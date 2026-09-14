@@ -35,7 +35,7 @@ vi.mock("../../stores/terminals", () => ({
 }));
 
 vi.mock("../../stores/github", () => ({
-	githubStore: { getPrForBranch: vi.fn() },
+	githubStore: { getBranchPrData: vi.fn() },
 }));
 
 vi.mock("../../stores/repositories", () => ({
@@ -50,7 +50,11 @@ vi.mock("../../stores/promptLibrary", () => ({
 }));
 
 vi.mock("../../utils/promptContext", () => ({
-	prContextVariables: vi.fn().mockResolvedValue({}),
+	// prContextVariables is synchronous (plain object -> plain object); the
+	// original .mockResolvedValue({}) here made this a Promise-returning stub
+	// for a function useSmartPrompts.ts never awaits, silently discarding
+	// every prContextVariables(pr) call's actual return value.
+	prContextVariables: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock("../../transport", () => ({
@@ -80,9 +84,12 @@ vi.mock("../usePty", () => ({
 import { invoke } from "../../invoke";
 import { agentConfigsStore } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
+import { githubStore } from "../../stores/github";
 import { promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import { providerRegistryStore } from "../../stores/providerRegistry";
+import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { prContextVariables } from "../../utils/promptContext";
 import { resolveInjectTarget, shouldSubmitInjectPrompt, useSmartPrompts } from "../useSmartPrompts";
 
 const mockedGetHeadlessAgent = vi.mocked(agentConfigsStore.getHeadlessAgent);
@@ -533,5 +540,167 @@ describe("executeHeadless — 'agentType:configName' composite value parsing", (
 			"execute_headless_prompt",
 			expect.objectContaining({ command: "claude", args: ["--print"] }),
 		);
+	});
+});
+
+describe("executeSmartPrompt — variable resolution", () => {
+	const mockedInvoke = vi.mocked(invoke);
+	const mockedProcess = vi.mocked(promptLibraryStore.processContent);
+	const mockedGetBranchPrData = vi.mocked(githubStore.getBranchPrData);
+	const mockedRepoGet = vi.mocked(repositoriesStore.get);
+	const mockedRepoGetActive = vi.mocked(repositoriesStore.getActive);
+
+	const activeTerminal = (overrides: Record<string, unknown> = {}) =>
+		({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+			...overrides,
+		}) as unknown as ReturnType<typeof terminalsStore.getActive>;
+
+	beforeEach(() => {
+		mockedIsBusy.mockReturnValue(false);
+		mockedGetActive.mockReturnValue(activeTerminal());
+		mockedRepoGetActive.mockReturnValue({ path: "/repo" } as unknown as ReturnType<typeof repositoriesStore.getActive>);
+		mockedRepoGet.mockReturnValue(undefined);
+		mockedGetBranchPrData.mockReturnValue(null);
+		mockedProcess.mockResolvedValue("PROCESSED");
+	});
+
+	it("passes the active repo path to resolve_prompt_variables", async () => {
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
+
+		expect(mockedInvoke).toHaveBeenCalledWith("resolve_prompt_variables", {
+			content: "Do something",
+			repoPath: "/repo",
+		});
+	});
+
+	it("manual variables win over frontend vars, which win over git vars", async () => {
+		mockedInvoke.mockResolvedValue({
+			vars: { branch: "git-value", shared: "from-git" },
+			needed: ["branch", "shared", "agent_type"],
+		});
+		mockedGetActive.mockReturnValue(activeTerminal({ agentType: "shared-from-frontend" }));
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject", content: "{branch} {shared} {agent_type}" }), {
+			shared: "from-manual",
+		});
+
+		const passedVars = mockedProcess.mock.calls[0]?.[1] as Record<string, string>;
+		expect(passedVars.branch).toBe("git-value");
+		expect(passedVars.shared).toBe("from-manual");
+		expect(passedVars.agent_type).toBe("shared-from-frontend");
+	});
+
+	it("returns unresolved_variables listing the missing names", async () => {
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: ["nonexistent_var", "another_missing"] });
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
+
+		expect(res.ok).toBe(false);
+		if (!res.ok) {
+			expect(res.reason).toBe("unresolved_variables");
+			expect(JSON.parse(res.output ?? "[]")).toEqual(["nonexistent_var", "another_missing"]);
+		}
+	});
+
+	it("shell mode routes through shellSafe processContent", async () => {
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		await executeSmartPrompt(makePrompt({ executionMode: "shell" }));
+
+		expect(mockedProcess).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({ shellSafe: true }),
+		);
+	});
+});
+
+describe("resolveFrontendVars (via executeSmartPrompt)", () => {
+	const mockedInvoke = vi.mocked(invoke);
+	const mockedProcess = vi.mocked(promptLibraryStore.processContent);
+	const mockedGetBranchPrData = vi.mocked(githubStore.getBranchPrData);
+	const mockedRepoGet = vi.mocked(repositoriesStore.get);
+	const mockedRepoGetActive = vi.mocked(repositoriesStore.getActive);
+	const mockedPrContextVariables = vi.mocked(prContextVariables);
+
+	beforeEach(() => {
+		mockedIsBusy.mockReturnValue(false);
+		mockedRepoGetActive.mockReturnValue({ path: "/repo" } as unknown as ReturnType<typeof repositoriesStore.getActive>);
+		mockedProcess.mockResolvedValue("PROCESSED");
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: ["agent_type", "cwd", "pr_title"] });
+	});
+
+	it("resolves agent_type and cwd from the active terminal", async () => {
+		// canExecuteInject requires active.agentType to be set ("No agent
+		// detected in terminal" otherwise) — every fixture below needs it.
+		mockedRepoGet.mockReturnValue(undefined);
+		mockedGetBranchPrData.mockReturnValue(null);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			cwd: "/repo/subdir",
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+		// Only agent_type/cwd are referenced by this test's content — pr_title
+		// (in the describe-level default) would otherwise trigger
+		// unresolved_variables since no PR is configured here.
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: ["agent_type", "cwd"] });
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject", content: "{agent_type} {cwd}" }));
+
+		const passedVars = mockedProcess.mock.calls[0]?.[1] as Record<string, string>;
+		expect(passedVars.agent_type).toBe("claude");
+		expect(passedVars.cwd).toBe("/repo/subdir");
+	});
+
+	it("resolves pr_* variables only when the active branch has a PR", async () => {
+		mockedRepoGet.mockReturnValue({ activeBranch: "feature-x" } as unknown as ReturnType<typeof repositoriesStore.get>);
+		mockedGetBranchPrData.mockReturnValue({ title: "My PR" } as unknown as ReturnType<
+			typeof githubStore.getBranchPrData
+		>);
+		mockedPrContextVariables.mockReturnValue({ pr_title: "My PR" });
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: ["pr_title"] });
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject", content: "{pr_title}" }));
+
+		expect(mockedGetBranchPrData).toHaveBeenCalledWith("/repo", "feature-x");
+		const passedVars = mockedProcess.mock.calls[0]?.[1] as Record<string, string>;
+		expect(passedVars.pr_title).toBe("My PR");
+	});
+
+	it("resolves nothing when the repo has no activeBranch", async () => {
+		mockedRepoGet.mockReturnValue(undefined);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
+		const { executeSmartPrompt } = useSmartPrompts();
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
+
+		expect(res.ok).toBe(true);
+		expect(mockedGetBranchPrData).not.toHaveBeenCalled();
 	});
 });

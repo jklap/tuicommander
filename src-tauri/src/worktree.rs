@@ -5351,6 +5351,112 @@ branch refs/heads/feat
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "found");
     }
 
+    // --- "current behavior" pins for the TUIC_* env-injection work ---
+    // These assert what run_setup_script/run_script_in_dir do TODAY (no env
+    // injection at all). The `_today_` ones are deleted once script_env.rs is
+    // wired in (see script_env.rs's own tests for the replacement coverage);
+    // the others (parent-env inheritance, the -1 exit-code collision) are
+    // invariants that must survive that change and are kept.
+
+    #[test]
+    #[serial_test::serial]
+    fn run_setup_script_today_sets_no_tuic_env() {
+        // Can't assert an absolute count: this binary may itself be running
+        // inside a TUICommander-spawned PTY (TUIC_SESSION/TUIC_CONFIG_DIR/
+        // TUIC_PTY_TTY already ambient), and other tests transiently set their
+        // own TUIC_* vars (e.g. diff_triage's TUIC_REVIEW_CONFIDENCE_THRESHOLD
+        // tests) — hence #[serial_test::serial] to avoid racing those. Compare
+        // before/after instead: run_setup_script must add exactly zero.
+        let before = std::env::vars()
+            .filter(|(k, _)| k.starts_with("TUIC_"))
+            .count();
+
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+        // `|| true` so a shell with no matching lines (grep -c prints 0 and
+        // exits 1) doesn't turn into a script failure.
+        let result = run_setup_script("env | grep -c '^TUIC_' || true".to_string(), cwd)
+            .expect("should succeed");
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            before.to_string(),
+            "run_setup_script should pass through the ambient TUIC_* count unchanged today"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn run_setup_script_still_inherits_parent_env() {
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+
+        unsafe {
+            std::env::set_var("TUIC_TEST_PARENT_INHERIT_MARKER", "parent-value-abc123");
+        }
+        let result = run_setup_script("echo \"$TUIC_TEST_PARENT_INHERIT_MARKER\"".to_string(), cwd);
+        unsafe {
+            std::env::remove_var("TUIC_TEST_PARENT_INHERIT_MARKER");
+        }
+
+        let result = result.expect("should succeed");
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            "parent-value-abc123",
+            "run_setup_script must keep inheriting the full parent environment \
+             (no env_clear) even after TUIC_* injection lands"
+        );
+    }
+
+    #[test]
+    fn run_setup_script_today_does_not_enrich_path() {
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+        let parent_path = std::env::var("PATH").unwrap_or_default();
+
+        let result = run_setup_script("echo \"$PATH\"".to_string(), cwd).expect("should succeed");
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(
+            result["stdout"].as_str().unwrap().trim(),
+            parent_path,
+            "before script_env.rs wires in enriched_path(), PATH should pass through unchanged"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn run_script_in_dir_today_sets_no_tuic_env() {
+        // See run_setup_script_today_sets_no_tuic_env for why this compares
+        // before/after rather than asserting a hardcoded zero.
+        let before = std::env::vars()
+            .filter(|(k, _)| k.starts_with("TUIC_"))
+            .count();
+
+        let dir = TempDir::new().expect("temp dir");
+        // run_script_in_dir only reports success/failure, not output, so route
+        // the assertion through a marker file instead of stdout.
+        let marker = dir.path().join("tuic-count.txt");
+        let script = format!("env | grep -c '^TUIC_' > {} || true", marker.display());
+        let result = run_script_in_dir(&script, dir.path());
+        assert!(result.is_ok(), "script should succeed: {:?}", result);
+        let count = fs::read_to_string(&marker).expect("read marker");
+        assert_eq!(count.trim(), before.to_string());
+    }
+
+    #[test]
+    fn run_setup_script_exit_code_minus_one_when_killed() {
+        // A signal-killed child reports `status.code() == None`, which
+        // run_setup_script maps to exit_code -1 today. A future timeout must
+        // return Err rather than reusing this same sentinel value, or a
+        // timed-out script becomes indistinguishable from a killed one.
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+
+        let result = run_setup_script("kill -9 $$".to_string(), cwd).expect("should return Ok");
+        assert_eq!(result["exit_code"], -1);
+    }
+
     #[test]
     fn run_script_in_dir_succeeds_with_zero_exit() {
         let dir = TempDir::new().expect("temp dir");

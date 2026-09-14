@@ -404,6 +404,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shell_script_today_receives_no_tuic_context() {
+        // Pins current behavior before TUIC_* context is wired into
+        // apply_clean_env's `ctx` slot (see script_env.rs). Because
+        // apply_clean_env already env_clear()s and only re-adds the fixed
+        // ENV_ALLOWLIST, this is a plain sanity check (not racy against
+        // ambient TUIC_* vars the way worktree.rs's inherited-env tests are).
+        let out = execute_shell_script(
+            "env | grep -c '^TUIC_' || true".to_string(),
+            5000,
+            "/tmp".to_string(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.trim(), "0");
+    }
+
+    #[tokio::test]
     async fn headless_allowlist_keeps_path() {
         // PATH is on the allowlist, so the child must still be able to resolve
         // common binaries — otherwise `sh -c 'echo x'` wouldn't even start in
