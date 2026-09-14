@@ -900,10 +900,9 @@ pub fn ensure_index(
             // be behind the repo, so it goes through the same update path a live
             // index uses — which either applies the diff or rebuilds outright.
             // Nothing here can serve content that disagrees with disk.
-            match ContentIndex::restore(&data_dir, &repo) {
-                Some(restored) => {
-                    *index_ref.write() = restored;
-                    rebuild_in_place(&index_ref, &repo, Some(&throttle));
+            match restore_reconciled(&data_dir, &repo, Some(&throttle)) {
+                Some(reconciled) => {
+                    *index_ref.write() = reconciled;
                     tracing::info!(repo = %repo, "content index restored from snapshot");
                 }
                 None => {
@@ -1076,6 +1075,25 @@ pub fn rebuild_index(state: &Arc<crate::state::AppState>, repo_path: &str) {
 /// Both cheap paths hold only the read lock while walking, and every write is
 /// O(changes). Only one builder per repo runs at a time (`index_in_flight`), so
 /// nothing else can replace the index between planning and applying.
+/// Restore `repo`'s snapshot and bring it in line with disk, or `None` when
+/// there is no snapshot to restore.
+///
+/// Reconciles in a private lock and hands back a finished index, so the caller
+/// publishes exactly once. Assigning the snapshot to the shared entry first and
+/// reconciling afterwards published a `ready: true` index that still described
+/// the snapshot, and every consumer checks `is_ready()` and nothing else: for
+/// the length of the reconciliation a search answered from a corpus predating
+/// the last commits and reported a file it could not find as absent.
+fn restore_reconciled(
+    data_dir: &Path,
+    repo: &str,
+    throttle: Option<&IndexerThrottle>,
+) -> Option<ContentIndex> {
+    let staging = parking_lot::RwLock::new(ContentIndex::restore(data_dir, repo)?);
+    rebuild_in_place(&staging, repo, throttle);
+    Some(staging.into_inner())
+}
+
 fn rebuild_in_place(
     index: &parking_lot::RwLock<ContentIndex>,
     repo: &str,
@@ -1737,6 +1755,40 @@ mod tests {
         assert!(
             !index.is_current(),
             "content replaced under a preserved mtime must invalidate"
+        );
+    }
+
+    /// Publication is a single assignment because reconciliation happens off to
+    /// the side. The entry is published `ready: true` and every consumer checks
+    /// `is_ready()` and nothing else, so reconciling after publication left a
+    /// window in which a search answered from the snapshot's corpus and reported
+    /// a file committed since as absent.
+    #[test]
+    fn a_restored_snapshot_agrees_with_disk_before_it_is_handed_back() {
+        let repo = make_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let data_dir = tempfile::tempdir().unwrap();
+        ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new())
+            .save_snapshot(data_dir.path(), &repo_path);
+
+        // A file lands after the snapshot — exactly what reconciliation exists
+        // to pick up, and what a prematurely published index cannot find.
+        fs::write(repo.path().join("afterwards.rs"), "fn quokka_marker() {}").unwrap();
+
+        let restored = restore_reconciled(data_dir.path(), &repo_path, None)
+            .expect("a snapshot was written just above");
+
+        assert!(restored.is_ready());
+        assert!(
+            restored.is_current(),
+            "an index handed back for publication must already agree with disk"
+        );
+        assert!(
+            restored
+                .search("quokka_marker", 5)
+                .iter()
+                .any(|hit| hit.rel_path == "afterwards.rs"),
+            "a file added after the snapshot must be searchable the moment the index is published"
         );
     }
 
