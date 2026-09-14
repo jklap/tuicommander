@@ -2822,26 +2822,146 @@ pub(crate) fn archive_worktree_dir(
     Ok(archive_dest.to_string_lossy().to_string())
 }
 
-/// Run a shell script in a directory and return an error if it exits non-zero.
+/// Run a script under `sh -c` / `cmd /C` in `cwd`, injecting `ctx`'s `TUIC_*`
+/// vars, and enforce `timeout`. Shared by `run_script_in_dir` (archive) and
+/// `run_setup_script` (setup) so the two can't drift on how a timeout is
+/// enforced or a hung child is reaped.
 ///
-/// Used by archive/delete operations to run cleanup scripts before the operation.
-fn run_script_in_dir(script: &str, cwd: &Path) -> Result<(), String> {
+/// Two things a naive `spawn` + `try_wait` loop gets wrong, both handled here:
+///
+/// - **Pipe deadlock**: `Command::output()` drains stdout/stderr for you: a
+///   loop that only polls `try_wait` does not, and a child that writes past
+///   its pipe buffer (16 KiB on macOS; `npm install` blows past this
+///   immediately) blocks forever the moment nothing is reading. Both pipes
+///   are drained on dedicated reader threads *before* the wait loop starts,
+///   joined only once the child's fate (finished or killed) is known.
+/// - **Orphaned grandchildren on timeout**: killing just the `sh -c` shell
+///   leaves whatever it started (e.g. `npm`'s own children) still running —
+///   exactly the "hung script the user can't see or interrupt" case the
+///   `TODO: add a timeout` markers this replaces were about. On Unix the
+///   child is placed in its own process group at spawn (`setsid`) so a
+///   timeout can `killpg` the whole tree (SIGTERM, then SIGKILL after a short
+///   grace period if it hasn't exited). Windows gets a plain `child.kill()` —
+///   no process-group equivalent here today.
+fn run_shell_capture(
+    script: &str,
+    cwd: &Path,
+    ctx: &crate::script_env::ScriptContext,
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    use std::io::Read;
+
     let (shell, flag) = if cfg!(target_os = "windows") {
         ("cmd", "/C")
     } else {
         ("sh", "-c")
     };
 
-    // TODO: add a timeout — a hung script with CREATE_NO_WINDOW has no visible
-    // window, so users can't see or interrupt it (issue #7 follow-up).
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
-    crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Archive, cwd)
-        .apply_std(&mut cmd);
+    ctx.apply_std(&mut cmd);
     crate::cli::apply_no_window(&mut cmd);
-    let output = cmd
-        .output()
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid() is async-signal-safe and is the only thing this
+        // closure does; it runs in the forked child before exec.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to execute script: {e}"))?;
+
+    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|e| format!("Failed to poll script: {e}"))?
+        {
+            break Some(status);
+        }
+        if start.elapsed() >= timeout {
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    let Some(status) = status else {
+        #[cfg(unix)]
+        {
+            let pgid = child.id() as i32;
+            // SAFETY: killpg with a plain signal number and no memory access.
+            unsafe {
+                libc::killpg(pgid, libc::SIGTERM);
+            }
+            let grace_deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            let mut reaped = false;
+            while std::time::Instant::now() < grace_deadline {
+                if child.try_wait().ok().flatten().is_some() {
+                    reaped = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            if !reaped {
+                unsafe {
+                    libc::killpg(pgid, libc::SIGKILL);
+                }
+                let _ = child.wait();
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // The reader threads see EOF once the child (and its inherited pipe
+        // fds) are gone, so these always return rather than blocking forever.
+        let _ = stdout_handle.join();
+        let _ = stderr_handle.join();
+        return Err(format!("Script timed out after {}s", timeout.as_secs()));
+    };
+
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let stderr = stderr_handle.join().unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// Run a shell script in a directory and return an error if it exits non-zero.
+///
+/// Used by archive/delete operations to run cleanup scripts before the operation.
+fn run_script_in_dir(script: &str, cwd: &Path) -> Result<(), String> {
+    let ctx = crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Archive, cwd);
+    let timeout = std::time::Duration::from_secs(
+        crate::config::load_repo_defaults().archive_script_timeout_secs,
+    );
+    let output = run_shell_capture(script, cwd, &ctx, timeout)?;
 
     let exit_code = output.status.code().unwrap_or(-1);
     if exit_code != 0 {
@@ -2865,22 +2985,16 @@ pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json
         return Err(format!("Working directory does not exist: {cwd}"));
     }
 
-    let (shell, flag) = if cfg!(target_os = "windows") {
-        ("cmd", "/C")
-    } else {
-        ("sh", "-c")
-    };
-
-    // TODO: add a timeout — a hung script with CREATE_NO_WINDOW has no visible
-    // window, so users can't see or interrupt it (issue #7 follow-up).
-    let mut cmd = std::process::Command::new(shell);
-    cmd.arg(flag).arg(&script).current_dir(cwd_path);
-    crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd_path)
-        .apply_std(&mut cmd);
-    crate::cli::apply_no_window(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to execute script: {e}"))?;
+    let ctx =
+        crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd_path);
+    let timeout = std::time::Duration::from_secs(
+        crate::config::load_repo_defaults().setup_script_timeout_secs,
+    );
+    // A timeout returns Err (not Ok({exit_code: -1})) — a signal-killed script
+    // already maps to exit_code -1 (status.code() == None), and collapsing
+    // both into that one sentinel would make a timeout indistinguishable
+    // from an ordinary kill in the response the frontend/HTTP caller sees.
+    let output = run_shell_capture(&script, cwd_path, &ctx, timeout)?;
 
     Ok(serde_json::json!({
         "exit_code": output.status.code().unwrap_or(-1),
@@ -5506,14 +5620,129 @@ branch refs/heads/feat
     #[test]
     fn run_setup_script_exit_code_minus_one_when_killed() {
         // A signal-killed child reports `status.code() == None`, which
-        // run_setup_script maps to exit_code -1 today. A future timeout must
-        // return Err rather than reusing this same sentinel value, or a
-        // timed-out script becomes indistinguishable from a killed one.
+        // run_setup_script maps to exit_code -1 today. A timeout instead
+        // returns Err — see run_setup_script_times_out_and_returns_err — so
+        // the two remain distinguishable in the response the caller sees.
         let dir = TempDir::new().expect("temp dir");
         let cwd = dir.path().to_string_lossy().to_string();
 
         let result = run_setup_script("kill -9 $$".to_string(), cwd).expect("should return Ok");
         assert_eq!(result["exit_code"], -1);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn run_setup_script_times_out_and_returns_err() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = crate::config::set_config_dir_override(dir.path().join("tuic-config"));
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig {
+            setup_script_timeout_secs: 1,
+            ..crate::config::load_repo_defaults()
+        })
+        .expect("save repo defaults");
+
+        let cwd = dir.path().to_string_lossy().to_string();
+        let start = std::time::Instant::now();
+        let result = run_setup_script("sleep 30".to_string(), cwd);
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err(), "expected a timeout Err, got {result:?}");
+        assert!(
+            result.unwrap_err().contains("timed out"),
+            "error message should say the script timed out"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "should return promptly after the configured 1s timeout, took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn run_setup_script_timeout_kills_the_child_process_group() {
+        // Without process-group kill, timing out `sh -c` leaves whatever it
+        // started still running — this asserts the backgrounded grandchild
+        // is actually gone after the timeout, not just the shell.
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = crate::config::set_config_dir_override(dir.path().join("tuic-config"));
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig {
+            setup_script_timeout_secs: 1,
+            ..crate::config::load_repo_defaults()
+        })
+        .expect("save repo defaults");
+
+        let pid_file = dir.path().join("child.pid");
+        let cwd = dir.path().to_string_lossy().to_string();
+        let script = format!("sleep 30 & echo $! > {} ; wait", pid_file.display());
+        let result = run_setup_script(script, cwd);
+        assert!(result.is_err(), "expected a timeout Err, got {result:?}");
+
+        // Give the SIGKILL grace period a moment to land, then confirm the
+        // grandchild pid no longer resolves to a live process.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let pid = std::fs::read_to_string(&pid_file)
+            .expect("child wrote its pid")
+            .trim()
+            .parse::<i32>()
+            .expect("pid is a number");
+        // SAFETY: kill(pid, 0) only probes liveness, sends no signal.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            !alive,
+            "backgrounded grandchild (pid {pid}) should have been killed along with the shell"
+        );
+    }
+
+    #[test]
+    fn run_setup_script_captures_output_larger_than_the_pipe_buffer() {
+        // A naive spawn+try_wait loop (no reader threads) deadlocks once the
+        // child fills its stdout pipe buffer (16 KiB on macOS) with nothing
+        // draining it. 200 KiB comfortably exceeds that on every platform.
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+
+        let result = run_setup_script("yes x | head -c 200000".to_string(), cwd)
+            .expect("should succeed, not deadlock");
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(result["stdout"].as_str().unwrap().len(), 200_000);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn run_script_in_dir_times_out_and_aborts_the_archive() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "archive-timeout-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: None,
+            create_branch: false,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
+
+        let _guard =
+            crate::config::set_config_dir_override(repo.path().join("tuic-config-archive"));
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig {
+            archive_script_timeout_secs: 1,
+            ..crate::config::load_repo_defaults()
+        })
+        .expect("save repo defaults");
+
+        let start = std::time::Instant::now();
+        let result = archive_worktree(repo.path(), "archive-timeout-test", Some("sleep 30"));
+        let elapsed = start.elapsed();
+
+        assert!(
+            result.is_err(),
+            "a timed-out archive script should abort the archive"
+        );
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(elapsed < std::time::Duration::from_secs(5));
+        assert!(
+            wt.path.exists(),
+            "worktree must survive an archive aborted by a script timeout"
+        );
     }
 
     #[test]
