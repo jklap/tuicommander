@@ -1145,4 +1145,83 @@ mod survivor_tests {
             assert_eq!(json(pending).await, serde_json::Value::Null);
         }
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_worktree_shared_runs_setup_script_before_file_sync() {
+        // Pins today's ORDER, which worktree.rs's own doc comment on
+        // spawn_worktree_file_sync calls a "KNOWN, ACCEPTED ORDERING GAP":
+        // create_worktree_shared awaits the setup script to completion before
+        // it ever calls spawn_worktree_file_sync (which itself just does a
+        // fire-and-forget tokio::spawn). So a setup script that depends on a
+        // copy_ignored_files-synced file can never see it — deterministically,
+        // not just as a timing flake, since the sync task isn't even spawned
+        // yet by the time the script has already finished running.
+        //
+        // This test is inverted (not deleted) once the ordering fix lands:
+        // see create_worktree_shared_runs_the_file_sync_before_the_setup_script.
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = super::warm_tests::setup_repo(temp.path());
+        // An ignored file in the source repo — copy_ignored_files is what the
+        // sync would carry into the new worktree.
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n").expect("write gitignore");
+        std::fs::write(repo.join("ignored.txt"), "secret-config").expect("write ignored");
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", ".gitignore"])
+            .run()
+            .expect("git add .gitignore");
+        crate::git_cli::git_cmd(&repo)
+            .args(["commit", "-m", "add gitignore"])
+            .run()
+            .expect("git commit");
+
+        let marker = temp.path().join("order-check.txt");
+        crate::config::save_repo_settings(
+            crate::config::RepoSettingsMap::default(),
+            crate::config::RepoSettingsMap {
+                repos: [(
+                    repo.to_string_lossy().to_string(),
+                    crate::config::RepoSettingsEntry {
+                        path: repo.to_string_lossy().to_string(),
+                        copy_ignored_files: Some(true),
+                        setup_script: Some(format!(
+                            "if [ -f ignored.txt ]; then echo present > {}; else echo missing > {}; fi",
+                            marker.display(),
+                            marker.display()
+                        )),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        )
+        .expect("save repo settings");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = create_worktree_shared(
+            &state,
+            repo.to_string_lossy().to_string(),
+            "order-test-branch".to_string(),
+            None,
+        )
+        .await
+        .expect("worktree should be created");
+
+        assert!(
+            result.setup_script.is_some(),
+            "setup script should have run: {:?}",
+            result.setup_script_error
+        );
+        let outcome = std::fs::read_to_string(&marker).expect("read order marker");
+        assert_eq!(
+            outcome.trim(),
+            "missing",
+            "TODAY the setup script runs before the file sync has a chance to \
+             copy the ignored file — this is the documented ordering gap"
+        );
+    }
 }
