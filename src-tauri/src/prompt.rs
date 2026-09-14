@@ -632,6 +632,174 @@ mod tests {
         assert!(vars.get("branch").is_none_or(|branch| !branch.is_empty()));
     }
 
+    // --- resolve_vars git-backed tests (gap-closing: `resolve_vars`'s git
+    // paths were previously exercised only through resolve_context_variables_
+    // non_git_path, which never touches a real repo at all) ---
+
+    /// A `git init -b main` repo with one commit. Explicitly picks the
+    /// initial branch name rather than relying on `git init`'s default, which
+    /// depends on the *running user's* `init.defaultBranch` config and would
+    /// make `resolve_vars_reports_current_branch` flaky across machines.
+    fn setup_prompt_test_repo() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git command");
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(dir.path().join("README.md"), "# Test").expect("write file");
+        run(&["add", "."]);
+        run(&["commit", "-m", "Initial commit"]);
+        dir
+    }
+
+    // NOTE on test isolation: var_cache() is a process-global OnceLock<Mutex<..>>
+    // keyed by (repo_path, var). Each test below uses its own freshly created
+    // TempDir, so the cache keys never collide across tests — #[serial_test::serial]
+    // is not needed here. A test that resolves, mutates the repo, then
+    // re-resolves the *same* var within VAR_CACHE_TTL (3s) would read the stale
+    // cached value; none of these do that, but call invalidate_repo_vars(path)
+    // between such steps if a future test needs to.
+
+    #[test]
+    fn resolve_vars_reports_current_branch() {
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let vars = resolve_vars(&repo_path, &["branch".to_string()]);
+        assert_eq!(vars.get("branch").map(String::as_str), Some("main"));
+    }
+
+    #[test]
+    fn resolve_vars_diff_and_changed_files_reflect_working_tree() {
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        std::fs::write(repo.path().join("README.md"), "# Test\nchanged").expect("write");
+        std::fs::write(repo.path().join("new.txt"), "new").expect("write");
+
+        let vars = resolve_vars(
+            &repo_path,
+            &["diff".to_string(), "changed_files".to_string()],
+        );
+        assert!(
+            vars.get("diff").is_some_and(|d| d.contains("+changed")),
+            "diff should show the modified line: {:?}",
+            vars.get("diff")
+        );
+        let changed = vars.get("changed_files").expect("changed_files present");
+        assert!(changed.contains("README.md"));
+        assert!(changed.contains("new.txt"));
+    }
+
+    #[test]
+    fn resolve_vars_dirty_files_count_counts_status_lines() {
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        std::fs::write(repo.path().join("a.txt"), "a").expect("write");
+        std::fs::write(repo.path().join("b.txt"), "b").expect("write");
+
+        let vars = resolve_vars(&repo_path, &["dirty_files_count".to_string()]);
+        assert_eq!(vars.get("dirty_files_count").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn resolve_vars_repo_owner_slug_from_remote() {
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let out = Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:acme/widgets.git"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git remote add");
+        assert!(out.status.success());
+
+        let vars = resolve_vars(
+            &repo_path,
+            &[
+                "repo_owner".to_string(),
+                "repo_slug".to_string(),
+                "remote_url".to_string(),
+            ],
+        );
+        assert_eq!(vars.get("repo_owner").map(String::as_str), Some("acme"));
+        assert_eq!(vars.get("repo_slug").map(String::as_str), Some("widgets"));
+        assert_eq!(
+            vars.get("remote_url").map(String::as_str),
+            Some("git@github.com:acme/widgets.git")
+        );
+    }
+
+    #[test]
+    fn resolve_vars_returns_only_requested_vars() {
+        // Pins the `result.retain` behavior: repo_owner/repo_slug are derived
+        // from remote_url internally, but must not leak into the output map
+        // unless the caller actually asked for them.
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:acme/widgets.git"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git remote add");
+
+        let vars = resolve_vars(&repo_path, &["repo_owner".to_string()]);
+        assert!(vars.contains_key("repo_owner"));
+        assert!(
+            !vars.contains_key("remote_url"),
+            "remote_url is a resolver-internal dependency, not requested — must not leak: {vars:?}"
+        );
+    }
+
+    #[test]
+    fn all_vars_are_all_resolvable() {
+        // First test to ever assert ALL_VARS's contents. On a fully-populated
+        // repo (a commit, a remote, an upstream, some dirty files), every name
+        // in ALL_VARS should resolve to *something* except the ones that are
+        // legitimately absent even in a healthy repo — pin those exceptions
+        // explicitly rather than silently accepting a shrinking list.
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        std::fs::write(repo.path().join("dirty.txt"), "dirty").expect("write");
+        Command::new("git")
+            .args(["remote", "add", "origin", "git@github.com:acme/widgets.git"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git remote add");
+
+        let all: Vec<String> = ALL_VARS.iter().map(|s| s.to_string()).collect();
+        let vars = resolve_vars(&repo_path, &all);
+
+        // Legitimately absent with no upstream configured, even in an
+        // otherwise fully-populated repo. `conflict_files`/`stash_list` are
+        // NOT in this list: git_output populates the key even when the
+        // underlying git command succeeds with empty output (nothing
+        // stashed / nothing conflicted still yields "" via git_output's own
+        // "successful-but-empty" contract, prompt.rs's git_output doc
+        // comment above) — only branch_status's `@{upstream}` genuinely
+        // fails (non-zero exit) without a configured upstream.
+        const EXPECTED_ABSENT: &[&str] = &["branch_status"];
+
+        for name in ALL_VARS {
+            if EXPECTED_ABSENT.contains(name) {
+                continue;
+            }
+            assert!(
+                vars.contains_key(*name),
+                "ALL_VARS entry {name:?} did not resolve to anything on a fully-populated repo"
+            );
+        }
+    }
+
     // --- process_content_shell_safe tests ---
 
     #[test]
