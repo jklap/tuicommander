@@ -2836,6 +2836,8 @@ fn run_script_in_dir(script: &str, cwd: &Path) -> Result<(), String> {
     // window, so users can't see or interrupt it (issue #7 follow-up).
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
+    crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Archive, cwd)
+        .apply_std(&mut cmd);
     crate::cli::apply_no_window(&mut cmd);
     let output = cmd
         .output()
@@ -2873,6 +2875,8 @@ pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json
     // window, so users can't see or interrupt it (issue #7 follow-up).
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(&script).current_dir(cwd_path);
+    crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd_path)
+        .apply_std(&mut cmd);
     crate::cli::apply_no_window(&mut cmd);
     let output = cmd
         .output()
@@ -5351,39 +5355,9 @@ branch refs/heads/feat
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "found");
     }
 
-    // --- "current behavior" pins for the TUIC_* env-injection work ---
-    // These assert what run_setup_script/run_script_in_dir do TODAY (no env
-    // injection at all). The `_today_` ones are deleted once script_env.rs is
-    // wired in (see script_env.rs's own tests for the replacement coverage);
-    // the others (parent-env inheritance, the -1 exit-code collision) are
-    // invariants that must survive that change and are kept.
-
-    #[test]
-    #[serial_test::serial]
-    fn run_setup_script_today_sets_no_tuic_env() {
-        // Can't assert an absolute count: this binary may itself be running
-        // inside a TUICommander-spawned PTY (TUIC_SESSION/TUIC_CONFIG_DIR/
-        // TUIC_PTY_TTY already ambient), and other tests transiently set their
-        // own TUIC_* vars (e.g. diff_triage's TUIC_REVIEW_CONFIDENCE_THRESHOLD
-        // tests) — hence #[serial_test::serial] to avoid racing those. Compare
-        // before/after instead: run_setup_script must add exactly zero.
-        let before = std::env::vars()
-            .filter(|(k, _)| k.starts_with("TUIC_"))
-            .count();
-
-        let dir = TempDir::new().expect("temp dir");
-        let cwd = dir.path().to_string_lossy().to_string();
-        // `|| true` so a shell with no matching lines (grep -c prints 0 and
-        // exits 1) doesn't turn into a script failure.
-        let result = run_setup_script("env | grep -c '^TUIC_' || true".to_string(), cwd)
-            .expect("should succeed");
-        assert_eq!(result["exit_code"], 0);
-        assert_eq!(
-            result["stdout"].as_str().unwrap().trim(),
-            before.to_string(),
-            "run_setup_script should pass through the ambient TUIC_* count unchanged today"
-        );
-    }
+    // --- TUIC_* env-injection coverage (script_env.rs is now wired into both
+    // functions below). Renamed/replaced from the Phase-0 "_today_" pins —
+    // see git history for what those asserted before injection landed. ---
 
     #[test]
     #[serial_test::serial]
@@ -5405,43 +5379,128 @@ branch refs/heads/feat
             result["stdout"].as_str().unwrap().trim(),
             "parent-value-abc123",
             "run_setup_script must keep inheriting the full parent environment \
-             (no env_clear) even after TUIC_* injection lands"
+             (no env_clear) even with TUIC_* injection wired in"
         );
     }
 
     #[test]
-    fn run_setup_script_today_does_not_enrich_path() {
+    fn run_setup_script_sets_enriched_path() {
         let dir = TempDir::new().expect("temp dir");
         let cwd = dir.path().to_string_lossy().to_string();
-        let parent_path = std::env::var("PATH").unwrap_or_default();
 
         let result = run_setup_script("echo \"$PATH\"".to_string(), cwd).expect("should succeed");
         assert_eq!(result["exit_code"], 0);
         assert_eq!(
             result["stdout"].as_str().unwrap().trim(),
-            parent_path,
-            "before script_env.rs wires in enriched_path(), PATH should pass through unchanged"
+            crate::cli::enriched_path(),
+            "run_setup_script should enrich PATH the same way git subprocesses already do"
         );
     }
 
     #[test]
-    #[serial_test::serial]
-    fn run_script_in_dir_today_sets_no_tuic_env() {
-        // See run_setup_script_today_sets_no_tuic_env for why this compares
-        // before/after rather than asserting a hardcoded zero.
-        let before = std::env::vars()
-            .filter(|(k, _)| k.starts_with("TUIC_"))
-            .count();
+    fn run_setup_script_injects_worktree_context() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "env-inject-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("env-inject-test".to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
+        let cwd = wt.path.to_string_lossy().to_string();
 
+        let result = run_setup_script(
+            "echo \"$TUIC_MAIN_REPO_PATH|$TUIC_BRANCH|$TUIC_WORKTREE_NAME|$TUIC_IS_WORKTREE\""
+                .to_string(),
+            cwd,
+        )
+        .expect("should succeed");
+        assert_eq!(result["exit_code"], 0);
+        let stdout = result["stdout"].as_str().unwrap().trim();
+        let parts: Vec<&str> = stdout.split('|').collect();
+        assert_eq!(
+            parts[0],
+            repo.path().canonicalize().unwrap().to_string_lossy(),
+            "TUIC_MAIN_REPO_PATH should be the main checkout: {stdout}"
+        );
+        assert_eq!(parts[1], "env-inject-test");
+        assert_eq!(parts[2], "env-inject-test");
+        assert_eq!(parts[3], "true");
+    }
+
+    #[test]
+    fn run_setup_script_does_not_set_unknown_vars() {
+        // Detached HEAD: TUIC_BRANCH should be entirely absent, not empty.
+        let repo = setup_test_repo();
+        let sha = git_cmd(repo.path())
+            .args(["rev-parse", "HEAD"])
+            .run()
+            .expect("rev-parse")
+            .stdout;
+        let sha = sha.trim();
+        git_cmd(repo.path())
+            .args(["checkout", sha])
+            .run()
+            .expect("checkout detached");
+
+        let cwd = repo.path().to_string_lossy().to_string();
+        let result = run_setup_script(
+            "if [ -z \"${TUIC_BRANCH+x}\" ]; then echo UNSET; else echo \"SET:$TUIC_BRANCH\"; fi"
+                .to_string(),
+            cwd,
+        )
+        .expect("should succeed");
+        assert_eq!(result["stdout"].as_str().unwrap().trim(), "UNSET");
+    }
+
+    #[test]
+    fn run_setup_script_reports_script_kind_setup() {
         let dir = TempDir::new().expect("temp dir");
-        // run_script_in_dir only reports success/failure, not output, so route
-        // the assertion through a marker file instead of stdout.
-        let marker = dir.path().join("tuic-count.txt");
-        let script = format!("env | grep -c '^TUIC_' > {} || true", marker.display());
+        let cwd = dir.path().to_string_lossy().to_string();
+        let result = run_setup_script("echo \"$TUIC_SCRIPT_KIND\"".to_string(), cwd)
+            .expect("should succeed");
+        assert_eq!(result["stdout"].as_str().unwrap().trim(), "setup");
+    }
+
+    #[test]
+    fn run_script_in_dir_reports_script_kind_archive() {
+        let dir = TempDir::new().expect("temp dir");
+        let marker = dir.path().join("kind.txt");
+        let script = format!("echo \"$TUIC_SCRIPT_KIND\" > {}", marker.display());
         let result = run_script_in_dir(&script, dir.path());
         assert!(result.is_ok(), "script should succeed: {:?}", result);
-        let count = fs::read_to_string(&marker).expect("read marker");
-        assert_eq!(count.trim(), before.to_string());
+        let kind = fs::read_to_string(&marker).expect("read marker");
+        assert_eq!(kind.trim(), "archive");
+    }
+
+    #[test]
+    fn archive_script_receives_the_worktree_being_archived() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = WorktreeConfig {
+            task_name: "archive-env-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("archive-env-test".to_string()),
+            create_branch: true,
+        };
+        create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
+        // Marker written outside the worktree so it survives the archive move.
+        let marker = repo.path().join("archive-env-marker.txt");
+        let script = format!(
+            "echo \"$TUIC_WORKTREE_NAME|$TUIC_MAIN_REPO_PATH\" > {}",
+            marker.display()
+        );
+        let result = archive_worktree(repo.path(), "archive-env-test", Some(&script));
+        assert!(result.is_ok(), "archive should succeed: {:?}", result);
+
+        let content = fs::read_to_string(&marker).expect("read marker");
+        let parts: Vec<&str> = content.trim().split('|').collect();
+        assert_eq!(parts[0], "archive-env-test");
+        assert_eq!(
+            parts[1],
+            repo.path().canonicalize().unwrap().to_string_lossy()
+        );
     }
 
     #[test]
