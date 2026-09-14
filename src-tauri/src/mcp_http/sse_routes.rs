@@ -325,6 +325,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::WorktreeSyncStarted { .. } => "worktree-sync-started",
         AppEvent::WorktreeSyncProgress { .. } => "worktree-sync-progress",
         AppEvent::WorktreeSyncCompleted { .. } => "worktree-sync-completed",
+        AppEvent::WorktreeSetupScriptCompleted { .. } => "worktree-setup-script-completed",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
         AppEvent::RemoteConnectionStatusChanged { .. } => "remote-connection-status",
         // Not "remote-mirrored": a client must not be able to tell a mirrored
@@ -604,7 +605,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         | AppEvent::SpeechUtterance { payload } => payload.clone(),
         AppEvent::WorktreeSyncStarted { repo_path, branch } => {
             // camelCase keys mirror the Tauri window `worktree-sync-started`
-            // event — see `worktree::spawn_worktree_file_sync`.
+            // event — see `worktree::run_worktree_file_sync`.
             serde_json::json!({ "repoPath": repo_path, "branch": branch })
         }
         AppEvent::WorktreeSyncProgress {
@@ -629,6 +630,24 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "total": total,
                 "errors": errors,
             })
+        }
+        AppEvent::WorktreeSetupScriptCompleted {
+            repo_path,
+            branch,
+            worktree_path,
+            exit_code,
+            error,
+        } => {
+            // Same builder the Tauri window `worktree-setup-script-completed`
+            // emit uses (`worktree::spawn_worktree_setup_chain`): one payload,
+            // two carriers, so the camelCase keys cannot drift.
+            crate::state::worktree_setup_script_completed_payload(
+                repo_path,
+                branch,
+                worktree_path,
+                *exit_code,
+                error.as_deref(),
+            )
         }
     }
 }
@@ -1022,7 +1041,7 @@ mod tests {
     #[test]
     fn worktree_sync_events_use_camelcase_matching_window_events() {
         // Mirrors `worktree_create_failed_uses_camelcase_matching_window_event`:
-        // `worktree::spawn_worktree_file_sync` dual-emits all three of these on
+        // `worktree::run_worktree_file_sync` dual-emits all three of these on
         // the bus (SSE) AND the Tauri window with identical camelCase keys, so
         // a single frontend listener consumes both transports unchanged.
         let started = AppEvent::WorktreeSyncStarted {
@@ -1062,6 +1081,28 @@ mod tests {
         assert_eq!(body["copied"], 9);
         assert_eq!(body["total"], 10);
         assert_eq!(body["errors"][0], "missing.txt: source path does not exist");
+    }
+
+    #[test]
+    fn worktree_setup_script_completed_uses_camelcase_matching_window_event() {
+        // `worktree::spawn_worktree_setup_chain` dual-emits this on the bus
+        // (SSE) AND the Tauri window with identical camelCase keys.
+        let event = AppEvent::WorktreeSetupScriptCompleted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            worktree_path: "/repo/worktrees/feat-x".into(),
+            exit_code: Some(1),
+            error: None,
+        };
+        assert_eq!(event_type_name(&event), "worktree-setup-script-completed");
+        let body = event_payload(&event);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert_eq!(body["worktreePath"], "/repo/worktrees/feat-x");
+        assert_eq!(body["exitCode"], 1);
+        assert!(body["error"].is_null());
+        assert!(body.get("repo_path").is_none());
+        assert!(body.get("worktree_path").is_none());
     }
 
     #[test]

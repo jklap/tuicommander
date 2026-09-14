@@ -4394,12 +4394,17 @@ async fn handle_worktree(
                             }
                         }
                     }
-                    if let Some(setup_script) = created.setup_script {
-                        response["setup_script"] = setup_script;
-                    }
-                    if let Some(setup_script_error) = created.setup_script_error {
-                        response["setup_script_error"] = setup_script_error;
-                    }
+                    // The setup script (if configured) no longer runs inline
+                    // here — create_worktree_shared chains it after the CoW
+                    // warm and the file sync in the background
+                    // (spawn_worktree_setup_chain) so it can't race them, and
+                    // this tool response returns before any of them finishes
+                    // (instructions.warm_artifacts.status stays "pending"
+                    // until the whole chain is done). Its outcome is reported via the
+                    // dual-emitted `worktree-setup-script-completed` event,
+                    // not this response — an MCP client has no way to observe
+                    // that today, which is a deliberate, accepted tradeoff for
+                    // fixing the ordering (see worktree.rs's doc comment).
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
                         let safe_branch = sanitize_branch_for_suggested_prompt(&branch_name);
@@ -10875,6 +10880,58 @@ mod tests {
             body.contains("tokio::task::spawn_blocking"),
             "recursive worktree deletion and git safety checks must not park a Tokio worker"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_create_no_longer_returns_setup_script_fields() {
+        // Pins the deliberate MCP contract change from the setup-script
+        // ordering fix: create_worktree_shared now chains the setup script in
+        // the background (spawn_worktree_setup_chain: warm -> file sync ->
+        // script), so this tool response can no longer report
+        // setup_script/setup_script_error synchronously — the outcome is the
+        // worktree-setup-script-completed event instead.
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let mut defaults = crate::config::RepoDefaultsConfig::default();
+        defaults.setup_script = "true".into();
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_create",
+                "path": repo.path().to_string_lossy(),
+                "branch": "mcp-create-test",
+            }),
+            false,
+        )
+        .await;
+
+        assert!(
+            response.get("worktree_path").is_some(),
+            "response: {response}"
+        );
+        assert_eq!(response["branch"], "mcp-create-test");
+        assert!(
+            response.get("setup_script").is_none(),
+            "setup_script must not appear in the response: {response}"
+        );
+        assert!(
+            response.get("setup_script_error").is_none(),
+            "setup_script_error must not appear in the response: {response}"
+        );
+        let wt = std::path::PathBuf::from(response["worktree_path"].as_str().unwrap());
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while crate::worktree::warm_status(&wt)["status"] == "pending" {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("setup chain should finish");
+        crate::worktree::clear_warm(&wt);
     }
 
     #[test]

@@ -2535,8 +2535,12 @@ what MCP `repo action=worktree_create` returns — one value, two carriers — a
 it is the ONLY instruction channel: there is no enforcement layer behind it.
 Its `warm_artifacts.status` starts as `pending`; wait for `done` or `failed`
 in `GET /worktrees/paths?path=<base_repo>` before installing or building.
-The setup script completes before warming begins. Desktop IPC creation also
-returns `pending` and warms in the background.
+After this response, a background chain (`worktree::spawn_worktree_setup_chain`)
+runs strictly in order: the CoW warm, then the file sync
+(`copy_ignored_files`/`copy_untracked_files`/`copy_paths`), then the configured
+Setup Script. `status` stays `pending` until the LAST of those finishes, so
+`done` means the Setup Script has run too. Desktop IPC creation runs the same
+chain and also returns `pending`.
 
 `workspace_id` is how every later call addresses this workspace — `DELETE
 /worktrees/:workspaceId`, `POST /worktrees/finalize`,
@@ -2552,6 +2556,15 @@ to `"worktree"`) and removal as
 `worktree-removed` (`{ repo_path, workspace_id, branch }`) — the desktop Tauri
 event and the `/events` SSE frame serialize the same struct, so the field names
 are identical by construction. Payload table: `docs/sync-matrix.md`.
+
+
+**API change:** the response no longer carries `setup_script` /
+`setup_script_error` (previously the Setup Script ran inline and its
+`{exit_code, stdout, stderr}` result or error string rode on this response).
+The outcome is reported later via the dual-emitted
+`worktree-setup-script-completed` event (`/events` SSE; payload in
+`docs/sync-matrix.md`), silent when no script is configured. The same applies
+to MCP `repo action=worktree_create` and `POST /sessions/worktree`.
 
 ### Worktrees Base Directory
 
@@ -2627,8 +2640,14 @@ Content-Type: application/json
 ```
 
 Runs the script through `sh -c` (Unix) or `cmd /C` (Windows) in `cwd` and returns
-exit code plus captured output. `cwd` accepts `~`. A `cwd` that does not exist is a
-500 with `{ "error": ... }`. Same body as the `run_setup_script` command.
+`{ "exit_code": number, "stdout": string, "stderr": string }` — the same function
+and shape as the `run_setup_script` command, with the `TUIC_*` environment
+injected (`script_env::ScriptContext`: main checkout path, branch, base ref,
+worktree name, …) and the fixed 900 s script deadline. This is arbitrary shell
+execution, so the handler itself requires a loopback or authenticated request
+(`require_local_or_auth`; 403 otherwise). `cwd` accepts `~`; after expansion it
+must be absolute with no `..` (400 otherwise). A `cwd` that does not exist, or a
+timeout, is a 500 with `{ "error": ... }`.
 
 ### Remove Worktree
 

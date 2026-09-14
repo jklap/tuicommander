@@ -30,6 +30,7 @@ function deps(): AppInitDeps {
 		setStatusInfo: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
+		handleWorktreeSetupScriptCompleted: vi.fn(),
 		getDefaultFontSize: () => 14,
 		stores: {
 			hydrate: vi.fn().mockResolvedValue(undefined),

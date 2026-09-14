@@ -349,7 +349,7 @@ serving a configuration the disk disagrees with. See
 | `DELETE` | `/worktrees` | Remove worktree |
 | `GET` | `/worktrees/paths?path=` | Get linked-worktree paths for a repo, keyed by workspace id and carrying `kind` |
 | `GET` | `/worktrees/lifecycle?repoPath=&workspaceId=` | Fresh dirty/commit/removal-safety verdict for one exact workspace; unknown fails closed |
-| `POST` | `/worktrees/run-script` | Run a setup script in a directory; returns exit code and captured output |
+| `POST` | `/worktrees/run-script` | Run a Setup/Archive/Run script (`{script, cwd}`) with the `TUIC_*` env injected and the 900 s deadline — loopback or authenticated only (`require_local_or_auth`); `cwd` must be absolute after `~` expansion |
 
 ### Dictation and Desktop Integration
 
@@ -1216,8 +1216,13 @@ Tauri events and `/events` SSE.
 
 MCP `repo action=worktree_create` uses the same creation path as HTTP
 `POST /worktrees`, including `base_repo` validation, stale-worktree recovery,
-cache invalidation, `worktree-created` SSE/Tauri events, setup-script result
-reporting, and best-effort copy-on-write warming of Git-ignored directories.
+cache invalidation, `worktree-created` SSE/Tauri events, and the background
+post-create chain (best-effort copy-on-write warming of Git-ignored directories,
+then the file sync, then the Setup Script). The response returns before that
+chain runs, so it carries **no** `setup_script`/`setup_script_error` (removed;
+the outcome is the `worktree-setup-script-completed` event) and
+`instructions.warm_artifacts.status` stays `pending` until the Setup Script has
+finished.
 Every created workspace is a linked worktree: Git refs and objects remain
 shared with the parent, while `instructions.warm_artifacts.warmed_directories`
 reports how many ignored directories arrived warm. Parent tracked changes are

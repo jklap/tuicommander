@@ -87,25 +87,43 @@ pub fn finish_background_warm_blocking(
     token: u64,
     warm: impl FnOnce(&Path, &Path) -> crate::cow::WarmingReport + Send + 'static,
 ) {
-    let Some(lock) = warm_lock(&destination) else {
-        return;
-    };
+    if let Some(status) = run_background_warm_blocking(&source, &destination, token, warm) {
+        finish_warm(&destination, token, status);
+    }
+}
+
+/// Run the warm copy under the workspace's warm lock and return the status it
+/// earned — WITHOUT publishing it. The status stays `pending` until the caller
+/// passes the result to [`finish_warm`], which is what lets the app's
+/// post-create chain (warm → file sync → Setup Script) keep a workspace
+/// pending until its last step is done.
+///
+/// `None` means the warm never ran: the workspace was removed (its token
+/// cleared or replaced) before the copy could start, so nothing may be written
+/// into its destination any more.
+pub fn run_background_warm_blocking(
+    source: &Path,
+    destination: &Path,
+    token: u64,
+    warm: impl FnOnce(&Path, &Path) -> crate::cow::WarmingReport,
+) -> Option<serde_json::Value> {
+    let lock = warm_lock(destination)?;
     let _guard = lock
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !warm_token_is_current(&destination, token) {
-        return;
+    if !warm_token_is_current(destination, token) {
+        return None;
     }
-    let report = warm(&source, &destination);
+    let report = warm(source, destination);
     let status = if report.warnings.is_empty() {
         serde_json::json!({"status": "done"})
     } else {
         serde_json::json!({"status": "failed", "reason": report.warnings.join("; ")})
     };
-    finish_warm(&destination, token, status);
     for warning in report.warnings {
         tracing::warn!(source = "worktree", worktree = %destination.display(), "background warm failed: {warning}");
     }
+    Some(status)
 }
 
 pub fn warm_status(path: &Path) -> serde_json::Value {
@@ -1530,7 +1548,7 @@ impl CreatedWorkspace {
         let mut payload = self.instruction_payload();
         payload["warm_artifacts"]["status"] = serde_json::json!("pending");
         payload["warm_artifacts"]["note"] = serde_json::json!(
-            "Build inputs are still being copied. Check this workspace's warm_artifacts.status with get_worktree_paths(repo_path) or GET /worktrees/paths?path=<repo_path>. Wait for done or failed before installing dependencies or building here."
+            "Build inputs are still being copied (the configured file sync and Setup Script, if any, run after them). Check this workspace's warm_artifacts.status with get_worktree_paths(repo_path) or GET /worktrees/paths?path=<repo_path>. Wait for done or failed before installing dependencies or building here."
         );
         payload
     }
@@ -3944,6 +3962,16 @@ fn windows_hook_path(path: &str) -> String {
 ///
 /// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
 /// the kill path without waiting a quarter of an hour for it.
+///
+/// **Accepted, not a gap**: the captured `stdout`/`stderr` are unbounded — a
+/// script that writes gigabytes grows this process's memory by that much
+/// before the deadline fires. The script text is always either user-authored
+/// in Settings (Setup/Archive Script) or arrives through the same
+/// auth-gated caller as the rest of the HTTP surface (`POST
+/// /worktrees/run-script`), so nobody can hand this a script without already
+/// being able to run arbitrary code locally. Do not add a silent truncation
+/// cap without a real OOM report — it would change `stdout`/`stderr`'s
+/// contract for every caller.
 fn run_shell_script(
     script: &str,
     cwd: &Path,

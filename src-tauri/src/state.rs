@@ -570,7 +570,7 @@ pub enum AppEvent {
     #[serde(rename = "worktree-sync-started")]
     WorktreeSyncStarted { repo_path: String, branch: String },
     /// Throttled progress for the same background copy (not on every single
-    /// file — see `worktree::spawn_worktree_file_sync`'s throttling).
+    /// file — see `worktree::run_worktree_file_sync`'s throttling).
     #[serde(rename = "worktree-sync-progress")]
     WorktreeSyncProgress {
         repo_path: String,
@@ -588,6 +588,28 @@ pub enum AppEvent {
         total: usize,
         errors: Vec<String>,
     },
+    /// A worktree's Setup Script finished running in the background, after
+    /// `worktree::spawn_worktree_setup_chain` awaited the CoW warm (when the
+    /// creation path warms) and then the file sync above.
+    /// Fired only when a setup script was actually configured — silent
+    /// otherwise, matching `WorktreeSync*`'s own "nothing to do" precedent.
+    /// Worktree creation itself has already returned by this point on every
+    /// creation path (desktop, MCP HTTP worktree-create, MCP HTTP
+    /// session-with-worktree-create): this event, not a synchronous response
+    /// field, is how a script's outcome is reported.
+    #[serde(rename = "worktree-setup-script-completed")]
+    WorktreeSetupScriptCompleted {
+        repo_path: String,
+        branch: String,
+        worktree_path: String,
+        /// `None` when the script never produced an exit code at all (spawn
+        /// failure, task panic) — see `error` for that case.
+        exit_code: Option<i64>,
+        /// `None` on a clean run (including a non-zero exit code, which is
+        /// still reported via `exit_code`) — `Some` only for a spawn/panic
+        /// failure, mirroring `run_setup_script`'s own `Result` shape.
+        error: Option<String>,
+    },
 }
 
 /// The wire body of [`AppEvent::SessionStateChanged`], shared by the desktop
@@ -599,6 +621,25 @@ pub enum AppEvent {
 /// that drift.
 pub(crate) fn session_state_payload(session_id: &str, state: &SessionState) -> serde_json::Value {
     serde_json::json!({ "session_id": session_id, "state": state })
+}
+
+/// The wire body of [`AppEvent::WorktreeSetupScriptCompleted`], shared by the
+/// desktop window event (`worktree::spawn_worktree_setup_chain`) and the
+/// `/events` SSE arm — same one-builder rule as [`session_state_payload`].
+pub(crate) fn worktree_setup_script_completed_payload(
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    exit_code: Option<i64>,
+    error: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "repoPath": repo_path,
+        "branch": branch,
+        "worktreePath": worktree_path,
+        "exitCode": exit_code,
+        "error": error,
+    })
 }
 
 impl AppEvent {
@@ -5480,7 +5521,9 @@ impl AppState {
             // A worktree's background file copy is repo-scoped, not a session.
             | AppEvent::WorktreeSyncStarted { .. }
             | AppEvent::WorktreeSyncProgress { .. }
-            | AppEvent::WorktreeSyncCompleted { .. } => {}
+            | AppEvent::WorktreeSyncCompleted { .. }
+            // The setup-script outcome that follows the sync is repo-scoped too.
+            | AppEvent::WorktreeSetupScriptCompleted { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.

@@ -51,9 +51,11 @@ succeeds and the response carries a warning naming the directory that stayed
 cold. Measured on this repository: **~38 s for 30 GB across 80k files**
 (`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
 For desktop, HTTP, and MCP creation, wait until the workspace's warm status is
-`done` or `failed` before installing dependencies or building. When creation
-runs a configured setup script through HTTP or MCP, it finishes before the copy
-starts. Desktop setup and warming can overlap.
+`done` or `failed` before installing dependencies or building. On every
+creation path (desktop, HTTP, MCP) the order is fixed: the warm copy first, then
+the configured file sync, then the Setup Script — so the script sees the warm
+directories and the synced files — and the status turns `done`/`failed` only
+after the Setup Script has finished.
 
 Copy-on-write warming needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
 directories on the same volume. TUICommander never trusts the filesystem *name*
@@ -173,12 +175,12 @@ When using **Ask** mode, the cleanup dialog detects uncommitted changes and auto
 
 ### Archive Script
 
-A per-repo lifecycle hook that runs **before** a worktree is archived or deleted. Configure it in Settings → Repository → Scripts tab, or via `.tuic.json` (`archive_script` field).
+A per-repo lifecycle hook that runs **before** a worktree is archived or deleted. Configure it in Settings → Repository → Scripts tab, or as a global default in Settings → Repositories. **Not** supported in `.tuic.json` — executing a repo-committed script with no trust-on-first-use confirmation would let a malicious branch run arbitrary code the moment its worktree is touched.
 
 - The script runs in the worktree directory that is about to be removed
-- If the script exits with a non-zero code, the archive/delete operation is **blocked** and an error is shown
+- If the script exits with a non-zero code — or times out (after 15 minutes) — the archive/delete operation is **blocked** and an error is shown
 - Use cases: backing up local data, cleaning up resources, notifying external systems
-- The script is invoked via the platform shell (`sh -c` on macOS/Linux, `cmd /C` on Windows)
+- The script is invoked via the platform shell (`sh -c` on macOS/Linux, `cmd /C` on Windows), with a `TUIC_*` environment describing the worktree (main checkout path, branch, base ref, etc. — see the AI Agents guide's "Worktree Context" section) and a 15-minute timeout (only the shell itself is killed; its child processes are not)
 
 ## Moving Terminals Between Worktrees
 
