@@ -354,6 +354,8 @@ pub(super) async fn spawn_agent_session(
                 cmd.arg(arg);
             }
 
+            // Derived TUIC_* context first, so caller env can still override it.
+            crate::pty::inject_worktree_env(&mut cmd, spawn_cwd.as_deref());
             for (key, value) in &spawn_env {
                 cmd.env(key, value);
             }
