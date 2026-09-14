@@ -170,8 +170,13 @@ impl<T: Clone> TtlCache<T> {
         (at.elapsed() < API_CACHE_TTL).then(|| value.clone())
     }
 
+    /// The last good reading, but only while it is still worth showing. Without
+    /// the age bound a reading stood in for a live one forever, so a persistent
+    /// failure froze the ticker on an hours-old percentage that looked current.
     fn stale(&self) -> Option<T> {
-        self.0.lock().as_ref().map(|(value, _)| value.clone())
+        let guard = self.0.lock();
+        let (value, at) = guard.as_ref()?;
+        (at.elapsed() < STALE_FALLBACK_MAX_AGE).then(|| value.clone())
     }
 
     fn put(&self, value: &T) {
@@ -190,6 +195,10 @@ static RATE_LIMITED_UNTIL: parking_lot::Mutex<Option<Instant>> = parking_lot::Mu
 const API_CACHE_TTL: Duration = Duration::from_secs(300);
 /// Minimum backoff after a 429, so the next poll does not hammer the endpoint.
 const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(120);
+/// How old a cached reading may be before it stops standing in for a live one.
+/// Neither response carries a timestamp, so the frontend cannot tell a fresh
+/// figure from an old one — past this age the error is the honest answer.
+const STALE_FALLBACK_MAX_AGE: Duration = Duration::from_secs(1800);
 
 /// Rate limits — the endpoint the Codex CLI itself polls.
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -276,6 +285,17 @@ async fn cached_fetch<T: Clone + serde::de::DeserializeOwned>(
                     backoff_secs = RATE_LIMIT_BACKOFF.as_secs(),
                     "Rate limited — backing off"
                 );
+            }
+            // A credential failure is not a transient blip: the Codex CLI owns
+            // this token and rotates it on its own runs, so 401/403 is the one
+            // thing the user must be told about rather than papered over.
+            if matches!(status, 401 | 403) {
+                tracing::warn!(
+                    source = "codex_usage",
+                    status,
+                    "Codex token rejected — surfacing the error instead of a cached reading"
+                );
+                return Err(message);
             }
             if let Some(stale) = cache.stale() {
                 tracing::info!(
