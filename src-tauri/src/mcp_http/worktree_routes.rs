@@ -1217,6 +1217,8 @@ mod survivor_tests {
             repo.to_string_lossy().to_string(),
             "order-test-branch".to_string(),
             None,
+            None,
+            false,
         )
         .await
         .expect("worktree should be created");
