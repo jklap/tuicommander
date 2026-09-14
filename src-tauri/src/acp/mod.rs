@@ -308,10 +308,17 @@ pub enum AcpTurnState {
     Settled,
 }
 
+/// What this attachment knows about token usage, from two independent signals.
+///
+/// Both are optional because the agent owes neither. `context` arrives on a
+/// `session/update` and `end_turn` on the prompt response, and an agent may
+/// send one, the other, or both. Requiring `context` meant the snapshot could
+/// only exist once a `UsageUpdate` had arrived, so an agent that reports usage
+/// only on the response had every figure dropped from the durable aggregate.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpUsageSnapshot {
-    pub context: v1::UsageUpdate,
+    pub context: Option<v1::UsageUpdate>,
     pub end_turn: Option<v1::Usage>,
 }
 
