@@ -230,9 +230,18 @@ impl AcpClientManager {
         request: AcpReconnectRequest,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
         self.snapshot(request.connection_id)?;
+        // Validate the replacement BEFORE giving up the working connection.
+        // Every input check lives inside `connect`, so disconnecting first meant
+        // a renamed root or a moved binary destroyed the live connection, every
+        // attachment on it and every running turn, and then answered
+        // `invalid_input`. There is no rollback and the old id is gone, so a
+        // request that could never have succeeded left the caller with nothing.
+        let executable = canonical_executable(&config.executable).await?;
+        let root = canonical_root(&request.root).await?;
+        launch_spec(&EgoAcpConfig { executable }, &root)?;
+
         self.disconnect(request.connection_id).await?;
-        self.connect(config, AcpConnectRequest { root: request.root })
-            .await
+        self.connect(config, AcpConnectRequest { root }).await
     }
 
     /// Open a durable session on a live connection.
