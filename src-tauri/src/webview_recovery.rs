@@ -103,50 +103,83 @@ mod desktop {
         }
     }
 
-    /// One poll. Returns true while the frame holds the app.
+    /// One poll. Returns the lost document's URL, or `None` while the frame
+    /// holds the app.
+    ///
+    /// Probes and nothing else: [`spawn`] does the logging and the recovery,
+    /// because it is the only place that knows whether this is a new loss or
+    /// the same one fifteen seconds later.
     ///
     /// `WebviewWindow::url` posts a message to the event loop and blocks on the
     /// reply, so this must not run on the main thread (it would wait for itself)
     /// nor on the diagnostics thread (a wedged event loop would take the CPU
     /// watchdog down with it). Hence the dedicated thread in [`spawn`].
-    fn healthy(state: &Arc<AppState>) -> bool {
-        let Some(window) = main_window(state) else {
-            return true; // No window yet — nothing to recover.
-        };
-        let Ok(url) = window.url() else {
-            return true; // Probe failed; a failed probe is not a lost document.
-        };
+    fn lost_document(state: &Arc<AppState>) -> Option<String> {
+        let window = main_window(state)?; // No window yet — nothing to recover.
+        let url = window.url().ok()?; // A failed probe is not a lost document.
         if !is_lost(url.as_str()) {
             *state.webview_boot_url.write() = Some(url);
-            return true;
+            return None;
         }
-        tracing::error!(
-            source = "webview",
-            url = %url,
-            "Main WebView lost its document — the app is not in the DOM and the window is white. \
-             Navigating back to the app; PTY sessions are unaffected.",
-        );
-        let outcome = navigate_home(state);
-        tracing::info!(source = "webview", outcome = %outcome, "WebView recovery attempted");
-        false
+        Some(url.to_string())
     }
+
+    /// Ceiling on the retry schedule, in polls — four minutes at `POLL_INTERVAL`.
+    /// Bounded rather than latched: a navigate can fail transiently, and a latch
+    /// that stopped retrying would leave the window white for good.
+    const MAX_RECOVERY_BACKOFF_POLLS: u32 = 16;
 
     pub(crate) fn spawn(state: Arc<AppState>) {
         std::thread::Builder::new()
             .name("webview-recovery".into())
             .spawn(move || {
                 std::thread::sleep(STARTUP_DELAY);
-                let mut was_lost = false;
+                // The log lines are latched separately from the retries, and
+                // they are the thing that must not repeat: an error and an info
+                // every fifteen seconds alternate, so they defeat the ring
+                // buffer's adjacent-entry coalescing and take two of its 1000
+                // slots per poll. A window left white overnight evicted every
+                // other diagnostic in the buffer — including whatever explained
+                // the loss.
+                let mut announced_loss = false;
+                let mut polls_until_retry = 0u32;
+                let mut backoff_polls = 1u32;
                 loop {
                     std::thread::sleep(POLL_INTERVAL);
-                    let ok = healthy(&state);
-                    if ok && was_lost {
-                        tracing::info!(
+                    let Some(url) = lost_document(&state) else {
+                        if announced_loss {
+                            tracing::info!(
+                                source = "webview",
+                                "Main WebView is back on the app after a lost document"
+                            );
+                        }
+                        announced_loss = false;
+                        polls_until_retry = 0;
+                        backoff_polls = 1;
+                        continue;
+                    };
+                    if !announced_loss {
+                        announced_loss = true;
+                        tracing::error!(
                             source = "webview",
-                            "Main WebView is back on the app after a lost document"
+                            url = %url,
+                            "Main WebView lost its document — the app is not in the DOM and the \
+                             window is white. Navigating back to the app; PTY sessions are \
+                             unaffected.",
                         );
                     }
-                    was_lost = !ok;
+                    if polls_until_retry > 0 {
+                        polls_until_retry -= 1;
+                        continue;
+                    }
+                    let outcome = navigate_home(&state);
+                    tracing::info!(
+                        source = "webview",
+                        outcome = %outcome,
+                        "WebView recovery attempted"
+                    );
+                    polls_until_retry = backoff_polls;
+                    backoff_polls = (backoff_polls * 2).min(MAX_RECOVERY_BACKOFF_POLLS);
                 }
             })
             .expect("failed to spawn webview-recovery thread");
