@@ -558,6 +558,23 @@ describe("mdTabsStore", () => {
 			});
 		});
 
+		it("a tab added with an empty repoPath is visible under every repo/branch", () => {
+			// The combination a plugin's openMarkdownFile relies on for a file with
+			// no owning repo (locateFile returns repoPath:"") — confirms the tab it
+			// produces is not just unscoped in isolation, but genuinely visible
+			// regardless of which repo/branch is currently active.
+			testInScope(() => {
+				addRepoWithBranch("/Gits/alpha", "main");
+				addRepoWithBranch("/Gits/beta", "develop");
+
+				const id = store.add("", "/elsewhere/notes/board.md");
+
+				expect(store.getVisibleIds("/Gits/alpha|main")).toContain(id);
+				expect(store.getVisibleIds("/Gits/beta|develop")).toContain(id);
+				expect(store.getVisibleIds(null)).toContain(id);
+			});
+		});
+
 		it("addFileBackground scopes to its own repo too", () => {
 			testInScope(() => {
 				addRepoWithBranch("/Gits/alpha", "main");
