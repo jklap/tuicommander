@@ -301,6 +301,7 @@ Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on
 | `toggle-focus-mode` | `Cmd+Alt+Enter` | Focus mode — hide sidebar/tab bar/panels |
 | `toggle-file-browser-content-search` | `Cmd+Shift+F` | File content search |
 | `toggle-diff-scroll` | `Cmd+Shift+G` | Diff scroll view |
+| `open-session-review` | _unbound_ | Session diff review — step through everything a Claude Code session changed (Command Palette) |
 | `toggle-global-workspace` | `Cmd+Shift+X` | Toggle global workspace |
 | `toggle-ai-chat` | `Cmd+Alt+A` | Toggle the ego-backed AI Chat panel. Listed only while **Experimental features** is on |
 | `clear-scrollback` | `Cmd+K` | Clear scrollback |
