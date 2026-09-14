@@ -1974,6 +1974,109 @@ describe("PluginHost — watchPath fan-out (613-00e8 F104)", () => {
 	});
 });
 
+describe("PluginHost — watchPath capability gating", () => {
+	it("external plugin without fs:watch throws PluginCapabilityError on watchPath", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		await expect(host!.watchPath("/a", () => {})).rejects.toThrow(PluginCapabilityError);
+	});
+
+	it("external plugin with fs:watch can call watchPath", async () => {
+		const invoked = vi.mocked(invoke);
+		invoked.mockResolvedValueOnce("watch-gate");
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["fs:watch"],
+		);
+		await expect(host!.watchPath("/a", () => {})).resolves.toBeDefined();
+	});
+});
+
+describe("PluginHost — registerTerminalAction capability gating", () => {
+	it("external plugin without ui:context-menu throws PluginCapabilityError on registerTerminalAction", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		expect(() => host!.registerTerminalAction({ id: "a", label: "A", action: () => {} })).toThrow(
+			PluginCapabilityError,
+		);
+	});
+
+	it("external plugin with ui:context-menu can call registerTerminalAction", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:context-menu"],
+		);
+		expect(() => host!.registerTerminalAction({ id: "a", label: "A", action: () => {} })).not.toThrow();
+	});
+});
+
+describe("PluginHost — openMarkdownFile capability gating and repo routing", () => {
+	afterEach(() => {
+		repositoriesStore.setActive(null);
+		repositoriesStore.remove("/gap-fill/repo");
+	});
+
+	it("external plugin without ui:markdown throws PluginCapabilityError on openMarkdownFile", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		expect(() => host!.openMarkdownFile("/abs/path.md")).toThrow(PluginCapabilityError);
+	});
+
+	it("opens a file inside a registered repo scoped to that repo", async () => {
+		repositoriesStore.add({ path: "/gap-fill/repo", displayName: "repo" });
+		repositoriesStore.setBranch("/gap-fill/repo", "main", { worktreePath: "/gap-fill/repo" });
+
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:markdown"],
+		);
+		host!.openMarkdownFile("/gap-fill/repo/docs/x.md");
+
+		const tab = mdTabsStore.get(mdTabsStore.getIds()[0]);
+		expect(tab).toMatchObject({ type: "file", repoPath: "/gap-fill/repo", filePath: "docs/x.md" });
+	});
+
+	it("opens a file under no registered repo as an unowned, absolute-path tab without throwing", async () => {
+		// md-kanban's board files commonly live outside any registered repo (a
+		// personal notes vault, say) — this is the exact case that plugin depends on.
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:markdown"],
+		);
+		expect(() => host!.openMarkdownFile("/elsewhere/notes/board.md")).not.toThrow();
+
+		const tab = mdTabsStore.get(mdTabsStore.getIds()[0]);
+		expect(tab).toMatchObject({ type: "file", repoPath: "", filePath: "/elsewhere/notes/board.md" });
+	});
+});
+
 describe("PluginHost — panel message bridge", () => {
 	it("onMessage callback receives messages via handlePanelMessage", () => {
 		const onMessage = vi.fn();
