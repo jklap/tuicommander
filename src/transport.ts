@@ -778,6 +778,41 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return { method: "GET", path: diffUrl };
 		},
 	},
+	list_review_sessions: {
+		map: (args, p) => {
+			let url = `/repo/session-review/sessions?path=${p("repoPath")}`;
+			if (args?.limit != null) url += `&limit=${encodeURIComponent(String(args.limit))}`;
+			if (args?.includeCounts) url += `&include_counts=true`;
+			return { method: "GET", path: url };
+		},
+	},
+	get_session_review: {
+		map: (args, p) => {
+			let url = `/repo/session-review?path=${p("repoPath")}&session_id=${p("sessionId")}`;
+			if (args?.includeSubagents === false) url += `&include_subagents=false`;
+			return { method: "GET", path: url };
+		},
+	},
+	revert_session_step: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/session-review/revert-step",
+			body: { path: args.repoPath, session_id: args.sessionId, tool_use_id: args.toolUseId, dry_run: args.dryRun },
+		}),
+	},
+	revert_file_to_session_start: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/session-review/revert-file",
+			body: {
+				path: args.repoPath,
+				session_id: args.sessionId,
+				abs_path: args.absPath,
+				force: args.force,
+				dry_run: args.dryRun,
+			},
+		}),
+	},
 	get_github_status: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/github?path=${p("path")}` }),
 	},

@@ -527,6 +527,68 @@ describe("transport", () => {
 			expect(result.path).toBe("/repo/files?path=%2Fmy%2Frepo");
 		});
 
+		it("maps list_review_sessions to GET /repo/session-review/sessions?path=, with optional limit/includeCounts", () => {
+			const bare = mapCommandToHttp("list_review_sessions", { repoPath: "/my/repo" });
+			expect(bare.method).toBe("GET");
+			expect(bare.path).toBe("/repo/session-review/sessions?path=%2Fmy%2Frepo");
+
+			const withOpts = mapCommandToHttp("list_review_sessions", {
+				repoPath: "/my/repo",
+				limit: 10,
+				includeCounts: true,
+			});
+			expect(withOpts.path).toBe("/repo/session-review/sessions?path=%2Fmy%2Frepo&limit=10&include_counts=true");
+		});
+
+		it("maps get_session_review to GET /repo/session-review?path=&session_id=", () => {
+			const result = mapCommandToHttp("get_session_review", { repoPath: "/my/repo", sessionId: "sess-1" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/repo/session-review?path=%2Fmy%2Frepo&session_id=sess-1");
+
+			const noSubagents = mapCommandToHttp("get_session_review", {
+				repoPath: "/my/repo",
+				sessionId: "sess-1",
+				includeSubagents: false,
+			});
+			expect(noSubagents.path).toBe("/repo/session-review?path=%2Fmy%2Frepo&session_id=sess-1&include_subagents=false");
+		});
+
+		it("maps revert_session_step to POST /repo/session-review/revert-step, keyed by tool_use_id", () => {
+			const result = mapCommandToHttp("revert_session_step", {
+				repoPath: "/my/repo",
+				sessionId: "sess-1",
+				toolUseId: "toolu_abc",
+				dryRun: true,
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/repo/session-review/revert-step");
+			expect(result.body).toEqual({
+				path: "/my/repo",
+				session_id: "sess-1",
+				tool_use_id: "toolu_abc",
+				dry_run: true,
+			});
+		});
+
+		it("maps revert_file_to_session_start to POST /repo/session-review/revert-file", () => {
+			const result = mapCommandToHttp("revert_file_to_session_start", {
+				repoPath: "/my/repo",
+				sessionId: "sess-1",
+				absPath: "/my/repo/src/foo.ts",
+				force: true,
+				dryRun: false,
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/repo/session-review/revert-file");
+			expect(result.body).toEqual({
+				path: "/my/repo",
+				session_id: "sess-1",
+				abs_path: "/my/repo/src/foo.ts",
+				force: true,
+				dry_run: false,
+			});
+		});
+
 		it("maps get_github_status to GET /repo/github?path=", () => {
 			const result = mapCommandToHttp("get_github_status", { path: "/my/repo" });
 			expect(result.method).toBe("GET");
