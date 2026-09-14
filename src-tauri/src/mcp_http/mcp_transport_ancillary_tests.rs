@@ -2608,3 +2608,110 @@ fn sanitize_branch_for_suggested_prompt_strips_backticks_and_newlines() {
         "normal-branch-name"
     );
 }
+
+#[tokio::test]
+async fn handle_worktree_create_no_longer_returns_setup_script_fields() {
+    // Pins the deliberate MCP contract change from the setup-script
+    // ordering fix: create_worktree_shared now chains the setup script in
+    // the background (spawn_worktree_setup_chain: warm -> file sync ->
+    // script), so this tool response can no longer report
+    // setup_script/setup_script_error synchronously — the outcome is the
+    // worktree-setup-script-completed event instead.
+    let repo = crate::state::tests_support::create_temp_git_repo();
+    let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let mut defaults = crate::config::RepoDefaultsConfig::default();
+    defaults.setup_script = "true".into();
+    crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+        .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+    let response = handle_worktree(
+        &state,
+        &serde_json::json!({
+            "action": "worktree_create",
+            "path": repo.path().to_string_lossy(),
+            "branch": "mcp-create-test",
+        }),
+        false,
+    )
+    .await;
+
+    assert!(
+        response.get("worktree_path").is_some(),
+        "response: {response}"
+    );
+    assert_eq!(response["branch"], "mcp-create-test");
+    assert!(
+        response.get("setup_script").is_none(),
+        "setup_script must not appear in the response: {response}"
+    );
+    assert!(
+        response.get("setup_script_error").is_none(),
+        "setup_script_error must not appear in the response: {response}"
+    );
+    let wt = std::path::PathBuf::from(response["worktree_path"].as_str().unwrap());
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while crate::worktree::warm_status(&wt)["status"] == "pending" {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("setup chain should finish");
+    crate::worktree::clear_warm(&wt);
+}
+
+// User decision (2026-10-17, pick 112): interactive creation leaves the Setup
+// Script chain in the background, but the unattended daemon path must WAIT for
+// it and fail on a Setup Script failure, so a workflow/automation agent never
+// starts in a half-set-up worktree.
+#[tokio::test]
+async fn daemon_workflow_worktree_waits_for_the_setup_script_and_fails_on_its_error() {
+    let repo = crate::state::tests_support::create_temp_git_repo();
+    let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+    // Success: the script's side effect exists by the time the wrapper returns,
+    // and the warm status is no longer pending (the whole chain finished).
+    let mut defaults = crate::config::RepoDefaultsConfig::default();
+    defaults.setup_script = "echo ready > setup.marker".into();
+    crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+        .unwrap();
+    let ok = create_daemon_workflow_worktree(
+        &state,
+        &repo.path().to_string_lossy(),
+        "daemon-setup-ok",
+        None,
+    )
+    .await
+    .expect("a succeeding Setup Script must not fail the daemon worktree");
+    let ok_path = std::path::PathBuf::from(&ok.path);
+    assert_eq!(
+        std::fs::read_to_string(ok_path.join("setup.marker"))
+            .expect("the Setup Script must have finished before the wrapper returned")
+            .trim(),
+        "ready"
+    );
+    assert_ne!(crate::worktree::warm_status(&ok_path)["status"], "pending");
+    crate::worktree::clear_warm(&ok_path);
+
+    // Failure: a non-zero exit fails creation with the script's error.
+    let mut defaults = crate::config::RepoDefaultsConfig::default();
+    defaults.setup_script = "echo setup-went-wrong >&2; exit 3".into();
+    crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+        .unwrap();
+    let err = match create_daemon_workflow_worktree(
+        &state,
+        &repo.path().to_string_lossy(),
+        "daemon-setup-fails",
+        None,
+    )
+    .await
+    {
+        Ok(_) => panic!("a failing Setup Script must fail the daemon worktree"),
+        Err(err) => err,
+    };
+    assert!(err.contains("exited with code 3"), "error: {err}");
+    assert!(err.contains("setup-went-wrong"), "error: {err}");
+}

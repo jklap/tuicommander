@@ -2,6 +2,7 @@ import { type Accessor, createEffect, createRoot, type Setter } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../agents";
 import { ensureAgentConfigsForRepo } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
+import { repoSettingsStore } from "../../stores/repoSettings";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { workItemLinksStore } from "../../stores/workItemLinks";
@@ -18,6 +19,7 @@ import { prepareAgentLaunchCommand } from "../../utils/agentSession";
 import { usePty } from "../usePty";
 import type { AgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
+import { armSetupScriptWaiter, type SetupNewWorktreeOptions } from "./createWorktreeCreationCoordinator";
 
 /** Maximum characters of a brief typed into an agent; item bodies can be arbitrarily long. */
 export const START_WORK_PROMPT_CAP = 12_000;
@@ -64,6 +66,7 @@ export interface StartWorkDeps {
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
+		options?: SetupNewWorktreeOptions,
 	) => Promise<string | undefined>;
 	setStatusInfo: (message: string) => void;
 	creatingWorktreeRepos: Accessor<Set<string>>;
@@ -200,8 +203,18 @@ export function createStartWork(deps: StartWorkDeps) {
 				base = baseRefs.find((r) => r.is_default)?.name ?? baseRefs[0]?.name ?? "main";
 			}
 			deps.setStatusInfo(`Creating worktree ${branch}...`);
-			result = await deps.createWorktree(repoPath, branch, true, base);
-			termId = await deps.setupNewWorktree(repoPath, result, branch, seed);
+			// Armed before the request: the backend's warm -> sync -> Setup Script
+			// chain may report completion before createWorktree's response arrives.
+			const setupWaiter = repoSettingsStore.getEffective(repoPath)?.setupScript
+				? armSetupScriptWaiter(repoPath)
+				: undefined;
+			try {
+				result = await deps.createWorktree(repoPath, branch, true, base);
+			} catch (err) {
+				setupWaiter?.cancel();
+				throw err;
+			}
+			termId = await deps.setupNewWorktree(repoPath, result, branch, seed, { setupWaiter });
 		} finally {
 			deps.setCreatingWorktreeRepos((prev) => {
 				const next = new Set(prev);

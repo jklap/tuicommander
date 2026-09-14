@@ -371,12 +371,17 @@ async fn handle_worktree_with_caller(
                             }
                         }
                     }
-                    if let Some(setup_script) = created.setup_script {
-                        response["setup_script"] = setup_script;
-                    }
-                    if let Some(setup_script_error) = created.setup_script_error {
-                        response["setup_script_error"] = setup_script_error;
-                    }
+                    // The setup script (if configured) no longer runs inline
+                    // here — create_worktree_shared chains it after the CoW
+                    // warm and the file sync in the background
+                    // (spawn_worktree_setup_chain) so it can't race them, and
+                    // this tool response returns before any of them finishes
+                    // (instructions.warm_artifacts.status stays "pending"
+                    // until the whole chain is done). Its outcome is reported via the
+                    // dual-emitted `worktree-setup-script-completed` event,
+                    // not this response — an MCP client has no way to observe
+                    // that today, which is a deliberate, accepted tradeoff for
+                    // fixing the ordering (see worktree.rs's doc comment).
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
                         let safe_branch = sanitize_branch_for_suggested_prompt(&branch_name);
@@ -2558,19 +2563,24 @@ pub(crate) async fn create_daemon_workflow_worktree(
     branch: &str,
     base_ref: Option<&str>,
 ) -> Result<DaemonWorkspace, String> {
-    super::worktree_routes::create_worktree_shared(
+    // Unattended: wait for the warm -> file sync -> Setup Script chain and fail
+    // on a Setup Script failure, so a workflow/automation agent never starts in
+    // a half-set-up worktree (interactive creation leaves the chain in the
+    // background instead).
+    super::worktree_routes::create_worktree_shared_with_setup(
         state,
         project.into(),
         branch.into(),
         base_ref.map(str::to_owned),
         None,
         false,
+        super::worktree_routes::SetupChainMode::Wait,
     )
     .await
     .map_err(|(_, value)| value.0.to_string())
-    .and_then(|created| {
-        if let Some(error) = created.setup_script_error {
-            return Err(error.to_string());
+    .and_then(|(created, setup_failure)| {
+        if let Some(error) = setup_failure {
+            return Err(error);
         }
         Ok(DaemonWorkspace {
             path: created.path,

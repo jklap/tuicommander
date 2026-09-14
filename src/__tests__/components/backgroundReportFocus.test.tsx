@@ -128,6 +128,7 @@ it("background_report_open_and_update_preserve_terminal_input_focus — catches:
 		},
 		applyPlatformClass: () => "macos",
 		registerRepo: vi.fn().mockResolvedValue(undefined),
+		handleWorktreeSetupScriptCompleted: vi.fn(),
 	} satisfies AppInitDeps);
 	repositoriesStore.add({ path: "/repo/typing", displayName: "typing" });
 	repositoriesStore.add({ path: "/repo/report", displayName: "report" });
