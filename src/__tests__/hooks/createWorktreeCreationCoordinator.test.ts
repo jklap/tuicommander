@@ -5,10 +5,19 @@ import { testInScopeAsync } from "../helpers/store";
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 
+/** Flush pending microtasks (promise chains with no real timers involved). */
+async function flushMicrotasks(times = 10) {
+	for (let i = 0; i < times; i++) {
+		await Promise.resolve();
+	}
+}
+
 describe("createWorktreeCreationCoordinator", () => {
 	let createWorktreeCreationCoordinator: typeof import("../../hooks/git/createWorktreeCreationCoordinator").createWorktreeCreationCoordinator;
+	let SETUP_SCRIPT_WAIT_TIMEOUT_MS: number;
 	let repositoriesStore: typeof import("../../stores/repositories").repositoriesStore;
 	let repoSettingsStore: typeof import("../../stores/repoSettings").repoSettingsStore;
+	let mockListen: ReturnType<typeof vi.fn>;
 
 	const REPO = "/Gits/alpha";
 
@@ -16,13 +25,34 @@ describe("createWorktreeCreationCoordinator", () => {
 		vi.resetModules();
 		mockInvoke.mockReset().mockResolvedValue(undefined);
 		vi.doMock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
-		createWorktreeCreationCoordinator = (await import("../../hooks/git/createWorktreeCreationCoordinator"))
-			.createWorktreeCreationCoordinator;
+		// `../../invoke`'s `listen()` routes through `@tauri-apps/api/event`'s `listen`
+		// whenever `isTauri()` is true (global setup sets `__TAURI_INTERNALS__`). Mock
+		// it here — rather than relying on the global `../mocks/tauri.ts` registration —
+		// so `captureListener` below always sees the exact instance the freshly
+		// re-imported (post-`resetModules`) coordinator module resolves to.
+		mockListen = vi.fn().mockResolvedValue(vi.fn());
+		vi.doMock("@tauri-apps/api/event", () => ({ listen: mockListen, emit: vi.fn().mockResolvedValue(undefined) }));
+		({ createWorktreeCreationCoordinator, SETUP_SCRIPT_WAIT_TIMEOUT_MS } = await import(
+			"../../hooks/git/createWorktreeCreationCoordinator"
+		));
 		repositoriesStore = (await import("../../stores/repositories")).repositoriesStore;
 		repoSettingsStore = (await import("../../stores/repoSettings")).repoSettingsStore;
 		repositoriesStore._testSetHydrated(true);
 		repositoriesStore.add({ path: REPO, displayName: "alpha" });
 	});
+
+	/** Capture the handler registered for `eventName` via `listen()`, whatever else
+	 *  is also registered. Mirrors `useAppInit.test.ts`'s `captureListener`. */
+	function captureListener<T>(eventName: string) {
+		let callback: ((event: { payload: T }) => void) | null = null;
+		mockListen.mockImplementation((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === eventName) {
+				callback = handler as unknown as (event: { payload: T }) => void;
+			}
+			return Promise.resolve(vi.fn());
+		});
+		return { getCallback: () => callback };
+	}
 
 	afterEach(() => {
 		repositoriesStore._testCancelPendingSave();
@@ -311,6 +341,216 @@ describe("createWorktreeCreationCoordinator", () => {
 				expect(repo.createWorktree).not.toHaveBeenCalled();
 				expect(worktreeDialogState()).not.toBeNull();
 			});
+		});
+	});
+
+	describe("setupNewWorktree — setup-script/run-script ordering", () => {
+		/** `makeCoordinator`'s default `createWorktree` mock always resolves with a fixed
+		 *  `branch: "new-worktree"`, regardless of the requested branch name — fine for
+		 *  the other describe blocks, but `armSetupScriptWaiter` matches the
+		 *  event's `branch` against `result.branch`, so these tests need the mock to
+		 *  actually echo back the requested branch name. */
+		const echoBranchRepoOverrides = {
+			createWorktree: vi.fn().mockImplementation((baseRepo: string, branchName: string) =>
+				Promise.resolve({
+					status: "ok",
+					name: branchName,
+					path: `${REPO}__wt/${branchName}`,
+					branch: branchName,
+					workspace_id: branchName,
+					base_repo: baseRepo,
+				}),
+			),
+		};
+
+		it("waits for the matching worktree-setup-script-completed event before creating the terminal, when a setup script is configured", async () => {
+			await testInScopeAsync(async () => {
+				repoSettingsStore.getOrCreate(REPO, "alpha");
+				repoSettingsStore.update(REPO, { setupScript: "npm install" });
+				const { getCallback } = captureListener<{ repoPath: string; branch: string }>(
+					"worktree-setup-script-completed",
+				);
+				const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
+
+				await coordinator.handleAddWorktree(REPO);
+				const done = coordinator.confirmCreateWorktree({
+					branchName: "feature-x",
+					createBranch: true,
+					baseRef: "main",
+				});
+
+				await flushMicrotasks();
+				expect(mockListen).toHaveBeenCalledWith("worktree-setup-script-completed", expect.any(Function));
+				expect(handleAddTerminalToWorkspace).not.toHaveBeenCalled();
+
+				getCallback()!({ payload: { repoPath: REPO, branch: "feature-x" } });
+				await done;
+
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
+			});
+		});
+
+		it("keeps waiting on a non-matching event (different repo or branch)", async () => {
+			await testInScopeAsync(async () => {
+				repoSettingsStore.getOrCreate(REPO, "alpha");
+				repoSettingsStore.update(REPO, { setupScript: "npm install" });
+				const { getCallback } = captureListener<{ repoPath: string; branch: string }>(
+					"worktree-setup-script-completed",
+				);
+				const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
+
+				await coordinator.handleAddWorktree(REPO);
+				const done = coordinator.confirmCreateWorktree({
+					branchName: "feature-x",
+					createBranch: true,
+					baseRef: "main",
+				});
+				await flushMicrotasks();
+
+				getCallback()!({ payload: { repoPath: REPO, branch: "some-other-branch" } });
+				await flushMicrotasks();
+				expect(handleAddTerminalToWorkspace).not.toHaveBeenCalled();
+
+				getCallback()!({ payload: { repoPath: REPO, branch: "feature-x" } });
+				await done;
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
+			});
+		});
+
+		it("creates the terminal without waiting on any event when no setup script is configured", async () => {
+			await testInScopeAsync(async () => {
+				const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
+
+				await coordinator.handleAddWorktree(REPO);
+				await coordinator.confirmCreateWorktree({ branchName: "feature-x", createBranch: true, baseRef: "main" });
+
+				expect(mockListen).not.toHaveBeenCalled();
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
+			});
+		});
+
+		it("listens BEFORE the create request, so a chain that finishes first is not missed", async () => {
+			await testInScopeAsync(async () => {
+				repoSettingsStore.getOrCreate(REPO, "alpha");
+				repoSettingsStore.update(REPO, { setupScript: "npm install" });
+				const { getCallback } = captureListener<{ repoPath: string; branch: string }>(
+					"worktree-setup-script-completed",
+				);
+				// The backend chain completes while the create response is still in flight.
+				const createWorktree = vi.fn().mockImplementation(async (baseRepo: string, branchName: string) => {
+					getCallback()!({ payload: { repoPath: REPO, branch: branchName } });
+					return {
+						status: "ok",
+						name: branchName,
+						path: `${REPO}__wt/${branchName}`,
+						branch: branchName,
+						workspace_id: branchName,
+						base_repo: baseRepo,
+					};
+				});
+				const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: { createWorktree } });
+
+				await coordinator.handleAddWorktree(REPO);
+				await coordinator.confirmCreateWorktree({ branchName: "fast-x", createBranch: true, baseRef: "main" });
+
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "fast-x");
+			});
+		});
+
+		it("never runs the setup script itself for a backend-created worktree", async () => {
+			await testInScopeAsync(async () => {
+				repoSettingsStore.getOrCreate(REPO, "alpha");
+				repoSettingsStore.update(REPO, { setupScript: "npm install" });
+				const { getCallback } = captureListener<{ repoPath: string; branch: string }>(
+					"worktree-setup-script-completed",
+				);
+				const { coordinator, repo } = makeCoordinator({ repo: echoBranchRepoOverrides });
+
+				await coordinator.handleAddWorktree(REPO);
+				const done = coordinator.confirmCreateWorktree({
+					branchName: "feature-x",
+					createBranch: true,
+					baseRef: "main",
+				});
+				await flushMicrotasks();
+				getCallback()!({ payload: { repoPath: REPO, branch: "feature-x" } });
+				await done;
+
+				expect(repo.runSetupScript).not.toHaveBeenCalled();
+			});
+		});
+
+		it("runs the setup script from the frontend for a worktree no backend chain set up", async () => {
+			await testInScopeAsync(async () => {
+				repoSettingsStore.getOrCreate(REPO, "alpha");
+				repoSettingsStore.update(REPO, { setupScript: "npm install" });
+				const { coordinator, repo, handleAddTerminalToWorkspace } = makeCoordinator();
+
+				await coordinator.setupNewWorktree(
+					REPO,
+					{
+						name: "pr-1",
+						path: `${REPO}__wt/pr-1`,
+						workspace_id: "pr-1",
+						branch: "pr-1",
+						base_repo: REPO,
+					},
+					"pr-1",
+					undefined,
+					{ runSetupScriptHere: true },
+				);
+
+				expect(repo.runSetupScript).toHaveBeenCalledWith("npm install", `${REPO}__wt/pr-1`);
+				expect(mockListen).not.toHaveBeenCalled();
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "pr-1");
+			});
+		});
+
+		it("stops listening when the create request fails", async () => {
+			await testInScopeAsync(async () => {
+				repoSettingsStore.getOrCreate(REPO, "alpha");
+				repoSettingsStore.update(REPO, { setupScript: "npm install" });
+				const unlisten = vi.fn();
+				mockListen.mockResolvedValue(unlisten);
+				const createWorktree = vi.fn().mockRejectedValue(new Error("boom"));
+				const { coordinator } = makeCoordinator({ repo: { createWorktree } });
+
+				await coordinator.handleAddWorktree(REPO);
+				await expect(
+					coordinator.confirmCreateWorktree({ branchName: "feature-x", createBranch: true, baseRef: "main" }),
+				).rejects.toThrow("boom");
+				await flushMicrotasks();
+
+				expect(unlisten).toHaveBeenCalled();
+			});
+		});
+
+		it("gives up and proceeds anyway once the safety-net timeout elapses with no matching event", async () => {
+			vi.useFakeTimers();
+			try {
+				await testInScopeAsync(async () => {
+					repoSettingsStore.getOrCreate(REPO, "alpha");
+					repoSettingsStore.update(REPO, { setupScript: "npm install" });
+					captureListener("worktree-setup-script-completed");
+					const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
+
+					await coordinator.handleAddWorktree(REPO);
+					const done = coordinator.confirmCreateWorktree({
+						branchName: "feature-x",
+						createBranch: true,
+						baseRef: "main",
+					});
+					await flushMicrotasks();
+					expect(handleAddTerminalToWorkspace).not.toHaveBeenCalled();
+
+					await vi.advanceTimersByTimeAsync(SETUP_SCRIPT_WAIT_TIMEOUT_MS);
+					await done;
+
+					expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
+				});
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 	});
 });

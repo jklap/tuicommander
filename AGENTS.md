@@ -678,7 +678,7 @@ exact scenario it claimed to cover).
 
 `git worktree add` only ever checks out tracked, committed content — copying anything else
 (ignored/untracked files, or a repo's explicit `copy_paths` list) into a freshly created worktree
-is a separate step, done by `worktree_sync.rs` + `worktree::spawn_worktree_file_sync`, run in the
+is a separate step, done by `worktree_sync.rs` + `worktree::run_worktree_file_sync`, run in the
 background right after the worktree is created (both the desktop `create_worktree` command and the
 MCP HTTP `create_worktree_shared` path call it, resolving effective settings themselves via
 `config::resolve_effective_copy_settings` — no frontend involvement needed). Before 2026-09-10,
@@ -1187,6 +1187,127 @@ string→string mapping needs real drift protection (e.g. `preset_name_for` /
 until every such mapping is updated — cheaper than a runtime parity test and
 catches the gap before it ships, not after.
 
+## Worktree Automation Script Context (`TUIC_*`) and the Setup-Script/Sync Ordering Fix
+
+Setup Script, Archive Script, Run Script, and Smart Prompt shell/headless children all
+now get a `TUIC_*` environment (`src-tauri/src/script_env.rs`'s `ScriptContext`) —
+`TUIC_MAIN_REPO_PATH`, `TUIC_BRANCH`, `TUIC_BASE_REF`, `TUIC_BASE_BRANCH`,
+`TUIC_WORKTREE_PATH`/`_NAME`/`_DIR`, `TUIC_IS_WORKTREE`, `TUIC_REPO_NAME`, plus the
+kind-agnostic `TUIC_SCRIPT_KIND`/`TUIC_APP_VERSION`/`TUIC_CONFIG_DIR`.
+
+**`ScriptContext::derive` is a pure function of a filesystem path — it never accepts
+caller-supplied repo/branch/worktree facts.** This was a deliberate design choice, not
+an oversight: the Run Script is typed into a PTY whose spawn config carries only
+`cwd`/`shell`/`env`, so deriving from `cwd` was the *only* way that surface could ever
+get this context at all; and `POST /worktrees/run-script` (added alongside this) is
+remote shell execution, where caller-supplied context would let a client set
+`TUIC_MAIN_REPO_PATH` to anything. If you add a new `TUIC_*` variable, derive it from
+the path the same way (`git::canonical_repo_root`/`read_branch_from_head`, both file
+reads, no subprocess) — do not thread it through from a caller "for convenience."
+
+**Script timeouts must drain stdout/stderr on dedicated reader threads, not rely on a
+bare `spawn()` + `try_wait()` loop.** A loop that doesn't actively drain the child's
+pipes deadlocks the instant the child writes past the OS pipe buffer (16 KiB on
+macOS) — `npm install` blows past this immediately. tuic-git's `run_shell_script`
+(`crates/tuic-git/src/worktree.rs`, fixed 900 s `SCRIPT_TIMEOUT` via
+`git_cli::output_with_deadline`) already does this. On timeout it kills only the
+`sh`/`cmd` child, not its process group — `npm`'s own children keep running; the
+process-tree kill is marked DEFERRED there.
+
+**Post-create order is CoW warm → file sync → Setup Script, all in one background
+chain the caller never awaits (`worktree::spawn_worktree_setup_chain`).** The sync
+awaits the warm (both write into the same destination; running them concurrently
+let either clobber the other), and the script awaits the sync (a script depending on
+a synced file could otherwise run before it exists). The warm status is published
+only after the LAST step, so `warm_artifacts.status` stays `pending` until the Setup
+Script has finished, and a removal that clears the warm token mid-chain stops the
+remaining steps. This is why no worktree-creation response — desktop IPC, HTTP
+`create_worktree_shared` (incl. MCP `repo worktree_create`), HTTP
+`create_session_with_worktree` — returns `setup_script`/`setup_script_error` any
+more: that information doesn't exist yet by the time the response is built. The
+outcome is reported via a dual-emitted `AppEvent::WorktreeSetupScriptCompleted`
+(`worktree-setup-script-completed`; one payload builder,
+`state::worktree_setup_script_completed_payload`, for the window emit and the SSE
+arm), silent when no script is configured (matching `worktree-sync-*`'s own
+nothing-to-do-is-silent precedent). **An MCP client currently has no way to observe
+this event** — accepted as a deliberate tradeoff for fixing the ordering bug. Do not
+"fix" this by making the chain synchronous again — that reintroduces blocking
+worktree creation.
+
+**Smart Prompts' `{var}` context-variable list is single-sourced in
+`src/data/contextVariables.ts`** (name, description, group, `source` — who resolves it:
+Rust, frontend, or one of three host surfaces — plus `repoControlled`/`script` flags).
+It replaced four independently hand-maintained copies that had drifted (a stray
+undocumented `branch_name` variable, 11 missing entries in one list, two near-identical
+picker arrays). `src/__tests__/contextVariablesParity.test.ts` parses `prompt.rs`'s
+`ALL_VARS`/`resolve_single_var` and `script_env.rs`'s `ScriptContext::pairs` straight out
+of the Rust source and asserts the TS registry stays in sync with both — when you add a
+new rust-sourced variable, add it to `contextVariables.ts` first; the parity test will
+tell you if `prompt.rs` disagrees. A variable's `TUIC_*` script-env name is always
+`TUIC_` + the registry name uppercased — no separate naming step.
+
+**Smart Prompts variables must resolve against the *terminal's* tree, not just "the
+active repo."** `executeSmartPrompt` used to resolve `{branch}`/`{diff}`/etc. against
+`repositoriesStore.getActive()` (the last-focused repo) while the command it substitutes
+into runs in the active *terminal's* cwd — with a worktree tab focused, this could
+generate a commit message from the main checkout's diff and then commit it in the
+worktree. Fixed via `resolvePromptTreeIn`/`resolvePromptTree`
+(`src/utils/repoOwnership.ts`/`src/stores/repositories.ts`), which resolves the tree
+(worktree or repo root) that owns a path — falls back to the active-repo behavior when
+the terminal's cwd belongs to no registered repo. `resolveFrontendVars` still needs the
+**repo root** specifically (never a worktree path): `repositoriesStore.get(...)` is
+keyed by repo root, so passing a worktree path there silently drops every `pr_*`
+variable — carry repo-root and tree-path as two separate values, don't conflate them.
+
+**`GitPanel/ChangesTab.tsx`'s "Generate commit message" has the same shape of bug,
+pre-existing and NOT fixed by the above** — it calls `executeSmartPrompt(prompt)` with
+no target override, so it inherits whatever `executeSmartPrompt` resolves against (now
+the active terminal's tree; before this session's fix, `repositoriesStore.getActive()`)
+rather than `props.repoPath` — the specific repo/worktree *this GitPanel instance* is
+showing, which can be a different repo than the one currently active/focused. Either could
+generate a commit message from one repo's diff and commit it into another. Confirmed via
+`git diff main..HEAD -- src/components/GitPanel/ChangesTab.tsx`: this file's only change on
+this branch is an unrelated indicators feature, so this is not a regression this feature
+introduced — it needs its own fix (`executeSmartPrompt` accepting an explicit target
+repo/tree path, with `ChangesTab` passing `props.repoPath`), out of scope here.
+
+**The setup-script/run-script ordering fix threads a real wait, not just documentation.**
+`createWorktreeCreationCoordinator.ts`'s `setupNewWorktree` used to `await
+runSetupScript(...)` inline before creating the terminal — an implicit ordering guarantee
+the background chain removed, so the Run Script could start concurrently with (or before)
+the Setup Script (e.g. `npm run dev` racing `npm install`). Restored via
+`armSetupScriptWaiter` (same file): a `listen()` on `worktree-setup-script-completed`
+opened BEFORE the create request (a fast chain can report before the response is
+processed), matched by `repoPath`+`branch`, armed only when `effective?.setupScript` is
+truthy, with a generous (20 min) safety-net timeout so a lost event (backend crash, SSE
+disconnect) can't hang worktree creation forever — it resolves either way, never rejects.
+Every caller of `createWorktree` arms one (dialog, quick-clone, auto-fix). A worktree the
+backend did NOT create through that chain (conflict assist) passes
+`{ runSetupScriptHere: true }` and still runs the script from the frontend.
+
+**A subdirectory cwd used to get zero `TUIC_*` vars at all — `git::resolve_git_dir`
+deliberately only checks its exact path, never walks up.** Reachable in practice: the
+Finder Service ("New TUICommander Tab Here" on a subfolder) or any terminal `cd`'d into a
+subdirectory before a Run Script command runs. Fixed with a separate, additive
+`git::find_repo_root` (walks up ancestors to the nearest `.git`, like `git rev-parse
+--show-toplevel`) that `script_env::ScriptContext::derive` now uses instead of the
+exact-match check — `resolve_git_dir` itself is unchanged (its other caller,
+`repo_watcher.rs`, always passes an already-resolved root, so an ancestor walk there would
+be a no-op anyway, but changing its contract wasn't worth the risk for one caller).
+
+**`resolve_single_var`'s `"base_branch"` arm now shares `config::resolve_effective_base_branch`
+with `TUIC_BASE_BRANCH`**, instead of calling `prompt::detect_base_branch` directly — the
+two used to diverge for any repo with a configured "Branch From" override (Smart Prompts'
+`{base_branch}` ignored it; the script env var didn't).
+
+**Unbounded `stdout`/`stderr` capture in tuic-git's `run_shell_script` is accepted, not a
+gap** — see its doc comment in `crates/tuic-git/src/worktree.rs`. The captured output has
+no size cap, but the script text is always either user-authored in Settings or reachable
+only through `POST /worktrees/run-script`, which checks `require_local_or_auth` itself —
+there's no untrusted party who can hand it a script without already being able to run
+arbitrary code locally. Don't add a truncation cap for this without a real OOM report; it
+would change `stdout`/`stderr`'s contract for every existing caller.
+
 ## Accepted Security Decisions
 
 Do NOT flag these as security issues in reviews — they are intentional design choices.
@@ -1198,6 +1319,7 @@ Do NOT flag these as security issues in reviews — they are intentional design 
 - **Iframe sandbox = `allow-scripts allow-same-origin`** — ALL iframes MUST use this. NEVER use bare `sandbox=""` — it kills JavaScript.
 - **Plugin capabilities do not isolate plugins from each other.** `plugin_id` is caller-supplied and plugins load into the same JS realm as the host, so any plugin can pass another plugin's id and inherit its grants. This is known, documented at the capability check in `plugins.rs`, at the `import()` in `pluginLoader.ts`, and in `docs/plugins.md`. A per-plugin token was considered and rejected — same-realm JS can read or proxy it, so it would be security theatre. Real isolation needs Worker/iframe + a host-created MessagePort; it is deferred, not overlooked. Do NOT propose the token.
 - **The self-signed-HTTPS HTTP→HTTPS redirect trusts `X-Forwarded-Host` over `Host` with no allow-list** (`axum-server-dual-protocol`'s `UpgradeHttp`, activated via `upgrade_http`/`.set_upgrade()` in `mcp_http::start_server` whenever the self-signed cert — not Tailscale — is the active TLS source). This is a textbook open-redirect *pattern*, but doesn't clear a real bar for reporting it: there's no reverse proxy in front of this app, exploitation needs LAN access plus a non-simple cross-origin header no normal browser navigation ever sends, and no credentials leak on redirect (Basic Auth isn't auto-forwarded cross-origin). Known and accepted; do not re-flag it without a concrete new exploitation path.
+- **tuic-git's `run_shell_script` (Setup/Archive Script execution, incl. via `POST /worktrees/run-script`) has unbounded `stdout`/`stderr` capture** — a script that writes gigabytes grows process memory by that much before its timeout can fire. Accepted: the script is always either user-authored in Settings or reachable only through the same `require_local_or_auth`-gated caller as the rest of the MCP HTTP surface, so there's no untrusted party who can supply a script without already being able to run arbitrary code locally. See the fuller rationale in `run_shell_script`'s doc comment. Do not add a truncation cap without a real OOM report.
 
 ## Ideas Tracker
 
