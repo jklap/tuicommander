@@ -6,7 +6,13 @@ import { setRepoConnectionLookup } from "../transportRuntime";
 import type { SavedTerminal } from "../types";
 import { pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { markPerf } from "../utils/perfTrace";
-import { type RepoOwner, resolveRepoOwnerIn, sameDir } from "../utils/repoOwnership";
+import {
+	type PromptTree,
+	type RepoOwner,
+	resolvePromptTreeIn,
+	resolveRepoOwnerIn,
+	sameDir,
+} from "../utils/repoOwnership";
 import { appLogger } from "./appLogger";
 import { makeBranchKey } from "./tabManager";
 import {
@@ -1926,6 +1932,12 @@ export interface FileLocation {
  * absolute, unscoped tab — visible under every repo. Ask the path who owns it
  * instead, and use that owner's worktree as the root.
  */
+/** Store-bound wrapper around `resolvePromptTreeIn` — see that function for
+ *  what it's for and why. */
+export function resolvePromptTree(path: string | null | undefined): PromptTree | null {
+	return resolvePromptTreeIn(path, repositoriesStore.state.repositories);
+}
+
 export function locateFile(absolutePath: string): FileLocation {
 	const owner = resolveRepoOwner(absolutePath);
 	if (!owner) return { repoPath: "", fsRoot: "", filePath: absolutePath };
