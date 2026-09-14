@@ -9784,6 +9784,8 @@ dependencies = [
  "flate2",
  "futures-util",
  "gio",
+ "gix",
+ "gix-imara-diff",
  "glob",
  "grep-matcher",
  "grep-regex",

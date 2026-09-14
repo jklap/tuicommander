@@ -66,6 +66,12 @@ test-group = 'git-subprocess'
 filter = 'test(=github_poller::volume_measurement_1995::measure_github_client_fixture_1995)'
 slow-timeout = { period = "30s", terminate-after = 12 }
 
+# session_review's revert_ tests spawn `git apply` subprocesses against a
+# TempDir fixture repo — same contention risk as git_reads above.
+[[profile.default.overrides]]
+filter = 'test(/^session_review::tests::revert_/)'
+test-group = 'git-subprocess'
+
 [profile.ci]
 # On CI, keep going after a failure so a run reports every failing test, and
 # retry twice to absorb infrastructure flakiness (shared runners, port races).

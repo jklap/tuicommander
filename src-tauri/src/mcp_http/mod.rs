@@ -42,6 +42,7 @@ mod remote_session_proxy;
 mod request_boundary;
 pub(crate) mod session;
 mod session_placement;
+mod session_review_routes;
 pub(crate) mod sse_routes;
 pub(crate) mod static_files;
 pub(crate) mod suspended_routes;
@@ -1389,6 +1390,23 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/repo/markdown-files",
             get(git_routes::list_markdown_files_http),
+        )
+        // Session Diff Review — step-by-step review of a Claude Code session's edits
+        .route(
+            "/repo/session-review/sessions",
+            get(session_review_routes::list_sessions_http),
+        )
+        .route(
+            "/repo/session-review",
+            get(session_review_routes::get_review_http),
+        )
+        .route(
+            "/repo/session-review/revert-step",
+            post(session_review_routes::revert_step_http),
+        )
+        .route(
+            "/repo/session-review/revert-file",
+            post(session_review_routes::revert_file_http),
         )
         // Branch operations
         .route(
