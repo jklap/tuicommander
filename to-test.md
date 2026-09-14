@@ -5732,3 +5732,38 @@ path and passes a real `null` through for an unknown image id — in `transport.
   A real `npm ci`/`npm install` setup script should also be checked in the *packaged* app (`make
   build`), where the desktop-launch `PATH` is genuinely impoverished — the new
   `PATH=enriched_path()` on setup/archive scripts is meant to fix exactly that.
+- [ ] Worktree setup-script ordering fix + new event (`plans/our-repo-worktree-automation-refactored-aho.md`,
+  Phase 7): create a worktree in a repo with `copy_ignored_files`/`copy_untracked_files`/`copy_paths`
+  AND a Setup Script configured (e.g. `ls -la > setup-saw-these-files.txt`) — confirm the synced
+  files are visible to the script (previously could race and not be there yet). Since the setup
+  script's outcome is no longer returned synchronously, confirm the new toast fires: a failing
+  script (e.g. `exit 1`) should show "Setup script failed (exit 1)" a moment after the worktree
+  tab opens, not immediately. Needs a `make dev` restart (Rust change). Test on all three creation
+  paths if practical: desktop "+" button, MCP `repo worktree create` (`agent` tool or a manual
+  HTTP `POST /worktrees`), and MCP HTTP session-with-worktree creation.
+- [ ] Setup-script/Run-Script ordering fix, frontend half (`createWorktreeCreationCoordinator.ts`'s
+  `waitForSetupScriptCompletion`, follow-up to the item above): configure a Setup Script that takes
+  a few real seconds (e.g. `sleep 5 && echo done > setup-ran.txt`) plus a Run Script (e.g.
+  `echo run-script-typed`). Create a new worktree from the desktop "+" button and confirm the Run
+  Script is NOT typed into the new tab until the Setup Script has actually finished (watch for
+  `setup-ran.txt` to appear before the Run Script's command shows up in the terminal) — previously
+  the Run Script could type immediately, racing the Setup Script. This is a frontend-only change
+  (hot-reloads under `make dev`, no restart needed) but is easiest to verify alongside the Rust-side
+  item above during the same restart.
+- [ ] `TUIC_*` vars from a subdirectory cwd (`git::find_repo_root`, `script_env.rs`): needs a
+  `make dev` restart (Rust change). Use the macOS Finder Service ("New TUICommander Tab Here") on a
+  subfolder *inside* a worktree (not the worktree root itself) and confirm the new tab's
+  `env | grep '^TUIC_'` still shows `TUIC_WORKTREE_PATH`/`TUIC_MAIN_REPO_PATH`/`TUIC_BRANCH` etc.,
+  describing the worktree root — not empty, and not describing the subfolder.
+- [ ] Smart Prompts active-repo-vs-worktree-cwd fix (`plans/our-repo-worktree-automation-refactored-aho.md`,
+  Phase 8b): with a worktree terminal tab focused (not the main checkout), run a Smart Prompt that
+  uses `{branch}`/`{diff}` (e.g. Smart Commit) and confirm the generated message reflects the
+  *worktree's* branch/diff, not the main checkout's. Then focus a plain shell tab in an
+  *unregistered* directory and confirm the same prompt still falls back to resolving against the
+  active repo rather than failing with `unresolved_variables`.
+- [ ] `POST /worktrees/run-script` was verified via unit tests calling the real handler function
+  directly (including a real axum-router routing test), but never against an actual running
+  `make dev` instance over the wire on `:9877`. Low priority (the handler and router-wiring are
+  both already exercised) but worth a real `curl -u <token> https://127.0.0.1:9877/worktrees/run-script
+  -d '{"script":"echo hi","cwd":"/tmp"}'` if a spare moment allows — confirm `{exit_code, stdout,
+  stderr}` and that an unauthenticated LAN-origin request gets 403.

@@ -72,6 +72,23 @@ pub(crate) fn resolve_git_dir(repo_path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Walk up from `cwd` to find the nearest ancestor that is itself a repo/worktree
+/// root — i.e. the directory `resolve_git_dir` recognizes directly — the way
+/// `git rev-parse --show-toplevel` finds a root from any subdirectory.
+/// `resolve_git_dir` itself deliberately only ever checks the exact path it's
+/// given (its other caller, `repo_watcher.rs`, always passes an
+/// already-resolved repo root), so this is a separate, additive helper, not a
+/// change to that function's contract.
+pub(crate) fn find_repo_root(cwd: &Path) -> Option<PathBuf> {
+    let mut dir = cwd;
+    loop {
+        if resolve_git_dir(dir).is_some() {
+            return Some(dir.to_path_buf());
+        }
+        dir = dir.parent()?;
+    }
+}
+
 /// Resolve a repo path to its canonical main-worktree root.
 ///
 /// Linked worktrees share the binding of their main repo: a linked worktree's
@@ -4049,6 +4066,46 @@ mod tests {
             git_dir.unwrap().join("HEAD").exists(),
             ".git dir should contain HEAD"
         );
+    }
+
+    #[test]
+    fn resolve_git_dir_does_not_walk_up_to_a_parent_repo() {
+        // resolve_git_dir's contract is "does THIS exact path have a .git" —
+        // unlike find_repo_root below, it must never find an ancestor's .git.
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).expect("mkdir sub");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+
+        assert!(resolve_git_dir(dir.path()).is_some());
+        assert!(
+            resolve_git_dir(&sub).is_none(),
+            "a subdirectory with no .git of its own must not resolve"
+        );
+    }
+
+    #[test]
+    fn find_repo_root_resolves_the_root_itself() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+
+        assert_eq!(find_repo_root(dir.path()), Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn find_repo_root_walks_up_from_a_nested_subdirectory() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        std::fs::create_dir(dir.path().join(".git")).expect("mkdir .git");
+        let nested = dir.path().join("src").join("components");
+        std::fs::create_dir_all(&nested).expect("mkdir nested");
+
+        assert_eq!(find_repo_root(&nested), Some(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn find_repo_root_returns_none_outside_any_repo() {
+        let dir = tempfile::TempDir::new().expect("temp dir (no .git)");
+        assert_eq!(find_repo_root(dir.path()), None);
     }
 
     #[test]

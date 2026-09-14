@@ -1,10 +1,13 @@
 use crate::AppState;
+use axum::Extension;
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
 
@@ -20,8 +23,6 @@ pub(super) struct CreatedWorktree {
     /// dirtiness and finalize all take an id.
     pub workspace_id: String,
     pub branch: String,
-    pub setup_script: Option<serde_json::Value>,
-    pub setup_script_error: Option<serde_json::Value>,
 }
 
 pub(super) async fn list_worktrees_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -90,7 +91,13 @@ pub(super) async fn create_worktree_http(
         Err(response) => return response,
     };
 
-    let mut response = serde_json::json!({
+    // The setup script (if configured) is no longer run inline here — it's
+    // chained after the file sync in the background by create_worktree_shared
+    // (spawn_worktree_setup_chain), reported via the dual-emitted
+    // `worktree-setup-script-completed` event rather than this response, so
+    // ordering against the sync is guaranteed regardless of how long either
+    // step takes.
+    let response = serde_json::json!({
         "name": created.worktree.name,
         "path": &created.path,
         // The instruction payload rides on both transports identically: the
@@ -103,14 +110,39 @@ pub(super) async fn create_worktree_http(
         "branch": created.worktree.branch,
         "base_repo": created.worktree.base_repo.to_string_lossy(),
     });
-    if let Some(setup_script) = created.setup_script {
-        response["setup_script"] = setup_script;
-    }
-    if let Some(setup_script_error) = created.setup_script_error {
-        response["setup_script_error"] = setup_script_error;
-    }
 
     (StatusCode::CREATED, Json(response))
+}
+
+/// HTTP counterpart of the `run_setup_script` Tauri command — closes a real
+/// IPC/HTTP parity gap: `transport.ts` already mapped this command to
+/// `POST /worktrees/run-script`, but no such route existed
+/// (`transport.test.ts`'s `KNOWN_HTTP_MAPPING_GAPS` listed it).
+///
+/// This runs an arbitrary shell script, so `require_local_or_auth` is
+/// load-bearing, not boilerplate — it must never become LAN-reachable
+/// without authentication. Response shape is exactly
+/// `{exit_code, stdout, stderr}`, identical to the Tauri command, so the
+/// existing `transport.ts` mapping needs no `transform`.
+pub(super) async fn run_setup_script_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<RunSetupScriptRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if let Err(e) = validate_repo_path(&body.cwd) {
+        return e.into_response();
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        crate::worktree::run_setup_script(body.script, body.cwd)
+    })
+    .await;
+    match result {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
 }
 
 pub(super) async fn create_worktree_shared(
@@ -168,34 +200,18 @@ pub(super) async fn create_worktree_shared(
                 worktree_path: wt_path.clone(),
                 kind: workspace.kind,
             });
-            let mut setup_script = None;
-            let mut setup_script_error = None;
-            let repo_for_script = base_repo.clone();
-            let cwd_for_script = wt_path.clone();
-            if let Some(script) = tokio::task::spawn_blocking(move || {
-                crate::config::resolve_effective_setup_script(&repo_for_script)
-            })
-            .await
-            .ok()
-            .flatten()
-            {
-                match tokio::task::spawn_blocking(move || {
-                    crate::worktree::run_setup_script(script, cwd_for_script)
-                })
-                .await
-                {
-                    Ok(Ok(result)) => {
-                        setup_script = Some(result);
-                    }
-                    Ok(Err(e)) => {
-                        setup_script_error = Some(serde_json::json!(e));
-                    }
-                    Err(e) => {
-                        setup_script_error = Some(serde_json::json!(format!("task panic: {e}")));
-                    }
-                }
-            }
-            crate::worktree::spawn_worktree_file_sync(state, &base_repo, &branch_name, &workspace.path);
+            // File sync, then (only once it's done) the setup script — see
+            // spawn_worktree_setup_chain's doc comment for why the two must
+            // be sequenced, and why this response no longer carries
+            // setup_script/setup_script_error inline (reported later via the
+            // dual-emitted worktree-setup-script-completed event instead).
+            crate::worktree::spawn_worktree_setup_chain(
+                state,
+                base_repo.clone(),
+                branch_name.clone(),
+                workspace.path.clone(),
+            );
+
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace
@@ -211,8 +227,6 @@ pub(super) async fn create_worktree_shared(
                 instructions,
                 workspace_id,
                 branch: branch_name,
-                setup_script,
-                setup_script_error,
             })
         }
         Err(e) => Err((
@@ -524,22 +538,6 @@ pub(super) struct RunSetupScriptRequest {
     pub cwd: String,
 }
 
-/// `POST /worktrees/run-script` — mirror of the `run_setup_script` command.
-/// The script runs a real process, so it goes to a blocking pool rather than
-/// stalling the axum worker for its whole duration.
-pub(super) async fn run_setup_script_http(
-    Json(body): Json<RunSetupScriptRequest>,
-) -> impl IntoResponse {
-    let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::run_setup_script(body.script, body.cwd)
-    })
-    .await;
-    match res {
-        Ok(r) => json_result(r),
-        Err(e) => err_500(&format!("task panic: {e}")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,18 +698,14 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn create_worktree_shared_runs_setup_script_before_file_sync() {
-        // Pins today's ORDER, which worktree.rs's own doc comment on
-        // spawn_worktree_file_sync calls a "KNOWN, ACCEPTED ORDERING GAP":
-        // create_worktree_shared awaits the setup script to completion before
-        // it ever calls spawn_worktree_file_sync (which itself just does a
-        // fire-and-forget tokio::spawn). So a setup script that depends on a
-        // copy_ignored_files-synced file can never see it — deterministically,
-        // not just as a timing flake, since the sync task isn't even spawned
-        // yet by the time the script has already finished running.
-        //
-        // This test is inverted (not deleted) once the ordering fix lands:
-        // see create_worktree_shared_runs_the_file_sync_before_the_setup_script.
+    async fn create_worktree_shared_runs_the_file_sync_before_the_setup_script() {
+        // Inverted version of the pre-fix pin (see git history for what it
+        // asserted): worktree.rs's spawn_worktree_setup_chain now awaits the
+        // file sync before resolving/running the setup script, so a script
+        // depending on a copy_ignored_files-synced file always sees it.
+        // Both steps run in the background after create_worktree_shared has
+        // already returned — hence the polling loop below instead of a
+        // synchronous assertion on the response.
         let repo = create_temp_git_repo();
         // An ignored file in the source repo — copy_ignored_files is what the
         // sync would carry into the new worktree.
@@ -750,7 +744,7 @@ mod tests {
         .expect("save repo settings");
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let result = create_worktree_shared(
+        create_worktree_shared(
             &state,
             repo.path().to_string_lossy().to_string(),
             "order-test-branch".to_string(),
@@ -759,17 +753,198 @@ mod tests {
         .await
         .expect("worktree should be created");
 
-        assert!(
-            result.setup_script.is_some(),
-            "setup script should have run: {:?}",
-            result.setup_script_error
-        );
-        let outcome = std::fs::read_to_string(&marker).expect("read order marker");
+        // The sync + setup script now run in a background chain, after
+        // create_worktree_shared has already returned — poll for the marker
+        // rather than asserting on it synchronously.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut outcome = None;
+        while std::time::Instant::now() < deadline {
+            if let Ok(content) = std::fs::read_to_string(&marker) {
+                outcome = Some(content);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let outcome =
+            outcome.expect("setup script should have run in the background within the timeout");
         assert_eq!(
             outcome.trim(),
-            "missing",
-            "TODAY the setup script runs before the file sync has a chance to \
-             copy the ignored file — this is the documented ordering gap"
+            "present",
+            "the setup script must see the file the sync copied in, now that the \
+             background chain awaits the sync before running the script"
         );
+    }
+
+    // --- run_setup_script_http: the IPC/HTTP parity route ---
+
+    fn loopback() -> SocketAddr {
+        "127.0.0.1:1".parse().unwrap()
+    }
+    fn lan() -> SocketAddr {
+        "192.168.1.2:1".parse().unwrap()
+    }
+    fn authed() -> Option<Extension<Authenticated>> {
+        Some(Extension(Authenticated))
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_rejects_unauthenticated_non_loopback() {
+        // This route is arbitrary shell execution — must never become
+        // LAN-reachable without authentication.
+        let resp = run_setup_script_http(
+            ConnectInfo(lan()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: "/tmp".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_loopback_passes_guard() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_authenticated_remote_passes_guard() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(lan()),
+            authed(),
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_returns_the_same_shape_as_the_tauri_command() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hello".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["exit_code"], 0);
+        assert_eq!(body["stdout"].as_str().unwrap().trim(), "hello");
+        assert_eq!(body["stderr"], "");
+        // Exactly these three keys — no extra fields the frontend/`transport.ts`
+        // mapping (which passes this response through with no `transform`)
+        // wouldn't know about.
+        let obj = body.as_object().expect("object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["exit_code", "stderr", "stdout"]);
+    }
+
+    #[tokio::test]
+    async fn post_worktrees_run_script_does_not_match_the_branch_delete_route() {
+        // Adjacency guard: /worktrees/run-script (POST, static segment) and
+        // /worktrees/{branch} (DELETE, single dynamic segment) coexist in the
+        // same axum router. axum 0.8's matchit prioritises static segments
+        // over dynamic ones, so this should never actually collide — but the
+        // two are similar enough (same prefix, one segment deep) that a
+        // future refactor could get this wrong silently. A minimal router
+        // registering both real handlers, not the full app (which needs
+        // mod.rs's private test helpers) — routing behavior is a property of
+        // the route table, not of auth/state wiring, so this is self-contained.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/run-script",
+                axum::routing::post(run_setup_script_http),
+            )
+            .route(
+                "/worktrees/{branch}",
+                axum::routing::delete(remove_worktree_http),
+            )
+            .with_state(state);
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "script": "echo hi",
+                    "cwd": dir.path().to_string_lossy(),
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+
+        let response = mini_router.oneshot(request).await.unwrap();
+        // Must not be routed as a DELETE-only /{branch} match producing 405,
+        // and must not 404 — it should reach run_setup_script_http and succeed.
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_rejects_malformed_json_body() {
+        // Boundary/corrupt-data case: run_setup_script_http's Json<RunSetupScriptRequest>
+        // extractor can't be exercised by calling the handler function directly with a
+        // hand-built struct (the compiler would force every field to exist) — a genuinely
+        // malformed/incomplete wire body only surfaces axum's own extraction rejection
+        // when it goes through the real router, hence the same mini-router as the
+        // adjacency test above rather than a direct handler call.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/run-script",
+                axum::routing::post(run_setup_script_http),
+            )
+            .with_state(state);
+
+        // Missing the required "cwd" field entirely.
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({"script": "echo hi"}).to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+        let response = mini_router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Not valid JSON at all.
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("not json"))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+        let response = mini_router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

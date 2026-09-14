@@ -109,6 +109,13 @@ export interface AppInitDeps {
 	setCurrentBranch: (branch: string | null) => void;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
 	refreshAllBranchStats: (scopeRepoPath?: string) => Promise<void> | void;
+	handleWorktreeSetupScriptCompleted: (payload: {
+		repoPath: string;
+		branch: string;
+		worktreePath: string;
+		exitCode: number | null;
+		error: string | null;
+	}) => void;
 	getDefaultFontSize: () => number;
 	stores: {
 		hydrate: () => Promise<void>;
@@ -508,6 +515,20 @@ export async function initApp(deps: AppInitDeps) {
 			);
 		},
 	).catch((err) => appLogger.error("app", "Failed to register worktree-sync-completed listener", err));
+
+	// The setup script (if configured) runs after the sync above, in the same
+	// background chain (see `worktree::spawn_worktree_setup_chain`) — its
+	// outcome arrives here instead of a synchronous response from worktree
+	// creation.
+	listen<{
+		repoPath: string;
+		branch: string;
+		worktreePath: string;
+		exitCode: number | null;
+		error: string | null;
+	}>("worktree-setup-script-completed", (event) => {
+		deps.handleWorktreeSetupScriptCompleted(event.payload);
+	}).catch((err) => appLogger.error("app", "Failed to register worktree-setup-script-completed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
 	replaceMcpToastListener((event) => {

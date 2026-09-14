@@ -2102,6 +2102,35 @@ to `"worktree"`) and removal as
 event and the `/events` SSE frame serialize the same struct, so the field names
 are identical by construction. Payload table: `docs/sync-matrix.md`.
 
+
+The worktree's own file sync (`copy_ignored_files`/`copy_untracked_files`/
+`copy_paths`) and its configured Setup Script, if any, both run **afterward in
+the background** (`worktree::spawn_worktree_setup_chain`, always
+sync-then-script in that order), so this response never carries
+`setup_script`/`setup_script_error`. The setup script's outcome — if one is
+configured — is reported later via the dual-emitted
+`worktree-setup-script-completed` event (see `docs/sync-matrix.md`); there is
+currently no way to poll for it over this HTTP surface.
+
+### Run a Worktree Script
+
+```
+POST /worktrees/run-script
+Content-Type: application/json
+
+{ "script": "npm install", "cwd": "/path/to/worktree" }
+```
+
+Runs `script` under `sh -c` (or `cmd /C` on Windows) in `cwd` — the same
+function the desktop Setup/Archive/Run Script UI uses, with a `TUIC_*`
+environment injected (`script_env::ScriptContext` — main checkout path,
+branch, base ref, worktree name, etc.) and a timeout enforced (configurable
+per repo; defaults 600s). This is arbitrary shell execution, so the route
+requires loopback or an authenticated request — see `docs/backend/mcp-http.md`'s
+auth model. Response is `{ "exit_code": number, "stdout": string, "stderr":
+string }`; a timeout or a missing/invalid `cwd` returns an error instead of a
+response body.
+
 ### Worktrees Base Directory
 
 ```

@@ -371,9 +371,11 @@ tree (e.g. `node_modules`), which is exactly why it doesn't block opening the wo
 
 ### Scripts Tab
 
-- **Setup Script** — Runs once after worktree creation (e.g., `npm install`)
+- **Setup Script** — Runs once after worktree creation (e.g., `npm install`), after the worktree file sync (`copy_ignored_files`/`copy_untracked_files`/`copy_paths`) finishes, in the background — worktree creation itself returns immediately. Its outcome is reported via the `worktree-setup-script-completed` event (a toast), not a synchronous response.
 - **Run Script** — On-demand script launchable from toolbar with `Cmd+R`
-- **Archive Script** — Runs before a worktree is archived or deleted; non-zero exit blocks the operation
+- **Archive Script** — Runs before a worktree is archived or deleted; non-zero exit (including a timeout) blocks the operation
+
+All three scripts run with a `TUIC_*` environment injected (main checkout path, branch, base ref, worktree name, etc. — see the Terminals guide's Environment Variables section) and an enforced timeout (default 600s for Setup, 120s for Archive; configurable via the global repo defaults).
 
 ### Repo-Local Config (`.tuic.json`)
 
@@ -381,7 +383,9 @@ A `.tuic.json` file in the repository root provides team-shareable settings that
 
 **Precedence:** `.tuic.json` > per-repo app settings > global defaults
 
-Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `setup_script`, `run_script`, `archive_script`, `worktree_storage`, `delete_branch_on_remove`, `auto_archive_merged`, `orphan_cleanup`, `pr_merge_strategy`, `after_merge`, `auto_delete_on_pr_close`.
+Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `worktree_storage`, `delete_branch_on_remove`, `auto_archive_merged`, `orphan_cleanup`, `pr_merge_strategy`, `after_merge`, `auto_delete_on_pr_close`.
+
+**`setup_script`/`run_script`/`archive_script` are deliberately NOT supported in `.tuic.json`** — executing a repo-committed script with no trust-on-first-use confirmation would let a malicious branch run arbitrary code the moment its worktree is created. Configure these per-repo (Settings) or as a global default instead.
 
 User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intentionally excluded from `.tuic.json`.
 
