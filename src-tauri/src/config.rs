@@ -1714,6 +1714,14 @@ pub(crate) struct RepoDefaultsConfig {
     pub(crate) run_script: String,
     #[serde(default)]
     pub(crate) archive_script: String,
+    /// Setup script timeout in seconds. Longer than the archive default:
+    /// a hung setup script only delays a background task (worktree creation
+    /// already returns before it finishes), whereas a hung archive script
+    /// blocks the user's delete/archive action.
+    #[serde(default = "default_setup_script_timeout_secs")]
+    pub(crate) setup_script_timeout_secs: u64,
+    #[serde(default = "default_archive_script_timeout_secs")]
+    pub(crate) archive_script_timeout_secs: u64,
     // -- Worktree settings --
     #[serde(default)]
     pub(crate) worktree_storage: WorktreeStorage,
@@ -1746,6 +1754,8 @@ impl Default for RepoDefaultsConfig {
             setup_script: String::new(),
             run_script: String::new(),
             archive_script: String::new(),
+            setup_script_timeout_secs: default_setup_script_timeout_secs(),
+            archive_script_timeout_secs: default_archive_script_timeout_secs(),
             worktree_storage: WorktreeStorage::default(),
             prompt_on_create: true,
             delete_branch_on_remove: true,
@@ -1761,6 +1771,14 @@ impl Default for RepoDefaultsConfig {
 
 fn default_base_branch() -> String {
     "automatic".to_string()
+}
+
+fn default_setup_script_timeout_secs() -> u64 {
+    600
+}
+
+fn default_archive_script_timeout_secs() -> u64 {
+    120
 }
 
 /// Map of repo path -> settings
