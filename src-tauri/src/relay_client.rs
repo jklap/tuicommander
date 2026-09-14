@@ -376,20 +376,16 @@ async fn connect_and_run(
         .send(Message::Text(format!("Bearer {relay_token}").into()))
         .await?;
 
-    log_via_state(
-        state,
-        "info",
-        "relay",
-        "authenticated, starting event bridge",
-    );
-    state
-        .relay
-        .connected
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-
-    // The `connected` flag above is also what tells `run` this attempt got in,
-    // so the backoff ladder resets — the reset lives there, not here.
+    // Writing the bearer proves nothing: the relay reads it, verifies it, and
+    // closes with 4003 when it does not resolve. Raising `connected` here
+    // therefore called a rejected token a successful connection — and since
+    // `run` resets the backoff ladder off that same flag, every rejected
+    // attempt dropped the wait back to one second and hammered the relay for as
+    // long as the token stayed wrong. The relay answers a peer that gets past
+    // auth with an unconditional `relay:status`, so that frame — and nothing
+    // earlier — is the handshake completing.
     let mut event_rx = state.event_bus.subscribe();
+    let mut authenticated = false;
     let mut awaiting_by_session: HashMap<String, bool> = HashMap::new();
     // The relay tells us when a phone is actually listening. Until it does, the
     // only thing worth sending is a push hint — that is what wakes the phone up.
@@ -469,6 +465,17 @@ async fn connect_and_run(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<RelayMessage>(&text) {
                             Ok(RelayMessage::Status { peer }) => {
+                                if !authenticated {
+                                    authenticated = true;
+                                    log_via_state(state, "info", "relay", "authenticated, starting event bridge");
+                                    // Also what tells `run` this attempt got in,
+                                    // so the backoff ladder resets — the reset
+                                    // lives there, not here.
+                                    state
+                                        .relay
+                                        .connected
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
                                 peer_attached = peer_is_attached(&peer);
                                 let label = match peer {
                                     PeerStatus::Connected => "mobile peer connected",
@@ -805,7 +812,15 @@ mod tests {
     /// A relay server that completes the handshake, reads the bearer frame and
     /// then closes — the "connects fine, drops immediately" shape that drives
     /// the reconnect path. Every accepted connection is announced on `accepted`.
-    async fn spawn_dropping_relay(accepted: tokio::sync::mpsc::UnboundedSender<()>) -> String {
+    ///
+    /// `authenticate` is the whole difference between the two shapes the client
+    /// must tell apart. The real relay answers a peer that gets past auth with
+    /// an unconditional `relay:status` and answers a bad token with a bare
+    /// close, so that frame is the only evidence the handshake succeeded.
+    async fn spawn_dropping_relay(
+        accepted: tokio::sync::mpsc::UnboundedSender<()>,
+        authenticate: bool,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test relay");
@@ -818,6 +833,13 @@ mod tests {
                 tokio::spawn(async move {
                     if let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await {
                         let _ = ws.next().await; // the `Bearer <token>` frame
+                        if authenticate {
+                            let _ = ws
+                                .send(Message::Text(
+                                    r#"{"type":"relay:status","peer":"waiting"}"#.into(),
+                                ))
+                                .await;
+                        }
                         let _ = ws.close(None).await;
                     }
                 });
@@ -851,7 +873,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn backoff_resets_after_a_connection_that_came_up() {
         let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
-        let url = spawn_dropping_relay(accepted_tx).await;
+        let url = spawn_dropping_relay(accepted_tx, true).await;
 
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         {
@@ -886,6 +908,52 @@ mod tests {
             waits.iter().all(|wait| wait == "1s"),
             "a connection that came up ends the failure streak, so every wait \
              must stay at the initial backoff; logged {waits:?}"
+        );
+    }
+
+    /// The counterpart: a token the relay refuses. It reads the bearer frame and
+    /// closes without ever sending a status, which is what 4003 looks like from
+    /// here. Writing the frame used to count as connecting, so every rejection
+    /// reset the ladder to one second and the client hammered the relay for as
+    /// long as the token stayed wrong — the one failure that never self-heals.
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_token_lets_the_backoff_grow() {
+        let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+        let url = spawn_dropping_relay(accepted_tx, false).await;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut cfg = state.config.write();
+            cfg.services.relay.enabled = true;
+            cfg.services.relay.url = url;
+            cfg.services.relay.token = "rejected_relay_token".to_string();
+            cfg.services.relay.session_id = "test-session".to_string();
+        }
+
+        let settings =
+            RelaySettings::active(&state.config.read()).expect("relay settings are complete");
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let client = tokio::spawn(run(state.clone(), settings, stop_rx));
+
+        for attempt in 1..=3 {
+            accepted_rx
+                .recv()
+                .await
+                .unwrap_or_else(|| panic!("relay client never made attempt {attempt}"));
+        }
+        let _ = stop_tx.send(());
+        let _ = client.await;
+
+        let waits = logged_reconnect_waits(&state);
+        assert!(
+            waits.len() >= 2,
+            "expected two reconnect waits, logged {waits:?}"
+        );
+        assert_eq!(
+            &waits[..2],
+            ["1s", "2s"],
+            "a handshake that never completed must keep climbing the ladder; \
+             logged {waits:?}"
         );
     }
 
