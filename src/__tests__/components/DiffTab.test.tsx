@@ -17,12 +17,12 @@ vi.mock("../../invoke", () => ({ invoke: h.invoke }));
 vi.mock("../../components/ui/DiffViewer", () => ({
 	DiffViewer: (props: { diff: string }) => <div data-testid="diff-stub">{props.diff}</div>,
 }));
-// BranchDiffScrollView fetches its own diffs via useRepository/getDiff and
+// AllChangesView fetches its own diffs via useRepository/getDiff and
 // renders through the (also mocked) shared DiffFileList — stubbed here so
 // these tests exercise only DiffTab's own scroll-mode branch, not the
-// all-files view's own rendering (covered by BranchDiffScrollView.test.tsx).
-vi.mock("../../components/DiffTab/BranchDiffScrollView", () => ({
-	BranchDiffScrollView: () => <div data-testid="scroll-view-stub" />,
+// all-files view's own rendering (covered by AllChangesView.test.tsx).
+vi.mock("../../components/DiffTab/AllChangesView", () => ({
+	AllChangesView: () => <div data-testid="scroll-view-stub" />,
 }));
 
 import { DiffTab } from "../../components/DiffTab/DiffTab";
