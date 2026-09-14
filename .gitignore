@@ -55,6 +55,7 @@ scripts/*
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs
 !scripts/mutants.sh
+!scripts/install-launch-shells.sh
 !scripts/hooks/
 !scripts/perf/
 scripts/perf/results/

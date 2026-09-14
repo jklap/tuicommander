@@ -407,11 +407,18 @@ mod tests {
         /// not turn it back into a script to make it print more.
         const REAL_ECHO: &str = "/bin/echo";
 
-        /// Shell that must be launchable wherever these tests run: it is the
-        /// default `run:` shell on the CI images and ships with macOS, and it
-        /// is also the script the WSL path injects. Its absence is a real
-        /// failure, not an environment quirk, so it is never gated.
-        const REQUIRED_SHELL: &str = "bash";
+        /// The launch matrix. Every one of these must be installed wherever
+        /// these tests run — there is no presence probe and nothing is skipped.
+        ///
+        /// An earlier version gated zsh and fish on the interpreter being
+        /// found. fish is on neither the macOS base install nor the CI images,
+        /// so its half of the matrix had never executed anywhere while still
+        /// reporting as passed: nothing in the output said fish was not tried.
+        /// A skipped test that reports as passed is worse than a missing one.
+        /// `scripts/install-launch-shells.sh` installs and verifies all three
+        /// and is the record of what the matrix requires; the CI workflow runs
+        /// it, and it is the one command to run on a new machine.
+        const LAUNCH_SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
         /// A `PATH` prefix holding `claude` and `codex` stand-ins.
         fn agent_bin_dir() -> PathBuf {
@@ -475,36 +482,36 @@ mod tests {
             }
         }
 
-        /// `true` when `shell` can be launched on this machine.
+        /// Fail, naming `shell` and how to install it, unless it can be
+        /// launched rc-free on this machine.
         ///
-        /// fish is not on the macOS base install nor on the CI images, and
-        /// installing an interpreter is not this test's job. When a gated shell
-        /// is absent its launch assertions do not run and `assert_wrapper_paths`
-        /// is the only cover left — structural, not behavioural. `REQUIRED_SHELL`
-        /// stays out of this gate for exactly that reason.
-        fn shell_present(shell: &str) -> bool {
-            Command::new(shell)
+        /// The probe is the rc-free launch itself, not `which`, because the
+        /// trap this guards against is a shell that IS installed and still
+        /// cannot be used: `rc_free_flags` passes `--no-config` to fish, which
+        /// only exists in fish >= 3.3. Under the old presence gate an older
+        /// fish failed that probe, dropped out of the matrix, and produced a
+        /// run log byte-identical to a green one.
+        fn require_shell(shell: &str) {
+            assert!(
+                LAUNCH_SHELLS.contains(&shell),
+                "{shell} is not in the launch matrix"
+            );
+            let probe = Command::new(shell)
                 .args(rc_free_flags(shell))
                 .arg("-c")
                 .arg("exit 0")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
-        }
-
-        /// Shells to exercise for one case: every one present here, plus
-        /// `REQUIRED_SHELL` whether or not the probe likes it.
-        fn launchable_shells() -> Vec<&'static str> {
-            let shells: Vec<&'static str> = ["bash", "zsh", "fish"]
-                .into_iter()
-                .filter(|shell| *shell == REQUIRED_SHELL || shell_present(shell))
-                .collect();
+                .status();
             assert!(
-                shells.contains(&REQUIRED_SHELL),
-                "{REQUIRED_SHELL} must be in the launch matrix"
+                probe.is_ok_and(|status| status.success()),
+                "{shell} cannot be launched with {:?}, so the launch matrix is \
+                 incomplete. Install it (macOS: `brew install {shell}`; \
+                 Debian/Ubuntu: `sudo apt-get install -y {shell}`), or run \
+                 `scripts/install-launch-shells.sh`. fish must be >= 3.3, which \
+                 is when `--no-config` was added.",
+                rc_free_flags(shell)
             );
-            shells
         }
 
         /// Source the integration script in `shell`, run `invocation`, and
@@ -559,18 +566,44 @@ mod tests {
                 .collect()
         }
 
-        /// Run one case across the matrix and compare against `expected`.
-        fn assert_across_shells(
+        /// Run one case in one shell and compare against `expected`.
+        fn assert_in_shell(
+            shell: &str,
             case: &str,
             tuic_env: &[(&str, &str)],
             invocation: &str,
             expected: &[&str],
         ) {
-            for shell in launchable_shells() {
-                let actual = wrapper_command_lines(shell, tuic_env, invocation);
-                assert_eq!(actual, expected, "{shell}: {case}");
-            }
+            require_shell(shell);
+            let actual = wrapper_command_lines(shell, tuic_env, invocation);
+            assert_eq!(actual, expected, "{shell}: {case}");
         }
+
+        /// Emit one `#[test]` per case per shell, so the shell that ran is in
+        /// the test name and the run log names every shell that was launched.
+        ///
+        /// One test per case looping over the matrix would hide the shell: a
+        /// log line reading `setting_on_appends_launch_scoped_status_flags`
+        /// says nothing about whether fish was among the shells it tried,
+        /// which is exactly how the fish half stayed unexecuted.
+        macro_rules! launch_matrix {
+            ($($case:ident),+ $(,)?) => {
+                $(mod $case {
+                    #[test]
+                    fn in_bash() { super::$case("bash") }
+                    #[test]
+                    fn in_zsh() { super::$case("zsh") }
+                    #[test]
+                    fn in_fish() { super::$case("fish") }
+                })+
+            };
+        }
+
+        launch_matrix!(
+            setting_on_appends_launch_scoped_status_flags,
+            an_explicit_user_flag_suppresses_injection,
+            setting_off_leaves_the_command_line_untouched,
+        );
 
         const CLAUDE_SETTINGS: &str = "/tuic/agent-hooks/claude.json";
         const CODEX_NOTIFY: &str = "/tuic/agent-hooks/codex-notify.sh";
@@ -582,17 +615,18 @@ mod tests {
             ]
         }
 
-        #[test]
-        fn setting_on_appends_launch_scoped_status_flags() {
+        fn setting_on_appends_launch_scoped_status_flags(shell: &str) {
             let claude = format!("--model opus --settings {CLAUDE_SETTINGS}");
-            assert_across_shells(
+            assert_in_shell(
+                shell,
                 "Claude gets the TUIC settings file appended",
                 &signals_on(),
                 "claude --model opus",
                 &[claude.as_str()],
             );
             let codex = format!("exec --full-auto -c notify=[\"{CODEX_NOTIFY}\"]");
-            assert_across_shells(
+            assert_in_shell(
+                shell,
                 "Codex gets the TUIC notify script appended",
                 &signals_on(),
                 "codex exec --full-auto",
@@ -600,9 +634,9 @@ mod tests {
             );
         }
 
-        #[test]
-        fn an_explicit_user_flag_suppresses_injection() {
-            assert_across_shells(
+        fn an_explicit_user_flag_suppresses_injection(shell: &str) {
+            assert_in_shell(
+                shell,
                 "Claude leaves the user's own --settings alone",
                 &signals_on(),
                 "claude --settings /user/settings.json\n\
@@ -618,7 +652,8 @@ mod tests {
                     "--model opus --settings /user/settings.json",
                 ],
             );
-            assert_across_shells(
+            assert_in_shell(
+                shell,
                 "Codex leaves the user's own notify override alone",
                 &signals_on(),
                 "codex -c 'notify=[\"/user/notify.sh\"]' exec\n\
@@ -632,15 +667,16 @@ mod tests {
             );
         }
 
-        #[test]
-        fn setting_off_leaves_the_command_line_untouched() {
-            assert_across_shells(
+        fn setting_off_leaves_the_command_line_untouched(shell: &str) {
+            assert_in_shell(
+                shell,
                 "Claude is launched exactly as typed",
                 &[],
                 "claude --model opus --dangerously-skip-permissions",
                 &["--model opus --dangerously-skip-permissions"],
             );
-            assert_across_shells(
+            assert_in_shell(
+                shell,
                 "Codex is launched exactly as typed",
                 &[],
                 "codex exec --full-auto",
