@@ -2688,6 +2688,27 @@ pub(crate) fn resolve_effective_setup_script(repo_path: &str) -> Option<String> 
     resolve_setup_script_from(&settings, &defaults, repo_path)
 }
 
+/// Resolve the effective base branch for a repo, following the same
+/// per-repo-override > global-defaults chain as `resolve_effective_setup_script`,
+/// then resolving the `"automatic"` sentinel (the default) to a real branch
+/// name via `prompt::detect_base_branch`. Returns `None` only when detection
+/// itself fails (no main/master/develop branch found) — used by
+/// `script_env::ScriptContext` for `TUIC_BASE_BRANCH`.
+pub(crate) fn resolve_effective_base_branch(repo_path: &str) -> Option<String> {
+    let settings: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
+    let defaults: RepoDefaultsConfig = load_json_config(REPO_DEFAULTS_FILE);
+    let configured = settings
+        .repos
+        .get(repo_path)
+        .and_then(|e| e.base_branch.clone())
+        .unwrap_or_else(|| defaults.base_branch.clone());
+    if configured.is_empty() || configured == "automatic" {
+        crate::prompt::detect_base_branch(repo_path)
+    } else {
+        Some(configured)
+    }
+}
+
 fn resolve_setup_script_from(
     settings: &RepoSettingsMap,
     defaults: &RepoDefaultsConfig,

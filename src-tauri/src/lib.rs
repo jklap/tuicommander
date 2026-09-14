@@ -97,6 +97,7 @@ pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
 pub(crate) mod repo_watcher;
+pub(crate) mod script_env;
 pub(crate) mod scrollback_store;
 #[cfg(feature = "desktop")]
 pub(crate) mod selfsigned;
