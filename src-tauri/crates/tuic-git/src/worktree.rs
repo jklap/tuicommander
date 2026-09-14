@@ -6380,14 +6380,29 @@ branch refs/heads/feat
     #[test]
     fn run_setup_script_exit_code_minus_one_when_killed() {
         // A signal-killed child reports `status.code() == None`, which
-        // run_setup_script maps to exit_code -1 today. A future timeout must
-        // return Err rather than reusing this same sentinel value, or a
-        // timed-out script becomes indistinguishable from a killed one.
+        // run_setup_script maps to exit_code -1. A timeout instead returns
+        // Err — see run_shell_script_gives_up_at_the_deadline — so the two
+        // remain distinguishable in the response the caller sees.
         let dir = TempDir::new().expect("temp dir");
         let cwd = dir.path().to_string_lossy().to_string();
 
         let result = run_setup_script("kill -9 $$".to_string(), cwd).expect("should return Ok");
         assert_eq!(result["exit_code"], -1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_setup_script_captures_output_larger_than_the_pipe_buffer() {
+        // A naive spawn+try_wait loop (no reader threads) deadlocks once the
+        // child fills its stdout pipe buffer (16 KiB on macOS) with nothing
+        // draining it. 200 KiB comfortably exceeds that on every platform.
+        let dir = TempDir::new().expect("temp dir");
+        let cwd = dir.path().to_string_lossy().to_string();
+
+        let result = run_setup_script("yes x | head -c 200000".to_string(), cwd)
+            .expect("should succeed, not deadlock");
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(result["stdout"].as_str().unwrap().len(), 200_000);
     }
 
     #[test]
