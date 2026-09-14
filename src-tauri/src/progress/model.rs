@@ -393,3 +393,67 @@ pub(crate) struct ProgressReportOutcome {
     pub receipt: ProgressReceipt,
     pub event: Option<ProgressEvent>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deserialise a valid body, then the same body with one extra field, and
+    /// require the second to fail with an "unknown field" error.
+    ///
+    /// The valid case is asserted first on purpose. A rejection alone proves
+    /// nothing — a fixture that is malformed for an unrelated reason is
+    /// rejected too, and the test would then pass while `deny_unknown_fields`
+    /// was gone.
+    macro_rules! assert_rejects_unknown_field {
+        ($ty:ty, $json:tt) => {{
+            let name = stringify!($ty);
+            let mut value = serde_json::json!($json);
+            serde_json::from_value::<$ty>(value.clone())
+                .unwrap_or_else(|e| panic!("{name} must accept its own valid body: {e}"));
+
+            value
+                .as_object_mut()
+                .expect("fixture is a JSON object")
+                .insert("nopeNotAField".to_string(), serde_json::json!(1));
+            let err = serde_json::from_value::<$ty>(value).expect_err(&format!(
+                "{name} accepted an unknown field — its deny_unknown_fields is gone"
+            ));
+            assert!(
+                err.to_string().contains("unknown field"),
+                "{name} rejected the body for the wrong reason: {err}"
+            );
+        }};
+    }
+
+    /// Every progress input type carries `serde(deny_unknown_fields)`, so a
+    /// caller that misspells a field is refused instead of silently getting a
+    /// default. Nothing else in the tree asserts that: delete an attribute and
+    /// the valid bodies still parse, the routes still answer, and the whole
+    /// suite stays green.
+    ///
+    /// This lives at the serde layer rather than in an HTTP test on purpose.
+    /// Over HTTP a rejected body answers 422 from the axum extractor — the
+    /// same 422 a caller gets when an auth guard is missing and the body never
+    /// reaches it, which is the confusion
+    /// `every_progress_route_runs_its_handler_for_a_loopback_caller` is built
+    /// to avoid. Keep the two apart.
+    #[test]
+    fn every_progress_input_type_refuses_an_unknown_field() {
+        assert_rejects_unknown_field!(ProgressListInput, {"beforeSequence": 4, "limit": 50});
+        assert_rejects_unknown_field!(ProgressDeleteInput, {"eventIds": ["event-1"]});
+        assert_rejects_unknown_field!(ProgressClearInput, {"expectedRevision": 2});
+        assert_rejects_unknown_field!(ProgressReadInput, {"snapshotCursor": 7});
+        assert_rejects_unknown_field!(ProgressCorrection, {
+            "operation": "edit_summary",
+            "eventId": "event-1",
+            "summary": "a corrected summary"
+        });
+        assert_rejects_unknown_field!(ProgressUpdateInput, {
+            "expectedRevision": 2,
+            "corrections": []
+        });
+        assert_rejects_unknown_field!(ProgressExportOptions, {"includeProvenance": true});
+        assert_rejects_unknown_field!(ProgressExportInput, {"operation": "preview"});
+    }
+}
