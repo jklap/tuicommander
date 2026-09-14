@@ -1747,6 +1747,7 @@ See `examples/plugins/` for reference implementations:
 - `report-watcher` — Generic report file watcher with markdown viewer
 - `claude-status` — Agent-scoped plugin (`agentTypes: ["claude"]`) tracking usage and rate limits
 - `wiz-kanban` — Wiz framework plugin: kanban board for managing the workflow of plans, stories, and reviews with drag-and-drop
+- `md-kanban` — Kanban board over checkbox tasks (`- [ ]`) in a single markdown file: inline `[field:: value]`/`(field:: value)` metadata (priority, dependsOn, id), `#tags`, heading-path labels, a small upstream/downstream dependency graph with hover-highlight, and multi-board support via a native file picker
 
 ### 17.7 Claude Wakeup Plugin
 Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it stalls without asking a question. Ships in `plugins/claude-wakeup/`.
