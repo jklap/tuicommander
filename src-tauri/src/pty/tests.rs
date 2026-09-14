@@ -11854,6 +11854,71 @@ fn assert_codex_false_ready_capture(name: &str, expected_variant: &str) {
     );
 }
 
+/// Measure, for one capture, the longest UNBROKEN run of Ready frames — the
+/// same window `screen_ready_pending_since` accumulates in production.
+///
+/// The geometry is a caller argument because TUICCAP1 carries none and both
+/// false-ready fixtures predate TUICCAP2. Read it off the capture: the highest
+/// CSI CUP row and the widest horizontal box rule.
+fn longest_ready_run_us(bytes: &[u8], rows: u16, cols: u16) -> u64 {
+    let capture = crate::pty_capture::decode_capture(bytes).expect("valid capture");
+    let mut vt = crate::state::VtLogBuffer::new(rows, cols, 2000);
+    let mut ready_since: Option<u64> = None;
+    let mut longest = 0u64;
+
+    for record in capture.records {
+        if record.direction != crate::pty_capture::CaptureDirection::Output {
+            continue;
+        }
+        vt.process(&record.data);
+        match detect_agent_screen_activity(Some("codex"), &vt.screen_rows()) {
+            AgentScreenActivity::Ready => {
+                let first = *ready_since.get_or_insert(record.elapsed_us);
+                longest = longest.max(record.elapsed_us.saturating_sub(first));
+            }
+            // Anything that is not Ready ends the window, because production
+            // does exactly that: `note_unknown_screen` clears
+            // `screen_ready_pending_since`, so an Unknown frame in the middle
+            // restarts the AGENT_READY_CONFIRM countdown from zero. Measuring
+            // Ready-to-Ready across an Unknown gap reports a stability the
+            // production code never sees.
+            AgentScreenActivity::Working
+            | AgentScreenActivity::Unknown
+            | AgentScreenActivity::Interrupted => ready_since = None,
+        }
+    }
+    longest
+}
+
+/// The two false-ready fixtures only prove anything while their Ready runs
+/// still outlast `AGENT_READY_CONFIRM`: that is what made the pre-fix code
+/// declare idle mid-turn (measured 2026-09-14 at f9803b00^: 1.552 s and
+/// 1.567 s of stable Ready were enough). If a later change to
+/// `detect_codex_screen_activity` shortened those runs below the threshold,
+/// `codex_0154_false_ready_real_captures_stay_protocol_busy` would keep
+/// passing while proving nothing, which is the same "green by absence" trap as
+/// a skipped test.
+///
+/// This is also the measurement the 2026-09-13 audit of this story got wrong.
+/// It timed the FIRST Ready transient — 233 ms and 143 ms — and concluded from
+/// it that no capture could ever produce the RED. The longest run is 7.6 s and
+/// 7.5 s. Pin the number so nobody has to take it on trust again.
+#[test]
+fn the_false_ready_fixtures_still_hold_ready_long_enough_to_matter() {
+    for name in [
+        "codex-0.154-mid-turn-false-ready.tcap",
+        "codex-0.154-background-terminal-false-ready.tcap",
+    ] {
+        let longest = longest_ready_run_us(&agent_prompt_fixture(name), 63, 160);
+        assert!(
+            std::time::Duration::from_micros(longest) >= AGENT_READY_CONFIRM,
+            "{name}: longest Ready run is {:.3}s, under AGENT_READY_CONFIRM, \
+             so this fixture can no longer reproduce the false idle",
+            longest as f64 / 1e6
+        );
+    }
+}
+
 #[test]
 fn codex_0154_false_ready_real_captures_stay_protocol_busy() {
     for (fixture, variant) in [
