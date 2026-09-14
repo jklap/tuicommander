@@ -2648,7 +2648,7 @@ static WT_STATUS_EPOCH: std::sync::LazyLock<dashmap::DashMap<String, u64>> =
 
 /// Mark the working tree of `path` as changed, so no later read joins one that
 /// started before the change. Call after the mutation has completed.
-fn bump_working_tree_epoch(path: &str) {
+pub(crate) fn bump_working_tree_epoch(path: &str) {
     *WT_STATUS_EPOCH.entry(path.to_string()).or_insert(0) += 1;
 }
 
@@ -2867,64 +2867,85 @@ pub(crate) async fn git_apply_reverse_patch(
 ) -> Result<(), String> {
     let repo = path.clone();
     tokio::task::spawn_blocking(move || {
-        let repo_path = PathBuf::from(&path);
-
-        // Validate patch is non-empty and looks like a unified diff
-        let trimmed = patch.trim();
-        if trimmed.is_empty() {
-            return Err("Patch is empty".to_string());
-        }
-        if !trimmed.starts_with("diff --git") && !trimmed.starts_with("---") {
-            return Err("Invalid patch: must start with 'diff --git' or '---'".to_string());
-        }
-
-        let mut args = vec!["apply", "--reverse"];
-        match scope.as_deref() {
-            None => {}
-            Some("staged") => args.push("--cached"),
-            Some(other) => {
-                return Err(format!(
-                    "Invalid scope: {:?}. Expected None or \"staged\"",
-                    other
-                ));
-            }
-        }
-
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let git_bin = crate::cli::resolve_cli("git");
-        let mut child = Command::new(&git_bin)
-            .current_dir(&repo_path)
-            .arg("--no-optional-locks")
-            .args(&args)
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn git apply: {e}"))?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(patch.as_bytes())
-                .map_err(|e| format!("Failed to write patch to stdin: {e}"))?;
-        }
-
-        let output = child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to wait for git apply: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            return Err(format!("git apply --reverse failed: {stderr}"));
-        }
-
-        Ok(())
+        apply_reverse_patch_impl(&path, &patch, scope.as_deref(), false)
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))?
     .inspect(|_| bump_working_tree_epoch(&repo))
+}
+
+/// Apply a unified diff patch in reverse. Shared by [`git_apply_reverse_patch`]
+/// and `session_review`'s per-step revert, which rebuilds a patch from a
+/// transcript's own `tool_use_id` rather than trusting a client-supplied one.
+///
+/// `check_only` runs `git apply --reverse --check`, which validates the patch
+/// applies cleanly without touching the working tree — used to answer
+/// "can this be reverted?" without side effects.
+///
+/// Synchronous — callers already run this inside `spawn_blocking`.
+pub(crate) fn apply_reverse_patch_impl(
+    path: &str,
+    patch: &str,
+    scope: Option<&str>,
+    check_only: bool,
+) -> Result<(), String> {
+    let repo_path = PathBuf::from(path);
+
+    // Validate patch is non-empty and looks like a unified diff
+    let trimmed = patch.trim();
+    if trimmed.is_empty() {
+        return Err("Patch is empty".to_string());
+    }
+    if !trimmed.starts_with("diff --git") && !trimmed.starts_with("---") {
+        return Err("Invalid patch: must start with 'diff --git' or '---'".to_string());
+    }
+
+    let mut args = vec!["apply", "--reverse"];
+    if check_only {
+        args.push("--check");
+    }
+    match scope {
+        None => {}
+        Some("staged") => args.push("--cached"),
+        Some(other) => {
+            return Err(format!(
+                "Invalid scope: {:?}. Expected None or \"staged\"",
+                other
+            ));
+        }
+    }
+
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let git_bin = crate::cli::resolve_cli("git");
+    let mut child = Command::new(&git_bin)
+        .current_dir(&repo_path)
+        .arg("--no-optional-locks")
+        .args(&args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn git apply: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(patch.as_bytes())
+            .map_err(|e| format!("Failed to write patch to stdin: {e}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for git apply: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("git apply --reverse failed: {stderr}"));
+    }
+
+    Ok(())
 }
 
 // --- git commit ---

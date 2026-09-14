@@ -163,6 +163,15 @@ gix = { version = "0.85", default-features = false, features = [
     "dirwalk",
     "parallel",
 ] }
+# gix-diff enables gix-imara-diff (renamed here from its crates.io name
+# "gix-imara-diff") for its `blob` feature, but does not itself forward that
+# crate's own `unified_diff` feature — so `gix::diff::blob::{BasicLineDiffPrinter,
+# UnifiedDiffConfig, UnifiedDiffPrinter}` and `Diff::unified_diff` are otherwise
+# unavailable. Declaring the same dependency directly, with that feature on,
+# unifies with gix-diff's own copy (same crate/version, one Cargo.lock entry)
+# and turns the feature on crate-wide. Used by session_review.rs to render a
+# git-apply-able unified diff from two in-memory strings.
+gix-imara-diff = { version = "0.2.3", default-features = false, features = ["unified_diff"] }
 parking_lot = "0.12"
 regex = "1"
 lazy_static = "1"
