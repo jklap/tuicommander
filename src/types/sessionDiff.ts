@@ -92,7 +92,12 @@ export interface SessionReview {
 	included_subagents: boolean;
 }
 
-export type RevertMethod = "git_apply_reverse" | "string_substitution" | "restore_backup" | "write_base" | "delete_file";
+export type RevertMethod =
+	| "git_apply_reverse"
+	| "string_substitution"
+	| "restore_backup"
+	| "write_base"
+	| "delete_file";
 
 export interface RevertResult {
 	applied: boolean;
