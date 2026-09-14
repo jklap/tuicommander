@@ -381,10 +381,7 @@ fn report_progress_event(
     project: String,
     report: crate::progress::ProgressReportInput,
 ) -> Result<crate::progress::ProgressReceipt, String> {
-    let provenance = crate::progress::ProgressProvenance {
-        workspace_path: Some(project.clone()),
-        ..Default::default()
-    };
+    let provenance = crate::progress::ProgressProvenance::for_workspace(&project);
     crate::mcp_http::mcp_transport::report_progress(
         state.inner(),
         Some(&project),

@@ -390,10 +390,7 @@ async fn post_progress_report(
     if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    let provenance = crate::progress::ProgressProvenance {
-        workspace_path: Some(q.path.clone()),
-        ..Default::default()
-    };
+    let provenance = crate::progress::ProgressProvenance::for_workspace(&q.path);
     json_result(mcp_transport::report_progress(
         &state,
         Some(&q.path),
