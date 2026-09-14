@@ -399,7 +399,10 @@ const HALLUCINATION_SUBSTRING: &[&str] = &[
     "thanks for listening",
     "subtitles by",
     "transcribed by",
-    "subscribe",
+    // "subscribe" on its own is a verb this codebase dictates constantly
+    // ("add a subscribe handler", "unsubscribe the grid"), and substring
+    // matching would condemn the whole sentence. The boilerplate form is
+    // already covered by the entry below.
     "like and subscribe",
     // es
     "gracias por ver el video",
@@ -541,6 +544,20 @@ mod tests {
         assert!(!is_hallucination("apri il file browser"));
         assert!(!is_hallucination("run the tests"));
         assert!(!is_hallucination(""));
+    }
+
+    /// "subscribe" is a verb this codebase dictates constantly, so it may only
+    /// be matched in the channel-boilerplate form. A bare substring entry made
+    /// every one of these sentences vanish with a "filtered hallucination" skip.
+    #[test]
+    fn a_sentence_about_subscribing_survives() {
+        assert!(!is_hallucination(
+            "add a subscribe handler to the event bus"
+        ));
+        assert!(!is_hallucination("unsubscribe the terminal grid on close"));
+        assert!(!is_hallucination("chat_subscribe returns a receiver"));
+        // The boilerplate form must still go.
+        assert!(is_hallucination("Please like and subscribe!"));
     }
 
     /// The short-phrase list was written from what a 1.5–3 s streaming window
