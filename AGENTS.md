@@ -155,6 +155,25 @@ tests` step / `pnpm test:plugins` reports 0 tests collected and exits 1). Both a
 environment drift, not a regression — don't spend time fixing the submodule pointer unless
 explicitly asked.
 
+**Committing a change under `plugins/` needs TWO commits, in two separate git histories.**
+`cd plugins && git add ... && git commit` lands a commit inside the submodule's own repo
+(likely detached-HEAD, since worktrees don't check the submodule out onto a branch) — this is
+what actually holds the new/changed plugin file. The parent repo's own `git add plugins &&
+git commit` then only records that new commit SHA as the submodule's pinned pointer; it does
+not carry the plugin's file contents itself. Neither commit is visible to another clone (or to
+`github.com/sstraus/tuicommander-plugins`) until the **submodule's own commit** is pushed to
+that remote separately — this is a manual step that isn't implied by, or done as part of,
+committing/pushing the parent repo. If you add or edit a plugin, don't forget the submodule-side
+push, and don't assume the parent repo's own push covers it.
+
+**A plugin living under this repo's `plugins/` submodule is NOT auto-loaded by a running
+instance.** That directory is only the source/distribution copy (mirrors the public
+`tuicommander-plugins` repo, feeding the registry/release-zip pipeline) — an app instance loads
+plugins from `{config_dir}/plugins/{id}/` (e.g. `~/Library/Application Support/com.tuic.commander/
+plugins/{id}/` on macOS), a separate location entirely. To manually exercise a plugin you just
+added or edited in `plugins/{id}/`, use Settings → Plugins → "Install from folder" pointing at it,
+or copy the directory into the config dir's `plugins/` folder yourself, then enable it.
+
 `src/__tests__/components/ChangelogModal.test.tsx` has a flaky async leak (an uncleaned
 timer/effect from its `onMount`, unrelated to the file's own logic — confirmed pre-existing,
 untouched by recent commits) that vitest's leak detector marks as a failed test FILE even when
