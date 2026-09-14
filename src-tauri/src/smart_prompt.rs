@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Output;
 use std::time::Duration;
 use tokio::process::Command;
@@ -32,13 +33,29 @@ const ENV_ALLOWLIST: &[&str] = &[
 ];
 
 /// Clear the child's env, re-populate from the allowlist inherited from the
-/// current process, then overlay caller-supplied vars. Centralises the policy
-/// so headless and shell paths can't drift out of sync.
-fn apply_clean_env(cmd: &mut Command, extra: Option<&HashMap<String, String>>) {
+/// current process, overlay the derived `TUIC_*` script context, then overlay
+/// caller-supplied vars last (so an explicit `extra` entry always wins over a
+/// same-named derived one). Centralises the policy so headless and shell
+/// paths can't drift out of sync.
+///
+/// `TUIC_*` values (paths, branch names) are not secrets — a repo-controlled
+/// script could already learn all of them by running `git` in its own cwd —
+/// so adding them here does not widen the exfiltration surface `ENV_ALLOWLIST`
+/// exists to close off. Don't "fix" this by stripping them back out.
+fn apply_clean_env(
+    cmd: &mut Command,
+    ctx: Option<&crate::script_env::ScriptContext>,
+    extra: Option<&HashMap<String, String>>,
+) {
     cmd.env_clear();
     for key in ENV_ALLOWLIST {
         if let Ok(value) = std::env::var(key) {
             cmd.env(key, value);
+        }
+    }
+    if let Some(ctx) = ctx {
+        for (k, v) in ctx.as_map() {
+            cmd.env(k, v);
         }
     }
     if let Some(vars) = extra {
@@ -103,9 +120,13 @@ pub(crate) async fn execute_headless_prompt(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
-    // Clear inherited env and inject only allowlist + caller-supplied vars.
-    // See ENV_ALLOWLIST for the rationale.
-    apply_clean_env(&mut cmd, env.as_ref());
+    // Clear inherited env and inject allowlist + TUIC_* context + caller-
+    // supplied vars. See ENV_ALLOWLIST for the rationale.
+    let ctx = crate::script_env::ScriptContext::derive(
+        crate::script_env::ScriptKind::Prompt,
+        Path::new(&repo_path),
+    );
+    apply_clean_env(&mut cmd, Some(&ctx), env.as_ref());
 
     let mut child = cmd
         .spawn()
@@ -168,9 +189,14 @@ pub(crate) async fn execute_shell_script(
         .kill_on_drop(true);
 
     // Shell scripts never receive caller-supplied env vars today — strip the
-    // inherited parent env to the allowlist so repo-controlled script_content
-    // cannot read ANTHROPIC_API_KEY / GITHUB_TOKEN / etc. from the Tauri process.
-    apply_clean_env(&mut cmd, None);
+    // inherited parent env to the allowlist (+ TUIC_* context) so repo-
+    // controlled script_content cannot read ANTHROPIC_API_KEY / GITHUB_TOKEN /
+    // etc. from the Tauri process.
+    let ctx = crate::script_env::ScriptContext::derive(
+        crate::script_env::ScriptKind::Prompt,
+        Path::new(&repo_path),
+    );
+    apply_clean_env(&mut cmd, Some(&ctx), None);
 
     let child = cmd
         .spawn()
@@ -404,20 +430,86 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shell_script_today_receives_no_tuic_context() {
-        // Pins current behavior before TUIC_* context is wired into
-        // apply_clean_env's `ctx` slot (see script_env.rs). Because
-        // apply_clean_env already env_clear()s and only re-adds the fixed
-        // ENV_ALLOWLIST, this is a plain sanity check (not racy against
-        // ambient TUIC_* vars the way worktree.rs's inherited-env tests are).
+    async fn shell_script_in_non_repo_cwd_still_gets_universal_tuic_vars() {
+        // /tmp is not (in general) a git repo, so ScriptContext::derive's
+        // is_repo gate should suppress every repo-shaped var — but the
+        // always-present ones (SCRIPT_KIND/APP_VERSION/CONFIG_DIR) still come
+        // through, same as apply_clean_env's fixed ENV_ALLOWLIST does.
+        // apply_clean_env itself is not racy against ambient TUIC_* vars the
+        // way worktree.rs's inherited-env tests are: it env_clear()s first.
         let out = execute_shell_script(
-            "env | grep -c '^TUIC_' || true".to_string(),
+            "echo \"$TUIC_SCRIPT_KIND|$TUIC_MAIN_REPO_PATH\"".to_string(),
             5000,
             "/tmp".to_string(),
         )
         .await
         .unwrap();
-        assert_eq!(out.trim(), "0");
+        assert_eq!(out.trim(), "prompt|");
+    }
+
+    #[tokio::test]
+    async fn shell_script_receives_tuic_context_on_top_of_the_allowlist() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        for args in [
+            vec!["init", "-b", "main"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(dir.path())
+                .output()
+                .expect("git command");
+        }
+        std::fs::write(dir.path().join("README.md"), "x").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let out = execute_shell_script(
+            "echo \"$TUIC_BRANCH|$TUIC_MAIN_REPO_PATH\"".to_string(),
+            5000,
+            dir.path().to_string_lossy().to_string(),
+        )
+        .await
+        .unwrap();
+        let parts: Vec<&str> = out.trim().split('|').collect();
+        assert_eq!(parts[0], "main");
+        assert_eq!(
+            parts[1],
+            dir.path().canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[tokio::test]
+    async fn headless_caller_env_overrides_the_derived_context() {
+        // apply_clean_env's ordering contract: allowlist -> ctx -> extra, so
+        // an explicit caller-supplied var always wins over a same-named
+        // derived one.
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "TUIC_SCRIPT_KIND".to_string(),
+            "caller-override".to_string(),
+        );
+
+        let out = execute_headless_prompt(
+            "sh".to_string(),
+            vec!["-c".to_string(), "echo \"$TUIC_SCRIPT_KIND\"".to_string()],
+            None,
+            5000,
+            "/tmp".to_string(),
+            Some(env),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, "caller-override");
     }
 
     #[tokio::test]
