@@ -78,6 +78,7 @@ export interface ShortcutHandlers {
 	closeActiveTabOrPane: () => void;
 	togglePromptLibrary: () => void;
 	toggleDiffScroll: () => void;
+	openSessionReview: () => void;
 	toggleGlobalWorkspace: () => void;
 	openFile: () => void;
 	newFile: () => void;
@@ -316,6 +317,9 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			return true;
 		case "toggle-diff-scroll":
 			handlers.toggleDiffScroll();
+			return true;
+		case "open-session-review":
+			handlers.openSessionReview();
 			return true;
 		case "toggle-global-workspace":
 			handlers.toggleGlobalWorkspace();

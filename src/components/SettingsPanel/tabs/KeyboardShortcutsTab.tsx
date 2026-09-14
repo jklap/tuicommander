@@ -234,6 +234,7 @@ export function getShortcutSections(): ShortcutSection[] {
 				{ action: "toggle-branches-tab", keys: keyFor("toggle-branches-tab"), description: "Branches" },
 				{ action: "quick-branch-switch", keys: keyFor("quick-branch-switch"), description: "Quick branch switch" },
 				{ action: "toggle-diff-scroll", keys: keyFor("toggle-diff-scroll"), description: "Diff scroll view" },
+				{ action: "open-session-review", keys: keyFor("open-session-review"), description: "Session diff review" },
 			],
 		},
 		{

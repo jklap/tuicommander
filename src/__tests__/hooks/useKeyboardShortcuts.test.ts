@@ -65,6 +65,7 @@ function createMockHandlers(): ShortcutHandlers {
 		closeActiveTabOrPane: vi.fn(),
 		togglePromptLibrary: vi.fn(),
 		toggleDiffScroll: vi.fn(),
+		openSessionReview: vi.fn(),
 		toggleGlobalWorkspace: vi.fn(),
 		openFile: vi.fn(),
 		newFile: vi.fn(),

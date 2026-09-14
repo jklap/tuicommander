@@ -2,7 +2,7 @@ import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
 import { IndicatorIcon } from "../../indicators/IndicatorIcon";
 import { resolveIconId } from "../../indicators/registry";
-import { diffTabsStore } from "../../stores/diffTabs";
+import { diffTabsStore, isSessionReviewTab } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -322,7 +322,11 @@ export const DiffTabView: Component<FileTabViewProps> = (props) => {
 				onPointerDown={(event) => props.onPointerDown(event, props.id, "diff")}
 			>
 				<span class={s.tabIcon}>
-					{props.richIcon && !tab()?.filePath ? (
+					{isSessionReviewTab(tab()) ? (
+						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M8 1a7 7 0 1 0 4.9 12l-.9-.9A5.5 5.5 0 1 1 13.5 8h-2l2.75 3 2.75-3h-2A7 7 0 0 0 8 1zm-.75 3v4.5l3.5 2.1.75-1.24-2.75-1.66V4h-1.5z" />
+						</svg>
+					) : props.richIcon && !tab()?.filePath ? (
 						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
 							<path d="M2 2h12v1H2zm0 3h12v1H2zm0 3h10v1H2zm0 3h8v1H2z" />
 						</svg>
@@ -340,7 +344,7 @@ export const DiffTabView: Component<FileTabViewProps> = (props) => {
 				</Show>
 				<span class={s.tabName}>
 					{tab()?.fileName}
-					{tab()?.scope ? ` (${tab()?.scope?.slice(0, 7)})` : ""}
+					{tab()?.scope && !isSessionReviewTab(tab()) ? ` (${tab()?.scope?.slice(0, 7)})` : ""}
 				</span>
 				<PanePositionIcon tabId={props.id} rects={props.paneRects} />
 				<button

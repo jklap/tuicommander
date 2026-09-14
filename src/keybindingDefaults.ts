@@ -57,6 +57,7 @@ export const ACTION_NAMES = [
 	"toggle-focus-mode",
 	"prompt-library",
 	"toggle-diff-scroll",
+	"open-session-review",
 	"toggle-global-workspace",
 	"open-file",
 	"new-file",
@@ -147,6 +148,9 @@ export const DEFAULT_BINDINGS: Record<ActionName, string> = {
 	"toggle-focus-mode": "Cmd+Alt+Enter",
 	"prompt-library": "Cmd+Shift+K",
 	"toggle-diff-scroll": "Cmd+Shift+G",
+	// Unbound by default: a review workflow, not a hot path, reachable via the
+	// Command Palette (or a future Git-Panel button).
+	"open-session-review": "",
 	"toggle-global-workspace": "Cmd+Shift+X",
 	"open-file": "Cmd+O",
 	"new-file": "Cmd+N",

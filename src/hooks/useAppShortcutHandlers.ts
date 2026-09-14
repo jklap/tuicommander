@@ -153,6 +153,11 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			uiStore.setDiffViewMode("scroll");
 			diffTabsStore.add(repoPath, "", "M");
 		},
+		openSessionReview: () => {
+			const repoPath = repositoriesStore.state.activeRepoPath;
+			if (!repoPath) return;
+			diffTabsStore.addSessionReview(repoPath);
+		},
 		openFile: () => {
 			const defaultPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath || undefined;
 			void openDialog({ multiple: false, directory: false, defaultPath })
