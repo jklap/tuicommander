@@ -18,14 +18,21 @@
 # mid-run, with the mutant applied. A clone is an independent repository, absent
 # from .git/worktrees, so that cleanup cannot see it.
 #
-# A clone, not `git archive`, because twelve tests in git.rs call
-# get_commit_log and friends on `env!("CARGO_MANIFEST_DIR")/..` — the repository
-# they sit in. get_commit_log rejects a path that is not a repository rather
-# than letting git discover one upward, so in a plain export the BASELINE test
-# run failed on `get_commit_log_count_clamped_to_500` and no mutant was tested.
-# `--local` hardlinks the object store, so the real history costs almost
-# nothing. Those tests asserting against their own checkout is a separate
-# problem this script only works around.
+# A clone, not `git archive` — but NOT because the suite needs the surrounding
+# history any more. That used to be the reason: twelve tests in git.rs called
+# get_commit_log and friends on `env!("CARGO_MANIFEST_DIR")/..`, the repository
+# they sit in, and get_commit_log rejects a path that is not a repository
+# rather than letting git discover one upward, so in a plain export the
+# BASELINE run failed on `get_commit_log_count_clamped_to_500` and no mutant
+# was tested. #772-f7c2 made those tests build their own fixture repositories;
+# measured 2026-09-14, the whole `--lib` suite passes in an export (5197 run,
+# 5197 passed), so an export would work here now.
+#
+# The clone stays because it costs nothing to keep and answers more questions:
+# `--local` hardlinks the object store, so the history is not copied, and a
+# real repository keeps `checkout --detach` available and leaves cargo-mutants
+# free to consult git. Switching to an export would buy nothing and would put
+# that last assumption back in play.
 set -euo pipefail
 
 RANGE="${1:-HEAD~1}"

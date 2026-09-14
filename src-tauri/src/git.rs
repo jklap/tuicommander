@@ -3448,6 +3448,105 @@ pub(crate) async fn get_file_blame(path: String, file: String) -> Result<Vec<Bla
 mod tests {
     use super::*;
 
+    // --- Fixture repositories ---
+    //
+    // No test in this module resolves its subject repository from
+    // `CARGO_MANIFEST_DIR`. The crate is not guaranteed to sit inside a git
+    // repository — a `git archive` export, a source tarball and a vendored
+    // build each produce a plain directory — and `get_commit_log` and friends
+    // reject a path that is not a repository rather than letting git discover
+    // one upward. A test pointed at the surrounding checkout therefore fails
+    // there for a reason that has nothing to do with the code under test, and
+    // in the meantime asserts against whatever history that checkout happens
+    // to carry.
+
+    /// Run `git` in `dir`, panicking with stderr when it fails.
+    fn git_in(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .unwrap_or_else(|e| panic!("spawn git {args:?}: {e}"));
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// An empty repository on `main`, with an identity configured so commits work.
+    fn empty_fixture_repo() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Canonicalized because `/var` is a symlink to `/private/var` on macOS
+        // and `validate_paths_within_repo` compares canonical prefixes.
+        let path = dir.path().canonicalize().expect("canonicalize tempdir");
+        git_in(&path, &["init", "-q", "-b", "main"]);
+        git_in(&path, &["config", "user.email", "test@test.com"]);
+        git_in(&path, &["config", "user.name", "Test"]);
+        (dir, path)
+    }
+
+    /// Author/committer time of the first fixture commit: 2025-01-01, so the
+    /// "timestamp is after 2024" assertion keeps its meaning.
+    const FIXTURE_EPOCH: i64 = 1_735_689_600;
+
+    /// A repository whose `main` carries `commits` commits, each appending one
+    /// line to `log.txt` — so every line of that file blames to a different
+    /// commit, and `git log -- log.txt` has the full history.
+    ///
+    /// Built with `git fast-import`: one process for the whole history, so the
+    /// 505-commit fixture the clamp test needs costs ~40 ms instead of 505
+    /// `git commit` spawns.
+    fn history_fixture_repo(commits: u32) -> (tempfile::TempDir, PathBuf) {
+        use std::io::Write as _;
+        assert!(commits > 0, "a history fixture needs at least one commit");
+        let (dir, path) = empty_fixture_repo();
+
+        let mut stream = String::new();
+        let mut file = String::new();
+        for i in 1..=commits {
+            file.push_str(&format!("line {i}\n"));
+            let blob_mark = i * 2;
+            let commit_mark = blob_mark + 1;
+            let ts = FIXTURE_EPOCH + i64::from(i);
+            let subject = format!("commit {i}");
+            stream.push_str(&format!("blob\nmark :{blob_mark}\ndata {}\n", file.len()));
+            stream.push_str(&file);
+            stream.push_str(&format!("commit refs/heads/main\nmark :{commit_mark}\n"));
+            stream.push_str(&format!("author Test <test@test.com> {ts} +0000\n"));
+            stream.push_str(&format!("committer Test <test@test.com> {ts} +0000\n"));
+            stream.push_str(&format!("data {}\n{subject}\n", subject.len()));
+            if i > 1 {
+                stream.push_str(&format!("from :{}\n", commit_mark - 2));
+            }
+            stream.push_str(&format!("M 100644 :{blob_mark} log.txt\n"));
+        }
+
+        let mut child = std::process::Command::new("git")
+            .current_dir(&path)
+            .args(["fast-import", "--quiet"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn git fast-import");
+        child
+            .stdin
+            .take()
+            .expect("fast-import stdin")
+            .write_all(stream.as_bytes())
+            .expect("write fast-import stream");
+        assert!(
+            child.wait().expect("wait fast-import").success(),
+            "git fast-import failed"
+        );
+
+        // fast-import writes objects and refs but leaves the index and working
+        // tree empty; blame and file reads want the checked-out copy.
+        git_in(&path, &["read-tree", "HEAD"]);
+        git_in(&path, &["checkout-index", "-a", "-f"]);
+        (dir, path)
+    }
+
     // --- list_remotes / parse_git_config_remotes ---
 
     #[test]
@@ -3809,13 +3908,11 @@ mod tests {
     }
 
     // --- Integration tests: compare file I/O vs git subprocess ---
-    // These run against the actual tuicommander repo to validate correctness.
+    // These run against a fixture repository to validate correctness.
 
     #[test]
     fn test_read_branch_matches_git_rev_parse() {
-        // Find the repo root (this file lives in src-tauri/src/)
-        let manifest_dir = env!("CARGO_MANIFEST_DIR"); // src-tauri/
-        let repo_root = PathBuf::from(manifest_dir).parent().unwrap().to_path_buf();
+        let (_dir, repo_root) = history_fixture_repo(1);
 
         // File I/O approach
         let file_branch = read_branch_from_head(&repo_root);
@@ -3830,6 +3927,11 @@ mod tests {
             });
 
         assert_eq!(
+            file_branch,
+            Some("main".to_string()),
+            "the fixture is checked out on main"
+        );
+        assert_eq!(
             file_branch, git_branch,
             "read_branch_from_head() must match `git rev-parse --abbrev-ref HEAD`"
         );
@@ -3837,8 +3939,16 @@ mod tests {
 
     #[test]
     fn test_read_remote_url_matches_git_remote() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let repo_root = PathBuf::from(manifest_dir).parent().unwrap().to_path_buf();
+        let (_dir, repo_root) = history_fixture_repo(1);
+        git_in(
+            &repo_root,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:octocat/hello.git",
+            ],
+        );
 
         // File I/O approach
         let file_url = read_remote_url(&repo_root);
@@ -3857,8 +3967,7 @@ mod tests {
 
     #[test]
     fn test_resolve_git_dir_for_local_repo() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let repo_root = PathBuf::from(manifest_dir).parent().unwrap().to_path_buf();
+        let (_dir, repo_root) = history_fixture_repo(1);
 
         let git_dir = resolve_git_dir(&repo_root);
         assert!(git_dir.is_some(), "Should resolve .git dir for this repo");
@@ -3869,30 +3978,40 @@ mod tests {
     }
 
     #[test]
-    fn test_get_merged_branches_against_real_repo() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let repo_root = PathBuf::from(manifest_dir).parent().unwrap().to_path_buf();
+    fn test_get_merged_branches_against_a_fixture_repo() {
+        let (_dir, repo_root) = history_fixture_repo(3);
+        // An ancestor of main: merged, and at a different SHA, so it survives
+        // the "never diverged" filter.
+        git_in(&repo_root, &["branch", "merged-feature", "main~1"]);
+        // At main's exact SHA: merged, but filtered out as never diverged.
+        git_in(&repo_root, &["branch", "same-as-main", "main"]);
+        // Its own commit on top of main: not merged.
+        git_in(&repo_root, &["switch", "-q", "-c", "diverged"]);
+        std::fs::write(repo_root.join("side.txt"), "side").expect("write side.txt");
+        git_in(&repo_root, &["add", "side.txt"]);
+        git_in(&repo_root, &["commit", "-q", "-m", "side commit"]);
+        git_in(&repo_root, &["switch", "-q", "main"]);
 
         let merged = get_merged_branches_impl(&repo_root)
-            .expect("get_merged_branches_impl should succeed on real repo");
+            .expect("get_merged_branches_impl should succeed on a repo");
 
-        // The main branch should NOT appear — it has the same SHA as itself,
-        // so the "never diverged" filter correctly excludes it.
-        let has_main = merged
-            .iter()
-            .any(|b| MAIN_BRANCH_CANDIDATES.contains(&b.as_str()));
         assert!(
-            !has_main,
-            "main branch should not appear in its own merged list, got: {merged:?}"
+            merged.contains(&"merged-feature".to_string()),
+            "an ancestor branch at its own SHA is merged, got: {merged:?}"
         );
-
-        // All returned branches should be truly merged (not main itself)
-        for branch in &merged {
-            assert!(
-                !is_main_branch(branch),
-                "main branch should not be in merged list"
-            );
-        }
+        assert!(
+            !merged.contains(&"diverged".to_string()),
+            "a branch with commits main does not contain is not merged, got: {merged:?}"
+        );
+        assert!(
+            !merged.contains(&"same-as-main".to_string()),
+            "a branch at main's SHA never diverged and is filtered, got: {merged:?}"
+        );
+        // The main branch must not appear in its own merged list.
+        assert!(
+            !merged.iter().any(|b| is_main_branch(b)),
+            "main branch should not be in merged list, got: {merged:?}"
+        );
     }
 
     #[test]
@@ -3916,21 +4035,39 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_default_branch_for_real_repo() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let repo_root = PathBuf::from(manifest_dir).parent().unwrap().to_path_buf();
+    fn test_detect_default_branch_for_a_fixture_repo() {
+        let (_dir, repo_root) = history_fixture_repo(1);
         let git_dir = resolve_git_dir(&repo_root).expect("should resolve git dir");
 
-        let branch = detect_default_branch(&git_dir);
-        assert!(
-            branch.is_some(),
-            "should detect a default branch for this repo"
+        assert_eq!(
+            detect_default_branch(&git_dir),
+            Some("main".to_string()),
+            "a local refs/heads/main is the default branch"
         );
-        // Local checkout uses "main"; CI detached-HEAD checkout uses "origin/main"
-        let branch_name = branch.unwrap();
-        assert!(
-            branch_name == "main" || branch_name == "origin/main",
-            "expected 'main' or 'origin/main', got: {branch_name}"
+    }
+
+    /// The detached-HEAD shape a CI checkout produces: no local branch at all,
+    /// only `refs/remotes/origin/main`. This used to hide inside the real-repo
+    /// test as an `== "main" || == "origin/main"` disjunction, which meant
+    /// neither branch of it was ever asserted on purpose.
+    #[test]
+    fn test_detect_default_branch_falls_back_to_the_remote_tracking_ref() {
+        let (_dir, repo_root) = history_fixture_repo(1);
+        let head = git_in(&repo_root, &["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        git_in(&repo_root, &["checkout", "-q", "--detach", &head]);
+        git_in(
+            &repo_root,
+            &["update-ref", "refs/remotes/origin/main", &head],
+        );
+        git_in(&repo_root, &["branch", "-q", "-D", "main"]);
+        let git_dir = resolve_git_dir(&repo_root).expect("should resolve git dir");
+
+        assert_eq!(
+            detect_default_branch(&git_dir),
+            Some("origin/main".to_string()),
+            "with no local branch the remote-tracking ref answers"
         );
     }
 
@@ -4005,19 +4142,37 @@ mod tests {
 
     #[tokio::test]
     async fn get_file_diff_rejects_path_traversal() {
-        // Use this repo's own path as a valid git repo
-        let repo_path = std::env::current_dir().unwrap();
+        // A repository with a real file next to it, reachable only by
+        // traversing out: `get_file_diff` runs its traversal guard solely when
+        // the joined path EXISTS, so a target that is merely absent falls
+        // through to `git diff` and the assertion then reads git's message
+        // instead of ours.
+        //
+        // This test used to take `std::env::current_dir()` as "a valid git
+        // repo" and ask for `../../etc/passwd`. That path does not exist
+        // either, so the guard never ran: it passed on git's own
+        // "outside repository" wording, and only while the crate happened to
+        // sit inside a repository. In a `git archive` export git printed its
+        // usage instead and the test failed (#772-f7c2).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonicalize tempdir");
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).expect("create repo dir");
+        git_in(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("outside.txt"), "secret").expect("write outside.txt");
+
         let result = get_file_diff(
-            repo_path.to_string_lossy().to_string(),
-            "../../etc/passwd".to_string(),
+            repo.to_string_lossy().to_string(),
+            "../outside.txt".to_string(),
             None,
             None,
         )
         .await;
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("outside repository") || err.contains("Failed to resolve"),
-            "unexpected error: {err}"
+
+        assert_eq!(
+            result.unwrap_err(),
+            "Access denied: file is outside repository",
+            "the guard in get_file_diff must reject it, not git"
         );
     }
 
@@ -4395,9 +4550,18 @@ mod tests {
 
     // --- validate_paths_within_repo tests ---
 
+    /// A directory holding `src/tracked.rs`, so the existing-file branch of
+    /// `validate_paths_within_repo` (the one that canonicalizes) is exercised.
+    fn validate_paths_fixture() -> (tempfile::TempDir, PathBuf) {
+        let (dir, path) = empty_fixture_repo();
+        std::fs::create_dir_all(path.join("src")).expect("mkdir src");
+        std::fs::write(path.join("src/tracked.rs"), "// tracked").expect("write tracked.rs");
+        (dir, path)
+    }
+
     #[test]
     fn validate_paths_rejects_traversal() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (_dir, repo) = validate_paths_fixture();
         let result = validate_paths_within_repo(&repo, &["../../etc/passwd".to_string()]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside repository"));
@@ -4405,14 +4569,14 @@ mod tests {
 
     #[test]
     fn validate_paths_accepts_normal_paths() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let result = validate_paths_within_repo(&repo, &["src/git.rs".to_string()]);
+        let (_dir, repo) = validate_paths_fixture();
+        let result = validate_paths_within_repo(&repo, &["src/tracked.rs".to_string()]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn validate_paths_rejects_absolute_paths() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let (_dir, repo) = validate_paths_fixture();
         let result = validate_paths_within_repo(&repo, &["/etc/passwd".to_string()]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("absolute path"));
@@ -4853,9 +5017,7 @@ mod tests {
 
     #[test]
     fn get_last_commit_timestamps_returns_timestamp_for_main() {
-        // Uses the current repo (tuicommander) as a real git repo.
-        // In CI (detached HEAD), detect_default_branch returns "origin/main" instead of "main".
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(2);
         let git_dir = resolve_git_dir(&repo).expect("should resolve git dir");
         let main_ref = detect_default_branch(&git_dir).expect("should detect a default branch");
         let result = get_last_commit_timestamps(&repo, std::slice::from_ref(&main_ref));
@@ -4865,6 +5027,8 @@ mod tests {
         );
         let ts = result[&main_ref];
         assert!(ts.is_some(), "main branch should have a commit timestamp");
+        // The fixture's last commit, not "some plausible-looking number".
+        assert_eq!(ts.unwrap(), FIXTURE_EPOCH + 2);
         // Timestamp should be reasonable (after 2024-01-01 = 1704067200)
         assert!(
             ts.unwrap() > 1_704_067_200,
@@ -4874,7 +5038,7 @@ mod tests {
 
     #[test]
     fn get_last_commit_timestamps_nonexistent_branch_returns_none() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(1);
         let result = get_last_commit_timestamps(&repo, &["nonexistent-branch-abc123".to_string()]);
         assert!(result.contains_key("nonexistent-branch-abc123"));
         assert!(result["nonexistent-branch-abc123"].is_none());
@@ -4882,7 +5046,7 @@ mod tests {
 
     #[test]
     fn get_last_commit_timestamps_empty_input_returns_empty() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(1);
         let result = get_last_commit_timestamps(&repo, &[]);
         assert!(result.is_empty());
     }
@@ -4949,42 +5113,58 @@ mod tests {
 
     // --- get_commit_log integration tests ---
 
+    /// Enough commits for both limits to bite: above `COMMIT_LOG_MAX_COUNT`, so
+    /// a request over the limit is distinguishable from one under it. Without
+    /// that, `len() <= 500` passes on a repository with three commits and on a
+    /// build with the clamp deleted alike.
+    const COMMIT_LOG_FIXTURE_COMMITS: u32 = COMMIT_LOG_MAX_COUNT + 5;
+
     #[tokio::test]
-    async fn get_commit_log_returns_commits_for_real_repo() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    async fn get_commit_log_returns_commits_for_a_fixture_repo() {
+        let (_dir, repo) = history_fixture_repo(8);
         let result = get_commit_log(repo.to_string_lossy().to_string(), Some(5), None).await;
-        let commits = result.expect("should succeed on real repo");
-        assert!(!commits.is_empty(), "repo should have commits");
-        assert!(commits.len() <= 5, "should respect count limit");
+        let commits = result.expect("should succeed on a repo");
+        assert_eq!(commits.len(), 5, "should respect count limit");
         // First commit should have a valid hash (40 hex chars)
         assert_eq!(commits[0].hash.len(), 40);
         assert!(commits[0].hash.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(!commits[0].author_name.is_empty());
+        assert_eq!(commits[0].author_name, "Test");
         assert!(!commits[0].author_date.is_empty());
-        assert!(!commits[0].subject.is_empty());
+        assert_eq!(commits[0].subject, "commit 8", "newest commit comes first");
     }
 
     #[tokio::test]
     async fn get_commit_log_default_count_is_50() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(COMMIT_LOG_DEFAULT_COUNT + 5);
         let result = get_commit_log(repo.to_string_lossy().to_string(), None, None).await;
         let commits = result.expect("should succeed");
-        // We know this repo has many commits; default limit is 50
-        assert!(commits.len() <= 50);
+        // The fixture carries more than the default, so the default has to bite.
+        assert_eq!(commits.len(), COMMIT_LOG_DEFAULT_COUNT as usize);
     }
 
     #[tokio::test]
     async fn get_commit_log_count_clamped_to_500() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        // Requesting 9999 should be clamped to 500
-        let result = get_commit_log(repo.to_string_lossy().to_string(), Some(9999), None).await;
-        let commits = result.expect("should succeed");
-        assert!(commits.len() <= 500);
+        let (_dir, repo) = history_fixture_repo(COMMIT_LOG_FIXTURE_COMMITS);
+        let repo_str = repo.to_string_lossy().to_string();
+
+        // Requesting 9999 is clamped to COMMIT_LOG_MAX_COUNT...
+        let clamped = get_commit_log(repo_str.clone(), Some(9999), None)
+            .await
+            .expect("should succeed");
+        assert_eq!(clamped.len(), COMMIT_LOG_MAX_COUNT as usize);
+
+        // ...while a request below the limit is honoured as asked, which is
+        // what makes the assertion above about the clamp and not about the
+        // size of the fixture.
+        let under = get_commit_log(repo_str, Some(COMMIT_LOG_MAX_COUNT - 100), None)
+            .await
+            .expect("should succeed");
+        assert_eq!(under.len(), (COMMIT_LOG_MAX_COUNT - 100) as usize);
     }
 
     #[tokio::test]
     async fn get_commit_log_pagination_with_after() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(8);
         let repo_str = repo.to_string_lossy().to_string();
 
         // Get first page
@@ -5026,22 +5206,23 @@ mod tests {
 
     #[tokio::test]
     async fn get_file_history_returns_commits_for_known_file() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(8);
         let result = get_file_history(
             repo.to_string_lossy().to_string(),
-            "src-tauri/src/git.rs".to_string(),
+            "log.txt".to_string(),
             Some(5),
             None,
         )
         .await;
         let commits = result.expect("should succeed for a file in the repo");
-        assert!(!commits.is_empty(), "git.rs should have commit history");
-        assert!(commits.len() <= 5);
+        // Every fixture commit touches log.txt, so the count limit bites.
+        assert_eq!(commits.len(), 5);
+        assert_eq!(commits[0].subject, "commit 8", "newest commit comes first");
     }
 
     #[tokio::test]
     async fn get_file_history_nonexistent_file_returns_empty() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(1);
         let result = get_file_history(
             repo.to_string_lossy().to_string(),
             "nonexistent-file-xyz.txt".to_string(),
@@ -5317,30 +5498,25 @@ filename test.txt
 
     #[tokio::test]
     async fn get_file_blame_returns_lines_for_known_file() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let result = get_file_blame(
-            repo.to_string_lossy().to_string(),
-            "src-tauri/src/git.rs".to_string(),
-        )
-        .await;
+        // Each fixture commit appends one line, so line N blames to commit N —
+        // a blame result the test can name instead of only describe.
+        let (_dir, repo) = history_fixture_repo(6);
+        let result =
+            get_file_blame(repo.to_string_lossy().to_string(), "log.txt".to_string()).await;
         let lines = result.expect("should succeed for a file in the repo");
-        assert!(!lines.is_empty(), "git.rs should have blame lines");
-        // Every line should have a 40-char hex hash. This test exercises the gix
-        // blame path (get_file_blame → git_reads().blame()), so the non-empty
-        // `summary` assertion covers gix's commit-summary population — every real
-        // commit in this repo's history has a non-empty subject line.
-        for bl in &lines {
-            assert_eq!(bl.hash.len(), 40, "hash should be 40 chars: {}", bl.hash);
-            assert!(!bl.author.is_empty(), "author should not be empty");
-            assert!(bl.author_time > 0, "author_time should be positive");
-            assert!(!bl.summary.is_empty(), "summary should not be empty");
-            assert!(bl.line_number > 0, "line_number should be positive");
-        }
-        // Line numbers should be sequential
+        assert_eq!(lines.len(), 6, "one line per fixture commit");
+        // This test exercises the gix blame path (get_file_blame →
+        // git_reads().blame()), so the `summary` assertion covers gix's
+        // commit-summary population.
         for (i, bl) in lines.iter().enumerate() {
+            let n = i + 1;
+            assert_eq!(bl.hash.len(), 40, "hash should be 40 chars: {}", bl.hash);
+            assert!(bl.hash.chars().all(|c| c.is_ascii_hexdigit()));
+            assert_eq!(bl.author, "Test");
+            assert_eq!(bl.author_time, FIXTURE_EPOCH + n as i64);
+            assert_eq!(bl.summary, format!("commit {n}"));
             assert_eq!(
-                bl.line_number,
-                (i + 1) as u32,
+                bl.line_number, n as u32,
                 "line numbers should be sequential"
             );
         }
@@ -5348,7 +5524,7 @@ filename test.txt
 
     #[tokio::test]
     async fn get_file_blame_fails_for_nonexistent_file() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let (_dir, repo) = history_fixture_repo(1);
         let result = get_file_blame(
             repo.to_string_lossy().to_string(),
             "nonexistent-file-xyz.txt".to_string(),
@@ -5359,17 +5535,14 @@ filename test.txt
 
     #[tokio::test]
     async fn get_file_blame_untracked_file_returns_friendly_error() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        // Use a file that exists on disk but is not tracked by git
-        // (stories/ is gitignored, but we can use any untracked file)
-        let tmp = repo.join("_blame_test_untracked.tmp");
-        std::fs::write(&tmp, "hello").unwrap();
+        let (_dir, repo) = history_fixture_repo(1);
+        // A file that exists on disk but is not tracked by git.
+        std::fs::write(repo.join("untracked.tmp"), "hello").expect("write untracked.tmp");
         let result = get_file_blame(
             repo.to_string_lossy().to_string(),
-            "_blame_test_untracked.tmp".to_string(),
+            "untracked.tmp".to_string(),
         )
         .await;
-        std::fs::remove_file(&tmp).ok();
         let err = result.unwrap_err();
         assert!(
             err.contains("not tracked by git"),
@@ -5556,45 +5729,56 @@ filename test.txt
 
     #[test]
     fn test_get_branches_detail_returns_rich_info() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let repo_root = PathBuf::from(manifest_dir).parent().unwrap().to_path_buf();
+        let (_dir, repo_root) = history_fixture_repo(2);
+        git_in(&repo_root, &["branch", "feature", "main~1"]);
+        let head = git_in(&repo_root, &["rev-parse", "main"])
+            .trim()
+            .to_string();
+        git_in(
+            &repo_root,
+            &["update-ref", "refs/remotes/origin/main", &head],
+        );
+        // The synthetic pointer the filter exists to drop.
+        git_in(
+            &repo_root,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
 
         let branches = get_branches_detail_impl(&repo_root)
-            .expect("get_branches_detail_impl should succeed on real repo");
+            .expect("get_branches_detail_impl should succeed on a repo");
 
-        assert!(!branches.is_empty(), "should return at least one branch");
+        let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+        assert!(names.contains(&"main"), "got: {names:?}");
+        assert!(names.contains(&"feature"), "got: {names:?}");
+        assert!(names.contains(&"origin/main"), "got: {names:?}");
 
         // Branch names must not be empty
         for b in &branches {
             assert!(!b.name.is_empty(), "branch name should not be empty");
         }
 
-        // In CI (detached HEAD), no branch is current — skip those assertions
-        let is_detached = git_cmd(&repo_root)
-            .args(["symbolic-ref", "--quiet", "HEAD"])
-            .run()
-            .is_err();
-
-        if !is_detached {
-            let current_branches: Vec<&BranchDetail> =
-                branches.iter().filter(|b| b.is_current).collect();
-            assert_eq!(
-                current_branches.len(),
-                1,
-                "exactly one branch should be current, got: {:?}",
-                current_branches.iter().map(|b| &b.name).collect::<Vec<_>>()
-            );
-            let current = current_branches[0];
-            assert!(
-                current.last_commit_date.is_some(),
-                "current branch should have a last_commit_date"
-            );
-        }
-
-        // At least one branch should have a non-empty last_commit_date
+        let current_branches: Vec<&BranchDetail> =
+            branches.iter().filter(|b| b.is_current).collect();
+        assert_eq!(
+            current_branches.len(),
+            1,
+            "exactly one branch should be current, got: {:?}",
+            current_branches.iter().map(|b| &b.name).collect::<Vec<_>>()
+        );
+        assert_eq!(current_branches[0].name, "main");
         assert!(
-            branches.iter().any(|b| b.last_commit_date.is_some()),
-            "at least one branch should have a last_commit_date"
+            current_branches[0].last_commit_date.is_some(),
+            "current branch should have a last_commit_date"
+        );
+
+        // Every branch should have a non-empty last_commit_date
+        assert!(
+            branches.iter().all(|b| b.last_commit_date.is_some()),
+            "every branch should have a last_commit_date, got: {branches:?}"
         );
 
         // No origin/HEAD pseudo-ref should appear
@@ -5750,21 +5934,15 @@ filename test.txt
     // --- get_recent_branches_impl tests ---
 
     #[test]
-    fn test_get_recent_branches_on_real_repo() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let repo_root = PathBuf::from(manifest_dir).parent().unwrap().to_path_buf();
-
-        let result = get_recent_branches_impl(&repo_root, 5);
-        assert!(
-            result.is_ok(),
-            "should not error on a real repo: {result:?}"
-        );
-        // Result may be empty on a fresh repo, but it must be a Vec
-        let branches = result.unwrap();
-        // Branch names must not be empty strings
-        for b in &branches {
-            assert!(!b.is_empty(), "branch names must not be empty");
+    fn test_get_recent_branches_returns_checkouts_most_recent_first() {
+        let (_dir, repo_root) = history_fixture_repo(1);
+        for name in ["alpha", "beta", "gamma"] {
+            git_in(&repo_root, &["switch", "-q", "-c", name]);
         }
+        git_in(&repo_root, &["switch", "-q", "main"]);
+
+        let branches = get_recent_branches_impl(&repo_root, 5).expect("should not error on a repo");
+        assert_eq!(branches, vec!["main", "gamma", "beta", "alpha"]);
     }
 
     #[test]
