@@ -52,6 +52,7 @@ const BROWSER_ACTION_IDS = new Set([
 	"toggle-outline",
 	"toggle-file-browser-content-search",
 	"toggle-diff-scroll",
+	"open-session-review",
 	"toggle-git-ops",
 	"toggle-branches-tab",
 	"toggle-global-workspace",

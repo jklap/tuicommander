@@ -1,7 +1,7 @@
 import { type Component, createMemo, createSignal, For, lazy, Match, Show, Suspense, Switch } from "solid-js";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { invoke } from "../../invoke";
-import { diffTabsStore } from "../../stores/diffTabs";
+import { diffTabsStore, isSessionReviewTab } from "../../stores/diffTabs";
 import { findPaneGroupAtPoint } from "../../stores/dragDrop";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
@@ -29,6 +29,9 @@ const CodeEditorTab = lazy(() =>
 	import("../CodeEditorPanel/CodeEditorTab").then((module) => ({ default: module.CodeEditorTab })),
 );
 const DiffTab = lazy(() => import("../DiffTab/DiffTab").then((module) => ({ default: module.DiffTab })));
+const SessionDiffTab = lazy(() =>
+	import("../SessionDiffTab/SessionDiffTab").then((module) => ({ default: module.SessionDiffTab })),
+);
 
 // ---- PaneNodeView: recursive tree renderer ----
 
@@ -481,14 +484,26 @@ const DiffPane: Component<{ tabId: string; onClose: (id: string) => void }> = (p
 		<Show when={tab()}>
 			{(diffTab) => (
 				<Suspense>
-					<DiffTab
-						tabId={props.tabId}
-						repoPath={diffTab().repoPath}
-						filePath={diffTab().filePath}
-						scope={diffTab().scope}
-						untracked={diffTab().untracked}
-						onClose={() => props.onClose(props.tabId)}
-					/>
+					<Show
+						when={isSessionReviewTab(diffTab())}
+						fallback={
+							<DiffTab
+								tabId={props.tabId}
+								repoPath={diffTab().repoPath}
+								filePath={diffTab().filePath}
+								scope={diffTab().scope}
+								untracked={diffTab().untracked}
+								onClose={() => props.onClose(props.tabId)}
+							/>
+						}
+					>
+						<SessionDiffTab
+							tabId={props.tabId}
+							repoPath={diffTab().repoPath}
+							sessionId={diffTab().sessionId}
+							onClose={() => props.onClose(props.tabId)}
+						/>
+					</Show>
 				</Suspense>
 			)}
 		</Show>
@@ -565,7 +580,11 @@ function tabTitle(tab: PaneTab): string {
 		}
 		case "diff": {
 			const d = diffTabsStore.get(tab.id);
-			return (d?.filePath && pathBasename(d.filePath)) || tab.id;
+			// A tab with no filePath (the "Diff Scroll" / Session Review views)
+			// already carries the right display name in `fileName` — falling
+			// through to the raw internal tab.id ("diff-3") was a pre-existing
+			// bug, not specific to the session-review scope this fixes for.
+			return (d?.filePath && pathBasename(d.filePath)) || d?.fileName || tab.id;
 		}
 		case "editor": {
 			const e = editorTabsStore.get(tab.id);

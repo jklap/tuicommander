@@ -173,7 +173,11 @@ export function useRepository() {
 	}
 
 	/** Recent Claude Code sessions that touched this repo, newest first. */
-	async function listReviewSessions(repoPath: string, limit?: number, includeCounts?: boolean): Promise<SessionSummary[]> {
+	async function listReviewSessions(
+		repoPath: string,
+		limit?: number,
+		includeCounts?: boolean,
+	): Promise<SessionSummary[]> {
 		try {
 			return await invoke<SessionSummary[]>("list_review_sessions", { repoPath, limit, includeCounts });
 		} catch (err) {
@@ -186,7 +190,11 @@ export function useRepository() {
 	 *  Rethrows — an empty `{steps:[],files:[]}` must never be confused with a
 	 *  real backend failure, so callers track their own error state instead of
 	 *  trusting a swallowed-to-empty result to mean "no edits". */
-	async function getSessionReview(repoPath: string, sessionId: string, includeSubagents?: boolean): Promise<SessionReview> {
+	async function getSessionReview(
+		repoPath: string,
+		sessionId: string,
+		includeSubagents?: boolean,
+	): Promise<SessionReview> {
 		return await invoke<SessionReview>("get_session_review", { repoPath, sessionId, includeSubagents });
 	}
 

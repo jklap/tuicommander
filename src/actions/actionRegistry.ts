@@ -62,6 +62,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"toggle-outline": { label: "Toggle outline panel", category: "Panels" },
 	"toggle-file-browser-content-search": { label: "Search file contents", category: "File Browser" },
 	"toggle-diff-scroll": { label: "Branch diff scroll view", category: "Git" },
+	"open-session-review": { label: "Session diff review", category: "Git" },
 	"toggle-git-ops": { label: "Git panel", category: "Git" },
 	"toggle-branches-tab": { label: "Branches tab", category: "Git" },
 
@@ -144,6 +145,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"toggle-outline": handlers.toggleOutlinePanel,
 		"toggle-git-ops": handlers.toggleGitOpsPanel,
 		"toggle-diff-scroll": handlers.toggleDiffScroll,
+		"open-session-review": handlers.openSessionReview,
 		"toggle-global-workspace": handlers.toggleGlobalWorkspace,
 		"toggle-branches-tab": handlers.toggleBranchesTab,
 		"split-vertical": () => handlers.handleSplit("vertical"),
