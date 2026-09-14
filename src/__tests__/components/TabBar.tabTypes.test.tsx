@@ -86,6 +86,23 @@ describe("TabBar tab-type classes", () => {
 		expect(container.querySelector(`[data-tab-id="${id}"]`)?.classList.contains("diffTab")).toBe(true);
 	});
 
+	it("names a Session Review tab 'Session Review' with no scope suffix", () => {
+		const id = diffTabsStore.addSessionReview("/repo", "sess-1");
+		const { container, getByText } = renderBar();
+		const tab = container.querySelector(`[data-tab-id="${id}"]`);
+		expect(tab?.classList.contains("diffTab")).toBe(true);
+		// The generic "(scope)" suffix every other scoped diff tab gets must be
+		// suppressed for this one — it would otherwise read "Session Review (session)".
+		expect(getByText("Session Review")).toBeTruthy();
+		expect(container.textContent).not.toContain("(session)");
+	});
+
+	it("still appends the scope suffix for a regular scoped diff tab (regression guard)", () => {
+		diffTabsStore.add("/repo", "/repo/change.ts", "M", "staged");
+		const { container } = renderBar();
+		expect(container.textContent).toContain("(staged)");
+	});
+
 	it("gives an editor tab the editTab class", () => {
 		const id = editorTabsStore.add("/repo", "/repo/edit.ts");
 		const { container } = renderBar();

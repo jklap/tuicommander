@@ -588,6 +588,24 @@ When modifying `src-tauri/src/dictation/**`, `src-tauri/crates/tuic-dictation/**
 | `docs/FEATURES.md` | Section 9 (Voice Dictation) |
 | `to-test.md` | Anything needing real audio, a real download or Boss's eye — a Rust change here never reaches his live `make dev` session |
 
+### Session Diff Review
+When modifying transcript parsing, base resolution, revert mechanisms, or the review UI:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/session_review.rs` | Transcript parser, base-resolution tiers, revert commands |
+| `docs/backend/session-review.md` | Transcript format reference, base-resolution table, the two revert mechanisms, cache invariant |
+| `docs/api/tauri-commands.md` | The four `session_review.rs` commands |
+| `docs/api/http-api.md` | The four `/repo/session-review/*` routes |
+| `docs/backend/mcp-http.md` | Route table |
+| `src/components/SessionDiffTab/` | Frontend tab (picker, list, file/step rows, row-model builder) |
+| `src/types/sessionDiff.ts` | TS mirror of the Rust wire types — keep field-for-field in sync |
+| `src/hooks/useRepository.ts` | `listReviewSessions`/`getSessionReview`/`revertSessionStep`/`revertFileToSessionStart` |
+| `src/stores/diffTabs.ts` | `SESSION_SCOPE`/`isSessionReviewTab`/`addSessionReview`/`setSessionId` |
+| `docs/frontend/components.md` | Component tree |
+| `docs/FEATURES.md` | Section 7.5 (Diff) |
+| `docs/user-guide/branches.md` | User-facing walkthrough |
+
 ### Settings & Configuration
 When adding config fields or settings UI:
 
