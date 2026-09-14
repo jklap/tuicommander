@@ -294,6 +294,10 @@
 /repo/remotes
 /repo/remove-orphan
 /repo/run-git
+/repo/session-review
+/repo/session-review/revert-file
+/repo/session-review/revert-step
+/repo/session-review/sessions
 /repo/stage
 /repo/stash
 /repo/stash/apply

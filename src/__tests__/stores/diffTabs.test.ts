@@ -118,4 +118,61 @@ describe("diffTabsStore", () => {
 			});
 		});
 	});
+
+	describe("addSessionReview()", () => {
+		it("opens a session-review tab with the SESSION_SCOPE sentinel and 'Session Review' name", () => {
+			testInScope(() => {
+				const id = store.addSessionReview("/repo", "sess-1");
+				expect(store.state.activeId).toBe(id);
+				const tab = store.get(id);
+				expect(tab?.scope).toBe("session");
+				expect(tab?.fileName).toBe("Session Review");
+				expect(tab?.filePath).toBe("");
+				expect(tab?.sessionId).toBe("sess-1");
+			});
+		});
+
+		it("dedupes to one tab per repo regardless of sessionId", () => {
+			testInScope(() => {
+				const id1 = store.addSessionReview("/repo", "sess-1");
+				const id2 = store.addSessionReview("/repo", "sess-2");
+				expect(id2).toBe(id1);
+				expect(store.getCount()).toBe(1);
+				// Re-opening with a different sessionId updates the existing tab.
+				expect(store.get(id1)?.sessionId).toBe("sess-2");
+			});
+		});
+
+		it("does not collide with the existing empty-filePath 'Diff Scroll' tab", () => {
+			testInScope(() => {
+				const scrollId = store.add("/repo", "", "M");
+				const reviewId = store.addSessionReview("/repo");
+				expect(reviewId).not.toBe(scrollId);
+				expect(store.getCount()).toBe(2);
+				expect(store.get(scrollId)?.fileName).toBe("Diff Scroll");
+				expect(store.get(reviewId)?.fileName).toBe("Session Review");
+			});
+		});
+
+		it("allows the same repo's session review alongside its regular per-file diff tabs", () => {
+			testInScope(() => {
+				const fileId = store.add("/repo", "a.ts", "M");
+				const reviewId = store.addSessionReview("/repo");
+				expect(store.getCount()).toBe(2);
+				expect(store.get(fileId)).toBeDefined();
+				expect(store.get(reviewId)).toBeDefined();
+			});
+		});
+	});
+
+	describe("setSessionId()", () => {
+		it("updates the tab's sessionId in place", () => {
+			testInScope(() => {
+				const id = store.addSessionReview("/repo");
+				expect(store.get(id)?.sessionId).toBeUndefined();
+				store.setSessionId(id, "sess-42");
+				expect(store.get(id)?.sessionId).toBe("sess-42");
+			});
+		});
+	});
 });
