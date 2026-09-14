@@ -412,7 +412,7 @@ The live registry exposes status via SSE events (`upstream_status_changed`). Val
 |---------|------|---------|-------------|
 | `extract_prompt_variables` | `content` | `Vec<String>` | Parse `{var}` placeholders |
 | `process_prompt_content` | `content, variables` | `String` | Substitute variables |
-| `resolve_context_variables` | `repo_path: String` | `HashMap<String, String>` | Resolve git context variables (branch, diff, changed_files, commit_log, etc.) for smart prompt substitution. Best-effort: variables that fail are omitted |
+| `resolve_context_variables` | `repo_path: String` | `HashMap<String, String>` | Resolve every rust-sourced context variable (branch, diff, changed_files, commit_log, worktree_path, main_repo_path, etc. — see `ALL_VARS`) for `repo_path`, which may be a worktree path as well as a repo root. Best-effort: variables that fail are omitted |
 
 ## Smart Prompt Execution (`smart_prompt.rs`)
 

@@ -104,15 +104,35 @@ Prompts use `{variable_name}` syntax. Most variables are auto-resolved at execut
 |----------|-------------|
 | `{branch}` | Current branch name |
 | `{base_branch}` | Default branch (main/master/develop) |
-| `{repo_name}` | Repository directory name |
-| `{repo_path}` | Full filesystem path to the repository root |
+| `{branch_status}` | Ahead/behind counts vs. the upstream tracking branch |
+| `{repo_name}` | Main checkout's directory name (not a worktree's — see Worktree Context below) |
+| `{repo_path}` | The tree the variables were resolved against — the worktree root when a worktree terminal is focused, else the repo root |
 | `{diff}` | Working tree diff (truncated to 50KB) |
 | `{staged_diff}` | Staged changes diff (truncated to 50KB) |
 | `{changed_files}` | Short status output |
+| `{dirty_files_count}` | Number of modified files |
 | `{commit_log}` | Last 20 commits |
 | `{last_commit}` | Last commit hash + message |
 | `{conflict_files}` | Files with merge conflicts |
 | `{stash_list}` | Stash entries |
+| `{remote_url}` | Remote origin URL |
+| `{current_user}` | Git `user.name` |
+| `{repo_owner}` | GitHub owner parsed from the remote URL |
+| `{repo_slug}` | Repository name parsed from the remote URL |
+| `{branch_name}` | The branch you right-clicked (branch context menu only) — distinct from `{branch}`, the currently checked-out one |
+
+### Worktree Context (from Rust backend)
+
+Resolved by reusing the same `TUIC_*` derivation the Setup/Archive/Run scripts get — see the "Worktree Context" section of `docs/user-guide/ai-agents.md`. Variables here describe whichever **tree the variables were resolved against** — the linked worktree when a worktree terminal tab is focused, otherwise the main checkout (see the active-repo-vs-worktree-cwd note below).
+
+| Variable | Description |
+|----------|-------------|
+| `{worktree_path}` | The worktree root (same value as `repo_path` when not in a linked worktree) |
+| `{main_repo_path}` | The main checkout — always the repo root itself, never a worktree |
+| `{worktree_name}` | Basename of `worktree_path` |
+| `{is_worktree}` | `"true"` if the current tree is a linked worktree, else `"false"` |
+
+Variable resolution follows the **active terminal's** working directory, not just "the active repo": with a worktree tab focused, `{branch}`/`{diff}`/etc. describe that worktree, not the main checkout. Falls back to the active repo when the terminal's cwd belongs to no registered repo.
 
 ### GitHub/PR Context (from frontend stores)
 
@@ -122,6 +142,10 @@ Prompts use `{variable_name}` syntax. Most variables are auto-resolved at execut
 | `{pr_title}` | PR title |
 | `{pr_url}` | GitHub pull request URL |
 | `{pr_state}` | PR state: OPEN, MERGED, or CLOSED |
+| `{pr_author}` | PR author username |
+| `{pr_labels}` | PR labels (comma-separated) |
+| `{pr_additions}` | Lines added in the PR |
+| `{pr_deletions}` | Lines deleted in the PR |
 | `{pr_checks}` | CI check summary (e.g. "3 passed, 1 failed") |
 | `{merge_status}` | Merge status: MERGEABLE, CONFLICTING, or BEHIND |
 | `{review_decision}` | Review status: APPROVED, CHANGES_REQUESTED, or REVIEW_REQUIRED |
@@ -131,13 +155,33 @@ Prompts use `{variable_name}` syntax. Most variables are auto-resolved at execut
 | Variable | Description |
 |----------|-------------|
 | `{agent_type}` | Active agent type (claude, aider, codex, etc.) |
-| `{cwd}` | Active terminal working directory |
+| `{cwd}` | Active terminal's working directory |
+| `{session_id}` | Stable per-tab session UUID (same value the terminal's `$TUIC_SESSION` carries) |
 
-### Manual Input Variables
+### File Context (populated by file/folder hosts — file browser, diff editor, markdown/editor tabs)
 
 | Variable | Description |
 |----------|-------------|
-| `{issue_number}` | GitHub issue number to investigate |
+| `{file_path}` | Absolute path of the selected file or folder |
+| `{file_rel_path}` | Path relative to the repository root |
+| `{file_name}` | Basename of the file (e.g. `foo.ts`) |
+| `{file_ext}` | File extension including the dot (e.g. `.ts`) |
+| `{file_dir}` | Parent directory absolute path |
+| `{file_is_dir}` | `"true"` if the target is a folder, else `"false"` |
+
+### Issue Context (populated by the GitHub sidebar's expanded-issue popover)
+
+| Variable | Description |
+|----------|-------------|
+| `{issue_number}` | GitHub issue number |
+| `{issue_title}` | GitHub issue title |
+| `{issue_author}` | GitHub issue author |
+| `{issue_labels}` | Comma-separated issue labels |
+| `{issue_state}` | Issue state: OPEN or CLOSED |
+| `{issue_url}` | GitHub issue URL |
+| `{issue_assignees}` | Comma-separated assignee usernames |
+| `{issue_milestone}` | Issue milestone name |
+| `{issue_comments_count}` | Number of comments on the issue |
 
 ### Variable Input Dialog
 
