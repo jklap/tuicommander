@@ -33,7 +33,7 @@ Constraints:
 - `id` must match directory name exactly, non-empty
 - `main` must be a filename only (no path separators or `..`)
 - `minAppVersion` must be <= current app version (current: 0.3.x)
-- `capabilities`: subset of `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
+- `capabilities`: subset of `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `ui:external-link`, `ui:file-picker`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
 - `allowedUrls`: URL patterns for `net:http` (supports `*` wildcard for path prefix matching)
 - `agentTypes`: optional array of agent type strings. When set, output watchers and structured event handlers only fire for terminals running a matching agent. Omit or use `[]` for universal plugins. Valid terminal values: `claude`, `gemini`, `opencode`, `aider`, `codex`, `amp`, `cursor`, `goose`, `grok`, `droid`, `pi`, `git`.
 - `binaries`: optional array of CLI binary names this plugin may execute via `exec:cli` (e.g. `["rtk", "mdkb"]`). The on-disk manifest is the source of truth — binaries not declared here are rejected.
@@ -235,6 +235,8 @@ host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" 
 | `host.openMarkdownFile(absolutePath: string): void` | `ui:markdown` |
 | `host.openMarkdownFileBackground(absolutePath: string): boolean` — opens a pinned background tab; false when no registered repo owns the path | `ui:markdown` |
 | `host.openEditorTab(filePath: string, repoPath: string, opts?: { fsRoot?: string, line?: number }): void` | *(none)* |
+| `host.openExternalUrl(url: string): void` — opens an http/https/mailto URL in the system browser/mail client via the same allowlist as terminal-output links; any other scheme is dropped and logged, not thrown. Runs in the host's JS realm — a plugin panel's iframe cannot call this directly and must `postMessage` its intent to the plugin first. | `ui:external-link` |
+| `await host.pickFile(options?: { filters?: { name: string, extensions: string[] }[], defaultPath?: string }): Promise<string \| null>` — shows the native "Open file" dialog, resolving `null` on cancel. Desktop only (resolves `null` in browser/HTTP mode). Runs in the host's JS realm, same as `openExternalUrl`. | `ui:file-picker` |
 | `await host.playNotificationSound(sound?: "question" \| "error" \| "completion" \| "warning" \| "info" \| "attention"): Promise<void>` | `ui:sound` |
 | `host.openPanel({ id, title, html, onMessage? }): PanelHandle` | `ui:panel` |
 | `host.setTicker({ id, text, label?, icon?, priority?, ttlMs?, onClick? }): void` | `ui:ticker` |

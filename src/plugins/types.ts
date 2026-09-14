@@ -341,7 +341,9 @@ export type PluginCapability =
 	| "ui:context-menu"
 	| "ui:sidebar"
 	| "ui:file-icons"
-	| "ui:file-preview";
+	| "ui:file-preview"
+	| "ui:external-link"
+	| "ui:file-picker";
 
 /** Valid sound names for playNotificationSound — single source of truth */
 export const NOTIFICATION_SOUNDS = ["question", "error", "completion", "warning", "info", "attention"] as const;
@@ -803,6 +805,45 @@ export interface PluginHost {
 
 	/** Open a file in the CodeMirror editor tab. Requires "ui:panel" capability. */
 	openEditorTab(filePath: string, repoPath: string, opts?: { fsRoot?: string; line?: number }): void;
+
+	// -- Tier 3k: External links & native file picker (capability-gated) --
+
+	/**
+	 * Open an http/https/mailto URL in the user's default browser/mail client.
+	 * Requires "ui:external-link" capability.
+	 *
+	 * Delegates to the same allowlist guard used for terminal-output links —
+	 * any other scheme (file://, custom protocols) is dropped and logged, not
+	 * thrown, because plugin panels render untrusted file content and a
+	 * `file://`/custom-scheme link must never be able to invoke an OS handler.
+	 * Callers get no signal that a URL was dropped.
+	 *
+	 * A plugin's iframe cannot call this directly — TUIC_SDK_SCRIPT blocks all
+	 * non-`tuic://` link navigation inside the sandboxed panel, by design. The
+	 * panel must `postMessage` its intent to the plugin's own onMessage
+	 * handler, which then calls this host method (a real function call in the
+	 * host's JS realm, not the iframe's).
+	 */
+	openExternalUrl(url: string): void;
+
+	/**
+	 * Show the OS "Open file" dialog and resolve the chosen absolute path, or
+	 * null when the user cancels. Requires "ui:file-picker" capability.
+	 *
+	 * Desktop only — resolves null in browser/HTTP mode, where no native
+	 * dialog exists. Like openExternalUrl, this runs in the HOST's JS realm:
+	 * an iframe cannot summon a native dialog on its own, so a panel must
+	 * postMessage its intent and let the plugin call this.
+	 *
+	 * The returned path is NOT validated here — the fs:* APIs already reject
+	 * anything outside $HOME, so a plugin that intends to read the picked file
+	 * should check containment itself and show a friendly message, rather than
+	 * surfacing a raw filesystem error to the user.
+	 */
+	pickFile(options?: {
+		filters?: Array<{ name: string; extensions: string[] }>;
+		defaultPath?: string;
+	}): Promise<string | null>;
 
 	// -- Tier 3d: Credential access (capability-gated) --
 
