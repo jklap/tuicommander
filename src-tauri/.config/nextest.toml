@@ -21,6 +21,12 @@ git-subprocess = { max-threads = 1 }
 filter = 'test(/^git_reads::tests::/)'
 test-group = 'git-subprocess'
 
+# session_review's revert_ tests spawn `git apply` subprocesses against a
+# TempDir fixture repo — same contention risk as git_reads above.
+[[profile.default.overrides]]
+filter = 'test(/^session_review::tests::revert_/)'
+test-group = 'git-subprocess'
+
 [profile.ci]
 # On CI, keep going after a failure so a run reports every failing test, and
 # retry twice to absorb infrastructure flakiness (shared runners, port races).
