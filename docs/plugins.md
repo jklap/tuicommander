@@ -1179,6 +1179,40 @@ console.log(status.index.documents); // 1486
 - 5 MB stdout limit
 - Binary is resolved via PATH lookup and known install locations (`~/.cargo/bin/`, `/usr/local/bin/`, etc.)
 
+### Tier 3k: External Links & Native File Picker (capability-gated)
+
+#### `host.openExternalUrl(url) -> void`
+
+Opens an `http`/`https`/`mailto` URL in the user's default browser/mail client. **Requires `"ui:external-link"` capability.**
+
+Delegates to the same allowlist guard used for terminal-output links (`src/utils/openUrl.ts`) — any other scheme (`file://`, a custom protocol, `javascript:`, a malformed URL) is silently dropped and logged, not thrown. Plugin panels render untrusted file content, so a link must never be able to invoke an arbitrary OS handler.
+
+This runs in the **host's** JS realm, not the plugin's sandboxed iframe. `TUIC_SDK_SCRIPT` blocks every non-`tuic://` link click inside a panel by design, so a panel's own links cannot trigger this directly — the panel must `postMessage` its intent to the plugin's `onMessage` handler, which then calls `host.openExternalUrl`:
+
+```javascript
+// Inside the plugin panel's HTML <script>
+window.parent.postMessage({ type: "open-link", url: "https://example.com" }, "*");
+```
+```javascript
+// In the plugin's onMessage handler (main.js)
+onMessage(data) {
+  if (data.type === "open-link") host.openExternalUrl(data.url);
+}
+```
+
+#### `await host.pickFile(options?) -> Promise<string | null>`
+
+Shows the OS "Open file" dialog and resolves the chosen absolute path, or `null` when the user cancels. **Requires `"ui:file-picker"` capability.**
+
+```typescript
+const path = await host.pickFile({
+  filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+});
+if (path) { /* ... */ }
+```
+
+Desktop only — resolves `null` in browser/HTTP mode, where no native dialog exists. Like `openExternalUrl`, this runs in the host's JS realm: a panel's iframe cannot summon a native dialog on its own, so it must `postMessage` its intent and let the plugin call this. The returned path is not validated against `$HOME` here — the `fs:*` APIs already reject anything outside it, so a plugin should catch that error and show a friendly message rather than surfacing the raw filesystem error.
+
 ### Tier 4: Scoped Tauri Invoke (whitelisted commands only)
 
 #### `host.invoke<T>(cmd, args?) -> Promise<T>`
@@ -1270,6 +1304,8 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `ui:sidebar` | `host.registerSidebarPanel()` | Can register collapsible panel sections in the sidebar |
 | `ui:file-icons` | `host.registerFileIconProvider()` | Can provide file/folder icons for the file browser (e.g. VS Code icon themes) |
 | `ui:file-preview` | `host.registerFilePreview()` | Can claim file extensions and provide custom preview UIs |
+| `ui:external-link` | `host.openExternalUrl()` | Can open URLs in the system browser/mail client (http/https/mailto only, same allowlist as terminal-output links) |
+| `ui:file-picker` | `host.pickFile()` | Can show the native "Open file" dialog and read the chosen path back (desktop only) |
 
 Tier 1, Tier 2, and plugin data commands are always available without capabilities.
 

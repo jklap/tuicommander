@@ -2024,6 +2024,133 @@ describe("PluginHost — openMarkdownFile capability gating and repo routing", (
 	});
 });
 
+describe("PluginHost — Tier 3k openExternalUrl capability gating", () => {
+	it("built-in plugin (no capabilities) can call openExternalUrl without throwing", async () => {
+		let host: PluginHost | null = null;
+		pluginRegistry.register(
+			makePlugin("builtin", (h) => {
+				host = h;
+			}),
+		);
+		expect(() => host!.openExternalUrl("https://example.com")).not.toThrow();
+	});
+
+	it("external plugin without ui:external-link throws PluginCapabilityError", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		expect(() => host!.openExternalUrl("https://example.com")).toThrow(PluginCapabilityError);
+	});
+
+	it("external plugin with ui:external-link delegates to the real openUrl allowlist for an allowed scheme", async () => {
+		const { openUrl } = await import("@tauri-apps/plugin-opener");
+		vi.mocked(openUrl).mockClear();
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:external-link"],
+		);
+		host!.openExternalUrl("https://example.com");
+		expect(openUrl).toHaveBeenCalledWith("https://example.com");
+	});
+
+	it("does not call the opener for a disallowed scheme, proving delegation rather than reimplementation", async () => {
+		const { openUrl } = await import("@tauri-apps/plugin-opener");
+		vi.mocked(openUrl).mockClear();
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:external-link"],
+		);
+		host!.openExternalUrl("file:///etc/passwd");
+		expect(openUrl).not.toHaveBeenCalled();
+	});
+});
+
+describe("PluginHost — Tier 3k pickFile capability gating", () => {
+	/** setup.ts sets __TAURI_INTERNALS__ globally so every other suite defaults
+	 *  to Tauri mode; the browser-mode test below flips it off and restores it. */
+	function setTauriMode(enabled: boolean) {
+		if (enabled) {
+			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+		} else {
+			delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+		}
+	}
+
+	afterEach(() => {
+		setTauriMode(true);
+	});
+
+	it("external plugin without ui:file-picker rejects with PluginCapabilityError", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		await expect(host!.pickFile()).rejects.toThrow(PluginCapabilityError);
+	});
+
+	it("external plugin with ui:file-picker resolves the dialog's chosen path", async () => {
+		const { open } = await import("@tauri-apps/plugin-dialog");
+		vi.mocked(open).mockResolvedValueOnce("/home/u/board.md");
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:file-picker"],
+		);
+		const result = await host!.pickFile({ filters: [{ name: "Markdown", extensions: ["md"] }] });
+		expect(result).toBe("/home/u/board.md");
+		expect(open).toHaveBeenCalledWith(
+			expect.objectContaining({
+				multiple: false,
+				directory: false,
+				filters: [{ name: "Markdown", extensions: ["md"] }],
+			}),
+		);
+	});
+
+	it("resolves null when the dialog is cancelled", async () => {
+		const { open } = await import("@tauri-apps/plugin-dialog");
+		vi.mocked(open).mockResolvedValueOnce(null);
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:file-picker"],
+		);
+		await expect(host!.pickFile()).resolves.toBeNull();
+	});
+
+	it("resolves null in browser mode without importing the dialog plugin", async () => {
+		const { open } = await import("@tauri-apps/plugin-dialog");
+		vi.mocked(open).mockClear();
+		setTauriMode(false);
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:file-picker"],
+		);
+		await expect(host!.pickFile()).resolves.toBeNull();
+		expect(open).not.toHaveBeenCalled();
+	});
+});
+
 describe("PluginHost — panel message bridge", () => {
 	it("onMessage callback receives messages via handlePanelMessage", () => {
 		const onMessage = vi.fn();

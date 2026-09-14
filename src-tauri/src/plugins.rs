@@ -184,6 +184,8 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "ui:sidebar",
     "ui:file-icons",
     "ui:file-preview",
+    "ui:external-link",
+    "ui:file-picker",
 ];
 
 /// Validate a parsed manifest for required fields and sanity.
