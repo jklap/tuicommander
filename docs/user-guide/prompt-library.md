@@ -44,7 +44,7 @@ never leaves it.
 2. Fill in the fields:
    - **Name** (required) — shown in the list
    - **Description** — optional subtitle, also searchable
-   - **Content** (required) — the text to insert; use `{{variable}}` for dynamic values
+   - **Content** (required) — the text to insert; use `{variable}` for dynamic values
    - **Auto-execute** — submit immediately, or leave the inserted text editable for review
    - **Keyboard Shortcut** — optional global shortcut to trigger this prompt directly
 3. Click **Save**
@@ -63,27 +63,24 @@ only) and how conflicts are reviewed on import.
 
 ## Variable Substitution
 
-Use `{{variable_name}}` placeholders in prompt content. When you send a prompt that contains variables, a dialog appears asking you to fill in each value before injection.
+Use `{variable_name}` placeholders (single braces — `{{variable_name}}` is **not** supported;
+double braces are parsed as the literal variable name `{variable_name`, which never resolves and
+renders as-is) in prompt content. When you send a prompt that contains variables, a dialog appears
+asking you to fill in each value before injection.
 
 ```
-cd {{project_dir}} && cargo test -- {{test_filter}}
+cd {project_dir} && cargo test -- {test_filter}
 ```
 
 ### Built-in Variables
 
-These are resolved automatically by the backend when present:
-
-| Variable | Value |
-|----------|-------|
-| `{{diff}}` | Current git diff |
-| `{{changed_files}}` | List of changed files |
-| `{{repo_name}}` | Repository name |
-| `{{branch}}` | Current branch name |
-| `{{cwd}}` | Current working directory |
+Resolved automatically by the backend when present — see [Smart Prompts' Context
+Variables](smart-prompts.md#context-variables) for the full, canonical list (Git, Worktree,
+GitHub/PR, Agent/Terminal, File, and Issue context).
 
 ### Custom Variables
 
-Any `{{name}}` not in the built-in list becomes a custom input field in the variable dialog. You can optionally add a description and default value per variable when editing the prompt — the description appears as placeholder text in the dialog.
+Any `{name}` not in the built-in list becomes a custom input field in the variable dialog. You can optionally add a description and default value per variable when editing the prompt — the description appears as placeholder text in the dialog.
 
 ### Inserting with Variables
 

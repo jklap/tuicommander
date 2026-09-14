@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { RepositoryState, WorkspaceState } from "../../stores/repositories";
-import { resolveRepoOwnerIn, unregisteredRepoRootFor } from "../../utils/repoOwnership";
+import { resolvePromptTreeIn, resolveRepoOwnerIn, unregisteredRepoRootFor } from "../../utils/repoOwnership";
 
 /**
  * The resolver answers "which registered repo owns this path". It is the single
@@ -127,6 +127,33 @@ describe("resolveRepoOwnerIn", () => {
 	// no parameter through which "the repo that currently has focus" could reach it.
 	it("cannot consult focus, because no focus is passed in", () => {
 		expect(resolveRepoOwnerIn.length).toBe(2);
+	});
+});
+
+describe("resolvePromptTreeIn", () => {
+	it("resolves the worktree root as treePath for a path inside a linked worktree", () => {
+		expect(resolvePromptTreeIn(`${ROOT}/LS/agent2__wt/refactor-inventory-dpkg-shadow/src`, REPOS)).toEqual({
+			repoPath: `${ROOT}/LS/agent2`,
+			branchName: "refactor-inventory-dpkg-shadow",
+			treePath: `${ROOT}/LS/agent2__wt/refactor-inventory-dpkg-shadow`,
+		});
+	});
+
+	it("resolves the repo root itself as treePath for a path matched at the root", () => {
+		expect(resolvePromptTreeIn(`${ROOT}/LS/veritas/crates/parser`, REPOS)).toEqual({
+			repoPath: `${ROOT}/LS/veritas`,
+			branchName: null,
+			treePath: `${ROOT}/LS/veritas`,
+		});
+	});
+
+	it("returns null for a path no registered repo owns", () => {
+		expect(resolvePromptTreeIn(`${ROOT}/LS/gate-os__wt/feat-local-collector`, REPOS)).toBeNull();
+	});
+
+	it("returns null for an empty or missing path", () => {
+		expect(resolvePromptTreeIn(null, REPOS)).toBeNull();
+		expect(resolvePromptTreeIn("", REPOS)).toBeNull();
 	});
 });
 

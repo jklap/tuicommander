@@ -1,5 +1,10 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../../agents";
+import {
+	type ContextVariableDef,
+	repoControlledVarsInContent,
+	variablesForPicker,
+} from "../../../data/contextVariables";
 import { ALL_SMART_PLACEMENTS, SMART_PLACEMENT_INFO } from "../../../data/smartPlacementLabels";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
 import { useAgentDetection } from "../../../hooks/useAgentDetection";
@@ -30,102 +35,6 @@ type Category = (typeof CATEGORIES)[number];
 
 /** Built-in defaults indexed by ID for quick lookup */
 const BUILTIN_BY_ID = new Map(SMART_PROMPTS_BUILTIN.map((p) => [p.id, p]));
-
-/** Context variables available for smart prompt templates */
-interface VarDef {
-	name: string;
-	description: string;
-	group: string;
-}
-
-const CONTEXT_VARIABLES: VarDef[] = [
-	// Git
-	{ name: "branch", description: "Current branch name", group: "Git" },
-	{ name: "base_branch", description: "Base branch (main/master/develop)", group: "Git" },
-	{ name: "diff", description: "Full working tree diff", group: "Git" },
-	{ name: "staged_diff", description: "Staged changes diff", group: "Git" },
-	{ name: "changed_files", description: "git status --short", group: "Git" },
-	{ name: "dirty_files_count", description: "Number of modified files", group: "Git" },
-	{ name: "commit_log", description: "Last 20 commits (oneline)", group: "Git" },
-	{ name: "last_commit", description: "Last commit hash + subject", group: "Git" },
-	{ name: "conflict_files", description: "Files with merge conflicts", group: "Git" },
-	{ name: "stash_list", description: "Stash entries", group: "Git" },
-	{ name: "branch_status", description: "Ahead/behind remote tracking", group: "Git" },
-	{ name: "remote_url", description: "Remote origin URL", group: "Git" },
-	{ name: "current_user", description: "Git user.name", group: "Git" },
-	{ name: "repo_name", description: "Repository directory name", group: "Git" },
-	{ name: "repo_path", description: "Full repository path", group: "Git" },
-	{ name: "repo_owner", description: "GitHub owner from remote URL", group: "Git" },
-	{ name: "repo_slug", description: "Repository name from remote URL", group: "Git" },
-	// GitHub
-	{ name: "pr_number", description: "PR number for current branch", group: "GitHub" },
-	{ name: "pr_title", description: "PR title", group: "GitHub" },
-	{ name: "pr_url", description: "PR URL", group: "GitHub" },
-	{ name: "pr_state", description: "open / closed / merged", group: "GitHub" },
-	{ name: "pr_author", description: "PR author username", group: "GitHub" },
-	{ name: "pr_labels", description: "PR labels (comma-separated)", group: "GitHub" },
-	{ name: "pr_additions", description: "Lines added in PR", group: "GitHub" },
-	{ name: "pr_deletions", description: "Lines deleted in PR", group: "GitHub" },
-	{ name: "merge_status", description: "Mergeable status", group: "GitHub" },
-	{ name: "review_decision", description: "Review decision", group: "GitHub" },
-	{ name: "pr_checks", description: "CI check summary", group: "GitHub" },
-	// Terminal
-	{ name: "agent_type", description: "Detected agent (claude, codex...)", group: "Terminal" },
-	{ name: "cwd", description: "Terminal working directory", group: "Terminal" },
-	// File (populated for placement="file-context" hosts)
-	{ name: "file_path", description: "Absolute path of selected file/folder", group: "File" },
-	{ name: "file_rel_path", description: "Path relative to repo root", group: "File" },
-	{ name: "file_name", description: "Basename (foo.ts)", group: "File" },
-	{ name: "file_ext", description: "Extension including dot (.ts)", group: "File" },
-	{ name: "file_dir", description: "Parent directory absolute path", group: "File" },
-	{ name: "file_is_dir", description: "'true' if a folder, else 'false'", group: "File" },
-];
-
-/** Variables whose runtime value is controlled by repository contents
- * (branch names, commit messages, PR titles, remote URLs). When they are
- * substituted into a shell-execution template, quoting is mandatory —
- * otherwise a crafted branch like `main'; rm -rf ~ ;#` escapes `sh -c`.
- * The Rust backend quotes these for us via `process_prompt_content_shell_safe`;
- * this list drives a UI warning so the author knows the risk surface. */
-const REPO_CONTROLLED_VARIABLES: ReadonlySet<string> = new Set([
-	"branch",
-	"base_branch",
-	"diff",
-	"staged_diff",
-	"changed_files",
-	"commit_log",
-	"last_commit",
-	"conflict_files",
-	"stash_list",
-	"remote_url",
-	"current_user",
-	"repo_name",
-	"repo_owner",
-	"repo_slug",
-	"pr_title",
-	"pr_author",
-	"pr_labels",
-	"pr_url",
-	"pr_state",
-	"pr_checks",
-	"merge_status",
-	"review_decision",
-	"agent_type",
-	"cwd",
-]);
-
-/** Return the subset of repo-controlled variables referenced in content. */
-export function repoControlledVarsInContent(content: string): string[] {
-	const found = new Set<string>();
-	const re = /\{([^{}]+)\}/g;
-	let match: RegExpExecArray | null;
-	while ((match = re.exec(content)) !== null) {
-		if (REPO_CONTROLLED_VARIABLES.has(match[1])) {
-			found.add(match[1]);
-		}
-	}
-	return [...found].sort();
-}
 
 /** Derive the category from a prompt's tags */
 function promptCategory(prompt: SavedPrompt): Category | "other" {
@@ -171,10 +80,11 @@ const VariableDropdown: Component<{
 }> = (props) => {
 	const [open, setOpen] = createSignal(false);
 
-	// Group variables
+	// Group variables. This tab surfaces file-context variables (it's used
+	// from a file-context host), unlike PromptDrawer's picker.
 	const groups = createMemo(() => {
-		const map = new Map<string, VarDef[]>();
-		for (const v of CONTEXT_VARIABLES) {
+		const map = new Map<string, ContextVariableDef[]>();
+		for (const v of variablesForPicker({ hosts: ["file"] })) {
 			const list = map.get(v.group) ?? [];
 			list.push(v);
 			map.set(v.group, list);

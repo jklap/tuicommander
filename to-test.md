@@ -5776,6 +5776,13 @@ path and passes a real `null` through for an unknown image id — in `transport.
   Git panel triggered it. Covered by unit tests at the `useSmartPrompts.ts` level (the exact mechanism
   `ChangesTab` now relies on), but not by a full component-mount test — this is the live end-to-end
   check for that gap. Frontend-only change, hot-reloads under `make dev`, no restart needed.
+- [ ] `SmartButtonStrip`'s same cross-repo fix, across its non-ChangesTab callers (register two repos,
+  focus a terminal in repo A, then trigger the strip from repo B's context): the Branches tab's
+  "Create PR" button (`BranchesTab.tsx`), and an Issue/PR popover's smart button (`GitHubPanel.tsx`
+  right-click on an issue, or `PrSection.tsx`/`PrDetailPopover.tsx` on a PR) for repo B — confirm each
+  resolves variables (and, for a headless prompt, runs) against repo B, not repo A. Covered by a new
+  component-mount test (`SmartButtonStrip.test.tsx`) asserting the prop is forwarded, but not by a live
+  check against these five real call sites. Frontend-only change, hot-reloads under `make dev`.
 - [ ] `repo action=worktree_setup_status` MCP tool action + `GET /worktrees/setup-status` HTTP route
   (closes the "MCP client can't observe setup script completion" gap): unit-tested via direct handler
   calls, but not against a live `make dev` instance. Create a worktree with a Setup Script configured

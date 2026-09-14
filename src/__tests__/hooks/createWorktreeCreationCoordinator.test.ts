@@ -452,5 +452,52 @@ describe("createWorktreeCreationCoordinator", () => {
 				vi.useRealTimers();
 			}
 		});
+
+		it("still unlistens if listen()'s own registration promise resolves after the safety-net timeout already fired", async () => {
+			// Tauri's real listen() is itself async — there's a genuine window where
+			// the safety-net timeout can fire before it resolves. If the late
+			// registration didn't check `settled` and unlisten immediately, this
+			// would leak a live "worktree-setup-script-completed" listener forever.
+			vi.useFakeTimers();
+			try {
+				await testInScopeAsync(async () => {
+					repoSettingsStore.getOrCreate(REPO, "alpha");
+					repoSettingsStore.update(REPO, { setupScript: "npm install" });
+
+					const unlistenFn = vi.fn();
+					let resolveRegistration: (() => void) | undefined;
+					mockListen.mockImplementation(
+						() =>
+							new Promise<() => void>((resolve) => {
+								resolveRegistration = () => resolve(unlistenFn);
+							}),
+					);
+
+					const { coordinator, handleAddTerminalToBranch } = makeCoordinator({ repo: echoBranchRepoOverrides });
+
+					await coordinator.handleAddWorktree(REPO);
+					const done = coordinator.confirmCreateWorktree({
+						branchName: "feature-x",
+						createBranch: true,
+						baseRef: "main",
+					});
+					await flushMicrotasks();
+
+					// Timeout fires with listen()'s registration promise still pending.
+					await vi.advanceTimersByTimeAsync(900_000);
+					await done;
+					expect(handleAddTerminalToBranch).toHaveBeenCalledWith(REPO, "feature-x");
+					expect(unlistenFn).not.toHaveBeenCalled();
+
+					// Now the registration finally resolves — must unlisten immediately
+					// rather than leaving a live listener registered indefinitely.
+					resolveRegistration?.();
+					await flushMicrotasks();
+					expect(unlistenFn).toHaveBeenCalledTimes(1);
+				});
+			} finally {
+				vi.useRealTimers();
+			}
+		});
 	});
 });

@@ -8,6 +8,7 @@ import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
 import { writeClipboard } from "../utils/clipboard";
 import { prContextVariables } from "../utils/promptContext";
+import { resolvePromptTreeIn } from "../utils/repoOwnership";
 import { usePty } from "./usePty";
 
 export interface SmartPromptResult {
@@ -228,13 +229,22 @@ export function useSmartPrompts() {
 		return { ok: true };
 	}
 
-	/** Frontend-only variables (GitHub PR, agent/terminal) — no IPC needed. */
-	function resolveFrontendVars(repoPath: string): Record<string, string> {
+	/** Frontend-only variables (GitHub PR, agent/terminal) — no IPC needed.
+	 *  `branch`, when given, is the branch the tree the variables are being
+	 *  resolved against actually has checked out (`PromptTree.branchName`,
+	 *  derived fresh from the terminal's cwd) — preferred over
+	 *  `repo.activeBranch`, which is a separately-maintained pointer that
+	 *  several focus-switch paths (cross-pane Alt+Arrow, closing a pane) are
+	 *  known to leave stale for a non-root worktree. `undefined`/`null` falls
+	 *  back to `activeBranch`, which is still the right signal for the repo
+	 *  ROOT itself — there's no per-worktree branch to derive there; whatever
+	 *  is checked out at the root can change at any time. */
+	function resolveFrontendVars(repoPath: string, branch?: string | null): Record<string, string> {
 		const vars: Record<string, string> = {};
 		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.activeWorkspaceId ?? "";
-		if (branch) {
-			const pr = githubStore.getBranchPrData(repoPath, branch);
+		const resolvedBranch = branch ?? repo?.activeWorkspaceId ?? "";
+		if (resolvedBranch) {
+			const pr = githubStore.getBranchPrData(repoPath, resolvedBranch);
 			if (pr) Object.assign(vars, prContextVariables(pr));
 		}
 		const activeTerminal = terminalsStore.getActive();
@@ -253,10 +263,18 @@ export function useSmartPrompts() {
 		return { ...vars, ...resolveFrontendVars(repoPath) };
 	}
 
-	/** Execute a smart prompt via inject or headless mode */
+	/** Execute a smart prompt via inject or headless mode.
+	 *
+	 *  `targetPath`, when given, overrides which tree (worktree or repo root)
+	 *  variables resolve against AND which directory a shell/headless prompt
+	 *  actually runs in — for a caller that is itself bound to a specific
+	 *  repo/worktree independent of terminal focus (e.g. a Git panel showing
+	 *  `props.repoPath`, which need not be the currently active terminal's
+	 *  repo). Omitted, this falls back to the active terminal's cwd, as before. */
 	async function executeSmartPrompt(
 		prompt: SavedPrompt,
 		manualVariables?: Record<string, string>,
+		targetPath?: string,
 	): Promise<SmartPromptResult> {
 		const check = canExecute(prompt);
 		if (!check.ok) {
@@ -268,14 +286,40 @@ export function useSmartPrompts() {
 		const rawMode = prompt.executionMode ?? "inject";
 		const effectiveMode = rawMode === "headless" && resolveHeadlessAgent(prompt).isApi ? "api" : rawMode;
 
-		// Single IPC: extract needed variable names + resolve only those from git.
+		// Resolve variables against the tree (worktree or repo root) that owns
+		// `targetPath` when the caller supplied one, else the ACTIVE
+		// TERMINAL's cwd — not just "the active repo" (the
+		// active-repo-vs-worktree-cwd bug: {branch}/{diff} used to describe
+		// the main checkout while the command actually ran in the worktree).
+		// Falls back to today's active-repo behavior when neither resolves
+		// against a registered repo, so a plain shell in an unregistered
+		// directory keeps working exactly as before.
+		const activeTerminal = terminalsStore.getActive();
+		const tree = resolvePromptTreeIn(targetPath ?? activeTerminal?.cwd, repositoriesStore.state.repositories);
 		const activeRepo = repositoriesStore.getActive();
-		const repoPath = activeRepo?.path ?? "";
+		const repoRoot = tree?.repoPath ?? activeRepo?.path ?? "";
+		const varsPath = tree?.treePath ?? repoRoot;
+
+		// Single IPC: extract needed variable names + resolve only those from git.
 		const { vars: gitVars, needed: varNames } = await invoke<{ vars: Record<string, string>; needed: string[] }>(
 			"resolve_prompt_variables",
-			{ content: prompt.content, repoPath: repoPath || null },
+			{ content: prompt.content, repoPath: varsPath || null },
 		);
-		const allVars = { ...gitVars, ...resolveFrontendVars(repoPath), ...manualVariables };
+		// resolveFrontendVars takes the REPO ROOT specifically, never a
+		// worktree path — repositoriesStore is keyed by repo root, so
+		// passing varsPath here would make its `repositoriesStore.get(...)`
+		// lookup silently miss and drop every pr_* variable. tree?.branchName
+		// (derived fresh from the terminal's cwd) is passed through too —
+		// without it, resolveFrontendVars falls back to repo.activeBranch,
+		// a separately-maintained pointer that cross-pane focus switches
+		// (Alt+Arrow, closing a pane) can leave stale for a worktree that
+		// isn't the repo root, reintroducing a narrower version of the same
+		// active-repo-vs-worktree-cwd bug for pr_* variables specifically.
+		const allVars = {
+			...gitVars,
+			...resolveFrontendVars(repoRoot, tree?.branchName),
+			...manualVariables,
+		};
 		const unresolved = varNames.filter((v) => !(v in allVars));
 		if (unresolved.length > 0) {
 			return { ok: false, reason: "unresolved_variables", output: JSON.stringify(unresolved) };
@@ -289,13 +333,13 @@ export function useSmartPrompts() {
 		});
 
 		if (effectiveMode === "shell") {
-			return executeShell(prompt, processed);
+			return executeShell(prompt, processed, targetPath ? varsPath : undefined);
 		}
 		if (effectiveMode === "api") {
 			return executeApi(prompt, processed);
 		}
 		if (effectiveMode === "headless") {
-			return executeHeadless(prompt, processed);
+			return executeHeadless(prompt, processed, targetPath ? varsPath : undefined);
 		}
 		return executeInject(prompt, processed);
 	}
@@ -329,7 +373,11 @@ export function useSmartPrompts() {
 		}
 	}
 
-	async function executeHeadless(prompt: SavedPrompt, content: string): Promise<SmartPromptResult> {
+	async function executeHeadless(
+		prompt: SavedPrompt,
+		content: string,
+		repoPathOverride?: string,
+	): Promise<SmartPromptResult> {
 		const resolved = resolveHeadlessAgent(prompt);
 		const headlessVal = resolved.agent;
 		if (!headlessVal) {
@@ -377,7 +425,7 @@ export function useSmartPrompts() {
 		}
 
 		const active = terminalsStore.getActive();
-		const repoPath = active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
+		const repoPath = repoPathOverride ?? active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
 		try {
 			const output = await invoke<string>("execute_headless_prompt", {
 				command,
@@ -399,9 +447,13 @@ export function useSmartPrompts() {
 		}
 	}
 
-	async function executeShell(prompt: SavedPrompt, content: string): Promise<SmartPromptResult> {
+	async function executeShell(
+		prompt: SavedPrompt,
+		content: string,
+		repoPathOverride?: string,
+	): Promise<SmartPromptResult> {
 		const active = terminalsStore.getActive();
-		const repoPath = active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
+		const repoPath = repoPathOverride ?? active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
 		try {
 			const output = await invoke<string>("execute_shell_script", {
 				scriptContent: content,
