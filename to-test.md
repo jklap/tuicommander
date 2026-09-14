@@ -3569,3 +3569,18 @@ path and passes a real `null` through for an unknown image id — in `transport.
   Silently absent (no error, no shim) if the `tuic` sidecar can't be resolved at all (e.g. a
   from-source checkout with no built sidecar) — confirm that failure mode doesn't also break
   anything else about the PTY spawn.
+- [ ] Worktree automation scripts (`TUIC_*` env injection) and PTY `TUIC_*` context
+  (`plans/our-repo-worktree-automation-refactored-aho.md`): Setup/Archive script injection and
+  timeouts are unit-tested end-to-end against real subprocesses/worktrees, but the PTY-side
+  injection (`pty.rs::inject_worktree_env`, called from every `bind_pty_identity` site) needs a
+  **`make dev` restart** to take effect (Rust change, no hot-reload) — after restarting, open a
+  NEW terminal tab in a worktree (existing PTYs were spawned before the restart) and confirm
+  `env | grep '^TUIC_'` shows `TUIC_MAIN_REPO_PATH`, `TUIC_BRANCH`, `TUIC_WORKTREE_NAME`,
+  `TUIC_WORKTREES_DIR`, `TUIC_IS_WORKTREE=true`, and (if a base ref/branch is configured)
+  `TUIC_BASE_REF`/`TUIC_BASE_BRANCH`. Also verify a Run Script (Settings → repo → Automation
+  Scripts) actually sees these vars when typed into the fresh tab. Windows is out of scope for
+  this pass (no process-group kill on script timeout, and the PTY/PATH env behavior there is
+  unverified) — confirm at least that nothing regresses there (`cmd /C`, `%TUIC_MAIN_REPO_PATH%`).
+  A real `npm ci`/`npm install` setup script should also be checked in the *packaged* app (`make
+  build`), where the desktop-launch `PATH` is genuinely impoverished — the new
+  `PATH=enriched_path()` on setup/archive scripts is meant to fix exactly that.
