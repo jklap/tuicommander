@@ -563,7 +563,11 @@ mod tests {
         assert!(!plain.markdown.contains("Agent"));
         assert!(!plain.markdown.contains("/tmp/work"));
         let annotated = preview(root.path(), true);
-        assert!(annotated.markdown.contains("source: Agent \\*One\\*; /tmp/work"));
+        assert!(
+            annotated
+                .markdown
+                .contains("source: Agent \\*One\\*; /tmp/work")
+        );
         // Options are part of the snapshot identity, so a preview taken with one
         // option set can never be written back with another.
         assert_ne!(plain.snapshot_id, annotated.snapshot_id);
@@ -583,9 +587,11 @@ mod tests {
         let events_before = store.list(None, Some(50)).unwrap().events;
 
         let preview = preview(root.path(), false);
-        assert!(progress_export(root.path().into(), write_input(&preview, false))
-            .unwrap()
-            .written);
+        assert!(
+            progress_export(root.path().into(), write_input(&preview, false))
+                .unwrap()
+                .written
+        );
 
         assert_eq!(status_before, store.status().unwrap());
         assert_eq!(events_before, store.list(None, Some(50)).unwrap().events);
