@@ -699,6 +699,7 @@ pub(super) fn spawn_pty_session(
             // path: no caller identity exists here, so the PTY key serves as both.
             crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
             crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
+            crate::pty::inject_worktree_env(&mut cmd, cwd.as_deref());
             cmd
         },
     )

@@ -56,6 +56,7 @@ pub(crate) async fn create_pty(
                 &session_id_for_env,
                 spawn_config.tuic_session.as_deref(),
             );
+            inject_worktree_env(&mut cmd, spawn_config.cwd.as_deref());
 
             // Inject env flags (feature flags configured in Settings → Agents)
             for (key, value) in &spawn_config.env {
@@ -226,6 +227,7 @@ pub(crate) async fn create_pty_with_worktree(
                 &session_id_for_env,
                 spawn_tuic_session.as_deref(),
             );
+            inject_worktree_env(&mut cmd, spawn_worktree_path.to_str());
             for (key, value) in &spawn_env {
                 cmd.env(key, value);
             }
