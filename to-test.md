@@ -241,6 +241,89 @@ tests: 77 vitest + 15 node:test lifecycle). What's NOT machine-verifiable:
       documented to resolve `null` there (no native dialog) — confirm "Add
       Board" fails gracefully (a toast or no-op) rather than throwing.
 
+## Session Diff Review — step-by-step review of a Claude Code session's edits (2026-09-14, **Rust change — needs `make dev` restart**)
+
+New tab (Command Palette: "Session diff review") reconstructing a session's
+edit timeline from its transcript (`~/.claude/projects/`) and, where
+available, `~/.claude/file-history/` backups. Rust: new `session_review.rs`
+(transcript parser, base resolution, revert commands), `git.rs`
+(`apply_reverse_patch_impl` extraction, `bump_working_tree_epoch` made
+`pub(crate)`), Cargo.toml (`gix-imara-diff` added directly for its
+`unified_diff` feature). Frontend: `src/components/SessionDiffTab/` tree,
+`diffTabsStore`/`useRepository`/`transport.ts` extensions. Transcript
+parsing, base-resolution tiers, revert mechanisms, and the frontend
+orchestration are all unit-tested (42 Rust tests, ~50 vitest tests across
+`buildRows`/`SessionPicker`/`SessionDiffTab`/`StepCard`/the extracted DiffTab
+helpers) — `DiffViewer`/`SessionDiffList`'s own rendering is stubbed in those
+tests since `@git-diff-view/solid` needs a real Canvas and
+`@tanstack/solid-virtual` can't measure rows in jsdom/happy-dom (both
+pre-existing, documented environment limitations — see
+`DiffViewer.test.tsx`/`DiffFileList.test.tsx`).
+
+**Post-implementation code/security review (2026-09-14)** found and fixed a
+path-traversal gap (`session_id` wasn't validated as a bare UUID before being
+joined into a filesystem path — closed with `validate_session_id`), a data
+corruption bug (`str::find("")` always matches at offset 0, so reverting a
+pure-deletion edit could silently reinsert text at the wrong location instead
+of failing cleanly), two review-cache staleness bugs (never invalidated after
+a revert; didn't include `include_subagents` in its key), a `classify_path`
+misclassification for a since-deleted in-repo file behind a symlinked root,
+and a frontend bug where the live-session poll refresh reset every manually
+collapsed file back to expanded. All have regression tests; see
+`AGENTS.md`'s "Session Diff Review — Replay Semantics and Cache-Invalidation
+Gotchas" section for the two replay/cache gotchas in case they recur
+elsewhere.
+
+**Known gaps from the same review, deliberately not fixed in this pass**
+(none rise to data-corruption-in-the-common-case the way the fixed ones did):
+
+- Binary detection (`is_binary_str`/`is_binary_bytes`) only checks for a NUL
+  byte in the first 8000 bytes (git's own heuristic) — a non-UTF-8 text file
+  (e.g. Latin-1/Shift-JIS) with no NUL in that window is treated as text,
+  lossily converted via `String::from_utf8_lossy`, and that lossy text can be
+  written back to disk on a whole-file revert. Narrow edge case; would need a
+  real encoding-detection pass to fix properly.
+- `apply_forward`/`apply_reverse`/`revert_step_via_substitution` locate a
+  substitution via the *first* occurrence of the old/new text (`str::find`,
+  not `rfind` or hunk-anchored) — if a file has duplicated text (e.g. a
+  repeated license header) and the real edit targeted a later occurrence,
+  replay can silently touch the wrong one. Needs hunk/line-context anchoring
+  to fix correctly, which is a bigger change than this pass's scope.
+- `revert_step_via_substitution`'s Edit-arm logic is a second, independently
+  maintained copy of `apply_reverse`'s Edit arm — a future correctness fix to
+  one can be missed in the other. Maintainability only, not a live bug.
+- `list_review_sessions(include_counts: true)` scans each session's full
+  transcript sequentially rather than in parallel — picker load time scales
+  linearly with session count. Performance only.
+
+What's NOT machine-verifiable:
+
+- [ ] Open the tab against a real, past Claude Code session for this repo (not a
+      synthetic fixture) and confirm the grouped-by-file view's cumulative diffs
+      and the chronological view's step order both look right, including at
+      least one session with a subagent edit and one with a file the session
+      created.
+- [ ] Drag-select lines in a rendered step/file diff and send a comment — confirm
+      it lands in the terminal in the same format the regular Diff tab's
+      selection-comment feature produces.
+- [ ] Revert a single step on a real file, confirm only that edit is undone and
+      later edits survive; revert a step whose region a later edit already
+      touched and confirm it fails with a clear message instead of partially
+      applying.
+- [ ] Revert a whole file to session start on a real file with a `file-history`
+      backup (byte-exact restore) and on one without (reconstructed write);
+      revert a session-created file and confirm it's deleted.
+- [ ] Hand-edit a file outside the session, then try to revert it — confirm the
+      drift refusal appears and the "Force revert anyway" toast action works.
+- [ ] Revert a single step whose edit was a pure deletion (the `new_string`
+      Claude Code recorded was empty) — confirm it reports "not found" rather
+      than corrupting the file (this can no longer be located unambiguously
+      from content alone; see AGENTS.md's Session Diff Review section).
+- [ ] Visual check: file/step header layout, badges (drifted / outside repo /
+      unknown base), and the warnings banner render correctly in both light and
+      dark theme, matching `docs/frontend/STYLE_GUIDE.md`.
+- [ ] Screenshot for `docs/FEATURES.md` / release notes.
+
 ## Customizable notification sounds — per-event preset/custom-file picker (2026-09-11, **Rust change — needs `make dev` restart**)
 
 Settings > Notifications: each event's row gains a `<select>` next to its

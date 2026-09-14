@@ -69,14 +69,17 @@ export default defineConfig({
       // and gap-closing backfills on top of the above brought the combined floor to lines
       // 58.62%, statements 55.51%, functions 53.45%, branches 51.36% — the same whole-number
       // floor as just above, since this session's own contribution didn't cross another
-      // integer point. Set just under that new floor so CI can keep enforcing "don't regress"
-      // — ratchet up incrementally as coverage genuinely improves, rather than lowering them
-      // again if a change makes CI red.
+      // integer point. Ratcheted up again as of 2026-09-14 (Session Diff Review — the DiffTab/
+      // BranchDiffScrollView coverage backfill that preceded the feature, plus the new
+      // SessionDiffTab tree's own tests, measured lines 65.97%, statements 63.08%, functions
+      // 61.32%, branches 57.76%). Set just under that new floor so CI can keep enforcing "don't
+      // regress" — ratchet up incrementally as coverage genuinely improves, rather than lowering
+      // them again if a change makes CI red.
       thresholds: {
-        lines: 58,
-        functions: 53,
-        branches: 51,
-        statements: 55,
+        lines: 65,
+        functions: 61,
+        branches: 57,
+        statements: 63,
       },
     },
   },

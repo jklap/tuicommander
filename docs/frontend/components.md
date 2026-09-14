@@ -29,7 +29,17 @@ App.tsx (central orchestrator)
 │   │   ├── CommitGraph       # Visual commit graph with lane assignments
 │   │   └── SyncRow           # Push/pull/fetch action bar
 │   ├── DiffTab/              # Individual file diff tab (with Cmd+F search)
-│   │   └── BranchDiffScrollView  # All-files scroll view (scroll mode)
+│   │   ├── BranchDiffScrollView  # All-files scroll view (scroll mode)
+│   │   ├── sendDiffComment.ts    # Shared comment-on-selected-lines formatter/sender
+│   │   ├── useLineSelection.ts   # Shared drag-to-select-lines-in-a-diff primitive
+│   │   └── CommentBox            # Shared comment textarea UI
+│   ├── SessionDiffTab/       # Step-by-step review of a Claude Code session's edits
+│   │   ├── SessionDiffTab        # Orchestrator: session picker, view-mode toolbar, revert/copy/search
+│   │   ├── SessionDiffList       # Virtualized list serving grouped-by-file + chronological views
+│   │   ├── SessionFileHeader     # Per-file row (chevron, path, stats, revert/copy actions)
+│   │   ├── SessionPicker         # Header dropdown over recent Claude Code sessions
+│   │   ├── StepCard              # One edit step's diff (reuses DiffTab's line-selection/comment box)
+│   │   └── buildRows.ts          # Pure row-model builder for both view modes
 │   ├── PrDiffTab/            # PR diff viewer tab
 │   ├── CodeEditorPanel/      # CodeMirror 6 code editor tab
 │   ├── MarkdownPanel/        # Markdown file browser
