@@ -1,7 +1,7 @@
 import { type Component, createEffect, createMemo, For, type JSX, lazy, Show, Suspense } from "solid-js";
 import noTuiOpenImg from "../assets/no-tui-open.png";
 import { useFileDrop } from "../hooks/useFileDrop";
-import { diffTabsStore } from "../stores/diffTabs";
+import { diffTabsStore, isSessionReviewTab } from "../stores/diffTabs";
 import { editorTabsStore } from "../stores/editorTabs";
 import { mdTabsStore } from "../stores/mdTabs";
 import { paneLayoutStore } from "../stores/paneLayout";
@@ -21,6 +21,9 @@ const CodeEditorTab = lazy(() =>
 	import("./CodeEditorPanel/CodeEditorTab").then((module) => ({ default: module.CodeEditorTab })),
 );
 const DiffTab = lazy(() => import("./DiffTab/DiffTab").then((module) => ({ default: module.DiffTab })));
+const SessionDiffTab = lazy(() =>
+	import("./SessionDiffTab/SessionDiffTab").then((module) => ({ default: module.SessionDiffTab })),
+);
 
 export interface TerminalAreaProps {
 	onTerminalFocus: (id: string) => void;
@@ -198,7 +201,17 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 											classList={{ active: shouldShow(id, diffTabsStore.state.activeId === id) }}
 											onContextMenu={(e) => e.stopPropagation()}
 										>
-											{diffTab && (
+											{diffTab && isSessionReviewTab(diffTab) && (
+												<Suspense>
+													<SessionDiffTab
+														tabId={id}
+														repoPath={diffTab.repoPath}
+														sessionId={diffTab.sessionId}
+														onClose={() => props.onCloseTab(id)}
+													/>
+												</Suspense>
+											)}
+											{diffTab && !isSessionReviewTab(diffTab) && (
 												<Suspense>
 													<DiffTab
 														tabId={id}
