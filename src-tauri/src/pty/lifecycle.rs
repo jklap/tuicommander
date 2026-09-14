@@ -201,6 +201,73 @@ pub(crate) fn apply_agent_screen_env(
     cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", mode);
 }
 
+/// Inject `TUIC_*` worktree/repo context (main checkout, branch, base ref,
+/// etc. — see `script_env::ScriptContext`) into a PTY spawn, so a Run Script
+/// typed into the new terminal — and every command a user types afterward —
+/// can see it, the same way a Setup/Archive script or a Smart Prompt child
+/// already can.
+///
+/// A PTY's env is fixed at spawn time: if the user later `cd`s to a different
+/// worktree in this same tab, these vars keep describing the spawn cwd, not
+/// wherever the shell currently is. `TUIC_SESSION` has the same property, so
+/// this is consistent with the rest of the terminal's identity — don't try to
+/// keep it live off OSC 7, a running process's environment can't be mutated
+/// from outside it.
+///
+/// Every `bind_pty_identity` call site should also call this one, passing the
+/// same `cwd` the PTY itself is about to be spawned in. Order, because
+/// `CommandBuilder::env` keeps the last write for a key: these derived vars go
+/// in first, then any caller/run-config env (so a caller's same-named
+/// `TUIC_*` key wins over the derived one), then `bind_pty_identity` last, so
+/// `TUIC_SESSION`/`TUIC_CONFIG_DIR` can never be overridden. Desktop
+/// `spawn_agent` and both HTTP agent spawns (`POST /sessions/agent`, MCP
+/// `agent action=spawn`) follow it; desktop shell creation does the same through
+/// `apply_shell_pty_env`.
+pub(crate) fn inject_worktree_env(cmd: &mut CommandBuilder, cwd: Option<&str>) {
+    let Some(cwd) = cwd else {
+        return;
+    };
+    let expanded = crate::cli::expand_tilde(cwd);
+    crate::script_env::ScriptContext::derive(
+        crate::script_env::ScriptKind::Run,
+        std::path::Path::new(&expanded),
+    )
+    .apply_pty(cmd);
+}
+
+/// Environment keys `bind_pty_identity` owns. A caller's env may set anything
+/// else, but never these: a wrong `TUIC_SESSION` or socket makes the terminal's
+/// MCP calls and hooks speak for another session.
+const PTY_IDENTITY_ENV_KEYS: [&str; 4] = [
+    "TUIC_SESSION",
+    "TUIC_CONFIG_DIR",
+    "TUIC_SOCKET",
+    "TUIC_ATTACHMENTS_DIR",
+];
+
+/// The env sequence for a desktop-created shell PTY (`create_pty`,
+/// `create_pty_with_worktree`): worktree context, identity, Claude screen
+/// default, then the caller's env. The caller still wins over the derived
+/// worktree vars and the screen/agent-view defaults, but its copy of an
+/// identity key is dropped, so identity is bound last in effect.
+pub(crate) fn apply_shell_pty_env(
+    state: &AppState,
+    cmd: &mut CommandBuilder,
+    session_id: &str,
+    tuic_session: Option<&str>,
+    cwd: Option<&str>,
+    env: &std::collections::HashMap<String, String>,
+) {
+    inject_worktree_env(cmd, cwd);
+    bind_pty_identity(state, cmd, session_id, tuic_session);
+    apply_agent_screen_env(cmd, env);
+    for (key, value) in env {
+        if !PTY_IDENTITY_ENV_KEYS.contains(&key.as_str()) {
+            cmd.env(key, value);
+        }
+    }
+}
+
 fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");

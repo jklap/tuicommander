@@ -1716,6 +1716,100 @@ fn bind_pty_identity_env_reaches_the_real_child() {
     reap(child);
 }
 
+/// `inject_worktree_env` (:111) is meant to be called at every
+/// `bind_pty_identity` site — this observes the real child environment
+/// through a live pty, same rationale as the identity test above: a
+/// build-string bug in `ScriptContext::apply_pty` should fail here, not
+/// just in `script_env.rs`'s own unit tests against a `Vec` of pairs.
+#[cfg(unix)]
+#[test]
+fn worktree_env_reaches_the_real_child() {
+    let repo = tempfile::TempDir::new().expect("temp dir");
+    for args in [
+        vec!["init", "-b", "main"],
+        vec!["config", "user.email", "test@test.com"],
+        vec!["config", "user.name", "Test"],
+    ] {
+        std::process::Command::new("git")
+            .args(&args)
+            .current_dir(repo.path())
+            .output()
+            .expect("git command");
+    }
+    std::fs::write(repo.path().join("README.md"), "x").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+
+    let cwd = repo.path().to_string_lossy().to_string();
+    let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.cwd(&cwd);
+        inject_worktree_env(&mut cmd, Some(cwd.as_str()));
+        cmd.arg("-c");
+        cmd.arg(r#"printf '%s\n%s\n' "$TUIC_BRANCH" "$TUIC_MAIN_REPO_PATH""#);
+        cmd
+    })
+    .expect("sh must spawn");
+
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    drop(pair.slave);
+    let output = read_pty_output_bounded(reader, 2, std::time::Duration::from_secs(5));
+    let mut lines = output.lines();
+    assert_eq!(lines.next(), Some("main"), "TUIC_BRANCH: {output:?}");
+    assert_eq!(
+        lines.next(),
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        ),
+        "TUIC_MAIN_REPO_PATH: {output:?}"
+    );
+    reap(child);
+}
+
+#[cfg(unix)]
+#[test]
+fn non_repo_cwd_gets_no_worktree_vars() {
+    let dir = tempfile::TempDir::new().expect("temp dir (not a git repo)");
+    let cwd = dir.path().to_string_lossy().to_string();
+    let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.cwd(&cwd);
+        inject_worktree_env(&mut cmd, Some(cwd.as_str()));
+        cmd.arg("-c");
+        cmd.arg(r#"printf '%s\n%s\n' "${TUIC_MAIN_REPO_PATH-unset}" "$TUIC_SCRIPT_KIND""#);
+        cmd
+    })
+    .expect("sh must spawn");
+
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    drop(pair.slave);
+    let output = read_pty_output_bounded(reader, 2, std::time::Duration::from_secs(5));
+    let mut lines = output.lines();
+    assert_eq!(
+        lines.next(),
+        Some("unset"),
+        "a non-repo cwd must not get TUIC_MAIN_REPO_PATH: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("run"),
+        "the universal TUIC_SCRIPT_KIND must still be set: {output:?}"
+    );
+    reap(child);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
     let started = std::time::Instant::now();
@@ -3916,4 +4010,48 @@ fn suggest_reopen_preserves_only_undelivered_choices_and_submission_discards_the
         sl.reset_suggest_memory();
         assert!(sl.drain_pending_suggest().is_none());
     }
+}
+
+// Catches: a caller env entry overriding the PTY's own identity on the desktop
+// create paths, so its MCP calls and hooks attribute to another session.
+#[test]
+fn shell_pty_caller_env_cannot_override_identity() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    let env: std::collections::HashMap<String, String> = [
+        ("TUIC_SESSION", "someone-else"),
+        ("TUIC_CONFIG_DIR", "/elsewhere"),
+        ("TUIC_SOCKET", "/elsewhere.sock"),
+        ("TUIC_ATTACHMENTS_DIR", "/elsewhere-attachments"),
+        ("FEATURE_FLAG", "on"),
+        ("CLAUDE_CODE_DISABLE_AGENT_VIEW", "0"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    apply_shell_pty_env(&state, &mut cmd, "own-pty", Some("own-identity"), None, &env);
+
+    let get = |key: &str| cmd.get_env(key).map(|v| v.to_string_lossy().into_owned());
+    assert_eq!(get("TUIC_SESSION").as_deref(), Some("own-identity"));
+    assert_eq!(
+        get("TUIC_CONFIG_DIR").as_deref(),
+        Some(crate::config::config_dir().to_string_lossy().as_ref())
+    );
+    assert_ne!(get("TUIC_SOCKET").as_deref(), Some("/elsewhere.sock"));
+    assert_ne!(
+        get("TUIC_ATTACHMENTS_DIR").as_deref(),
+        Some("/elsewhere-attachments")
+    );
+    // Everything else the caller sets still wins over TUIC's defaults.
+    assert_eq!(get("FEATURE_FLAG").as_deref(), Some("on"));
+    assert_eq!(get("CLAUDE_CODE_DISABLE_AGENT_VIEW").as_deref(), Some("0"));
+    assert_eq!(
+        state
+            .session_maps
+            .live_pty_by_tuic_session
+            .get("own-identity")
+            .map(|entry| entry.value().clone())
+            .as_deref(),
+        Some("own-pty")
+    );
 }

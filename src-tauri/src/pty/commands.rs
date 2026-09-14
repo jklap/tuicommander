@@ -49,19 +49,17 @@ pub(crate) async fn create_pty(
             crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
 
             // Inject stable session UUID so agents can use it for session binding
-            // (e.g. `claude --session-id $TUIC_SESSION`, then `claude --resume $TUIC_SESSION`)
-            bind_pty_identity(
+            // (e.g. `claude --session-id $TUIC_SESSION`, then `claude --resume $TUIC_SESSION`),
+            // plus the env flags configured in Settings → Agents, which can never
+            // override that identity.
+            apply_shell_pty_env(
                 &state_for_env,
                 &mut cmd,
                 &session_id_for_env,
                 spawn_config.tuic_session.as_deref(),
+                spawn_config.cwd.as_deref(),
+                &spawn_config.env,
             );
-            apply_agent_screen_env(&mut cmd, &spawn_config.env);
-
-            // Inject env flags (feature flags configured in Settings → Agents)
-            for (key, value) in &spawn_config.env {
-                cmd.env(key, value);
-            }
 
             cmd
         },
@@ -227,16 +225,14 @@ pub(crate) async fn create_pty_with_worktree(
             let mut cmd = build_shell_command(&spawn_shell);
             cmd.cwd(&spawn_worktree_path);
             crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
-            bind_pty_identity(
+            apply_shell_pty_env(
                 &state_for_env,
                 &mut cmd,
                 &session_id_for_env,
                 spawn_tuic_session.as_deref(),
+                spawn_worktree_path.to_str(),
+                &spawn_env,
             );
-            apply_agent_screen_env(&mut cmd, &spawn_env);
-            for (key, value) in &spawn_env {
-                cmd.env(key, value);
-            }
             cmd
         },
     )
