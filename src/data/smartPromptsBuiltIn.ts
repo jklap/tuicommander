@@ -1,49 +1,10 @@
 import type { SavedPrompt, SmartPlacement } from "../stores/promptLibrary";
 
-/** Human-readable descriptions for all auto-resolvable context variables.
- *  Used by VariableInputDialog and the dropdown tooltip. */
-export const VARIABLE_DESCRIPTIONS: Record<string, string> = {
-	// Git context (resolved by Rust backend)
-	branch: "Current git branch name",
-	base_branch: "Main/master/develop branch detected in the repo",
-	diff: "Unstaged changes (git diff)",
-	staged_diff: "Staged changes (git diff --staged)",
-	changed_files: "List of modified files (git status --short)",
-	commit_log: "Last 20 commits (one-line format)",
-	last_commit: "Latest commit hash and message",
-	conflict_files: "Files with unresolved merge conflicts",
-	stash_list: "Current git stash entries",
-	repo_name: "Repository directory name",
-	repo_path: "Full filesystem path to the repository root",
-	// GitHub/PR context (resolved from frontend stores)
-	pr_number: "Pull request number for the current branch",
-	pr_title: "Pull request title",
-	pr_url: "GitHub pull request URL",
-	pr_state: "PR state: OPEN, MERGED, or CLOSED",
-	pr_checks: "CI check summary (e.g. '3 passed, 1 failed')",
-	merge_status: "Merge status: MERGEABLE, CONFLICTING, or BEHIND",
-	review_decision: "Review status: APPROVED, CHANGES_REQUESTED, or REVIEW_REQUIRED",
-	// Agent/terminal context
-	agent_type: "Active agent type (claude, aider, codex, etc.)",
-	cwd: "Active terminal working directory",
-	// Issue context (resolved from expanded issue in the sidebar)
-	issue_number: "GitHub issue number",
-	issue_title: "GitHub issue title",
-	issue_author: "GitHub issue author",
-	issue_labels: "Comma-separated issue labels",
-	issue_state: "Issue state: OPEN or CLOSED",
-	issue_url: "GitHub issue URL",
-	issue_assignees: "Comma-separated assignee usernames",
-	issue_milestone: "Issue milestone name",
-	issue_comments_count: "Number of comments on the issue",
-	// File context (populated by placement="file-context" hosts)
-	file_path: "Absolute path of the selected file or folder",
-	file_rel_path: "Path relative to the repository root",
-	file_name: "Basename of the file (e.g. foo.ts)",
-	file_ext: "File extension including the dot (e.g. .ts)",
-	file_dir: "Parent directory absolute path",
-	file_is_dir: "'true' if the target is a folder, else 'false'",
-};
+/** Re-exported for back-compat with this file's existing importers
+ *  (`VariableInputDialog.tsx`, `PromptDrawer.tsx`) — the actual definition,
+ *  and every other Smart Prompts variable list, now lives in
+ *  `contextVariables.ts`, the single source of truth. */
+export { VARIABLE_DESCRIPTIONS } from "./contextVariables";
 
 /** Bumped whenever a built-in's non-content metadata (placement, mode, etc.) changes
  *  in a way that should override a user's unmodified copy on next hydrate — see

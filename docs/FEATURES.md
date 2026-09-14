@@ -1139,8 +1139,8 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 
 ### 10.2 Prompts
 - Create, edit, delete saved prompts
-- Variable substitution: `{{variable_name}}`
-- Built-in variables: `{{diff}}`, `{{changed_files}}`, `{{repo_name}}`, `{{branch}}`, `{{cwd}}`
+- Variable substitution: `{variable_name}` (single braces — `{{variable_name}}` is not supported)
+- Built-in variables: `{diff}`, `{changed_files}`, `{repo_name}`, `{branch}`, `{cwd}`, and more — see §10.7
 - Custom variables prompt user for input
 - Categories: Custom, Recent, Favorites
 - Pin prompts to top
@@ -1161,7 +1161,7 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 - **Open**: `Cmd+K` or toolbar lightning bolt button
 - Drawer with category filtering (All/Custom/Recent/Favorites), search by name/description, and enable/disable toggles
 - Prompt rows show inline badges: execution mode (inject/shell/headless/api), built-in, placement tags
-- Prompts are context-aware: 31 variables auto-resolved from git, GitHub, and terminal state
+- Prompts are context-aware: 51 variables auto-resolved from git, worktree context, GitHub, terminal state, and file/issue/branch hosts — see §10.7
 - **Variable Input Dialog**: unresolved variables show a compact form with variable name + description before execution
 - **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes (user-friendly labels with a hover description of where each one surfaces), execution mode, target, auto-execute, and keyboard shortcut capture. The Prompt Library drawer's own edit form and Settings > Smart Prompts both expose the same fields
 - **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: **Auto** (default) — the Compose box if one is already open, otherwise the terminal input — **Compose box** (always), or **Terminal** (always)
@@ -1183,14 +1183,20 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 
 ### 10.7 Context Variables
 
-Variables are resolved from the Rust backend (`resolve_context_variables`) and frontend stores:
+Variables are resolved from the Rust backend (`resolve_context_variables`) and frontend stores.
+The single source of truth for this list is `src/data/contextVariables.ts` (51 entries as of this
+writing) — a `contextVariablesParity.test.ts` guard keeps it in sync with the Rust resolver and the
+`TUIC_*` script-env names below. Resolution follows the **active terminal's** cwd, not just "the
+active repo": with a worktree tab focused, git-context variables describe that worktree, not the
+main checkout (falls back to the active repo when the cwd belongs to no registered repo).
 
 | Variable | Source | Description |
 |----------|--------|-------------|
 | `{branch}` | git | Current branch name |
 | `{base_branch}` | git | Detected default branch (main/master/develop) |
-| `{repo_name}` | git | Repository directory name |
-| `{repo_path}` | git | Full filesystem path to the repository root |
+| `{branch_status}` | git | Ahead/behind counts vs. the upstream tracking branch |
+| `{repo_name}` | git | Main checkout's directory name (not a worktree's) |
+| `{repo_path}` | git | The tree the variables were resolved against — worktree root or repo root |
 | `{repo_owner}` | git | GitHub owner parsed from remote URL |
 | `{repo_slug}` | git | Repository name parsed from remote URL |
 | `{diff}` | git | Full working tree diff (truncated to 50KB) |
@@ -1201,9 +1207,13 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | `{last_commit}` | git | Last commit hash + message |
 | `{conflict_files}` | git | Files with merge conflicts |
 | `{stash_list}` | git | Stash entries |
-| `{branch_status}` | git | Ahead/behind remote tracking branch |
 | `{remote_url}` | git | Remote origin URL |
 | `{current_user}` | git | Git config user.name |
+| `{branch_name}` | host (branch menu) | The right-clicked branch — distinct from `{branch}` |
+| `{worktree_path}` | git | The worktree root (same as `repo_path` outside a worktree) |
+| `{main_repo_path}` | git | The main checkout — always the repo root, never a worktree |
+| `{worktree_name}` | git | Basename of `worktree_path` |
+| `{is_worktree}` | git | `"true"`/`"false"` |
 | `{pr_number}` | GitHub store | PR number for current branch |
 | `{pr_title}` | GitHub store | PR title |
 | `{pr_url}` | GitHub store | PR URL |
@@ -1216,8 +1226,23 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 | `{merge_status}` | GitHub store | PR mergeable status |
 | `{review_decision}` | GitHub store | PR review decision |
 | `{agent_type}` | terminal store | Active agent type (claude, gemini, etc.) |
-| `{cwd}` | terminal store | Active terminal working directory |
-| `{issue_number}` | manual | Prompted from user at execution time |
+| `{cwd}` | terminal store | Active terminal's working directory |
+| `{session_id}` | terminal store | Stable per-tab session UUID (same as `$TUIC_SESSION`) |
+| `{file_path}` | host (file context) | Absolute path of the selected file or folder |
+| `{file_rel_path}` | host (file context) | Path relative to the repository root |
+| `{file_name}` | host (file context) | Basename of the file (e.g. `foo.ts`) |
+| `{file_ext}` | host (file context) | File extension including the dot (e.g. `.ts`) |
+| `{file_dir}` | host (file context) | Parent directory absolute path |
+| `{file_is_dir}` | host (file context) | `"true"`/`"false"` |
+| `{issue_number}` | host (issue popover) | GitHub issue number |
+| `{issue_title}` | host (issue popover) | GitHub issue title |
+| `{issue_author}` | host (issue popover) | GitHub issue author |
+| `{issue_labels}` | host (issue popover) | Comma-separated issue labels |
+| `{issue_state}` | host (issue popover) | Issue state: OPEN or CLOSED |
+| `{issue_url}` | host (issue popover) | GitHub issue URL |
+| `{issue_assignees}` | host (issue popover) | Comma-separated assignee usernames |
+| `{issue_milestone}` | host (issue popover) | Issue milestone name |
+| `{issue_comments_count}` | host (issue popover) | Number of comments on the issue |
 
 ### 10.8 Execution Modes
 

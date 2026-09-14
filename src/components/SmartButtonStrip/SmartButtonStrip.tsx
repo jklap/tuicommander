@@ -86,7 +86,13 @@ export const SmartButtonStrip: Component<SmartButtonStripProps> = (props) => {
 		props.onBusyChange?.(true);
 		try {
 			const extraVars = props.contextVariables?.();
-			const result = await executeSmartPrompt(prompt, extraVars);
+			// Target THIS strip's own repo explicitly — every caller (GitHubPanel,
+			// PrSection, PrDetailPopover, BranchesTab, ChangesTab) is bound to a
+			// specific repo via props.repoPath, independent of which repo's
+			// terminal happens to be focused. Without this, executeSmartPrompt
+			// falls back to resolving against the active terminal's tree, which
+			// can silently diverge from the repo this strip is actually showing.
+			const result = await executeSmartPrompt(prompt, extraVars, props.repoPath);
 			if (!result.ok) props.onError?.(friendlyError(result, prompt.name));
 		} catch (err) {
 			props.onError?.(String(err));
