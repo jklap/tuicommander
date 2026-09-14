@@ -254,6 +254,25 @@ tests` step / `pnpm test:plugins` reports 0 tests collected and exits 1). Both a
 environment drift, not a regression — don't spend time fixing the submodule pointer unless
 explicitly asked.
 
+**Committing a change under `plugins/` needs TWO commits, in two separate git histories.**
+`cd plugins && git add ... && git commit` lands a commit inside the submodule's own repo
+(likely detached-HEAD, since worktrees don't check the submodule out onto a branch) — this is
+what actually holds the new/changed plugin file. The parent repo's own `git add plugins &&
+git commit` then only records that new commit SHA as the submodule's pinned pointer; it does
+not carry the plugin's file contents itself. Neither commit is visible to another clone (or to
+`github.com/sstraus/tuicommander-plugins`) until the **submodule's own commit** is pushed to
+that remote separately — this is a manual step that isn't implied by, or done as part of,
+committing/pushing the parent repo. If you add or edit a plugin, don't forget the submodule-side
+push, and don't assume the parent repo's own push covers it.
+
+**A plugin living under this repo's `plugins/` submodule is NOT auto-loaded by a running
+instance.** That directory is only the source/distribution copy (mirrors the public
+`tuicommander-plugins` repo, feeding the registry/release-zip pipeline) — an app instance loads
+plugins from `{config_dir}/plugins/{id}/` (e.g. `~/Library/Application Support/com.tuic.commander/
+plugins/{id}/` on macOS), a separate location entirely. To manually exercise a plugin you just
+added or edited in `plugins/{id}/`, use Settings → Plugins → "Install from folder" pointing at it,
+or copy the directory into the config dir's `plugins/` folder yourself, then enable it.
+
 `src/__tests__/components/ChangelogModal.test.tsx` has a flaky async leak (an uncleaned
 timer/effect from its `onMount`, unrelated to the file's own logic — confirmed pre-existing,
 untouched by recent commits) that vitest's leak detector marks as a failed test FILE even when
@@ -569,6 +588,8 @@ exactly how the corrupted value above sailed through validation on every launch)
 - A new push (`AppHandle.emit`, `Channel<T>`, or per-stream broadcast) → bridge it: low-frequency lifecycle/progress events go on `event_bus` → `/events` SSE (add arms to `sse_routes.rs`); high-frequency token streams get a dedicated per-id WS (mirrors the PTY log-mode WS). Keep the desktop `emit` AND the bus/WS path — there is **no** bus→window forwarder, so producers **dual-emit**.
 - Request/response shapes (field names, casing, payload structure) MUST be identical across IPC and HTTP so the same frontend store code works unchanged on both transports.
 
+**Gap found and fixed 2026-09-10:** the desktop IPC command `get_session_foreground_process` (`pty/commands.rs`) mirrors the detected foreground agent into `session_states.agent_type` — the flag `should_transition_idle_with_hook` reads to pick the shell-idle vs. agent-idle threshold. Its HTTP counterpart, `get_foreground_process` (`mcp_http/session.rs`), used to only compute and return the detected name — it never wrote anything into `session_states` at all, neither the set nor the clear path, so a browser/PWA/remote client polling this endpoint never actually corrected the backend's per-session `agent_type` mirror. Both transports now call the shared `pub(crate) crate::pty::refresh_session_agent` (not gated to the `desktop` feature — nothing it calls is Tauri-specific, only the `#[tauri::command]` wrapper is). If you add a THIRD transport-specific consumer of foreground-process detection, share this same function — don't re-implement the detection logic again.
+
 ## PTY Command Injection
 
 NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/utils/sendCommand.ts` — it handles agent-specific Enter semantics (Ink raw mode needs split writes). This applies to dictation, command palette, suggested actions, and any other feature that sends input to a terminal.
@@ -582,9 +603,23 @@ The alacritty fork's `Handler` impl (`patches/alacritty_terminal/src/term/mod.rs
 - `pty.rs::process_chunk` — the ordinary per-PTY-read path. Flushes `PtyWrite` replies immediately after `grid_drain_events()`, *before* the chrome-filter/classification work below it (which clones the full screen on a chunk's first paint — exactly when a freshly-launched TUI queries cursor position, so this ordering is load-bearing, not cosmetic).
 - The frame ticker's stalled-synchronized-update timeout flush (`flush_sync_timeout_if_needed`, `pty.rs`) — replays buffered bytes through the same `Handler` when a BSU never sees its ESU within 150ms, but only forwards screen frames; it never runs `process_chunk`. Drains via `terminal_grid.rs::drain_pty_write_events()` (a `PtyWrite`-only drain — it must NOT take everything with a full `drain_events()`, since other event kinds queued there, e.g. title/OSC 133/TUIC, have no handler on the ticker and must stay queued for the next real chunk).
 
-If you add a third place that calls `.process()`/replays PTY bytes outside these two, check whether it can produce a `PtyWrite` and needs the same drain-and-flush. (The scrollback-restore replay path and session-teardown's `force_stop_sync_if_buffered` were checked and are NOT gaps: the former replays reconstructed SGR-styling bytes that can never contain a query sequence in the first place, since queries never left a trace in the stored `LogLine` screen model; the latter runs after the child has already exited, so there is nothing left to write a reply to.)
+If you add a third place that calls `.process()`/replays PTY bytes outside these two, check whether it can produce a `PtyWrite` and needs the same drain-and-flush. (The scrollback-restore replay path and session-teardown's `force_stop_sync_if_buffered` were checked and are NOT gaps *for `PtyWrite` specifically*: the former replays reconstructed SGR-styling bytes that can never contain a query sequence in the first place, since queries never left a trace in the stored `LogLine` screen model; the latter runs after the child has already exited, so there is nothing left to write a reply to.)
+
+**This is not the only such queue — check every one, not just `PtyWrite`.** Kitty image decode (color-tools plan) added a second, separate, non-`TermEvent` queue (`pending_kitty_jobs`) that the *same* `Handler`-replay call sites can populate, and a code review caught that `flush_sync_timeout_if_needed` and `force_stop_sync_if_buffered` were missed for it — the exact same shape of gap this section already fixed once for `PtyWrite`, in the exact same two places, because a fix scoped to "the queue I'm looking at" doesn't audit every queue a shared replay path can produce. Unlike the `PtyWrite` case, session teardown genuinely IS a gap here even though the child has already exited: there's no reply to write, but a permanently-`is_pending()` placeholder would be wrong for any later read (`image_bytes`/`image_meta`) of that closing session's residual state. See `pty.rs::resolve_kitty_decode_jobs`'s doc comment for the fix and all three call sites. When you add a new per-session queue that a `Handler`-replay path can populate, grep for every existing `Term::process`/`stop_sync` call site and check each one against it — don't assume the `PtyWrite` list above is exhaustive for your new queue too.
 
 **Flushing earlier must not mean flushing under a lock you didn't hold before.** The `process_chunk` fix above shipped once already holding the session's `vt_log` `Mutex` across the write — a real regression a review caught: `write_terminal_reply`'s `write_all`/`flush` can block (a SIGSTOP'd/standby child, a full PTY input queue), and blocking there while holding the lock stalls every other consumer of that session's grid (frame ticker, HTTP terminal reads). `process_chunk` now splits into two lock acquisitions — collect pending replies under the first, drop it, flush lock-free, re-lock for the screen-diff/classification work — specifically so the write is never inside a locked critical section. When moving a flush/write earlier in a hot path to fix a latency bug, check what lock is held at the new call site, not just that it now runs sooner.
+
+## Every Step of Untrusted-Escape-Sequence Processing Needs Its Own Cap, Not Just a Final Byte Total
+
+Any handler that reacts to a terminal escape sequence by doing real work — reserving grid rows, decompressing a payload, accumulating a buffer across multiple chunked wire messages — is processing attacker-controlled input (any process in the PTY: a `cat`'d file, a compromised CLI tool, remote SSH output) and needs an explicit bound at **every** step that scales with a wire-supplied number, not only a final "is the assembled result too big" check. A single final byte cap does not protect the *intermediate* steps that ran to produce that result.
+
+A 2026-09-11 security review of the inline-images feature (`docs/backend/pty.md`'s Kitty/iTerm2 sections) found this violated three separate times in one feature, each independently a real DoS reachable from ordinary PTY input:
+
+- **`reserve_image_footprint`** (`patches/alacritty_terminal/src/term/mod.rs`) took a row count straight from wire data (Kitty `r=`, iTerm2 `height=`) with no upper bound, then looped once per row *inside* `Term::process`, under the session's `vt_log` lock — a crafted `r=4000000000` could attempt ~4.3 billion iterations, hanging that session and everything else reading its grid. Fixed with a hard `MAX_FOOTPRINT_ROWS` clamp at the single choke point both protocols route through.
+- **Kitty's `m=1` chunked-transmission accumulation** had no cap of its own — each individual chunk was already bounded (`vte`'s `MAX_OSC_RAW_STD`, 2 MiB), but nothing stopped an unbounded *number* of chunks from growing the pending buffer past any reasonable size before the app-level total-bytes cap ever ran. The sibling iTerm2 multipart path had already solved this exact problem for itself (`MAX_MULTIPART_B64_BYTES`, fail-closed) — the fix was only ever applied to one of the two parallel chunking paths. **When two protocol paths share a shape (both have chunked/multipart assembly), a safety fix applied to one needs an explicit check for whether the sibling has the same gap.**
+- **`o=z` zlib decompression** used a plain unbounded `read_to_end` — a classic decompression bomb, allocating the full inflated buffer before any size check ran. Fixed by wrapping the decoder in `Read::take(cap + 1)` and checking whether the read filled that exact allowance (`Take` doesn't error on hitting its limit, it just stops — so the check must be `len() > cap`, not "did this return `Err`").
+
+When adding a new escape-sequence handler that reserves resources, accumulates a wire-chunked buffer, or decompresses a payload, ask explicitly: what wire-supplied number drives a loop or an allocation here, and what stops it from being astronomically large? A cap added only after the expensive step (decompress-then-check, accumulate-then-check) still lets the expensive step itself run unbounded.
 
 ## Agent Session Management
 
