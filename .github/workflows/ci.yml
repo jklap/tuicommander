@@ -112,6 +112,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold
 
+      # shell_integration.rs launches the claude/codex wrappers in bash, zsh
+      # AND fish. fish is on none of the runner images, and the tests used to
+      # drop it silently when absent — so its half of the matrix reported as
+      # passed without ever running. The script installs all three and fails
+      # if any cannot be launched rc-free (fish needs >= 3.3 for --no-config).
+      - name: Install launch-matrix shells
+        run: scripts/install-launch-shells.sh
+
       - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -195,6 +203,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold
 
+      - name: Install launch-matrix shells
+        run: scripts/install-launch-shells.sh
+
       - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -270,6 +281,11 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: bash
         run: echo "CARGO_TARGET_DIR=C:/t" >> $GITHUB_ENV
+
+      # The launch matrix is #[cfg(unix)], so only the macOS leg needs it.
+      - name: Install launch-matrix shells
+        if: matrix.platform == 'macos-latest'
+        run: scripts/install-launch-shells.sh
 
       - name: Install Rust ${{ env.RUST_VERSION }}
         uses: dtolnay/rust-toolchain@stable
