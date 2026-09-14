@@ -285,10 +285,22 @@ fn var_cache() -> &'static parking_lot::Mutex<HashMap<(String, String), CacheEnt
 /// vars (`{diff}`, `{changed_files}`, `{last_commit}`, …) reflect repo state
 /// immediately after a commit/checkout instead of lingering up to
 /// `VAR_CACHE_TTL` (3s).
-pub(crate) fn invalidate_repo_vars(path: &str) {
-    var_cache()
-        .lock()
-        .retain(|(repo, _), _| repo.as_str() != path);
+pub(crate) fn invalidate_repo_vars(_path: &str) {
+    // Clears the WHOLE cache, not just `_path`'s entries — deliberate.
+    // `AppState::invalidate_repo_caches` (this fn's only caller) is invoked
+    // with the repo *root* even for a change detected inside a watched
+    // worktree (`repo_watcher.rs`'s `sync_worktree_watches`), but since the
+    // cwd-vs-active-repo fix, prompt variables can be resolved against a
+    // worktree PATH, not just the root — so a per-repo-string retain would
+    // never touch (and never invalidate) the worktree-keyed cache entries a
+    // change inside that worktree should stale out. Exact-string matching
+    // also can't handle the sibling worktree layout
+    // (`<repo_parent>/<repo_name>__wt/<branch>`, see `worktree.rs`'s
+    // `resolve_worktree_dir_for_repo`), which isn't a path *under* the root
+    // at all. The cache holds at most a couple dozen entries with a 3s TTL
+    // and exists purely to dedupe rapid calls, so clearing everything on any
+    // repo-cache invalidation costs nothing measurable.
+    var_cache().lock().clear();
 }
 
 fn resolve_single_var(repo_path: &str, var: &str) -> Option<String> {
@@ -340,6 +352,10 @@ const ALL_VARS: &[&str] = &[
     "repo_slug",
     "repo_name",
     "repo_path",
+    "worktree_path",
+    "main_repo_path",
+    "worktree_name",
+    "is_worktree",
 ];
 
 fn resolve_vars(repo_path: &str, needed: &[String]) -> HashMap<String, String> {
@@ -351,12 +367,54 @@ fn resolve_vars(repo_path: &str, needed: &[String]) -> HashMap<String, String> {
     if needed_set.contains("repo_path") {
         result.insert("repo_path".to_string(), repo_path.to_string());
     }
+
+    // Worktree-aware vars (repo_name included: it now means the MAIN
+    // checkout's name, not repo_path's basename — see the deliberate
+    // semantic change below) piggyback on script_env::ScriptContext, which
+    // already derives exactly this via file reads (commondir, HEAD) for the
+    // TUIC_* script env — no separate git subprocess needed here.
     if needed_set.contains("repo_name")
-        && let Some(name) = std::path::Path::new(repo_path)
-            .file_name()
-            .and_then(|n| n.to_str())
+        || needed_set.contains("worktree_path")
+        || needed_set.contains("main_repo_path")
+        || needed_set.contains("worktree_name")
+        || needed_set.contains("is_worktree")
     {
-        result.insert("repo_name".to_string(), name.to_string());
+        let ctx = crate::script_env::ScriptContext::derive(
+            crate::script_env::ScriptKind::Prompt,
+            std::path::Path::new(repo_path),
+        );
+        let ctx_map = ctx.as_map();
+        for (var_name, tuic_key) in [
+            ("worktree_path", "TUIC_WORKTREE_PATH"),
+            ("main_repo_path", "TUIC_MAIN_REPO_PATH"),
+            ("worktree_name", "TUIC_WORKTREE_NAME"),
+            ("is_worktree", "TUIC_IS_WORKTREE"),
+        ] {
+            if needed_set.contains(var_name)
+                && let Some(v) = ctx_map.get(tuic_key)
+            {
+                result.insert(var_name.to_string(), v.clone());
+            }
+        }
+        if needed_set.contains("repo_name") {
+            if let Some(v) = ctx_map.get("TUIC_REPO_NAME") {
+                // Deliberate semantic change: repo_name is now the MAIN
+                // checkout's directory name, not repo_path's basename —
+                // without this, {repo_name} silently flips from e.g.
+                // "tuicommander" to "startup-scripts" whenever a worktree
+                // terminal is focused. Preserves today's value in the common
+                // case (repo_path is already the main checkout).
+                result.insert("repo_name".to_string(), v.clone());
+            } else if let Some(name) = std::path::Path::new(repo_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+            {
+                // Non-git path (or otherwise undetectable): fall back to the
+                // old plain-basename behavior rather than leaving repo_name
+                // unresolved.
+                result.insert("repo_name".to_string(), name.to_string());
+            }
+        }
     }
 
     // Collect git vars we need, including implicit dependencies for derived vars.
@@ -800,6 +858,121 @@ mod tests {
         }
     }
 
+    #[test]
+    fn worktree_vars_on_main_checkout_report_not_a_worktree() {
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+
+        let vars = resolve_vars(
+            &repo_path,
+            &[
+                "worktree_path".to_string(),
+                "main_repo_path".to_string(),
+                "is_worktree".to_string(),
+            ],
+        );
+        let canonical = repo
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(vars.get("worktree_path"), Some(&canonical));
+        assert_eq!(vars.get("main_repo_path"), Some(&canonical));
+        assert_eq!(vars.get("is_worktree").map(String::as_str), Some("false"));
+    }
+
+    #[test]
+    fn worktree_vars_in_linked_worktree_report_main_repo_path() {
+        let repo = setup_prompt_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "feature-x".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("feature-x".to_string()),
+            create_branch: true,
+        };
+        let wt = crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+        let wt_path = wt.path.to_string_lossy().to_string();
+
+        let vars = resolve_vars(
+            &wt_path,
+            &[
+                "worktree_path".to_string(),
+                "main_repo_path".to_string(),
+                "worktree_name".to_string(),
+                "is_worktree".to_string(),
+                "branch".to_string(),
+            ],
+        );
+        let main_canonical = repo
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            vars.get("main_repo_path"),
+            Some(&main_canonical),
+            "main_repo_path must point at the main checkout, not the worktree itself"
+        );
+        assert_eq!(
+            vars.get("worktree_path"),
+            Some(
+                &wt.path
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            vars.get("worktree_name").map(String::as_str),
+            Some("feature-x")
+        );
+        assert_eq!(vars.get("is_worktree").map(String::as_str), Some("true"));
+        assert_eq!(vars.get("branch").map(String::as_str), Some("feature-x"));
+    }
+
+    #[test]
+    fn repo_name_stays_the_main_repo_name_inside_a_worktree() {
+        // Deliberate semantic pin: without deriving repo_name from
+        // main_repo_path, it would silently flip from the main checkout's
+        // name to the worktree's own directory name whenever a worktree
+        // path is resolved against.
+        let repo = setup_prompt_test_repo();
+        let repo_name = repo
+            .path()
+            .canonicalize()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "repo-name-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("repo-name-test".to_string()),
+            create_branch: true,
+        };
+        let wt = crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+
+        let vars_at_main = resolve_vars(&repo.path().to_string_lossy(), &["repo_name".to_string()]);
+        let vars_at_worktree = resolve_vars(&wt.path.to_string_lossy(), &["repo_name".to_string()]);
+        assert_eq!(vars_at_main.get("repo_name"), Some(&repo_name));
+        assert_eq!(
+            vars_at_worktree.get("repo_name"),
+            Some(&repo_name),
+            "repo_name must stay the MAIN checkout's name even when resolved \
+             against a worktree path, not the worktree's own directory name \
+             (which would be \"repo-name-test\" here)"
+        );
+    }
+
     // --- process_content_shell_safe tests ---
 
     #[test]
@@ -907,12 +1080,23 @@ mod tests {
     // --- var_cache invalidation tests ---
 
     #[test]
-    fn invalidate_repo_vars_removes_only_target_repo() {
-        // Unique paths so this never races with other tests sharing the global cache.
+    #[serial_test::serial]
+    fn invalidate_repo_vars_clears_every_tree_so_worktree_entries_are_not_missed() {
+        // Deliberately clears the WHOLE cache, not just the named repo's
+        // entries — see invalidate_repo_vars's own doc comment. A per-repo
+        // retain would miss cache entries keyed by a *worktree* path (now
+        // reachable since the active-repo-vs-worktree-cwd fix), and can't
+        // handle the sibling worktree layout
+        // (`<repo_parent>/<repo_name>__wt/<branch>`), which isn't a path
+        // under the repo root at all — so exact-string matching on the repo
+        // root would never invalidate it. #[serial] because this asserts on
+        // the cache being fully empty, which a concurrently-running test
+        // populating its own entries would violate.
         let repo_a = "/test/invalidate_repo_vars/repo_a";
-        let repo_b = "/test/invalidate_repo_vars/repo_b";
+        let worktree_of_a = "/test/invalidate_repo_vars/repo_a/.worktrees/feat-x";
         {
             let mut cache = var_cache().lock();
+            cache.clear();
             for var in ["diff", "changed_files"] {
                 cache.insert(
                     (repo_a.to_string(), var.to_string()),
@@ -922,10 +1106,12 @@ mod tests {
                     },
                 );
             }
+            // A worktree-keyed entry — the exact case a per-repo-string
+            // retain on `repo_a` would have missed.
             cache.insert(
-                (repo_b.to_string(), "diff".to_string()),
+                (worktree_of_a.to_string(), "branch".to_string()),
                 CacheEntry {
-                    value: "keep".to_string(),
+                    value: "feat-x".to_string(),
                     fetched_at: Instant::now(),
                 },
             );
@@ -934,9 +1120,10 @@ mod tests {
         invalidate_repo_vars(repo_a);
 
         let cache = var_cache().lock();
-        assert!(!cache.contains_key(&(repo_a.to_string(), "diff".to_string())));
-        assert!(!cache.contains_key(&(repo_a.to_string(), "changed_files".to_string())));
-        // Other repo's entries untouched.
-        assert!(cache.contains_key(&(repo_b.to_string(), "diff".to_string())));
+        assert!(
+            cache.is_empty(),
+            "invalidate_repo_vars must clear the entire cache: {} entries remain",
+            cache.len()
+        );
     }
 }
