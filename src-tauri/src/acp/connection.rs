@@ -953,7 +953,7 @@ impl ConnectionActor {
         let turn_id = attachment.active_turn.as_ref().map(|turn| turn.turn_id);
         let changed = if let v1::SessionUpdate::UsageUpdate(usage) = &notification.update {
             attachment.usage = Some(AcpUsageSnapshot {
-                context: usage.clone(),
+                context: Some(usage.clone()),
                 end_turn: attachment
                     .usage
                     .as_ref()
@@ -1269,10 +1269,22 @@ impl ConnectionActor {
                     stop_reason: Some(response.stop_reason),
                     usage: response.usage.clone(),
                 });
-                if let Some(usage) = &response.usage
-                    && let Some(held) = attachment.usage.as_mut()
-                {
-                    held.end_turn = Some(usage.clone());
+                // Create the snapshot rather than only updating one that exists.
+                // `PromptResponse.usage` is independent of `UsageUpdate`, so
+                // requiring a held snapshot dropped every figure from an agent
+                // that reports usage on the response alone. It survived in
+                // `active_turn` until the next turn overwrote it, which is
+                // exactly long enough to look like it was kept.
+                if let Some(usage) = &response.usage {
+                    match attachment.usage.as_mut() {
+                        Some(held) => held.end_turn = Some(usage.clone()),
+                        None => {
+                            attachment.usage = Some(AcpUsageSnapshot {
+                                context: None,
+                                end_turn: Some(usage.clone()),
+                            })
+                        }
+                    }
                 }
                 AcpClientEvent::TurnSettled {
                     stop_reason: response.stop_reason,
