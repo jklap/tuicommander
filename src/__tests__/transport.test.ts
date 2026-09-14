@@ -1869,7 +1869,6 @@ describe("transport", () => {
 			"get_relay_status",
 			"check_update_channel",
 			"get_session_shell_family",
-			"run_setup_script",
 			"detect_all_agent_binaries",
 		]);
 
@@ -1926,6 +1925,18 @@ describe("transport", () => {
 				method: "POST",
 				path: "/repo/delete-orphan",
 				body: { repoPath: "/r", worktreePath: "/r/wt" },
+			});
+		});
+
+		// run_setup_script used to be a real gap: transport.ts already mapped it to
+		// /worktrees/run-script, but no such axum route existed (KNOWN_HTTP_MAPPING_GAPS
+		// above, until now). Positive assertion for the fixed mapping — the response shape
+		// needs no transform since the new route returns exactly {exit_code, stdout, stderr}.
+		it("maps run_setup_script to the now-registered /worktrees/run-script route", () => {
+			expect(mapCommandToHttp("run_setup_script", { script: "echo hi", cwd: "/tmp" })).toEqual({
+				method: "POST",
+				path: "/worktrees/run-script",
+				body: { script: "echo hi", cwd: "/tmp" },
 			});
 		});
 

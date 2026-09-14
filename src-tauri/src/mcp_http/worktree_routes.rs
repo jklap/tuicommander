@@ -1,12 +1,15 @@
 use crate::AppState;
+use axum::Extension;
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use std::net::SocketAddr;
 use std::sync::Arc;
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 
+use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
 
@@ -97,6 +100,37 @@ pub(super) async fn create_worktree_http(
     }
 
     (StatusCode::CREATED, Json(response))
+}
+
+/// HTTP counterpart of the `run_setup_script` Tauri command — closes a real
+/// IPC/HTTP parity gap: `transport.ts` already mapped this command to
+/// `POST /worktrees/run-script`, but no such route existed
+/// (`transport.test.ts`'s `KNOWN_HTTP_MAPPING_GAPS` listed it).
+///
+/// This runs an arbitrary shell script, so `require_local_or_auth` is
+/// load-bearing, not boilerplate — it must never become LAN-reachable
+/// without authentication. Response shape is exactly
+/// `{exit_code, stdout, stderr}`, identical to the Tauri command, so the
+/// existing `transport.ts` mapping needs no `transform`.
+pub(super) async fn run_setup_script_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<RunSetupScriptRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if let Err(e) = validate_repo_path(&body.cwd) {
+        return e.into_response();
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        crate::worktree::run_setup_script(body.script, body.cwd)
+    })
+    .await;
+    match result {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
 }
 
 pub(super) async fn create_worktree_shared(
@@ -706,5 +740,135 @@ mod tests {
             "TODAY the setup script runs before the file sync has a chance to \
              copy the ignored file — this is the documented ordering gap"
         );
+    }
+
+    // --- run_setup_script_http: the IPC/HTTP parity route ---
+
+    fn loopback() -> SocketAddr {
+        "127.0.0.1:1".parse().unwrap()
+    }
+    fn lan() -> SocketAddr {
+        "192.168.1.2:1".parse().unwrap()
+    }
+    fn authed() -> Option<Extension<Authenticated>> {
+        Some(Extension(Authenticated))
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_rejects_unauthenticated_non_loopback() {
+        // This route is arbitrary shell execution — must never become
+        // LAN-reachable without authentication.
+        let resp = run_setup_script_http(
+            ConnectInfo(lan()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: "/tmp".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_loopback_passes_guard() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_authenticated_remote_passes_guard() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(lan()),
+            authed(),
+            Json(RunSetupScriptRequest {
+                script: "echo hi".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn run_setup_script_http_returns_the_same_shape_as_the_tauri_command() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let resp = run_setup_script_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(RunSetupScriptRequest {
+                script: "echo hello".to_string(),
+                cwd: dir.path().to_string_lossy().to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = response_json(resp).await;
+        assert_eq!(body["exit_code"], 0);
+        assert_eq!(body["stdout"].as_str().unwrap().trim(), "hello");
+        assert_eq!(body["stderr"], "");
+        // Exactly these three keys — no extra fields the frontend/`transport.ts`
+        // mapping (which passes this response through with no `transform`)
+        // wouldn't know about.
+        let obj = body.as_object().expect("object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["exit_code", "stderr", "stdout"]);
+    }
+
+    #[tokio::test]
+    async fn post_worktrees_run_script_does_not_match_the_branch_delete_route() {
+        // Adjacency guard: /worktrees/run-script (POST, static segment) and
+        // /worktrees/{branch} (DELETE, single dynamic segment) coexist in the
+        // same axum router. axum 0.8's matchit prioritises static segments
+        // over dynamic ones, so this should never actually collide — but the
+        // two are similar enough (same prefix, one segment deep) that a
+        // future refactor could get this wrong silently. A minimal router
+        // registering both real handlers, not the full app (which needs
+        // mod.rs's private test helpers) — routing behavior is a property of
+        // the route table, not of auth/state wiring, so this is self-contained.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/run-script",
+                axum::routing::post(run_setup_script_http),
+            )
+            .route(
+                "/worktrees/{branch}",
+                axum::routing::delete(remove_worktree_http),
+            )
+            .with_state(state);
+
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({
+                    "script": "echo hi",
+                    "cwd": dir.path().to_string_lossy(),
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+
+        let response = mini_router.oneshot(request).await.unwrap();
+        // Must not be routed as a DELETE-only /{branch} match producing 405,
+        // and must not 404 — it should reach run_setup_script_http and succeed.
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
