@@ -1693,7 +1693,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - Built-in plugins (TypeScript, compiled with app) and external plugins (JS, loaded at runtime)
 - Hot-reload: file changes in plugin directories trigger automatic re-import
 - Per-plugin error logging with ring buffer (500 entries)
-- Capability-gated access: `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
+- Capability-gated access: `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `ui:external-link`, `ui:file-picker`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
 - CLI execution API: sandboxed execution of whitelisted CLI binaries (`mdkb`) with timeout and size limits
 - Filesystem API: sandboxed text read, base64 binary read, write, rename, list, tail-read, and watch operations restricted to `$HOME`
 - HTTP API: outbound requests scoped to manifest-declared URL patterns (SSRF prevention)
@@ -1778,6 +1778,7 @@ See `examples/plugins/` for reference implementations:
 - `report-watcher` — Generic report file watcher with markdown viewer
 - `claude-status` — Agent-scoped plugin (`agentTypes: ["claude"]`) tracking usage and rate limits
 - `wiz-kanban` — Wiz framework plugin: kanban board for managing the workflow of plans, stories, and reviews with drag-and-drop
+- `md-kanban` — Kanban board over checkbox tasks (`- [ ]`) in a single markdown file: inline `[field:: value]`/`(field:: value)` metadata (priority, dependsOn, id), `#tags`, heading-path labels, a small upstream/downstream dependency graph with hover-highlight, and multi-board support via a native file picker
 
 ### 17.7 Claude Wakeup Plugin
 Agent-scoped plugin (`agentTypes: ["claude"]`) that wakes Claude Code when it stalls without asking a question. Ships in `plugins/claude-wakeup/`.

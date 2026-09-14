@@ -266,6 +266,8 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "ui:sidebar",
     "ui:file-icons",
     "ui:file-preview",
+    "ui:external-link",
+    "ui:file-picker",
 ];
 
 /// Validate a parsed manifest for required fields and sanity.
@@ -1611,6 +1613,29 @@ mod tests {
             "ui:ticker".into(),
         ];
         assert!(validate_manifest(&m, "build-cleaner").is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_md_kanban_capabilities() {
+        // ui:external-link (host.openExternalUrl) and ui:file-picker
+        // (host.pickFile) are md-kanban's two new capabilities — must be in
+        // KNOWN_CAPABILITIES so its manifest loads instead of being rejected
+        // as unknown. This is the Rust-side counterpart to the frontend's
+        // pluginRegistry.test.ts capability-gating tests: those cover
+        // requireCapability's runtime behavior, this covers the allowlist
+        // the manifest itself is validated against.
+        let mut m = valid_manifest("md-kanban");
+        m.capabilities = vec![
+            "fs:read".into(),
+            "fs:write".into(),
+            "fs:watch".into(),
+            "ui:panel".into(),
+            "ui:markdown".into(),
+            "ui:context-menu".into(),
+            "ui:external-link".into(),
+            "ui:file-picker".into(),
+        ];
+        assert!(validate_manifest(&m, "md-kanban").is_ok());
     }
 
     // -- Binary validation --

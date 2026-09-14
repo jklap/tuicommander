@@ -193,6 +193,55 @@ is an install-hygiene issue on Boss's machine, not a code bug — needs the
 stale `/Applications` copy removed or replaced and Launch Services refreshed
 before `tuic open-here` will work again. Not fixed as part of this session
 (touching `/Applications` needs Boss's own OK).
+## Markdown Kanban plugin (`md-kanban`, 2026-09-14, **new plugin — not auto-loaded, install first**)
+
+Kanban board over checkbox tasks in a plain markdown file, plus two new
+PluginHost capabilities (`ui:external-link`, `ui:file-picker`). Frontend-only
+change (no Rust), so it's picked up by the existing `make dev`/Vite HMR — no
+restart needed for the two new host methods themselves.
+
+**Not auto-discovered**: unlike a built-in plugin, `plugins/md-kanban/` in
+this repo's `plugins/` submodule is only the *source/distribution* copy
+(mirrors what ships to `tuicommander-plugins` on GitHub) — a running instance
+loads plugins from `{config_dir}/plugins/{id}/`, not from the repo checkout.
+To test, use Settings → Plugins → "Install from folder" and point it at
+`plugins/md-kanban/` (or copy the directory into the config dir's `plugins/`
+folder yourself), then enable it.
+
+Parsing/rewrite/dependency-graph/rendering logic is unit-tested (92 automated
+tests: 77 vitest + 15 node:test lifecycle). What's NOT machine-verifiable:
+
+- [ ] "Add Board" opens the real native "Open file" dialog (not a stub), and
+      picking a `.md` file with checkbox tasks renders a 6-column board.
+- [ ] Drag a card between columns — the underlying file's status character
+      updates (open it in the markdown editor to confirm), and dragging to
+      Done/Won't Fix adds a `[completion::]`/`[cancelled::]` field with
+      today's real date; dragging back out removes it.
+- [ ] A plain click on a card body does nothing; clicking a `[label](path)`
+      link inside a card's text opens that file in a new markdown tab (or,
+      for an `http(s)://` link, opens the system browser).
+- [ ] Hovering a card's `<`/`>`/`!` dependency badge visually highlights the
+      right upstream/downstream card(s) elsewhere on the board, with no
+      flicker or missed hover due to iframe focus quirks.
+- [ ] The "Get ID" `#` button on an id-less card assigns an id, and the id is
+      actually on the OS clipboard afterward (paste it somewhere to confirm)
+      — `tuic.clipboard()` round-tripping through the real app, not just the
+      plugin's own postMessage call.
+- [ ] Add a second board via the tab strip, switch between them, and confirm
+      each keeps its own "Hide archived" checkbox state across a switch and
+      an app restart (persistence via `read_plugin_data`/`write_plugin_data`).
+- [ ] Close the last remaining board — the panel should stay open on the
+      empty "Add Board" state, not close the tab itself.
+- [ ] Edit the board's markdown file in an external editor while the panel is
+      open and visible — the board should pick up the change within ~1s
+      (fs:watch debounce) without any manual refresh.
+- [ ] "Open file" button opens the real underlying markdown file in
+      TUICommander's own markdown viewer/editor.
+- [ ] Browser/PWA mode (`:9876`/`:9877` in a real browser): `pickFile`
+      documented to resolve `null` there (no native dialog) — confirm "Add
+      Board" fails gracefully (a toast or no-op) rather than throwing.
+
+## Customizable notification sounds — per-event preset/custom-file picker (2026-09-11, **Rust change — needs `make dev` restart**)
 
 Settings > Notifications: each event's row gains a `<select>` next to its
 enable checkbox — Default, another event's tone borrowed as a preset (Chime /
