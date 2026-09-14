@@ -125,6 +125,47 @@ tests: 77 vitest + 15 node:test lifecycle). What's NOT machine-verifiable:
       documented to resolve `null` there (no native dialog) — confirm "Add
       Board" fails gracefully (a toast or no-op) rather than throwing.
 
+## Session Diff Review — step-by-step review of a Claude Code session's edits (2026-09-14, **Rust change — needs `make dev` restart**)
+
+New tab (Command Palette: "Session diff review") reconstructing a session's
+edit timeline from its transcript (`~/.claude/projects/`) and, where
+available, `~/.claude/file-history/` backups. Rust: new `session_review.rs`
+(transcript parser, base resolution, revert commands), `git.rs`
+(`apply_reverse_patch_impl` extraction, `bump_working_tree_epoch` made
+`pub(crate)`), Cargo.toml (`gix-imara-diff` added directly for its
+`unified_diff` feature). Frontend: `src/components/SessionDiffTab/` tree,
+`diffTabsStore`/`useRepository`/`transport.ts` extensions. Transcript
+parsing, base-resolution tiers, revert mechanisms, and the frontend
+orchestration are all unit-tested (30 Rust tests, ~40 vitest tests across
+`buildRows`/`SessionPicker`/`SessionDiffTab`/the extracted DiffTab helpers) —
+`DiffViewer`/`SessionDiffList`'s own rendering is stubbed in those tests since
+`@git-diff-view/solid` needs a real Canvas and `@tanstack/solid-virtual` can't
+measure rows in jsdom/happy-dom (both pre-existing, documented environment
+limitations — see `DiffViewer.test.tsx`/`DiffFileList.test.tsx`). What's NOT
+machine-verifiable:
+
+- [ ] Open the tab against a real, past Claude Code session for this repo (not a
+      synthetic fixture) and confirm the grouped-by-file view's cumulative diffs
+      and the chronological view's step order both look right, including at
+      least one session with a subagent edit and one with a file the session
+      created.
+- [ ] Drag-select lines in a rendered step/file diff and send a comment — confirm
+      it lands in the terminal in the same format the regular Diff tab's
+      selection-comment feature produces.
+- [ ] Revert a single step on a real file, confirm only that edit is undone and
+      later edits survive; revert a step whose region a later edit already
+      touched and confirm it fails with a clear message instead of partially
+      applying.
+- [ ] Revert a whole file to session start on a real file with a `file-history`
+      backup (byte-exact restore) and on one without (reconstructed write);
+      revert a session-created file and confirm it's deleted.
+- [ ] Hand-edit a file outside the session, then try to revert it — confirm the
+      drift refusal appears and the "Force revert anyway" toast action works.
+- [ ] Visual check: file/step header layout, badges (drifted / outside repo /
+      unknown base), and the warnings banner render correctly in both light and
+      dark theme, matching `docs/frontend/STYLE_GUIDE.md`.
+- [ ] Screenshot for `docs/FEATURES.md` / release notes.
+
 ## Customizable notification sounds — per-event preset/custom-file picker (2026-09-11, **Rust change — needs `make dev` restart**)
 
 Settings > Notifications: each event's row gains a `<select>` next to its

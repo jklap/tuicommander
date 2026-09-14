@@ -493,6 +493,36 @@ GET /repo/file-diff?path=/path/to/repo&file=src/main.rs
 
 Returns diff for a single file.
 
+### Session Diff Review
+
+See [`docs/backend/session-review.md`](../backend/session-review.md) for the underlying transcript format and revert strategies.
+
+```
+GET /repo/session-review/sessions?path=/path/to/repo&limit=20&include_counts=true
+```
+
+Recent Claude Code sessions for the repo, newest first. `limit` (default 20, capped 50) and `include_counts` (default false — scans each transcript's edit/file counts) are optional.
+
+```
+GET /repo/session-review?path=/path/to/repo&session_id=<uuid>&include_subagents=false
+```
+
+Full chronological edit timeline + per-file cumulative diffs for one session. `include_subagents` (default true) merges in `subagents/*.jsonl` transcripts.
+
+```
+POST /repo/session-review/revert-step
+{ "path": "/path/to/repo", "session_id": "<uuid>", "tool_use_id": "toolu_...", "dry_run": false }
+```
+
+Undo one step, keeping every later step.
+
+```
+POST /repo/session-review/revert-file
+{ "path": "/path/to/repo", "session_id": "<uuid>", "abs_path": "/path/to/repo/src/main.rs", "force": false, "dry_run": false }
+```
+
+Restore a file to its content at session start (or delete it if the session created it). Refuses when the file has drifted since unless `force: true`.
+
 ### Read File
 
 ```

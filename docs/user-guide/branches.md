@@ -132,3 +132,19 @@ Right-click any branch for the full context menu:
 
 - **Stale** (dimmed): the branch has no commits in the last 30 days — a visual cue that it may be abandoned
 - **Merged** badge: the branch has been merged into the default branch and is safe to delete
+
+## Session Diff Review
+
+Step through everything a Claude Code session changed — open it from the Command Palette ("Session diff review"). It opens as a tab, defaulting to the focused terminal's live agent session (or the most recent session for the repo); use the picker in the tab's toolbar to review a different past session.
+
+Two ways to read it:
+- **By file** (default) — one row per changed file, showing its cumulative diff for the session with the individual edits that produced it collapsible underneath.
+- **Chronological** — every edit, across every file, in the order the agent actually made them.
+
+Per step or per file, you can:
+- **Open the file** at that change.
+- **Comment on selected lines** — drag-select a range and send a note to the agent's terminal, in the same `[path:Lx-Ly]` format the regular Diff tab uses.
+- **Copy the diff** (a step, a file, or the whole session's combined diff via "Copy all" in the toolbar).
+- **Revert** — a single step (undone via a reverse patch, keeping every later edit — this can fail if a later edit touched the same lines) or a whole file back to what it looked like at the start of the session (byte-exact when TUICommander can find the session's own backup, reconstructed otherwise, or the file is deleted if the session created it).
+
+A file whose starting content can't be determined, or that's changed outside the session since, is flagged rather than silently guessed at. Subagent edits are included by default — untick "Subagent edits" in the toolbar to exclude them.

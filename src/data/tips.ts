@@ -480,4 +480,10 @@ export const TIPS: Tip[] = [
 			"Settings → Notifications lets each event use its own default tone, borrow another event's tone, or play your own audio file (.wav/.mp3/.ogg/.flac) via the Sound dropdown.",
 		shortcut: null,
 	},
+	{
+		feature: "Session Diff Review",
+		description:
+			"Search 'Session diff review' in the Command Palette to step through everything a Claude Code session changed — grouped by file or in chronological order, with per-step or per-file revert.",
+		shortcut: null,
+	},
 ];
