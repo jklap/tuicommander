@@ -386,15 +386,36 @@ jobs:
       # The Windows test binary aborts at load with 0xc0000139
       # (STATUS_ENTRYPOINT_NOT_FOUND): a DLL it imports from is present but does
       # not export something it asks for. Windows names neither the DLL nor the
-      # symbol, and nothing off-Windows can link this binary, so the import table
-      # has to be read on the runner itself.
-      - name: Dump the test binary's imports
+      # symbol, and nothing off-Windows can link this binary, so the failure has
+      # to be read on the runner itself.
+      #
+      # `dumpbin /imports` was the first pass and cleared the obvious suspects:
+      # every static import is a system DLL and none names a version-sensitive
+      # symbol (VCRUNTIME140_1 asks only for __CxxFrameHandler4). That leaves a
+      # transitive dependency, which only a resolver walking the whole graph can
+      # name — hence Dependencies, which reports the missing export directly.
+      - name: Diagnose the test binary's load failure
         if: failure() && matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
           $exe = Get-ChildItem C:/t/debug/deps/tuicommander_lib-*.exe | Select-Object -First 1
-          Write-Host "dumpbin: $($dumpbin.FullName)"
-          Write-Host "binary:  $($exe.FullName)"
-          & $dumpbin.FullName /imports $exe.FullName
+          Write-Host "binary: $($exe.FullName)"
+
+          choco install dependencies -y --no-progress | Out-Null
+          $dep = Get-ChildItem "C:\ProgramData\chocolatey\lib\dependencies" -Recurse -Filter Dependencies.exe |
+            Select-Object -First 1
+          if ($dep) {
+            Write-Host "== Dependencies /modules =="
+            & $dep.FullName -modules $exe.FullName
+          } else {
+            Write-Host "Dependencies.exe not found after install"
+          }
+
+          # The CRT that is actually on this machine, against the one the linker
+          # built for — a mismatch here is the classic source of 0xc0000139.
+          Write-Host "== CRT in System32 =="
+          'MSVCP140.dll','VCRUNTIME140.dll','VCRUNTIME140_1.dll' | ForEach-Object {
+            $p = "C:\Windows\System32\$_"
+            if (Test-Path $p) { "{0}  {1}" -f $_, (Get-Item $p).VersionInfo.FileVersion }
+            else { "{0}  MISSING" -f $_ }
+          }
