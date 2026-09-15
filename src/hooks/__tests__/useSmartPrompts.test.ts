@@ -804,9 +804,37 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 		const { executeSmartPrompt } = useSmartPrompts();
 		await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
 
-		// resolveFrontendVars reads repositoriesStore.get(repoRoot)?.activeBranch
-		// — passing the worktree path here would silently miss (the store is
-		// keyed by repo root) and drop every pr_* variable.
-		expect(mockedGetBranchPrData).not.toHaveBeenCalledWith(WORKTREE_PATH, expect.anything());
+		// resolveFrontendVars looks the repo up by REPO ROOT (repositoriesStore
+		// is keyed by root, not by worktree path) — passing the worktree path
+		// as the first arg here would silently miss and drop every pr_* variable.
+		expect(mockedGetBranchPrData).toHaveBeenCalledWith(REPO_ROOT, expect.anything());
+	});
+
+	it("looks up PR data for the worktree's own branch, not a stale repo.activeBranch", async () => {
+		// Found by a code-review verification pass: resolveFrontendVars used to
+		// derive its branch solely from repo.activeBranch, a pointer that
+		// navigateToTerminal() keeps in sync but several cross-pane focus paths
+		// (Alt+Arrow, closing a split pane) bypass entirely — so it can lag
+		// behind which terminal is actually focused. Here activeBranch is
+		// deliberately left stale at "main" while the focused terminal's cwd is
+		// inside the "feat-x" worktree; pr_* lookups must use "feat-x" (from
+		// resolvePromptTreeIn's branchName, derived fresh from the cwd), not
+		// the stale "main".
+		mockedRepoGetActive.mockReturnValue({ path: "/some-other-repo" } as unknown as ReturnType<
+			typeof repositoriesStore.getActive
+		>);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			cwd: `${WORKTREE_PATH}/src`,
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }));
+
+		expect(mockedGetBranchPrData).toHaveBeenCalledWith(REPO_ROOT, "feat-x");
+		expect(mockedGetBranchPrData).not.toHaveBeenCalledWith(REPO_ROOT, "main");
 	});
 });

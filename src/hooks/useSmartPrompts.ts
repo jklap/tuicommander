@@ -225,13 +225,22 @@ export function useSmartPrompts() {
 		return { ok: true };
 	}
 
-	/** Frontend-only variables (GitHub PR, agent/terminal) — no IPC needed. */
-	function resolveFrontendVars(repoPath: string): Record<string, string> {
+	/** Frontend-only variables (GitHub PR, agent/terminal) — no IPC needed.
+	 *  `branch`, when given, is the branch the tree the variables are being
+	 *  resolved against actually has checked out (`PromptTree.branchName`,
+	 *  derived fresh from the terminal's cwd) — preferred over
+	 *  `repo.activeBranch`, which is a separately-maintained pointer that
+	 *  several focus-switch paths (cross-pane Alt+Arrow, closing a pane) are
+	 *  known to leave stale for a non-root worktree. `undefined`/`null` falls
+	 *  back to `activeBranch`, which is still the right signal for the repo
+	 *  ROOT itself — there's no per-worktree branch to derive there; whatever
+	 *  is checked out at the root can change at any time. */
+	function resolveFrontendVars(repoPath: string, branch?: string | null): Record<string, string> {
 		const vars: Record<string, string> = {};
 		const repo = repositoriesStore.get(repoPath);
-		const branch = repo?.activeBranch ?? "";
-		if (branch) {
-			const pr = githubStore.getBranchPrData(repoPath, branch);
+		const resolvedBranch = branch ?? repo?.activeBranch ?? "";
+		if (resolvedBranch) {
+			const pr = githubStore.getBranchPrData(repoPath, resolvedBranch);
 			if (pr) Object.assign(vars, prContextVariables(pr));
 		}
 		const activeTerminal = terminalsStore.getActive();
@@ -287,8 +296,18 @@ export function useSmartPrompts() {
 		// resolveFrontendVars takes the REPO ROOT specifically, never a
 		// worktree path — repositoriesStore is keyed by repo root, so
 		// passing varsPath here would make its `repositoriesStore.get(...)`
-		// lookup silently miss and drop every pr_* variable.
-		const allVars = { ...gitVars, ...resolveFrontendVars(repoRoot), ...manualVariables };
+		// lookup silently miss and drop every pr_* variable. tree?.branchName
+		// (derived fresh from the terminal's cwd) is passed through too —
+		// without it, resolveFrontendVars falls back to repo.activeBranch,
+		// a separately-maintained pointer that cross-pane focus switches
+		// (Alt+Arrow, closing a pane) can leave stale for a worktree that
+		// isn't the repo root, reintroducing a narrower version of the same
+		// active-repo-vs-worktree-cwd bug for pr_* variables specifically.
+		const allVars = {
+			...gitVars,
+			...resolveFrontendVars(repoRoot, tree?.branchName),
+			...manualVariables,
+		};
 		const unresolved = varNames.filter((v) => !(v in allVars));
 		if (unresolved.length > 0) {
 			return { ok: false, reason: "unresolved_variables", output: JSON.stringify(unresolved) };
