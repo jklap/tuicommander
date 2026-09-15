@@ -6902,6 +6902,88 @@ mod tests {
         );
     }
 
+    // --- WorktreeSetupStatus: the exact wire shape an MCP/HTTP client sees ---
+    //
+    // Both `handle_worktree`'s "setup_status" arm (`to_json_or_error`) and
+    // `get_worktree_setup_status_http` are thin `serde_json::to_value`/`Json(..)`
+    // pass-throughs of this enum — so locking its shape here is what actually
+    // protects both surfaces, not a redundant per-transport re-check.
+
+    #[test]
+    fn worktree_setup_status_serializes_each_state_with_the_expected_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::Running).unwrap(),
+            serde_json::json!({"state": "running"})
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::NotConfigured).unwrap(),
+            serde_json::json!({"state": "not_configured"})
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::Completed {
+                exit_code: Some(0),
+                error: None,
+            })
+            .unwrap(),
+            serde_json::json!({"state": "completed", "exit_code": 0, "error": null})
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::Completed {
+                exit_code: None,
+                error: Some("task panic: boom".to_string()),
+            })
+            .unwrap(),
+            serde_json::json!({"state": "completed", "exit_code": null, "error": "task panic: boom"})
+        );
+    }
+
+    #[test]
+    fn worktree_setup_status_cache_is_keyed_by_the_repo_path_branch_pair_not_either_alone() {
+        let cache = build_worktree_setup_status_cache();
+        cache.insert(
+            ("/repo".to_string(), "feat-a".to_string()),
+            Arc::new(WorktreeSetupStatus::Running),
+        );
+        cache.insert(
+            ("/repo".to_string(), "feat-b".to_string()),
+            Arc::new(WorktreeSetupStatus::NotConfigured),
+        );
+        cache.insert(
+            ("/other-repo".to_string(), "feat-a".to_string()),
+            Arc::new(WorktreeSetupStatus::Completed {
+                exit_code: Some(1),
+                error: None,
+            }),
+        );
+
+        assert_eq!(
+            *cache
+                .get(&("/repo".to_string(), "feat-a".to_string()))
+                .unwrap(),
+            WorktreeSetupStatus::Running
+        );
+        assert_eq!(
+            *cache
+                .get(&("/repo".to_string(), "feat-b".to_string()))
+                .unwrap(),
+            WorktreeSetupStatus::NotConfigured
+        );
+        assert_eq!(
+            *cache
+                .get(&("/other-repo".to_string(), "feat-a".to_string()))
+                .unwrap(),
+            WorktreeSetupStatus::Completed {
+                exit_code: Some(1),
+                error: None,
+            }
+        );
+        assert!(
+            cache
+                .get(&("/repo".to_string(), "feat-c".to_string()))
+                .is_none()
+        );
+    }
+
     #[test]
     fn test_clear_caches_empties_all() {
         let state = make_test_app_state();

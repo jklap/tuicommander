@@ -1095,6 +1095,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_worktree_setup_status_http_rejects_a_missing_query_param() {
+        // Boundary/corrupt-data case, mirroring run_setup_script_http_rejects_malformed_json_body:
+        // axum's own Query<WorktreeSetupStatusQuery> extraction rejection can't be
+        // exercised by calling the handler directly with a hand-built struct (the
+        // compiler forces every field to exist) — only a real request through the
+        // router hits axum's own "missing required query param" rejection.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/setup-status",
+                axum::routing::get(get_worktree_setup_status_http),
+            )
+            .with_state(state);
+
+        // Missing the required "branch" query param entirely.
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/worktrees/setup-status?repoPath=%2Frepo")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = mini_router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn get_worktree_setup_status_http_reports_running_and_not_configured_too() {
+        // The other two states aren't just theoretical — assert their literal
+        // JSON shape flows through this route unchanged, not just "completed"
+        // and "unknown" (already covered above). The exhaustive shape itself is
+        // locked once in state.rs's own serialization test; this only proves
+        // the route doesn't do anything unexpected to it in transit.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.worktree_setup_status.insert(
+            ("/repo".to_string(), "running-branch".to_string()),
+            Arc::new(crate::state::WorktreeSetupStatus::Running),
+        );
+        state.worktree_setup_status.insert(
+            ("/repo".to_string(), "no-script-branch".to_string()),
+            Arc::new(crate::state::WorktreeSetupStatus::NotConfigured),
+        );
+
+        let running = get_worktree_setup_status_http(
+            State(state.clone()),
+            Query(WorktreeSetupStatusQuery {
+                repo_path: "/repo".to_string(),
+                branch: "running-branch".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response_json(running).await["state"], "running");
+
+        let not_configured = get_worktree_setup_status_http(
+            State(state),
+            Query(WorktreeSetupStatusQuery {
+                repo_path: "/repo".to_string(),
+                branch: "no-script-branch".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(
+            response_json(not_configured).await["state"],
+            "not_configured"
+        );
+    }
+
+    #[tokio::test]
     async fn get_worktrees_setup_status_does_not_match_the_branch_delete_route() {
         // Adjacency guard, mirroring post_worktrees_run_script_does_not_match_the_branch_delete_route
         // above: /worktrees/setup-status (GET, static segment) and

@@ -7565,6 +7565,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_worktree_setup_status_requires_path() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "setup_status",
+                "branch": "some-branch",
+            }),
+            false,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("requires 'path'"),
+            "response: {response}"
+        );
+    }
+
+    #[tokio::test]
     async fn handle_worktree_setup_status_reports_unknown_for_an_untracked_pair() {
         let repo = create_temp_git_repo_for_mcp_test();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
