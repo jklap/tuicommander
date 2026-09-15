@@ -252,6 +252,8 @@ it.each([false, true])("repaints scrollbar history marks immediately when enable
 				startedAt: 0,
 				endedAt: 1,
 				promptText: null,
+				onAltScreen: false,
+				fromTranscriptDump: false,
 			},
 		],
 		userPromptLines: [30],
