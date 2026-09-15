@@ -101,6 +101,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "general",
 		section: "Local tools",
+		label: "Finder Integration",
+		labelKey: "general.heading.finderService",
+		platform: "desktop",
+	},
+	{
+		tab: "general",
+		section: "Local tools",
 		label: "Code Intelligence",
 		labelKey: "general.heading.codeIntelligence",
 		platform: "desktop",

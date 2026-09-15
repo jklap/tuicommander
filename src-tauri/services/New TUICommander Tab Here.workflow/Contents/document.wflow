@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AMApplicationBuild</key>
+	<string>523</string>
+	<key>AMApplicationVersion</key>
+	<string>2.10</string>
+	<key>AMDocumentVersion</key>
+	<string>2</string>
+	<key>actions</key>
+	<array>
+		<dict>
+			<key>action</key>
+			<dict>
+				<key>ActionBundlePath</key>
+				<string>/System/Library/Automator/Run Shell Script.action</string>
+				<key>ActionName</key>
+				<string>Run Shell Script</string>
+				<key>ActionParameters</key>
+				<dict>
+					<key>COMMAND_STRING</key>
+					<string>BIN="/usr/local/bin/tuic"
+if [ ! -x "$BIN" ]; then
+	BIN="$(command -v tuic 2&gt;/dev/null)"
+fi
+if [ -z "$BIN" ]; then
+	osascript -e 'display notification "Run TUICommander at least once to finish setup." with title "tuic CLI not found"' &gt;/dev/null 2&gt;&amp;1
+	exit 1
+fi
+exec "$BIN" open-here "$@"</string>
+					<key>CheckedForUserDefaultShell</key>
+					<true/>
+					<key>inputMethod</key>
+					<integer>1</integer>
+					<key>shell</key>
+					<string>/bin/bash</string>
+					<key>source</key>
+					<string></string>
+				</dict>
+				<key>BundleIdentifier</key>
+				<string>com.apple.RunShellScript</string>
+				<key>CFBundleVersion</key>
+				<string>2.0.3</string>
+				<key>CanShowSelectedItemsWhenRun</key>
+				<false/>
+				<key>CanShowWhenRun</key>
+				<true/>
+				<key>Class Name</key>
+				<string>RunShellScriptAction</string>
+				<key>InputUUID</key>
+				<string>00000000-0000-0000-0000-000000000001</string>
+				<key>OutputUUID</key>
+				<string>00000000-0000-0000-0000-000000000002</string>
+				<key>UUID</key>
+				<string>00000000-0000-0000-0000-000000000003</string>
+				<key>arguments</key>
+				<dict/>
+				<key>isViewVisible</key>
+				<true/>
+				<key>location</key>
+				<string>309.000000:253.000000</string>
+			</dict>
+			<key>isViewVisible</key>
+			<true/>
+		</dict>
+	</array>
+	<key>connectors</key>
+	<dict/>
+	<key>workflowMetaData</key>
+	<dict>
+		<key>serviceInputTypeIdentifier</key>
+		<string>com.apple.Automator.fileSystemObject.path</string>
+		<key>serviceOutputTypeIdentifier</key>
+		<string>com.apple.Automator.nothing</string>
+		<key>serviceProcessesInput</key>
+		<integer>0</integer>
+		<key>workflowTypeIdentifier</key>
+		<string>com.apple.Automator.servicesMenu</string>
+	</dict>
+</dict>
+</plist>
