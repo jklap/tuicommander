@@ -142,7 +142,11 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Create dist stub for include_dir
-        run: mkdir -p dist && echo '<html></html>' > dist/index.html
+        # Both shells, because the SPA fallback serves mobile.html for /mobile/*
+        # and index.html for everything else. A stub carrying index.html alone
+        # 404s every mobile deep link, which fails a test a real `vite build`
+        # passes — the stub has to have the shape the build produces.
+        run: mkdir -p dist && for f in index mobile; do echo '<html></html>' > "dist/$f.html"; done
 
       - name: Create sidecar stub for Tauri build.rs
         run: |
@@ -335,7 +339,11 @@ jobs:
 
       - name: Create dist stub for include_dir
         shell: bash
-        run: mkdir -p dist && echo '<html></html>' > dist/index.html
+        # Both shells, because the SPA fallback serves mobile.html for /mobile/*
+        # and index.html for everything else. A stub carrying index.html alone
+        # 404s every mobile deep link, which fails a test a real `vite build`
+        # passes — the stub has to have the shape the build produces.
+        run: mkdir -p dist && for f in index mobile; do echo '<html></html>' > "dist/$f.html"; done
 
       - name: Create sidecar stub for Tauri build.rs
         shell: bash
