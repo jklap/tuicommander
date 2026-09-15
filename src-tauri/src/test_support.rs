@@ -98,9 +98,26 @@ pub(crate) fn normalize_newlines(output: &str) -> String {
 /// playing them back keeps one spelling and tests the same stream everywhere.
 pub(crate) fn replay_file_command(path: &std::path::Path) -> portable_pty::CommandBuilder {
     let (shell, flag) = host_shell();
+    let spelled = if cfg!(windows) {
+        // Bare, because the quotes would never reach `cmd`. `CommandBuilder`
+        // wraps any argument holding a space or a quote and escapes the inner
+        // quotes as `\"`, which is the C runtime's convention and not one
+        // `cmd` knows: it answered "The filename, directory name, or volume
+        // label syntax is incorrect." The surviving wrapper is the pair
+        // `cmd /C` strips by itself, so an unquoted path arrives intact.
+        assert!(
+            !path.to_string_lossy().contains(' '),
+            "a space in {} cannot survive `cmd /C` through CommandBuilder; \
+             give the test a temp directory without one",
+            path.display(),
+        );
+        path.display().to_string()
+    } else {
+        format!("\"{}\"", path.display())
+    };
     let mut command = portable_pty::CommandBuilder::new(shell);
     command.arg(flag);
-    command.arg(print_file_script(&format!("\"{}\"", path.display())));
+    command.arg(print_file_script(&spelled));
     command
 }
 
