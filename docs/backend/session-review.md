@@ -104,6 +104,9 @@ crate-wide for the one shared instance of the package.
   back to reversing the recorded substitution directly against the file's
   *current* content (`method: "string_substitution"`) — the same
   region-scoped tolerance as the in-repo path, just implemented by hand.
+  `revert_step_via_substitution`'s Edit arm delegates to `apply_reverse`
+  rather than re-deriving its own find/replace-backward logic, so the two
+  paths can't drift apart.
 - **Per-file, revert-to-session-start** (`revert_file_to_session_start`): a
   **direct content restore**, not a cumulative reverse-patch apply — byte-copy
   the `@v1` backup when available (`restore_backup`), write the reconstructed
@@ -147,7 +150,12 @@ transcript's `(len, mtime)`.
 `metadata()`; `title`/`last_prompt` come from a tail-read of the last 64 KB
 (both `custom-title`/`last-prompt` record types recur every turn, so the
 last copy is always near EOF); full edit/file counts are opt-in
-(`include_counts`) and scanned only for the first `limit` entries.
+(`include_counts`) and scanned only for the first `limit` entries. When
+`include_counts` is set, those per-session full-transcript scans run
+concurrently across `std::thread::scope` threads (sound here — the whole
+command already runs inside `spawn_blocking`, off the async reactor) rather
+than one after another, so picker load/refresh time doesn't scale linearly
+with session count.
 
 ## Commands
 
