@@ -27,6 +27,24 @@ where
         .map_err(|e| format!("fs task failed: {e}"))?
 }
 
+/// Is this string an absolute path on *any* platform TUIC runs on?
+///
+/// `Path::is_absolute` answers for the host only, and the validators that call
+/// this decide whether a path may escape a boundary. Judging a foreign shape
+/// as relative is the dangerous half of that: on Windows `Path::join` replaces
+/// the root when the joined path has one, so a repo path joined with
+/// `/etc/passwd` lands at the root of the repo's drive rather than inside the
+/// repo. So each shape the other platform uses gets an explicit string check —
+/// `C:\…` and `\\…` do not parse as absolute on unix, and a leading `/` does
+/// not parse as absolute on Windows, where a path without a drive letter is
+/// merely rooted.
+pub(crate) fn is_absolute_on_any_platform(path: &str) -> bool {
+    std::path::Path::new(path).is_absolute()
+        || path.get(1..3) == Some(":\\")
+        || path.starts_with("\\\\")
+        || path.starts_with('/')
+}
+
 /// A directory entry returned by `list_directory`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {

@@ -197,6 +197,16 @@ mod tests {
         }
     }
 
+    /// Unix only because it runs the hook commands, and the TUIC one is a POSIX
+    /// shell script that reads the controlling tty through `ps -o tty=`. The
+    /// additivity it proves is Claude's, not the platform's.
+    ///
+    /// DEFERRED (2026-09-15) — `hook_command` and `codex_script` are generated
+    /// on every platform, so a Windows install writes agent hooks that no shell
+    /// there can run and the agent-state badge never leaves its initial value.
+    /// Giving Windows its own hook shape is a feature, not part of making the
+    /// suite pass; raised with Boss rather than guessed at here.
+    #[cfg(unix)]
     #[test]
     fn claude_settings_hooks_are_additive_with_same_event_global_and_project_hooks() {
         let dir = tempfile::TempDir::new().unwrap();

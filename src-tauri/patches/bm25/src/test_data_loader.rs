@@ -36,7 +36,9 @@ pub mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "No such file or directory")]
+    // The OS message differs per platform ("No such file or directory" against
+    // "The system cannot find the file specified"); the error kind does not.
+    #[should_panic(expected = "NotFound")]
     fn it_should_panic_if_the_file_does_not_exist() {
         read_recipes("non_existent_file.csv");
     }

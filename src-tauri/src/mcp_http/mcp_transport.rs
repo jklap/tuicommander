@@ -7373,7 +7373,9 @@ mod tests {
         let at = source
             .find("\"worktree_remove\" => {")
             .expect("worktree_remove action");
-        let body = &source[at..(at + 2_000).min(source.len())];
+        // By chars, not bytes: a byte window can end inside a multi-byte
+        // character, and where it lands moves with the line endings.
+        let body: String = source[at..].chars().take(2_000).collect();
         assert!(
             body.contains("tokio::task::spawn_blocking"),
             "recursive worktree deletion and git safety checks must not park a Tokio worker"
@@ -7644,11 +7646,32 @@ mod tests {
 
     /// Spawn binary for tests that read state belonging to the child *after* the
     /// spawn returns — its inbox, its peer entry, its parent link, its task
-    /// status. `/usr/bin/true` exits before the first read and the exit cleanup
-    /// deletes the very state under test, so those tests only passed by winning a
-    /// race. `/bin/cat` blocks on stdin; every test using it kills the session at
-    /// the end. Tests that only read the spawn response keep `/usr/bin/true`.
+    /// status. A binary that exits before the first read lets the exit cleanup
+    /// delete the very state under test, so those tests only passed by winning a
+    /// race. These block on stdin; every test using one kills the session at the
+    /// end. Tests that only read the spawn response take the short-lived one.
+    ///
+    /// `binary_path` is checked with `Path::is_absolute` and then for being a
+    /// real file, both of which answer for the host — so a POSIX path is
+    /// rejected on Windows before any of these tests reaches its subject.
+    #[cfg(not(windows))]
     const LONG_LIVED_TEST_BINARY: &str = "/bin/cat";
+    #[cfg(windows)]
+    const LONG_LIVED_TEST_BINARY: &str = "C:\\Windows\\System32\\more.com";
+
+    /// Spawn binary for tests that read only the spawn response.
+    #[cfg(not(windows))]
+    const SHORT_LIVED_TEST_BINARY: &str = "/usr/bin/true";
+    #[cfg(windows)]
+    const SHORT_LIVED_TEST_BINARY: &str = "C:\\Windows\\System32\\whoami.exe";
+
+    /// Working directory for the spawned child. It only has to exist: the child
+    /// is given it so the spawn does not inherit this process's cwd. `/tmp` is
+    /// not a directory Windows has, and `CreateProcessW` fails on it.
+    #[cfg(not(windows))]
+    const TEST_SPAWN_CWD: &str = "/tmp";
+    #[cfg(windows)]
+    const TEST_SPAWN_CWD: &str = "C:\\Windows";
 
     const TEST_UUID_A: &str = "550e8400-e29b-41d4-a716-446655440a01";
     const TEST_UUID_B: &str = "550e8400-e29b-41d4-a716-446655440a02";
@@ -8568,8 +8591,8 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "verify inherited parent binding",
-                "binary_path": "/usr/bin/true",
-                "cwd": "/tmp",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some(eager_mcp_session),
         );
@@ -8602,7 +8625,7 @@ mod tests {
                 "action": "spawn",
                 "prompt": "task handle additivity",
                 "binary_path": LONG_LIVED_TEST_BINARY,
-                "cwd": "/tmp",
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some("mcp-classic"),
         );
@@ -8675,7 +8698,7 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "remote caller",
-                "binary_path": "/usr/bin/true",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
             }),
             Some("mcp-remote"),
         );
@@ -10249,7 +10272,7 @@ mod tests {
                 "action": "spawn",
                 "name": "geometry-child",
                 "prompt": "verify geometry",
-                "binary_path": "/usr/bin/true",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
                 "rows": 40,
                 "cols": 300,
             }),
@@ -14553,7 +14576,7 @@ mod tests {
                 "action": "spawn",
                 "name": "cwd-regression-child",
                 "prompt": "verify cwd",
-                "binary_path": "/usr/bin/true",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
             }),
             Some("mcp-unbound"),
             unbound_hint.as_deref(),
@@ -14838,7 +14861,7 @@ mod tests {
                 "action": "spawn",
                 "prompt": "hello",
                 "binary_path": LONG_LIVED_TEST_BINARY,
-                "cwd": "/tmp",
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some("mcp-orch"),
         );
@@ -14898,7 +14921,7 @@ mod tests {
                 "name": "linux-primary",
                 "prompt": "hello",
                 "binary_path": LONG_LIVED_TEST_BINARY,
-                "cwd": "/tmp",
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some("mcp-orch"),
         );
@@ -15010,7 +15033,7 @@ mod tests {
                 "action": "spawn",
                 "name": "   ",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
             }),
             None,
         );
@@ -15041,7 +15064,7 @@ mod tests {
                 "action": "spawn",
                 "prompt": "hello",
                 "binary_path": LONG_LIVED_TEST_BINARY,
-                "cwd": "/tmp",
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some("mcp-orch"),
         );
@@ -15080,8 +15103,8 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
-                "cwd": "/tmp",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some("mcp-anon"),
         );
@@ -15334,7 +15357,7 @@ mod tests {
                 "action": "spawn",
                 "prompt": "hello",
                 "binary_path": LONG_LIVED_TEST_BINARY,
-                "cwd": "/tmp",
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some("mcp-orch"),
         );
@@ -15405,7 +15428,7 @@ mod tests {
                 "action": "spawn",
                 "prompt": "hello",
                 "binary_path": LONG_LIVED_TEST_BINARY,
-                "cwd": "/tmp",
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some(parent_mcp),
         );
@@ -15507,7 +15530,7 @@ mod tests {
                 "action": "spawn",
                 "prompt": "report with agent send",
                 "binary_path": LONG_LIVED_TEST_BINARY,
-                "cwd": "/tmp",
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some(parent_mcp),
         );
@@ -15547,8 +15570,8 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
-                "cwd": "/tmp",
+                "binary_path": SHORT_LIVED_TEST_BINARY,
+                "cwd": TEST_SPAWN_CWD,
             }),
             Some(mcp),
         );

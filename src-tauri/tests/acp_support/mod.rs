@@ -81,6 +81,21 @@ pub fn fixture_agent() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_tuic-acp-fixture-agent"))
 }
 
+/// An absolute path on this host, written once in `/` form.
+///
+/// The ACP launch checks its paths with `Path::is_absolute`, which answers for
+/// the host and is right to: the ego binary and the worktree are on this
+/// machine. On Windows a leading `/` is merely rooted, so a POSIX-spelled path
+/// is rejected there before a test reaches its subject.
+#[must_use]
+pub fn absolute(path: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{}", path.replace('/', "\\")))
+    } else {
+        PathBuf::from(path)
+    }
+}
+
 /// A session request for one directory and nothing else.
 #[must_use]
 pub fn authority(cwd: PathBuf) -> AcpSessionAuthority {

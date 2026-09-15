@@ -84,6 +84,20 @@ pub(crate) fn normalize_newlines(output: &str) -> String {
     output.replace("\r\n", "\n")
 }
 
+/// A command that replays a file's bytes into the PTY it is spawned on.
+///
+/// The tests that drive a real PTY need a specific byte stream, and spelling
+/// that stream as a shell script means writing it twice — once in `sh`, once in
+/// `cmd`, which has neither `printf` nor `seq`. Writing the bytes from Rust and
+/// playing them back keeps one spelling and tests the same stream everywhere.
+pub(crate) fn replay_file_command(path: &std::path::Path) -> portable_pty::CommandBuilder {
+    let (shell, flag) = host_shell();
+    let mut command = portable_pty::CommandBuilder::new(shell);
+    command.arg(flag);
+    command.arg(print_file_script(&format!("\"{}\"", path.display())));
+    command
+}
+
 /// A path with `/` separators, whatever the host used. Tests spell the suffix
 /// or fragment they expect once, in the form every platform can read, and
 /// compare against this rather than against two spellings.
