@@ -745,7 +745,8 @@ empty result.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `play_notification_sound` | `sound, volume, device?` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) on `device`, or the system default; every tone releases to zero and drains a short silent tail before the output stream closes |
+| `play_notification_sound` | `sound, volume, device, choice` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) at the given volume/device. `choice` selects the source: the sound's own default tone, another sound's tone borrowed as a preset, or a user-supplied audio file (`choice.preset == "custom"`, decoded via `rodio::Decoder`). Fire-and-forget like every other failure mode here — an unopenable/undecodable custom file falls back to the default tone (logged, not surfaced), it never errors. Every tone releases to zero and drains a short silent tail before the output stream closes. HTTP twin `POST /system/notification-sound` honours a borrowed preset but plays the default tone for `custom` |
+| `list_audio_output_devices` | -- | `Vec<AudioOutputDevice>` | Enumerate available audio output devices, marking the system default (enumeration runs off the async worker with a timeout; HTTP twin `GET /audio/output-devices`) |
 | `block_sleep` | -- | `()` | Prevent system sleep |
 | `unblock_sleep` | -- | `()` | Allow system sleep |
 
@@ -1120,3 +1121,20 @@ Unavailable detached registrations are excluded from automatic orphan cleanup in
 ### Append-only story notes
 
 `add_note` and `list_notes` use the same shared story service on all transports. Notes retain backend actor/time and the subject revision without advancing it. Optional `{runId, commandId}` receipt references are validated against the same project and plan. See [Native stories in the HTTP API](http-api.md#append-only-story-notes) for fields, replies, bounds, and append-only semantics.
+
+## macOS Finder Service (`finder_service.rs`)
+
+Desktop-only (`INTENTIONALLY_UNMAPPED` in `src/transport/commandTable.ts` — no HTTP equivalent; installing a
+local Finder menu item is meaningless for a browser/remote client). See
+[Finder integration](../user-guide/finder-integration.md) for the user-facing behavior and section
+17.4.2 of `FEATURES.md` for the placement ladder.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `get_finder_service_status` | -- | `{ installed: bool, prompt_dismissed: bool }` | Whether the "New TUICommander Tab Here" bundle is installed in `~/Library/Services/`, and whether the first-run prompt has already been dismissed |
+| `install_finder_service` | -- | `Result<(), String>` | Copy the bundled `.workflow` into `~/Library/Services/`, ad-hoc code-sign it (best-effort — a signing failure doesn't fail the install), and flush the Services menu cache (`pbs -flush`) |
+| `uninstall_finder_service` | -- | `Result<(), String>` | Remove the bundle from `~/Library/Services/`, if present (no-op success if already absent) |
+| `dismiss_finder_service_prompt` | -- | `()` | Persist that the first-run prompt was dismissed, so it is never shown again |
+
+Non-macOS builds: `get_finder_service_status` reports `installed: false`; `install_finder_service`
+returns an error; `uninstall_finder_service`/`dismiss_finder_service_prompt` are no-ops.

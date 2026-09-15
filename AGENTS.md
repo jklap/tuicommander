@@ -330,6 +330,76 @@ Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform p
 
 **Terminal keydown vs. global shortcuts:** `keyToSequence()` (`src/components/Terminal/terminalInput.ts`) excludes `metaKey` but not `ctrlKey` from its printable-character PTY-forwarding fallback — so a global shortcut whose Windows/Linux form uses Ctrl+&lt;printable&gt; (macOS form: Cmd+&lt;printable&gt;) will be silently swallowed and typed into the terminal instead of bubbling to the document-level shortcut listener, unless the terminal's keydown handler explicitly bails out first (see `isGlobalShortcutPassthrough`, `terminalInput.ts`). When adding or rebinding a global shortcut that uses Ctrl/Cmd + a printable key, verify the Windows/Linux (Ctrl) form is special-cased the same way.
 
+## macOS Finder Service ("New TUICommander Tab Here")
+
+Right-click a folder/file in Finder → a terminal pane opens there via a placement ladder (owning
+repo/worktree → active repo → ask the user). Chain: Finder → the bundle's shell action → `tuic
+open-here <paths...>` → `tuic://open-terminal` deep link. See `docs/user-guide/finder-integration.md`
+and `FEATURES.md` §17.4.2 for user-facing behavior; `docs/sync-matrix.md`'s matching row for what to
+update when touching it.
+
+**The Service bundle (`src-tauri/services/*.workflow/`) is a hand-authored Automator document, not
+Automator-generated — verify any change to it with the `automator` CLI, not just `plutil -lint`.**
+`plutil -lint` only proves the plist is well-formed XML; it says nothing about whether Automator's
+runtime will actually execute the workflow. The `automator` CLI (ships with macOS) runs a `.workflow`
+bundle directly and is the fastest way to prove a change actually works, fully scriptable, no Finder
+GUI or right-click needed:
+```bash
+# single item
+automator -i /path/to/folder "src-tauri/services/New TUICommander Tab Here.workflow"
+# multiple items (the -i flag only takes one; use -i - with newline-separated stdin for a selection)
+printf '%s\n%s\n' /path/one /path/two | automator -i - "src-tauri/services/New TUICommander Tab Here.workflow"
+```
+This is how the shipped bundle was actually verified (single item, multi-item selection, and a plain
+file) before being committed — not just plist-linted. Reuse this technique for any future Automator
+Service/Quick Action work in this repo rather than reasoning about the `.wflow` schema from memory.
+
+**`automator -i` passing does NOT mean the Service works from Finder's real right-click menu — it
+bypasses Gatekeeper's Services-menu dispatch entirely.** A 2026-09-14 bug report ("The Service cannot
+be run because it is not configured correctly" from a real Finder right-click) traced to the
+installed bundle having no code signature at all (`codesign -dv` → "code object is not signed at
+all"), which Gatekeeper (`spctl --status` → assessments enabled) rejects when Finder's Services
+menu dispatches a third-party Automator "Run Shell Script" action — but `automator -i` against the
+same unsigned bundle runs it just fine, because it never goes through that Gatekeeper-gated path.
+Fixed in `finder_service.rs`'s `install_into`: ad-hoc sign the bundle right after copying it
+(`/usr/bin/codesign --force --deep --sign -` — absolute path, matching the sibling `pbs` call in
+this same file), best-effort so a missing `codesign` or an unsignable bundle never fails the
+install (though the caller now logs whether signing actually succeeded alongside the "Finder
+Service installed" line, so a real failure isn't only a buried separate warning). **`--deep` is
+required, not just defensive** — a `/code-review` pass suggested dropping it per Apple's TN2206
+guidance (which generally warns against `--deep` for developer-authored signing), but testing a
+fresh copy without it fails outright: `codesign` reports the bundle as still "not signed at all",
+naming `Contents/document.wflow` as an unsigned "subcomponent" it refuses to seal without `--deep`.
+If you touch this signing step again, verify any change against a fresh copy of the real bundle,
+not just the guidance's general advice. If you change this bundle again, `automator -i` proves the
+workflow logic is correct, but only a real Finder right-click (or `codesign -dv` on the installed
+copy showing a signature) proves it will actually run from the Services menu.
+
+**A stale second copy of TUICommander.app sharing the same bundle id silently breaks every
+`tuic://` deep link (including `open-here`) while showing no error at all.** Also found
+2026-09-14: with both `/Applications/TUICommander.app` (an older install) and a locally-built
+`make dev`/release copy present on disk, both registered `com.tuic.commander` /
+`CFBundleURLSchemes: [tuic]` with Launch Services, and macOS resolved `open 'tuic://...'` (which
+is exactly what `tuic open-here`/`tuic_cli::open_deep_link` calls) to the stale copy instead of
+the one actually running — the URL was silently dropped, with zero log output on either the Rust
+or frontend side, even for a deep link that should trigger the JS handler's "unrecognised command"
+warning. Confirmed via `open -a <the exact running app bundle path> 'tuic://...'`, which delivered
+and logged instantly, proving the deep-link plumbing itself was never the problem. This is an
+install-hygiene issue, not a code bug, and there's no code fix for it — if a `tuic://` link (or
+the Finder Service, which goes through the same CLI call) appears to silently do nothing while the
+app is definitely running, check for a duplicate `TUICommander.app` elsewhere (`/Applications` is
+the usual culprit next to a dev build) before assuming the deep-link code regressed. See "Test
+instance vs orchestrator instance" above — routinely running a second instance for testing is this
+repo's normal workflow, which is exactly what makes this collision easy to hit by accident.
+
+**`tuic://open-terminal` deliberately has no confirmation dialog**, unlike `open-repo`'s unknown-path
+branch. This was a considered decision, not an oversight — do not "fix" it by adding one. Rationale:
+spawning a pane starts an idle shell and executes nothing; `tuic new` already has zero confirmation
+for the same reason; and both the CLI and the frontend deep-link handler independently cap at 5 panes
+per invocation, so a crafted/repeated link can't fan out unboundedly. The one outcome that DOES mutate
+persistent state — registering a new repo — is only reachable through an explicit click on the
+picker dialog's "Add this folder as a repository" button; that click is the confirmation.
+
 ## Global Focus/Keyboard Handlers Must Check `anyModalOpen()`
 
 `useKeyboardRedirect.ts` (forwards printable keys to the active terminal
@@ -1019,6 +1089,54 @@ See [`docs/release-checklist.md`](docs/release-checklist.md) for version bump, t
 ## Implementation Memory
 
 After non-trivial implementations, write an mdkb `memory_write` entry. Content: **Goal**, **Approach**, **Outcome**, **Gotchas**, **Rejected alternatives**. Skip file lists (mdkb indexes code). Focus on non-obvious insights a future session can't derive from reading the code. Search existing memories first to avoid duplicates.
+
+## Notification Sound Playback (`rodio` decoder features, custom-file fallback)
+
+`notification_sound.rs` generates its built-in tones procedurally (`EnvelopedTone`,
+a custom `Source` impl) — this needs only rodio's `playback` feature. **Playing a
+user-supplied audio file (`rodio::Decoder`) is a separate capability that needs
+its own Cargo features.** `src-tauri/Cargo.toml`'s `rodio` dependency sets
+`default-features = false`, so `Decoder::new(...)` compiles but silently has zero
+format backends registered — every file fails to decode — unless the relevant
+feature is explicitly listed. Currently enabled: `wav`, `mp3`, `vorbis` (ogg),
+`flac`. Adding support for another container (e.g. `mp4`/m4a-aac) means adding
+that feature to the `rodio = { ... features = [...] }` line, not just writing
+Rust code that calls `Decoder::new` and expecting it to work.
+
+**A custom sound file that fails to open/decode MUST still play something —
+the sound's own default tone — never propagate an error that silences the
+notification entirely.** `resolve_playback_source` (not `play()`/
+`play_notification_sound` themselves, which are plain fire-and-forget with no
+return value) owns this fallback: it only ever returns `PlaybackSource::Custom`
+when the file opened and decoded successfully, logging a warning and falling
+through to `PlaybackSource::Sequence` (the sound's default tone) for every
+other case — missing file, corrupt/unsupported format, or "custom" selected
+with no path configured yet. A first version of this feature used `?` to
+propagate `open_custom_sound`'s error straight out of `play()`, which a code
+review caught as a real regression: it meant a moved/deleted/corrupted custom
+file made that notification silent forever, directly contradicting the
+feature's own shipped docs. The lesson generalizes — a graceful-fallback
+promise ("falls back to X" in a commit message or docs) needs a test that
+actually exercises the fallback path end-to-end (what plays when the primary
+source fails), not just a test that the function "doesn't return Err."
+
+**`SoundChoice.preset` is a plain `String`, not a Rust enum, in both
+`config.rs` (persisted config) and `notification_sound.rs` (the IPC command's
+own copy) — deliberately.** The frontend (`src/notifications.ts`'s
+`SoundPreset` union) is the sole source of truth for which preset names are
+valid; both Rust sides just pattern-match known strings and fall back to that
+sound's own default tone for anything unrecognized. This was a direct
+reaction to fixing a real bug the same day: `src/plugins/types.ts`'s
+`NOTIFICATION_SOUNDS` had silently drifted out of sync with the other two
+definitions of the *sound name* enum (missing `"attention"` entirely). Adding
+a second enum-typed concept (*preset* choice) duplicated across Rust and TS
+would recreate the exact same drift risk one layer up. Don't "fix" this by
+introducing a `SoundPreset` Rust enum matching the TS one — instead, where a
+string→string mapping needs real drift protection (e.g. `preset_name_for` /
+`TOAST_SOUNDS`), match *from* the enum *to* the string with an exhaustive
+`match` and no `_` arm, so a new `NotificationSound` variant fails to compile
+until every such mapping is updated — cheaper than a runtime parity test and
+catches the gap before it ships, not after.
 
 ## Accepted Security Decisions
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isNotificationSound, NOTIFICATION_SOUNDS, type NotificationConfig } from "../notifications";
 
 // Mock the invoke module — NotificationManager delegates to Rust
 vi.mock("../invoke", () => ({
@@ -49,6 +50,7 @@ describe("NotificationManager", () => {
 				sound: "question",
 				volume: 0.5,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 
@@ -81,6 +83,7 @@ describe("NotificationManager", () => {
 				sound: "completion",
 				volume: 0.5,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 
@@ -118,6 +121,7 @@ describe("NotificationManager", () => {
 				sound: "completion",
 				volume: 0.8,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
 		});
 
@@ -134,7 +138,76 @@ describe("NotificationManager", () => {
 				sound: "completion",
 				volume: 0.8,
 				device: null,
+				choice: { preset: "default", custom_path: null },
 			});
+		});
+
+		it("forwards a configured audio_device to Rust", async () => {
+			manager.updateConfig({ audio_device: "USB Speakers" });
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledWith("play_notification_sound", {
+				sound: "question",
+				volume: 0.5,
+				device: "USB Speakers",
+				choice: { preset: "default", custom_path: null },
+			});
+		});
+	});
+
+	describe("exponential backoff", () => {
+		it("backs off after 3 consecutive failures, then recovers once the window passes", async () => {
+			mockInvoke
+				.mockRejectedValueOnce(new Error("e1"))
+				.mockRejectedValueOnce(new Error("e2"))
+				.mockRejectedValueOnce(new Error("e3"));
+
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(2);
+
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(3); // 3rd failure arms the 5s backoff
+
+			// Still well within the 5s backoff window — invoke must not even be attempted.
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(3);
+
+			// Past the 5s window — resumes attempting.
+			await vi.advanceTimersByTimeAsync(4500);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(4);
+		});
+
+		it("resets the failure count after a successful play, so a later run of failures re-arms from 3, not cumulatively", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("e1")).mockRejectedValueOnce(new Error("e2"));
+
+			await manager.play("question"); // failure 1
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question"); // failure 2 — still below the 3-failure threshold
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question"); // succeeds (default mock), resets consecutiveFailures to 0
+			expect(mockInvoke).toHaveBeenCalledTimes(3);
+
+			mockInvoke
+				.mockRejectedValueOnce(new Error("e4"))
+				.mockRejectedValueOnce(new Error("e5"))
+				.mockRejectedValueOnce(new Error("e6"));
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question"); // 3rd fresh failure — arms backoff again
+			expect(mockInvoke).toHaveBeenCalledTimes(6);
+
+			await vi.advanceTimersByTimeAsync(600);
+			await manager.play("question");
+			expect(mockInvoke).toHaveBeenCalledTimes(6); // backed off, not a 7th attempt
 		});
 	});
 
@@ -195,10 +268,64 @@ describe("NotificationManager", () => {
 			expect(manager.getConfig().volume).toBe(0.5);
 		});
 
+		it("setSoundChoice updates only the given sound's choice", () => {
+			manager.setSoundChoice("question", { preset: "attention", custom_path: null });
+			expect(manager.getConfig().sound_choices.question).toEqual({ preset: "attention", custom_path: null });
+			expect(manager.getConfig().sound_choices.error).toEqual({ preset: "default", custom_path: null });
+		});
+
+		it("setSoundChoice's choice is forwarded on the next play()", async () => {
+			manager.setSoundChoice("error", { preset: "custom", custom_path: "/Users/me/ding.wav" });
+			await manager.play("error");
+			expect(mockInvoke).toHaveBeenCalledWith("play_notification_sound", {
+				sound: "error",
+				volume: 0.5,
+				device: null,
+				choice: { preset: "custom", custom_path: "/Users/me/ding.wav" },
+			});
+		});
+
 		it("updateConfig merges config", () => {
 			manager.updateConfig({ volume: 0.9, enabled: false });
 			expect(manager.getConfig().volume).toBe(0.9);
 			expect(manager.getConfig().enabled).toBe(false);
+		});
+
+		it("updateConfig shallow-merges: a partial `sounds` patch replaces the whole map, not just the given keys", () => {
+			// Documents current behavior as a guardrail. `NotificationConfig["sounds"]` is
+			// currently a flat Record<NotificationSound, boolean> so no real caller passes a
+			// partial `sounds` object today — but a future per-sound field (e.g. a custom
+			// sound-source override) is exactly the kind of nested value this shallow merge
+			// would silently corrupt. If this test starts failing because updateConfig grew
+			// a deep merge, that's fine — update it; the point is a future regression here
+			// must be a deliberate change, not a silent one.
+			manager.updateConfig({ sounds: { question: false } as unknown as NotificationConfig["sounds"] });
+			const sounds = manager.getConfig().sounds;
+			expect(sounds.question).toBe(false);
+			expect(sounds.error).toBeUndefined();
+			expect(sounds.completion).toBeUndefined();
+		});
+	});
+
+	describe("isNotificationSound()", () => {
+		it("accepts every known sound name", () => {
+			for (const sound of NOTIFICATION_SOUNDS) {
+				expect(isNotificationSound(sound)).toBe(true);
+			}
+		});
+
+		it("rejects unknown strings", () => {
+			expect(isNotificationSound("bogus")).toBe(false);
+			expect(isNotificationSound("")).toBe(false);
+			expect(isNotificationSound("Question")).toBe(false); // case-sensitive
+		});
+
+		it("rejects non-string values", () => {
+			expect(isNotificationSound(null)).toBe(false);
+			expect(isNotificationSound(undefined)).toBe(false);
+			expect(isNotificationSound(42)).toBe(false);
+			expect(isNotificationSound({})).toBe(false);
+			expect(isNotificationSound(["question"])).toBe(false);
 		});
 	});
 
@@ -271,5 +398,86 @@ describe("browser attention sound", () => {
 		expect(starts.slice(1).map((time, index) => Math.round((time - stops[index]) * 1000))).toEqual([50, 50]);
 		expect(oscillators.map((oscillator) => oscillator.frequency.value)).toEqual([392, 392, 659]);
 		expect(oscillators.map((oscillator) => oscillator.type)).toEqual(["triangle", "triangle", "triangle"]);
+	});
+});
+
+describe("browser preset resolution (Web Audio fallback)", () => {
+	const originalTauriInternals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+	const originalTauriShim = (globalThis as Record<string, unknown>).__TAURI_SHIM__;
+
+	afterEach(() => {
+		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = originalTauriInternals;
+		if (originalTauriShim === undefined) {
+			delete (globalThis as Record<string, unknown>).__TAURI_SHIM__;
+		} else {
+			(globalThis as Record<string, unknown>).__TAURI_SHIM__ = originalTauriShim;
+		}
+		vi.unstubAllGlobals();
+	});
+
+	function stubAudioContext() {
+		const oscillators: Array<{ frequency: { value: number }; type: OscillatorType }> = [];
+		vi.stubGlobal(
+			"AudioContext",
+			class {
+				currentTime = 0;
+				state = "running";
+				destination = {};
+				resume = vi.fn();
+				createGain = () => ({ gain: { value: 0 }, connect: vi.fn() });
+				createOscillator = () => {
+					const osc = {
+						frequency: { value: 0 },
+						type: "sine" as OscillatorType,
+						connect: vi.fn(),
+						start: vi.fn(),
+						stop: vi.fn(),
+						onended: null as (() => void) | null,
+					};
+					oscillators.push(osc);
+					return osc;
+				};
+			},
+		);
+		return oscillators;
+	}
+
+	it("a preset borrowed from another sound plays THAT sound's tone frequencies", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
+		const oscillators = stubAudioContext();
+		vi.resetModules();
+
+		const { NotificationManager } = await import("../notifications");
+		const manager = new NotificationManager();
+		manager.setSoundChoice("question", { preset: "completion", custom_path: null });
+		await manager.play("question");
+
+		// "completion"'s own tone is [660, 880] — distinct from "question"'s own [880, 1100].
+		expect(oscillators.map((o) => o.frequency.value)).toEqual([660, 880]);
+	});
+
+	it("'custom' has no meaning in the browser — falls back to the sound's own tone", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
+		const oscillators = stubAudioContext();
+		vi.resetModules();
+
+		const { NotificationManager } = await import("../notifications");
+		const manager = new NotificationManager();
+		manager.setSoundChoice("question", { preset: "custom", custom_path: "/some/file.wav" });
+		await manager.play("question");
+
+		expect(oscillators.map((o) => o.frequency.value)).toEqual([880, 1100]);
+	});
+
+	it("'default' plays the sound's own tone, unchanged", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
+		const oscillators = stubAudioContext();
+		vi.resetModules();
+
+		const { NotificationManager } = await import("../notifications");
+		const manager = new NotificationManager();
+		await manager.play("error");
+
+		expect(oscillators.map((o) => o.frequency.value)).toEqual([440, 330]);
 	});
 });
