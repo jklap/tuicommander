@@ -2,19 +2,32 @@ import { type Component, createMemo, createSignal, For, onCleanup, Show } from "
 import { appLogger } from "../../stores/appLogger";
 import { type CommandBlock, terminalsStore } from "../../stores/terminals";
 import { onClickKeyDown } from "../../utils/a11y";
+import { evictionStableToGridRelative } from "../Terminal/canvasTerminalUtils";
 import s from "./CommandOverview.module.css";
 
 /** Extract command text from a block: prefer the turn-level `promptText` (the
  *  actual submitted prompt, from the backend's idle→busy edge) when present,
  *  falling back to slicing the grid between the row markers — the only text
- *  source a real shell block or the `⏺`-heuristic fallback has. */
+ *  source a real shell block or the `⏺`-heuristic fallback has. The grid-slice
+ *  fallback needs a real row to slice, so it's the one place in this file
+ *  that DOES care about `onAltScreen` — a block tagged `onAltScreen: true`
+ *  with no `promptText` (a plain shell command whose OSC 133 markers landed
+ *  on the alt screen) has no valid `commandLine`/`executionLine` to read.
+ *  `commandLine`/`executionLine` are eviction-stable (see `CommandBlock`'s doc
+ *  comment) — convert to `getBufferLines`'s grid-relative space before reading;
+ *  a row already evicted from scrollback converts to `null` and reads as empty. */
 async function getCommandText(termId: string, block: CommandBlock): Promise<string> {
 	if (block.promptText != null) return block.promptText;
+	if (block.onAltScreen) return "";
 	if (block.commandLine == null || block.executionLine == null) return "";
 	const term = terminalsStore.get(termId);
 	const ref = term?.ref;
 	if (!ref) return "";
-	const lines = await ref.getBufferLines(block.commandLine, block.executionLine);
+	const historyBase = ref.getHistoryBase();
+	const start = evictionStableToGridRelative(block.commandLine, historyBase);
+	const end = evictionStableToGridRelative(block.executionLine, historyBase);
+	if (start == null || end == null) return "";
+	const lines = await ref.getBufferLines(start, end);
 	return lines.join(" ").trim();
 }
 

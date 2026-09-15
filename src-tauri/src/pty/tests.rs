@@ -12220,7 +12220,7 @@ fn tuic_osc_state_transitions_shell_state() {
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
 
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 0, false, &state);
 
     let current = state
         .session_maps
@@ -12230,7 +12230,7 @@ fn tuic_osc_state_transitions_shell_state() {
         .load(std::sync::atomic::Ordering::Acquire);
     assert_eq!(current, SHELL_BUSY);
 
-    let _ = proc.handle_tuic_state("idle", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("idle", session_id, 0, false, &state);
     let current = state
         .session_maps
         .shell_states
@@ -12292,7 +12292,7 @@ fn handle_tuic_state_busy_edge_emits_agent_block_start_with_prompt_text() {
     );
 
     let proc = ChunkProcessor::new(None, None);
-    let (transitioned, block_event) = proc.handle_tuic_state("busy", session_id, 42, &state);
+    let (transitioned, block_event) = proc.handle_tuic_state("busy", session_id, 42, false, &state);
     assert!(transitioned, "idle->busy must be a real transition");
     match block_event {
         Some(ParsedEvent::AgentBlock {
@@ -12300,6 +12300,7 @@ fn handle_tuic_state_busy_edge_emits_agent_block_start_with_prompt_text() {
             line,
             exit_code,
             prompt_text,
+            ..
         }) => {
             assert_eq!(action, "start");
             assert_eq!(line, 42);
@@ -12315,9 +12316,9 @@ fn handle_tuic_state_idle_edge_emits_agent_block_end_with_no_flag() {
     let session_id = "test-block-end";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
 
-    let (transitioned, block_event) = proc.handle_tuic_state("idle", session_id, 55, &state);
+    let (transitioned, block_event) = proc.handle_tuic_state("idle", session_id, 55, false, &state);
     assert!(transitioned, "busy->idle must be a real transition");
     match block_event {
         Some(ParsedEvent::AgentBlock {
@@ -12342,10 +12343,10 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
     let session_id = "test-block-end-flagged";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
     state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
 
-    let (_, block_event) = proc.handle_tuic_state("idle", session_id, 55, &state);
+    let (_, block_event) = proc.handle_tuic_state("idle", session_id, 55, false, &state);
     match block_event {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -12362,8 +12363,8 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
     );
 
     // Next turn, with no new flag set, must not be flagged.
-    let _ = proc.handle_tuic_state("busy", session_id, 60, &state);
-    let (_, next_end) = proc.handle_tuic_state("idle", session_id, 65, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 60, false, &state);
+    let (_, next_end) = proc.handle_tuic_state("idle", session_id, 65, false, &state);
     match next_end {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -12385,8 +12386,8 @@ fn handle_tuic_state_busy_edge_clears_a_flag_that_arrived_too_late_for_the_previ
     let session_id = "test-stale-flag-race";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
-    let (_, end_event) = proc.handle_tuic_state("idle", session_id, 20, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
+    let (_, end_event) = proc.handle_tuic_state("idle", session_id, 20, false, &state);
     match end_event {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -12403,8 +12404,8 @@ fn handle_tuic_state_busy_edge_clears_a_flag_that_arrived_too_late_for_the_previ
 
     // Turn 2 starts — its busy edge must discard the stale flag rather
     // than letting it attach to turn 2's own idle transition.
-    let _ = proc.handle_tuic_state("busy", session_id, 30, &state);
-    let (_, turn2_end) = proc.handle_tuic_state("idle", session_id, 40, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 30, false, &state);
+    let (_, turn2_end) = proc.handle_tuic_state("idle", session_id, 40, false, &state);
     match turn2_end {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -12421,13 +12422,13 @@ fn handle_tuic_state_same_state_reaffirmation_emits_neither() {
     let session_id = "test-block-noop";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let (first, _) = proc.handle_tuic_state("busy", session_id, 10, &state);
+    let (first, _) = proc.handle_tuic_state("busy", session_id, 10, false, &state);
     assert!(first);
 
     // Simulates a redundant busy re-affirmation (e.g. the surviving
     // PostToolUse(AskUserQuestion|ExitPlanMode) entry): same target,
     // already busy — must be a no-op, not a second block start.
-    let (second, block_event) = proc.handle_tuic_state("busy", session_id, 20, &state);
+    let (second, block_event) = proc.handle_tuic_state("busy", session_id, 20, false, &state);
     assert!(
         !second,
         "same-state re-affirmation must not be a real transition"
@@ -12451,7 +12452,7 @@ fn tuic_osc_state_emits_shell_state_event() {
     let mut rx = state.event_bus.subscribe();
 
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 0, false, &state);
 
     let evt = rx.try_recv();
     assert!(
@@ -12481,7 +12482,7 @@ fn tuic_osc_state_unknown_verb_ignored() {
     );
 
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("thinking", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("thinking", session_id, 0, false, &state);
 
     let current = state
         .session_maps
@@ -15047,7 +15048,7 @@ fn cc_block_end_carries_next_header_line_not_previous_start() {
     // `endLine === promptLine`.
     let mut last = None;
     let rows = vec![header_row(3, "Read"), header_row(9, "Edit")];
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     assert_eq!(events.len(), 3);
     assert_eq!(agent_block(&events[0]), ("start", 103));
     assert_eq!(agent_block(&events[1]), ("end", 109));
@@ -15064,7 +15065,7 @@ fn cc_block_end_carries_next_header_line_not_previous_start() {
 fn cc_block_end_is_exclusive_so_fold_count_is_positive() {
     let mut last = Some(50);
     let rows = vec![header_row(4, "Bash")];
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     let end_line = events
         .iter()
         .find_map(|e| match e {
@@ -15079,7 +15080,7 @@ fn cc_block_end_is_exclusive_so_fold_count_is_positive() {
 #[test]
 fn cc_block_teardown_uses_cursor_line_not_block_start() {
     let mut last = Some(50);
-    let events = synthesize_cc_block_events(&[], 100, false, 180, &mut last);
+    let events = synthesize_cc_block_events(&[], 100, false, 180, false, &mut last);
     assert_eq!(events.len(), 1);
     assert_eq!(agent_block(&events[0]), ("end", 180));
     assert_eq!(last, None, "teardown must clear the dangling block");
@@ -15091,7 +15092,7 @@ fn cc_block_end_never_precedes_its_start_when_abs_lines_regress() {
     // row_index keeps cycling, so abs_line is not globally monotonic.
     let mut last = Some(200);
     let rows = vec![header_row(50, "Bash")]; // abs_line = 100 + 50 = 150 < 200
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     assert_eq!(events.len(), 2, "expected an end event and a start event");
     assert_eq!(
         agent_block(&events[0]),
@@ -15116,7 +15117,7 @@ fn cc_block_end_never_precedes_its_start_when_abs_lines_regress() {
 fn cc_block_dedups_repeated_header_on_same_line() {
     let mut last = Some(150);
     let rows = vec![header_row(50, "Bash")]; // abs_line = 100 + 50 = 150 == last
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     assert!(
         events.is_empty(),
         "repeated header on the same line must not re-start"
@@ -15127,7 +15128,7 @@ fn cc_block_dedups_repeated_header_on_same_line() {
 #[test]
 fn cc_block_teardown_with_no_active_block_emits_nothing() {
     let mut last = None;
-    let events = synthesize_cc_block_events(&[], 100, false, 180, &mut last);
+    let events = synthesize_cc_block_events(&[], 100, false, 180, false, &mut last);
     assert!(events.is_empty());
     assert_eq!(last, None);
 }
@@ -18577,4 +18578,457 @@ fn declared_background_work_alone_makes_agent_state_working() {
         !snapshot.background_work,
         "OS-level flag must stay untouched"
     );
+}
+
+/// Fullscreen-mode fix: a busy/idle edge that lands while the alternate
+/// screen buffer is active (Claude Code's default renderer) must still
+/// emit its `AgentBlock` (so `CommandOverview`'s prompt/duration/exit
+/// metadata keeps working) but tag it `on_alt_screen: true` so
+/// row-anchored consumers (gutter, scrollbar, fold, jump-nav) know `line`
+/// is not a valid scrollback anchor.
+#[test]
+fn handle_tuic_state_alt_screen_active_tags_both_start_and_end() {
+    let session_id = "test-block-alt-screen";
+    let state = setup_idle_session(session_id);
+    state
+        .session_maps
+        .last_prompts
+        .insert(session_id.to_string(), "do the thing".to_string());
+    let proc = ChunkProcessor::new(None, None);
+
+    let (_, start_event) = proc.handle_tuic_state("busy", session_id, 3, true, &state);
+    match start_event {
+        Some(ParsedEvent::AgentBlock {
+            action,
+            prompt_text,
+            on_alt_screen,
+            ..
+        }) => {
+            assert_eq!(action, "start");
+            assert!(
+                on_alt_screen,
+                "a busy edge recorded during fullscreen mode must be tagged"
+            );
+            // Metadata must still be populated — CommandOverview depends on it.
+            assert_eq!(prompt_text, Some("do the thing".to_string()));
+        }
+        other => panic!("expected AgentBlock start, got {other:?}"),
+    }
+
+    let (_, end_event) = proc.handle_tuic_state("idle", session_id, 1, true, &state);
+    match end_event {
+        Some(ParsedEvent::AgentBlock {
+            action,
+            on_alt_screen,
+            ..
+        }) => {
+            assert_eq!(action, "end");
+            assert!(
+                on_alt_screen,
+                "the matching idle edge must be tagged too, even though \
+                 its `line` (1) is numerically less than the start \
+                 edge's `line` (3) — non-monotonic `line` values across \
+                 a single block are exactly what alt-screen tagging \
+                 exists to make safe to ignore downstream"
+            );
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+}
+
+/// A block that starts on the primary screen but whose matching idle
+/// edge lands after the agent has entered fullscreen mode mid-turn must
+/// still tag only the mistagged (alt-screen) half — the start event,
+/// already emitted and consumed by the frontend, is not retroactively
+/// touched. This documents the current, correct behavior: each edge is
+/// tagged independently, at the instant it is observed.
+#[test]
+fn handle_tuic_state_tags_each_edge_independently_across_a_screen_transition() {
+    let session_id = "test-block-mixed-screen";
+    let state = setup_idle_session(session_id);
+    let proc = ChunkProcessor::new(None, None);
+
+    let (_, start_event) = proc.handle_tuic_state("busy", session_id, 10, false, &state);
+    assert!(
+        matches!(
+            start_event,
+            Some(ParsedEvent::AgentBlock {
+                on_alt_screen: false,
+                ..
+            })
+        ),
+        "start observed on the primary screen must not be tagged"
+    );
+
+    let (_, end_event) = proc.handle_tuic_state("idle", session_id, 4, true, &state);
+    assert!(
+        matches!(
+            end_event,
+            Some(ParsedEvent::AgentBlock {
+                on_alt_screen: true,
+                ..
+            })
+        ),
+        "end observed after entering fullscreen mode must be tagged"
+    );
+}
+
+/// Fullscreen-mode fix: `on_alt_screen` is tagged on every event this
+/// fallback emits — start, the end that closes a previous block, and the
+/// teardown-close path — not just the primary-screen case every other
+/// test in this group exercises.
+#[test]
+fn cc_block_alt_screen_tags_start_end_and_teardown() {
+    let mut last = None;
+    let rows = vec![header_row(3, "Read"), header_row(9, "Edit")];
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, true, &mut last);
+    assert_eq!(events.len(), 3, "start, end, start");
+    for evt in &events {
+        match evt {
+            ParsedEvent::AgentBlock { on_alt_screen, .. } => {
+                assert!(*on_alt_screen, "every synthesized event must be tagged")
+            }
+            other => panic!("expected AgentBlock, got {other:?}"),
+        }
+    }
+
+    // Teardown-close path (agent_active flips false) must tag too.
+    let events = synthesize_cc_block_events(&[], 100, false, 180, true, &mut last);
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        ParsedEvent::AgentBlock {
+            action,
+            on_alt_screen,
+            ..
+        } => {
+            assert_eq!(action, "end");
+            assert!(*on_alt_screen);
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+}
+
+fn dump_row(row_index: usize, text: &str) -> ChangedRow {
+    ChangedRow {
+        row_index,
+        text: text.to_string(),
+    }
+}
+
+#[test]
+fn transcript_dump_requires_claude_and_hook_instrumentation() {
+    let rows = vec![dump_row(0, "\u{276F} do the thing")];
+    let mut last = None;
+
+    // Wrong agent type.
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("codex"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert!(events.is_empty());
+
+    // Not hook-instrumented.
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        false,
+        200,
+        &mut last,
+        false,
+    );
+    assert!(events.is_empty());
+
+    // No agent type at all.
+    let events =
+        synthesize_transcript_dump_block_events(&rows, 100, None, true, 200, &mut last, false);
+    assert!(events.is_empty());
+}
+
+/// Code-review finding: a still-open dump block must be closed the
+/// moment the gate stops holding (agent exits / hook state clears),
+/// mirroring `synthesize_cc_block_events`'s `!agent_active` teardown —
+/// otherwise `last_dump_block_line` stays `Some` forever and can
+/// mis-close whatever block opens next.
+#[test]
+fn transcript_dump_gate_dropping_closes_a_still_open_block() {
+    let rows = vec![dump_row(3, "\u{276F} do the thing")];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert_eq!(events.len(), 1, "opens the block");
+    assert!(last.is_some());
+
+    // Gate drops (agent exited / hook state cleared) before any `done`
+    // marker ever appeared on screen.
+    let events =
+        synthesize_transcript_dump_block_events(&[], 100, None, true, 250, &mut last, false);
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        ParsedEvent::AgentBlock {
+            action,
+            line,
+            on_alt_screen,
+            ..
+        } => {
+            assert_eq!(action, "end");
+            assert_eq!(*line, 250);
+            assert!(!on_alt_screen);
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+    assert_eq!(last, None, "must clear the tracker, not just emit an end");
+
+    // A later call with the gate still down must stay a no-op — nothing
+    // left to close.
+    let events =
+        synthesize_transcript_dump_block_events(&[], 100, None, true, 300, &mut last, false);
+    assert!(events.is_empty());
+}
+
+#[test]
+fn transcript_dump_prompt_line_starts_a_real_primary_screen_block() {
+    let rows = vec![dump_row(3, "\u{276F} do the thing")];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        ParsedEvent::AgentBlock {
+            action,
+            line,
+            prompt_text,
+            on_alt_screen,
+            new_dump_generation,
+            ..
+        } => {
+            assert_eq!(action, "start");
+            assert_eq!(*line, 103);
+            assert_eq!(prompt_text, &Some("do the thing".to_string()));
+            assert!(
+                !on_alt_screen,
+                "the dump is real primary-screen content, never alt-screen"
+            );
+            assert!(
+                !new_dump_generation,
+                "is_new_generation was false, so this must not signal a prune"
+            );
+        }
+        other => panic!("expected AgentBlock start, got {other:?}"),
+    }
+    assert_eq!(last, Some(103));
+}
+
+/// Scrollback-ring eviction fix's sibling for #11: `is_new_generation:
+/// true` (a visit back to the alternate screen since the last dump
+/// activity) must tag exactly the first `start` event with
+/// `new_dump_generation: true` — the signal the frontend prunes stale
+/// dump blocks on — and never a later one in the same chunk.
+#[test]
+fn transcript_dump_new_generation_tags_only_the_first_start_event() {
+    let rows = vec![
+        dump_row(3, "\u{276F} first turn"),
+        dump_row(9, "\u{276F} second turn"),
+    ];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        true,
+    );
+    assert_eq!(events.len(), 3, "start, end, start");
+    let generation_flags: Vec<bool> = events
+        .iter()
+        .map(|e| match e {
+            ParsedEvent::AgentBlock {
+                new_dump_generation,
+                ..
+            } => *new_dump_generation,
+            _ => panic!("expected AgentBlock"),
+        })
+        .collect();
+    assert_eq!(
+        generation_flags,
+        vec![true, false, false],
+        "only the very first start event may carry the signal"
+    );
+}
+
+/// `is_new_generation: false` (no alternate-screen visit since the last
+/// dump activity — e.g. the dump is still being incrementally repainted)
+/// must never tag anything, even the first event.
+#[test]
+fn transcript_dump_no_new_generation_when_not_flagged() {
+    let rows = vec![dump_row(3, "\u{276F} first turn")];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        ParsedEvent::AgentBlock {
+            new_dump_generation,
+            ..
+        } => assert!(!new_dump_generation),
+        other => panic!("expected AgentBlock start, got {other:?}"),
+    }
+}
+
+#[test]
+fn transcript_dump_turn_end_marker_closes_the_open_block() {
+    let rows = vec![
+        dump_row(3, "\u{276F} do the thing"),
+        dump_row(6, "\u{273B} Churned for 1s \u{b7} done 1:54 AM"),
+    ];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert_eq!(events.len(), 2);
+    match &events[1] {
+        ParsedEvent::AgentBlock {
+            action,
+            line,
+            on_alt_screen,
+            ..
+        } => {
+            assert_eq!(action, "end");
+            assert_eq!(*line, 106);
+            assert!(!on_alt_screen);
+        }
+        other => panic!("expected AgentBlock end, got {other:?}"),
+    }
+    assert_eq!(last, None, "closing must clear the open-block tracker");
+}
+
+#[test]
+fn transcript_dump_second_prompt_closes_the_first_block_first() {
+    let rows = vec![
+        dump_row(3, "\u{276F} first turn"),
+        dump_row(9, "\u{276F} second turn"),
+    ];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert_eq!(events.len(), 3, "start, end, start");
+    let actions: Vec<&str> = events
+        .iter()
+        .map(|e| match e {
+            ParsedEvent::AgentBlock { action, .. } => action.as_str(),
+            _ => panic!("expected AgentBlock"),
+        })
+        .collect();
+    assert_eq!(actions, vec!["start", "end", "start"]);
+}
+
+#[test]
+fn transcript_dump_turn_end_with_no_open_block_is_a_noop() {
+    let rows = vec![dump_row(3, "\u{273B} Churned for 1s \u{b7} done 1:54 AM")];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert!(events.is_empty());
+}
+
+#[test]
+fn transcript_dump_prompt_detector_ignores_plain_output_lines() {
+    assert_eq!(transcript_dump_prompt_text("just some output"), None);
+    assert_eq!(transcript_dump_prompt_text("\u{23FA} Read(file.rs)"), None);
+    assert_eq!(transcript_dump_prompt_text("\u{276F} hello"), Some("hello"));
+}
+
+/// Edge cases: a bare `❯` with no trailing space (not the dump's own
+/// format, so it must not match) and `❯ ` with nothing after it (must
+/// match with an empty string, not panic on the slice).
+#[test]
+fn transcript_dump_prompt_detector_edge_cases() {
+    assert_eq!(transcript_dump_prompt_text("\u{276F}"), None);
+    assert_eq!(transcript_dump_prompt_text("\u{276F}no_space"), None);
+    assert_eq!(transcript_dump_prompt_text("\u{276F} "), Some(""));
+}
+
+/// An empty prompt (`❯ ` with nothing else on the line) must start a
+/// block with `prompt_text: None`, not `Some("")` — mirrors the
+/// heuristic fallback's own "no text source" convention rather than
+/// leaking an empty-but-present string into the frontend.
+#[test]
+fn transcript_dump_empty_prompt_text_becomes_none_not_empty_string() {
+    let rows = vec![dump_row(3, "\u{276F} ")];
+    let mut last = None;
+    let events = synthesize_transcript_dump_block_events(
+        &rows,
+        100,
+        Some("claude"),
+        true,
+        200,
+        &mut last,
+        false,
+    );
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        ParsedEvent::AgentBlock { prompt_text, .. } => {
+            assert_eq!(prompt_text, &None);
+        }
+        other => panic!("expected AgentBlock start, got {other:?}"),
+    }
+}
+
+#[test]
+fn transcript_dump_turn_end_detector_requires_both_glyph_and_marker() {
+    assert!(!is_transcript_dump_turn_end("just some output"));
+    assert!(!is_transcript_dump_turn_end(
+        "\u{273B} still working, no done marker yet"
+    ));
+    assert!(is_transcript_dump_turn_end(
+        "\u{273B} Churned for 1s \u{b7} done 1:54 AM"
+    ));
 }

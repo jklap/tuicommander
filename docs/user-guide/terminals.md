@@ -277,6 +277,12 @@ Two sources feed blocks, and a session only ever uses one:
 
 - **No marks at all** — the agent has no hook instrumentation installed and its output never
   produced a heuristic match either; marks require at least one detected block.
+- **No gutter/scrollbar marks, fold, jump-nav, or block-scoped search while the agent is
+  running** — if the agent is using a fullscreen renderer (Claude Code's default; check with
+  `/tui`), this is expected: a fullscreen TUI draws in the terminal's alternate screen buffer,
+  which never accumulates real scrollback, so there is no row to anchor a mark to. The block
+  still shows up in Command Overview with a live prompt/duration, and everything resumes
+  normally once the agent returns to a plain shell prompt.
 - **The fold gutter chevron doesn't appear** — Settings > Terminal > Blocks > Enable block
   folding is off, or the block hasn't closed yet (a still-running command has nothing to fold).
 - **No red tick on a real failure** — check whether the agent has hook instrumentation

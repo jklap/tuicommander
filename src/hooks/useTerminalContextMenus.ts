@@ -1,6 +1,7 @@
 import type { Setter } from "solid-js";
 import { AGENTS, type AgentType } from "../agents";
 import type { ContextMenuItem } from "../components/ContextMenu";
+import { evictionStableToGridRelative } from "../components/Terminal/canvasTerminalUtils";
 import { invoke } from "../invoke";
 import { getModifierSymbol } from "../platform";
 import { agentConfigsStore } from "../stores/agentConfigs";
@@ -9,7 +10,7 @@ import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
-import { terminalsStore } from "../stores/terminals";
+import { rowAnchoredBlocks, terminalsStore } from "../stores/terminals";
 import { buildAgentLaunchCommand } from "../utils/agentSession";
 import { writeClipboard } from "../utils/clipboard";
 import { keyFor } from "../utils/hotkey";
@@ -155,13 +156,24 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 			action: async () => {
 				const activeId = terminalsStore.state.activeId;
 				const term = activeId ? terminalsStore.get(activeId) : undefined;
-				const lastBlock = term?.commandBlocks[term.commandBlocks.length - 1];
+				// Skip back past any trailing alt-screen-tainted blocks (e.g. a
+				// Claude Code fullscreen session running after the last real shell
+				// block) — their executionLine/endLine are not valid buffer rows.
+				const anchoredBlocks = rowAnchoredBlocks(term?.commandBlocks ?? []);
+				const lastBlock = anchoredBlocks[anchoredBlocks.length - 1];
 				if (!term?.ref || !lastBlock || lastBlock.executionLine == null || lastBlock.endLine == null) return;
+				// executionLine/endLine are eviction-stable — convert to getBufferLines'
+				// grid-relative space; a row already evicted from scrollback converts to
+				// null, same as "no valid block" above.
+				const historyBase = term.ref.getHistoryBase();
+				const start = evictionStableToGridRelative(lastBlock.executionLine + 1, historyBase);
+				const end = evictionStableToGridRelative(lastBlock.endLine, historyBase);
+				if (start == null || end == null) return;
 				// The menu invokes this without awaiting it, so a rejected buffer read
 				// would surface as an unhandled rejection instead of a failed copy.
 				let lines: string[];
 				try {
-					lines = await term.ref.getBufferLines(lastBlock.executionLine + 1, lastBlock.endLine);
+					lines = await term.ref.getBufferLines(start, end);
 				} catch (e) {
 					appLogger.warn("terminal", "Copy Block Output failed to read the buffer", { error: String(e) });
 					return;
@@ -175,7 +187,8 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 			},
 			disabled: (() => {
 				const activeId = terminalsStore.state.activeId;
-				return !activeId || !terminalsStore.get(activeId)?.commandBlocks.length;
+				const blocks = activeId ? terminalsStore.get(activeId)?.commandBlocks : undefined;
+				return !blocks || rowAnchoredBlocks(blocks).length === 0;
 			})(),
 		},
 		{

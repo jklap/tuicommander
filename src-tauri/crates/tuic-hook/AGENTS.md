@@ -3,7 +3,9 @@
 Native sidecar TUICommander installs into an AI agent's own hook config (Claude
 Code, Gemini, Grok, Codex) to emit `OSC 7770;verb=payload` on busy/idle/awaiting/
 toolfail. See `docs/backend/tuic-hook.md` (human-facing CLI/derivation reference)
-and `hook-lifecycle.html` (repo root, tracked — full event→verb→feature diagram)
+and `plans/hook-lifecycle.html` (main checkout only, gitignored — NOT repo-root/
+tracked despite the name matching `agent-signal-architecture.html`'s style;
+confirmed absent from `git ls-files` 2026-09-15 — full event→verb→feature diagram)
 for the "what"; this file is the "how to work on this crate" for an agent.
 
 ## Build before you test the generator

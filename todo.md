@@ -120,31 +120,6 @@ listed here.
 - **Recommended priority:** P3 (cosmetic; not a regression, the field was always
   unwired).
 
-### tuic-hook's DERIVATIONS lookup is not scoped per agent
-- **Problem/opportunity:** `tuic-hook`'s `hook_event_name`-based derivation
-  (`src-tauri/crates/tuic-hook/src/main.rs`'s `DERIVATIONS` table) matches purely on
-  the event-name string, with no awareness of which agent (Claude/Gemini/Grok/Codex)
-  invoked it. Gemini's own event names "Notification" and "SessionEnd" are spelled
-  identically to two Claude `DERIVATIONS` entries. Currently harmless in practice
-  because Gemini's `agent_hook.rs` map still passes an explicit `--state` (which wins
-  over derivation), but if a future Gemini payload shape turns out to include a
-  `hook_event_name` field — unverified either way today — "Notification" would also
-  start emitting a `notify` scrape Gemini's map never asked for, silently contradicting
-  `main.rs`'s own doc comment that non-Claude agents "fall back to flags exactly as
-  before derivation existed." Locked down as a regression test
-  (`agent_hook.rs::golden_wire_output::gemini_notification_name_collision_with_claude_derivations_currently_leaks_a_scrape`)
-  documenting current behavior, not a fix.
-- **Proposed solution:** Either (a) scope `DERIVATIONS` lookups by a per-agent prefix/
-  namespace passed via a new flag, or (b) confirm Gemini/Grok/Codex hooks never send
-  `hook_event_name` and assert that in the same test, converting the "currently leaks"
-  framing into "structurally can't happen."
-- **Expected benefits:** Removes a latent cross-agent behavior leak before any agent
-  other than Claude is confirmed to send `hook_event_name`.
-- **Trade-offs:** Low urgency while no non-Claude agent has been confirmed to send this
-  field; (a) adds a small amount of plumbing for a currently-hypothetical case.
-- **Estimated complexity:** S–M.
-- **Recommended priority:** P3 (documented, tested, no live impact today).
-
 ### `TUIC_PTY_TTY` has no multi-pane disambiguation or device-path-staleness handling
 - **Problem/opportunity:** `TUIC_PTY_TTY` (stamped in
   `pty.rs::spawn_pty_pair_with_retry`, the sole injection point) is the primary

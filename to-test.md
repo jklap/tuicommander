@@ -5834,3 +5834,59 @@ path and passes a real `null` through for an unknown image id — in `transport.
   `repo action=worktree_setup_status path=<repo> branch=<branch>` via the `agent`/MCP tool surface) and
   confirm it transitions `running` → `completed` (or `not_configured` with no script), matching what the
   `worktree-setup-script-completed` event reports for the same worktree.
+
+## Command Blocks fullscreen-mode fix (2026-09-15)
+
+Root cause (verified live via a throwaway session and `terminal_grid.rs` unit tests, not just
+theorized): Claude Code's default fullscreen renderer draws in the alternate screen buffer, which
+never grows real scrollback for a fully-repainted TUI, so `line` values OSC 133/7770 compute
+during that time are transient on-screen cursor rows, not valid anchors. Fixed by tagging every
+`AgentBlock`/`Osc133Event` with `on_alt_screen`/`onAltScreen`, and filtering row-anchored consumers
+(gutter, scrollbar, fold, jump-nav, block-scoped search, "Copy Block Output") through the new
+`rowAnchoredBlocks()` helper (`terminals.ts`) — `CommandOverview` deliberately does not filter.
+This is a **Rust change** — it will not take effect in any already-running build (including the
+orchestrator instance this fix was developed inside) until rebuilt (`make build` or a `make dev`
+restart); do not restart the shared orchestrator to test this, per AGENTS.md's Dev Hot Reload
+section. All of the below needs a rebuilt build to check.
+
+- [ ] **Core fix** — open a fresh terminal tab, run `claude` (fullscreen renderer, the default),
+  send a couple of turns, then drop back to the shell (`/exit` or Ctrl+D). Confirm: no bogus
+  gutter marks, scrollbar ticks, or `Cmd+Shift+Up/Down` jump targets appear either during the
+  fullscreen session or once back at the shell prompt; `CommandOverview`'s row for that tab still
+  shows live prompt text/duration while the agent is fullscreen; running a real shell command
+  after exiting produces a normal, correctly-anchored block.
+- [ ] **Alt-screen re-entry** — with a plain alt-screen TUI (`vim`, `htop`, `less`) run inside a
+  hook-instrumented agent's session (or just inside a plain shell), confirm the same: no bogus
+  marks appear from whatever happens to print while that TUI has the alt screen, and shell blocks
+  before/after it stay correct.
+- [ ] **§5 transcript-dump reconstruction** — inside a fullscreen Claude Code session, press
+  `Ctrl+O` (transcript mode) then `[` (write to native scrollback). Confirm: gutter marks,
+  scrollbar ticks, fold, and `Cmd+Shift+Up/Down` jump-nav now populate against the dumped text,
+  anchored to the real prompt (`❯`) / turn-completion (`✻ ... · done`) lines; press `Esc` to
+  return to fullscreen and confirm nothing breaks. This only applies to a hook-instrumented Claude
+  Code session specifically (`agent_type == "claude"` — verified via the session's own state, not
+  guessed).
+- [ ] **§5/#11 transcript-dump de-duplication (2026-09-15 fix)** — repeat the `Ctrl+O`→`[` gesture
+  a second time in the same session (`Esc` back to the agent, `Ctrl+O`, `[` again). Confirm the
+  re-dumped copy does NOT leave a second, overlapping set of blocks: `Cmd+Shift+Up/Down` jump-nav
+  should only ever land on turns from the LATEST dump plus any real shell blocks from before the
+  first dump, never a duplicate of an earlier dump's turn. Previously flagged as a known, accepted
+  limitation ("note, do not fix"); fixed via `new_dump_generation`/`fromTranscriptDump` pruning
+  (`terminals.ts`'s `handleOsc133`, gated on a real alternate-screen visit between dumps).
+- [ ] **#6 scrollback-ring eviction fix (2026-09-15)** — needs a session with >10,000 lines of
+  real scrollback (`GRID_SCROLLBACK`, `state.rs`) to actually saturate the ring, so a short manual
+  session won't exercise it; the unit-level regression coverage
+  (`osc133_line_stays_eviction_stable_and_never_aliases_past_scrollback_saturation`,
+  `terminal_grid.rs`) is the practical verification for this one. If a long-running session with
+  heavy output is available, confirm gutter marks/scrollbar ticks/jump-nav for an OLD block don't
+  suddenly jump to a wrong row, and a NEW block recorded after heavy scrollback growth still
+  anchors correctly, once real eviction has occurred.
+- [ ] **§5 glyph-collision residual risk (code-review finding, assessed not fixed)** — the
+  transcript-dump detector opens a phantom block if an ordinary typed command at a bare shell
+  prompt happens to start with `❯ ` (some zsh themes, e.g. Pure/Spaceship, use this glyph) while
+  `agent_type` is still stuck at `"claude"` from a just-exited session. For the default zsh
+  auto-injected shell integration this window is roughly one prompt-redraw beat (the shell's own
+  OSC133 `A` marker clears `agent_type` almost immediately via `clear_agent_type_on_confirmed_shell`)
+  — with a `❯`-glyph zsh theme, exit Claude Code and immediately type an ordinary command at the
+  next prompt; confirm no phantom `AgentBlock`/`CommandOverview` entry appears for it. If one
+  does appear reproducibly (not just as a rare race), this needs a real fix, not just monitoring.

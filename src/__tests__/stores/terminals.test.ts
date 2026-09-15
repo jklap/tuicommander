@@ -1,5 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CommandBlock } from "../../stores/terminals";
+import { rowAnchoredBlocks } from "../../stores/terminals";
 import { makeTerminal, testInScope } from "../helpers/store";
+
+function makeBlock(overrides: Partial<CommandBlock> = {}): CommandBlock {
+	return {
+		promptLine: 0,
+		commandLine: null,
+		executionLine: null,
+		endLine: null,
+		exitCode: null,
+		startedAt: 0,
+		endedAt: null,
+		promptText: null,
+		onAltScreen: false,
+		fromTranscriptDump: false,
+		...overrides,
+	};
+}
 
 describe("terminalsStore", () => {
 	let store: typeof import("../../stores/terminals").terminalsStore;
@@ -151,6 +169,39 @@ describe("terminalsStore", () => {
 		});
 	});
 
+	describe('handleOsc133() "C" marker', () => {
+		it("sets activeBlock.executionLine when there's an active block", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 10);
+				store.handleOsc133(id, "C", 12);
+				expect(store.get(id)!.activeBlock?.executionLine).toBe(12);
+			});
+		});
+
+		it("records lastCommandExecAt (used to gate completion against false-busy)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				expect(store.get(id)!.lastCommandExecAt).toBeNull();
+				store.handleOsc133(id, "A", 10);
+				store.handleOsc133(id, "C", 12);
+				expect(store.get(id)!.lastCommandExecAt).not.toBeNull();
+			});
+		});
+
+		it("records lastCommandExecAt even with no active block", () => {
+			// A real command can execute without ever having seen "A" (e.g. a
+			// mid-session shell-integration install) — the timestamp must still
+			// be recorded, unlike executionLine which has nothing to attach to.
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "C", 12);
+				expect(store.get(id)!.lastCommandExecAt).not.toBeNull();
+				expect(store.get(id)!.activeBlock).toBeNull();
+			});
+		});
+	});
+
 	describe('handleOsc133() "B" marker', () => {
 		// The field real shell integration (shell_integration.rs) now populates via
 		// 133;B — previously untested end to end, even though "A"/"C"/"D" each have
@@ -182,6 +233,118 @@ describe("terminalsStore", () => {
 				store.handleOsc133(id, "B", 11);
 				expect(store.get(id)!.activeBlock).toBeNull();
 			});
+		});
+	});
+
+	describe("handleOsc133() onAltScreen tagging (fullscreen-mode fix)", () => {
+		it("defaults onAltScreen to false when the caller omits it", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 10);
+				expect(store.get(id)!.activeBlock?.onAltScreen).toBe(false);
+			});
+		});
+
+		it("tags a block started while the alternate screen is active", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 3, undefined, null, true);
+				expect(store.get(id)!.activeBlock?.onAltScreen).toBe(true);
+			});
+		});
+
+		it("OR's the flag onto the block on B/C/D rather than overwriting it — a", () => {
+			// block tainted by even one alt-screen marker must stay tainted even if
+			// a later marker for the same block lands back on the primary screen.
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 3, undefined, null, true);
+				store.handleOsc133(id, "B", 4, undefined, undefined, false);
+				expect(store.get(id)!.activeBlock?.onAltScreen).toBe(true);
+			});
+		});
+
+		it("does not taint a block whose markers all land on the primary screen", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.handleOsc133(id, "A", 3, undefined, null, false);
+				store.handleOsc133(id, "C", 5, undefined, undefined, false);
+				expect(store.get(id)!.activeBlock?.onAltScreen).toBe(false);
+			});
+		});
+
+		it("carries the flag through to the completed block on D", () => {
+			const rafCallbacks = new Map<number, FrameRequestCallback>();
+			let nextHandle = 0;
+			vi.stubGlobal(
+				"requestAnimationFrame",
+				vi.fn((cb: FrameRequestCallback) => {
+					nextHandle += 1;
+					rafCallbacks.set(nextHandle, cb);
+					return nextHandle;
+				}),
+			);
+			vi.stubGlobal("cancelAnimationFrame", vi.fn());
+			try {
+				testInScope(() => {
+					const id = store.add(makeTerminal());
+					store.handleOsc133(id, "A", 3, undefined, null, true);
+					store.handleOsc133(id, "D", 6, 0, undefined, true);
+					rafCallbacks.get(1)?.(0);
+					const blocks = store.get(id)!.commandBlocks;
+					expect(blocks[blocks.length - 1]?.onAltScreen).toBe(true);
+				});
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+	});
+
+	describe("rowAnchoredBlocks()", () => {
+		it("filters out blocks recorded on the alternate screen", () => {
+			const primary = { ...makeBlock(), promptLine: 1, onAltScreen: false };
+			const alt = { ...makeBlock(), promptLine: 2, onAltScreen: true };
+			expect(rowAnchoredBlocks([primary, alt])).toEqual([primary]);
+		});
+
+		it("returns everything when nothing is tainted", () => {
+			const a = { ...makeBlock(), promptLine: 1, onAltScreen: false };
+			const b = { ...makeBlock(), promptLine: 2, onAltScreen: false };
+			expect(rowAnchoredBlocks([a, b])).toEqual([a, b]);
+		});
+	});
+
+	describe("toggleBlockFold()", () => {
+		it("folds an unfolded promptLine", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.toggleBlockFold(id, 5);
+				expect(store.get(id)!.foldedBlocks.has(5)).toBe(true);
+			});
+		});
+
+		it("unfolds an already-folded promptLine", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.toggleBlockFold(id, 5);
+				store.toggleBlockFold(id, 5);
+				expect(store.get(id)!.foldedBlocks.has(5)).toBe(false);
+			});
+		});
+
+		it("tracks multiple folded blocks independently", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.toggleBlockFold(id, 5);
+				store.toggleBlockFold(id, 9);
+				expect(store.get(id)!.foldedBlocks).toEqual(new Set([5, 9]));
+				store.toggleBlockFold(id, 5);
+				expect(store.get(id)!.foldedBlocks).toEqual(new Set([9]));
+			});
+		});
+
+		it("is a no-op for an unknown terminal id", () => {
+			expect(() => store.toggleBlockFold("no-such-terminal", 5)).not.toThrow();
 		});
 	});
 

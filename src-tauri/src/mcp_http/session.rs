@@ -1619,9 +1619,10 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
             marker,
             line,
             exit_code,
+            on_alt_screen,
             ..
         } => {
-            serde_json::json!({"type": "osc133", "marker": marker, "line": line, "exit_code": exit_code})
+            serde_json::json!({"type": "osc133", "marker": marker, "line": line, "exit_code": exit_code, "on_alt_screen": on_alt_screen})
         }
         crate::state::AppEvent::PtyCwd { cwd, .. } => {
             serde_json::json!({"type": "cwd", "cwd": cwd})
@@ -3449,12 +3450,21 @@ mod tests {
 
     #[test]
     fn grid_ws_osc133_frame_matches_the_desktop_event_payload() {
-        for (marker, exit_code) in [("A", None), ("D", Some(0)), ("D", Some(130))] {
+        for (marker, exit_code, on_alt_screen) in [
+            ("A", None, false),
+            ("D", Some(0), false),
+            ("D", Some(130), false),
+            // The alt-screen-tainted case must round-trip identically on both
+            // transports too — a browser client needs the same signal a
+            // desktop client gets to skip row-anchored rendering for it.
+            ("A", None, true),
+        ] {
             let frame = grid_ws_frame(&crate::state::AppEvent::PtyOsc133 {
                 session_id: "s1".to_string(),
                 marker: marker.to_string(),
                 line: 42,
                 exit_code,
+                on_alt_screen,
             })
             .expect("osc133 must be carried by the grid WS");
 
@@ -3465,6 +3475,7 @@ mod tests {
                 marker: marker.to_string(),
                 line: 42,
                 exit_code,
+                on_alt_screen,
             })
             .expect("Osc133Event must serialize");
 
@@ -3487,6 +3498,7 @@ mod tests {
             marker: "A".to_string(),
             line: 0,
             exit_code: None,
+            on_alt_screen: false,
         })
         .expect("osc133 must be carried by the grid WS");
 
@@ -3523,6 +3535,7 @@ mod tests {
                 marker: "A".to_string(),
                 line: 1,
                 exit_code: None,
+                on_alt_screen: false,
             })
             .is_some(),
             "OSC 133 must reach browser clients"

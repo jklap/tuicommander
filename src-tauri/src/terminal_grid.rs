@@ -124,12 +124,18 @@ pub enum TermEvent {
         command: char,
         params: String,
         line: usize,
+        /// See `alacritty_terminal::event::Event::Osc133::on_alt_screen` —
+        /// captured atomically with `line` at the moment the marker fired,
+        /// not resampled downstream.
+        on_alt_screen: bool,
     },
     Osc7(String),
     Tuic {
         verb: String,
         payload: String,
         line: usize,
+        /// See `Osc133::on_alt_screen`.
+        on_alt_screen: bool,
     },
     /// iTerm2 OSC 1337 `StealFocus`.
     RequestFocus,
@@ -255,11 +261,13 @@ impl EventListener for TermEventCollector {
                 command,
                 params,
                 line,
+                on_alt_screen,
             } => {
                 self.events.lock().push(TermEvent::Osc133 {
                     command,
                     params,
                     line,
+                    on_alt_screen,
                 });
             }
             Event::Osc7(url) => {
@@ -269,11 +277,13 @@ impl EventListener for TermEventCollector {
                 verb,
                 payload,
                 line,
+                on_alt_screen,
             } => {
                 self.events.lock().push(TermEvent::Tuic {
                     verb,
                     payload,
                     line,
+                    on_alt_screen,
                 });
             }
             // An unanswered colour query is NOT a no-op, which is why this arm
@@ -367,6 +377,11 @@ pub struct Osc133Event {
     pub line: usize,
     /// Exit code (only present for "D" markers)
     pub exit_code: Option<i32>,
+    /// True when `line` was computed while the alternate screen buffer was
+    /// active — see `ParsedEvent::AgentBlock::on_alt_screen` (`output_parser.rs`)
+    /// for the full rationale. `line` there is a transient on-screen cursor
+    /// row, not a valid scrollback anchor.
+    pub on_alt_screen: bool,
 }
 
 /// A search match in the terminal grid.
@@ -1275,6 +1290,14 @@ impl TerminalGrid {
     /// Number of scrollback lines above the visible screen.
     pub fn scrollback_count(&self) -> usize {
         self.term.grid().history_size()
+    }
+
+    /// Eviction-stable total: unlike `scrollback_count()`, never plateaus once the
+    /// scrollback cap starts evicting old lines. See `Grid::total_scrolled`'s doc
+    /// comment for why this is the coordinate a stored (not read-and-discarded)
+    /// absolute row id must be built from.
+    pub fn total_scrolled_count(&self) -> usize {
+        self.term.grid().total_scrolled()
     }
 
     /// Number of primary-screen scrollback lines, regardless of the active screen.
@@ -6466,7 +6489,11 @@ mod tests {
         let events = grid.drain_events();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            TermEvent::Osc133 { command, .. } => assert_eq!(*command, 'A'),
+            TermEvent::Osc133 { command, line, .. } => {
+                assert_eq!(*command, 'A');
+                // total_scrolled()==0 + cursor row 0 on a fresh grid.
+                assert_eq!(*line, 0, "line must be total_scrolled() + cursor row");
+            }
             other => panic!("expected Osc133, got {other:?}"),
         }
     }
@@ -6479,10 +6506,165 @@ mod tests {
         assert_eq!(events.len(), 1);
         match &events[0] {
             TermEvent::Osc133 {
-                command, params, ..
+                command,
+                params,
+                line,
+                on_alt_screen,
             } => {
                 assert_eq!(*command, 'D');
                 assert_eq!(params, "42");
+                assert_eq!(*line, 0);
+                assert!(!on_alt_screen);
+            }
+            other => panic!("expected Osc133, got {other:?}"),
+        }
+    }
+
+    /// Characterizes the fullscreen-mode root cause at the lowest level: once
+    /// the alternate screen is active, `line` is computed against the ALT
+    /// grid's own `history_size()` (which never grows for a fully-repainted
+    /// TUI like Claude Code's fullscreen renderer — nothing ever scrolls off
+    /// the top), not the primary screen's real, monotonically-increasing
+    /// scrollback. Real primary content written before entering the alt
+    /// screen must NOT be reflected in the alt-screen event's `line`.
+    #[test]
+    fn osc133_line_is_relative_to_the_active_screen_not_primary_history() {
+        let mut grid = TerminalGrid::new(3, 80, 1000);
+        // Push far more lines than the 3-row screen can hold, so the primary
+        // screen accumulates real scrollback well past any row index the
+        // 3-row alt screen's own cursor could ever report (0..=2).
+        for i in 0..20 {
+            grid.process(format!("line{i}\r\n").as_bytes());
+        }
+        let primary_history = grid.scrollback_count();
+        assert!(
+            primary_history > 3,
+            "primary screen must have accumulated real history past the \
+             screen's own row range: got {primary_history}"
+        );
+
+        // Enter the alternate screen (Claude Code's fullscreen renderer) and
+        // emit an OSC 133 marker immediately.
+        grid.process(b"\x1b[?1049h");
+        assert!(grid.is_alternate_screen());
+        assert_eq!(
+            grid.scrollback_count(),
+            0,
+            "a freshly entered alt screen has no history of its own yet"
+        );
+        grid.process(b"\x1b]133;A\x07");
+        let events = grid.drain_events();
+        let osc = events
+            .iter()
+            .find(|e| matches!(e, TermEvent::Osc133 { .. }))
+            .expect("expected an Osc133 event");
+        match osc {
+            TermEvent::Osc133 {
+                line,
+                on_alt_screen,
+                ..
+            } => {
+                assert!(
+                    *line < primary_history,
+                    "alt-screen line ({line}) must be a small on-screen \
+                     cursor row, not anchored to the primary screen's real \
+                     scrollback depth ({primary_history}) — this is exactly \
+                     the fullscreen-mode root cause: `line` here is disjoint \
+                     from the coordinate space Command Blocks anchor into"
+                );
+                assert!(
+                    on_alt_screen,
+                    "must be tagged, captured atomically with `line` at the \
+                     moment the marker fired"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Scrollback-ring eviction fix (2026-09-15): once `history_size()`
+    /// saturates at the grid's scroll-limit cap, it stops growing forever —
+    /// but the cursor's on-screen row keeps cycling through the same small
+    /// range, so an OSC133 `line` computed as `history_size() + cursor_row`
+    /// (the old formula) would emit the SAME `line` for two markers far
+    /// apart in real time. `total_scrolled()` never plateaus, so this must
+    /// not happen once it's used instead.
+    #[test]
+    fn osc133_line_stays_eviction_stable_and_never_aliases_past_scrollback_saturation() {
+        // A tiny cap makes saturation cheap to reach in a unit test.
+        let mut grid = TerminalGrid::new(3, 80, 5);
+        grid.process(b"\x1b]133;A\x07");
+        let first_line = match grid
+            .drain_events()
+            .into_iter()
+            .find(|e| matches!(e, TermEvent::Osc133 { .. }))
+        {
+            Some(TermEvent::Osc133 { line, .. }) => line,
+            _ => panic!("expected an Osc133 event"),
+        };
+
+        // Push far more lines than the 5-row cap so history_size() saturates
+        // and the ring starts evicting.
+        for i in 0..50 {
+            grid.process(format!("line{i}\r\n").as_bytes());
+        }
+        assert_eq!(
+            grid.scrollback_count(),
+            5,
+            "history_size() must be pinned at the scroll-limit cap once saturated"
+        );
+
+        grid.process(b"\x1b]133;A\x07");
+        let second_line = match grid
+            .drain_events()
+            .into_iter()
+            .find(|e| matches!(e, TermEvent::Osc133 { .. }))
+        {
+            Some(TermEvent::Osc133 { line, .. }) => line,
+            _ => panic!("expected a second Osc133 event"),
+        };
+
+        assert!(
+            second_line > first_line,
+            "an eviction-stable `line` must keep growing across saturation \
+             (first={first_line}, second={second_line}) — a `history_size()`-based \
+             `line` would have collided here instead"
+        );
+    }
+
+    /// Fullscreen-mode fix, precision: `on_alt_screen` is captured at the
+    /// exact instant each event fires (inside `osc133()`/`osc7770()`), not
+    /// resampled once after the whole chunk is processed — so two markers in
+    /// the SAME chunk that straddle an alt-screen transition are tagged
+    /// independently and correctly, not uniformly with whatever the screen
+    /// state happened to be when the chunk finished.
+    #[test]
+    fn osc133_markers_straddling_an_alt_screen_transition_in_one_chunk_are_tagged_independently() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // One process() call: emit a primary-screen marker, enter the alt
+        // screen, then emit a second marker — all in a single chunk.
+        grid.process(b"\x1b]133;A\x07\x1b[?1049h\x1b]133;A\x07");
+        let events: Vec<_> = grid
+            .drain_events()
+            .into_iter()
+            .filter(|e| matches!(e, TermEvent::Osc133 { .. }))
+            .collect();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            TermEvent::Osc133 { on_alt_screen, .. } => {
+                assert!(
+                    !on_alt_screen,
+                    "the first marker fired on the primary screen"
+                )
+            }
+            other => panic!("expected Osc133, got {other:?}"),
+        }
+        match &events[1] {
+            TermEvent::Osc133 { on_alt_screen, .. } => {
+                assert!(
+                    *on_alt_screen,
+                    "the second marker fired after entering the alt screen"
+                )
             }
             other => panic!("expected Osc133, got {other:?}"),
         }

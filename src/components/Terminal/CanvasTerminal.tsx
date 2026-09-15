@@ -8,7 +8,7 @@ import { conversationStore } from "../../stores/conversationStore";
 import { initLinkModifier, linkModifierHeld } from "../../stores/linkModifier";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
-import { terminalsStore } from "../../stores/terminals";
+import { rowAnchoredBlocks, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
@@ -61,6 +61,7 @@ import {
 	decideFrameGrid,
 	decodeBinaryFrame,
 	decodeStyledRange,
+	evictionStableToGridRelative,
 	GUTTER_PX,
 	gridDimsForBox,
 	HIDDEN_ACK_INTERVAL_MS,
@@ -123,6 +124,8 @@ export interface CanvasTerminalRef {
 	scrollToBlock: (direction: "previous" | "next") => void;
 	/** Toggle fold on the command block nearest the viewport's vertical center. */
 	toggleBlockFoldAtViewport: () => void;
+	/** Lines evicted from history so far — see `TerminalRef.getHistoryBase`'s doc comment. */
+	getHistoryBase: () => number;
 }
 
 export interface CanvasTerminalProps {
@@ -917,11 +920,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (searchBlockScope && currentFrame) {
 			const term = terminalsStore.get(props.terminalId);
 			if (term) {
-				const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+				const combined = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+				const allBlocks = rowAnchoredBlocks(combined);
 				const viewTop = currentFrame.historySize - currentFrame.displayOffset;
-				const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
-				scopedSearchBlock = resolveScopedBlock(allBlocks, viewCenter) ?? null;
-				matches = filterMatchesToBlock(matches, allBlocks, viewCenter);
+				const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2); // grid-relative
+				const historyBase = currentFrame.historyBase;
+				// `allBlocks`' rows are eviction-stable (see CommandBlock's doc comment).
+				// scopedSearchBlock is read later by paintSearchScopeIndicator, which also
+				// expects eviction-stable rows, so resolve it against the eviction-stable
+				// view-center — but `matches[].row` (from a live `terminal_search`) is
+				// grid-relative, so filter against a grid-relative-converted block list.
+				scopedSearchBlock = resolveScopedBlock(allBlocks, viewCenter + historyBase) ?? null;
+				const gridRelativeBlocks = allBlocks.flatMap((block) => {
+					const promptLine = evictionStableToGridRelative(block.promptLine, historyBase);
+					if (promptLine === null) return [];
+					const endLine = block.endLine == null ? null : evictionStableToGridRelative(block.endLine, historyBase);
+					return [{ promptLine, endLine }];
+				});
+				matches = filterMatchesToBlock(matches, gridRelativeBlocks, viewCenter);
 			}
 		}
 		const activeMatch = search.replace(
@@ -1025,15 +1041,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function paintSearchScopeIndicator(m: CellMetrics) {
 		if (!searchBlockScope || !scopedSearchBlock) return;
 		const bounds = currentViewportBounds();
-		if (!bounds) return;
+		if (!bounds || !currentFrame) return;
+		// promptLine/endLine are eviction-stable (see CommandBlock's doc comment);
+		// `bounds` is grid-relative — convert down, dropping an already-evicted edge
+		// to the viewport bound it would otherwise clamp to anyway.
+		const historyBase = currentFrame.historyBase;
+		const startRow = evictionStableToGridRelative(scopedSearchBlock.promptLine, historyBase) ?? bounds.viewTop;
 		// endLine ?? Infinity: an open block's indicator should extend to the bottom
 		// of the viewport, same as a closed block would if it ran past it.
-		const clamped = clampRowRangeToViewport(
-			scopedSearchBlock.promptLine,
-			scopedSearchBlock.endLine ?? Number.POSITIVE_INFINITY,
-			bounds.viewTop,
-			bounds.viewBottom,
-		);
+		const endRow =
+			scopedSearchBlock.endLine == null
+				? Number.POSITIVE_INFINITY
+				: (evictionStableToGridRelative(scopedSearchBlock.endLine, historyBase) ?? bounds.viewTop);
+		const clamped = clampRowRangeToViewport(startRow, endRow, bounds.viewTop, bounds.viewBottom);
 		if (!clamped) return; // scrolled fully off-screen — draw nothing, not a full-height bar
 		const { startVp, endVp } = clamped;
 		octx.fillStyle = "#e8984c";
@@ -1048,13 +1068,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function paintGutterMarkers(m: CellMetrics) {
 		const term = terminalsStore.get(props.terminalId);
-		if (!term) return;
-		const blocks = term.commandBlocks;
+		if (!term || !currentFrame) return;
+		const blocks = rowAnchoredBlocks(term.commandBlocks);
 		if (blocks.length === 0) return;
 		for (const block of blocks) {
 			const kind = gutterMarkKind(block);
 			if (!kind) continue;
-			const vpRow = absRowToViewport(block.promptLine);
+			const promptRow = evictionStableToGridRelative(block.promptLine, currentFrame.historyBase);
+			if (promptRow === null) continue;
+			const vpRow = absRowToViewport(promptRow);
 			if (vpRow === null) continue;
 			octx.fillStyle = GUTTER_MARK_COLOR[kind];
 			octx.fillRect(-GUTTER_PX, vpRow * m.cellHeight, 3, m.cellHeight);
@@ -1069,15 +1091,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function paintFoldChevrons(m: CellMetrics) {
 		if (!settingsStore.state.blockFoldingEnabled) return;
 		const term = terminalsStore.get(props.terminalId);
-		if (!term || term.commandBlocks.length === 0) return;
+		if (!term || term.commandBlocks.length === 0 || !currentFrame) return;
+		const blocks = rowAnchoredBlocks(term.commandBlocks);
+		if (blocks.length === 0) return;
 		const fontFamily = settingsStore.getFontFamily();
 		octx.font = `${Math.round(m.cellHeight * 0.7)}px ${fontFamily}`;
 		octx.fillStyle = "rgba(150,150,150,0.8)";
-		for (const block of term.commandBlocks) {
+		for (const block of blocks) {
 			const folded = term.foldedBlocks.has(block.promptLine);
 			if (!folded && !foldRange(block)) continue; // nothing to fold, don't imply otherwise
 			const headerRow = block.executionLine ?? block.promptLine;
-			const vpRow = absRowToViewport(headerRow);
+			const headerRowRelative = evictionStableToGridRelative(headerRow, currentFrame.historyBase);
+			if (headerRowRelative === null) continue;
+			const vpRow = absRowToViewport(headerRowRelative);
 			if (vpRow === null) continue;
 			const y = vpRow * m.cellHeight;
 			octx.fillText(folded ? "▸" : "▾", -GUTTER_PX + 4, y + m.cellHeight * 0.8);
@@ -1086,20 +1112,28 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function paintFoldedBlocks(m: CellMetrics) {
 		const term = terminalsStore.get(props.terminalId);
-		if (!term || term.foldedBlocks.size === 0) return;
+		if (!term || term.foldedBlocks.size === 0 || !currentFrame) return;
 		const fontFamily = settingsStore.getFontFamily();
 		const painted = new Set<number>();
 		for (const promptLine of term.foldedBlocks) {
 			if (painted.has(promptLine)) continue;
 			painted.add(promptLine);
 			const block = term.commandBlocks.find((b) => b.promptLine === promptLine);
-			if (!block) continue;
+			if (!block || block.onAltScreen) continue;
 			const range = foldRange(block);
 			if (!range) continue;
 			const { foldStart, foldedCount } = range;
-			const foldEnd = foldStart + foldedCount;
+			// foldStart is an eviction-stable absolute row (see CommandBlock's doc
+			// comment); foldedCount is a plain span, unaffected by the coordinate
+			// space. Convert both edges down individually rather than converting then
+			// adding, since foldStart alone can straddle the eviction boundary.
+			const foldStartRelative = evictionStableToGridRelative(foldStart, currentFrame.historyBase);
+			if (foldStartRelative === null) continue;
+			const foldEndRelative = foldStartRelative + foldedCount;
 			const bounds = currentViewportBounds();
-			const clamped = bounds ? clampRowRangeToViewport(foldStart, foldEnd, bounds.viewTop, bounds.viewBottom) : null;
+			const clamped = bounds
+				? clampRowRangeToViewport(foldStartRelative, foldEndRelative, bounds.viewTop, bounds.viewBottom)
+				: null;
 			if (!clamped) continue;
 			const { startVp, endVp } = clamped;
 			const y = startVp * m.cellHeight;
@@ -1129,8 +1163,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (mode === "off") return;
 		if (mode === "modifier" && !blockTimestampsVisible) return;
 		const term = terminalsStore.get(props.terminalId);
-		if (!term) return;
-		const all = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+		if (!term || !currentFrame) return;
+		const combined = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+		const all = rowAnchoredBlocks(combined);
 		if (all.length === 0) return;
 		const fontFamily = settingsStore.getFontFamily();
 		const fontSize = Math.round(m.cellHeight * 0.7);
@@ -1139,7 +1174,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const canvasW = overlayCanvasRef.width / m.dpr;
 		let lastLabelBottom = -Infinity;
 		for (const block of all) {
-			const vpRow = absRowToViewport(block.promptLine);
+			const promptRow = evictionStableToGridRelative(block.promptLine, currentFrame.historyBase);
+			if (promptRow === null) continue;
+			const vpRow = absRowToViewport(promptRow);
 			if (vpRow === null) continue;
 			const y = vpRow * m.cellHeight;
 			if (y < lastLabelBottom) continue;
@@ -1262,7 +1299,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			historySize: frame.historySize,
 			showBlockMarks: settingsStore.state.showBlockMarks,
 			showPromptMarks: settingsStore.state.showPromptMarks,
-			blocks: term?.commandBlocks ?? [],
+			blocks: term ? rowAnchoredBlocks(term.commandBlocks) : [],
 			promptLines: term?.userPromptLines ?? [],
 		});
 		if (!showScrollbar) {
@@ -1296,15 +1333,29 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let lastScrollbarMarksKey = "";
 
 	function paintScrollbarMarks(totalRows: number) {
-		if (!scrollbarRef) return;
+		if (!scrollbarRef || !currentFrame) return;
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
+
+		// blocks'/userPromptLines' rows are eviction-stable (see CommandBlock's doc
+		// comment); `totalRows` (and search matches' rows) are grid-relative — convert
+		// down before computing tick ratios, dropping any row already evicted.
+		const historyBase = currentFrame.historyBase;
+		const blocks = rowAnchoredBlocks(term.commandBlocks).flatMap((block) => {
+			const promptLine = evictionStableToGridRelative(block.promptLine, historyBase);
+			if (promptLine === null) return [];
+			const endLine = block.endLine == null ? null : evictionStableToGridRelative(block.endLine, historyBase);
+			return [{ ...block, promptLine, endLine }];
+		});
+		const promptLines = term.userPromptLines
+			.map((line) => evictionStableToGridRelative(line, historyBase))
+			.filter((line): line is number => line !== null);
 
 		const marksInput: ScrollbarMarksInput = {
 			showBlockMarks: settingsStore.state.showBlockMarks,
 			showPromptMarks: settingsStore.state.showPromptMarks,
-			blocks: term.commandBlocks,
-			promptLines: term.userPromptLines,
+			blocks,
+			promptLines,
 			totalRows,
 			matches: search.matches,
 		};
@@ -2597,8 +2648,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				props.onCwdChange?.(props.terminalId, cwd);
 			});
 			await transport.onEvent("osc133", (payload) => {
-				const { marker, line, exit_code } = payload as { marker: string; line: number; exit_code: number | null };
-				terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
+				const { marker, line, exit_code, on_alt_screen } = payload as {
+					marker: string;
+					line: number;
+					exit_code: number | null;
+					on_alt_screen: boolean;
+				};
+				terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined, undefined, on_alt_screen);
 			});
 			// Lines assembled by the Rust reader, carrying the ids it already
 			// matched. No raw stream is scanned here any more.
@@ -3177,22 +3233,30 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (rawX < GUTTER_PX) {
 					const term = terminalsStore.get(props.terminalId);
 					if (term) {
-						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
+						const combined = [...term.commandBlocks, term.activeBlock].filter(
 							Boolean,
 						) as import("../../stores/terminals").CommandBlock[];
-						const block = findBlockAtViewport(allBlocks, absRow, 0);
+						const allBlocks = rowAnchoredBlocks(combined);
+						// Blocks store eviction-stable rows (see CommandBlock's doc comment);
+						// `absRow` is grid-relative. Compare in eviction-stable space, then
+						// convert the resolved selection range back down before painting it.
+						const historyBase = currentFrame?.historyBase ?? 0;
+						const absRowStable = absRow + historyBase;
+						const block = findBlockAtViewport(allBlocks, absRowStable, 0);
 						if (block) {
 							// Only treat the header row as a fold target when folding is
 							// enabled — otherwise it falls through to the copy behavior
 							// below, same as it did before this row had a fold zone at all.
-							if (settingsStore.state.blockFoldingEnabled && gutterZoneAt(absRow, block) === "fold") {
+							if (settingsStore.state.blockFoldingEnabled && gutterZoneAt(absRowStable, block) === "fold") {
 								toggleFoldForBlock(block);
 								e.preventDefault();
 								return;
 							}
-							const startRow = (block.executionLine ?? block.promptLine) + 1;
-							const endRow = (block.endLine ?? absRow) - 1;
-							if (endRow >= startRow) {
+							const startRowStable = (block.executionLine ?? block.promptLine) + 1;
+							const endRowStable = (block.endLine ?? absRowStable) - 1;
+							const startRow = evictionStableToGridRelative(startRowStable, historyBase);
+							const endRow = evictionStableToGridRelative(endRowStable, historyBase);
+							if (startRow != null && endRow != null && endRow >= startRow) {
 								selection.start = { row: startRow, col: 0 };
 								selection.end = { row: endRow, col: lastResizeCols - 1 };
 								selection.selecting = false;
@@ -3725,11 +3789,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		function scrollToBlock(direction: "previous" | "next") {
 			const term = terminalsStore.get(props.terminalId);
 			if (!term || !currentFrame) return;
-			const blocks = term.commandBlocks;
-			const active = term.activeBlock;
-			const allPromptLines = blocks.map((b) => b.promptLine).concat(active ? [active.promptLine] : []);
+			const combined = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+			const allPromptLines = rowAnchoredBlocks(combined).map((b) => b.promptLine);
 			if (allPromptLines.length === 0) return;
-			const currentViewLine = currentFrame.historySize - currentFrame.displayOffset;
+			// promptLines are eviction-stable (see CommandBlock's doc comment) —
+			// shift the grid-relative viewport line up into that same space to compare.
+			const currentViewLine = currentFrame.historySize - currentFrame.displayOffset + currentFrame.historyBase;
 			const targetLine = pickBlock(allPromptLines, currentViewLine, direction);
 			if (targetLine === undefined) {
 				// No further block ahead: land at the live tail, matching the old
@@ -3741,7 +3806,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 				return;
 			}
-			invokeRef?.("terminal_scroll_to", { sessionId: props.sessionId, line: targetLine }).catch(
+			// `terminal_scroll_to`'s `line` is grid-relative (0 = oldest row currently
+			// in scrollback) — convert back down; a block whose row has since been
+			// evicted has nothing left to scroll to.
+			const targetLineRelative = evictionStableToGridRelative(targetLine, currentFrame.historyBase);
+			if (targetLineRelative == null) return;
+			invokeRef?.("terminal_scroll_to", { sessionId: props.sessionId, line: targetLineRelative }).catch(
 				ipcErr("terminal_scroll_to"),
 			);
 		}
@@ -3768,10 +3838,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!settingsStore.state.blockFoldingEnabled) return;
 			const term = terminalsStore.get(props.terminalId);
 			if (!term || !currentFrame) return;
-			const viewTop = currentFrame.historySize - currentFrame.displayOffset;
-			const blocks = [...term.commandBlocks, term.activeBlock].filter(
+			// Grid-relative viewport top, shifted up into the blocks' eviction-stable
+			// space (see CommandBlock's doc comment) before comparing.
+			const viewTop = currentFrame.historySize - currentFrame.displayOffset + currentFrame.historyBase;
+			const combined = [...term.commandBlocks, term.activeBlock].filter(
 				Boolean,
 			) as import("../../stores/terminals").CommandBlock[];
+			const blocks = rowAnchoredBlocks(combined);
 			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
 			if (!current) return;
 			toggleFoldForBlock(current);
@@ -3781,6 +3854,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			focus: () => keyInputRef.focus({ preventScroll: true }),
 			scrollToBlock,
 			toggleBlockFoldAtViewport,
+			getHistoryBase: () => currentFrame?.historyBase ?? 0,
 			getSelectionText: () => selection.cachedText,
 			refresh: () => {
 				rowMap.clear();

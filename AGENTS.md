@@ -18,6 +18,7 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 - **CI has never executed on this repository.** `.github/workflows/ci.yml` triggers on push and exists, but `gh run list` returns zero runs for this repo on any branch. "CI is green" is never evidence of anything — nothing in this repo's test suite has ever been machine-validated by CI. Treat any CI-shaped claim in a commit message or PR description as unverified until someone actually watches a run. `CONTRIBUTING.md` describes CI as an active gate; it isn't yet.
 - `make check`'s "plugin tests" step is **currently expected to fail** — the `plugins` submodule has zero test files. This is known, tracked state (`c6cae61a`'s CI comment); don't spend time trying to "fix" a red `make check` caused by it.
 - **When touching `src-tauri/patches/{alacritty_terminal,vte}/`, verification MUST include `cargo nextest run --workspace` (or `make check`), not a package-scoped `cargo test --lib`/`cargo test -p tuicommander`.** The vendored crates are separate workspace members with their own regression suite (`patches/alacritty_terminal/tests/ref.rs`, ~44 fixture-replay tests) that a package-scoped run silently skips. `cargo nextest run`/`list` without `--workspace` also silently scopes to zero tests for a vendored crate instead of erroring — this exact mistake produced a false "these tests were never wired in" diagnosis in commit `47217d2c`'s own message. A background-color-erase fix landed in `6dd165f5` without running the workspace suite and shipped two regressions caught only later.
+- **A second, independent trap in `vte` specifically: its `ansi` Cargo feature is not in `default = ["std"]`.** `cargo test -p vte` (or `cargo nextest run -p vte`) alone silently compiles ZERO of `src/ansi.rs`'s `mod tests` — the module itself, `mod ansi;`, is declared `pub mod ansi;` unconditionally in `lib.rs`, but everything inside it (including the `Handler`/`Processor` types most OSC-parsing tests actually exercise) is behind `#[cfg(feature = "ansi")]` at the crate level. `cargo test -p vte --features ansi` runs them; so does `cargo nextest run --workspace`, since `alacritty_terminal`'s own `[dependencies.vte]` unconditionally requests `features = ["std", "ansi"]`, which Cargo's feature unification applies workspace-wide. Confirmed 2026-09-15 while adding OSC 133 parse tests to `ansi.rs`: a bare `cargo test -p vte` reported "32 passed, 0 failed" and looked completely healthy while running only `lib.rs`'s generic OSC/CSI tests, not a single one of `ansi.rs`'s OSC-1337/OSC-133-specific tests. Same failure shape as the `--workspace` gotcha above — a scoped run that reports a clean pass while silently excluding the tests you actually meant to run — just triggered by a feature flag instead of a workspace boundary.
 - When resolving a rebase/merge conflict in a Rust function by taking one side's body wholesale, diff the full field set of any struct it returns — a dropped field can compile cleanly (mocked in the caller's own tests) while silently regressing a feature only an end-to-end test would catch. Prefer merging the logic, not picking a side outright, when the two versions diverge structurally.
 - **Before writing what you believe is a "new" test file, verify it doesn't already exist.** `Write`'s "must Read first" safeguard only fires for paths *outside* the current working directory, so it will not stop you from silently overwriting an existing in-repo test file with no warning. A 2026-08-28 session did exactly this to `CreateWorktreeDialog.test.tsx` — a subagent's exploration summary claimed "zero tests exist for this component," which was wrong (a 919-line file already existed from `c0547b53`), and `Write` clobbered it. Caught only by a routine final `git status --porcelain`/`git diff --stat` sweep before wrapping up, which is why that sweep is not optional on multi-file work. Run `ls`/`git status <path>` yourself before `Write`-ing a file whose non-existence you're only inferring from someone else's report.
 - **`[HUMAN]` is a last resort.** Before marking a to-test item `[HUMAN]`, you MUST attempt verification through this escalation ladder:
@@ -814,6 +815,98 @@ A 2026-09-11 security review of the inline-images feature (`docs/backend/pty.md`
 - **`o=z` zlib decompression** used a plain unbounded `read_to_end` — a classic decompression bomb, allocating the full inflated buffer before any size check ran. Fixed by wrapping the decoder in `Read::take(cap + 1)` and checking whether the read filled that exact allowance (`Take` doesn't error on hitting its limit, it just stops — so the check must be `len() > cap`, not "did this return `Err`").
 
 When adding a new escape-sequence handler that reserves resources, accumulates a wire-chunked buffer, or decompresses a payload, ask explicitly: what wire-supplied number drives a loop or an allocation here, and what stops it from being astronomically large? A cap added only after the expensive step (decompress-then-check, accumulate-then-check) still lets the expensive step itself run unbounded.
+
+## Command Blocks — `line` Is Only A Valid Anchor On The Primary Screen
+
+Command Blocks (gutter marks, scrollbar ticks, fold, `Cmd+Shift+Up/Down` jump-nav, block-scoped
+search, "Copy Block Output") anchor to absolute row numbers computed as `history_size() +
+cursor.point.line` against whichever screen (primary or alt) is *currently active* — both
+`osc133()` and `osc7770()` (`patches/alacritty_terminal/src/term/mod.rs`) compute it this way,
+with no `is_alternate_screen()` check in either handler.
+
+**This silently breaks for any fullscreen (alternate-screen) TUI, and it's now the everyday case,
+not an edge case** — Claude Code's default renderer draws entirely inside the alternate screen
+buffer, and being a fully-repainted TUI (redraws its fixed viewport via cursor addressing,
+never triggers a real terminal scroll), the alt screen's own `history_size()` never grows.
+Confirmed live: a real fullscreen Claude Code session reports `total_lines == screen_lines` —
+zero scrollback — for its *entire* life, even after many turns. During that time, `line` is just
+the transient on-screen cursor row: small, non-monotonic across turns, and disconnected both from
+the primary scrollback (`CanvasTerminal` isn't even rendering the durable log while alt-screen is
+active) and from whatever real primary-screen content comes next once the agent returns to a
+shell prompt.
+
+Fixed (2026-09-15) by tagging every block-boundary event with `on_alt_screen`/`onAltScreen`. For
+the direct OSC133/OSC7770 event path, this is captured **inside the vendored alacritty patch's
+`osc133()`/`osc7770()` handlers themselves** (`self.mode().contains(TermMode::ALT_SCREEN)`,
+threaded through `Event::Osc133`/`Event::Tuic` → `TermEvent::Osc133`/`Tuic`), atomically with
+`line` — a code-review pass caught that reading `is_alternate_screen()` once per PTY chunk
+downstream in `pty.rs` (the first version of this fix) mistags any event when the alt screen
+toggles more than once within a single chunk (a 64KB PTY read buffer easily fits a full
+enter+exit round-trip). The two heuristic, text-scanning paths
+(`synthesize_cc_block_events`/`synthesize_transcript_dump_block_events`, which react to
+*content* on `changed_rows` rather than a discrete VTE event) still take the coarser
+per-chunk-sampled flag — achieving the same per-row precision for those would need each row
+timestamped with its own alt-screen bit at diff time, a materially bigger change; the practical
+risk is lower there since alt-screen transition sequences don't typically share a row with
+visible `⏺`/`❯`/`✻` text.
+
+The block still fires either way — `CommandOverview`'s prompt/duration/exit-status metadata never
+depended on row validity and keeps working through a fullscreen turn. **Exception found by the
+same review pass: `CommandOverview.tsx`'s `getCommandText` falls back to slicing the grid
+(`ref.getBufferLines(commandLine, executionLine)`) whenever `promptText` is null — a real shell
+OSC133 block with no hook-driven prompt text — and that fallback DOES depend on row validity, so
+it must check `block.onAltScreen` too and return `""` rather than read.** Every row-anchored
+consumer must read blocks through `rowAnchoredBlocks()` (`src/stores/terminals.ts`), which drops
+`onAltScreen: true` entries, rather than rendering a mark at a meaningless row.
+
+If you add a new row-anchored block consumer (frontend) or a new `AgentBlock`/`Osc133Event`
+producer (backend), it needs the same treatment: filter through `rowAnchoredBlocks()` on the
+frontend, thread `on_alt_screen` through on the backend. Full research (live introspection +
+binary-string analysis of the installed `claude` CLI + code reading) and the fix's design
+rationale are in `plans/command-blocks-fullscreen-mode-fix.md` (main checkout) and
+`agent-signal-architecture.html`'s "Command Blocks & Scrollbar Ticks" section.
+
+**Stretch addition, same fix:** Claude Code's fullscreen "transcript mode" (`Ctrl+O`) stays inside
+the alt screen too — no help there, same limitation. But its `[` key ("write to native
+scrollback") verified live to genuinely exit the alt screen and dump the whole conversation as
+real, addressable primary-screen text. `synthesize_transcript_dump_block_events` (`pty.rs`)
+recognizes that dump's own `❯ <prompt>` / `✻ … · done` markers and synthesizes real,
+`on_alt_screen: false` blocks from it — narrowly scoped to a hook-instrumented Claude Code session
+(`agent_type == "claude"`), since the `❯` glyph isn't exclusive to this dump (this repo's own zsh
+prompt can use one too). Per Claude Code's own docs, `[` re-dumps the *entire* conversation from
+scratch each time it's pressed (not an incremental append) — repeating the gesture used to leave a
+second, overlapping set of blocks sitting in `commandBlocks[]` forever; fixed (2026-09-15) via
+`new_dump_generation`/`fromTranscriptDump`, below.
+
+**Scrollback-ring eviction (2026-09-15 fix):** `line` was originally computed as
+`history_size() + cursor row` (`osc133()`/`osc7770()`, `term/mod.rs`) — `history_size()` *plateaus*
+once the grid's scroll-limit cap starts evicting old lines (confirmed via `Grid`'s own doc
+comment: "unlike `history_size()` it does not plateau or shrink when the scrollback cap evicts old
+lines"), while the on-screen cursor row keeps cycling through the same small range. Once a session
+accumulates enough real scrollback to saturate the cap (`GRID_SCROLLBACK`, `state.rs`, 10,000
+lines), two blocks recorded far apart in real time could land on the identical `line` — the exact
+same physical-row-coordinate-space collision the alt-screen fix above closes for a *different*
+cause. Fixed by switching to `Grid::total_scrolled()` (a pre-existing, already-shipped primitive —
+see its doc comment, and `reserve_image_footprint`'s `abs_row`/`serialize_styled_range`'s
+`history_base`, which already used it for images and the scroll row cache): eviction-stable,
+never plateaus. Every consumer that needs to turn a stored `CommandBlock` row back into a live
+viewport/buffer-line row must convert first — see `terminals.ts`'s `CommandBlock` doc comment and
+`canvasTerminalUtils.ts`'s `evictionStableToGridRelative`. Regression test:
+`terminal_grid.rs`'s `osc133_line_stays_eviction_stable_and_never_aliases_past_scrollback_saturation`
+(a tiny 5-line scroll cap makes real saturation cheap to reach in a unit test).
+
+**Transcript-dump de-duplication (2026-09-15 fix, closes the gap above):** `[` is only reachable
+from transcript mode (the alternate screen), so a visit back to the alternate screen since the
+last dump activity is an unambiguous signal that whatever dump activity resumes next is a
+genuinely *new* `[`-dump, not a continuation of the one already on screen.
+`ChunkProcessor.dump_saw_alt_screen` (`pty.rs`) tracks exactly that, consumed (and reset) the next
+time a primary-screen chunk synthesizes a dump `start` event — that event alone carries
+`new_dump_generation: true`. On the frontend, `handleOsc133`'s `"A"` case responds by pruning every
+existing `fromTranscriptDump: true` `CommandBlock` — including a still-open `activeBlock` left
+unclosed by leaving transcript mode mid-turn — before adding the new one, so a repeat gesture
+never leaves stale blocks behind. A real shell/hook/heuristic block (`fromTranscriptDump: false`)
+is never touched by this prune. See `to-test.md`'s "§5/#11" entry for the manual check (this is a
+Rust change; needs a rebuild).
 
 ## Agent Session Management
 
