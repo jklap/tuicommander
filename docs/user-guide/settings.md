@@ -467,6 +467,10 @@ credentials, network interface, session token duration, IPv6, LAN access
 without authentication, **Tailscale HTTPS**, the connect QR code, and the
 **Cloud Relay**. See [Remote Access](remote-access.md) for full setup guide.
 
+#### File Access (on the Remote Access page)
+
+**Additional Readable Directories** — absolute directories that web and remote clients may **read** files from, in addition to your registered repositories. Ships with `~/.claude/plans` enabled by default, so clicking a Claude Code plan-file link an agent printed works out of the box in browser/remote mode. Desktop reads are never restricted — this setting only affects the HTTP transport used by browser/PWA/remote clients. It never widens writing, copying, or moving a file — those stay confined to registered repository roots. Remove an entry here if you don't want it readable over HTTP; the setting applies regardless of whether Remote Access itself is enabled, since it also governs the headless `tuic-remote` daemon.
+
 ### Remote Machines
 
 Add, connect, and manage `tuic-remote` daemons on other machines over SSH or a
