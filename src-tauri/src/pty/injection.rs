@@ -2758,6 +2758,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
         let mut sl = ss.lock();
         sl.reset_tool_error_memory();
         sl.reset_suggest_memory();
+        sl.reset_declared_background_work();
     }
 
     // Track slash command mode: true when the input buffer starts with /

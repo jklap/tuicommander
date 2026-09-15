@@ -2760,6 +2760,51 @@ impl ChunkProcessor {
                                 .turn_error_flags
                                 .insert(session_id.to_string(), ());
                         }
+                        "bgtasks" => {
+                            // From a Stop/StopFailure hook: `tuic-hook` scraped
+                            // the raw, comma-joined `status` of every entry in
+                            // Claude Code's own `background_tasks` array (see
+                            // `background_task_statuses` in tuic-hook's
+                            // main.rs) — classification of which statuses mean
+                            // "still running" happens here, not in tuic-hook
+                            // (see that crate's AGENTS.md). A side-table write
+                            // only, like `toolfail` above — not `AgentMetadata`,
+                            // which has no consumer today. Stamped with the
+                            // CURRENT turn epoch so it self-expires the moment
+                            // a new prompt is submitted, exactly like
+                            // `completion_declared`/`mark_suggest_candidate`.
+                            //
+                            // Classified fail-safe, not as an exact `"running"`
+                            // match: Claude Code's `background_tasks[].status`
+                            // vocabulary is not a documented closed set anywhere
+                            // (unlike `notification_type`'s enumerated values) —
+                            // only `"completed"`/`"failed"` are confirmed terminal
+                            // from real production captures. Any OTHER status
+                            // (a future/unrecognized value, or a transient one
+                            // like "pending"/"queued" this binary has never seen)
+                            // is treated as still active, so an unrecognized
+                            // status can never silently clear a real declaration
+                            // — the same "unanswered evidence counts as work"
+                            // philosophy `has_pending_background_probe` already
+                            // uses for the OS-heuristic path.
+                            const KNOWN_TERMINAL_STATUSES: &[&str] = &["completed", "failed"];
+                            let decoded = percent_decode_osc_payload(&payload);
+                            let running = decoded.split(',').any(|status| {
+                                !status.is_empty() && !KNOWN_TERMINAL_STATUSES.contains(&status)
+                            });
+                            if let Some(turn_epoch) = state
+                                .session_maps
+                                .session_states
+                                .get(session_id)
+                                .map(|s| s.turn_epoch)
+                                && let Some(silence) =
+                                    state.session_maps.silence_states.get(session_id)
+                            {
+                                silence
+                                    .lock()
+                                    .set_declared_background_work(running, turn_epoch);
+                            }
+                        }
                         // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
                         // metadata `tuic-hook` extracted natively from a Claude Code
                         // hook's stdin JSON (SessionStart/Pre/PostToolUse/

@@ -281,6 +281,7 @@ async fn session_list_omits_absent_optional_fields() {
         // False for nearly every session, so they follow the same rule as
         // every other optional field rather than being spelled out as false.
         "background_work",
+        "declared_background_work",
         "standby",
     ] {
         assert!(!entry.contains_key(absent), "{absent} must be omitted");
@@ -3109,6 +3110,7 @@ fn session_status_omits_absent_optional_fields() {
         assert!(!object.contains_key(absent), "{absent} must be omitted");
     }
     assert!(object.contains_key("background_work"));
+    assert!(object.contains_key("declared_background_work"));
     assert!(object.contains_key("awaiting_input"));
 }
 

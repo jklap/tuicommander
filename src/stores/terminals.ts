@@ -136,6 +136,12 @@ export interface TerminalData {
 	providerRecovery?: ProviderRecovery | null;
 	backgroundWork: boolean;
 	abandonedSinceMs?: number | null;
+	/** Claude's own hook-declared background tasks (e.g. a backgrounded Bash
+	 *  call) still running, for the current turn. Deliberately separate from
+	 *  `backgroundWork` (an OS process-tree observation) — see
+	 *  `effectiveActivityState`'s use of it to bypass the long-lived-dev-server
+	 *  idle carve-out that `backgroundWork` alone is subject to. */
+	declaredBackgroundWork: boolean;
 	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
 	completionNotified: boolean; // Current busy cycle already produced its completion notification
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
@@ -191,6 +197,7 @@ type TerminalCreateData = Omit<
 	| "agentState"
 	| "backgroundWork"
 	| "abandonedSinceMs"
+	| "declaredBackgroundWork"
 	| "queuedCommands"
 	| "completionNotified"
 	| "nameIsCustom"
@@ -538,6 +545,7 @@ function createTerminalsStore() {
 				shellStateRevision: 0,
 				agentState: null,
 				backgroundWork: false,
+				declaredBackgroundWork: false,
 				queuedCommands: 0,
 				completionNotified: false,
 				nameIsCustom: false,
@@ -598,6 +606,7 @@ function createTerminalsStore() {
 				shellStateRevision: 0,
 				agentState: null,
 				backgroundWork: false,
+				declaredBackgroundWork: false,
 				queuedCommands: 0,
 				completionNotified: false,
 				nameIsCustom: false,
@@ -769,6 +778,7 @@ function createTerminalsStore() {
 						// after it can no longer appear in the next session-list snapshot.
 						setState("terminals", id, "agentState", null);
 						setState("terminals", id, "backgroundWork", false);
+						setState("terminals", id, "declaredBackgroundWork", false);
 						// The backend drops the queue with the session; a lingering count
 						// would offer to clear commands that no longer exist.
 						setState("terminals", id, "queuedCommands", 0);

@@ -962,6 +962,9 @@ fn handle_session_unpaged(
                     let background_work = session_state
                         .as_ref()
                         .is_some_and(|snapshot| snapshot.background_work);
+                    let declared_background_work = session_state
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.declared_background_work);
                     let alias = state
                         .session_maps
                         .term_aliases
@@ -988,6 +991,11 @@ fn handle_session_unpaged(
                         object,
                         "background_work",
                         background_work.then_some(serde_json::Value::Bool(true)),
+                    );
+                    insert_optional_value(
+                        object,
+                        "declared_background_work",
+                        declared_background_work.then_some(serde_json::Value::Bool(true)),
                     );
                     insert_optional_value(
                         object,
@@ -1675,6 +1683,7 @@ fn handle_session_unpaged(
                         "session_id": session_id,
                         "background_work": ss.background_work,
                         "provider_recovery": ss.provider_recovery,
+                        "declared_background_work": ss.declared_background_work,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,
                         "delivery_uncertain": delivery_uncertain,
