@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::device::{DeviceHandle, DeviceMsg, InputEvent};
 use crate::dispatch::{self, Gesture, GestureResolver};
+use crate::leds::{self, AmbientLed};
 use crate::policy::layout::default_layout;
 use crate::policy::rank::priority_of;
 use crate::policy::{ActionKind, KeyRole, Priority, SlotContent, SlotPlanner};
@@ -50,10 +51,17 @@ pub struct Coordinator {
     /// ticks still ranks sessions against a consistent clock, rather than
     /// re-sampling wall-clock time inconsistently with the render loop.
     last_now_ms: u64,
+    led_count: u8,
+    /// The ambient color last *returned* by `ambient_led_update` — not
+    /// necessarily the color last actually written to the device, since the
+    /// caller (`run_one_device`) may skip the write entirely when RGB isn't
+    /// supported. `None` until the first call, so the very first tick always
+    /// reports a color (even Green) rather than staying silent.
+    last_led: Option<AmbientLed>,
 }
 
 impl Coordinator {
-    pub fn new(num_lcd_slots: u8, key_px: u32, jpeg_quality: u8) -> Self {
+    pub fn new(num_lcd_slots: u8, led_count: u8, key_px: u32, jpeg_quality: u8) -> Self {
         Self {
             planner: SlotPlanner::new(num_lcd_slots),
             layout: default_layout(num_lcd_slots),
@@ -62,6 +70,8 @@ impl Coordinator {
             gestures: GestureResolver::new(),
             last_snapshots: HashMap::new(),
             last_now_ms: 0,
+            led_count,
+            last_led: None,
         }
     }
 
@@ -205,6 +215,22 @@ impl Coordinator {
     fn choice_option_keys(&self, session: &SessionSnapshot) -> Vec<String> {
         session.choice_prompt_options.clone()
     }
+
+    /// Recompute the ambient LED color from the latest snapshot and return
+    /// the colors to write **only if it changed** since the last call — the
+    /// "one write per state change" discipline from the design plan. Call
+    /// once per tick, after `tick()` itself has refreshed `last_snapshots`;
+    /// the caller decides whether to actually send it (gated on the
+    /// negotiated `FeatureSet::rgb`, which this module knows nothing about).
+    pub fn ambient_led_update(&mut self, now_ms: u64) -> Option<Vec<[u8; 3]>> {
+        let sessions: Vec<SessionSnapshot> = self.last_snapshots.values().cloned().collect();
+        let led = leds::ambient_for(&sessions, now_ms);
+        if self.last_led == Some(led) {
+            return None;
+        }
+        self.last_led = Some(led);
+        Some(led.colors(self.led_count))
+    }
 }
 
 /// Pure mapping from a session's derived state to what its tile should
@@ -334,5 +360,26 @@ mod tests {
     fn empty_overflow_has_no_badge() {
         let face = face_for_overflow(0);
         assert_eq!(face.badge, None);
+    }
+
+    #[test]
+    fn ambient_led_update_reports_once_then_dedups_until_it_changes() {
+        let mut c = Coordinator::new(15, 24, 64, 90);
+        // First call always reports, even for the boring "nothing going on"
+        // case — `last_led` starts at `None`, not `Some(Green)`, precisely
+        // so the very first tick still turns the ring on.
+        let first = c.ambient_led_update(0);
+        assert_eq!(first, Some(AmbientLed::Green.colors(24)));
+
+        // Unchanged state: no write needed.
+        assert_eq!(c.ambient_led_update(1), None);
+
+        // A session shows up needing input: reports the change once...
+        let mut s = session("idle");
+        s.awaiting_input = true;
+        c.last_snapshots.insert(s.session_id.clone(), s);
+        assert_eq!(c.ambient_led_update(2), Some(AmbientLed::Peach.colors(24)));
+        // ...then goes quiet again until it changes once more.
+        assert_eq!(c.ambient_led_update(3), None);
     }
 }
