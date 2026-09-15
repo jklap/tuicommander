@@ -322,6 +322,7 @@
 /sessions/x
 /sessions/x/accent-color
 /sessions/x/chat-view
+/sessions/x/focus
 /sessions/x/force-retry
 /sessions/x/foreground
 /sessions/x/has-foreground
@@ -366,6 +367,8 @@
 /stats
 /stories/action
 /stories/capabilities
+/streamdock/devices
+/streamdock/status
 /system/check-update
 /system/home-directory
 /system/local-ip
@@ -388,6 +391,7 @@
 /tunnels/start/x
 /tunnels/status/x
 /tunnels/stop/x
+/ui/action
 /watchers/dir
 /watchers/hot-repos
 /watchers/repo

@@ -294,6 +294,8 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::ShellAbandoned { .. } => "shell-abandoned",
         AppEvent::PtyTitle { .. } => "pty-title",
         AppEvent::PtyBell { .. } => "pty-bell",
+        AppEvent::SessionFocusRequested { .. } => "session-focus-requested",
+        AppEvent::UiActionRequested { .. } => "ui-action-requested",
         AppEvent::PtyOsc133 { .. } => "pty-osc133",
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PtyOpenUrl { .. } => "pty-open-url",
@@ -423,6 +425,12 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyActivity { session_id } => {
             serde_json::json!({ "session_id": session_id })
+        }
+        AppEvent::SessionFocusRequested { session_id } => {
+            serde_json::json!({ "session_id": session_id })
+        }
+        AppEvent::UiActionRequested { name } => {
+            serde_json::json!({ "name": name })
         }
         AppEvent::PtyOsc133 {
             session_id,

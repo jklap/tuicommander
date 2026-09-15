@@ -903,6 +903,16 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "ai-chat", section: "Network and sandbox", label: "Network" },
 	{ tab: "ai-chat", section: "Agent and model", label: "Default model", labelKey: "providers.label.defaultModel" },
 	{ tab: "ai-chat", section: "Agent and model", label: "Provider catalogue" },
+	// tabs/StreamDockTab.tsx — hidden from the nav in browser mode (the macropad
+	// is a local USB device); the per-key role grid is a dynamic <For>.
+	{ tab: "streamdock", section: "StreamDock" },
+	{ tab: "streamdock", section: "StreamDock M18" },
+	{ tab: "streamdock", section: "Pinned sessions" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Enable StreamDock integration" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "StreamDock status" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Device" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Screen brightness" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "LED brightness" },
 ];
 
 /** Section heading as rendered, i18n applied. */

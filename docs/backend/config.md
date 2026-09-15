@@ -379,6 +379,7 @@ cleartext copy does not survive on disk.
 | `language` | `String` | `"en"` | UI language code |
 | `max_tab_name_length` | `u32` | `25` | Max tab name display length |
 | `split_tab_mode` | `SplitTabMode` | `"separate"` | Split tab mode: `"separate"` (each pane gets a tab) or `"unified"` (one shared tab) |
+| `streamdock` | `StreamDockConfig` | `{}` | StreamDock M18 macropad integration: `enabled`, `device_serial` (`null` = first found), `screen_brightness` (0-100, default `70`), `led_brightness` (0-100, default `40`), `pinned_sessions` (never evicted from a slot). See `src-tauri/src/streamdock/` |
 | `tab_ordering_mode` | `TabOrderingMode` | `"grouped-by-type"` | Tab ordering mode: `"grouped-by-type"`, `"terminals-first"`, or `"free"` |
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
 | `chat_mute_intermediate_text` | `bool` | `true` | Chat (terminal Chat view, AI Chat, mobile) draws assistant text that a tool call follows in the same turn smaller and dimmer. The final text of a turn keeps the normal style. Applies immediately. |

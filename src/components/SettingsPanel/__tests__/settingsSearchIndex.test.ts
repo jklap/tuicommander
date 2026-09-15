@@ -26,6 +26,7 @@ const TAB_SOURCES: Record<string, string[]> = {
 	mcp: ["tabs/services/LocalMcpPanel.tsx", "tabs/services/UpstreamMcpPanel.tsx"],
 	"remote-access": ["tabs/services/RemoteAccessPanel.tsx"],
 	"remote-machines": ["tabs/RemoteMachinesTab.tsx", "tabs/services/RemoteMachinesPanel.tsx"],
+	streamdock: ["tabs/StreamDockTab.tsx"],
 	plugins: ["tabs/PluginsTab.tsx"],
 	"smart-prompts": ["tabs/SmartPromptsTab.tsx"],
 	agents: ["tabs/AgentsTab.tsx", "tabs/LaunchModuleSettings.tsx"],
@@ -65,6 +66,8 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// datalist entry, not a setting), and the "Deployment" and "Keep ephemeral
 	// daemon alive" labels, whose text sits in a nested `<span>`.
 	"remote-machines": { dynamic: 1, orphans: 0 },
+	// StreamDockTab: the per-session pin toggles are labelled from a runtime <For>.
+	streamdock: { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 2, orphans: 12 },
 	// The per-agent "Native status signals", "Prevent alternate screen", and

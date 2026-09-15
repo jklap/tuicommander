@@ -44,6 +44,7 @@ import {
 	RepoWorktreeTab,
 	SelectionTab,
 	SmartPromptsTab,
+	StreamDockTab,
 	TelegramTab,
 	TerminalTab,
 } from "./tabs";
@@ -99,6 +100,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 			{ key: "mcp", label: t("settings.mcp", "MCP") },
 			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
+			{ key: "streamdock", label: t("settings.streamdock", "StreamDock") },
 			{ key: "telegram", label: "Telegram" },
 			{ key: "plugins", label: t("settings.managePlugins", "Manage plugins") },
 		],
@@ -117,6 +119,9 @@ function hiddenTabs(): Set<string> {
 	// While that panel is behind the experimental toggle, this tab would let a
 	// person set a default model for an engine they cannot open.
 	if (!settingsStore.isAiChatEnabled()) hidden.add("ai-chat");
+	// The StreamDock macropad is a USB device on the desktop machine; the
+	// backend supervisor only exists in the desktop build.
+	if (!isTauri()) hidden.add("streamdock");
 	return hidden;
 }
 
@@ -454,6 +459,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 					<SettingsHelpScope page="voice">
 						<DictationSettings />
 					</SettingsHelpScope>
+				</Show>
+				<Show when={activeTab() === "streamdock"}>
+					<StreamDockTab />
 				</Show>
 				<Show when={activeTab() === "github"}>
 					<SettingsHelpScope page="github">

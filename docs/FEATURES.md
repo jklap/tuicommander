@@ -3491,3 +3491,36 @@ Mobile offers the **Chat** tab only when the host has a configured ego executabl
 Desktop sidebar session rows and mobile session cards mark a parentless plain shell as **Abandoned** after one idle hour and show its idle age. The five-second backend sweep requires a fresh OS process inventory: the PTY child must be an interactive shell with no child processes. An unknown inventory, script, foreground command, background child, detached TUIC job, managed identity, live child session, pending input or keep-open hold prevents closure. Unsupported or incomplete OS process observations fail closed.
 
 Settings → Agents → Idle agent hibernation (Expert Mode) includes **Close abandoned shells after (hours)** (`agents.abandoned_shell_hours`). The machine-owned value defaults to **0 (off)**; whole hours from 1 to 65535 enable closure. Idle age is measured from the most recent input, output or semantic activity, including elapsed time while the machine sleeps. Closure rechecks the process inventory and activity at the destructive boundary, and uses the normal session close/tombstone path. The sweep can lag the threshold by one five-second tick. A remote daemon applies its own setting, not the desktop host's value.
+
+---
+
+## 28. StreamDock M18 Macropad
+
+A 15-key LCD macropad (5×3 grid, 64×64px keys, plus 3 plain push buttons) that mirrors live
+session state — each key shows a session's status (working/idle/needs input/error/completed)
+and pressing it focuses that session's tab. Desktop only.
+
+### 28.1 Rendering
+- Each key face is content-hash cached: an unchanged session never re-encodes or re-transfers its image
+- Full-bleed background color encodes state; only the "needs input" state pulses (a scarce, deliberately reserved signal)
+- Primary label is the session's short `term_alias` (e.g. `tc-1`); secondary line shows the current task or an elapsed-idle "ready (Nm)" escalation
+
+### 28.2 Slot Assignment
+- Sessions are assigned to keys by **stable identity**, never arrival order — a closed session's slot goes blank rather than shifting its neighbors, and a session keeps its slot for as long as it exists
+- With no empty slot, the lowest-priority occupant is evicted — but a session awaiting input is never evicted by another session also awaiting input, and a pinned session (Settings) is never evicted
+- More live sessions than slots renders as an overflow count rather than paginating
+
+### 28.3 Gestures
+- Tap, double-tap, and hold are all resolved from the device's own press/release event pairing — a hold is only knowable once the physical release arrives, since the hardware reports no "still held" signal
+- Tap answers a pending choice prompt (highlighted option) or focuses the session's tab; double-tap answers the second option; hold sends an interrupt (Ctrl-C)
+- Three plain buttons and the bottom LCD row are fixed verb keys: jump to the next session awaiting input, approve/reject a choice prompt, interrupt the focused session
+
+### 28.4 Architecture
+- `src-tauri/crates/tuic-streamdock/` — device transport (built on the `mirajazz` crate), rendering, gesture resolution, and slot-assignment policy, all decoupled from `AppState` behind a `StateSource`/`ActionSink` port so a future sidecar split needs no changes here
+- `src-tauri/src/streamdock/` — the in-process supervisor: reconciles the device connection with config, implements the two ports against `AppState` directly, and exposes status/device-list over HTTP + Tauri IPC
+- Config: `AppConfig.streamdock` (enable, device selection, screen/LED brightness, pinned sessions) — see [config.md](backend/config.md)
+- Settings tab: enable toggle, live status, device picker with rescan, brightness sliders, per-session pin toggles
+
+### 28.5 Hardware Notes
+- Reading a button press and writing a key's LCD image use two independent numbering spaces on this hardware for the same physical key — confirmed empirically, not documented by the vendor
+- Hot-plug (unplug/replug) recovers automatically via a 2s discovery poll; the vendor's own Creator app holds the device exclusively and must not be running alongside TUICommander

@@ -66,6 +66,7 @@ mod tests {
             shell_state: None,
             awaiting_input: false,
             choice_prompt_pending: false,
+            choice_prompt_options: Vec::new(),
             rate_limited: false,
             suggested_actions_pending: false,
             last_activity_ms: now_ms,
