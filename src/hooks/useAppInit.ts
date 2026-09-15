@@ -98,6 +98,7 @@ export interface AppInitDeps {
 					question_confident?: boolean;
 					agent_type?: string | null;
 					background_work?: boolean;
+					declared_background_work?: boolean;
 				} | null;
 			}>
 		>;
@@ -880,6 +881,7 @@ export async function initApp(deps: AppInitDeps) {
 				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
 				awaitingInputConfident: session.state?.question_confident === true,
 				backgroundWork: session.state?.background_work ?? false,
+				declaredBackgroundWork: session.state?.declared_background_work ?? false,
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 

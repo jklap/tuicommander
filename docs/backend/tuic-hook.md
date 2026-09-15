@@ -41,8 +41,8 @@ flags exactly as they did before derivation existed.
 | `PostToolUse` | `busy` | `tool_name` | — |
 | `PostToolUseFailure` | *(none)* | `tool_name` | from `exit_code` if present, else sentinel `1` — suppressed entirely if `is_interrupt` is `true` |
 | `Notification` | `awaiting` | `message`, `notification_type` | — |
-| `Stop` | `idle` | — | — |
-| `StopFailure` | `idle` | — | fixed `1` |
+| `Stop` | `idle` | `background_tasks` | — |
+| `StopFailure` | `idle` | `background_tasks` | fixed `1` |
 | `SessionEnd` | `idle` | — | — |
 | `Elicitation` | `awaiting` | — | — |
 | `ElicitationResult` | `busy` | — | — |
@@ -75,6 +75,7 @@ practice.
 | `--emit-tool` | Forces the `tool_name` scrape (legacy alias). |
 | `--emit-notify` | Forces the `message` scrape (legacy alias). |
 | `--emit-notification-type` | Forces the `notification_type` scrape. Unlike its siblings above, not a legacy alias — `notification_type` scraping was introduced alongside derivation, so no pre-derivation settings entry could ever reference it; kept only for parity with the other `scrape_*` override flags. |
+| `--emit-background-tasks` | Forces the `background_tasks` scrape. Not a legacy alias, same as `--emit-notification-type` — kept only for parity with the other `scrape_*` override flags. |
 | `--version` | Prints `tuic-hook <version>` and exits. Bypasses the `TUIC_SESSION` gate — used by `hook_binary`'s startup drift check outside any agent session. |
 | `--help`, `-h` | Prints a usage summary (this table, condensed) and exits. Also bypasses the `TUIC_SESSION` gate. |
 
@@ -97,6 +98,7 @@ A JSON object, read in full on every fire (bounded to 1 MiB — see
 | `notification_type` | `Notification`'s scrape (or `--emit-notification-type`) — Claude Code's own closed-set discriminant for the fire. Confirmed values as of this writing: `permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, `elicitation_url_dialog`, `elicitation_complete`, `elicitation_response`, `agent_needs_input`, `agent_completed`, `quota_auto_resume_fired`, `quota_auto_resume_stale`, `quota_auto_resume_disabled`. Lets the receiving end (`pty.rs::notification_awaiting_outcome`) classify a fire deterministically instead of sniffing `message`'s free-text wording — see `agent-signal-architecture.html`'s Incident Log (2026-08-29/2026-09-02). |
 | `exit_code` | `PostToolUseFailure`'s `toolfail` derivation (or `--toolfail-from-stdin`). Accepts a JSON number or a numeric string. Claude Code's real `PostToolUseFailure` payload doesn't send this field at all (its schema is `tool_name`, `tool_input`, `tool_use_id`, `error`, `is_interrupt?`, `duration_ms?`) — in practice this always falls back to the sentinel `1`, unless `is_interrupt` is `true` (see below). |
 | `is_interrupt` | `PostToolUseFailure`: if `true` (a tool call cancelled via Esc, not a real failure), suppresses the `toolfail` emission entirely rather than falling back to the sentinel. |
+| `background_tasks` | `Stop`/`StopFailure`'s scrape (or `--emit-background-tasks`). An array of `{id, type, status, description, command}` objects Claude Code includes when a backgrounded tool call (e.g. a `run_in_background` Bash command) is still outstanding as the turn ends. Extracted as the raw, comma-joined `status` of every entry — e.g. `"running,completed"` — **not** reduced to a "still running" boolean here (see `crates/tuic-hook/AGENTS.md`'s rule against baking Claude Code's evolving vocabulary into this binary); the receiving end (`pty.rs`'s `"bgtasks"` OSC arm) decides which status values mean "still running". Present-but-empty (`[]`) still emits — a real "nothing outstanding" observation, comma-joined into an empty string — distinct from the field being absent entirely, which emits nothing and leaves the receiving end's prior value untouched. |
 
 Missing, empty-string, or malformed fields are all treated as absent — "omit this
 verb" for free-text fields, "fall back to the sentinel `1`" for `exit_code`. Malformed
@@ -149,8 +151,8 @@ ESC ] 7770 ; verb=payload ESC \
 
 One sequence per verb, all verbs for one fire concatenated into a single buffer and
 delivered in one `write_all`. `state` and `toolfail` are emitted verbatim (fixed
-enum/numeric values); `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`notifytype` are
-percent-encoded (RFC 3986 unreserved set) since they carry free text that could
+enum/numeric values); `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`notifytype`/`bgtasks`
+are percent-encoded (RFC 3986 unreserved set) since they carry free text that could
 otherwise contain the OSC `;` delimiter or control bytes. `toolfail` is always
 partitioned ahead of every other verb on the wire, regardless of derivation/argv
 order — `handle_tuic_state` (`pty.rs`) reads-and-clears the turn's failure flag at the

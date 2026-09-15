@@ -23,10 +23,16 @@ export function effectiveActivityState(
 	isRateLimited: boolean,
 	agentState: string | null,
 	backgroundWork: boolean,
+	declaredBackgroundWork = false,
 ): EffectiveActivityState {
 	if (isRateLimited) return "rate_limited";
 	if (awaitingInput === "error") return "error";
 	if (awaitingInput || agentState === "awaiting_input") return "awaiting_input";
+	// Claude's own hook-declared background work (a backgrounded tool call it
+	// explicitly said it's waiting on) is authoritative, unlike the OS-level
+	// `backgroundWork` heuristic below — it deliberately bypasses that
+	// heuristic's idle carve-out rather than being folded into it.
+	if (declaredBackgroundWork) return "working";
 	// A ready composer is available work from the dashboard's point of view.
 	// Codex may intentionally leave a long-lived background terminal (for
 	// example a dev server) running after the turn has completed; that process
@@ -87,8 +93,16 @@ export function terminalStatusLabel(
 	classNames: { rateLimited: string; error: string; waiting: string; working: string; idle: string },
 	agentState: string | null = null,
 	backgroundWork = false,
+	declaredBackgroundWork = false,
 ): { label: string; className: string } {
-	const state = effectiveActivityState(shellState, awaitingInput, isRateLimited, agentState, backgroundWork);
+	const state = effectiveActivityState(
+		shellState,
+		awaitingInput,
+		isRateLimited,
+		agentState,
+		backgroundWork,
+		declaredBackgroundWork,
+	);
 	if (state === "rate_limited") return { label: "Rate limited", className: classNames.rateLimited };
 	if (state === "error") return { label: "Error", className: classNames.error };
 	if (state === "awaiting_input") return { label: "Waiting for input", className: classNames.waiting };
@@ -158,6 +172,7 @@ export interface ActivityTerminalRow {
 	isRateLimited: boolean;
 	agentState: string | null;
 	backgroundWork: boolean;
+	declaredBackgroundWork: boolean;
 	isBusy: boolean; // Debounced busy (2s hold) — calmer than raw shellState for badge/ordering
 	isPromoted: boolean;
 }
@@ -195,6 +210,7 @@ export function buildActivitySnapshot(): ActivitySnapshot {
 			isRateLimited,
 			agentState: t?.agentState ?? null,
 			backgroundWork: t?.backgroundWork ?? false,
+			declaredBackgroundWork: t?.declaredBackgroundWork ?? false,
 			isBusy: terminalsStore.isBusy(id),
 			isPromoted: globalWorkspaceStore.isPromoted(id),
 		});
@@ -204,7 +220,14 @@ export function buildActivitySnapshot(): ActivitySnapshot {
 		return (
 			!!r &&
 			isActivityWorking(
-				effectiveActivityState(r.shellState, r.awaitingInput, r.isRateLimited, r.agentState, r.backgroundWork),
+				effectiveActivityState(
+					r.shellState,
+					r.awaitingInput,
+					r.isRateLimited,
+					r.agentState,
+					r.backgroundWork,
+					r.declaredBackgroundWork,
+				),
 			)
 		);
 	};
@@ -277,6 +300,7 @@ export function branchActivitySummary(terminalIds: string[]): BranchActivitySumm
 						REMOVAL_DIALOG_CLASS_NAMES,
 						t?.agentState ?? null,
 						t?.backgroundWork ?? false,
+						t?.declaredBackgroundWork ?? false,
 					).label;
 		terminals.push({ id, agentType: t?.agentType ?? null, label });
 	}

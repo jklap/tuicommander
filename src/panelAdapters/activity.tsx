@@ -40,9 +40,17 @@ export function snapshotToRows(snap: ActivitySnapshot, prev?: readonly TerminalR
 				statusClasses,
 				t.agentState,
 				t.backgroundWork,
+				t.declaredBackgroundWork,
 			),
 			isWorking: isActivityWorking(
-				effectiveActivityState(t.shellState, t.awaitingInput, t.isRateLimited, t.agentState, t.backgroundWork),
+				effectiveActivityState(
+					t.shellState,
+					t.awaitingInput,
+					t.isRateLimited,
+					t.agentState,
+					t.backgroundWork,
+					t.declaredBackgroundWork,
+				),
 			),
 			lastDataAt: t.lastDataAt,
 			idleSince: t.idleSince,

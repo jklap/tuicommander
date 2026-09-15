@@ -1512,6 +1512,19 @@ pub(crate) struct SilenceState {
     completion_declared: bool,
     /// Input-turn epoch that declared completion.
     completion_turn_epoch: u64,
+    /// Claude's own hook payload (the `bgtasks` OSC 7770 verb, scraped from
+    /// `background_tasks` on `Stop`/`StopFailure`) declared at least one
+    /// background task still running as of `declared_background_work_turn_epoch`.
+    /// Deliberately separate from `SessionState::background_work` (the OS
+    /// process-tree observation): that field is demand-gated by a 1s
+    /// process-tree refresher which would silently overwrite a hook-derived
+    /// value on its very next tick (see `set_background_work_for_epoch_with_hook`).
+    /// This declaration instead follows `completion_declared`'s shape exactly
+    /// — single writer, epoch-stamped, self-expiring, untouched by any
+    /// polling loop.
+    declared_background_work: bool,
+    /// Input-turn epoch that made the declaration above.
+    declared_background_work_turn_epoch: u64,
     /// Ranked busy/idle/awaiting evidence for the current turn (#744-138c).
     /// Replaces eight independently-mutated booleans (explicit_busy, hook_busy,
     /// explicit_idle, idle_confirmed, turn_started_by_input, turn_activity_seen,
@@ -1580,6 +1593,8 @@ impl SilenceState {
             pending_suggest_at: None,
             completion_declared: false,
             completion_turn_epoch: 0,
+            declared_background_work: false,
+            declared_background_work_turn_epoch: 0,
             evidence: TurnEvidence::default(),
             hook_state_seen: false,
             cached_screen_activity: AgentScreenActivity::Unknown,
@@ -2251,12 +2266,38 @@ impl SilenceState {
     /// Drop any parked suggest on user input. Parallels `reset_tool_error_memory`:
     /// the user is engaging again, so stale suggestions from the previous turn
     /// must not fire after a new input cycle starts.
+    ///
+    /// Deliberately does NOT touch `declared_background_work` — see
+    /// `reset_declared_background_work`'s doc comment for why that's a
+    /// separate method, not folded in here. This method is also called from
+    /// `apply_working_evidence`'s "reopen a stale completed/idle turn on
+    /// renewed screen evidence" path, which is not a real new turn boundary.
     pub(crate) fn reset_suggest_memory(&mut self) {
         self.pending_suggest_items = None;
         self.pending_suggest_turn_epoch = 0;
         self.pending_suggest_at = None;
         self.completion_declared = false;
         self.completion_turn_epoch = 0;
+    }
+
+    /// Clear a `bgtasks`-declared background-work claim. Call this ONLY at a
+    /// genuine new-turn boundary (a real line/interrupt submitted to the
+    /// agent) — never from `apply_working_evidence`'s reopening path.
+    ///
+    /// This used to be folded into `reset_suggest_memory` on the assumption
+    /// that "a new turn invalidates any prior declaration" — true, but
+    /// `reset_suggest_memory` is ALSO called when renewed screen evidence
+    /// reopens a stale completed/idle Claude turn (`apply_working_evidence`),
+    /// which is not a new turn at all: for an agent orchestrating background
+    /// teammates, waking up to poll them is expected and doesn't mean the
+    /// teammates finished. Folding the two together meant every such poll
+    /// silently erased a still-accurate `declared_background_work=true` the
+    /// moment the parent's own screen showed renewed activity, until the
+    /// next `Stop` hook happened to re-assert it — see the `ai-usage`
+    /// Agent-Teams incident (2026-09-16) this split was extracted from.
+    pub(crate) fn reset_declared_background_work(&mut self) {
+        self.declared_background_work = false;
+        self.declared_background_work_turn_epoch = 0;
     }
 
     #[cfg(test)]
@@ -2266,6 +2307,21 @@ impl SilenceState {
 
     pub(crate) fn completion_declared_for_epoch(&self, turn_epoch: u64) -> bool {
         self.completion_declared && self.completion_turn_epoch == turn_epoch
+    }
+
+    /// Set from the `bgtasks` OSC 7770 verb (`pty.rs`'s `TermEvent::Tuic`
+    /// dispatch) — Claude's own hook declared at least one background task
+    /// with a "still running" status as of `turn_epoch`.
+    pub(crate) fn set_declared_background_work(&mut self, active: bool, turn_epoch: u64) {
+        self.declared_background_work = active;
+        self.declared_background_work_turn_epoch = turn_epoch;
+    }
+
+    /// Mirrors `completion_declared_for_epoch`: only true for the CURRENT
+    /// turn — a new turn silently invalidates a stale declaration even
+    /// without an explicit clear (see `reset_declared_background_work`).
+    pub(crate) fn declared_background_work_for_epoch(&self, turn_epoch: u64) -> bool {
+        self.declared_background_work && self.declared_background_work_turn_epoch == turn_epoch
     }
 
     /// Returns true if the session has been silent long enough and the spinner
@@ -2520,7 +2576,19 @@ fn try_shell_transition_locked<F: FnOnce()>(
                 .session_states
                 .get(session_id)
                 .is_some_and(|session| session.has_pending_background_probe());
-            if is_agent && !completion_declared && !has_background_work && !background_probe_pending
+            // `silence_state` (the caller's already-locked guard) — NOT
+            // `state.declared_background_work_for`, which would try to
+            // re-lock the same non-reentrant mutex and deadlock.
+            let declared_background_work = session_lifecycle.is_some_and(|(_, turn_epoch)| {
+                silence_state
+                    .as_ref()
+                    .is_some_and(|silence| silence.declared_background_work_for_epoch(turn_epoch))
+            });
+            if is_agent
+                && !completion_declared
+                && !has_background_work
+                && !background_probe_pending
+                && !declared_background_work
             {
                 parent_dispatch = enqueue_state_change_to_parent(
                     state,
@@ -3964,6 +4032,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
             let mut silence = sl.lock();
             silence.note_user_submission(false);
             silence.reset_suggest_memory();
+            silence.reset_declared_background_work();
         }
         return;
     };
@@ -3995,6 +4064,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         // this evidence and is redundant for the ones that do not.
         silence.note_user_submission(has_ready_screen_adapter(Some(&agent_type)));
         silence.reset_suggest_memory();
+        silence.reset_declared_background_work();
         stamp_last_output_now(state, session_id, now_epoch_ms());
         let prev = state
             .session_maps
@@ -5119,15 +5189,31 @@ fn emit_pending_suggest_if_idle(
     // this same lock before advancing SessionState.turn_epoch and clearing the
     // old turn. Whichever owns the lock first defines the lifecycle order.
     let mut silence_state = silence.lock();
-    let Some((current_turn_epoch, background_work)) = state
+    let Some((current_turn_epoch, background_work, background_probe_pending)) = state
         .session_maps
         .session_states
         .get(session_id)
-        .map(|session| (session.turn_epoch, session.background_work))
+        .map(|session| {
+            (
+                session.turn_epoch,
+                session.background_work,
+                session.has_pending_background_probe(),
+            )
+        })
     else {
         return false;
     };
-    if background_work {
+    // `background_probe_pending`: an open question (a ready screen or explicit
+    // idle marker was seen, but no process snapshot newer than that observation
+    // has confirmed or denied a live descendant yet) counts as work, same as
+    // every other reader of these three signals (`state.rs::session_state_with_shell`,
+    // `try_shell_transition_locked`'s parent-idle suppression) — publishing
+    // "completed" before the probe resolves would race a real background
+    // descendant that just hasn't been confirmed yet.
+    if background_work
+        || background_probe_pending
+        || silence_state.declared_background_work_for_epoch(current_turn_epoch)
+    {
         return false;
     }
     let Some((turn_epoch, items)) = silence_state.drain_pending_suggest_with_epoch() else {
@@ -6580,6 +6666,47 @@ impl ChunkProcessor {
                             // next busy→idle edge in `handle_tuic_state`; the actual
                             // payload value is intentionally never parsed here.
                             state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+                        }
+                        "bgtasks" => {
+                            // From a Stop/StopFailure hook: `tuic-hook` scraped
+                            // the raw, comma-joined `status` of every entry in
+                            // Claude Code's own `background_tasks` array (see
+                            // `background_task_statuses` in tuic-hook's
+                            // main.rs) — classification of which statuses mean
+                            // "still running" happens here, not in tuic-hook
+                            // (see that crate's AGENTS.md). A side-table write
+                            // only, like `toolfail` above — not `AgentMetadata`,
+                            // which has no consumer today. Stamped with the
+                            // CURRENT turn epoch so it self-expires the moment
+                            // a new prompt is submitted, exactly like
+                            // `completion_declared`/`mark_suggest_candidate`.
+                            //
+                            // Classified fail-safe, not as an exact `"running"`
+                            // match: Claude Code's `background_tasks[].status`
+                            // vocabulary is not a documented closed set anywhere
+                            // (unlike `notification_type`'s enumerated values) —
+                            // only `"completed"`/`"failed"` are confirmed terminal
+                            // from real production captures. Any OTHER status
+                            // (a future/unrecognized value, or a transient one
+                            // like "pending"/"queued" this binary has never seen)
+                            // is treated as still active, so an unrecognized
+                            // status can never silently clear a real declaration
+                            // — the same "unanswered evidence counts as work"
+                            // philosophy `has_pending_background_probe` already
+                            // uses for the OS-heuristic path.
+                            const KNOWN_TERMINAL_STATUSES: &[&str] = &["completed", "failed"];
+                            let decoded = percent_decode_osc_payload(&payload);
+                            let running = decoded.split(',').any(|status| {
+                                !status.is_empty() && !KNOWN_TERMINAL_STATUSES.contains(&status)
+                            });
+                            if let Some(turn_epoch) =
+                                state.session_maps.session_states.get(session_id).map(|s| s.turn_epoch)
+                                && let Some(silence) = state.session_maps.silence_states.get(session_id)
+                            {
+                                silence
+                                    .lock()
+                                    .set_declared_background_work(running, turn_epoch);
+                            }
                         }
                         // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
                         // metadata `tuic-hook` extracted natively from a Claude Code
@@ -10735,6 +10862,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
         let mut sl = ss.lock();
         sl.reset_tool_error_memory();
         sl.reset_suggest_memory();
+        sl.reset_declared_background_work();
     }
 
     // Track slash command mode: true when the input buffer starts with /
@@ -10959,11 +11087,33 @@ pub(crate) fn resize_session_core(
 /// 6. startup_settled == true
 #[cfg(unix)]
 fn background_activity_blocks_standby(state: &AppState, session_id: &str) -> bool {
-    state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .is_some_and(|session| session.background_work || session.has_pending_background_probe())
+    background_activity_blocks_standby_with_silence(state, session_id, None)
+}
+
+/// `locked_silence`: pass the caller's already-held `SilenceState` guard when
+/// one is held (e.g. `standby_session`'s `_lifecycle_guard`) — `None` re-locks
+/// internally via `AppState::declared_background_work_for`. Never lock
+/// `state.session_maps.silence_states` again here unconditionally: `SilenceState`'s mutex
+/// is not reentrant, and `standby_session` calls this while already holding it.
+#[cfg(unix)]
+fn background_activity_blocks_standby_with_silence(
+    state: &AppState,
+    session_id: &str,
+    locked_silence: Option<&SilenceState>,
+) -> bool {
+    let Some((turn_epoch, base_activity)) = state.session_maps.session_states.get(session_id).map(|session| {
+        (
+            session.turn_epoch,
+            session.background_work || session.has_pending_background_probe(),
+        )
+    }) else {
+        return false;
+    };
+    let declared_background_work = match locked_silence {
+        Some(silence) => silence.declared_background_work_for_epoch(turn_epoch),
+        None => state.declared_background_work_for(session_id, turn_epoch),
+    };
+    base_activity || declared_background_work
 }
 
 #[cfg(unix)]
@@ -11096,7 +11246,7 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
         .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
         .clone();
     let _lifecycle_guard = silence.lock();
-    if background_activity_blocks_standby(state, session_id) {
+    if background_activity_blocks_standby_with_silence(state, session_id, Some(&_lifecycle_guard)) {
         return Ok(false);
     }
     let pgid = {
