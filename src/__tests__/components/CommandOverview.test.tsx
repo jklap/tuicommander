@@ -56,7 +56,31 @@ describe("CommandOverview", () => {
 			commandBlocks: [makeBlock({ promptText: null })],
 			activeBlock: null,
 			shellState: "idle",
-			ref: { getBufferLines },
+			// No eviction in this fixture, so grid-relative === eviction-stable.
+			ref: { getBufferLines, getHistoryBase: () => 0 },
+		});
+		const { container } = render(() => <CommandOverview />);
+		await Promise.resolve();
+		await Promise.resolve();
+		const commandDiv = container.querySelector(".command");
+		expect(commandDiv?.textContent).toBe("echo hello");
+		expect(getBufferLines).toHaveBeenCalledWith(2, 3);
+	});
+
+	// Scrollback-ring eviction fix: commandLine/executionLine are eviction-stable
+	// (see CommandBlock's doc comment) — the grid-slice fallback must convert them
+	// down through getHistoryBase() before calling getBufferLines, not pass the
+	// raw stored values straight through.
+	it("converts commandLine/executionLine through getHistoryBase before slicing the grid", async () => {
+		getBufferLines.mockClear();
+		getBufferLines.mockResolvedValueOnce(["echo", "hello"]);
+		mockGet.mockReturnValue({
+			name: "Terminal 1",
+			commandBlocks: [makeBlock({ promptText: null, commandLine: 1002, executionLine: 1003 })],
+			activeBlock: null,
+			shellState: "idle",
+			// 1000 lines evicted since these rows were recorded.
+			ref: { getBufferLines, getHistoryBase: () => 1000 },
 		});
 		const { container } = render(() => <CommandOverview />);
 		await Promise.resolve();
@@ -77,6 +101,59 @@ describe("CommandOverview", () => {
 		mockGet.mockReturnValue({
 			name: "Terminal 1",
 			commandBlocks: [makeBlock({ promptText: null, commandLine: null, executionLine: null })],
+			activeBlock: null,
+			shellState: "idle",
+			ref: { getBufferLines },
+		});
+		const { container } = render(() => <CommandOverview />);
+		await Promise.resolve();
+		await Promise.resolve();
+		const commandDiv = container.querySelector(".command");
+		expect(commandDiv?.textContent).toBe("idle");
+		expect(getBufferLines).not.toHaveBeenCalled();
+	});
+
+	// Fullscreen-mode fix: CommandOverview is the deliberate exception to
+	// alt-screen filtering — a block recorded during a Claude Code fullscreen
+	// turn has no valid row to render gutter/scrollbar/nav against, but its
+	// promptText/duration/exit status are still real and must keep showing
+	// here, same as any other block.
+	it("still renders prompt/duration/exit status for a block recorded on the alternate screen", async () => {
+		mockGet.mockReturnValue({
+			name: "Terminal 1",
+			commandBlocks: [
+				makeBlock({
+					promptText: "please refactor the parser",
+					onAltScreen: true,
+					startedAt: Date.now() - 2000,
+					endedAt: Date.now(),
+					exitCode: 0,
+				}),
+			],
+			activeBlock: null,
+			shellState: "idle",
+			ref: { getBufferLines },
+		});
+		const { container } = render(() => <CommandOverview />);
+		await Promise.resolve();
+		await Promise.resolve();
+		const commandDiv = container.querySelector(".command");
+		expect(commandDiv?.textContent).toBe("please refactor the parser");
+		expect(container.querySelector(".duration")?.textContent).toBe("2s");
+		expect(getBufferLines).not.toHaveBeenCalled();
+	});
+
+	// Code-review finding: a REAL shell block (no promptText — the grid-slice
+	// fallback is its only text source) tagged `onAltScreen: true` must skip
+	// the buffer read entirely rather than slicing alt-screen-relative row
+	// numbers against the real primary scrollback. Distinct from the test
+	// above, which covers a hook-driven block (has promptText, never hits
+	// the grid-slice branch at all).
+	it("skips the grid-slice fallback for an alt-screen-tainted block with no promptText", async () => {
+		getBufferLines.mockClear();
+		mockGet.mockReturnValue({
+			name: "Terminal 1",
+			commandBlocks: [makeBlock({ promptText: null, onAltScreen: true })],
 			activeBlock: null,
 			shellState: "idle",
 			ref: { getBufferLines },

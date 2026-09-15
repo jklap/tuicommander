@@ -149,6 +149,37 @@ pub enum ParsedEvent {
         /// "end" and for the `⏺`-heuristic fallback, which has no text source.
         #[serde(skip_serializing_if = "Option::is_none")]
         prompt_text: Option<String>,
+        /// True when `line` was computed while the alternate screen buffer was
+        /// active. `line` is `total_scrolled() + cursor row` (eviction-stable,
+        /// see 2026-09-15's scrollback-ring fix) against whichever screen
+        /// (primary or alt) was active at that instant — a fullscreen TUI
+        /// (Claude Code's default renderer) never grows real alt-screen
+        /// history, so `line` there is just a transient on-screen cursor row,
+        /// not a valid anchor into the durable scrollback. Consumers that
+        /// render row-anchored UI (gutter marks, scrollbar ticks, fold,
+        /// jump-nav, block-scoped search) must skip a block where this is
+        /// true; metadata-only consumers (the Commands overview panel) must
+        /// not, since `prompt_text`/timestamps/`exit_code` stay meaningful
+        /// either way.
+        #[serde(rename = "on_alt_screen", default)]
+        on_alt_screen: bool,
+        /// True for every block synthesized from a Claude Code fullscreen
+        /// transcript-mode `[` dump (see `synthesize_transcript_dump_block_events`).
+        /// The frontend needs this to prune stale dump blocks on
+        /// `new_dump_generation` without touching real shell/hook blocks.
+        #[serde(rename = "from_transcript_dump", default)]
+        from_transcript_dump: bool,
+        /// True only on the first `start` event of a fresh `[`-dump — i.e. one
+        /// that followed a visit back to the alternate screen since the last
+        /// dump activity. Per `synthesize_transcript_dump_block_events`'s doc
+        /// comment, `[` re-dumps the *entire* conversation from scratch each
+        /// time it's pressed, so a repeat gesture would otherwise leave a
+        /// second, overlapping copy of the same blocks sitting in
+        /// `commandBlocks[]` forever. The frontend must prune every existing
+        /// `fromTranscriptDump: true` block (including a still-open
+        /// `activeBlock`) before adding the block this flag rides on.
+        #[serde(rename = "new_dump_generation", default)]
+        new_dump_generation: bool,
     },
     /// Agent failed to start because of a session-id conflict or missing session.
     /// Emitted when Claude Code prints startup errors like

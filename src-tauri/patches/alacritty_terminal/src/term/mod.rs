@@ -3366,12 +3366,27 @@ impl<T: EventListener> Handler for Term<T> {
             _ => return,
         };
         self.grid.cursor.template.cell_type = cell_type;
-        let line =
-            self.grid.history_size() + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        // Eviction-stable absolute row (`total_scrolled() + cursor row`), not the
+        // saturating `history_size() + cursor row` this used before — a value
+        // stored once and compared against a *later* frame's grid (every consumer
+        // of this event's `line`: Command Blocks, `userPromptLines`) must use the
+        // coordinate that never plateaus or aliases once the scrollback cap starts
+        // evicting old lines, the same convention `reserve_image_footprint`'s
+        // `abs_row` already uses for image placements. See TUICommander AGENTS.md
+        // > Command Blocks > "Scrollback-ring eviction" for the aliasing this fixes.
+        let line = self.grid.total_scrolled()
+            + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        // Captured atomically with `line` itself — the alternate screen can
+        // toggle more than once within a single PTY chunk, so sampling this
+        // downstream (after the whole chunk has been processed) can attach
+        // the wrong screen's state to an event from earlier in the same
+        // chunk. See TUICommander AGENTS.md > Command Blocks.
+        let on_alt_screen = self.mode().contains(TermMode::ALT_SCREEN);
         self.event_proxy.send_event(Event::Osc133 {
             command,
             params: params.to_owned(),
             line,
+            on_alt_screen,
         });
     }
 
@@ -3382,12 +3397,15 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn osc7770(&mut self, verb: &str, payload: &str) {
-        let line =
-            self.grid.history_size() + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        // See osc133()'s comment above — same eviction-stable-coordinate reasoning.
+        let line = self.grid.total_scrolled()
+            + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        let on_alt_screen = self.mode().contains(TermMode::ALT_SCREEN);
         self.event_proxy.send_event(Event::Tuic {
             verb: verb.to_owned(),
             payload: payload.to_owned(),
             line,
+            on_alt_screen,
         });
     }
 

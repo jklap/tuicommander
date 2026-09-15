@@ -68,6 +68,12 @@ pub enum Event {
         command: char,
         params: String,
         line: usize,
+        /// Whether the alternate screen buffer was active at the exact
+        /// instant `line` was computed — captured here, atomically with
+        /// `line` itself, rather than downstream, since alt-screen state can
+        /// change more than once within a single PTY chunk (see TUICommander
+        /// AGENTS.md > Command Blocks).
+        on_alt_screen: bool,
     },
 
     /// OSC 7 current working directory (file://hostname/path).
@@ -78,6 +84,8 @@ pub enum Event {
         verb: String,
         payload: String,
         line: usize,
+        /// See `Osc133::on_alt_screen`.
+        on_alt_screen: bool,
     },
 
     /// iTerm2 OSC 1337 `StealFocus` — bring the terminal application to the
@@ -127,12 +135,14 @@ impl Debug for Event {
                 command,
                 params,
                 line,
+                ..
             } => write!(f, "Osc133({command}, {params:?}, line={line})"),
             Event::Osc7(url) => write!(f, "Osc7({url})"),
             Event::Tuic {
                 verb,
                 payload,
                 line,
+                ..
             } => write!(f, "Tuic({verb}={payload}, line={line})"),
             Event::RequestFocus => write!(f, "RequestFocus"),
             Event::RequestAttention(value) => write!(f, "RequestAttention({value})"),

@@ -36,6 +36,27 @@ export function clampRowRangeToViewport(
 	return { startVp: clampedStart - viewTop, endVp: clampedEnd - viewTop };
 }
 
+/**
+ * Converts a stored, eviction-stable absolute row (Command Blocks'
+ * `promptLine`/`commandLine`/`executionLine`/`endLine`, `userPromptLines`)
+ * into the CURRENT frame's grid-relative absolute row — the coordinate
+ * `absRowToViewport`/`viewportRowToAbs`/`terminal_get_lines` all use — or
+ * `null` once the physical row has been evicted from scrollback.
+ *
+ * The backend tags these fields with `total_scrolled() + cursor row`
+ * (2026-09-15's scrollback-ring fix) specifically because it never plateaus
+ * or shrinks the way `history_size()` does once the ring starts evicting —
+ * without this, two blocks recorded far apart in real time could land on the
+ * identical grid-relative row once the ring saturates. `historyBase` (this
+ * frame's own count of evicted lines) reconstructs the grid-relative row for
+ * *this* frame — the same `historyBase + grid_relative` convention
+ * `imageLayer.ts` already uses for image placements, run in reverse.
+ */
+export function evictionStableToGridRelative(line: number, historyBase: number): number | null {
+	const relative = line - historyBase;
+	return relative < 0 ? null : relative;
+}
+
 // Wire format constants (must match terminal_grid.rs)
 const HEADER_SIZE = 26;
 const CELL_SIZE = 11; // 4 (char u32) + 3 (fg) + 3 (bg) + 1 (attrs)

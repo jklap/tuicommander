@@ -347,9 +347,9 @@ describe("canvasTerminalTransport", () => {
 			await transport.onEvent("osc133", handler);
 
 			wsInstances[0].onmessage!({
-				data: JSON.stringify({ type: "osc133", marker: "D", line: 42, exit_code: 1 }),
+				data: JSON.stringify({ type: "osc133", marker: "D", line: 42, exit_code: 1, on_alt_screen: false }),
 			});
-			expect(handler).toHaveBeenCalledWith({ marker: "D", line: 42, exit_code: 1 });
+			expect(handler).toHaveBeenCalledWith({ marker: "D", line: 42, exit_code: 1, on_alt_screen: false });
 		});
 
 		it("delivers a cwd frame as the same { cwd } object the desktop event carries", async () => {

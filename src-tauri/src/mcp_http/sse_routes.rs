@@ -348,12 +348,14 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             marker,
             line,
             exit_code,
+            on_alt_screen,
         } => {
             serde_json::json!({
                 "session_id": session_id,
                 "marker": marker,
                 "line": line,
                 "exit_code": exit_code,
+                "on_alt_screen": on_alt_screen,
             })
         }
         AppEvent::PtyCwd { session_id, cwd } => {

@@ -83,19 +83,29 @@ fn hook_binary_command(args: &[&str]) -> String {
 }
 
 /// `OSC 7770;state=<state>` only — the common case (`UserPromptSubmit`,
-/// `Stop`, `SessionEnd`, …).
-pub(crate) fn hook_command(state: &str) -> String {
-    hook_binary_command(&["--state", state])
+/// `Stop`, `SessionEnd`, …). `agent` scopes `tuic-hook`'s `hook_event_name`
+/// derivation lookup (see `crates/tuic-hook/src/main.rs`'s `DERIVATIONS`
+/// table and `find_derivation`) — without it, a same-named event from a
+/// different agent (Gemini's own "Notification"/"SessionEnd" happen to
+/// collide with Claude-specific rows) could silently inherit Claude's scrape
+/// behavior if that agent's payload also carries a `hook_event_name` field.
+pub(crate) fn hook_command(agent: &str, state: &str) -> String {
+    hook_binary_command(&["--agent", agent, "--state", state])
 }
 
-/// No flags at all: `hook_event_name`, which `tuic-hook` reads from the
-/// hook's own stdin JSON, fully determines what gets emitted (see
-/// `crates/tuic-hook/src/main.rs`'s `DERIVATIONS` table) — state, any
-/// free-text scrape, and `toolfail` alike. Used for every Claude entry whose
-/// meaning matches the bare event; only `PreToolUse`'s narrow matcher needs
-/// an explicit override (see `claude_hook_map` below).
-fn derived_hook_command() -> String {
-    hook_binary_command(&[])
+/// No explicit `--state`/`--emit-*` flags: `hook_event_name`, which
+/// `tuic-hook` reads from the hook's own stdin JSON, fully determines what
+/// gets emitted (see `crates/tuic-hook/src/main.rs`'s `DERIVATIONS` table) —
+/// state, any free-text scrape, and `toolfail` alike. Used for every Claude
+/// entry whose meaning matches the bare event; only `PreToolUse`'s narrow
+/// matcher needs an explicit override (see `claude_hook_map` below). Still
+/// passes `--agent` — derivation is scoped per agent (see `hook_command`'s
+/// doc comment), and `derived_hook_command` is Claude-only in practice, but
+/// stays explicit rather than relying on `tuic-hook`'s absent-`--agent`
+/// default (`"claude"`, kept only for commands installed before this flag
+/// existed).
+fn derived_hook_command(agent: &str) -> String {
+    hook_binary_command(&["--agent", agent])
 }
 
 /// Claude hooks (tool-level). Array order matters: the broad `PreToolUse` busy
@@ -112,8 +122,8 @@ fn derived_hook_command() -> String {
 /// awaiting is sticky, so a set with no clear latches the badge forever.
 pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
     vec![
-        ("SessionStart", "", derived_hook_command()),
-        ("UserPromptSubmit", "", derived_hook_command()),
+        ("SessionStart", "", derived_hook_command("claude")),
+        ("UserPromptSubmit", "", derived_hook_command("claude")),
         (
             "PreToolUse",
             "AskUserQuestion|ExitPlanMode",
@@ -124,15 +134,15 @@ pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
             // means specifically on this already-scoped entry — a matcher
             // policy that belongs here, not baked into `tuic-hook`. Its
             // `tool_name` scrape is still derived, not an explicit flag.
-            hook_binary_command(&["--state", "awaiting"]),
+            hook_binary_command(&["--agent", "claude", "--state", "awaiting"]),
         ),
         (
             "PostToolUse",
             "AskUserQuestion|ExitPlanMode",
-            derived_hook_command(),
+            derived_hook_command("claude"),
         ),
-        ("Elicitation", "", derived_hook_command()),
-        ("ElicitationResult", "", derived_hook_command()),
+        ("Elicitation", "", derived_hook_command("claude")),
+        ("ElicitationResult", "", derived_hook_command("claude")),
         // Trade-off vs. the old explicit `--toolfail-from-stdin`: that flag
         // guaranteed a `toolfail=1` fallback even against malformed/absent
         // stdin. Deriving instead means an unparseable payload can't be
@@ -141,22 +151,28 @@ pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
         // unparseable JSON. Accepted because that JSON is Claude Code's own
         // generated payload (not user input), so it is not expected to be
         // malformed in practice.
-        ("PostToolUseFailure", "", derived_hook_command()),
-        ("Notification", "", derived_hook_command()),
-        ("Stop", "", derived_hook_command()),
-        ("StopFailure", "", derived_hook_command()),
-        ("SessionEnd", "", derived_hook_command()),
+        ("PostToolUseFailure", "", derived_hook_command("claude")),
+        ("Notification", "", derived_hook_command("claude")),
+        ("Stop", "", derived_hook_command("claude")),
+        ("StopFailure", "", derived_hook_command("claude")),
+        ("SessionEnd", "", derived_hook_command("claude")),
     ]
 }
 
 /// Gemini hooks (same shell-hook shape, different event names; v0.26+).
+/// `--agent gemini` on every entry keeps `tuic-hook`'s `hook_event_name`
+/// derivation scoped away from Claude's `DERIVATIONS` rows — Gemini's own
+/// "Notification" and "SessionEnd" event names happen to collide with two
+/// Claude-specific rows, and Gemini's own hook payload shape (does it ever
+/// send `hook_event_name` at all?) is unverified, so this is defense against
+/// an unverified-but-plausible future collision, not a currently-observed bug.
 pub(crate) fn gemini_hook_map() -> Vec<HookEntry> {
     vec![
-        ("BeforeAgent", "", hook_command("busy")),
-        ("BeforeTool", "", hook_command("busy")),
-        ("AfterAgent", "", hook_command("idle")),
-        ("Notification", "", hook_command("awaiting")),
-        ("SessionEnd", "", hook_command("idle")),
+        ("BeforeAgent", "", hook_command("gemini", "busy")),
+        ("BeforeTool", "", hook_command("gemini", "busy")),
+        ("AfterAgent", "", hook_command("gemini", "idle")),
+        ("Notification", "", hook_command("gemini", "awaiting")),
+        ("SessionEnd", "", hook_command("gemini", "idle")),
     ]
 }
 
@@ -169,10 +185,10 @@ pub(crate) fn gemini_hook_map() -> Vec<HookEntry> {
 /// suppressed under instrumentation.
 pub(crate) fn grok_hook_map() -> Vec<HookEntry> {
     vec![
-        ("UserPromptSubmit", "", hook_command("busy")),
-        ("PreToolUse", "", hook_command("busy")),
-        ("Stop", "", hook_command("idle")),
-        ("SessionEnd", "", hook_command("idle")),
+        ("UserPromptSubmit", "", hook_command("grok", "busy")),
+        ("PreToolUse", "", hook_command("grok", "busy")),
+        ("Stop", "", hook_command("grok", "idle")),
+        ("SessionEnd", "", hook_command("grok", "idle")),
     ]
 }
 
@@ -183,9 +199,9 @@ pub(crate) fn grok_hook_map() -> Vec<HookEntry> {
 /// the first turn (not session open), so busy appears once the user submits.
 pub(crate) fn codex_hook_map() -> Vec<HookEntry> {
     vec![
-        ("SessionStart", "", hook_command("busy")),
-        ("UserPromptSubmit", "", hook_command("busy")),
-        ("Stop", "", hook_command("idle")),
+        ("SessionStart", "", hook_command("codex", "busy")),
+        ("UserPromptSubmit", "", hook_command("codex", "busy")),
+        ("Stop", "", hook_command("codex", "idle")),
     ]
 }
 
@@ -195,7 +211,7 @@ mod tests {
 
     #[test]
     fn hook_command_starts_with_tuic_session_guard() {
-        let cmd = hook_command("busy");
+        let cmd = hook_command("claude", "busy");
         assert!(
             cmd.starts_with(r#"[ -n "${TUIC_SESSION"#),
             "must guard on TUIC_SESSION first: {cmd}"
@@ -208,15 +224,25 @@ mod tests {
         // generator's job is now just "build the right argv", not resolve a
         // tty itself. See the golden_wire_output module below for proof the
         // *actual bytes on the wire* are unchanged.
-        assert!(hook_command("busy").contains("--state busy"));
-        assert!(hook_command("awaiting").contains("--state awaiting"));
-        assert!(hook_command("idle").contains("--state idle"));
+        assert!(hook_command("claude", "busy").contains("--state busy"));
+        assert!(hook_command("claude", "awaiting").contains("--state awaiting"));
+        assert!(hook_command("claude", "idle").contains("--state idle"));
+    }
+
+    #[test]
+    fn hook_command_scopes_derivation_to_the_given_agent() {
+        assert!(hook_command("gemini", "busy").contains("--agent gemini"));
+        assert!(hook_command("grok", "idle").contains("--agent grok"));
+        assert!(hook_command("codex", "busy").contains("--agent codex"));
+        assert!(derived_hook_command("claude").contains("--agent claude"));
     }
 
     #[test]
     fn hook_command_ends_with_sentinel() {
         assert!(
-            hook_command("idle").trim_end().ends_with(SENTINEL),
+            hook_command("claude", "idle")
+                .trim_end()
+                .ends_with(SENTINEL),
             "must end with the ownership sentinel"
         );
     }
@@ -248,14 +274,14 @@ mod tests {
     #[test]
     fn hook_command_always_exits_zero() {
         assert!(
-            hook_command("busy").contains("|| true"),
+            hook_command("claude", "busy").contains("|| true"),
             "must never block the agent (exit 0)"
         );
     }
 
     #[test]
     fn hook_command_checks_the_binary_is_executable_before_invoking_it() {
-        let cmd = hook_command("busy");
+        let cmd = hook_command("claude", "busy");
         assert!(
             cmd.contains(r#"[ -x "$B" ]"#),
             "must not attempt to invoke a missing/non-executable binary: {cmd}"
@@ -1053,36 +1079,29 @@ mod tests {
             );
         }
 
-        /// KNOWN GAP, locked down rather than silently left untested: `tuic-hook`'s
-        /// `DERIVATIONS` table is matched purely on the `hook_event_name` string,
-        /// with no per-agent scoping. Gemini's own event names "Notification" and
-        /// "SessionEnd" happen to be spelled identically to two Claude entries in
-        /// that table. Gemini's map carries an explicit `--state`, so the *state*
-        /// transition stays correct either way — but if a future Gemini payload
-        /// shape turns out to include a `hook_event_name` field (its hooks
-        /// "haven't been verified" not to, per this module's doc comment),
-        /// Notification would ALSO start emitting `notify`/`notifytype` scrapes
-        /// Gemini's map never asked for, contradicting this module's doc comment
-        /// that non-Claude agents "fall back to flags exactly as before derivation
-        /// existed." This test pins the current, real behavior (not the intended
-        /// one) so a fix — or a decision to accept the risk — is a deliberate,
-        /// visible change to this test, not a silent one.
+        /// FIXED 2026-09-15 (was a known, deliberately-locked-down gap):
+        /// `tuic-hook`'s `DERIVATIONS` table used to be matched purely on the
+        /// `hook_event_name` string, with no per-agent scoping. Gemini's own
+        /// event names "Notification" and "SessionEnd" happen to be spelled
+        /// identically to two Claude-only entries in that table, so a Gemini
+        /// payload that (unverified, but plausible) also carries a
+        /// `hook_event_name` field would silently inherit Claude's
+        /// `message`/`notification_type` scrapes — the `notification_type`
+        /// leak was the bigger risk of the two, since it feeds
+        /// `pty.rs::notification_awaiting_outcome`'s confidence classifier
+        /// directly, not just inert free-text metadata.
         ///
-        /// The `notification_type` leak (added 2026-09-02 alongside `message`'s
-        /// pre-existing one, same collision) is a strictly bigger risk than
-        /// `message`'s: a leaked `message` is inert free-text metadata, but a
-        /// leaked `notification_type` directly drives
-        /// `pty.rs::notification_awaiting_outcome`'s confidence classification —
-        /// a Gemini payload whose own (unrelated) field coincidentally matching
-        /// one of Claude's 12 documented values could silently suppress a
-        /// genuine Gemini awaiting badge. Not fixed here (the real fix is
-        /// per-agent-scoped `DERIVATIONS` matching, a larger change — see this
-        /// module's doc comment and `todo.md`'s "DERIVATIONS lookup is not
-        /// scoped per agent" entry); flagged in
-        /// `agent-signal-architecture.html`'s Incident Log so it isn't
-        /// discovered fresh.
+        /// Every generated hook command now carries an explicit `--agent`
+        /// (`gemini_hook_map()`'s entries pass `--agent gemini`), and
+        /// `find_derivation` (`crates/tuic-hook/src/main.rs`) filters on
+        /// `event == name && agent == agent` — so `DERIVATIONS`' Claude-only
+        /// rows can never match a Gemini-tagged invocation, regardless of
+        /// what `hook_event_name` its payload happens to carry. This test now
+        /// pins the fixed behavior: a same-named Gemini event produces ONLY
+        /// what `gemini_hook_map()` explicitly asked for (`--state`), never a
+        /// Claude-shaped scrape.
         #[test]
-        fn gemini_notification_name_collision_with_claude_derivations_currently_leaks_a_scrape() {
+        fn gemini_notification_name_collision_with_claude_derivations_is_scoped_away() {
             let _binary = install_binary();
             let map = gemini_hook_map();
 
@@ -1094,28 +1113,25 @@ mod tests {
             let (_, written) = run(notification_cmd, true, None, Some(stdin));
             assert_eq!(
                 written,
-                [
-                    osc("notify", "unexpected%20but%20present"),
-                    osc("state", "awaiting"),
-                ]
-                .concat(),
-                "documents the current leak — Claude's Notification derivation scrapes \
-                 `message` for ANY caller whose payload names itself \"Notification\", \
-                 including Gemini's, since matching isn't scoped per agent"
+                osc("state", "awaiting"),
+                "must NOT inherit Claude's `message` scrape — Gemini's own \
+                 --agent tag keeps DERIVATIONS' Claude-only Notification row \
+                 from matching"
             );
 
             let stdin = br#"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#;
             let (_, written) = run(notification_cmd, true, None, Some(stdin));
             assert_eq!(
                 written,
-                [osc("notifytype", "idle_prompt"), osc("state", "awaiting"),].concat(),
-                "the same collision now also leaks notification_type — worse than the \
-                 message leak above, since this one actively feeds Gemini's own \
-                 state=awaiting through Claude's confidence classifier"
+                osc("state", "awaiting"),
+                "must NOT inherit Claude's `notification_type` scrape either — \
+                 this is the higher-risk half of the fixed collision, since an \
+                 unscoped leak here would have fed Gemini's own state=awaiting \
+                 through Claude's confidence classifier"
             );
 
-            // SessionEnd has no scrape field in DERIVATIONS, so its collision is
-            // currently harmless — state stays the only output.
+            // SessionEnd's collision was already harmless before the fix (no
+            // scrape field in DERIVATIONS for it) — still verify state alone.
             let (_, _, session_end_cmd) = map
                 .iter()
                 .find(|(e, _, _)| *e == "SessionEnd")
@@ -1123,6 +1139,36 @@ mod tests {
             let stdin = br#"{"hook_event_name":"SessionEnd"}"#;
             let (_, written) = run(session_end_cmd, true, None, Some(stdin));
             assert_eq!(written, osc("state", "idle"));
+        }
+
+        /// Companion to the collision-scoping test above: a REAL Claude
+        /// invocation (the common, intended case) must still get its
+        /// derivation-driven scrapes — proves the `--agent` scoping fix
+        /// didn't accidentally break Claude's own matching in the process of
+        /// fixing Gemini's.
+        #[test]
+        fn claude_notification_still_scrapes_message_and_notification_type() {
+            let _binary = install_binary();
+            let map = claude_hook_map();
+            let (_, _, notification_cmd) = map
+                .iter()
+                .find(|(e, _, _)| *e == "Notification")
+                .expect("claude map must have a Notification entry");
+
+            let stdin = br#"{"hook_event_name":"Notification","message":"hello","notification_type":"idle_prompt"}"#;
+            let (_, written) = run(notification_cmd, true, None, Some(stdin));
+            assert_eq!(
+                written,
+                [
+                    osc("notify", "hello"),
+                    osc("notifytype", "idle_prompt"),
+                    osc("state", "awaiting"),
+                ]
+                .concat(),
+                "Claude's own Notification derivation must still scrape both \
+                 fields — only cross-agent matching was scoped away, not \
+                 Claude's own"
+            );
         }
     }
 }
