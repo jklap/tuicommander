@@ -156,7 +156,31 @@ and a frontend bug where the live-session poll refresh reset every manually
 collapsed file back to expanded. All have regression tests; see
 `AGENTS.md`'s "Session Diff Review — Replay Semantics and Cache-Invalidation
 Gotchas" section for the two replay/cache gotchas in case they recur
-elsewhere. What's NOT machine-verifiable:
+elsewhere.
+
+**Known gaps from the same review, deliberately not fixed in this pass**
+(none rise to data-corruption-in-the-common-case the way the fixed ones did):
+
+- Binary detection (`is_binary_str`/`is_binary_bytes`) only checks for a NUL
+  byte in the first 8000 bytes (git's own heuristic) — a non-UTF-8 text file
+  (e.g. Latin-1/Shift-JIS) with no NUL in that window is treated as text,
+  lossily converted via `String::from_utf8_lossy`, and that lossy text can be
+  written back to disk on a whole-file revert. Narrow edge case; would need a
+  real encoding-detection pass to fix properly.
+- `apply_forward`/`apply_reverse`/`revert_step_via_substitution` locate a
+  substitution via the *first* occurrence of the old/new text (`str::find`,
+  not `rfind` or hunk-anchored) — if a file has duplicated text (e.g. a
+  repeated license header) and the real edit targeted a later occurrence,
+  replay can silently touch the wrong one. Needs hunk/line-context anchoring
+  to fix correctly, which is a bigger change than this pass's scope.
+- `revert_step_via_substitution`'s Edit-arm logic is a second, independently
+  maintained copy of `apply_reverse`'s Edit arm — a future correctness fix to
+  one can be missed in the other. Maintainability only, not a live bug.
+- `list_review_sessions(include_counts: true)` scans each session's full
+  transcript sequentially rather than in parallel — picker load time scales
+  linearly with session count. Performance only.
+
+What's NOT machine-verifiable:
 
 - [ ] Open the tab against a real, past Claude Code session for this repo (not a
       synthetic fixture) and confirm the grouped-by-file view's cumulative diffs
