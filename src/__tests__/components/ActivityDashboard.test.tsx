@@ -514,6 +514,7 @@ describe("Activity Dashboard subagent marker", () => {
 					isRateLimited: false,
 					agentState: null,
 					backgroundWork: false,
+					declaredBackgroundWork: false,
 					isBusy: false,
 					isPromoted: false,
 					subAgentTag: "COORDINATOR",

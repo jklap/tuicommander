@@ -98,6 +98,7 @@ export interface ActiveSessionInfo {
 		agent_intent?: string | null;
 		last_prompt?: string | null;
 		background_work?: boolean;
+		declared_background_work?: boolean;
 		queued_commands?: number;
 		last_activity_ms?: number;
 	} | null;
