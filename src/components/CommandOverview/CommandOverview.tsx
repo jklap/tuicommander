@@ -7,9 +7,17 @@ import s from "./CommandOverview.module.css";
 /** Extract command text from a block: prefer the turn-level `promptText` (the
  *  actual submitted prompt, from the backend's idle→busy edge) when present,
  *  falling back to slicing the grid between the row markers — the only text
- *  source a real shell block or the `⏺`-heuristic fallback has. */
+ *  source a real shell block or the `⏺`-heuristic fallback has. The grid-slice
+ *  fallback needs a real row to slice, so it's the one place in this file
+ *  that DOES care about `onAltScreen` — a block tagged `onAltScreen: true`
+ *  with no `promptText` (a plain shell command whose OSC 133 markers landed
+ *  on the alt screen) has no valid `commandLine`/`executionLine` to read.
+ *  `commandLine`/`executionLine` are eviction-stable (see `CommandBlock`'s doc
+ *  comment) — convert to `getBufferLines`'s grid-relative space before reading;
+ *  a row already evicted from scrollback converts to `null` and reads as empty. */
 async function getCommandText(termId: string, block: CommandBlock): Promise<string> {
 	if (block.promptText != null) return block.promptText;
+	if (block.onAltScreen) return "";
 	if (block.commandLine == null || block.executionLine == null) return "";
 	const term = terminalsStore.get(termId);
 	const ref = term?.ref;
