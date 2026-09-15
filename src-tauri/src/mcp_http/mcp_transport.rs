@@ -6872,6 +6872,8 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the cfg(unix) PTY tests below buffer real output.
+    #[cfg(unix)]
     use crate::OutputRingBuffer;
     use base64::Engine;
 
