@@ -1052,7 +1052,7 @@ fn build_mcp_instructions_for_mode(
         }
         out.push_str("- `task` (poll a spawn that outlives a wait): get, cancel\n");
         if repo_enabled {
-            out.push_str("- `repo` (repos, PRs, worktrees): list, active, prs, status, worktree_list, worktree_create, worktree_remove\n");
+            out.push_str("- `repo` (repos, PRs, worktrees): list, active, prs, status, worktree_list, worktree_create, worktree_remove, worktree_setup_status\n");
         }
         if ui_enabled {
             out.push_str("- `ui` (tabs, toasts, confirm dialogs): tab, toast, confirm\n");
@@ -1286,8 +1286,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str =
-    "list, active, prs, status, worktree_list, worktree_create, worktree_remove";
+const REPO_ACTIONS: &str = "list, active, prs, status, worktree_list, worktree_create, worktree_remove, worktree_setup_status";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
@@ -1296,7 +1295,7 @@ const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 // Remove these when handle_mcp_tool_call dispatch is updated.
 const LEGACY_AGENT_ACTIONS: &str = "detect, spawn, stats, metrics";
 const LEGACY_GITHUB_ACTIONS: &str = "prs, status, issues, close_issue, reopen_issue";
-const LEGACY_WORKTREE_ACTIONS: &str = "list, create, remove";
+const LEGACY_WORKTREE_ACTIONS: &str = "list, create, remove, setup_status";
 const LEGACY_WORKSPACE_ACTIONS: &str = "list, active";
 const LEGACY_UI_ACTIONS: &str = "tab";
 const LEGACY_NOTIFY_ACTIONS: &str = "toast, confirm";
@@ -1517,11 +1516,11 @@ fn native_tool_definitions(prefer_spawning: bool, prefer_messaging: bool) -> ser
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI status, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create worktree. Requires path. Optional: branch, base_ref, spawn_session.\n- worktree_remove: Remove worktree. Requires path, branch.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI status, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create worktree. Requires path. Optional: branch, base_ref, spawn_session.\n- worktree_remove: Remove worktree. Requires path, branch.\n- worktree_setup_status: Poll a worktree's Setup Script outcome (the script runs in the background after worktree_create returns, so this is the only way to learn its result). Requires path, branch. Returns {state: \"running\"|\"not_configured\"|\"completed\"|\"unknown\"}, plus exit_code/error when completed.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, worktree_list, worktree_create, worktree_remove" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, worktree_list, worktree_create, worktree_remove)" },
-                "branch": { "type": "string", "description": "Branch name (action=worktree_create optional, action=worktree_remove required)" },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, worktree_list, worktree_create, worktree_remove, worktree_setup_status" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, worktree_list, worktree_create, worktree_remove, worktree_setup_status)" },
+                "branch": { "type": "string", "description": "Branch name (action=worktree_create optional, action=worktree_remove and action=worktree_setup_status required)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" }
             }, "required": ["action"] }
@@ -3711,6 +3710,25 @@ async fn handle_worktree(
                     worktree_remove_success_response(outcome.branch_delete_warning)
                 }
                 Err(e) => serde_json::json!({"error": e}),
+            }
+        }
+        "setup_status" => {
+            let path = match require_path(args, "setup_status") {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let branch = match args["branch"].as_str() {
+                Some(b) => b.to_string(),
+                None => {
+                    return serde_json::json!({"error": "Action 'setup_status' requires 'branch' parameter"});
+                }
+            };
+            match crate::worktree::get_worktree_setup_status(state, &path, &branch) {
+                Some(status) => to_json_or_error(status),
+                None => serde_json::json!({"state": "unknown"}),
             }
         }
         other => serde_json::json!({"error": format!(
@@ -6382,6 +6400,9 @@ async fn handle_repo(
         "worktree_remove" => {
             handle_worktree(state, &remap_action(args, "remove"), is_claude_code).await
         }
+        "worktree_setup_status" => {
+            handle_worktree(state, &remap_action(args, "setup_status"), is_claude_code).await
+        }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
         )}),
@@ -7485,10 +7506,11 @@ mod tests {
         // file-sync ordering fix: create_worktree_shared now chains the
         // setup script in the background (spawn_worktree_setup_chain),
         // after the file sync, so this tool response can no longer report
-        // setup_script/setup_script_error synchronously — an MCP client
-        // must rely on the worktree-setup-script-completed event instead
-        // (which it currently has no way to observe). No prior test
-        // exercised handle_worktree's "create" arm at all.
+        // setup_script/setup_script_error synchronously. An MCP client
+        // learns the outcome via `repo action=worktree_setup_status`
+        // instead (see the tests below) — polling, since it has no
+        // SSE/event stream to receive worktree-setup-script-completed on.
+        // No prior test exercised handle_worktree's "create" arm at all.
         let repo = create_temp_git_repo_for_mcp_test();
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
 
@@ -7516,6 +7538,131 @@ mod tests {
             response.get("setup_script_error").is_none(),
             "setup_script_error must not appear in the response: {response}"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_setup_status_requires_branch() {
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "setup_status",
+                "path": repo.path().to_string_lossy(),
+            }),
+            false,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("requires 'branch'"),
+            "response: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_setup_status_reports_unknown_for_an_untracked_pair() {
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "setup_status",
+                "path": repo.path().to_string_lossy(),
+                "branch": "never-created",
+            }),
+            false,
+        )
+        .await;
+
+        assert_eq!(response["state"], "unknown");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn handle_worktree_setup_status_reports_the_tracked_status_after_create() {
+        // End-to-end through the same "create" arm as the test above: an MCP
+        // client that just created a worktree with a configured setup script
+        // must be able to poll for its outcome via this action, since the
+        // create response itself no longer carries it.
+        let repo = create_temp_git_repo_for_mcp_test();
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        crate::config::save_repo_settings(crate::config::RepoSettingsMap {
+            repos: [(
+                repo.path().to_string_lossy().to_string(),
+                crate::config::RepoSettingsEntry {
+                    path: repo.path().to_string_lossy().to_string(),
+                    setup_script: Some("exit 0".to_string()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })
+        .expect("save repo settings");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let create_response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "create",
+                "path": repo.path().to_string_lossy(),
+                "branch": "mcp-setup-status-test",
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(create_response["branch"], "mcp-setup-status-test");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut final_response = None;
+        loop {
+            let response = handle_worktree(
+                &state,
+                &serde_json::json!({
+                    "action": "setup_status",
+                    "path": repo.path().to_string_lossy(),
+                    "branch": "mcp-setup-status-test",
+                }),
+                false,
+            )
+            .await;
+            if response["state"] == "completed" {
+                final_response = Some(response);
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let response = final_response.expect("setup script should complete within the timeout");
+        assert_eq!(response["exit_code"], 0);
+        assert!(response.get("error").is_none_or(|e| e.is_null()));
+    }
+
+    #[tokio::test]
+    async fn handle_repo_worktree_setup_status_remaps_to_handle_worktree() {
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_setup_status",
+                "path": repo.path().to_string_lossy(),
+                "branch": "never-created",
+            }),
+            false,
+        )
+        .await;
+
+        assert_eq!(response["state"], "unknown");
     }
 
     #[tokio::test]
@@ -7650,6 +7797,7 @@ mod tests {
             ws_clients: dashmap::DashMap::new(),
             config: parking_lot::RwLock::new(crate::config::AppConfig::default()),
             git_cache: crate::state::GitCacheState::new(),
+            worktree_setup_status: crate::state::build_worktree_setup_status_cache(),
             repo_watchers: dashmap::DashMap::new(),
             repo_git_fingerprints: dashmap::DashMap::new(),
             repo_head_targets: dashmap::DashMap::new(),
@@ -12172,6 +12320,7 @@ mod tests {
             "worktree_list",
             "worktree_create",
             "worktree_remove",
+            "worktree_setup_status",
         ] {
             assert!(
                 action_desc.contains(action),

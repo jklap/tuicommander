@@ -640,6 +640,13 @@ pub(super) struct RunSetupScriptRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct WorktreeSetupStatusQuery {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub branch: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct DiscoverAgentSessionRequest {
     #[serde(rename = "agentType")]
     pub agent_type: String,

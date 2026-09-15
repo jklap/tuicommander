@@ -131,6 +131,26 @@ pub(super) async fn run_setup_script_http(
     }
 }
 
+/// Poll the current state of a worktree's background setup chain
+/// (`worktree::spawn_worktree_setup_chain`) — closes the observability gap
+/// left by that chain no longer returning `setup_script`/`setup_script_error`
+/// synchronously: an MCP client has no SSE/event stream to receive
+/// `worktree-setup-script-completed` on, so this lets it poll instead.
+/// Read-only status lookup, no `require_local_or_auth` gate needed (unlike
+/// `run_setup_script_http`, this never executes anything).
+pub(super) async fn get_worktree_setup_status_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<WorktreeSetupStatusQuery>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&q.repo_path) {
+        return e.into_response();
+    }
+    match crate::worktree::get_worktree_setup_status(&state, &q.repo_path, &q.branch) {
+        Some(status) => Json(status).into_response(),
+        None => Json(serde_json::json!({"state": "unknown"})).into_response(),
+    }
+}
+
 pub(super) async fn create_worktree_shared(
     state: &Arc<AppState>,
     base_repo: String,
@@ -725,6 +745,122 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_worktree_shared_tracks_setup_status_through_to_completed() {
+        // Closes the observability gap left by the background chain no longer
+        // returning setup_script/setup_script_error synchronously — an MCP
+        // client has no event stream, so it must be able to poll instead.
+        let repo = create_temp_git_repo();
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        crate::config::save_repo_settings(crate::config::RepoSettingsMap {
+            repos: [(
+                repo.path().to_string_lossy().to_string(),
+                crate::config::RepoSettingsEntry {
+                    path: repo.path().to_string_lossy().to_string(),
+                    setup_script: Some("exit 0".to_string()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })
+        .expect("save repo settings");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        create_worktree_shared(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "status-test-branch".to_string(),
+            None,
+        )
+        .await
+        .expect("worktree should be created");
+
+        // spawn_worktree_setup_chain inserts a status synchronously before
+        // create_worktree_shared returns — must never still be "untracked" at
+        // this point, whether or not the script has finished yet.
+        let immediate = crate::worktree::get_worktree_setup_status(
+            &state,
+            repo.path().to_string_lossy().as_ref(),
+            "status-test-branch",
+        );
+        assert!(
+            immediate.is_some(),
+            "status must be tracked synchronously, before the background chain finishes"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut final_status = None;
+        while std::time::Instant::now() < deadline {
+            match crate::worktree::get_worktree_setup_status(
+                &state,
+                repo.path().to_string_lossy().as_ref(),
+                "status-test-branch",
+            ) {
+                Some(s @ crate::state::WorktreeSetupStatus::Completed { .. }) => {
+                    final_status = Some(s);
+                    break;
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        assert_eq!(
+            final_status,
+            Some(crate::state::WorktreeSetupStatus::Completed {
+                exit_code: Some(0),
+                error: None,
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_worktree_shared_tracks_not_configured_when_no_setup_script() {
+        let repo = create_temp_git_repo();
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        create_worktree_shared(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "no-script-branch".to_string(),
+            None,
+        )
+        .await
+        .expect("worktree should be created");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut final_status = None;
+        while std::time::Instant::now() < deadline {
+            match crate::worktree::get_worktree_setup_status(
+                &state,
+                repo.path().to_string_lossy().as_ref(),
+                "no-script-branch",
+            ) {
+                Some(s @ crate::state::WorktreeSetupStatus::NotConfigured) => {
+                    final_status = Some(s);
+                    break;
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        assert_eq!(
+            final_status,
+            Some(crate::state::WorktreeSetupStatus::NotConfigured),
+            "must settle on NotConfigured, never linger as Running forever, when no script is configured"
+        );
+    }
+
+    #[test]
+    fn get_worktree_setup_status_is_none_for_an_untracked_pair() {
+        let state = crate::state::tests_support::make_test_app_state();
+        assert_eq!(
+            crate::worktree::get_worktree_setup_status(&state, "/never/tracked", "some-branch"),
+            None
+        );
+    }
+
     // --- run_setup_script_http: the IPC/HTTP parity route ---
 
     fn loopback() -> SocketAddr {
@@ -896,5 +1032,97 @@ mod tests {
         request.extensions_mut().insert(ConnectInfo(loopback()));
         let response = mini_router.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- get_worktree_setup_status_http: closes the MCP observability gap ---
+
+    #[tokio::test]
+    async fn get_worktree_setup_status_http_returns_unknown_for_an_untracked_pair() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = get_worktree_setup_status_http(
+            State(state),
+            Query(WorktreeSetupStatusQuery {
+                repo_path: "/never/tracked".to_string(),
+                branch: "some-branch".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["state"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn get_worktree_setup_status_http_returns_the_tracked_status() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.worktree_setup_status.insert(
+            ("/repo".to_string(), "feat-x".to_string()),
+            Arc::new(crate::state::WorktreeSetupStatus::Completed {
+                exit_code: Some(1),
+                error: None,
+            }),
+        );
+
+        let response = get_worktree_setup_status_http(
+            State(state),
+            Query(WorktreeSetupStatusQuery {
+                repo_path: "/repo".to_string(),
+                branch: "feat-x".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["state"], "completed");
+        assert_eq!(body["exit_code"], 1);
+        assert!(body["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_worktree_setup_status_http_rejects_an_invalid_repo_path() {
+        // Boundary/corrupt-data case: validate_repo_path must run before any
+        // cache lookup, the same as every other route in this file.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = get_worktree_setup_status_http(
+            State(state),
+            Query(WorktreeSetupStatusQuery {
+                repo_path: "not-an-absolute-path".to_string(),
+                branch: "main".to_string(),
+            }),
+        )
+        .await;
+        assert_ne!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_worktrees_setup_status_does_not_match_the_branch_delete_route() {
+        // Adjacency guard, mirroring post_worktrees_run_script_does_not_match_the_branch_delete_route
+        // above: /worktrees/setup-status (GET, static segment) and
+        // /worktrees/{branch} (DELETE, single dynamic segment) coexist in the
+        // same router.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/setup-status",
+                axum::routing::get(get_worktree_setup_status_http),
+            )
+            .route(
+                "/worktrees/{branch}",
+                axum::routing::delete(remove_worktree_http),
+            )
+            .with_state(state);
+
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/worktrees/setup-status?repoPath=%2Frepo&branch=feat-x")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = mini_router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["state"], "unknown");
     }
 }

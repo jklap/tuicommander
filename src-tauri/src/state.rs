@@ -1465,6 +1465,10 @@ pub struct AppState {
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
     pub(crate) git_cache: GitCacheState,
+    /// Pollable snapshot of each worktree's background setup chain, so an MCP
+    /// client (no event stream) can check status instead of only ever being
+    /// told via `worktree-setup-script-completed`. See [`WorktreeSetupStatus`].
+    pub(crate) worktree_setup_status: WorktreeSetupStatusCache,
     /// Raw file watchers per repo (keyed by repo path), with per-category
     /// debounce. macOS/Windows: one recursive `notify::RecommendedWatcher` over
     /// the repo root. Linux: pruned non-recursive working-tree watches + targeted
@@ -2744,6 +2748,7 @@ impl AppState {
             ws_clients: DashMap::new(),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
+            worktree_setup_status: build_worktree_setup_status_cache(),
             repo_watchers: DashMap::new(),
             repo_git_fingerprints: DashMap::new(),
             repo_head_targets: DashMap::new(),
@@ -3167,6 +3172,47 @@ pub(crate) fn build_git_cache<T: Send + Sync + 'static>(
                 ttl_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         })
+        .build()
+}
+
+/// Snapshot of a worktree's background setup chain
+/// (`worktree::spawn_worktree_setup_chain`), keyed by `(repo_path, branch)` in
+/// [`WorktreeSetupStatusCache`]. Lets a polling caller (an MCP client, which
+/// has no SSE/event stream to listen on) ask "is it done yet" instead of only
+/// ever being told via the dual-emitted `worktree-setup-script-completed`
+/// event — closing the observability gap `AppEvent::WorktreeSetupScriptCompleted`
+/// left for that transport.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub(crate) enum WorktreeSetupStatus {
+    /// The chain is running (file sync and/or setup script not finished yet).
+    Running,
+    /// The chain finished and no setup script was configured for this repo —
+    /// there was never anything to wait for beyond the file sync.
+    NotConfigured,
+    /// The chain finished having run a configured setup script.
+    Completed {
+        exit_code: Option<i64>,
+        error: Option<String>,
+    },
+}
+
+/// Bounded, TTL-evicted cache of [`WorktreeSetupStatus`] snapshots, keyed by
+/// `(repo_path, branch)`. Same shape as [`GitCache`] (moka, capacity + TTL
+/// bound) but keyed on a pair rather than a single repo path, so it lives
+/// alongside `GitCacheState` rather than inside it.
+pub(crate) type WorktreeSetupStatusCache =
+    moka::sync::Cache<(String, String), Arc<WorktreeSetupStatus>>;
+
+/// A worktree's setup chain is expected to finish within
+/// `setup_script_timeout_secs` (600s default) plus the file sync — 30 minutes
+/// gives real headroom over that without keeping a "Completed" entry around
+/// indefinitely. Capacity matches `GIT_CACHE_CAPACITY`: worktree creation is
+/// rare enough that this is a generous bound, not a tight one.
+pub(crate) fn build_worktree_setup_status_cache() -> WorktreeSetupStatusCache {
+    moka::sync::Cache::builder()
+        .max_capacity(GIT_CACHE_CAPACITY)
+        .time_to_live(Duration::from_secs(30 * 60))
         .build()
 }
 
@@ -6549,6 +6595,7 @@ mod tests {
             ws_clients: dashmap::DashMap::new(),
             config: parking_lot::RwLock::new(crate::config::AppConfig::default()),
             git_cache: GitCacheState::new(),
+            worktree_setup_status: build_worktree_setup_status_cache(),
             repo_watchers: dashmap::DashMap::new(),
             repo_git_fingerprints: dashmap::DashMap::new(),
             repo_head_targets: dashmap::DashMap::new(),
