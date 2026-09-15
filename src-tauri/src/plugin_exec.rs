@@ -138,8 +138,26 @@ fn canonical_trusted_dirs() -> &'static [std::path::PathBuf] {
 }
 
 /// Returns true if `path` resides within one of the trusted directories.
+///
+/// Each form is compared against its own. The canonical list alone is not
+/// enough: on Windows `canonicalize` prefixes `\\?\`, which a path nobody
+/// canonicalized cannot match, and a path that does not exist yet cannot be
+/// canonicalized at all — so on Windows this answered false for every plain
+/// path, including the trusted directories themselves. A `..` anywhere
+/// disqualifies the plain comparison, because `starts_with` matches components
+/// and would let the path climb back out of the directory it just entered.
 fn is_in_trusted_dir(path: &std::path::Path) -> bool {
-    canonical_trusted_dirs().iter().any(|d| path.starts_with(d))
+    let climbs = path
+        .components()
+        .any(|c| c == std::path::Component::ParentDir);
+    if !climbs && trusted_dirs().iter().any(|d| path.starts_with(d)) {
+        return true;
+    }
+    path.canonicalize().is_ok_and(|canonical| {
+        canonical_trusted_dirs()
+            .iter()
+            .any(|d| canonical.starts_with(d))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +173,13 @@ fn validate_cwd(cwd: &str) -> Result<std::path::PathBuf, String> {
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("Failed to resolve working directory: {e}"))?;
-    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    // Canonicalized like the path it is compared against: on Windows
+    // `canonicalize` returns a `\\?\`-prefixed path, which a plain home
+    // directory never prefixes, so every working directory would be rejected.
+    let home = dirs::home_dir()
+        .ok_or("Cannot determine home directory")?
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve home directory: {e}"))?;
     if !canonical.starts_with(&home) {
         return Err("Working directory must be within the user's home directory".into());
     }
@@ -420,8 +444,17 @@ mod tests {
     #[test]
     fn validate_cwd_rejects_outside_home() {
         let home = dirs::home_dir().unwrap();
-        if !std::path::Path::new("/tmp").starts_with(&home) {
-            assert!(validate_cwd("/tmp").is_err());
+        // `/tmp` is neither absolute nor outside home on Windows, where the
+        // temp directory sits under the user profile.
+        let outside = if cfg!(windows) {
+            std::path::PathBuf::from(
+                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
+            )
+        } else {
+            std::path::PathBuf::from("/tmp")
+        };
+        if !outside.starts_with(&home) {
+            assert!(validate_cwd(&outside.to_string_lossy()).is_err());
         }
     }
 

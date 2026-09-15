@@ -63,7 +63,16 @@ fn effective_home_dir() -> Result<PathBuf, String> {
             .canonicalize()
             .map_err(|e| format!("Failed to resolve home override: {e}"));
     }
-    dirs::home_dir().ok_or("Cannot determine home directory".into())
+    // Canonicalized like the override above, and like the path it is compared
+    // against in `validate_within_home`. On Windows `canonicalize` returns a
+    // `\\?\`-prefixed path, so a plain home directory never prefixes it and
+    // every plugin FS call is rejected — including reads of the home directory
+    // itself. On unix the two forms usually coincide, which is why only the
+    // Windows suite caught it.
+    dirs::home_dir()
+        .ok_or_else(|| "Cannot determine home directory".to_string())?
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve home directory: {e}"))
 }
 
 /// Resolve and validate that a path is within $HOME.
@@ -1748,6 +1757,25 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// `ArtifactEntry::path` is a String, and Windows builds it with `\`, so a
+    /// plain suffix check against a `/`-spelled expectation never matches
+    /// there. Normalise instead of spelling every expectation twice.
+    fn slashed(path: &str) -> String {
+        path.replace('\\', "/")
+    }
+
+    /// A directory that exists and is outside the home directory. `/tmp` is
+    /// neither absolute nor outside home on Windows, where the temp directory
+    /// lives under the user profile, so the tests that need "somewhere the
+    /// plugin must not reach" cannot spell it as a literal.
+    fn dir_outside_home() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()))
+        } else {
+            PathBuf::from("/tmp")
+        }
+    }
+
     #[test]
     fn validate_rejects_empty_path() {
         assert!(validate_within_home("").is_err());
@@ -1872,8 +1900,9 @@ mod tests {
     fn validate_rejects_outside_home() {
         let _guard = FS_TEST_LOCK.lock().unwrap();
         let home = dirs::home_dir().unwrap();
-        if !Path::new("/tmp").starts_with(&home) {
-            assert!(validate_within_home("/tmp").is_err());
+        let outside = dir_outside_home();
+        if !outside.starts_with(&home) {
+            assert!(validate_within_home(&outside.to_string_lossy()).is_err());
         }
     }
 
@@ -2062,10 +2091,12 @@ mod tests {
     fn write_file_rejects_outside_home() {
         let _guard = FS_TEST_LOCK.lock().unwrap();
         let home = dirs::home_dir().unwrap();
-        if !Path::new("/tmp").starts_with(&home) {
+        let outside = dir_outside_home();
+        if !outside.starts_with(&home) {
+            let target = outside.join(".tuic-test-write-outside.txt");
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result = rt.block_on(plugin_write_file_inner(
-                "/tmp/.tuic-test-write-outside.txt".to_string(),
+                target.to_string_lossy().to_string(),
                 "content".to_string(),
             ));
             assert!(result.is_err());
@@ -2271,18 +2302,19 @@ mod tests {
 
         let paths: Vec<_> = out.iter().map(|e| e.path.as_str()).collect();
         assert!(
-            out.iter().any(|e| e.path.ends_with("/bin")
+            out.iter().any(|e| slashed(&e.path).ends_with("/bin")
                 && e.kind == "dotnet"
                 && !e.path.contains("sysroot")),
             "got {paths:?}"
         );
         assert!(
             out.iter()
-                .any(|e| e.path.ends_with("/obj") && e.kind == "dotnet"),
+                .any(|e| slashed(&e.path).ends_with("/obj") && e.kind == "dotnet"),
             "got {paths:?}"
         );
         assert!(
-            !out.iter().any(|e| e.path.ends_with("sysroot/bin")),
+            !out.iter()
+                .any(|e| slashed(&e.path).ends_with("sysroot/bin")),
             "unmarked bin must not be claimed: {paths:?}"
         );
         assert!(
@@ -2348,7 +2380,7 @@ mod tests {
 
         let kind_of = |suffix: &str| {
             out.iter()
-                .find(|e| e.path.ends_with(suffix))
+                .find(|e| slashed(&e.path).ends_with(suffix))
                 .map(|e| e.kind.clone())
         };
         assert_eq!(kind_of("app/build").as_deref(), Some("gradle"));
@@ -2382,7 +2414,7 @@ mod tests {
             "got {:?}",
             out.iter().map(|e| &e.path).collect::<Vec<_>>()
         );
-        assert!(out[0].path.ends_with("php-app/vendor"));
+        assert!(slashed(&out[0].path).ends_with("php-app/vendor"));
         assert_eq!(out[0].kind, "php");
     }
 
