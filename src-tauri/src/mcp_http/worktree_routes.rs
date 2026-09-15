@@ -854,4 +854,47 @@ mod tests {
         // and must not 404 — it should reach run_setup_script_http and succeed.
         assert_eq!(response.status(), StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn run_setup_script_http_rejects_malformed_json_body() {
+        // Boundary/corrupt-data case: run_setup_script_http's Json<RunSetupScriptRequest>
+        // extractor can't be exercised by calling the handler function directly with a
+        // hand-built struct (the compiler would force every field to exist) — a genuinely
+        // malformed/incomplete wire body only surfaces axum's own extraction rejection
+        // when it goes through the real router, hence the same mini-router as the
+        // adjacency test above rather than a direct handler call.
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mini_router = axum::Router::new()
+            .route(
+                "/worktrees/run-script",
+                axum::routing::post(run_setup_script_http),
+            )
+            .with_state(state);
+
+        // Missing the required "cwd" field entirely.
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(
+                serde_json::json!({"script": "echo hi"}).to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+        let response = mini_router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Not valid JSON at all.
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/worktrees/run-script")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("not json"))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(loopback()));
+        let response = mini_router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }

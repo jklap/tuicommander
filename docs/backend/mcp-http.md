@@ -162,6 +162,7 @@ serving a configuration the disk disagrees with. See
 | `POST` | `/worktrees` | Create worktree |
 | `DELETE` | `/worktrees` | Remove worktree |
 | `GET` | `/worktrees/paths?path=` | Get worktree paths for repo |
+| `POST` | `/worktrees/run-script` | Run a Setup/Archive/Run script (`{script, cwd}`) with the `TUIC_*` env injected and a timeout enforced — loopback or authenticated only, see below |
 
 ## Streaming
 

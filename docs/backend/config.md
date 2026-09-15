@@ -718,9 +718,6 @@ A `.tuic.json` file in the repository root provides team-shareable settings. It 
 | `base_branch` | `String` | Base branch for worktrees |
 | `copy_ignored_files` | `bool` | Copy .gitignored files to worktree |
 | `copy_untracked_files` | `bool` | Copy untracked files to worktree |
-| `setup_script` | `String` | Script to run after worktree creation |
-| `run_script` | `String` | Default run command |
-| `archive_script` | `String` | Script to run before archive/delete |
 | `worktree_storage` | `WorktreeStorage` | Storage strategy (sibling/app-dir/inside-repo) |
 | `delete_branch_on_remove` | `bool` | Delete branch when removing worktree |
 | `auto_archive_merged` | `bool` | Auto-archive merged worktrees |
@@ -728,6 +725,8 @@ A `.tuic.json` file in the repository root provides team-shareable settings. It 
 | `pr_merge_strategy` | `MergeStrategy` | PR merge method preference |
 | `after_merge` | `WorktreeAfterMerge` | Post-merge worktree action |
 | `auto_delete_on_pr_close` | `AutoDeleteOnPrClose` | Auto-delete on PR close |
+
+**`setup_script`/`run_script`/`archive_script` are deliberately NOT fields of `RepoLocalConfig`** — executing a repo-committed script with no trust-on-first-use confirmation would let a malicious branch run arbitrary code the moment its worktree is created. Configure these per-repo (`repo-settings.json`, via Settings) or as a global default (`repo-defaults.json`) instead — see `resolve_archive_script`/`resolve_effective_setup_script` in `src-tauri/src/worktree.rs`/`config.rs`, both of which skip this tier explicitly.
 
 **Command:** `load_repo_local_config(repo_path)` — returns `RepoLocalConfig` or `null` if file is missing or malformed.
 

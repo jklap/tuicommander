@@ -102,12 +102,12 @@ When using **Ask** mode, the cleanup dialog detects uncommitted changes and auto
 
 ### Archive Script
 
-A per-repo lifecycle hook that runs **before** a worktree is archived or deleted. Configure it in Settings → Repository → Scripts tab, or via `.tuic.json` (`archive_script` field).
+A per-repo lifecycle hook that runs **before** a worktree is archived or deleted. Configure it in Settings → Repository → Scripts tab, or as a global default in Settings → Repositories. **Not** supported in `.tuic.json` — executing a repo-committed script with no trust-on-first-use confirmation would let a malicious branch run arbitrary code the moment its worktree is touched.
 
 - The script runs in the worktree directory that is about to be removed
-- If the script exits with a non-zero code, the archive/delete operation is **blocked** and an error is shown
+- If the script exits with a non-zero code — or times out (120s by default) — the archive/delete operation is **blocked** and an error is shown
 - Use cases: backing up local data, cleaning up resources, notifying external systems
-- The script is invoked via the platform shell (`sh -c` on macOS/Linux, `cmd /C` on Windows)
+- The script is invoked via the platform shell (`sh -c` on macOS/Linux, `cmd /C` on Windows), with a `TUIC_*` environment describing the worktree (main checkout path, branch, base ref, etc. — see the AI Agents guide's "Worktree Context" section) and, on Unix, a timeout that kills the whole process tree, not just the shell
 
 ## Moving Terminals Between Worktrees
 

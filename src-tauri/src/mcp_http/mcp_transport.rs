@@ -7480,6 +7480,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_worktree_create_no_longer_returns_setup_script_fields() {
+        // Pins the deliberate MCP contract change from the setup-script/
+        // file-sync ordering fix: create_worktree_shared now chains the
+        // setup script in the background (spawn_worktree_setup_chain),
+        // after the file sync, so this tool response can no longer report
+        // setup_script/setup_script_error synchronously — an MCP client
+        // must rely on the worktree-setup-script-completed event instead
+        // (which it currently has no way to observe). No prior test
+        // exercised handle_worktree's "create" arm at all.
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "create",
+                "path": repo.path().to_string_lossy(),
+                "branch": "mcp-create-test",
+            }),
+            false,
+        )
+        .await;
+
+        assert!(
+            response.get("worktree_path").is_some(),
+            "response: {response}"
+        );
+        assert_eq!(response["branch"], "mcp-create-test");
+        assert!(
+            response.get("setup_script").is_none(),
+            "setup_script must not appear in the response: {response}"
+        );
+        assert!(
+            response.get("setup_script_error").is_none(),
+            "setup_script_error must not appear in the response: {response}"
+        );
+    }
+
+    #[tokio::test]
     async fn handle_worktree_remove_actually_removes_a_real_worktree() {
         // No existing test exercised `handle_worktree`'s "remove" arm against a
         // real repo/worktree — only the missing-branch-param error path
