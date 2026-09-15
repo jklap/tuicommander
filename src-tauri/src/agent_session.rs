@@ -2003,6 +2003,7 @@ mod tests {
 
     /// The composed half is unit-tested above; this covers the half that reads a
     /// real process, which is where the platform APIs can silently return nothing.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn rebuild_launch_command_reads_a_live_process() {
         let pid = std::process::id();
