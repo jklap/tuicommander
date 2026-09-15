@@ -768,6 +768,7 @@ fn repo_tool_lists_retained_worktree_actions_and_branch_parameter() {
         "worktree_list",
         "worktree_create",
         "worktree_remove",
+        "worktree_setup_status",
     ] {
         assert!(
             action_desc.contains(action),
