@@ -688,6 +688,10 @@ Add-time secrets travel in an optional write-only `credentials` array on the sav
 | `sounds.error` | `bool` | `true` | Play on error |
 | `sounds.completion` | `bool` | `true` | Play on completion |
 | `sounds.warning` | `bool` | `true` | Play on warning |
+| `sounds.info` | `bool` | `true` | Play on info |
+| `sounds.attention` | `bool` | `true` | Play the agent-needs-you callback |
+| `audio_device` | `Option<String>` | `None` | Specific output device name; `None` = system default |
+| `sound_choices.<event>` | `SoundChoice` | `{preset: "default", custom_path: None}` | Per-event sound source, one entry each for `question`/`error`/`completion`/`warning`/`info`/`attention`. `preset` is a plain string interpreted by `notification_sound::resolve_sequence` (`"default"`, another event's name to borrow its tone, or `"custom"`) rather than a Rust enum, so a new preset value needs no matching change to this struct. `custom_path` is only read when `preset == "custom"` |
 | `silence_remote_completions` | `bool` | `true` | Mute sounds and OS notices for parented sessions; retain the completion-chime mute for unparented HTTP/MCP sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
 | `pr_native_notifications` | `bool` | `true` | OS notification for PR ready / CI failed / changes requested / merged transitions |
@@ -1218,6 +1222,17 @@ Persistent cache for incremental JSONL parsing of Claude session transcripts. St
 This is an internal cache file, not user-editable. It is automatically pruned when projects or session files are deleted.
 
 The separate Anthropic rate-limit API cache is in memory only. Its responses and rate-limit backoff are keyed by the Claude session's credential profile directory, so switching `CLAUDE_CONFIG_DIR` cannot reuse another account's quota.
+
+## First-Run Prompt Markers
+
+Small empty-content marker files in `config_dir()` record that a one-time startup prompt was
+already shown/dismissed, so it never repeats. Existence alone is the signal — content is unused.
+
+| File | Module | Set by |
+|------|--------|--------|
+| `.cli-prompt-dismissed` | `tuic_cli.rs` | `dismiss_cli_prompt` — the "Install tuic CLI?" prompt |
+| `.finder-service-prompt-dismissed` | `finder_service.rs` (macOS only) | `dismiss_finder_service_prompt` — the "Add Finder integration?" prompt |
+| `.whats-new-seen` | `tuic_cli.rs` | `set_last_seen_version` — tracks the last version whose "What's New" was shown |
 
 ## Repo-Local Config (`.tuic.json`)
 

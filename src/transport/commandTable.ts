@@ -152,7 +152,9 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: "/system/notification-sound",
 			// `device` rides along: notifications.ts always sends it, so dropping it
 			// here would play every browser-mode sound on the default output.
-			body: { sound: args.sound, volume: args.volume, device: args.device ?? null },
+			// `choice` likewise mirrors the desktop command; the server ignores a
+			// `custom` file over HTTP and plays the default tone instead.
+			body: { sound: args.sound, volume: args.volume, device: args.device ?? null, choice: args.choice ?? null },
 		}),
 	},
 	// --- Relay ---
@@ -2535,6 +2537,13 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"uninstall_cli",
 	"dismiss_cli_prompt",
 	"get_cli_status",
+	// Finder Service (macOS "New TUICommander Tab Here") install/management —
+	// registers a local Finder right-click menu item. Meaningless for a
+	// browser/remote client, which has no local Finder to register one for.
+	"get_finder_service_status",
+	"install_finder_service",
+	"uninstall_finder_service",
+	"dismiss_finder_service_prompt",
 	// App version bookkeeping — desktop updater state.
 	"get_last_seen_version",
 	"set_last_seen_version",
