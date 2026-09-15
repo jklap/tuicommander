@@ -377,11 +377,10 @@ async fn handle_worktree_with_caller(
                     // (spawn_worktree_setup_chain) so it can't race them, and
                     // this tool response returns before any of them finishes
                     // (instructions.warm_artifacts.status stays "pending"
-                    // until the whole chain is done). Its outcome is reported via the
-                    // dual-emitted `worktree-setup-script-completed` event,
-                    // not this response — an MCP client has no way to observe
-                    // that today, which is a deliberate, accepted tradeoff for
-                    // fixing the ordering (see worktree.rs's doc comment).
+                    // until the whole chain is done). Its outcome is the
+                    // dual-emitted `worktree-setup-script-completed` event; an
+                    // MCP client (no event stream) polls
+                    // `action=worktree_setup_status` instead.
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
                         let safe_branch = sanitize_branch_for_suggested_prompt(&branch_name);
@@ -493,6 +492,22 @@ async fn handle_worktree_with_caller(
                 Err(error) => {
                     serde_json::json!({"error": format!("orphan cleanup answer task failed: {error}")})
                 }
+            }
+        }
+        "worktree_setup_status" => {
+            let path = match require_path(args, "worktree_setup_status") {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let Some(branch) = args["branch"].as_str() else {
+                return serde_json::json!({"error": "Action 'worktree_setup_status' requires 'branch' parameter"});
+            };
+            match crate::worktree::get_worktree_setup_status(state, &path, branch) {
+                Some(status) => to_json_or_error(status),
+                None => serde_json::json!({"state": "unknown"}),
             }
         }
         "branch_delete" => {
@@ -2289,6 +2304,7 @@ pub(super) async fn handle_repo_with_caller(
         | "worktree_lifecycle"
         | "worktree_create"
         | "worktree_remove"
+        | "worktree_setup_status"
         | "orphan_cleanup_answer"
         | "branch_delete" => {
             handle_worktree_with_caller(state, args, is_claude_code, mcp_session_id).await

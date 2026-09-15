@@ -2616,7 +2616,8 @@ async fn handle_worktree_create_no_longer_returns_setup_script_fields() {
     // the background (spawn_worktree_setup_chain: warm -> file sync ->
     // script), so this tool response can no longer report
     // setup_script/setup_script_error synchronously — the outcome is the
-    // worktree-setup-script-completed event instead.
+    // worktree-setup-script-completed event, or for an MCP client
+    // `action=worktree_setup_status` (tests below).
     let repo = crate::state::tests_support::create_temp_git_repo();
     let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -2658,6 +2659,115 @@ async fn handle_worktree_create_no_longer_returns_setup_script_fields() {
     })
     .await
     .expect("setup chain should finish");
+    crate::worktree::clear_warm(&wt);
+}
+
+#[tokio::test]
+async fn handle_worktree_setup_status_requires_branch() {
+    let repo = crate::state::tests_support::create_temp_git_repo();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let response = handle_worktree(
+        &state,
+        &serde_json::json!({
+            "action": "worktree_setup_status",
+            "path": repo.path().to_string_lossy(),
+        }),
+        false,
+    )
+    .await;
+    assert!(
+        response["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("requires 'branch'"),
+        "response: {response}"
+    );
+}
+
+#[tokio::test]
+async fn handle_worktree_setup_status_requires_path() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let response = handle_worktree(
+        &state,
+        &serde_json::json!({"action": "worktree_setup_status", "branch": "some-branch"}),
+        false,
+    )
+    .await;
+    assert!(
+        response["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("requires 'path'"),
+        "response: {response}"
+    );
+}
+
+#[tokio::test]
+async fn repo_worktree_setup_status_reports_unknown_for_an_untracked_pair() {
+    // Through handle_repo, the tool's real entry point.
+    let repo = crate::state::tests_support::create_temp_git_repo();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let response = handle_repo(
+        &state,
+        &serde_json::json!({
+            "action": "worktree_setup_status",
+            "path": repo.path().to_string_lossy(),
+            "branch": "never-created",
+        }),
+        false,
+    )
+    .await;
+    assert_eq!(response, serde_json::json!({"state": "unknown"}));
+}
+
+#[tokio::test]
+async fn repo_worktree_setup_status_reports_the_outcome_after_create() {
+    // An MCP client that just created a worktree with a configured setup
+    // script must be able to poll for its outcome, since the create
+    // response no longer carries it. `completed` is written before the
+    // warm status turns `done`, so a poller never sees done-but-running.
+    let repo = crate::state::tests_support::create_temp_git_repo();
+    let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let mut defaults = crate::config::RepoDefaultsConfig::default();
+    defaults.setup_script = "exit 3".into();
+    crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+        .unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let path = repo.path().to_string_lossy().to_string();
+    let created = handle_repo(
+        &state,
+        &serde_json::json!({"action": "worktree_create", "path": &path, "branch": "mcp-setup-status"}),
+        false,
+    )
+    .await;
+    assert_eq!(created["branch"], "mcp-setup-status", "{created}");
+    let wt = std::path::PathBuf::from(created["worktree_path"].as_str().unwrap());
+    let poll_args = serde_json::json!({"action": "worktree_setup_status", "path": &path, "branch": "mcp-setup-status"});
+    let response = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let response = handle_repo(&state, &poll_args, false).await;
+            if response["state"] == "completed" {
+                return response;
+            }
+            assert!(
+                response["state"] == "running",
+                "unexpected state before completion: {response}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("setup script should complete");
+    assert_eq!(response["exit_code"], 3);
+    assert!(response["error"].is_null(), "{response}");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while crate::worktree::warm_status(&wt)["status"] == "pending" {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
     crate::worktree::clear_warm(&wt);
 }
 
