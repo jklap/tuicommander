@@ -3785,3 +3785,12 @@ section. All of the below needs a rebuilt build to check.
   (not stuck on the last color). If no hardware is available, the focus/action event path itself
   can be proven without a device via `curl -X POST :9877/sessions/{id}/focus` and
   `curl -X POST :9877/ui/action` against the worktree build.
+  **Visual verification of `Settings > StreamDock` itself has NOT been done** — the tab is gated
+  behind `isTauri()` (same as Dictation), so it's invisible in plain browser-mode testing and can
+  only be screenshotted from the real Tauri desktop app, which needs the same restart called out
+  above. After restarting, open Settings > StreamDock and check: the status strip's colored dot
+  and label render correctly for each state (disabled/waiting/connected/error), the device
+  dropdown and Rescan button look right with 0 vs 1+ devices listed, both brightness sliders
+  render and drag smoothly, and the pinned-sessions list renders correctly with 0 vs several live
+  sessions. Follow `docs/frontend/STYLE_GUIDE.md` and take a screenshot per AGENTS.md's "Visual"
+  rule — none exist yet for this tab.

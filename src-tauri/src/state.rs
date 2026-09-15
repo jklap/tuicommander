@@ -173,10 +173,13 @@ pub enum AppEvent {
     /// its `actionRegistry` name (e.g. `"jump-waiting-terminal"`). The
     /// frontend dispatches through the existing action registry so this one
     /// event makes every registry action controller-bindable, but the
-    /// allowlist gating which names are actually accepted lives in Rust
-    /// (`streamdock::sink`), not here — this event itself carries no
-    /// restriction, so any future producer of it must apply its own
-    /// allowlist before emitting.
+    /// allowlist gating which names are actually accepted lives in Rust —
+    /// `UI_ACTION_ALLOWLIST` / `run_ui_action_impl` in
+    /// `mcp_http::session` (the single choke point both the HTTP route and
+    /// `streamdock::sink::AppStateSink::run_ui_action` call through) — not
+    /// here. This event itself carries no restriction, so any future
+    /// producer of it must route through that same function, not construct
+    /// this variant directly, or it bypasses the allowlist silently.
     #[serde(rename = "ui-action-requested")]
     UiActionRequested { name: String },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust

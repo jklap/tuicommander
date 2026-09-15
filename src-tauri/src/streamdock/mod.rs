@@ -168,6 +168,20 @@ async fn run_supervisor(
             continue; // not a device we have a table for
         };
 
+        // `StreamDockConfig.device_serial` picks a specific unit when more
+        // than one is attached (the Settings device picker) — `None` means
+        // "first connected device," the pre-existing behavior. A device
+        // that doesn't match a configured serial is skipped entirely,
+        // including the `pending`-drain path (a mismatched already-attached
+        // device on startup must not be connected to just because it was
+        // first in the enumeration order).
+        let wanted_serial = state.config.read().streamdock.device_serial.clone();
+        if let Some(wanted) = wanted_serial.as_deref()
+            && dev_info.serial_number.as_deref() != Some(wanted)
+        {
+            continue;
+        }
+
         match mirajazz::device::Device::connect(
             &dev_info,
             model.protocol_version,
@@ -204,11 +218,15 @@ async fn run_supervisor(
 }
 
 /// Runs one connected device's actor + reader + coordinator tick loop until
-/// it becomes unhealthy or `shutdown` fires. Re-reads `state.config`'s
-/// `streamdock` block once at the start (brightness, pinned sessions) —
-/// picking up a config change made while disconnected requires nothing
-/// more than the next reconnect, which hot-plug polling already provides
-/// on its own 2s cadence if the device is still physically present.
+/// it becomes unhealthy or `shutdown` fires. Screen/LED brightness and
+/// pinned sessions are re-read from `state.config` and re-applied **every
+/// tick** (see the `tick.tick()` arm below) — not just once at connect —
+/// so a Settings change while the device is already attached takes effect
+/// live, matching `StreamDockManager::apply_config`'s own doc comment
+/// promising exactly this. A config change made while the device is
+/// disconnected still just needs the next reconnect, which hot-plug
+/// polling already provides on its own 2s cadence if the device is still
+/// physically present.
 async fn run_one_device(
     state: &Arc<AppState>,
     model: &'static tuic_streamdock::device::model::DeviceModel,
@@ -225,12 +243,16 @@ async fn run_one_device(
 
     let cfg = state.config.read().streamdock.clone();
     let rgb_supported = model_supports_rgb(model, &device).await;
+    let mut applied_screen_brightness = clamp_brightness(cfg.screen_brightness);
     let _ = handle
-        .send(actor::DeviceMsg::ScreenBrightness(cfg.screen_brightness))
+        .send(actor::DeviceMsg::ScreenBrightness(
+            applied_screen_brightness,
+        ))
         .await;
+    let mut applied_led_brightness = clamp_brightness(cfg.led_brightness);
     if rgb_supported {
         let _ = handle
-            .send(actor::DeviceMsg::LedBrightness(cfg.led_brightness))
+            .send(actor::DeviceMsg::LedBrightness(applied_led_brightness))
             .await;
     }
 
@@ -242,7 +264,8 @@ async fn run_one_device(
     };
     let mut coordinator =
         tuic_streamdock::Coordinator::new(15, model.led_count, model.key_px as u32, 90);
-    coordinator.set_pinned(cfg.pinned_sessions.iter().cloned());
+    let mut applied_pinned = cfg.pinned_sessions.clone();
+    coordinator.set_pinned(applied_pinned.iter().cloned());
 
     let mut dirty = true;
     let mut health = handle.health.clone();
@@ -279,6 +302,33 @@ async fn run_one_device(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
+
+                // Live-apply a Settings brightness/pin change without
+                // waiting for a reconnect. A plain `RwLock::read` + clone
+                // every 250ms is cheap; only an actual change results in a
+                // device write.
+                let live_cfg = state.config.read().streamdock.clone();
+                let wanted_screen_brightness = clamp_brightness(live_cfg.screen_brightness);
+                if wanted_screen_brightness != applied_screen_brightness {
+                    let _ = handle
+                        .send(actor::DeviceMsg::ScreenBrightness(wanted_screen_brightness))
+                        .await;
+                    applied_screen_brightness = wanted_screen_brightness;
+                }
+                if rgb_supported {
+                    let wanted_led_brightness = clamp_brightness(live_cfg.led_brightness);
+                    if wanted_led_brightness != applied_led_brightness {
+                        let _ = handle
+                            .send(actor::DeviceMsg::LedBrightness(wanted_led_brightness))
+                            .await;
+                        applied_led_brightness = wanted_led_brightness;
+                    }
+                }
+                if live_cfg.pinned_sessions != applied_pinned {
+                    coordinator.set_pinned(live_cfg.pinned_sessions.iter().cloned());
+                    applied_pinned = live_cfg.pinned_sessions;
+                }
+
                 coordinator.tick(&source, &handle, &mut dirty, now_ms).await;
                 coordinator.tick_gestures(&sink, Instant::now());
                 if rgb_supported
@@ -289,6 +339,17 @@ async fn run_one_device(
             }
         }
     }
+}
+
+/// `StreamDockConfig.screen_brightness`/`led_brightness` are persisted as a
+/// plain `u8`, so a hand-edited or migrated `config.json` can carry any
+/// value up to 255 even though the Settings UI's slider only ever produces
+/// 0-100. `Device::set_brightness`/`set_led_brightness` take a raw
+/// percentage with no validation of their own — clamp here, at the only two
+/// call sites that ever send one to the device, rather than trusting every
+/// future config source to already be in range.
+fn clamp_brightness(pct: u8) -> u8 {
+    pct.min(100)
 }
 
 /// Whether to bother sending an LED command at all — gated on the firmware
@@ -305,4 +366,22 @@ async fn model_supports_rgb(
         .map(tuic_streamdock::device::model::FeatureSet::from_firmware_string)
         .unwrap_or_default()
         .rgb
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_brightness_passes_through_in_range_values() {
+        assert_eq!(clamp_brightness(0), 0);
+        assert_eq!(clamp_brightness(70), 70);
+        assert_eq!(clamp_brightness(100), 100);
+    }
+
+    #[test]
+    fn clamp_brightness_caps_a_corrupted_or_migrated_out_of_range_value() {
+        assert_eq!(clamp_brightness(101), 100);
+        assert_eq!(clamp_brightness(255), 100);
+    }
 }
