@@ -1327,7 +1327,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
+const REPO_ACTIONS: &str = "list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, worktree_setup_status, orphan_cleanup_answer, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -1562,15 +1562,15 @@ fn native_tool_definitions(prefer_spawning: bool, prefer_messaging: bool) -> ser
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- branch_integrations: Integration status and proof for every local branch, including worktree_paths. Requires path.\n- branch_integration: Same verdict for one branch. Requires path and branch. Returns tip, integrated, proof, archive_required, archived and archive_ref. Content-based proof requires an archive at that tip before deletion; unknown is never proof.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path and branch, or path and worktree_path for a detached checkout (removed only when clean, reachable from a branch and free of live sessions).\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 8, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- branch_integrations: Integration status and proof for every local branch, including worktree_paths. Requires path.\n- branch_integration: Same verdict for one branch. Requires path and branch. Returns tip, integrated, proof, archive_required, archived and archive_ref. Content-based proof requires an archive at that tip before deletion; unknown is never proof.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path and branch, or path and worktree_path for a detached checkout (removed only when clean, reachable from a branch and free of live sessions).\n- worktree_setup_status: Poll a worktree's Setup Script outcome (it runs in the background after worktree_create returns, after the warm and the file sync). Requires path and branch. Returns {state: \"running\"|\"not_configured\"|\"completed\"|\"unknown\"}, plus exit_code/error when completed.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 8, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
+                "action": { "type": "string", "description": "One of: list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, worktree_setup_status, orphan_cleanup_answer, branch_delete, progress_list" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, worktree_setup_status, branch_delete, progress_list)" },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
                 "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
                 "expected_fingerprint": { "type": "string", "description": "action=worktree_remove: lifecycle fingerprint shown at force confirmation. Removal refuses if the worktree changed." },
-                "branch": { "type": "string", "description": "Local branch name (required for worktree_lifecycle, worktree_remove and branch_delete; optional for worktree_create)" },
+                "branch": { "type": "string", "description": "Local branch name (required for worktree_lifecycle, worktree_remove, worktree_setup_status and branch_delete; optional for worktree_create)" },
                 "worktree_path": { "type": "string", "description": "action=worktree_remove: absolute path of a detached (orphan) checkout, instead of branch" },
                 "decision": { "type": "string", "description": "action=orphan_cleanup_answer: remove or keep the pending orphan cleanup for path" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
@@ -4400,11 +4400,10 @@ async fn handle_worktree(
                     // (spawn_worktree_setup_chain) so it can't race them, and
                     // this tool response returns before any of them finishes
                     // (instructions.warm_artifacts.status stays "pending"
-                    // until the whole chain is done). Its outcome is reported via the
-                    // dual-emitted `worktree-setup-script-completed` event,
-                    // not this response — an MCP client has no way to observe
-                    // that today, which is a deliberate, accepted tradeoff for
-                    // fixing the ordering (see worktree.rs's doc comment).
+                    // until the whole chain is done). Its outcome is the
+                    // dual-emitted `worktree-setup-script-completed` event; an
+                    // MCP client (no event stream) polls
+                    // `action=worktree_setup_status` instead.
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
                         let safe_branch = sanitize_branch_for_suggested_prompt(&branch_name);
@@ -4515,6 +4514,22 @@ async fn handle_worktree(
                 Err(error) => {
                     serde_json::json!({"error": format!("orphan cleanup answer task failed: {error}")})
                 }
+            }
+        }
+        "worktree_setup_status" => {
+            let path = match require_path(args, "worktree_setup_status") {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let Some(branch) = args["branch"].as_str() else {
+                return serde_json::json!({"error": "Action 'worktree_setup_status' requires 'branch' parameter"});
+            };
+            match crate::worktree::get_worktree_setup_status(state, &path, branch) {
+                Some(status) => to_json_or_error(status),
+                None => serde_json::json!({"state": "unknown"}),
             }
         }
         "branch_delete" => {
@@ -8641,6 +8656,7 @@ async fn handle_repo(
         | "worktree_lifecycle"
         | "worktree_create"
         | "worktree_remove"
+        | "worktree_setup_status"
         | "orphan_cleanup_answer"
         | "branch_delete" => handle_worktree(state, args, is_claude_code).await,
         "progress_list" => {
@@ -10889,7 +10905,8 @@ mod tests {
         // the background (spawn_worktree_setup_chain: warm -> file sync ->
         // script), so this tool response can no longer report
         // setup_script/setup_script_error synchronously — the outcome is the
-        // worktree-setup-script-completed event instead.
+        // worktree-setup-script-completed event, or for an MCP client
+        // `action=worktree_setup_status` (tests below).
         let repo = crate::state::tests_support::create_temp_git_repo();
         let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -10931,6 +10948,115 @@ mod tests {
         })
         .await
         .expect("setup chain should finish");
+        crate::worktree::clear_warm(&wt);
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_setup_status_requires_branch() {
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_setup_status",
+                "path": repo.path().to_string_lossy(),
+            }),
+            false,
+        )
+        .await;
+        assert!(
+            response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("requires 'branch'"),
+            "response: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_setup_status_requires_path() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_setup_status", "branch": "some-branch"}),
+            false,
+        )
+        .await;
+        assert!(
+            response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("requires 'path'"),
+            "response: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_worktree_setup_status_reports_unknown_for_an_untracked_pair() {
+        // Through handle_repo, the tool's real entry point.
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_setup_status",
+                "path": repo.path().to_string_lossy(),
+                "branch": "never-created",
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(response, serde_json::json!({"state": "unknown"}));
+    }
+
+    #[tokio::test]
+    async fn repo_worktree_setup_status_reports_the_outcome_after_create() {
+        // An MCP client that just created a worktree with a configured setup
+        // script must be able to poll for its outcome, since the create
+        // response no longer carries it. `completed` is written before the
+        // warm status turns `done`, so a poller never sees done-but-running.
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let mut defaults = crate::config::RepoDefaultsConfig::default();
+        defaults.setup_script = "exit 3".into();
+        crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let path = repo.path().to_string_lossy().to_string();
+        let created = handle_repo(
+            &state,
+            &serde_json::json!({"action": "worktree_create", "path": &path, "branch": "mcp-setup-status"}),
+            false,
+        )
+        .await;
+        assert_eq!(created["branch"], "mcp-setup-status", "{created}");
+        let wt = std::path::PathBuf::from(created["worktree_path"].as_str().unwrap());
+        let poll_args = serde_json::json!({"action": "worktree_setup_status", "path": &path, "branch": "mcp-setup-status"});
+        let response = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let response = handle_repo(&state, &poll_args, false).await;
+                if response["state"] == "completed" {
+                    return response;
+                }
+                assert!(
+                    response["state"] == "running",
+                    "unexpected state before completion: {response}"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("setup script should complete");
+        assert_eq!(response["exit_code"], 3);
+        assert!(response["error"].is_null(), "{response}");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while crate::worktree::warm_status(&wt)["status"] == "pending" {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
         crate::worktree::clear_warm(&wt);
     }
 
@@ -20205,6 +20331,7 @@ mod tests {
             "worktree_list",
             "worktree_create",
             "worktree_remove",
+            "worktree_setup_status",
         ] {
             assert!(
                 action_desc.contains(action),
