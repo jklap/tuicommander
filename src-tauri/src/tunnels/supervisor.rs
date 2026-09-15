@@ -421,6 +421,7 @@ fn is_retryable_spawn_error(e: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::system32_exe;
     use std::net::SocketAddr;
     use std::path::Path;
     use tokio::net::TcpListener;
@@ -553,7 +554,7 @@ mod tests {
         let script = fake_ssh_script(
             "spawn_clean_exit",
             "sleep 0.2; exit 0",
-            "ping -n 2 127.0.0.1 >nul & exit /b 0",
+            &format!("{} -n 2 127.0.0.1 >nul & exit /b 0", system32_exe("ping.exe")),
         );
         let (cb, statuses) = status_collector();
 
@@ -690,7 +691,7 @@ mod tests {
         let script = fake_ssh_script(
             "graceful_shutdown",
             "sleep 3600",
-            "ping -n 3601 127.0.0.1 >nul",
+            &format!("{} -n 3601 127.0.0.1 >nul", system32_exe("ping.exe")),
         );
         let (cb, _statuses) = status_collector();
 

@@ -96,34 +96,10 @@ impl GitReads for CliGitReads {
     }
 }
 
-/// Rewrite a host path string the way git prints one.
-///
-/// The two adapters behind this port have to answer with the same bytes, and on
-/// Windows `fs::canonicalize` does not: it returns a verbatim `\\?\` path with
-/// `\` separators, while `git worktree list` prints `C:/Users/…`. A consumer
-/// comparing a gix path against a CLI path — or against a path it took from the
-/// config — then finds no match at all. `/` is the separator the rest of TUIC
-/// carries in a path string as well (see `fs::DirEntry::path`).
-/// Only Windows paths are rewritten: `\` is a legal character in a unix file
-/// name, so the same rewrite there would corrupt paths rather than normalise
-/// them. The rewrite itself is in [`windows_git_spelling`], which is compiled
-/// and tested on every platform.
+/// Rewrite a host path string the way git prints one. See
+/// [`crate::fs::portable_spelling`] for why the two adapters must agree on it.
 fn git_spelling(path: &str) -> String {
-    if cfg!(windows) {
-        windows_git_spelling(path)
-    } else {
-        path.to_string()
-    }
-}
-
-fn windows_git_spelling(path: &str) -> String {
-    // `\\?\UNC\host\share` is `\\host\share` written verbatim, so the prefix
-    // cannot simply be cut off that one.
-    let simplified = match path.strip_prefix(r"\\?\UNC\") {
-        Some(rest) => format!(r"\\{rest}"),
-        None => path.strip_prefix(r"\\?\").unwrap_or(path).to_string(),
-    };
-    simplified.replace('\\', "/")
+    crate::fs::portable_spelling(path)
 }
 
 /// In-process gix adapter. Implements the same port as the CLI adapter; ops are
@@ -1345,26 +1321,6 @@ mod tests {
             .to_string();
         let cli_head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
         assert_eq!(gix_head, cli_head);
-    }
-
-    /// The spelling half of the parity the shootout below asserts, where it can
-    /// be checked on every platform rather than only on the one that breaks.
-    #[test]
-    fn windows_paths_are_rewritten_the_way_git_prints_them() {
-        // What `fs::canonicalize` hands back on Windows.
-        assert_eq!(
-            windows_git_spelling(r"\\?\C:\Users\me\repo"),
-            "C:/Users/me/repo"
-        );
-        // A plain host path: separators only.
-        assert_eq!(windows_git_spelling(r"C:\Users\me\repo"), "C:/Users/me/repo");
-        // The verbatim UNC form is `\\host\share`, not `UNC\host\share`.
-        assert_eq!(
-            windows_git_spelling(r"\\?\UNC\host\share\repo"),
-            "//host/share/repo"
-        );
-        // Already in git's spelling: unchanged.
-        assert_eq!(windows_git_spelling("C:/Users/me/repo"), "C:/Users/me/repo");
     }
 
     /// Step 10: gix worktree_paths == CLI, including the main worktree (gix

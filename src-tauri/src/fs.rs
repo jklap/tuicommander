@@ -45,6 +45,64 @@ pub(crate) fn is_absolute_on_any_platform(path: &str) -> bool {
         || path.starts_with('/')
 }
 
+/// Rewrite a host path string the way everything outside the Windows API
+/// spells one: no `\\?\` prefix, `/` separators.
+///
+/// Two consumers need it and they need the same answer. `git` is one — the gix
+/// and CLI adapters behind `GitReads` have to return identical bytes, and on
+/// Windows `fs::canonicalize` does not oblige: it returns a verbatim `\\?\`
+/// path with `\`, while `git worktree list` prints `C:/Users/…`, so a consumer
+/// comparing the two finds no match at all. A git *config value* is the other:
+/// there `\` starts an escape sequence, so a Windows path written verbatim
+/// reaches git mangled. `/` is also the separator the rest of TUIC carries in a
+/// path string (see [`DirEntry::path`]).
+///
+/// Only Windows paths are rewritten: `\` is a legal character in a unix file
+/// name, so the same rewrite there would corrupt paths rather than normalise
+/// them. The rewrite itself is in [`windows_portable_spelling`], which is
+/// compiled and tested on every platform.
+pub(crate) fn portable_spelling(path: &str) -> String {
+    if cfg!(windows) {
+        windows_portable_spelling(path)
+    } else {
+        path.to_string()
+    }
+}
+
+fn windows_portable_spelling(path: &str) -> String {
+    // `\\?\UNC\host\share` is `\\host\share` written verbatim, so the prefix
+    // cannot simply be cut off that one.
+    let simplified = match path.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => path.strip_prefix(r"\\?\").unwrap_or(path).to_string(),
+    };
+    simplified.replace('\\', "/")
+}
+
+/// The same directory, named the way the filesystem stores it.
+///
+/// Windows still hands out 8.3 short names — `C:\Users\RUNNER~1\…` for a
+/// profile whose real name is longer — and any consumer that treats `~` as
+/// meaning the home directory then reads the path as something else entirely.
+/// Canonicalising resolves the short name; the `\\?\` prefix it adds is dropped
+/// again, because most things that read a path back are not Windows APIs.
+/// A path that cannot be canonicalised is returned unchanged: the caller asked
+/// for a better spelling, not for existence.
+///
+/// Test-only so far: production paths reach TUIC from the user, who spells them
+/// the long way.
+#[cfg(test)]
+pub(crate) fn long_form(path: &std::path::Path) -> std::path::PathBuf {
+    let Ok(canonical) = std::fs::canonicalize(path) else {
+        return path.to_path_buf();
+    };
+    if cfg!(windows) {
+        std::path::PathBuf::from(windows_portable_spelling(&canonical.to_string_lossy()))
+    } else {
+        canonical
+    }
+}
+
 /// A directory entry returned by `list_directory`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {
@@ -4144,6 +4202,33 @@ mod tests {
         assert!(
             err.contains("outside repository") || err.contains("Access denied"),
             "expected the validation error, got: {err}"
+        );
+    }
+
+    /// The spelling half of the parity the `git_reads` shootout asserts, where
+    /// it can be checked on every platform rather than only on the one that
+    /// breaks.
+    #[test]
+    fn windows_paths_are_rewritten_the_way_git_prints_them() {
+        // What `fs::canonicalize` hands back on Windows.
+        assert_eq!(
+            windows_portable_spelling(r"\\?\C:\Users\me\repo"),
+            "C:/Users/me/repo"
+        );
+        // A plain host path: separators only.
+        assert_eq!(
+            windows_portable_spelling(r"C:\Users\me\repo"),
+            "C:/Users/me/repo"
+        );
+        // The verbatim UNC form is `\\host\share`, not `UNC\host\share`.
+        assert_eq!(
+            windows_portable_spelling(r"\\?\UNC\host\share\repo"),
+            "//host/share/repo"
+        );
+        // Already in the portable spelling: unchanged.
+        assert_eq!(
+            windows_portable_spelling("C:/Users/me/repo"),
+            "C:/Users/me/repo"
         );
     }
 }

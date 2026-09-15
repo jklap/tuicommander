@@ -931,13 +931,12 @@ mod persist_tests {
             state.record_outcome("s-slow", o);
         }
 
-        let flush_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let first = {
             let s = state.clone();
-            let done = flush_done.clone();
             std::thread::spawn(move || {
+                let started = std::time::Instant::now();
                 flush_dirty(&s);
-                done.store(true, std::sync::atomic::Ordering::Release);
+                started.elapsed()
             })
         };
 
@@ -946,14 +945,29 @@ mod persist_tests {
         let mut newer = sample_outcome();
         newer.timestamp = 99_999;
         newer.command = "the outcome that must survive".into();
+        let recording = std::time::Instant::now();
         state.record_outcome("s-slow", newer);
-        let flush_had_finished = flush_done.load(std::sync::atomic::Ordering::Acquire);
+        let recorded_in = recording.elapsed();
 
-        first.join().unwrap();
+        // How long the record took is the only externally visible trace of the
+        // lock. A flag stored by the flushing thread cannot prove the ordering:
+        // that store necessarily lands *after* the lock is released, so the
+        // thread waiting on it may wake and return first, and reading the flag
+        // there is a race rather than a measurement. That race is what made
+        // this test fail on the Windows CI leg while the ordering it exists to
+        // protect was intact.
+        let write_took = first.join().unwrap();
         assert!(
-            flush_had_finished,
-            "record_outcome returned while a flush was still writing that session, \
-             so the flush is writing from a snapshot that can go stale"
+            write_took > std::time::Duration::from_millis(10),
+            "setup: the write finished in {write_took:?}, too fast for a record \
+             issued 2ms in to land inside it — MAX_COMMANDS records of \
+             SNIPPET_MAX_LEN are supposed to make it take far longer"
+        );
+        assert!(
+            recorded_in >= std::time::Duration::from_millis(1),
+            "record_outcome returned in {recorded_in:?} while a {write_took:?} \
+             write of that session was still running, so the flush is writing \
+             from a snapshot that can go stale"
         );
 
         // And the outcome recorded after that write still reaches disk.
