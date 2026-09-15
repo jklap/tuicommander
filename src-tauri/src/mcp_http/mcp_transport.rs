@@ -2967,6 +2967,9 @@ fn handle_session(
                     let background_work = session_state
                         .as_ref()
                         .is_some_and(|snapshot| snapshot.background_work);
+                    let declared_background_work = session_state
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.declared_background_work);
                     let alias = state
                         .session_maps
                         .term_aliases
@@ -2993,6 +2996,11 @@ fn handle_session(
                         object,
                         "background_work",
                         background_work.then_some(serde_json::Value::Bool(true)),
+                    );
+                    insert_optional_value(
+                        object,
+                        "declared_background_work",
+                        declared_background_work.then_some(serde_json::Value::Bool(true)),
                     );
                     insert_optional_value(
                         object,
@@ -3475,6 +3483,7 @@ fn handle_session(
                     let mut response = serde_json::json!({
                         "session_id": session_id,
                         "background_work": ss.background_work,
+                        "declared_background_work": ss.declared_background_work,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,
                         "delivery_uncertain": delivery_uncertain,
@@ -8356,6 +8365,7 @@ mod tests {
             // False for nearly every session, so they follow the same rule as
             // every other optional field rather than being spelled out as false.
             "background_work",
+            "declared_background_work",
             "standby",
         ] {
             assert!(!entry.contains_key(absent), "{absent} must be omitted");
@@ -16758,6 +16768,7 @@ mod tests {
             assert!(!object.contains_key(absent), "{absent} must be omitted");
         }
         assert!(object.contains_key("background_work"));
+        assert!(object.contains_key("declared_background_work"));
         assert!(object.contains_key("awaiting_input"));
     }
 

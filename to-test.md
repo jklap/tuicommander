@@ -1610,6 +1610,49 @@ done, CLI/typecheck done — only the visual/browser step (rungs 4-5) is outstan
 - [ ] **[HUMAN]** After a `make dev` restart following a `tuic-hook` version bump, confirm via `curl http://localhost:9876/logs?source=agent_hook_commands` that startup logs show hooks were re-installed for any agent that already had instrumentation enabled with an old binary.
 - [ ] **[HUMAN]** Run a Claude Code session under Windows/WSL and confirm `tuic-hook` resolves the tty and emits OSC 7770 correctly — Windows CI never compiles or tests this crate (`ci.yml` explicitly skips the build/test steps there), and it has never been manually verified on real Windows either.
 
+## Declared background work — `bgtasks` OSC 7770 verb (2026-09-15, **Rust change — needs `make dev` restart**)
+
+`tuic-hook` now scrapes Claude Code's `background_tasks` array (present on `Stop`/`StopFailure` when a `run_in_background` tool call is still outstanding) into a new `bgtasks` OSC 7770 verb; `pty.rs` classifies it into `SilenceState::declared_background_work` (epoch-stamped, self-expiring, shaped like `completion_declared`) and exposes it as `SessionState.declared_background_work`, separate from the existing OS-heuristic `background_work`. The frontend's `effectiveActivityState` renders this as "Working" unconditionally, bypassing the idle-preserving carve-out `background_work` alone is subject to (the one protecting a Codex-left-running dev server). Machine-verified: `cargo nextest run -p tuic-hook` (new derivation/emission tests), `cargo nextest run -p tuicommander` (new OSC-dispatch/epoch-expiry/ladder tests, plus the full pre-existing `background_work`/`standby` suite unchanged), `pnpm exec tsc --noEmit` and `pnpm exec vitest run activitySnapshot` (new frontend cases). NOT machine-verified: the actual live badge rendering in a real `make dev` session.
+
+- [ ] **[HUMAN]** After a `make dev` restart, in a hook-instrumented Claude Code session, ask Claude to run a long-lived command in the background (e.g. "run `sleep 60` in the background and then tell me when it's done"), and once it ends its turn while that's still running, confirm via `curl -k https://127.0.0.1:9876/sessions` that the session's `agent_state` is `"working"` and `declared_background_work` is `true`.
+- [ ] **[HUMAN]** Confirm the sidebar/terminal-list badge for that session visually reads "Working," not "Idle," during that window — this is the actual user-facing fix; nothing above proves the real UI renders it correctly, only that the underlying data is correct.
+- [ ] **[HUMAN]** Confirm the badge returns to normal (Idle, or a fresh Working for a new turn) once the backgrounded command finishes and Claude's next hook fire reports it, or once you submit a new prompt.
+- [ ] **[HUMAN]** Confirm a session where Codex (or another agent) leaves an actual long-lived background process running (e.g. a dev server) still shows "Idle" once its own composer is ready — this fix must not have regressed that existing carve-out, since it only reads a NEW field (`declaredBackgroundWork`) that non-Claude agents never populate.
+
+### Fix: `declared_background_work` survives a poll-driven reopen, incl. Agent-Teams teammates (2026-09-16, **Rust change — needs `make dev` restart**)
+
+Found live: an "ai-usage" Claude Code session dispatched three Agent-Teams teammates
+(`background_tasks[].type == "teammate"`, confirmed in the real `Stop` hook payload
+via `.claude/hook-debug.log`) and ended its own turn. `declared_background_work` was
+correctly set `true` by the `bgtasks` OSC verb, but read back `false` moments later
+with no new user input submitted. Root cause: `reset_suggest_memory()` cleared
+`declared_background_work` alongside `completion_declared`, but that method is also
+called from `apply_working_evidence`'s "reopen a stale idle/completed turn on
+renewed screen evidence" path — which fires every time the orchestrator's own screen
+shows a spinner again (e.g. it waking up to poll its teammates), not just on a real
+new turn. Fixed by splitting the clear into its own `SilenceState::reset_declared_background_work()`,
+called only from genuine new-turn-submission sites. Machine-verified: new
+`cargo nextest run -p tuicommander` unit tests (`reset_suggest_memory_no_longer_touches_declared_background_work`,
+`reset_declared_background_work_clears_the_declaration`,
+`test_claude_reopening_a_premature_stop_hook_preserves_declared_background_work`,
+`a_genuine_new_turn_clears_declared_background_work`,
+`submitted_input_with_no_detected_agent_type_still_clears_declared_background_work`
+— covers `note_submitted_input_with_hook`'s other branch, and
+`end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll` — a full-pipeline
+replay through `ChunkProcessor::process_chunk` of the real OSC byte sequence
+(`bgtasks=running` + `state=idle`, in the order the installed `tuic-hook` binary
+actually emits them) followed by a real spinner-row repaint, not a direct call into
+`apply_working_evidence`). Independently reviewed via `/code-review` (scoped to this
+diff only) with no findings. Full `./scripts/check-gate.sh` and
+`cargo nextest run --workspace --no-fail-fast` both clean except two confirmed
+pre-existing, unrelated failures (`pty::tests::non_repo_cwd_gets_no_worktree_vars`,
+`worktree::tests::run_setup_script_does_not_set_unknown_vars` — both reproduce
+identically with this fix's changes fully `git stash`-ed out; see AGENTS.md's
+"Known pre-existing test-environment leak" note).
+
+- [ ] **[HUMAN]** After a `make dev` restart, reproduce the original scenario: ask Claude to dispatch a couple of Agent-Teams teammates on a task that takes at least a minute, wait for Claude's own turn to end (idle prompt), then trigger a poll (either wait for its own scheduled check-in, or nudge it to check status) without submitting a literal new prompt yourself. Confirm via `curl http://localhost:9876/sessions` that `declared_background_work` stays `true` (and the sidebar badge stays "Working") across that poll, not just immediately after the `Stop` hook fires.
+- [ ] **[HUMAN]** Confirm the badge still correctly returns to "Idle" once you submit a genuine new prompt while `declared_background_work` was `true` — the fix must not have made the flag permanently sticky.
+
 ## MCP marker/peer-message framing rewrite (2026-08-26, **Rust change — needs `make dev` restart**)
 
 - [ ] **[MANUAL/MCP]** After restart, spawn a real Task-tool subagent from a worktree-creation flow and confirm it does NOT emit `intent:`/`suggest:`/`ack` markers — the delegated hint tells it not to, but no automated check can observe a live model's actual behavior. This is the closest reachable proxy for "agents stop flagging markers as injection"; a full live-verification run needs a human or an MCP-driven agent session to actually converse with a fresh Claude Code / Codex / Gemini session.

@@ -87,6 +87,7 @@ type BackendSessionState = {
 	awaiting_input?: boolean;
 	question_confident?: boolean;
 	background_work?: boolean;
+	declared_background_work?: boolean;
 	queued_commands?: number;
 };
 
@@ -680,6 +681,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					terminalsStore.update(props.id, {
 						agentState: state.agent_state ?? null,
 						backgroundWork: state.background_work === true,
+						declaredBackgroundWork: state.declared_background_work === true,
 						queuedCommands: state.queued_commands ?? 0,
 						awaitingInput: state.awaiting_input === true ? "question" : null,
 						awaitingInputConfident: state.question_confident === true,

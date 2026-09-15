@@ -67,6 +67,14 @@ Disable this per agent with **Settings → Agents → Native status signals** to
 Instead of inferring busy/idle/waiting from terminal output, TUICommander can drive an agent's status directly from the agent's **own hook system**.
 
 When enabled, TUIC writes a small guarded shell command into the agent's settings file for each lifecycle event; the command invokes the bundled `tuic-hook` binary, which emits `OSC 7770;state=…` (busy on prompt/tool start, `awaiting` on an approval/question prompt, idle on stop) — plus, for Claude Code, free-text metadata (session id, working directory, transcript path, tool name, notification message) extracted natively from the hook's own JSON payload. The session state then follows the hooks precisely, and the heuristic question-detection above is suppressed for that agent. Screen and ordinary silence cannot override a protocol-held turn. If its completion signal is lost, a stable Ready screen plus five minutes without PTY output recovers the session and writes a `protocol-stale` warning.
+For Claude, the status stays "Working" while a backgrounded tool call (e.g. a
+`run_in_background` Bash command) is still outstanding, even after Claude's own
+turn ends and its composer is ready — Claude's `Stop` hook payload names any such
+outstanding task, so this doesn't rely on inference. This is a separate, more
+authoritative signal from the general "background process detected" heuristic
+(which deliberately shows "Idle" once the composer is ready, since Codex agents
+in particular may intentionally leave a long-lived dev server running).
+
 For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP server raises to ask you for input (`MCP server "…" requests your input`, with Accept/Decline). It arrives through Claude's `Elicitation` event and is retracted by `ElicitationResult`; no screen scraping is involved, because that dialog matches none of the question heuristics.
 
 **Ownership is safe and reversible.** Each managed hook carries a `# tuic-managed-hook` sentinel; enabling installs only TUIC's entries and disabling removes only them — your own (and wiz/mdkb) hooks in the same file are never touched. The toggle is the source of truth; the effect applies on the agent's **next launch** (hooks are read at startup).
