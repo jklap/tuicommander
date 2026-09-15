@@ -7488,7 +7488,7 @@ fn tuic_osc_state_transitions_shell_state() {
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
 
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 0, false, &state);
 
     let current = state
         .session_maps
@@ -7498,7 +7498,7 @@ fn tuic_osc_state_transitions_shell_state() {
         .load(std::sync::atomic::Ordering::Acquire);
     assert_eq!(current, SHELL_BUSY);
 
-    let _ = proc.handle_tuic_state("idle", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("idle", session_id, 0, false, &state);
     let current = state
         .session_maps
         .shell_states
@@ -7560,7 +7560,7 @@ fn handle_tuic_state_busy_edge_emits_agent_block_start_with_prompt_text() {
     );
 
     let proc = ChunkProcessor::new(None, None);
-    let (transitioned, block_event) = proc.handle_tuic_state("busy", session_id, 42, &state);
+    let (transitioned, block_event) = proc.handle_tuic_state("busy", session_id, 42, false, &state);
     assert!(transitioned, "idle->busy must be a real transition");
     match block_event {
         Some(ParsedEvent::AgentBlock {
@@ -7568,6 +7568,7 @@ fn handle_tuic_state_busy_edge_emits_agent_block_start_with_prompt_text() {
             line,
             exit_code,
             prompt_text,
+            ..
         }) => {
             assert_eq!(action, "start");
             assert_eq!(line, 42);
@@ -7583,9 +7584,9 @@ fn handle_tuic_state_idle_edge_emits_agent_block_end_with_no_flag() {
     let session_id = "test-block-end";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
 
-    let (transitioned, block_event) = proc.handle_tuic_state("idle", session_id, 55, &state);
+    let (transitioned, block_event) = proc.handle_tuic_state("idle", session_id, 55, false, &state);
     assert!(transitioned, "busy->idle must be a real transition");
     match block_event {
         Some(ParsedEvent::AgentBlock {
@@ -7610,10 +7611,10 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
     let session_id = "test-block-end-flagged";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
     state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
 
-    let (_, block_event) = proc.handle_tuic_state("idle", session_id, 55, &state);
+    let (_, block_event) = proc.handle_tuic_state("idle", session_id, 55, false, &state);
     match block_event {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -7630,8 +7631,8 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
     );
 
     // Next turn, with no new flag set, must not be flagged.
-    let _ = proc.handle_tuic_state("busy", session_id, 60, &state);
-    let (_, next_end) = proc.handle_tuic_state("idle", session_id, 65, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 60, false, &state);
+    let (_, next_end) = proc.handle_tuic_state("idle", session_id, 65, false, &state);
     match next_end {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -7653,8 +7654,8 @@ fn handle_tuic_state_busy_edge_clears_a_flag_that_arrived_too_late_for_the_previ
     let session_id = "test-stale-flag-race";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 10, &state);
-    let (_, end_event) = proc.handle_tuic_state("idle", session_id, 20, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
+    let (_, end_event) = proc.handle_tuic_state("idle", session_id, 20, false, &state);
     match end_event {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -7671,8 +7672,8 @@ fn handle_tuic_state_busy_edge_clears_a_flag_that_arrived_too_late_for_the_previ
 
     // Turn 2 starts — its busy edge must discard the stale flag rather
     // than letting it attach to turn 2's own idle transition.
-    let _ = proc.handle_tuic_state("busy", session_id, 30, &state);
-    let (_, turn2_end) = proc.handle_tuic_state("idle", session_id, 40, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 30, false, &state);
+    let (_, turn2_end) = proc.handle_tuic_state("idle", session_id, 40, false, &state);
     match turn2_end {
         Some(ParsedEvent::AgentBlock { exit_code, .. }) => {
             assert_eq!(
@@ -7689,13 +7690,13 @@ fn handle_tuic_state_same_state_reaffirmation_emits_neither() {
     let session_id = "test-block-noop";
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
-    let (first, _) = proc.handle_tuic_state("busy", session_id, 10, &state);
+    let (first, _) = proc.handle_tuic_state("busy", session_id, 10, false, &state);
     assert!(first);
 
     // Simulates a redundant busy re-affirmation (e.g. the surviving
     // PostToolUse(AskUserQuestion|ExitPlanMode) entry): same target,
     // already busy — must be a no-op, not a second block start.
-    let (second, block_event) = proc.handle_tuic_state("busy", session_id, 20, &state);
+    let (second, block_event) = proc.handle_tuic_state("busy", session_id, 20, false, &state);
     assert!(
         !second,
         "same-state re-affirmation must not be a real transition"
@@ -7719,7 +7720,7 @@ fn tuic_osc_state_emits_shell_state_event() {
     let mut rx = state.event_bus.subscribe();
 
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("busy", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("busy", session_id, 0, false, &state);
 
     let evt = rx.try_recv();
     assert!(
@@ -7749,7 +7750,7 @@ fn tuic_osc_state_unknown_verb_ignored() {
     );
 
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("thinking", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("thinking", session_id, 0, false, &state);
 
     let current = state
         .session_maps
@@ -8096,7 +8097,7 @@ fn tuic_state_prompt_drives_shell_busy() {
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
 
     let proc = ChunkProcessor::new(None, None);
-    let _ = proc.handle_tuic_state("prompt", session_id, 0, &state);
+    let _ = proc.handle_tuic_state("prompt", session_id, 0, false, &state);
 
     let current = state
         .session_maps
@@ -12826,7 +12827,7 @@ fn cc_block_end_carries_next_header_line_not_previous_start() {
     // `endLine === promptLine`.
     let mut last = None;
     let rows = vec![header_row(3, "Read"), header_row(9, "Edit")];
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     assert_eq!(events.len(), 3);
     assert_eq!(agent_block(&events[0]), ("start", 103));
     assert_eq!(agent_block(&events[1]), ("end", 109));
@@ -12843,7 +12844,7 @@ fn cc_block_end_carries_next_header_line_not_previous_start() {
 fn cc_block_end_is_exclusive_so_fold_count_is_positive() {
     let mut last = Some(50);
     let rows = vec![header_row(4, "Bash")];
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     let end_line = events
         .iter()
         .find_map(|e| match e {
@@ -12858,7 +12859,7 @@ fn cc_block_end_is_exclusive_so_fold_count_is_positive() {
 #[test]
 fn cc_block_teardown_uses_cursor_line_not_block_start() {
     let mut last = Some(50);
-    let events = synthesize_cc_block_events(&[], 100, false, 180, &mut last);
+    let events = synthesize_cc_block_events(&[], 100, false, 180, false, &mut last);
     assert_eq!(events.len(), 1);
     assert_eq!(agent_block(&events[0]), ("end", 180));
     assert_eq!(last, None, "teardown must clear the dangling block");
@@ -12870,7 +12871,7 @@ fn cc_block_end_never_precedes_its_start_when_abs_lines_regress() {
     // row_index keeps cycling, so abs_line is not globally monotonic.
     let mut last = Some(200);
     let rows = vec![header_row(50, "Bash")]; // abs_line = 100 + 50 = 150 < 200
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     assert_eq!(events.len(), 2, "expected an end event and a start event");
     assert_eq!(
         agent_block(&events[0]),
@@ -12895,7 +12896,7 @@ fn cc_block_end_never_precedes_its_start_when_abs_lines_regress() {
 fn cc_block_dedups_repeated_header_on_same_line() {
     let mut last = Some(150);
     let rows = vec![header_row(50, "Bash")]; // abs_line = 100 + 50 = 150 == last
-    let events = synthesize_cc_block_events(&rows, 100, true, 0, &mut last);
+    let events = synthesize_cc_block_events(&rows, 100, true, 0, false, &mut last);
     assert!(
         events.is_empty(),
         "repeated header on the same line must not re-start"
@@ -12906,7 +12907,7 @@ fn cc_block_dedups_repeated_header_on_same_line() {
 #[test]
 fn cc_block_teardown_with_no_active_block_emits_nothing() {
     let mut last = None;
-    let events = synthesize_cc_block_events(&[], 100, false, 180, &mut last);
+    let events = synthesize_cc_block_events(&[], 100, false, 180, false, &mut last);
     assert!(events.is_empty());
     assert_eq!(last, None);
 }
@@ -15325,7 +15326,7 @@ async fn critic_1302_hook_busy_after_a_dismissed_question_is_honoured() {
     let (state, silence, processor) = replay_claude_askuser_esc(sid).await;
     assert_eq!(shell_of(&state, sid), SHELL_IDLE);
 
-    let _ = processor.handle_tuic_state("busy", sid, 0, &state);
+    let _ = processor.handle_tuic_state("busy", sid, 0, false, &state);
     assert_eq!(
         shell_of(&state, sid),
         SHELL_BUSY,
@@ -15333,7 +15334,7 @@ async fn critic_1302_hook_busy_after_a_dismissed_question_is_honoured() {
     );
     assert!(silence.lock().hook_busy());
 
-    let _ = processor.handle_tuic_state("idle", sid, 0, &state);
+    let _ = processor.handle_tuic_state("idle", sid, 0, false, &state);
     assert_eq!(shell_of(&state, sid), SHELL_IDLE);
 }
 
@@ -15343,7 +15344,7 @@ async fn critic_1302_hook_busy_after_a_dismissed_question_is_honoured() {
 async fn critic_1302_decline_text_without_a_pending_question_leaves_busy_alone() {
     let sid = "critic-1302-quote";
     let (state, silence, mut processor) = replay_claude_askuser_esc(sid).await;
-    let _ = processor.handle_tuic_state("busy", sid, 0, &state);
+    let _ = processor.handle_tuic_state("busy", sid, 0, false, &state);
     assert_eq!(shell_of(&state, sid), SHELL_BUSY);
 
     processor.process_chunk(

@@ -1517,6 +1517,22 @@ struct ChunkProcessor {
     /// Absolute buffer line of the last heuristic agent-block start.
     /// Used to emit AgentBlock end when the next block starts or agent exits.
     last_agent_block_line: Option<usize>,
+    /// Absolute buffer line of the last block start synthesized from a
+    /// Claude Code fullscreen transcript-mode `[` dump (see
+    /// `synthesize_transcript_dump_block_events`). Independent of
+    /// `last_agent_block_line` — the dump is a one-shot snapshot printed to
+    /// the primary screen, structurally unrelated to either live block
+    /// source, so it needs its own open/close bookkeeping.
+    last_dump_block_line: Option<usize>,
+    /// Set whenever a chunk is processed with the alternate screen active;
+    /// consumed (and reset false) the next time a primary-screen chunk
+    /// synthesizes a fresh dump `start` event. Since `[` is only reachable
+    /// from transcript mode (the alternate screen), a `true` reading there
+    /// means real primary-screen dump activity resumed after a visit back to
+    /// the agent — i.e. a genuinely new `[`-dump, not a continuation of the
+    /// one already in progress. Drives `new_dump_generation` — see
+    /// `synthesize_transcript_dump_block_events`'s doc comment.
+    dump_saw_alt_screen: bool,
     /// Edge-detect an "Action Required" OSC 0 title so a permission prompt fires
     /// the question notification exactly once (the title repaints every spinner
     /// tick). Agent-agnostic: any agent that puts "Action Required" in its title
@@ -1637,6 +1653,8 @@ impl ChunkProcessor {
             tuic_session,
             last_session_conflict_mark: None,
             last_agent_block_line: None,
+            last_dump_block_line: None,
+            dump_saw_alt_screen: false,
             title_awaiting: false,
             codex_approval_question: None,
             codex_approval_canceled: false,
@@ -1650,11 +1668,20 @@ impl ChunkProcessor {
     /// start/end — the primary block source for any hook-instrumented
     /// session, matching the original one-block-per-prompt+output-cycle
     /// design intent independent of the agent's terminal rendering.
+    ///
+    /// `on_alt_screen` reflects whether the alternate screen buffer was
+    /// active when `line` was computed (by the caller, from
+    /// `history_size() + cursor row` against whichever screen was active at
+    /// that instant). A fullscreen TUI (Claude Code's default renderer) never
+    /// grows real alt-screen history, so `line` there is a transient
+    /// on-screen cursor row, not a valid scrollback anchor — tagged through
+    /// unchanged so row-anchored consumers can skip it.
     fn handle_tuic_state(
         &self,
         payload: &str,
         session_id: &str,
         line: i64,
+        on_alt_screen: bool,
         state: &AppState,
     ) -> (bool, Option<ParsedEvent>) {
         let (target, label) = match payload {
@@ -1682,6 +1709,9 @@ impl ChunkProcessor {
                     line,
                     exit_code: None,
                     prompt_text: last_prompt_text(state, session_id),
+                    on_alt_screen,
+                    from_transcript_dump: false,
+                    new_dump_generation: false,
                 })
             }
             SHELL_IDLE => {
@@ -1699,6 +1729,9 @@ impl ChunkProcessor {
                     line,
                     exit_code: if flagged { Some(1) } else { None },
                     prompt_text: None,
+                    on_alt_screen,
+                    from_transcript_dump: false,
+                    new_dump_generation: false,
                 })
             }
             _ => None,
@@ -1924,9 +1957,10 @@ impl ChunkProcessor {
             cursor_row,
             logical_prefix,
             physical_prefix,
-            history_size,
+            _history_size,
             intent_origin,
             intent_candidate,
+            on_alt_screen,
         ): VtProcessResult = if let Some(vt_log) = state.grid.vt_log_buffers.get(session_id) {
             // Phase 1: process the chunk and drain events under the lock,
             // but do NOT write any reply while holding it — write_terminal_reply's
@@ -2294,6 +2328,7 @@ impl ChunkProcessor {
                 hist,
                 intent_origin,
                 intent_candidate,
+                alt_screen,
             )
         } else {
             (
@@ -2308,8 +2343,13 @@ impl ChunkProcessor {
                 0,
                 0,
                 None,
+                false,
             )
         };
+        // The grid's eviction-stable screen origin (`TerminalGrid::screen_origin`,
+        // i.e. `total_scrolled()`): the coordinate every stored block row is built
+        // from, so heuristic/transcript-dump blocks match OSC 133 ones.
+        let total_scrolled = intent_origin;
 
         if screen_present
             && agent_type.as_deref() == Some("claude")
@@ -2501,6 +2541,7 @@ impl ChunkProcessor {
                         command,
                         params,
                         line,
+                        on_alt_screen,
                     } => {
                         explicit_idle_in_chunk |= command == 'A';
                         if command == 'A' && recovery_active {
@@ -2526,6 +2567,7 @@ impl ChunkProcessor {
                                     marker: command.to_string(),
                                     line,
                                     exit_code,
+                                    on_alt_screen,
                                 },
                             );
                         }
@@ -2534,6 +2576,7 @@ impl ChunkProcessor {
                             marker: command.to_string(),
                             line,
                             exit_code,
+                            on_alt_screen,
                         });
                     }
                     TermEvent::Osc7(url) => {
@@ -2564,6 +2607,7 @@ impl ChunkProcessor {
                         verb,
                         payload,
                         line,
+                        on_alt_screen,
                     } => match verb.as_str() {
                         "ego-recovery" if agent_type.as_deref() == Some("ego") => {
                             if let Some(event) =
@@ -2630,8 +2674,13 @@ impl ChunkProcessor {
                                     .has_tuic_state_integration
                                     .insert(session_id.to_string(), ());
                             }
-                            let (_, block_event) =
-                                self.handle_tuic_state(&payload, session_id, line as i64, state);
+                            let (_, block_event) = self.handle_tuic_state(
+                                &payload,
+                                session_id,
+                                line as i64,
+                                on_alt_screen,
+                                state,
+                            );
                             if let Some(evt) = block_event {
                                 tuic_events.push(evt);
                             }
@@ -2743,6 +2792,9 @@ impl ChunkProcessor {
                                     line: line as i64,
                                     exit_code,
                                     prompt_text: None,
+                                    on_alt_screen,
+                                    from_transcript_dump: false,
+                                    new_dump_generation: false,
                                 });
                             }
                         }
@@ -3167,22 +3219,54 @@ impl ChunkProcessor {
             // Close it now, at the current cursor position, then let the
             // primary source take over for everything after.
             if let Some(prev) = self.last_agent_block_line.take() {
-                let close_line = history_size + cursor_row.map_or(0, |r| r + 1);
+                let close_line = total_scrolled + cursor_row.map_or(0, |r| r + 1);
                 events.push(ParsedEvent::AgentBlock {
                     action: "end".into(),
                     line: close_line.max(prev + 1) as i64,
                     exit_code: None,
                     prompt_text: None,
+                    on_alt_screen,
+                    from_transcript_dump: false,
+                    new_dump_generation: false,
                 });
             }
         } else {
-            let teardown_end_line = history_size + cursor_row.map_or(0, |r| r + 1);
+            let teardown_end_line = total_scrolled + cursor_row.map_or(0, |r| r + 1);
             events.extend(synthesize_cc_block_events(
                 &changed_rows,
-                history_size,
+                total_scrolled,
                 agent_active_for_parse,
                 teardown_end_line,
+                on_alt_screen,
                 &mut self.last_agent_block_line,
+            ));
+        }
+
+        // A Claude Code fullscreen transcript-mode `[` dump — independent of
+        // (and never conflicting with) the two sources above: it never fires
+        // during a live hook-driven or heuristic turn, only when the user
+        // explicitly bridges the fullscreen conversation into real primary
+        // scrollback. See `synthesize_transcript_dump_block_events`'s doc
+        // comment.
+        //
+        // Recorded unconditionally (not just inside the `!on_alt_screen`
+        // branch below) — a visit back to the alternate screen is exactly
+        // the signal `is_new_generation` needs, and it can only be observed
+        // on the chunk where it actually happens.
+        if on_alt_screen {
+            self.dump_saw_alt_screen = true;
+        }
+        if !on_alt_screen {
+            let dump_teardown_end_line = total_scrolled + cursor_row.map_or(0, |r| r + 1);
+            let is_new_dump_generation = std::mem::take(&mut self.dump_saw_alt_screen);
+            events.extend(synthesize_transcript_dump_block_events(
+                &changed_rows,
+                total_scrolled,
+                agent_type.as_deref(),
+                hook_instrumented,
+                dump_teardown_end_line,
+                &mut self.last_dump_block_line,
+                is_new_dump_generation,
             ));
         }
 
@@ -4241,6 +4325,8 @@ type VtProcessResult = (
     usize,
     usize,
     Option<(crate::terminal_grid::LogicalPrefix, String)>,
+    // Whether the alternate screen was active when this chunk finished.
+    bool,
 );
 
 #[cfg(feature = "dictation")]
