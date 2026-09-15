@@ -113,6 +113,9 @@
   z-index: 20;
 }
 
+/* Agent accent color (--pane-accent outline): defined once in global.css,
+   shared with PaneTree's split-view case — see that rule's comment. */
+
 /* xterm scrollbar overrides — keep native viewport scrollable.
    xterm v6 reads scrollTop from this element to compute viewportY.
    overflow-y:hidden breaks viewportY (always returns 0).

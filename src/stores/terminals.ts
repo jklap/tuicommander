@@ -87,6 +87,15 @@ export interface TerminalData {
 	/** The name came from an explicit spawn name. OSC 0/2 titles leave it alone;
 	 *  an `intent:` title and a user rename may still replace it. */
 	nameFromSpawn: boolean;
+	/**
+	 * Set by the tmux compatibility shim's `set-option ... window-style|
+	 * pane-border-style|pane-active-border-style` (Claude Code's
+	 * per-teammate `--agent-color`) — a CSS-usable color string (an ANSI
+	 * keyword or `#rrggbb`). `null` means no accent. Rendered as a sidebar
+	 * tab marker (`TabBar`) and a terminal pane border (`PaneTree`,
+	 * `TerminalArea`'s flat view).
+	 */
+	accentColor: string | null;
 	cwd: string | null;
 	/**
 	 * The registered repo that owns this terminal, resolved from `cwd`.
@@ -165,6 +174,7 @@ type TerminalCreateData = Omit<
 	| "completionNotified"
 	| "nameIsCustom"
 	| "nameFromSpawn"
+	| "accentColor"
 	| "agentType"
 	| "agentLaunchCommand"
 	| "pendingResumeCommand"
@@ -204,6 +214,7 @@ type TerminalCreateData = Omit<
 	isRemote?: boolean;
 	nameIsCustom?: boolean;
 	nameFromSpawn?: boolean;
+	accentColor?: string | null;
 	agentType?: AgentType | null;
 	agentSessionId?: string | null;
 	agentLaunchCommand?: string | null;
@@ -485,6 +496,7 @@ function createTerminalsStore() {
 				completionNotified: false,
 				nameIsCustom: false,
 				nameFromSpawn: false,
+				accentColor: null,
 				agentType: null,
 				agentLaunchCommand: null,
 				pendingResumeCommand: null,
@@ -541,6 +553,7 @@ function createTerminalsStore() {
 				completionNotified: false,
 				nameIsCustom: false,
 				nameFromSpawn: false,
+				accentColor: null,
 				agentType: null,
 				agentLaunchCommand: null,
 				pendingResumeCommand: null,
@@ -660,6 +673,7 @@ function createTerminalsStore() {
 			// `session-renamed` echo of a change this store already applied.
 			const prevName = state.terminals[id]?.name;
 			const prevIsCustom = state.terminals[id]?.nameIsCustom ?? false;
+			const prevAccentColor = state.terminals[id]?.accentColor ?? null;
 			batch(() => {
 				if ("shellState" in data) {
 					const prev = state.terminals[id]?.shellState ?? null;
@@ -722,6 +736,22 @@ function createTerminalsStore() {
 						sessionId,
 						name: data.name ?? null,
 						isCustom: nextIsCustom,
+					}).catch(() => {});
+				}
+			}
+			// Same echo-guard shape as the name sync above, for the same reason:
+			// the backend's `session-accent-color-changed` event (tmux
+			// `set-option ... *-border-style`) flows through this same
+			// `update()`, and echoing it straight back unconditionally would
+			// re-trigger the backend's own emit — the exact ping-pong class of
+			// bug the name guard exists to prevent.
+			const nextAccentColor = state.terminals[id]?.accentColor ?? null;
+			if ("accentColor" in data && nextAccentColor !== prevAccentColor) {
+				const sessionId = state.terminals[id]?.sessionId;
+				if (sessionId) {
+					rpc("set_session_accent_color", {
+						sessionId,
+						color: nextAccentColor,
 					}).catch(() => {});
 				}
 			}

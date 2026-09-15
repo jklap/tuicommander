@@ -87,6 +87,9 @@
   box-shadow: inset 0 2px 0 var(--accent);
 }
 
+/* Agent accent color (--pane-accent outline): defined once in global.css,
+   shared with TerminalArea's flat-view case — see that rule's comment. */
+
 .pane-content {
   flex: 1;
   min-width: 0;
