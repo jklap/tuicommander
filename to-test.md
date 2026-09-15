@@ -3763,18 +3763,25 @@ section. All of the below needs a rebuilt build to check.
     IS added and persists across a settings reload.
 - [ ] StreamDock M18 macropad integration (`src-tauri/crates/tuic-streamdock/`,
   `src-tauri/src/streamdock/`, Settings > StreamDock tab): device connection, live session-tile
-  rendering, gesture dispatch, and config lifecycle, code-complete through Phase 6 and gated by
-  `check-gate.sh` (all Rust/frontend tests pass), but the in-process wiring (`AppStateSource`/
-  `AppStateSink`, `StreamDockManager::apply_config` reconcile, the new `SessionFocusRequested`/
-  `UiActionRequested` `AppEvent`s) has never run against a live `make dev` process — **requires a
-  restart to load** (Rust change, no hot-reload). After restarting with the real VSD M18 attached
-  and `Settings > StreamDock` enabled: confirm the device connects (status strip shows `running`
-  with the right serial), starting/finishing a real session moves the corresponding key within
-  ~300ms, closing a session blanks its slot without reindexing neighbors, a tap on a session tile
-  focuses that tab (and answers a pending choice prompt if one is showing), a hold sends interrupt
-  (`\x03`), the bottom-row verb keys (`Approve`/`Reject`/`Interrupt`/`JumpWaiting`/`Overflow`) and
-  the 3 plain buttons work, and both brightness sliders move the backlight live with no restart.
-  Also verify hot-plug: unplug and replug the device and confirm it reattaches within ~2s. If no
-  hardware is available, the focus/action event path itself can be proven without a device via
-  `curl -X POST :9877/sessions/{id}/focus` and `curl -X POST :9877/ui/action` against the worktree
-  build.
+  rendering, gesture dispatch, config lifecycle, and the ambient LED ring, code-complete through
+  Phase 7 and gated by `check-gate.sh` (all Rust/frontend tests pass), but the in-process wiring
+  (`AppStateSource`/`AppStateSink`, `StreamDockManager::apply_config` reconcile, the new
+  `SessionFocusRequested`/`UiActionRequested` `AppEvent`s, `Coordinator::ambient_led_update`) has
+  never run against a live `make dev` process — **requires a restart to load** (Rust change, no
+  hot-reload). After restarting with the real VSD M18 attached and `Settings > StreamDock`
+  enabled: confirm the device connects (status strip shows `running` with the right serial),
+  starting/finishing a real session moves the corresponding key within ~300ms, closing a session
+  blanks its slot without reindexing neighbors, a tap on a session tile focuses that tab (and
+  answers a pending choice prompt if one is showing), a hold sends interrupt (`\x03`), the
+  bottom-row verb keys (`Approve`/`Reject`/`Interrupt`/`JumpWaiting`/`Overflow`) and the 3 plain
+  buttons work, and both brightness sliders move the backlight live with no restart. Also verify
+  hot-plug: unplug and replug the device and confirm it reattaches within ~2s. **New in Phase 7:**
+  confirm the 24-LED ring lights up at all on this unit (Boss's VSD firmware string
+  `"V3.VSDM18_HBOE.02.01"` should negotiate `FeatureSet::rgb = true` per `device::model`'s
+  firmware-prefix match — this has only been unit-tested against that exact string, never
+  observed against the real ring) and that it actually changes color: green with all sessions
+  quiet, peach the moment any session goes into "awaiting input," red when a session is
+  rate-limited/errored, and that it settles back to green once the triggering session clears
+  (not stuck on the last color). If no hardware is available, the focus/action event path itself
+  can be proven without a device via `curl -X POST :9877/sessions/{id}/focus` and
+  `curl -X POST :9877/ui/action` against the worktree build.
