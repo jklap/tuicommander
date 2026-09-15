@@ -2044,6 +2044,10 @@ pub struct AppState {
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
     pub(crate) git_cache: GitCacheState,
+    /// Pollable snapshot of each worktree's background setup chain, so an MCP
+    /// client (no event stream) can check status instead of only ever being
+    /// told via `worktree-setup-script-completed`. See [`WorktreeSetupStatus`].
+    pub(crate) worktree_setup_status: WorktreeSetupStatusCache,
     /// Raw file watchers per repo (keyed by repo path), with per-category
     /// debounce. macOS/Windows: one recursive `notify::RecommendedWatcher` over
     /// the repo root. Linux: pruned non-recursive working-tree watches + targeted
@@ -3207,6 +3211,7 @@ impl AppState {
             ws_clients: DashMap::new(),
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
+            worktree_setup_status: build_worktree_setup_status_cache(),
             repo_watchers: DashMap::new(),
             repo_git_fingerprints: DashMap::new(),
             repo_head_targets: DashMap::new(),
@@ -3672,6 +3677,47 @@ pub(crate) fn build_git_cache<T: Send + Sync + 'static>(
                 ttl_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         })
+        .build()
+}
+
+/// Snapshot of a worktree's background setup chain
+/// (`worktree::spawn_worktree_setup_chain`), keyed by `(repo_path, branch)` in
+/// [`WorktreeSetupStatusCache`]. Lets a polling caller (an MCP client, which
+/// has no SSE/event stream to listen on) ask "is it done yet" instead of only
+/// ever being told via the dual-emitted `worktree-setup-script-completed`
+/// event — closing the observability gap `AppEvent::WorktreeSetupScriptCompleted`
+/// left for that transport.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub(crate) enum WorktreeSetupStatus {
+    /// The chain is running (file sync and/or setup script not finished yet).
+    Running,
+    /// The chain finished and no setup script was configured for this repo —
+    /// there was never anything to wait for beyond the file sync.
+    NotConfigured,
+    /// The chain finished having run a configured setup script.
+    Completed {
+        exit_code: Option<i64>,
+        error: Option<String>,
+    },
+}
+
+/// Bounded, TTL-evicted cache of [`WorktreeSetupStatus`] snapshots, keyed by
+/// `(repo_path, branch)`. Same shape as [`GitCache`] (moka, capacity + TTL
+/// bound) but keyed on a pair rather than a single repo path, so it lives
+/// alongside `GitCacheState` rather than inside it.
+pub(crate) type WorktreeSetupStatusCache =
+    moka::sync::Cache<(String, String), Arc<WorktreeSetupStatus>>;
+
+/// A worktree's setup chain is expected to finish within
+/// `setup_script_timeout_secs` (600s default) plus the file sync — 30 minutes
+/// gives real headroom over that without keeping a "Completed" entry around
+/// indefinitely. Capacity matches `GIT_CACHE_CAPACITY`: worktree creation is
+/// rare enough that this is a generous bound, not a tight one.
+pub(crate) fn build_worktree_setup_status_cache() -> WorktreeSetupStatusCache {
+    moka::sync::Cache::builder()
+        .max_capacity(GIT_CACHE_CAPACITY)
+        .time_to_live(Duration::from_secs(30 * 60))
         .build()
 }
 
@@ -7910,6 +7956,88 @@ mod tests {
             counter.load(std::sync::atomic::Ordering::Relaxed),
             1,
             "explicit invalidation must NOT increment the watcher-miss counter"
+        );
+    }
+
+    // --- WorktreeSetupStatus: the exact wire shape an MCP/HTTP client sees ---
+    //
+    // Both `handle_worktree`'s "setup_status" arm (`to_json_or_error`) and
+    // `get_worktree_setup_status_http` are thin `serde_json::to_value`/`Json(..)`
+    // pass-throughs of this enum — so locking its shape here is what actually
+    // protects both surfaces, not a redundant per-transport re-check.
+
+    #[test]
+    fn worktree_setup_status_serializes_each_state_with_the_expected_wire_shape() {
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::Running).unwrap(),
+            serde_json::json!({"state": "running"})
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::NotConfigured).unwrap(),
+            serde_json::json!({"state": "not_configured"})
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::Completed {
+                exit_code: Some(0),
+                error: None,
+            })
+            .unwrap(),
+            serde_json::json!({"state": "completed", "exit_code": 0, "error": null})
+        );
+        assert_eq!(
+            serde_json::to_value(WorktreeSetupStatus::Completed {
+                exit_code: None,
+                error: Some("task panic: boom".to_string()),
+            })
+            .unwrap(),
+            serde_json::json!({"state": "completed", "exit_code": null, "error": "task panic: boom"})
+        );
+    }
+
+    #[test]
+    fn worktree_setup_status_cache_is_keyed_by_the_repo_path_branch_pair_not_either_alone() {
+        let cache = build_worktree_setup_status_cache();
+        cache.insert(
+            ("/repo".to_string(), "feat-a".to_string()),
+            Arc::new(WorktreeSetupStatus::Running),
+        );
+        cache.insert(
+            ("/repo".to_string(), "feat-b".to_string()),
+            Arc::new(WorktreeSetupStatus::NotConfigured),
+        );
+        cache.insert(
+            ("/other-repo".to_string(), "feat-a".to_string()),
+            Arc::new(WorktreeSetupStatus::Completed {
+                exit_code: Some(1),
+                error: None,
+            }),
+        );
+
+        assert_eq!(
+            *cache
+                .get(&("/repo".to_string(), "feat-a".to_string()))
+                .unwrap(),
+            WorktreeSetupStatus::Running
+        );
+        assert_eq!(
+            *cache
+                .get(&("/repo".to_string(), "feat-b".to_string()))
+                .unwrap(),
+            WorktreeSetupStatus::NotConfigured
+        );
+        assert_eq!(
+            *cache
+                .get(&("/other-repo".to_string(), "feat-a".to_string()))
+                .unwrap(),
+            WorktreeSetupStatus::Completed {
+                exit_code: Some(1),
+                error: None,
+            }
+        );
+        assert!(
+            cache
+                .get(&("/repo".to_string(), "feat-c".to_string()))
+                .is_none()
         );
     }
 
