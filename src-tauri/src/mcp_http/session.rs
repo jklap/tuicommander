@@ -180,6 +180,11 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .get(&session_id)
                     .map(|value| value.value().clone())
                     .filter(|parent| !super::mcp_transport::is_pending_parent(parent)),
+                accent_color: state
+                    .session_maps
+                    .pty_accent_colors
+                    .get(&session_id)
+                    .map(|value| value.value().clone()),
                 state: None,
                 connection_id: None,
                 session_id,
@@ -507,6 +512,25 @@ pub(super) async fn set_session_name(
     entry
         .lock()
         .set_display_name(body.name, body.is_custom.unwrap_or(true));
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+/// Set (or clear) a session's accent color — the HTTP twin of `pty.rs`'s
+/// `set_session_accent_color` IPC command. Real consumer: the tmux
+/// compatibility shim's `set-option ... *-border-style` dispatch
+/// (`tmux_routes.rs`), delivering Claude Code's per-teammate
+/// `--agent-color`. Storage, the unchanged-value no-op guard, and the dual
+/// emit all live in `AppState::set_pty_accent_color` — this handler is only
+/// an existence check plus a call-through.
+pub(super) async fn set_session_accent_color(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<SetAccentColorRequest>,
+) -> impl IntoResponse {
+    if !state.session_maps.sessions.contains_key(&session_id) {
+        return session_not_found();
+    }
+    state.set_pty_accent_color(&session_id, body.color);
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -1716,6 +1740,9 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
                                     serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
                                 }
+                                crate::state::AppEvent::SessionRenamed { session_id: sid, name, is_custom } => {
+                                    serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
+                                }
                                 _ => continue,
                             };
                             if ws_sender.text(&payload.to_string()).await.is_err() {
@@ -2034,6 +2061,13 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
             description,
         } => {
             serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
+        }
+        crate::state::AppEvent::SessionRenamed {
+            session_id: sid,
+            name,
+            is_custom,
+        } => {
+            serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
         }
         // Mirrors the desktop `Osc133Event` field for field — see the shape
         // contract above. Without this a browser/PWA client had no command
@@ -3552,6 +3586,136 @@ mod tests {
             !concatenated_slash_mode,
             "the concatenated Escape/slash request must remain distinguishable from two parts"
         );
+    }
+
+    /// `PUT /sessions/{id}/name` is a frontend-originated rename (the store's
+    /// `update()` echoes every `name` change here), so it must never emit
+    /// `session-renamed`: the frontend's listener feeds that event straight back
+    /// into `update()`, which would echo again — an unbounded ping-pong on every
+    /// OSC title repaint. Backend-originated renames (MCP `session action=rename`,
+    /// tmux `select-pane -T`) go through `AppState::rename_session_from_backend`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_never_emits_session_renamed() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-no-echo";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let mut rx = state.event_bus.subscribe();
+        for name in ["hello", "hello", "world"] {
+            set_session_name(
+                State(state.clone()),
+                Path(session_id.to_string()),
+                Json(SetNameRequest {
+                    name: Some(name.to_string()),
+                    is_custom: Some(false),
+                }),
+            )
+            .await;
+        }
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::SessionRenamed { .. }),
+                "a frontend-originated rename must not emit session-renamed: {event:?}"
+            );
+        }
+        let entry = state.session_maps.sessions.get(session_id).unwrap();
+        assert_eq!(entry.lock().display_name.as_deref(), Some("world"));
+    }
+
+    /// Same unchanged-value guard as `set_session_name` — required so a
+    /// frontend echo of its own applied color (`terminals.ts`'s `update()`)
+    /// can never loop with `session-accent-color-changed`, the identical bug
+    /// class `set_session_name_skips_emit_when_unchanged` protects against.
+    #[tokio::test]
+    async fn set_session_accent_color_skips_emit_when_unchanged() {
+        let state = super::super::tests::test_state();
+        let session_id = "accent-color-noop-guard";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let mut rx = state.event_bus.subscribe();
+
+        set_session_accent_color(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetAccentColorRequest {
+                color: Some("blue".to_string()),
+            }),
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionAccentColorChanged { color, .. }) => {
+                assert_eq!(color, Some("blue".to_string()));
+            }
+            other => panic!("expected SessionAccentColorChanged on the first set, got {other:?}"),
+        }
+
+        // Same color again — the echo-back case. Must not re-emit.
+        set_session_accent_color(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetAccentColorRequest {
+                color: Some("blue".to_string()),
+            }),
+        )
+        .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "an unchanged accent color must not re-emit session-accent-color-changed"
+        );
+
+        // A genuinely different color still emits.
+        set_session_accent_color(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetAccentColorRequest {
+                color: Some("green".to_string()),
+            }),
+        )
+        .await;
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionAccentColorChanged { color, .. }) => {
+                assert_eq!(color, Some("green".to_string()));
+            }
+            other => {
+                panic!("expected SessionAccentColorChanged on a genuine change, got {other:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn set_session_accent_color_404s_for_an_unknown_session() {
+        let state = super::super::tests::test_state();
+        let resp = set_session_accent_color(
+            State(state.clone()),
+            Path("does-not-exist".to_string()),
+            Json(SetAccentColorRequest {
+                color: Some("blue".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// `list_sessions` (`GET /sessions`) had no test at all before this —
+    /// the one caller-side check this field actually needs: that
+    /// `AppState.pty_accent_colors` (a side-map, not a `PtySession` field —
+    /// see its doc comment) actually surfaces through to `SessionInfo`, and
+    /// that a session with no color set gets `None` rather than a stale or
+    /// wrong value from a DIFFERENT session's entry.
+    #[tokio::test]
+    async fn list_sessions_reports_each_sessions_own_accent_color() {
+        let state = super::super::tests::test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "colored");
+        crate::state::tests_support::insert_dummy_session(&state, "plain");
+        state.set_pty_accent_color("colored", Some("blue".to_string()));
+
+        let sessions = list_sessions(State(state.clone())).await.0;
+        let colored = sessions.iter().find(|s| s.session_id == "colored").unwrap();
+        let plain = sessions.iter().find(|s| s.session_id == "plain").unwrap();
+        assert_eq!(colored.accent_color.as_deref(), Some("blue"));
+        assert_eq!(plain.accent_color, None);
     }
 
     #[cfg(unix)]

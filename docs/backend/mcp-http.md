@@ -300,6 +300,7 @@ keeping the row lock during that probe would deadlock a bound Codex terminal.
 | `GET` | `/sessions/:id/shell-family` | Shell classification (`posix`/`windows-native`/`unknown`, or `null`) so the client picks the right control sequences |
 | `POST` | `/sessions/:id/pause` | Pause session output |
 | `POST` | `/sessions/:id/resume` | Resume session output |
+| `PUT` | `/sessions/:id/accent-color` | Set/clear a session's accent color |
 | `DELETE` | `/sessions/:id` | Close session |
 
 ### Design Mode
@@ -319,6 +320,28 @@ the desktop window and `/events` SSE with `{repo_path, session_id, status}`;
 `status` is `armed` or `stopped`. See the [HTTP API](../api/http-api.md#design-mode-endpoints)
 for the request bodies and the [user guide](../user-guide/design-mode.md) for
 the workflow.
+
+### tmux Compatibility Shim (`tmux_routes.rs`)
+
+Backs the `tuic`-as-`tmux` layer's pane/window/session graph (`docs/api/http-api.md`'s "tmux
+Compatibility Shim Endpoints" has full request/response shapes). In-memory only, partitioned by a
+caller-supplied `label`, reconciled against live `GET /sessions` state on every read.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/tmux/topology` | Full pane/window/session graph for one label |
+| `POST` | `/tmux/sessions` | Create a session (+ initial window/virtual pane) |
+| `DELETE` | `/tmux/sessions/:id` | Kill a session and every materialised pane's PTY |
+| `POST` | `/tmux/windows` | Add a window (+ virtual initial pane) to a session |
+| `POST` | `/tmux/panes` | Split: add a pane to a window, materialising immediately |
+| `POST` | `/tmux/panes/:id/materialize` | Idempotent lazy PTY spawn for a virtual pane |
+| `PUT` | `/tmux/panes/:id` | Set a pane's title; renames its TUIC tab if materialised |
+| `DELETE` | `/tmux/panes/:id` | Remove a pane and close its PTY if materialised |
+| `PUT` | `/tmux/panes/:id/accent-color` | Resolve + set a pane's real accent color if materialised |
+| `POST` | `/tmux/windows/:id/layout` | Broadcast a layout-arrangement request for a window's materialized panes |
+
+`kill-server` has no dedicated route — the CLI calls `DELETE /tmux/sessions/:id` once per session
+tracked under the invoking `-L`/`-S` label, so it never touches a different label's sessions.
 
 ### Monitoring
 

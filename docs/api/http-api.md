@@ -661,6 +661,30 @@ Sets a display name and its origin. `isCustom: true` protects an explicit user
 rename from subsequent OSC/intent titles; spawn-assigned and dynamic titles use
 `false`. Omitting the field preserves the legacy custom-rename behavior.
 
+Does **not** emit `session-renamed`: this route is the frontend store's own echo of a rename it
+already applied, so emitting would loop. Backend-originated renames (MCP `session action=rename`,
+the tmux shim's `PUT /tmux/panes/:id`) emit `session-renamed` (`{session_id, name, is_custom}`)
+instead.
+
+### Set Accent Color
+
+```
+PUT /sessions/:id/accent-color
+Content-Type: application/json
+
+{ "color": "blue" }
+```
+
+Sets (or clears, with `color: null`) a session's accent color — a CSS-usable string (an ANSI
+keyword or `#rrggbb`), rendered as a sidebar tab marker and a terminal pane border. Real consumer:
+the tmux compatibility shim's `set-option ... *-border-style` dispatch (Claude Code's per-teammate
+`--agent-color`, see "tmux Compatibility Shim Endpoints" below). Suppressed when the value hasn't
+actually changed, same as `session-renamed` — this is what stops a frontend's echo of its own
+applied color from looping.
+
+Emits `session-accent-color-changed` (`{session_id, color}`) over both the SSE/WS event bus and
+the desktop Tauri event.
+
 ### Close Session
 
 ```
@@ -724,6 +748,89 @@ their Tauri command counterparts. Status changes also arrive as the
 `{ "repo_path": string, "session_id": string, "status": "armed" | "stopped" }`.
 A grab is
 prefilled into the bound agent draft, never submitted by these endpoints.
+
+## tmux Compatibility Shim Endpoints
+
+Back the `tuic`-as-`tmux` compatibility layer (`docs/user-guide/cli.md`'s "tmux Compatibility"
+section) — a pane/window/session graph, in-memory only, partitioned by a caller-supplied `label`
+(the tmux `-L`/`-S` value, or `"default"`). Every route reconciles stale entries against live
+`GET /sessions` state first: a pane whose backing TUIC session has disappeared (the user closed
+the tab, or the app restarted) reverts to *virtual* rather than 404ing forever.
+
+```
+GET /tmux/topology?label=<label>
+```
+Full graph for one label: `{"sessions":[{"id":"$0","name":"...","active_window":"@0","windows":[{"id":"@0","name":"...","index":0,"active_pane":"%0","panes":[{"id":"%0","index":0,"title":null,"cwd":null,"tuic_session_id":null}]}]}]}`. `tuic_session_id: null` means the pane's id has been allocated but no PTY has been spawned for it yet.
+
+```
+POST /tmux/sessions
+{ "label": "...", "name": "claude-swarm", "window_name": "swarm-view" }
+→ 201 { "session_id": "$0", "window_id": "@0", "pane_id": "%0" }
+```
+Creates a session with one window and one virtual initial pane.
+
+```
+DELETE /tmux/sessions/:id?label=<label>
+```
+Removes the session and closes every one of its materialised panes' PTYs.
+
+```
+POST /tmux/windows
+{ "label": "...", "session_id": "$0", "name": "..." }
+→ 201 { "window_id": "@1", "pane_id": "%1" }
+```
+Adds a window (with one virtual initial pane) to an existing session.
+
+```
+POST /tmux/panes
+{ "label": "...", "window_id": "@0", "cwd": "/optional/path" }
+→ 201 { "pane_id": "%2", "tuic_session_id": "<uuid>" }
+```
+Adds a pane to an existing window — unlike the initial panes above, this one **materialises
+immediately** (spawns a real PTY): a split is always about to be used.
+
+```
+POST /tmux/panes/:id/materialize?label=<label>
+{ "cwd": "/optional/path" }
+→ 200 { "tuic_session_id": "<uuid>" }
+```
+Idempotent lazy spawn for a still-virtual pane; returns the existing id if already materialised.
+
+```
+PUT /tmux/panes/:id?label=<label>
+{ "title": "teammate-1" }
+```
+Records the pane's title and, if materialised and the title changed, renames its TUIC tab as a backend-originated rename (emits `session-renamed`, like MCP `session action=rename`). An empty or missing title only updates the pane record.
+
+```
+DELETE /tmux/panes/:id?label=<label>
+```
+Removes the pane and closes its PTY if materialised.
+
+```
+PUT /tmux/panes/:id/accent-color?label=<label>
+{ "value": "bg=default,fg=blue" }
+```
+The real half of `set-option ... window-style|pane-border-style|pane-active-border-style`
+(Claude Code's per-teammate `--agent-color`). `value` is the RAW tmux option value — the CLI has
+no dependency on the main app's color palette, so `resolve_tmux_color` (`tmux_routes.rs`) resolves
+it server-side to a CSS-usable string (ANSI keyword, or `colourN`/hex → `#rrggbb`) and calls
+through to `PUT /sessions/:id/accent-color`. Recorded on `TmuxPane.accent_color` and, like `title`,
+applied retroactively by `materialize` if the pane is still virtual.
+
+```
+POST /tmux/windows/:id/layout
+{ "label": "...", "layout": "tiled" }
+```
+The real half of `select-layout tiled`/`main-vertical`. Resolves the window's own **materialized**
+panes (virtual ones are simply omitted, not a gap) and broadcasts `tmux-window-layout-requested`
+(`{"session_ids": [...], "layout": "tiled"}`) for the frontend to arrange into a split view
+(`paneLayoutStore.arrangeSessionsAsLayout`) — the backend never touches pane-layout state itself.
+A no-op (still `200`) when nothing is materialized yet.
+
+`kill-server` has no dedicated endpoint of its own — it is `DELETE /tmux/sessions/:id?label=<label>`
+called once per session currently tracked under that label, matching real tmux's `-L a
+kill-server` never touching a session under a different label (or the user's own untracked tabs).
 
 ## Streaming Endpoints
 
