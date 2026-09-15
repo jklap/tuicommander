@@ -113,13 +113,26 @@ pub(crate) fn replay_file_command(path: &std::path::Path) -> portable_pty::Comma
 /// tests that drove a real PTY with an EOF loop did not fail on Windows — they
 /// hung, and nextest killed them at 120s.
 ///
+/// The drain must also answer the terminal's side of the conversation, which is
+/// why it takes the master's writer. A ConPTY's console host opens by asking
+/// the terminal where the cursor is — DSR, `ESC[6n` — and writes nothing at all
+/// until it gets a reply. With no reply these tests saw exactly those four
+/// bytes and then silence, so the child's output never existed to assert on.
+/// Production answers the same query through alacritty's `Event::PtyWrite`
+/// (see `pty.rs`); a buffer under test has no terminal, so the drain is the
+/// terminal.
+///
 /// Three named budgets, per the rule that one deadline may not serve two roles.
-/// `STARTUP` waits for the first byte — a ConPTY has a console host to launch
-/// first, and giving that the `QUIET` window meant the drain returned before
-/// the child had written anything and the test read an empty screen. `QUIET`
-/// decides the child has finished writing, and `DEADLINE` is the outer bound
-/// that says the read itself is stuck.
-pub(crate) fn drain_pty(mut reader: Box<dyn std::io::Read + Send>, mut sink: impl FnMut(&[u8])) {
+/// `STARTUP` waits for the first byte the *child* wrote — the handshake above
+/// does not count, or the drain would start its quiet countdown against a
+/// console host that has not spoken yet. `QUIET` decides the child has finished
+/// writing, and `DEADLINE` is the outer bound that says the read itself is
+/// stuck.
+pub(crate) fn drain_pty(
+    mut reader: Box<dyn std::io::Read + Send>,
+    mut terminal: Box<dyn std::io::Write + Send>,
+    mut sink: impl FnMut(&[u8]),
+) {
     const STARTUP: std::time::Duration = std::time::Duration::from_secs(15);
     const QUIET: std::time::Duration = std::time::Duration::from_millis(500);
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
@@ -152,12 +165,44 @@ pub(crate) fn drain_pty(mut reader: Box<dyn std::io::Read + Send>, mut sink: imp
         // reader reached EOF. Both end the drain.
         match rx.recv_timeout(budget) {
             Ok(chunk) => {
-                sink(&chunk);
+                let payload = answer_cursor_queries(&chunk, &mut terminal);
+                // Nothing but the handshake: the child still has not spoken,
+                // so the startup budget keeps running.
+                if payload.is_empty() {
+                    continue;
+                }
+                sink(&payload);
                 budget = QUIET;
             }
             Err(_) => return,
         }
     }
+}
+
+/// Reply to every cursor-position query in `chunk` and return what is left.
+///
+/// The reply is always `1;1`: these tests open a fresh PTY and replay a file
+/// into it, so the console host is asking about a cursor that has not moved.
+/// The query is matched inside one chunk because the console host writes it as
+/// a single write of its own, which the drain's read returns on its own.
+fn answer_cursor_queries(chunk: &[u8], terminal: &mut (impl std::io::Write + ?Sized)) -> Vec<u8> {
+    const QUERY: &[u8] = b"\x1b[6n";
+    if !chunk.windows(QUERY.len()).any(|w| w == QUERY) {
+        return chunk.to_vec();
+    }
+    let mut rest = Vec::with_capacity(chunk.len());
+    let mut at = 0;
+    while at < chunk.len() {
+        if chunk[at..].starts_with(QUERY) {
+            let _ = terminal.write_all(b"\x1b[1;1R");
+            let _ = terminal.flush();
+            at += QUERY.len();
+        } else {
+            rest.push(chunk[at]);
+            at += 1;
+        }
+    }
+    rest
 }
 
 /// A path with `/` separators, whatever the host used. Tests spell the suffix
