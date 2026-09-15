@@ -377,6 +377,7 @@ mod tests {
         assert!(val.is_none());
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn read_own_argv0() {
         // Our own argv[0] is always readable and never empty — the property the
@@ -385,11 +386,13 @@ mod tests {
         assert!(argv0.is_some_and(|s| !s.is_empty()));
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn read_argv0_of_dead_process() {
         assert!(read_process_argv0(99999999).is_none());
     }
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     fn read_own_argv_starts_with_argv0() {
         // Full argv is what a rebuilt launch command is made of: the flags an alias

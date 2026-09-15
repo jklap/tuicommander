@@ -882,20 +882,33 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgeState, dispatch_loop, read_http_response, request_protocol_version, response_timeout,
-        tuic_session_header_line,
+        read_http_response, request_protocol_version, response_timeout, tuic_session_header_line,
     };
+    #[cfg(unix)]
+    use super::{BridgeState, dispatch_loop};
+    #[cfg(unix)]
     use std::path::PathBuf;
+    #[cfg(unix)]
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[cfg(unix)]
+    use std::sync::atomic::AtomicUsize;
+    #[cfg(unix)]
+    use std::sync::atomic::Ordering;
+    #[cfg(unix)]
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
 
+    // Unix-domain-socket harness: `connect_ipc` has no other transport, so on
+    // Windows there is no mock to bind and nothing below can be built there.
+    #[cfg(unix)]
     /// Socket the mock IPC server listens on, read by `connect_ipc` under `cfg(test)`.
     static TEST_IPC_PATH: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
     /// Serializes the tests that install a mock server (the path above is global).
     /// Poisoning is ignored: a failing test must not cascade into the others.
+    #[cfg(unix)]
     static TEST_IPC_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    #[cfg(unix)]
     pub(super) fn test_ipc_path() -> Option<PathBuf> {
         TEST_IPC_PATH
             .lock()
@@ -905,12 +918,14 @@ mod tests {
 
     /// Holds the serialization lock and clears the global socket path on drop, so a
     /// panicking test leaves no mock installed for the next one.
+    #[cfg(unix)]
     struct MockGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
         stats: Arc<MockStats>,
     }
 
+    #[cfg(unix)]
     impl Drop for MockGuard {
         fn drop(&mut self) {
             *TEST_IPC_PATH.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -918,6 +933,7 @@ mod tests {
     }
 
     /// What the mock server observed, so tests can assert on real transport behavior.
+    #[cfg(unix)]
     #[derive(Default)]
     struct MockStats {
         /// Requests currently being served — the concurrency proof.
@@ -930,6 +946,7 @@ mod tests {
     /// Mock TUIC IPC endpoint. Answers `initialize` with a session id and any other
     /// request with a JSON-RPC result, sleeping `slow_ms` when the body contains
     /// `"slow"` so a test can hold one request open while sending the next.
+    #[cfg(unix)]
     async fn start_mock_ipc(slow_ms: u64) -> MockGuard {
         let lock = TEST_IPC_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
@@ -990,6 +1007,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn connected_state() -> Arc<BridgeState> {
         let state = Arc::new(BridgeState::new());
         *state.session_id.lock().unwrap() = Some("test-sid".to_string());
@@ -997,6 +1015,7 @@ mod tests {
         state
     }
 
+    #[cfg(unix)]
     fn call(name: &str) -> String {
         format!(
             r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{{"action":"list"}}}}}}"#
@@ -1006,6 +1025,7 @@ mod tests {
     /// The regression: a long request must not hold the reader hostage. Two slow
     /// (300ms) calls sent back-to-back finish in roughly one slow window, and the
     /// server sees both open at once.
+    #[cfg(unix)]
     #[tokio::test]
     async fn concurrent_requests_are_not_serialized() {
         let mock = start_mock_ipc(300).await;
@@ -1035,6 +1055,7 @@ mod tests {
 
     /// A fast call sent behind a long one must not wait for it. Without concurrent
     /// dispatch the fast call could only be served after the slow one returned.
+    #[cfg(unix)]
     #[tokio::test]
     async fn fast_request_is_served_while_a_slow_one_is_pending() {
         let mock = start_mock_ipc(400).await;
@@ -1059,6 +1080,7 @@ mod tests {
 
     /// Concurrency must not turn a reconnect into an `initialize` storm: three
     /// requests arriving while offline share a single re-initialize.
+    #[cfg(unix)]
     #[tokio::test]
     async fn concurrent_requests_reconnect_only_once() {
         let mock = start_mock_ipc(0).await;
@@ -1087,6 +1109,7 @@ mod tests {
     /// spawned request is reconnecting. Both paths take `reconnect_lock`, so the
     /// offline burst produces exactly one session establishment (+ the proxied
     /// downstream initialize) instead of one per reconnect authority.
+    #[cfg(unix)]
     #[tokio::test]
     async fn initialize_does_not_race_an_in_flight_reconnect() {
         let mock = start_mock_ipc(150).await;
@@ -1114,6 +1137,7 @@ mod tests {
 
     /// `initialize` stays sequential: it establishes the session every later
     /// request needs, so it is answered before the loop dispatches anything else.
+    #[cfg(unix)]
     #[tokio::test]
     async fn initialize_is_handled_before_later_requests() {
         let mock = start_mock_ipc(0).await;
