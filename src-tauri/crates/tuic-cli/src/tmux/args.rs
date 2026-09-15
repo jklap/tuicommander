@@ -294,9 +294,37 @@ pub(crate) enum TmuxOp {
     },
     KillServer,
     AttachSession,
-    /// Cosmetic tmux commands with no TUIC-tab equivalent: `select-layout`,
-    /// `set-option`/`set`, `set-window-option`/`setw`, `switch-client`.
-    /// Always succeeds with no output, regardless of its own flags.
+    /// `set-option`/`set`/`set-window-option`/`setw`. Most option names have
+    /// no TUIC equivalent and are silently accepted with no effect — see
+    /// `exec.rs`'s dispatch — but the three color options
+    /// (`window-style`/`pane-border-style`/`pane-active-border-style`) set a
+    /// real per-pane accent color.
+    SetOption {
+        /// `-t`
+        target: Option<String>,
+        /// `-w` seen (window-scoped, e.g. `pane-border-status`) — carried
+        /// for completeness; no currently-acted-on option reads it.
+        scope_window: bool,
+        /// First positional — the option name (e.g. `pane-border-style`).
+        name: String,
+        /// Remaining positional(s), space-joined — real tmux option values
+        /// can contain spaces (`pane-border-format`'s
+        /// `#[fg=blue,bold] #{pane_title} #[default]`).
+        value: String,
+    },
+    /// `select-layout`. Only `tiled` (the only layout reachable from
+    /// TUIC's environment — see `tmux-swarm-shim.md`) triggers a real
+    /// pane-arrangement request; every other layout name (or none) is a
+    /// silent no-op, same as before this variant existed.
+    SelectLayout {
+        /// `-t`
+        target: Option<String>,
+        /// Trailing positional, if any (e.g. `tiled`, `main-vertical`).
+        layout: Option<String>,
+    },
+    /// Cosmetic tmux commands with no TUIC-tab equivalent at all:
+    /// `switch-client`, `rename-window`. Always succeeds with no output,
+    /// regardless of its own flags.
     Noop(String),
     Unknown(String, Vec<String>),
 }
@@ -507,8 +535,56 @@ pub(crate) fn parse_tmux(argv: &[String]) -> Result<(GlobalOpts, TmuxOp), ArgErr
             }
         }
         "attach-session" | "attach" | "a" => TmuxOp::AttachSession,
-        "select-layout" | "set-option" | "set" | "set-window-option" | "setw" | "switch-client"
-        | "rename-window" => TmuxOp::Noop(subcmd.clone()),
+        "set-option" | "set" | "set-window-option" | "setw" => {
+            // Real tmux's full `set-option` flag surface: -a (append), -F
+            // (expand formats in value), -g (global), -o (only if unset),
+            // -p (pane), -q (quiet), -s (server), -u (unset), -w (window).
+            // Every one of these must be *accepted*, even though only `-w`
+            // (routing) and `-t` (target) are ever read — a general `tuic
+            // alias` user's `set-option -g status-left ...` must keep
+            // succeeding exactly as it did when this whole subcommand was a
+            // blanket no-op; narrowing the flag set to only what the swarm
+            // path happens to send would turn that into a hard error.
+            let spec = OptSpec {
+                value_flags: "t",
+                bool_flags: "aFgopqsuw",
+                command_tail: true,
+            };
+            let p = parse_args(&spec, &rest)?;
+            let scope_window = p.has('w');
+            let mut positional = p.positional().iter();
+            // A malformed call with no option name at all (real tmux would
+            // print usage and exit) degrades to an empty name here, which
+            // never matches a recognized option below and is therefore
+            // still a silent no-op — consistent with this whole subcommand
+            // family's "never hard-fail a caller we don't fully model"
+            // contract.
+            let name = positional.next().cloned().unwrap_or_default();
+            let value = positional.cloned().collect::<Vec<_>>().join(" ");
+            TmuxOp::SetOption {
+                target: p.value('t').map(String::from),
+                scope_window,
+                name,
+                value,
+            }
+        }
+        "select-layout" => {
+            // Real tmux flags: -E (spread to other windows), -o (last
+            // layout), -n/-p (next/previous), -x (checksum only). None are
+            // acted on, but all must be accepted for the same reason as
+            // `set-option` above.
+            let spec = OptSpec {
+                value_flags: "t",
+                bool_flags: "Eonpx",
+                command_tail: true,
+            };
+            let p = parse_args(&spec, &rest)?;
+            TmuxOp::SelectLayout {
+                target: p.value('t').map(String::from),
+                layout: p.positional().first().cloned(),
+            }
+        }
+        "switch-client" | "rename-window" => TmuxOp::Noop(subcmd.clone()),
         other => TmuxOp::Unknown(other.to_string(), rest),
     };
     Ok((globals, op))
@@ -731,25 +807,137 @@ mod tests {
     }
 
     #[test]
-    fn set_option_variants_are_noop_regardless_of_flags() {
+    fn switch_client_and_rename_window_are_unconditional_noops() {
+        // Unlike set-option/select-layout (below), these two never gain real
+        // dispatch — no TUIC equivalent exists for either (see args.rs's
+        // `TmuxOp::Noop` doc comment).
         for (argv, name) in [
-            (
-                s(&["set-option", "-p", "-t", "%3", "window-style", "bg=red"]),
-                "set-option",
-            ),
-            (
-                s(&["set-window-option", "-t", "@1", "pane-border-status", "top"]),
-                "set-window-option",
-            ),
-            (
-                s(&["select-layout", "-t", "claude-swarm:swarm-view", "tiled"]),
-                "select-layout",
-            ),
             (s(&["switch-client", "-t", "claude-swarm"]), "switch-client"),
+            (
+                s(&["rename-window", "-t", "@1", "new-name"]),
+                "rename-window",
+            ),
         ] {
             let (_, op) = parse_tmux(&argv).unwrap();
             assert_eq!(op, TmuxOp::Noop(name.to_string()));
         }
+    }
+
+    #[test]
+    fn set_option_parses_target_scope_name_and_value() {
+        let (_, op) = parse_tmux(&s(&[
+            "set-option",
+            "-p",
+            "-t",
+            "%3",
+            "pane-border-style",
+            "fg=blue",
+        ]))
+        .unwrap();
+        assert_eq!(
+            op,
+            TmuxOp::SetOption {
+                target: Some("%3".to_string()),
+                scope_window: false,
+                name: "pane-border-style".to_string(),
+                value: "fg=blue".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn set_option_joins_a_multi_word_value_and_flags_window_scope() {
+        // pane-border-format's real value is several space-separated
+        // tokens — must be rejoined, not just the first taken.
+        let (_, op) = parse_tmux(&s(&[
+            "set-window-option",
+            "-w",
+            "-t",
+            "claude-swarm:swarm-view",
+            "pane-border-status",
+            "top",
+        ]))
+        .unwrap();
+        assert_eq!(
+            op,
+            TmuxOp::SetOption {
+                target: Some("claude-swarm:swarm-view".to_string()),
+                scope_window: true,
+                name: "pane-border-status".to_string(),
+                value: "top".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn set_option_accepts_every_real_tmux_flag_without_erroring() {
+        // A general `tuic alias` user's arbitrary set-option call must keep
+        // succeeding exactly as it did when this whole subcommand was a
+        // blanket no-op — narrowing to only the flags the swarm path sends
+        // would regress this.
+        let (_, op) = parse_tmux(&s(&[
+            "set-option",
+            "-a",
+            "-g",
+            "-F",
+            "-q",
+            "status-left",
+            "hello",
+        ]))
+        .unwrap();
+        assert_eq!(
+            op,
+            TmuxOp::SetOption {
+                target: None,
+                scope_window: false,
+                name: "status-left".to_string(),
+                value: "hello".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn set_option_with_no_name_degrades_to_an_empty_name_not_an_error() {
+        let (_, op) = parse_tmux(&s(&["set-option", "-g"])).unwrap();
+        assert_eq!(
+            op,
+            TmuxOp::SetOption {
+                target: None,
+                scope_window: false,
+                name: String::new(),
+                value: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn select_layout_parses_target_and_layout_name() {
+        let (_, op) = parse_tmux(&s(&[
+            "select-layout",
+            "-t",
+            "claude-swarm:swarm-view",
+            "tiled",
+        ]))
+        .unwrap();
+        assert_eq!(
+            op,
+            TmuxOp::SelectLayout {
+                target: Some("claude-swarm:swarm-view".to_string()),
+                layout: Some("tiled".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn select_layout_accepts_real_flags_and_a_missing_layout_name() {
+        let (_, op) = parse_tmux(&s(&["select-layout", "-E", "-t", "@1"])).unwrap();
+        assert_eq!(
+            op,
+            TmuxOp::SelectLayout {
+                target: Some("@1".to_string()),
+                layout: None,
+            }
+        );
     }
 
     #[test]

@@ -316,6 +316,7 @@
 /sessions/wake
 /sessions/worktree
 /sessions/x
+/sessions/x/accent-color
 /sessions/x/chat-view
 /sessions/x/force-retry
 /sessions/x/foreground

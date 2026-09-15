@@ -219,6 +219,9 @@ Right-click an HTTP(S) terminal link (including localhost) and choose **Start in
 - Drag-resize divider between panes
 - Up to 6 panes in same direction (N-way split)
 - Split layout persists per branch
+- The tmux compatibility shim's `select-layout tiled`/`main-vertical` (§21.5) can arrange a Claude
+  Code agent-teams swarm's teammate sessions into a split view programmatically, via the same
+  mechanism as a manual split
 
 ### 1.4 Zoom (Per-Terminal)
 - Zoom in: `Cmd+=` (+2px)
@@ -2640,9 +2643,13 @@ partial work, and their child processes may continue.
   concurrent tmux-driving processes never see each other's panes
 - Supports: `-V`, `new-session`, `new-window`, `split-window`, `respawn-pane`, `list-sessions`,
   `list-windows`, `list-panes`, `display-message`, `select-pane`, `kill-pane`, `kill-session`,
-  `kill-server`, `send-keys`, `capture-pane`, `resize-pane`, `attach-session`, `has-session`;
-  `select-layout`/`set-option`/`set-window-option`/`switch-client`/`rename-window` are accepted
-  as explicit no-ops
+  `kill-server`, `send-keys`, `capture-pane`, `resize-pane`, `attach-session`, `has-session`
+- `set-option`'s three color options (`window-style`/`pane-border-style`/`pane-active-border-style`
+  — Claude Code's per-teammate `--agent-color`) set a real accent color, rendered as a sidebar tab
+  marker and a terminal pane border; `select-layout tiled`/`main-vertical` arranges a window's
+  materialized panes into an actual split view (each pane stays its own independent sidebar tab —
+  only the terminal area's current split changes). Every other `set-option`/`select-layout` value,
+  plus `set-window-option`/`switch-client`/`rename-window`, are accepted as explicit no-ops
 - A real pane/window/session graph lives app-side (`GET/POST/DELETE /tmux/*`), reconciled
   against live sessions so a manually-closed tab doesn't leave a dangling pane reference
 - Every invocation is logged (`<config dir>/logs/tmux-shim.log` + `POST /logs`, source

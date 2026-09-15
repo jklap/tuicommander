@@ -2818,6 +2818,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::set_session_name,
             open_markdown_tabs::sync_open_markdown_tabs,
             open_markdown_tabs::list_open_markdown_tabs,
+            pty::set_session_accent_color,
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
