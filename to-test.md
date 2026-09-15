@@ -5767,3 +5767,20 @@ path and passes a real `null` through for an unknown image id — in `transport.
   both already exercised) but worth a real `curl -u <token> https://127.0.0.1:9877/worktrees/run-script
   -d '{"script":"echo hi","cwd":"/tmp"}'` if a spare moment allows — confirm `{exit_code, stdout,
   stderr}` and that an unauthenticated LAN-origin request gets 403.
+- [ ] GitPanel/ChangesTab.tsx's "Generate commit message" cross-repo fix (executeSmartPrompt's new
+  `targetPath` param, `useSmartPrompts.ts`): register two repos, focus a terminal tab in repo A, then
+  open repo B's Git panel (Changes tab) and click "Generate commit message" with some staged/unstaged
+  changes in repo B. Confirm the generated message reflects repo B's diff (the repo the panel is
+  showing), not repo A's (the focused terminal's repo) — previously it would have used repo A's,
+  since `executeSmartPrompt` derived context from the active terminal, independent of which repo's
+  Git panel triggered it. Covered by unit tests at the `useSmartPrompts.ts` level (the exact mechanism
+  `ChangesTab` now relies on), but not by a full component-mount test — this is the live end-to-end
+  check for that gap. Frontend-only change, hot-reloads under `make dev`, no restart needed.
+- [ ] `repo action=worktree_setup_status` MCP tool action + `GET /worktrees/setup-status` HTTP route
+  (closes the "MCP client can't observe setup script completion" gap): unit-tested via direct handler
+  calls, but not against a live `make dev` instance. Create a worktree with a Setup Script configured
+  via an MCP client (or `curl -X POST /worktrees` then poll), then poll
+  `curl "https://127.0.0.1:9877/worktrees/setup-status?repoPath=<repo>&branch=<branch>"` (or
+  `repo action=worktree_setup_status path=<repo> branch=<branch>` via the `agent`/MCP tool surface) and
+  confirm it transitions `running` → `completed` (or `not_configured` with no script), matching what the
+  `worktree-setup-script-completed` event reports for the same worktree.

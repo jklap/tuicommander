@@ -1049,6 +1049,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             post(worktree_routes::run_setup_script_http),
         )
         .route(
+            "/worktrees/setup-status",
+            get(worktree_routes::get_worktree_setup_status_http),
+        )
+        .route(
             "/worktrees/finalize",
             post(worktree_routes::finalize_merged_worktree_http),
         )

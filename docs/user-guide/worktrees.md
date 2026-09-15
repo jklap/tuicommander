@@ -212,6 +212,8 @@ shared with the parent.
 
 When TUICommander receives a worktree creation event while the active terminal is running an agent, the confirmation offers **Open Worktree**. Accepting selects an existing terminal in the new worktree or creates one when needed. The running agent stays in its original terminal, branch, and working directory; TUICommander does not relabel or interrupt it.
 
+If the repo has a Setup Script configured, it runs in the background after creation and its outcome isn't included in the creation response. Poll `repo action=worktree_setup_status path=<repo> branch=<branch>` for `{state: "running" | "not_configured" | "completed" | "unknown"}` (plus `exit_code`/`error` once completed) instead of assuming success.
+
 ### Claude Code — Agent Bridge
 
 Claude Code cannot change its working directory mid-session. When CC creates a worktree via MCP, the response includes a `cc_agent_hint` field with:

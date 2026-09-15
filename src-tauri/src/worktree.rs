@@ -124,6 +124,14 @@ async fn run_worktree_file_sync(
 /// `AppEvent::WorktreeSetupScriptCompleted` — silent (no event at all) when
 /// no setup script is configured, matching `run_worktree_file_sync`'s own
 /// nothing-to-do-is-silent precedent.
+///
+/// The event alone left MCP clients (no SSE/event stream to listen on) with
+/// no way to ever learn the outcome — this function also writes a
+/// [`crate::state::WorktreeSetupStatus`] snapshot into
+/// `AppState::worktree_setup_status` at each transition (`Running` the moment
+/// this is called, then `NotConfigured` or `Completed` once the chain
+/// finishes), pollable via [`get_worktree_setup_status`] / `repo
+/// action=worktree_setup_status` / `GET /worktrees/setup-status`.
 pub(crate) fn spawn_worktree_setup_chain(
     state: &Arc<AppState>,
     base_repo: String,
@@ -131,6 +139,11 @@ pub(crate) fn spawn_worktree_setup_chain(
     worktree_path: PathBuf,
 ) {
     let state = Arc::clone(state);
+    let status_key = (base_repo.clone(), branch.clone());
+    state.worktree_setup_status.insert(
+        status_key.clone(),
+        Arc::new(crate::state::WorktreeSetupStatus::Running),
+    );
     tokio::spawn(async move {
         run_worktree_file_sync(&state, &base_repo, &branch, &worktree_path).await;
 
@@ -141,6 +154,10 @@ pub(crate) fn spawn_worktree_setup_chain(
         .await
         .ok()
         .flatten() else {
+            state.worktree_setup_status.insert(
+                status_key,
+                Arc::new(crate::state::WorktreeSetupStatus::NotConfigured),
+            );
             return;
         };
 
@@ -154,6 +171,14 @@ pub(crate) fn spawn_worktree_setup_chain(
             Err(e) => (None, Some(format!("task panic: {e}"))),
         };
 
+        state.worktree_setup_status.insert(
+            status_key,
+            Arc::new(crate::state::WorktreeSetupStatus::Completed {
+                exit_code,
+                error: error.clone(),
+            }),
+        );
+
         emit_worktree_setup_script_completed(
             &state,
             &base_repo,
@@ -163,6 +188,28 @@ pub(crate) fn spawn_worktree_setup_chain(
             error,
         );
     });
+}
+
+/// Poll the current status of a worktree's background setup chain, keyed by
+/// `(repo_path, branch)` — the same pair `spawn_worktree_setup_chain` tracks
+/// and the `worktree-setup-script-completed` event carries. Returns `None`
+/// when nothing is tracked for this pair: no worktree creation ever started a
+/// chain for it, the entry aged out (30 minute TTL — see
+/// `build_worktree_setup_status_cache`), or the app restarted since. A caller
+/// that gets `None` right after creating a worktree should treat it as "still
+/// starting," not "definitely no script" — the entry is inserted synchronously
+/// by `spawn_worktree_setup_chain` before it returns, so a `None` for a
+/// worktree just created moments ago most likely means the key doesn't match
+/// (wrong repo_path/branch), not a real race.
+pub(crate) fn get_worktree_setup_status(
+    state: &AppState,
+    repo_path: &str,
+    branch: &str,
+) -> Option<crate::state::WorktreeSetupStatus> {
+    state
+        .worktree_setup_status
+        .get(&(repo_path.to_string(), branch.to_string()))
+        .map(|arc| (*arc).clone())
 }
 
 fn emit_worktree_sync_started(state: &Arc<AppState>, repo_path: &str, branch: &str) {

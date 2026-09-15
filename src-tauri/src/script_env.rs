@@ -350,6 +350,50 @@ mod tests {
     }
 
     #[test]
+    fn derive_from_a_subdirectory_of_a_linked_worktree_still_finds_both_roots() {
+        // The single most realistic combination the subdirectory fix targets:
+        // a Finder-Service tab (or any `cd`'d-into terminal) opened inside a
+        // SUBDIRECTORY of a worktree, not the worktree root itself. A linked
+        // worktree's `.git` is a FILE, not a directory (unlike the main
+        // checkout, covered by the sibling subdirectory test above) — confirm
+        // `find_repo_root`'s ancestor walk recognizes that marker too, not
+        // just the directory form.
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+        let config = crate::worktree::WorktreeConfig {
+            task_name: "feature-y".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("feature-y".to_string()),
+            create_branch: true,
+        };
+        let wt = crate::worktree::create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("create worktree");
+        let sub = wt.path.join("src").join("components");
+        std::fs::create_dir_all(&sub).expect("mkdir nested subdirectory in worktree");
+
+        let ctx = ScriptContext::derive(ScriptKind::Setup, &sub);
+        let map = ctx.as_map();
+
+        assert_eq!(
+            map.get("TUIC_WORKTREE_PATH").map(PathBuf::from),
+            Some(wt.path.canonicalize().unwrap()),
+            "must be the worktree root, not the subdirectory cwd"
+        );
+        assert_eq!(
+            map.get("TUIC_MAIN_REPO_PATH").map(PathBuf::from),
+            Some(repo.path().canonicalize().unwrap())
+        );
+        assert_eq!(
+            map.get("TUIC_IS_WORKTREE").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            map.get("TUIC_BRANCH").map(String::as_str),
+            Some("feature-y")
+        );
+    }
+
+    #[test]
     fn worktrees_dir_is_the_worktree_paths_parent() {
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");

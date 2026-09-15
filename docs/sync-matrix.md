@@ -475,14 +475,18 @@ When touching Setup/Archive/Run script execution, their `TUIC_*` environment, or
 | `src-tauri/src/smart_prompt.rs` | `apply_clean_env`'s `ctx` slot — Smart Prompt shell/headless children get the same `TUIC_*` context |
 | `src-tauri/src/pty.rs` | `inject_worktree_env`, called at every `bind_pty_identity` site — this is how the Run Script (typed into the PTY, not a real child process) sees the context |
 | `src-tauri/src/config.rs` | `RepoDefaultsConfig`'s `setup_script_timeout_secs`/`archive_script_timeout_secs`, `resolve_effective_base_branch` |
-| `src-tauri/src/mcp_http/worktree_routes.rs` | `run_setup_script_http` (`POST /worktrees/run-script`) — keep its response shape (`{exit_code, stdout, stderr}`) identical to the Tauri command, no `transform` needed in `transport.ts` |
+| `src-tauri/src/mcp_http/worktree_routes.rs` | `run_setup_script_http` (`POST /worktrees/run-script`) — keep its response shape (`{exit_code, stdout, stderr}`) identical to the Tauri command, no `transform` needed in `transport.ts`; `get_worktree_setup_status_http` (`GET /worktrees/setup-status`) |
+| `src-tauri/src/state.rs` | `WorktreeSetupStatus`/`AppState::worktree_setup_status` — the pollable snapshot `spawn_worktree_setup_chain` writes into at each transition |
+| `src-tauri/src/mcp_http/mcp_transport.rs` | `handle_worktree`'s `"setup_status"` arm, `handle_repo`'s `"worktree_setup_status"` remap, `REPO_ACTIONS`/the `repo` tool's schema description |
 | `src/transport.ts` + `src/__tests__/transport.test.ts` | The `run_setup_script` → `/worktrees/run-script` mapping and its parity assertions |
 | `docs/user-guide/settings.md` | The `TUIC_*` table (Scripts Tab section) — the canonical user-facing list |
 | `docs/user-guide/ai-agents.md` | "Worktree Context (TUIC_\*)" section (grouped with `TUIC_SESSION` above it) — the fixed-at-spawn caveat |
 | `docs/backend/config.md` | The two timeout fields |
 | `docs/api/tauri-commands.md` | `run_setup_script`'s signature/response |
+| `docs/api/http-api.md` | `GET /worktrees/setup-status` |
+| `docs/backend/mcp-http.md` | REST-table row for `GET /worktrees/setup-status` |
 
-**Ordering:** `spawn_worktree_setup_chain` always awaits the file sync (`worktree-sync-*` events, above) before resolving/running the setup script, on all three worktree-creation paths (desktop, MCP HTTP `create_worktree_shared`, MCP HTTP `create_session_with_worktree`). Both steps run in the background — worktree creation itself has already returned by the time either happens — so the setup script's outcome is reported via the dual-emitted `worktree-setup-script-completed` event, not a synchronous response field. See `worktree.rs`'s doc comment on `spawn_worktree_setup_chain` for the full rationale, including why the MCP tool response no longer carries `setup_script`/`setup_script_error`.
+**Ordering:** `spawn_worktree_setup_chain` always awaits the file sync (`worktree-sync-*` events, above) before resolving/running the setup script, on all three worktree-creation paths (desktop, MCP HTTP `create_worktree_shared`, MCP HTTP `create_session_with_worktree`). Both steps run in the background — worktree creation itself has already returned by the time either happens — so the setup script's outcome is reported via the dual-emitted `worktree-setup-script-completed` event, not a synchronous response field. See `worktree.rs`'s doc comment on `spawn_worktree_setup_chain` for the full rationale, including why the MCP tool response no longer carries `setup_script`/`setup_script_error`. An MCP client, which has no event stream, instead polls `repo action=worktree_setup_status` / `GET /worktrees/setup-status` — see `state.rs`'s `WorktreeSetupStatus` doc comment.
 
 ### Settings & Configuration
 When adding config fields or settings UI:
