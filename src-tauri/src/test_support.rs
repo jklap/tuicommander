@@ -84,6 +84,13 @@ pub(crate) fn normalize_newlines(output: &str) -> String {
     output.replace("\r\n", "\n")
 }
 
+/// A path with `/` separators, whatever the host used. Tests spell the suffix
+/// or fragment they expect once, in the form every platform can read, and
+/// compare against this rather than against two spellings.
+pub(crate) fn slashed(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 /// A directory that exists and is outside the home directory. `/tmp` is neither
 /// absolute nor outside home on Windows, where the temp directory lives under
 /// the user profile.

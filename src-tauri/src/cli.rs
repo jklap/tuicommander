@@ -121,10 +121,14 @@ pub(crate) fn apply_no_window(_cmd: &mut std::process::Command) {
 /// `std::fs` APIs do not invoke a shell, so tilde is treated as a literal
 /// character and the OS returns ENOENT.
 pub(crate) fn expand_tilde(path: &str) -> String {
+    // `dirs::home_dir` rather than `$HOME`: Windows does not set that variable,
+    // so every `~` reached the OS literally there — in repo paths, working
+    // directories and agent commands alike. On unix it reads `$HOME` first, so
+    // nothing changes.
     if (path == "~" || path.starts_with("~/"))
-        && let Ok(home) = std::env::var("HOME")
+        && let Some(home) = dirs::home_dir()
     {
-        return format!("{}{}", home, &path[1..]);
+        return format!("{}{}", home.display(), &path[1..]);
     }
     path.to_string()
 }
@@ -231,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_expand_tilde_home_prefix() {
-        let home = std::env::var("HOME").unwrap();
+        let home = dirs::home_dir().expect("home directory").display().to_string();
         assert_eq!(expand_tilde("~/foo/bar"), format!("{home}/foo/bar"));
         assert_eq!(expand_tilde("~"), home);
     }

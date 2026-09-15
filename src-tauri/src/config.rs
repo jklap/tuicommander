@@ -5409,7 +5409,10 @@ mod tests {
 
         let path = std::path::PathBuf::from(result.unwrap());
         assert!(path.exists(), "Image file should exist on disk");
-        assert!(path.to_string_lossy().contains("note-images/test-note-1/"));
+        assert!(
+            crate::test_support::slashed(&path.to_string_lossy())
+                .contains("note-images/test-note-1/")
+        );
         assert!(path.to_string_lossy().ends_with(".png"));
 
         // Verify content matches

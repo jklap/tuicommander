@@ -965,7 +965,13 @@ fn extract_zip_entries(
             .ok_or_else(|| "ZIP entry has unsafe path".to_string())?
             .to_path_buf();
 
-        let entry_str = entry_path.to_string_lossy();
+        // `enclosed_name` hands back a host path, and Windows renders it with
+        // `\`. The prefix comes from the archive's own entry names, which ZIP
+        // always spells with `/`, so on Windows the strip below never matched:
+        // every entry was skipped and a plugin installed into an empty
+        // directory without an error. Windows accepts `/` in the paths it is
+        // given, so normalising here is enough.
+        let entry_str = entry_path.to_string_lossy().replace('\\', "/");
 
         // Strip prefix (if manifest was inside a subdirectory)
         let relative = if !prefix.is_empty() {

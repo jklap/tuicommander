@@ -281,6 +281,17 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
+      # Git for Windows defaults to core.autocrlf=true, which rewrites every
+      # checked-out file to CRLF. The suite compares file bytes it wrote itself
+      # against bytes git handed back, so that default made the Windows leg
+      # assert on different content than the other two. Global and before the
+      # checkout, because the test fixtures create their own repositories in
+      # temp directories, which no .gitattributes of ours would reach.
+      - name: Keep line endings verbatim (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0

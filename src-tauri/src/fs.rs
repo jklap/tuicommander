@@ -3259,7 +3259,7 @@ mod tests {
         assert!(result.is_some());
         let resolved = result.unwrap();
         assert!(!resolved.is_directory);
-        assert!(resolved.absolute_path.ends_with("src/lib.rs"));
+        assert!(crate::test_support::slashed(&resolved.absolute_path).ends_with("src/lib.rs"));
     }
 
     #[test]

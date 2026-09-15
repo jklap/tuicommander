@@ -1472,14 +1472,9 @@ fn parse_plan_file(clean: &str) -> Option<ParsedEvent> {
             tracing::debug!("[plan-file] candidate line: {:?}", line);
         }
         if let Some(caps) = PLAN_RE.captures(line) {
-            let mut path = caps[1].to_string();
             // Expand leading ~/ to the user's home directory so the
             // frontend always receives an absolute path it can open.
-            if path.starts_with("~/")
-                && let Some(home) = dirs::home_dir()
-            {
-                path = format!("{}{}", home.display(), &path[1..]);
-            }
+            let path = crate::cli::expand_tilde(&caps[1]);
             return Some(ParsedEvent::PlanFile { path });
         }
     }
@@ -3273,7 +3268,10 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // Tilde must be expanded to an absolute path
         assert!(!path.starts_with("~"), "tilde should be expanded: {path}");
         assert!(path.ends_with("/.claude/plans/graceful-rolling-quasar.md"));
-        assert!(path.starts_with("/"), "path should be absolute: {path}");
+        assert!(
+            std::path::Path::new(&path).is_absolute(),
+            "path should be absolute: {path}"
+        );
     }
 
     #[test]
