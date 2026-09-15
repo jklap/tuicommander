@@ -359,6 +359,13 @@ const LOCK_OWNER_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// detector's verdict is derived from the same probe result this module
 /// acts on, not a second call that could — even in principle — race to a
 /// different answer.
+///
+/// `allow(dead_code)` off unix: there is no probe there (see
+/// `probe_index_lock_owner` below), so only `Unknown` is ever constructed. The
+/// other variants still have to exist — `reclaim_stale_index_lock` matches all
+/// three on every platform — and cfg-ing them out would fork that match arm by
+/// platform for no gain.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum LockOwnership {
     /// The probe ran and named the live processes holding the lock open.
@@ -371,6 +378,10 @@ pub(crate) enum LockOwnership {
 
 /// Why the owner probe has no answer. The two cases are not interchangeable:
 /// one is permanent, the other is a bad minute.
+///
+/// `allow(dead_code)` off unix for the same reason as [`LockOwnership`]: with no
+/// probe to time out, only `Unavailable` is ever constructed there.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum UnknownOwner {
     /// The probe could not be run at all — no `lsof` on `PATH`, exec refused, or
