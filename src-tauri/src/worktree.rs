@@ -2471,6 +2471,7 @@ pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json
 mod tests {
     use super::*;
     use crate::config::WorktreeStorage;
+    use crate::test_support::{fail_with_stderr_script, print_file_script, touch_script};
     use std::fs;
     use std::process::Command;
     use tempfile::TempDir;
@@ -2497,7 +2498,10 @@ mod tests {
             // Async alone only moves the work to a Tokio worker; the body still
             // runs git subprocesses and recursive deletes, so it needs the
             // blocking pool as well.
-            let body = &source[at..(at + 800).min(source.len())];
+            // By chars, not bytes: this file has em dashes in its comments, and
+            // a byte window can end inside one. Where it lands depends on the
+            // line endings, so on Windows the same slice panicked.
+            let body: String = source[at..].chars().take(800).collect();
             assert!(
                 body.contains("spawn_blocking"),
                 "{command} awaits blocking git work and must hand it to spawn_blocking"
@@ -4331,7 +4335,7 @@ branch refs/heads/feat
         let dir = TempDir::new().expect("temp dir");
         let cwd = dir.path().to_string_lossy().to_string();
 
-        let result = run_setup_script("echo oops >&2; exit 1".to_string(), cwd)
+        let result = run_setup_script(fail_with_stderr_script("oops", 1), cwd)
             .expect("should return result");
         assert_eq!(result["exit_code"], 1);
         assert_eq!(result["stderr"].as_str().unwrap().trim(), "oops");
@@ -4350,7 +4354,8 @@ branch refs/heads/feat
         fs::write(dir.path().join("marker.txt"), "found").expect("write marker");
         let cwd = dir.path().to_string_lossy().to_string();
 
-        let result = run_setup_script("cat marker.txt".to_string(), cwd).expect("should succeed");
+        let result =
+            run_setup_script(print_file_script("marker.txt"), cwd).expect("should succeed");
         assert_eq!(result["exit_code"], 0);
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "found");
     }
@@ -4374,7 +4379,7 @@ branch refs/heads/feat
     fn run_script_in_dir_runs_in_correct_directory() {
         let dir = TempDir::new().expect("temp dir");
         fs::write(dir.path().join("test-file.txt"), "content").expect("write");
-        let result = run_script_in_dir("cat test-file.txt", dir.path());
+        let result = run_script_in_dir(&print_file_script("test-file.txt"), dir.path());
         assert!(result.is_ok());
     }
 
@@ -4391,7 +4396,7 @@ branch refs/heads/feat
         let _wt = create_worktree_internal(&worktrees_dir, &config, None).expect("create worktree");
         // Script creates a marker file inside the worktree dir; archive should still succeed
         let marker = worktrees_dir.join("archive-marker.txt");
-        let script = format!("touch {}", marker.display());
+        let script = touch_script(&marker.display().to_string());
         let result = archive_worktree(repo.path(), "archive-script-test", Some(&script));
         assert!(
             result.is_ok(),

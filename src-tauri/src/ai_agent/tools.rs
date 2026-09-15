@@ -2072,9 +2072,15 @@ fn truncate_output(s: &str) -> (String, bool) {
     if s.len() <= RUN_COMMAND_OUTPUT_CAP {
         return (s.to_string(), false);
     }
+    // Char windows, not byte windows: a command that prints any non-ASCII text
+    // can put a multi-byte character across the cut, and slicing there panics
+    // the whole tool call.
     let half = RUN_COMMAND_OUTPUT_CAP / 2;
-    let head = &s[..half];
-    let tail = &s[s.len() - half..];
+    let head: String = s.chars().take(half).collect();
+    let tail: String = {
+        let tail_start = s.chars().count().saturating_sub(half);
+        s.chars().skip(tail_start).collect()
+    };
     let truncated = format!(
         "{head}\n\n[... truncated: {} total chars, showing first {half} + last {half} ...]\n\n{tail}",
         s.len()
@@ -2588,6 +2594,9 @@ async fn dispatch_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{
+        home_var, print_cwd_script, print_file_script, print_var_script, sleep_script,
+    };
 
     // ── tool_definitions ───────────────────────────────────────
 
@@ -4650,12 +4659,23 @@ mod tests {
     #[tokio::test]
     async fn run_command_uses_sandbox_root_as_cwd() {
         let (dir, state) = fs_test_state("s1");
-        let r = dispatch(&state, "s1", "run_command", &json!({ "command": "pwd" })).await;
+        let r = dispatch(
+            &state,
+            "s1",
+            "run_command",
+            &json!({ "command": print_cwd_script() }),
+        )
+        .await;
         assert!(r.success, "{}", r.output);
         let parsed: Value = serde_json::from_str(&r.output).unwrap();
         let stdout = parsed["stdout"].as_str().unwrap().trim();
-        let expected = dir.path().canonicalize().unwrap();
-        assert_eq!(stdout, expected.to_str().unwrap());
+        // Compare canonical forms: a shell prints the directory it was handed,
+        // which on Windows can be the 8.3 short name and on macOS the /tmp
+        // symlink rather than /private/tmp.
+        assert_eq!(
+            std::path::Path::new(stdout).canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
     }
 
     #[tokio::test]
@@ -4666,7 +4686,7 @@ mod tests {
             &state,
             "s1",
             "run_command",
-            &json!({ "command": "pwd", "cwd": "sub" }),
+            &json!({ "command": print_cwd_script(), "cwd": "sub" }),
         )
         .await;
         assert!(r.success, "{}", r.output);
@@ -4694,7 +4714,7 @@ mod tests {
             &state,
             "s1",
             "run_command",
-            &json!({ "command": "sleep 60", "timeout_ms": 500 }),
+            &json!({ "command": sleep_script(), "timeout_ms": 500 }),
         )
         .await;
         assert!(!r.success);
@@ -4704,18 +4724,21 @@ mod tests {
     #[tokio::test]
     async fn run_command_sanitized_env() {
         let (_d, state) = fs_test_state("s1");
-        // `printenv HOME` returns the home directory path.
+        // Echoing the home variable returns the home directory path.
         let r = dispatch(
             &state,
             "s1",
             "run_command",
-            &json!({ "command": "printenv HOME" }),
+            &json!({ "command": print_var_script(home_var()) }),
         )
         .await;
         assert!(r.success, "{}", r.output);
         let parsed: Value = serde_json::from_str(&r.output).unwrap();
         let stdout = parsed["stdout"].as_str().unwrap();
-        assert!(stdout.contains('/'));
+        assert!(
+            stdout.contains(std::path::MAIN_SEPARATOR),
+            "expected a path, got {stdout:?}"
+        );
         // bare `env` is now allowed (local-trust-boundary model); verify it succeeds.
         let r2 = dispatch(&state, "s1", "run_command", &json!({ "command": "env" })).await;
         assert!(r2.success, "bare env should be allowed: {}", r2.output);
@@ -4738,12 +4761,17 @@ mod tests {
 
     #[tokio::test]
     async fn run_command_truncates_large_output() {
-        let (_d, state) = fs_test_state("s1");
+        let (dir, state) = fs_test_state("s1");
+        // Write the bulk from Rust and let the shell only print it back:
+        // `yes | head` has no Windows counterpart, and a `for /L` loop of this
+        // size takes seconds in `cmd`.
+        let big = "a".repeat(80).to_string() + "\n";
+        std::fs::write(dir.path().join("big.txt"), big.repeat(1000)).unwrap();
         let r = dispatch(
             &state,
             "s1",
             "run_command",
-            &json!({ "command": "yes aaaa | head -20000" }),
+            &json!({ "command": print_file_script("big.txt") }),
         )
         .await;
         assert!(r.success, "{}", r.output);
