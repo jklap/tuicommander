@@ -1,0 +1,59 @@
+[package]
+name = "tuic-streamdock"
+version.workspace = true
+description = "Mirabox StreamDock M18 macropad integration for TUICommander — device transport, key-face rendering, and slot-assignment policy, decoupled from AppState via the StateSource/ActionSink ports"
+authors = ["Stefano Straus <github.com/sstraus>"]
+edition = "2024"
+
+[lib]
+name = "tuic_streamdock"
+path = "src/lib.rs"
+
+[[bin]]
+name = "streamdock-demo"
+path = "src/bin/demo.rs"
+
+[[example]]
+name = "probe"
+path = "examples/probe.rs"
+
+[dependencies]
+# HID transport. `Device` (device/model.rs's counterpart in mirajazz) already
+# implements the Mirabox CRT wire framing end to end: connect/initialize,
+# set_brightness, set_led_brightness/set_led_colors, write_image+flush
+# (buffers per-key JPEG bytes and streams+commits them), clear_button_image,
+# sleep/keep_alive/shutdown, and DeviceStateReader for button-state polling.
+# We own only the model table (VID/PID/protocol_version/key_count) and the
+# raw-byte -> logical-slot decode function it asks us to supply — see
+# device/model.rs. Exact-pinned (not a caret range): this is a young crate
+# and we want reproducible builds on a USB write path the vendor's own
+# README warns can require factory reprogramming to recover from a
+# malformed packet.
+mirajazz = "=0.16.2"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+futures-lite = "2"
+
+# Rendering. No resvg/usvg (nothing to vectorize at 64x64) and no direct use
+# of the `image` crate in our own code (it arrives transitively via mirajazz,
+# used only inside its own convert_image_with_format helper, which we
+# deliberately bypass in favor of the lower-level write_image(key, &jpeg)
+# API — that keeps our own JPEG bytes deterministic and golden-byte
+# testable without touching mirajazz or hardware).
+tiny-skia = "0.11"
+ab_glyph = "0.2"
+jpeg-encoder = "0.6"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lru = "0.12"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
