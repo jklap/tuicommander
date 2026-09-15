@@ -1347,6 +1347,7 @@ main checkout (falls back to the active repo when the cwd belongs to no register
 - TUIC native tool toggles: enable/disable individual MCP tools (`session`, `agent`, `task`, `repo`, `ui`, `plugin_dev_guide`, `config`, `debug`) to restrict what AI agents can access
 - MCP Upstreams: add/edit/remove upstream MCP servers (HTTP or stdio with optional `cwd`), per-upstream enable/disable, reconnect, credential storage via OS keyring, live status dots, tool count and metrics. Saved upstreams auto-connect on boot
 - MCP Per-Repo Scoping: each repo can define which upstream MCP servers are relevant via an allowlist in repo settings (3-layer: per-repo > `.tuic.json` > defaults). Null/empty allowlist = all servers. Quick toggle via **Cmd+Shift+M** popup
+- File Access: **Additional Readable Directories** — extra absolute directories a browser/remote/PWA client may read files from, on top of registered repository roots. Default: `~/.claude/plans` (so a Claude Code plan-file link an agent printed opens with no setup). Desktop reads are never restricted; never widens writing, copying, or moving — see **14.6**
 - Remote access: port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, LAN auth bypass
 - Voice dictation: full setup (see section 9)
 
@@ -1465,6 +1466,7 @@ All data persisted to platform config directory via Rust:
 - `tuic-bridge` ships as a Tauri sidecar; auto-installs MCP configs on first launch for Claude Code, Cursor, Windsurf, VS Code, Codex, Grok, opencode, Droid, goose and pi — but only for the ones actually installed on the machine. Zed, Amp and Gemini keep MCP inside their general `settings.json` and wait for an explicit install. JSON configs are edited member-by-member, never reserialized, so comments, key order and indentation survive (see [MCP auto-install](backend/config.md#mcp-bridge-auto-install))
 - Local connections use Unix domain socket (`<config_dir>/mcp.sock`) on macOS/Linux or named pipe (`\\.\pipe\tuicommander-mcp`) on Windows; TCP port reserved for remote access only
 - Unix socket lifecycle is crash-safe: RAII guard removes the socket file on `Drop`; bind retries 3× (×100 ms) removing any stale file before each attempt; liveness check uses a real `connect()` probe so a dead socket from a crashed run never blocks MCP tool loading
+- **Additional Readable Directories** (Settings → Services & MCP → File Access) — a browser/remote/PWA client reading an absolute file path (a plan-file link, a code-editor open) is gated to registered repository roots plus this user-configurable list of extra directories. Ships with `~/.claude/plans` enabled by default. Desktop reads are never restricted; this setting never widens writing, copying, or moving a file — those stay confined to registered repository roots
 
 ### 14.7 Cross-Repo Knowledge Base
 - Knowledge base functionality is available via the `mdkb` MCP upstream server (configure in MCP Upstreams settings)

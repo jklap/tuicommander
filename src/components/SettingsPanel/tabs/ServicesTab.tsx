@@ -2,12 +2,14 @@ import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import { appLogger } from "../../../stores/appLogger";
+import { settingsStore } from "../../../stores/settings";
 import { rpc } from "../../../transport";
 import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
+import { isAbsolutePath } from "../../../utils/pathUtils";
 import { randomId } from "../../../utils/randomId";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
-import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
+import { SettingInput, SettingSelect, SettingToggle, settingSlugId } from "../SettingFields";
 import s from "../Settings.module.css";
 import { RemoteMachinesPanel } from "./services/RemoteMachinesPanel";
 import { UpstreamMcpPanel } from "./services/UpstreamMcpPanel";
@@ -157,6 +159,34 @@ const LocalServicesPanel: Component = () => {
 	const [status, setStatus] = createSignal<McpStatus | null>(null);
 	const [localIps] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
 	const [selectedIp, setSelectedIp] = createSignal<string>("");
+
+	// --- Additional HTTP-readable directories ---
+	const [newReadableDir, setNewReadableDir] = createSignal("");
+	const [readableDirError, setReadableDirError] = createSignal<string | null>(null);
+	const readableDirs = (): string[] => settingsStore.state.additionalReadableDirs;
+	/** Mirrors the backend's `expand_readable_root` acceptance rule (fs_routes.rs) —
+	 *  an absolute path, or `~`/`~/...` — so a client-side entry that can never
+	 *  resolve to a real root is rejected here instead of silently sitting in the
+	 *  list looking identical to a working entry. Defense-in-depth only: the
+	 *  backend re-validates independently and is the actual enforcement point. */
+	const isValidReadableDirEntry = (entry: string): boolean =>
+		!entry.includes("..") && (entry === "~" || entry.startsWith("~/") || isAbsolutePath(entry));
+	const addReadableDir = () => {
+		const dir = newReadableDir().trim();
+		if (!dir) return;
+		if (!isValidReadableDirEntry(dir)) {
+			setReadableDirError(
+				t("services.readableDirs.invalid", "Must be an absolute path, or start with ~/ for your home directory"),
+			);
+			return;
+		}
+		setReadableDirError(null);
+		if (readableDirs().includes(dir)) return;
+		settingsStore.setAdditionalReadableDirs([...readableDirs(), dir]);
+		setNewReadableDir("");
+	};
+	const removeReadableDir = (dir: string) =>
+		settingsStore.setAdditionalReadableDirs(readableDirs().filter((d) => d !== dir));
 
 	// Remote access form state
 	const [raEnabled, setRaEnabled] = createSignal(false);
@@ -403,6 +433,56 @@ const LocalServicesPanel: Component = () => {
 						"AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
 					)}
 				</p>
+			</div>
+
+			<h3>{t("services.heading.fileAccess", "File Access")}</h3>
+
+			<div
+				class={s.group}
+				id={settingSlugId(t("services.label.additionalReadableDirs", "Additional Readable Directories"))}
+			>
+				<label>{t("services.label.additionalReadableDirs", "Additional Readable Directories")}</label>
+				<p class={s.hint}>
+					{t(
+						"services.hint.additionalReadableDirs",
+						"Absolute directories that web and remote clients may READ files from, in addition to your registered repositories. Desktop reads are never restricted. Never widens writing, copying, or moving. Use ~ for your home directory.",
+					)}
+				</p>
+
+				<For each={readableDirs()}>
+					{(dir) => (
+						<div class={s.copyPathRow}>
+							<span class={s.copyPathText}>{dir}</span>
+							<button type="button" class={s.transferBtn} onClick={() => removeReadableDir(dir)}>
+								{t("services.readableDirs.remove", "Remove")}
+							</button>
+						</div>
+					)}
+				</For>
+
+				<div class={s.copyPathRow}>
+					<input
+						type="text"
+						class={s.copyPathInput}
+						value={newReadableDir()}
+						onInput={(e) => {
+							setNewReadableDir(e.currentTarget.value);
+							setReadableDirError(null);
+						}}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") addReadableDir();
+						}}
+						placeholder={t("services.readableDirs.placeholder", "e.g. ~/.claude/plans")}
+					/>
+					<button type="button" class={s.transferBtn} onClick={addReadableDir} disabled={!newReadableDir().trim()}>
+						{t("services.readableDirs.add", "Add")}
+					</button>
+				</div>
+				<Show when={readableDirError()}>
+					<p class={s.hint} style={{ color: "var(--error)" }}>
+						{readableDirError()}
+					</p>
+				</Show>
 			</div>
 
 			<h3>{t("services.heading.remoteAccess", "Remote Access")}</h3>

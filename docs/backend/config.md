@@ -271,6 +271,7 @@ cleartext copy does not survive on disk.
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
 | `standby_timeout_minutes` | `u16` | `5` | Minutes of idle + unfocused before SIGSTOP on the process group. `0` disables it |
 | `custom_launchers` | `Vec<CustomLauncher>` | `[]` | User-defined launchers shown in the "Open in" menu alongside built-ins |
+| `additional_readable_dirs` | `Vec<String>` | `["~/.claude/plans"]` | Extra absolute directories the HTTP `read-external`/`read-editor-external` routes may serve, on top of registered repository roots. Global, read-only — never widens the write/copy/move/transfer routes. See [`mcp-http.md`](mcp-http.md#security-model) |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Master toggle for experimental features |

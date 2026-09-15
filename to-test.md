@@ -5834,7 +5834,6 @@ path and passes a real `null` through for an unknown image id — in `transport.
   `repo action=worktree_setup_status path=<repo> branch=<branch>` via the `agent`/MCP tool surface) and
   confirm it transitions `running` → `completed` (or `not_configured` with no script), matching what the
   `worktree-setup-script-completed` event reports for the same worktree.
-
 ## Command Blocks fullscreen-mode fix (2026-09-15)
 
 Root cause (verified live via a throwaway session and `terminal_grid.rs` unit tests, not just
@@ -5890,3 +5889,19 @@ section. All of the below needs a rebuilt build to check.
   — with a `❯`-glyph zsh theme, exit Claude Code and immediately type an ordinary command at the
   next prompt; confirm no phantom `AgentBlock`/`CommandOverview` entry appears for it. If one
   does appear reproducibly (not just as a rare race), this needs a real fix, not just monitoring.
+
+- [ ] **Additional Readable Directories (HTTP read allow-list) — Rust change, needs a `make dev`
+  restart to take effect.** Unit- and integration-tested at the handler/router level (`fs_routes.rs`,
+  `mcp_http/mod.rs`), but not against a real running instance:
+  - Start a debug instance with Remote Access enabled. `curl
+    'http://127.0.0.1:9877/fs/read-external?path='"$HOME"'/.claude/plans/<some-file>.md'` with no repo
+    registered for that path → expect `200` (the default `~/.claude/plans` entry).
+  - `curl -X POST http://127.0.0.1:9877/fs/write-external -d '{"path":"'"$HOME"'/.claude/plans/x.md","content":"x"}'`
+    into the same directory → expect `403` (proves the write path was NOT widened).
+  - In Settings → Services & MCP → File Access, remove the default entry, re-request the same file via
+    curl → confirm `403` with the friendly-sounding message body.
+  - In browser mode, click a `~/.claude/plans/...` link rendered from an agent's output (a plan-file
+    reference) and confirm it opens with no `error`-level log line in `GET /logs`.
+  - In the Settings UI, try adding a relative path (e.g. `notes`) and confirm the new inline validation
+    error appears and the entry is NOT added — then add a real `~/...` or absolute path and confirm it
+    IS added and persists across a settings reload.
