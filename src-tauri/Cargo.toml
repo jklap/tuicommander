@@ -231,7 +231,7 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 aes-gcm = "0.11"
 sha2 = "0.11"
 hkdf = "0.13"
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 axum-server-dual-protocol = "0.7"
 web-push-native = { version = "0.4", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
@@ -296,6 +296,13 @@ windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp
 
 [patch.crates-io]
 alacritty_terminal = { path = "patches/alacritty_terminal" }
+# 0.7.0 unchanged except for the axum-server bump from `^0.7.1` to 0.8. Upstream
+# has not released since 2024-07 and that cap was the only thing holding
+# axum-server 0.7 in the tree, which is the sole path to unmaintained
+# rustls-pemfile (RUSTSEC-2025-0134). The 0.8 break is confined to `Server`
+# gaining an address type parameter and `from_tcp` becoming fallible; the
+# `Accept` trait this crate implements is untouched.
+axum-server-dual-protocol = { path = "patches/axum-server-dual-protocol" }
 # 2.3.2 plus one read-only accessor: `Scorer::embeddings`. Upstream can build and
 # query an index but never persist one, because the embeddings it holds are
 # private with no getter. `content_index` needs them to write a snapshot so a repo

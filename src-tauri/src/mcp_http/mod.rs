@@ -2382,18 +2382,37 @@ pub async fn start_server(
                 tracing::info!(source = "mcp_http", %addr, "TCP listening with dual-protocol HTTP+HTTPS");
                 Some(tokio::spawn(async move {
                     use axum_server_dual_protocol::ServerExt;
-                    if let Err(e) = axum_server_dual_protocol::from_tcp_dual_protocol(listener, tls)
-                        .set_upgrade(false)
-                        .serve(svc)
-                        .await
-                    {
+                    // axum-server 0.8 moved the non-blocking-mode switch into
+                    // `from_tcp`, so building the server is now fallible and its
+                    // failure is reported separately from a serve failure: one
+                    // means the listener never started, the other that it stopped.
+                    let server =
+                        match axum_server_dual_protocol::from_tcp_dual_protocol(listener, tls) {
+                            Ok(server) => server,
+                            Err(e) => {
+                                tracing::error!(
+                                    source = "mcp_http",
+                                    "TCP/TLS listener setup failed: {e}"
+                                );
+                                return;
+                            }
+                        };
+                    if let Err(e) = server.set_upgrade(false).serve(svc).await {
                         tracing::error!(source = "mcp_http", "TCP/TLS server error: {e}");
                     }
                 }))
             } else {
                 tracing::info!(source = "mcp_http", %addr, "TCP listening (HTTP only, remote access enabled)");
                 Some(tokio::spawn(async move {
-                    if let Err(e) = axum_server::from_tcp(listener).serve(svc).await {
+                    // Fallible since axum-server 0.8 — see the dual-protocol arm.
+                    let server = match axum_server::from_tcp(listener) {
+                        Ok(server) => server,
+                        Err(e) => {
+                            tracing::error!(source = "mcp_http", "TCP listener setup failed: {e}");
+                            return;
+                        }
+                    };
+                    if let Err(e) = server.serve(svc).await {
                         tracing::error!(source = "mcp_http", "TCP server error: {e}");
                     }
                 }))
