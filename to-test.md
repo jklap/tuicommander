@@ -699,6 +699,44 @@ live agent-frame check cannot be replayed.
   fear is the opposite one: an over-tight anchor that silences real menus for
   agents whose frame indents them.
 
+## tmux compatibility shim: per-teammate accent color + tiled-layout split view (2026-09-15)
+
+**Rust change — needs `make dev` restart** (adds `AppState.pty_accent_colors`, two `AppEvent`
+variants, new `TmuxOp` variants in `tuic-cli`, and two new HTTP routes — none of this exists in a
+running `make dev` instance until restarted, which tears down every live PTY session; coordinate
+before running it). After `make dev`, check `git status` for the tracked
+`src-tauri/binaries/tuic-<target>` sidecar diff (expected — `pnpm build:sidecar` reran) and revert
+if the rebuild wasn't the point of this check.
+
+Turns `tmux-swarm-shim.md`'s two remaining cosmetic categories into real TUIC behavior: per-teammate
+`--agent-color` (via `set-option ... *-border-style`) as a real accent color, and `select-layout
+tiled`/`main-vertical` as a real split-view arrangement. Automated coverage (Rust: 154 `tuic-cli`
+tests + 18 `tmux_routes` tests + `sse_routes`/`session.rs` additions, all passing; frontend: 84
+`paneLayout` tests + `resolveActiveAccentColor`/`TabBar` accent-rendering tests, all passing) proves
+the plumbing end-to-end, but the following need a real Claude Code agent-teams swarm and Boss's own
+eyes — HTTP probing can't confirm canvas/CSS rendering (see AGENTS.md's canvas-rendering note):
+
+- [ ] Spawn a 2+ teammate agent-teams swarm from a `make dev` test-instance terminal (with the
+  `tuic` alias pointing at the rebuilt binary — see `tmux-swarm-shim.md`'s note on `~/bin/tmux`
+  always exec'ing whichever binary its owning `TUICommander.app` bundle ships) and confirm via
+  `GET :9877/logs?source=tmux-shim` that `set-option`/`select-layout` calls are actually followed
+  by `PUT /tmux/panes/:id/accent-color`/`POST /tmux/windows/:id/layout` requests (not just logged
+  as before).
+- [ ] Confirm each teammate's sidebar tab shows a distinct colored left-edge marker matching its
+  `--agent-color` (`TabBar.module.css`'s `[style*="--accent-color"]` rule).
+- [ ] Confirm the terminal area shows the teammates arranged in an actual tiled split (not separate
+  full-screen tabs you have to switch between), and that each teammate is still individually
+  visible/selectable in the sidebar tab list (sidebar semantics are unchanged by design).
+- [ ] Confirm the terminal pane border itself shows the accent color too (`PaneTree.css`'s
+  `[style*="--pane-accent"]` rule for the split case, `styles.css`'s `.terminal-pane.active[style*="--pane-accent"]`
+  for the flat/unsplit case) — both should match the same color for the same session.
+- [ ] Spawn a 4+ teammate swarm and confirm the tiled grid looks reasonable (not lopsided) for an
+  odd pane count.
+- [ ] Exact color match: the two 256-color indices (`colour208`→orange, `colour205`→pink) resolve
+  via the shared xterm palette (`terminal_grid.rs`) — visually confirm these render as the expected
+  orange/pink, not some other hue, since this is the one part of `resolve_tmux_color` that isn't a
+  simple passthrough.
+
 ## tmux compatibility shim: swarm subcommands + invocation logging (2026-09-02/03, uncommitted)
 
 **Rust change — needs `make dev` restart** (adds an `AppState` field, a `session-renamed`

@@ -127,3 +127,41 @@ caught by a test that deliberately builds a two-session topology under one
 label — `display_message_and_list_panes_report_the_targeted_sessions_own_name`
 in `tmux/mod.rs`). Resolve the session via `target::resolve_session` with the
 same parsed target used for the window/pane, not via `.first()`.
+
+## Color/palette resolution belongs app-side, never in this crate
+
+`tuic-cli`'s `Cargo.toml` has **zero dependency on the main `tuicommander`
+crate** (only `clap`/`serde_json`/`dirs`/`base64`) — confirmed by reading it
+directly, not assumed. When `set-option ... window-style|pane-border-style|
+pane-active-border-style` (Claude Code's per-teammate `--agent-color`) needed
+turning into a real accent color (2026-09-15), the temptation was to add the
+color-name→hex resolution here in `exec.rs`, right next to the dispatch that
+decides whether a `set-option` call is one of the three real color options.
+That's wrong: resolving `colourN`/`colorN` needs the main crate's
+`terminal_grid::xterm_color_rgb` xterm-256 palette (reused rather than
+duplicated), which this crate cannot import. The fix that shipped:
+`exec.rs`'s `TuicBackend::set_pane_accent_color` sends the **raw, unresolved**
+tmux option value (e.g. `bg=default,fg=colour208`) over HTTP; the app side
+(`tmux_routes.rs`'s `resolve_tmux_color`) does the actual resolution. Any
+future tmux-compat feature needing something from the main app's own runtime
+state or logic (color palettes, git state, session state, anything beyond
+pure argv/target/format manipulation) must follow this same shape — pass the
+raw value through the `TuicBackend` trait and resolve it on the other side of
+the HTTP boundary, don't reach for a dependency this crate doesn't have.
+
+## `set-option`/`select-layout`: gate on the option/layout name BEFORE any backend call
+
+When `set-option`/`select-layout` were blanket `TmuxOp::Noop`s, every
+irrelevant `set-option` call (a general `tuic alias` user's `remain-on-exit`,
+`pane-border-format`, `pane-border-status`, or anything else this shim
+doesn't act on) succeeded with **zero I/O** — no HTTP call, no dependency on
+TUICommander even being reachable. Turning three specific option names real
+(the color ones) must preserve that property for every OTHER option name:
+`exec.rs`'s `TmuxOp::SetOption`/`TmuxOp::SelectLayout` arms check the
+option/layout name FIRST and return `Outcome::ok()` immediately for anything
+not on the short real-dispatch list, before ever calling `resolve_pane_id_or_error`
+or `backend.get_topology`. Do not restructure this to "always resolve the
+target, then decide what to do with it" — that would make every `set-option`
+call (regardless of whether TUIC can act on it) require a live, reachable
+instance, which is a real regression for `tuic alias`'s general-purpose
+tmux-replacement users, not just the swarm path.

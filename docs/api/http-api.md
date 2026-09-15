@@ -236,6 +236,25 @@ event bus and the desktop Tauri `session-renamed` event — previously this rout
 with no emit at all, so a rename was invisible to a browser/PWA client (or a desktop tab that
 wasn't the one that issued the rename) until the next full app restart.
 
+### Set Accent Color
+
+```
+PUT /sessions/:id/accent-color
+Content-Type: application/json
+
+{ "color": "blue" }
+```
+
+Sets (or clears, with `color: null`) a session's accent color — a CSS-usable string (an ANSI
+keyword or `#rrggbb`), rendered as a sidebar tab marker and a terminal pane border. Real consumer:
+the tmux compatibility shim's `set-option ... *-border-style` dispatch (Claude Code's per-teammate
+`--agent-color`, see "tmux Compatibility Shim Endpoints" below). Suppressed when the value hasn't
+actually changed, same as `session-renamed` — this is what stops a frontend's echo of its own
+applied color from looping.
+
+Emits `session-accent-color-changed` (`{session_id, color}`) over both the SSE/WS event bus and
+the desktop Tauri event.
+
 ### Close Session
 
 ```
@@ -299,6 +318,27 @@ Records the pane's title and, if materialised, renames its TUIC tab (`PUT /sessi
 DELETE /tmux/panes/:id?label=<label>
 ```
 Removes the pane and closes its PTY if materialised.
+
+```
+PUT /tmux/panes/:id/accent-color?label=<label>
+{ "value": "bg=default,fg=blue" }
+```
+The real half of `set-option ... window-style|pane-border-style|pane-active-border-style`
+(Claude Code's per-teammate `--agent-color`). `value` is the RAW tmux option value — the CLI has
+no dependency on the main app's color palette, so `resolve_tmux_color` (`tmux_routes.rs`) resolves
+it server-side to a CSS-usable string (ANSI keyword, or `colourN`/hex → `#rrggbb`) and calls
+through to `PUT /sessions/:id/accent-color`. Recorded on `TmuxPane.accent_color` and, like `title`,
+applied retroactively by `materialize` if the pane is still virtual.
+
+```
+POST /tmux/windows/:id/layout
+{ "label": "...", "layout": "tiled" }
+```
+The real half of `select-layout tiled`/`main-vertical`. Resolves the window's own **materialized**
+panes (virtual ones are simply omitted, not a gap) and broadcasts `tmux-window-layout-requested`
+(`{"session_ids": [...], "layout": "tiled"}`) for the frontend to arrange into a split view
+(`paneLayoutStore.arrangeSessionsAsLayout`) — the backend never touches pane-layout state itself.
+A no-op (still `200`) when nothing is materialized yet.
 
 `kill-server` has no dedicated endpoint of its own — it is `DELETE /tmux/sessions/:id?label=<label>`
 called once per session currently tracked under that label, matching real tmux's `-L a

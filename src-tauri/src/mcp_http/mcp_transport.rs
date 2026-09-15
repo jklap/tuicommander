@@ -7860,6 +7860,7 @@ mod tests {
             input_buffers: dashmap::DashMap::new(),
             last_prompts: dashmap::DashMap::new(),
             pty_descriptions: dashmap::DashMap::new(),
+            pty_accent_colors: dashmap::DashMap::new(),
             silence_states: dashmap::DashMap::new(),
             claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
             log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(

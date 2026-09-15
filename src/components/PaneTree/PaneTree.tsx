@@ -9,6 +9,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import {
 	MIN_PANE_RATIO,
 	type PaneBranch,
+	type PaneGroup,
 	type PaneLeaf,
 	type PaneNode,
 	type PaneTab,
@@ -209,6 +210,7 @@ const PaneGroupView: Component<{
 		});
 	});
 	const showTabBar = () => aliveTabs().length > 1;
+	const activeAccentColor = () => resolveActiveAccentColor(group());
 	const subtabMenu = createContextMenu();
 	const [contextTabId, setContextTabId] = createSignal<string | null>(null);
 
@@ -273,6 +275,7 @@ const PaneGroupView: Component<{
 			classList={{ "pane-group-active": isActive() }}
 			data-drop-target="pane"
 			data-group-id={props.groupId}
+			style={activeAccentColor() ? { "--pane-accent": activeAccentColor() } : undefined}
 			onClick={handleGroupClick}
 			onContextMenu={handleGroupClick}
 			onWheel={handleGroupWheel}
@@ -560,6 +563,22 @@ export function tabColorClass(tab: PaneTab): string {
 			return "pane-tab-panel";
 		}
 	}
+}
+
+/**
+ * The accent color a pane group's border/outline should render, set by the
+ * tmux compatibility shim's `set-option ... *-border-style` (Claude Code's
+ * per-teammate `--agent-color`) — the ACTIVE tab's terminal, since a
+ * group's border is one shared frame around whichever tab is currently
+ * showing, not per-tab. `undefined` (not `null`) so a `style` prop can omit
+ * the CSS var entirely rather than setting it to the literal string
+ * `"null"`. Exported (same precedent as `tabColorClass` above) so its logic
+ * is testable without mounting the full component tree.
+ */
+export function resolveActiveAccentColor(group: PaneGroup | undefined): string | undefined {
+	const activeTab = group?.tabs.find((t) => t.id === group.activeTabId);
+	if (activeTab?.type !== "terminal") return undefined;
+	return terminalsStore.get(activeTab.id)?.accentColor ?? undefined;
 }
 
 function tabTitle(tab: PaneTab): string {

@@ -199,6 +199,21 @@ pub(crate) trait TuicBackend {
     ) -> Result<String, String>;
     fn rename_pane(&self, label: &str, pane_id: &str, title: Option<&str>) -> Result<(), String>;
     fn kill_pane(&self, label: &str, pane_id: &str) -> Result<(), String>;
+    /// `set-option ... window-style|pane-border-style|pane-active-border-style`.
+    /// `value` is the RAW tmux option value (e.g. `bg=default,fg=blue`) —
+    /// this crate has no dependency on the main app's color palette, so
+    /// resolution happens app-side (`mcp_http::tmux_routes::resolve_tmux_color`).
+    fn set_pane_accent_color(&self, label: &str, pane_id: &str, value: &str) -> Result<(), String>;
+    /// `select-layout tiled`/`main-vertical`. The app resolves which of the
+    /// window's panes are materialized and announces the arrangement
+    /// itself — this call carries no pane list, only the target and layout
+    /// name.
+    fn request_window_layout(
+        &self,
+        label: &str,
+        window_id: &str,
+        layout: &str,
+    ) -> Result<(), String>;
 
     /// The byte-identical legacy path: run a plain `tuic` command exactly as
     /// it behaves outside tmux mode (own printing, own error text).
@@ -344,6 +359,40 @@ impl TuicBackend for IpcBackend {
         .map_err(|e| e.to_string())?;
         if !resp.is_success() {
             return Err(format!("Failed to kill pane: {}", resp.body));
+        }
+        Ok(())
+    }
+
+    fn set_pane_accent_color(&self, label: &str, pane_id: &str, value: &str) -> Result<(), String> {
+        let body = serde_json::json!({ "value": value });
+        let resp = crate::ipc::put(
+            &format!(
+                "/tmux/panes/{pane_id}/accent-color?label={}",
+                crate::urlencod(label)
+            ),
+            &body.to_string(),
+        )
+        .map_err(|e| e.to_string())?;
+        if !resp.is_success() {
+            return Err(format!("Failed to set pane accent color: {}", resp.body));
+        }
+        Ok(())
+    }
+
+    fn request_window_layout(
+        &self,
+        label: &str,
+        window_id: &str,
+        layout: &str,
+    ) -> Result<(), String> {
+        let body = serde_json::json!({ "label": label, "layout": layout });
+        let resp = crate::ipc::post(
+            &format!("/tmux/windows/{window_id}/layout"),
+            &body.to_string(),
+        )
+        .map_err(|e| e.to_string())?;
+        if !resp.is_success() {
+            return Err(format!("Failed to request window layout: {}", resp.body));
         }
         Ok(())
     }
@@ -834,6 +883,78 @@ pub(crate) fn execute(
             };
             std::thread::sleep(std::time::Duration::from_millis(100));
             match backend.write(&tuic_id, "\r") {
+                Ok(()) => Outcome::ok(),
+                Err(e) => Outcome::err(e),
+            }
+        }
+        TmuxOp::SetOption {
+            target,
+            scope_window: _,
+            name,
+            value,
+        } => {
+            // Only the three color options carry anything TUIC can act on
+            // (see `resolve_tmux_color` app-side) — every other option name
+            // (`remain-on-exit`, `pane-border-format`, `pane-border-status`,
+            // a general `tuic alias` user's own arbitrary option) stays a
+            // pure local no-op with NO backend call at all, exactly as it
+            // behaved when this whole subcommand was a blanket `Noop`. This
+            // matters, not just for efficiency: it means `set-option` for
+            // an irrelevant option name still succeeds even when
+            // TUICommander isn't running, same as before this variant
+            // existed — only the three real color options now require a
+            // live instance.
+            const COLOR_OPTIONS: &[&str] = &[
+                "window-style",
+                "pane-border-style",
+                "pane-active-border-style",
+            ];
+            if !COLOR_OPTIONS.contains(&name.as_str()) {
+                return Outcome::ok();
+            }
+            let Some(target) = target else {
+                // No -t on a color option (e.g. a hypothetical `-g` global
+                // style): nothing to color. Same "harmless no-op" treatment.
+                return Outcome::ok();
+            };
+            let pane_id = match resolve_pane_id_or_error(backend, &label, &target) {
+                Ok(id) => id,
+                Err(outcome) => return outcome,
+            };
+            match backend.set_pane_accent_color(&label, &pane_id, &value) {
+                Ok(()) => Outcome::ok(),
+                Err(e) => Outcome::err(e),
+            }
+        }
+        TmuxOp::SelectLayout { target, layout } => {
+            // Only `tiled` (the sole layout reachable from TUIC's
+            // environment — see `tmux-swarm-shim.md`) triggers a real
+            // request; `main-vertical` is built alongside for near-zero
+            // extra cost even though it's unreachable today. Anything else
+            // (or no layout name at all) is a pure local no-op, same
+            // reasoning as `SetOption` above — no backend call, no
+            // dependency on the app being reachable.
+            let is_real_layout = matches!(layout.as_deref(), Some("tiled") | Some("main-vertical"));
+            if !is_real_layout {
+                return Outcome::ok();
+            }
+            let layout = layout.unwrap_or_default();
+            let topology = match backend.get_topology(&label) {
+                Ok(t) => t,
+                Err(e) => return Outcome::err(e),
+            };
+            let window_id = target
+                .as_deref()
+                .map(parse_target)
+                .and_then(|t| resolve_window(&topology, &t))
+                .and_then(|w| w["id"].as_str());
+            let Some(window_id) = window_id else {
+                return Outcome::err(format!(
+                    "no such window: '{}'",
+                    target.as_deref().unwrap_or("")
+                ));
+            };
+            match backend.request_window_layout(&label, window_id, &layout) {
                 Ok(()) => Outcome::ok(),
                 Err(e) => Outcome::err(e),
             }

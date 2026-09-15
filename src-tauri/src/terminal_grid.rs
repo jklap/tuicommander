@@ -343,7 +343,12 @@ const ATTR_DEFAULT_FG: u8 = 0b0100_0000;
 const ATTR_DEFAULT_BG: u8 = 0b1000_0000;
 
 /// Standard xterm 256-color palette (16 ANSI + 216 color cube + 24 grayscale).
-fn xterm_color_rgb(index: u8) -> Rgb {
+///
+/// `pub(crate)` so other modules resolving a numeric terminal color to a
+/// displayable RGB value (e.g. `mcp_http::tmux_routes`'s tmux `colourN` →
+/// hex resolution for `set-option ... fg=colourN`) reuse this table instead
+/// of hand-rolling a second one.
+pub(crate) fn xterm_color_rgb(index: u8) -> Rgb {
     match index {
         // 16 standard ANSI colors — Tango/GNOME palette (xterm.js default)
         0 => Rgb {

@@ -352,6 +352,18 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps set_session_accent_color to PUT /sessions/{id}/accent-color", () => {
+			const result = mapCommandToHttp("set_session_accent_color", {
+				sessionId: "abc",
+				color: "blue",
+			});
+			expect(result).toEqual({
+				method: "PUT",
+				path: "/sessions/abc/accent-color",
+				body: { color: "blue" },
+			});
+		});
+
 		it("maps resize_pty to POST /sessions/{id}/resize", () => {
 			const result = mapCommandToHttp("resize_pty", { sessionId: "abc", rows: 40, cols: 120 });
 			expect(result.method).toBe("POST");

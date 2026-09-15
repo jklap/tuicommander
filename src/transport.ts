@@ -236,6 +236,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { name: args.name, isCustom: args.isCustom },
 		}),
 	},
+	set_session_accent_color: {
+		map: (args) => ({
+			method: "PUT",
+			path: `/sessions/${args.sessionId}/accent-color`,
+			body: { color: args.color },
+		}),
+	},
 	resize_pty: {
 		map: (args) => ({
 			method: "POST",

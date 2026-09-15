@@ -359,6 +359,13 @@
   background: linear-gradient(to top, color-mix(in srgb, var(--repo-color) 18%, transparent), transparent 60%);
 }
 
+/* Agent accent color — tmux shim's per-teammate --agent-color. A left-edge
+   stripe, always visible regardless of split/workspace state, distinct from
+   the repo-color gradient tint above (which is Global-Workspace-only). */
+.tab[style*="--accent-color"] {
+  box-shadow: inset 2px 0 0 var(--accent-color);
+}
+
 /* Diff tabs */
 .tab.diffTab {
   background: linear-gradient(to bottom, rgba(var(--ind-tabtype-diff-rgb), 0.1), rgba(var(--ind-tabtype-diff-rgb), 0.05));

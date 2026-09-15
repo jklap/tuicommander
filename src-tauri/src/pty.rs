@@ -6892,6 +6892,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.shell_states.remove(session_id);
     state.last_prompts.remove(session_id);
     state.pty_descriptions.remove(session_id);
+    state.pty_accent_colors.remove(session_id);
     state.terminal_rows.remove(session_id);
     state.resize_locks.remove(session_id);
     // Input mode and shell integration describe the process that just died.
@@ -11514,6 +11515,8 @@ pub(crate) struct ActiveSessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pty_description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    accent_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<crate::state::SessionState>,
 }
 
@@ -11576,6 +11579,29 @@ pub(crate) fn set_session_name(
     Ok(())
 }
 
+/// Set (or clear, with `color: None`) a PTY session's accent color — the
+/// desktop IPC twin of `mcp_http::session::set_session_accent_color`. Real
+/// consumer: the tmux compatibility shim's `set-option ... *-border-style`
+/// dispatch (`mcp_http::tmux_routes`), delivering Claude Code's per-teammate
+/// `--agent-color`. Unlike `set_session_name`, the value isn't a field on
+/// `PtySession` — `AppState::set_pty_accent_color` owns storage (a separate
+/// `pty_accent_colors` map, mirroring `pty_descriptions`), the
+/// unchanged-value no-op guard, and the dual emit, so this command is a
+/// thin existence check plus a call-through.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn set_session_accent_color(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    if !state.sessions.contains_key(&session_id) {
+        return Err(format!("Session not found: {session_id}"));
+    }
+    state.set_pty_accent_color(&session_id, color);
+    Ok(())
+}
+
 /// Queue a user-composed command for an agent session (Compose panel enqueue).
 /// Typed at once when the agent is idle, otherwise delivered on its next
 /// BUSY→IDLE transition so a running turn is never steered.
@@ -11624,6 +11650,17 @@ pub(crate) fn remove_queued_agent_command(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<ActiveSessionInfo> {
+    list_active_sessions_impl(&state)
+}
+
+/// The real body of `list_active_sessions`, taking a plain `&AppState`
+/// rather than a `tauri::State` — no test anywhere in this codebase
+/// constructs a `tauri::State` outside a running app, so a
+/// `#[tauri::command]` fn with one is otherwise untestable. Extracted so
+/// this logic (specifically: does it actually surface `pty_accent_colors`
+/// per-session, same as its HTTP twin `mcp_http::session::list_sessions`)
+/// has a direct test.
+fn list_active_sessions_impl(state: &AppState) -> Vec<ActiveSessionInfo> {
     state
         .sessions
         .iter()
@@ -11643,6 +11680,10 @@ pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<Activ
                 is_remote: session.is_remote,
                 pty_description: state
                     .pty_descriptions
+                    .get(entry.key())
+                    .map(|value| value.value().clone()),
+                accent_color: state
+                    .pty_accent_colors
                     .get(entry.key())
                     .map(|value| value.value().clone()),
                 state: state.session_state_with_shell(entry.key()),
@@ -26915,6 +26956,9 @@ mod tests {
         state.has_osc133_integration.insert(sid.to_string(), ());
         state.has_tuic_state_integration.insert(sid.to_string(), ());
         state.turn_error_flags.insert(sid.to_string(), ());
+        state
+            .pty_accent_colors
+            .insert(sid.to_string(), "blue".to_string());
 
         cleanup_session(sid, &state);
 
@@ -26937,6 +26981,37 @@ mod tests {
             !state.turn_error_flags.contains_key(sid),
             "must not leak a pending failure flag past session teardown"
         );
+        assert!(
+            !state.pty_accent_colors.contains_key(sid),
+            "must not leak a permanent accent-color entry per session UUID — the tmux \
+             shim's set-option dispatch is the only writer, but every session that ever \
+             gets one must still have it reaped on close"
+        );
+    }
+
+    // ── list_active_sessions ────────────────────────────────────────
+
+    /// `list_active_sessions` (the desktop IPC twin of
+    /// `mcp_http::session::list_sessions`) had no test at all — testing the
+    /// `#[tauri::command]` wrapper directly isn't possible without a real
+    /// running app (no test anywhere in this codebase constructs a
+    /// `tauri::State` outside one), so this exercises the extracted
+    /// `list_active_sessions_impl` instead. The one thing worth proving:
+    /// `pty_accent_colors` (a side-map, not a `PtySession` field) surfaces
+    /// per-session, same as the HTTP twin's own
+    /// `list_sessions_reports_each_sessions_own_accent_color` test.
+    #[test]
+    fn list_active_sessions_impl_reports_each_sessions_own_accent_color() {
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::state::tests_support::insert_dummy_session(&state, "colored");
+        crate::state::tests_support::insert_dummy_session(&state, "plain");
+        state.set_pty_accent_color("colored", Some("blue".to_string()));
+
+        let sessions = list_active_sessions_impl(&state);
+        let colored = sessions.iter().find(|s| s.session_id == "colored").unwrap();
+        let plain = sessions.iter().find(|s| s.session_id == "plain").unwrap();
+        assert_eq!(colored.accent_color.as_deref(), Some("blue"));
+        assert_eq!(plain.accent_color, None);
     }
 
     /// Populate the per-session maps that no teardown phase used to own, plus the

@@ -93,6 +93,35 @@ describe("TabBar", () => {
 		});
 	}
 
+	it("renders the tmux shim's accent color as a --accent-color style var, and omits it when unset", () => {
+		const id = addTerminal();
+		terminalsStore.update(id, { accentColor: "blue" });
+		const { container } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const tab = container.querySelector(`[data-tab-id="${id}"]`) as HTMLElement;
+		expect(tab.style.getPropertyValue("--accent-color")).toBe("blue");
+
+		const plainId = addTerminal({ name: "Plain" });
+		const { container: plainContainer } = render(() => (
+			<TabBar
+				onTabSelect={() => {}}
+				onTabClose={() => {}}
+				onCloseOthers={() => {}}
+				onCloseToRight={() => {}}
+				onNewTab={() => {}}
+			/>
+		));
+		const plainTab = plainContainer.querySelector(`[data-tab-id="${plainId}"]`) as HTMLElement;
+		expect(plainTab.style.getPropertyValue("--accent-color")).toBe("");
+	});
+
 	it("clicking new tab button calls onNewTab directly", () => {
 		const onNewTab = vi.fn();
 		const { container } = render(() => (
