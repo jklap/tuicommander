@@ -105,3 +105,134 @@ impl StateSource for AppStateSource {
         Box::pin(stream)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output_parser::{ChoiceOption, ChoicePromptPayload};
+    use crate::state::{SessionState, tests_support};
+
+    fn source() -> AppStateSource {
+        AppStateSource {
+            state: Arc::new(tests_support::make_test_app_state()),
+        }
+    }
+
+    #[test]
+    fn label_prefers_term_alias_over_display_name_and_cwd() {
+        let src = source();
+        tests_support::insert_dummy_session(&src.state, "s1");
+        src.state.sessions.get("s1").unwrap().lock().display_name =
+            Some("A Display Name".to_string());
+        src.state
+            .term_aliases
+            .insert("s1".to_string(), "tc-1".to_string());
+
+        let snap = src
+            .snapshot()
+            .into_iter()
+            .find(|s| s.session_id == "s1")
+            .expect("session present");
+        assert_eq!(
+            snap.label, "tc-1",
+            "a term alias must win over display_name"
+        );
+    }
+
+    #[test]
+    fn label_falls_back_to_display_name_when_no_term_alias() {
+        let src = source();
+        tests_support::insert_dummy_session(&src.state, "s2");
+        src.state.sessions.get("s2").unwrap().lock().display_name = Some("My Session".to_string());
+
+        let snap = src
+            .snapshot()
+            .into_iter()
+            .find(|s| s.session_id == "s2")
+            .expect("session present");
+        assert_eq!(snap.label, "My Session");
+    }
+
+    #[test]
+    fn label_falls_back_to_the_raw_session_id_when_nothing_else_is_available() {
+        let src = source();
+        tests_support::insert_dummy_session(&src.state, "s3");
+        // No term alias, no display_name (insert_dummy_session leaves it
+        // unset), and cwd is whatever the dummy shell reports — this test
+        // only pins the *last-resort* end of the chain, so it just asserts
+        // the label is never empty.
+        let snap = src
+            .snapshot()
+            .into_iter()
+            .find(|s| s.session_id == "s3")
+            .expect("session present");
+        assert!(
+            !snap.label.is_empty(),
+            "a session with no alias/display_name/cwd basename must still fall back to something, never blank"
+        );
+    }
+
+    #[test]
+    fn choice_prompt_options_are_extracted_as_bare_option_keys() {
+        let src = source();
+        tests_support::insert_dummy_session(&src.state, "s4");
+        src.state.session_states.insert(
+            "s4".to_string(),
+            SessionState {
+                choice_prompt: Some(ChoicePromptPayload {
+                    title: "Proceed?".to_string(),
+                    options: vec![
+                        ChoiceOption {
+                            key: "1".to_string(),
+                            label: "Yes".to_string(),
+                            highlighted: true,
+                            destructive: false,
+                            hint: None,
+                        },
+                        ChoiceOption {
+                            key: "2".to_string(),
+                            label: "No".to_string(),
+                            highlighted: false,
+                            destructive: true,
+                            hint: None,
+                        },
+                    ],
+                    dismiss_key: None,
+                    amend_key: None,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let snap = src
+            .snapshot()
+            .into_iter()
+            .find(|s| s.session_id == "s4")
+            .expect("session present");
+        assert!(snap.choice_prompt_pending);
+        assert_eq!(
+            snap.choice_prompt_options,
+            vec!["1".to_string(), "2".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_choice_prompt_yields_an_empty_options_list() {
+        let src = source();
+        tests_support::insert_dummy_session(&src.state, "s5");
+
+        let snap = src
+            .snapshot()
+            .into_iter()
+            .find(|s| s.session_id == "s5")
+            .expect("session present");
+        assert!(!snap.choice_prompt_pending);
+        assert!(snap.choice_prompt_options.is_empty());
+    }
+
+    #[test]
+    fn snapshot_on_an_empty_state_is_an_empty_vec() {
+        let src = source();
+        assert!(src.snapshot().is_empty());
+    }
+}

@@ -403,6 +403,7 @@ policy, or the in-app supervisor/config/Settings UI:
 | `src-tauri/crates/tuic-streamdock/src/render/` | KeyFace → JPEG rendering (palette, font, cache) |
 | `src-tauri/crates/tuic-streamdock/src/policy/` | SlotPlanner (sticky assignment, eviction) and priority ranking |
 | `src-tauri/crates/tuic-streamdock/src/port.rs` | `StateSource`/`ActionSink` — the entire coupling surface to any host |
+| `src-tauri/crates/tuic-streamdock/src/leds.rs` | Ambient LED ring color (aggregate green/peach/red), deduped per state change |
 | `src-tauri/crates/tuic-streamdock/src/coordinator.rs` | The 250ms tick loop tying render+policy+device together |
 | `src-tauri/src/streamdock/mod.rs` | `StreamDockManager` supervisor (`apply_config`, start/stop, hot-plug reconnect loop) |
 | `src-tauri/src/streamdock/source.rs` | `StateSource` impl reading `AppState` directly |
