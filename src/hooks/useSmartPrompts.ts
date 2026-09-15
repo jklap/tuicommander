@@ -259,10 +259,18 @@ export function useSmartPrompts() {
 		return { ...vars, ...resolveFrontendVars(repoPath) };
 	}
 
-	/** Execute a smart prompt via inject or headless mode */
+	/** Execute a smart prompt via inject or headless mode.
+	 *
+	 *  `targetPath`, when given, overrides which tree (worktree or repo root)
+	 *  variables resolve against AND which directory a shell/headless prompt
+	 *  actually runs in — for a caller that is itself bound to a specific
+	 *  repo/worktree independent of terminal focus (e.g. a Git panel showing
+	 *  `props.repoPath`, which need not be the currently active terminal's
+	 *  repo). Omitted, this falls back to the active terminal's cwd, as before. */
 	async function executeSmartPrompt(
 		prompt: SavedPrompt,
 		manualVariables?: Record<string, string>,
+		targetPath?: string,
 	): Promise<SmartPromptResult> {
 		const check = canExecute(prompt);
 		if (!check.ok) {
@@ -274,16 +282,16 @@ export function useSmartPrompts() {
 		const rawMode = prompt.executionMode ?? "inject";
 		const effectiveMode = rawMode === "headless" && resolveHeadlessAgent(prompt).isApi ? "api" : rawMode;
 
-		// Resolve variables against the tree (worktree or repo root) that
-		// owns the ACTIVE TERMINAL's cwd, not just "the active repo" — a
-		// worktree tab must see its own branch/diff, not the main
-		// checkout's (the active-repo-vs-worktree-cwd bug: {branch}/{diff}
-		// used to describe the main checkout while the command actually ran
-		// in the worktree). Falls back to today's active-repo behavior when
-		// the cwd belongs to no registered repo, so a plain shell in an
-		// unregistered directory keeps working exactly as before.
+		// Resolve variables against the tree (worktree or repo root) that owns
+		// `targetPath` when the caller supplied one, else the ACTIVE
+		// TERMINAL's cwd — not just "the active repo" (the
+		// active-repo-vs-worktree-cwd bug: {branch}/{diff} used to describe
+		// the main checkout while the command actually ran in the worktree).
+		// Falls back to today's active-repo behavior when neither resolves
+		// against a registered repo, so a plain shell in an unregistered
+		// directory keeps working exactly as before.
 		const activeTerminal = terminalsStore.getActive();
-		const tree = resolvePromptTreeIn(activeTerminal?.cwd, repositoriesStore.state.repositories);
+		const tree = resolvePromptTreeIn(targetPath ?? activeTerminal?.cwd, repositoriesStore.state.repositories);
 		const activeRepo = repositoriesStore.getActive();
 		const repoRoot = tree?.repoPath ?? activeRepo?.path ?? "";
 		const varsPath = tree?.treePath ?? repoRoot;
@@ -321,13 +329,13 @@ export function useSmartPrompts() {
 		});
 
 		if (effectiveMode === "shell") {
-			return executeShell(prompt, processed);
+			return executeShell(prompt, processed, targetPath ? varsPath : undefined);
 		}
 		if (effectiveMode === "api") {
 			return executeApi(prompt, processed);
 		}
 		if (effectiveMode === "headless") {
-			return executeHeadless(prompt, processed);
+			return executeHeadless(prompt, processed, targetPath ? varsPath : undefined);
 		}
 		return executeInject(prompt, processed);
 	}
@@ -361,7 +369,11 @@ export function useSmartPrompts() {
 		}
 	}
 
-	async function executeHeadless(prompt: SavedPrompt, content: string): Promise<SmartPromptResult> {
+	async function executeHeadless(
+		prompt: SavedPrompt,
+		content: string,
+		repoPathOverride?: string,
+	): Promise<SmartPromptResult> {
 		const resolved = resolveHeadlessAgent(prompt);
 		const headlessVal = resolved.agent;
 		if (!headlessVal) {
@@ -409,7 +421,7 @@ export function useSmartPrompts() {
 		}
 
 		const active = terminalsStore.getActive();
-		const repoPath = active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
+		const repoPath = repoPathOverride ?? active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
 		try {
 			const output = await invoke<string>("execute_headless_prompt", {
 				command,
@@ -431,9 +443,13 @@ export function useSmartPrompts() {
 		}
 	}
 
-	async function executeShell(prompt: SavedPrompt, content: string): Promise<SmartPromptResult> {
+	async function executeShell(
+		prompt: SavedPrompt,
+		content: string,
+		repoPathOverride?: string,
+	): Promise<SmartPromptResult> {
 		const active = terminalsStore.getActive();
-		const repoPath = active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
+		const repoPath = repoPathOverride ?? active?.cwd ?? repositoriesStore.getActive()?.path ?? "";
 		try {
 			const output = await invoke<string>("execute_shell_script", {
 				scriptContent: content,

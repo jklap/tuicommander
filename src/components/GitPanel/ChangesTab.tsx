@@ -527,7 +527,14 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 		setGenerating(true);
 		const gen = ++generateGeneration;
 		try {
-			const result = await executeSmartPrompt(prompt);
+			// Target THIS panel's own repo/worktree explicitly — without this,
+			// executeSmartPrompt resolves variables (and, for this headless
+			// prompt, its actual execution cwd) against the active TERMINAL's
+			// tree instead, which can be a different repo than the one this
+			// Changes tab is showing. That mismatch could generate a commit
+			// message from one repo's diff and commit it (via doCommit below,
+			// which always uses props.repoPath) into another.
+			const result = await executeSmartPrompt(prompt, undefined, props.repoPath ?? undefined);
 			if (gen !== generateGeneration) return;
 			if (!result.ok) setCommitError(result.reason ?? "Failed to generate commit message");
 		} catch (err) {

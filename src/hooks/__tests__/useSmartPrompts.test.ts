@@ -838,3 +838,103 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 		expect(mockedGetBranchPrData).not.toHaveBeenCalledWith(REPO_ROOT, "main");
 	});
 });
+
+describe("executeSmartPrompt — explicit targetPath override (GitPanel/ChangesTab fix)", () => {
+	// Regression coverage for the caller-side bug documented in AGENTS.md:
+	// GitPanel/ChangesTab.tsx's "Generate commit message" used to call
+	// executeSmartPrompt(prompt) with no override, so it inherited whatever
+	// the active TERMINAL's tree happened to be — which can be a different
+	// repo/worktree than the one that specific Git panel is showing. The
+	// `targetPath` parameter lets a caller bound to its own repo/worktree
+	// (independent of terminal focus) pin resolution to that tree instead.
+	const mockedInvoke = vi.mocked(invoke);
+	const mockedProcess = vi.mocked(promptLibraryStore.processContent);
+	const mockedGetBranchPrData = vi.mocked(githubStore.getBranchPrData);
+	const mockedRepoGetActive = vi.mocked(repositoriesStore.getActive);
+
+	const REPO_ROOT = "/repo";
+	const WORKTREE_PATH = "/repo__wt/feat-x";
+	const OTHER_REPO = "/some-other-repo";
+
+	beforeEach(() => {
+		mockedIsBusy.mockReturnValue(false);
+		mockedProcess.mockResolvedValue("PROCESSED");
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
+		mockedGetBranchPrData.mockReturnValue(null);
+		(repositoriesStore.state.repositories as Record<string, unknown>) = {
+			[REPO_ROOT]: {
+				path: REPO_ROOT,
+				activeBranch: "main",
+				branches: {
+					"feat-x": { name: "feat-x", worktreePath: WORKTREE_PATH },
+				},
+			},
+		};
+		// The active terminal/repo point at a totally unrelated repo — every
+		// assertion below must reflect targetPath, never these.
+		mockedRepoGetActive.mockReturnValue({ path: OTHER_REPO } as unknown as ReturnType<
+			typeof repositoriesStore.getActive
+		>);
+		mockedGetActive.mockReturnValue({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			cwd: "/completely/unrelated/terminal/cwd",
+			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
+		} as unknown as ReturnType<typeof terminalsStore.getActive>);
+	});
+
+	afterEach(() => {
+		(repositoriesStore.state.repositories as Record<string, unknown>) = {};
+	});
+
+	it("resolves variables against targetPath's tree, not the active terminal's cwd", async () => {
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }), undefined, WORKTREE_PATH);
+
+		expect(mockedInvoke).toHaveBeenCalledWith("resolve_prompt_variables", {
+			content: "Do something",
+			repoPath: WORKTREE_PATH,
+		});
+	});
+
+	it("looks up PR variables under targetPath's repo root and branch, not the active repo", async () => {
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }), undefined, WORKTREE_PATH);
+
+		expect(mockedGetBranchPrData).toHaveBeenCalledWith(REPO_ROOT, "feat-x");
+	});
+
+	it("runs a headless prompt's execute_headless_prompt call in targetPath's tree, not the active terminal's cwd", async () => {
+		mockedGetHeadlessAgent.mockReturnValue("claude");
+		mockedGetHeadlessTemplate.mockReturnValue("claude");
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "headless" }), undefined, WORKTREE_PATH);
+
+		const call = mockedInvoke.mock.calls.find(([cmd]) => cmd === "execute_headless_prompt");
+		expect(call?.[1]).toMatchObject({ repoPath: WORKTREE_PATH });
+	});
+
+	it("runs a shell prompt's execute_shell_script call in targetPath's tree, not the active terminal's cwd", async () => {
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "shell" }), undefined, WORKTREE_PATH);
+
+		const call = mockedInvoke.mock.calls.find(([cmd]) => cmd === "execute_shell_script");
+		expect(call?.[1]).toMatchObject({ repoPath: WORKTREE_PATH });
+	});
+
+	it("omitting targetPath keeps the original active-terminal-cwd behavior unchanged", async () => {
+		// No third argument — must NOT pick up WORKTREE_PATH from the mock
+		// setup above; falls back to the active terminal's cwd exactly as
+		// before this fix.
+		mockedGetHeadlessAgent.mockReturnValue("claude");
+		mockedGetHeadlessTemplate.mockReturnValue("claude");
+
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "headless" }));
+
+		const call = mockedInvoke.mock.calls.find(([cmd]) => cmd === "execute_headless_prompt");
+		expect(call?.[1]).toMatchObject({ repoPath: "/completely/unrelated/terminal/cwd" });
+	});
+});
