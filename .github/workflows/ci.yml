@@ -382,3 +382,19 @@ jobs:
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
         run: cargo nextest run --workspace --profile ci
+
+      # The Windows test binary aborts at load with 0xc0000139
+      # (STATUS_ENTRYPOINT_NOT_FOUND): a DLL it imports from is present but does
+      # not export something it asks for. Windows names neither the DLL nor the
+      # symbol, and nothing off-Windows can link this binary, so the import table
+      # has to be read on the runner itself.
+      - name: Dump the test binary's imports
+        if: failure() && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          $exe = Get-ChildItem C:/t/debug/deps/tuicommander_lib-*.exe | Select-Object -First 1
+          Write-Host "dumpbin: $($dumpbin.FullName)"
+          Write-Host "binary:  $($exe.FullName)"
+          & $dumpbin.FullName /imports $exe.FullName
