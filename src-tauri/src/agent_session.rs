@@ -1151,7 +1151,8 @@ mod tests {
     fn test_claude_project_dir_returns_path_with_slug() {
         if let Ok(result) = claude_project_dir("/Users/foo/bar".to_string(), None) {
             assert!(
-                result.ends_with("/.claude/projects/-Users-foo-bar"),
+                crate::test_support::slashed(&result)
+                    .ends_with("/.claude/projects/-Users-foo-bar"),
                 "unexpected path: {result}"
             );
         }
@@ -1978,11 +1979,17 @@ mod tests {
             &argv(&["claude", "--append-system-prompt", "be terse"]),
             env(&[("CLAUDE_CONFIG_DIR", "/Users/me/My Configs/.claude")]),
         );
+        // The quote character belongs to the host shell — `'` on unix, `"` on
+        // `cmd` — and the command is handed to that shell. What this test pins
+        // is which tokens get quoted at all: the two holding a space, and
+        // neither of the two that do not.
+        let dir = crate::prompt::shell_quote("/Users/me/My Configs/.claude");
+        let prompt = crate::prompt::shell_quote("be terse");
         assert_eq!(
-            cmd.as_deref(),
-            Some(
-                "CLAUDE_CONFIG_DIR='/Users/me/My Configs/.claude' claude --append-system-prompt 'be terse'"
-            )
+            cmd,
+            Some(format!(
+                "CLAUDE_CONFIG_DIR={dir} claude --append-system-prompt {prompt}"
+            ))
         );
     }
 

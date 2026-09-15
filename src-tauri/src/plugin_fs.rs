@@ -1755,15 +1755,8 @@ async fn trim_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::dir_outside_home;
+    use crate::test_support::{dir_outside_home, slashed};
     use std::path::Path;
-
-    /// `ArtifactEntry::path` is a String, and Windows builds it with `\`, so a
-    /// plain suffix check against a `/`-spelled expectation never matches
-    /// there. Normalise instead of spelling every expectation twice.
-    fn slashed(path: &str) -> String {
-        path.replace('\\', "/")
-    }
 
     #[test]
     fn validate_rejects_empty_path() {

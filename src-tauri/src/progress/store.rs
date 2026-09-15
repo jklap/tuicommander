@@ -37,6 +37,28 @@ pub struct ProgressStore {
     db_path: PathBuf,
 }
 
+/// What [`ProgressStore::read_existing_shm`] found before this process probed
+/// the database.
+///
+/// The snapshot is best-effort and never a reason to refuse the store. Windows
+/// gives every live SQLite connection byte-range locks on the `-shm` file, so a
+/// plain read of it fails there with a sharing violation whenever another TUIC
+/// process has the same project open — which is the normal case, not a fault.
+/// The SHM is a rebuildable index; the snapshot only feeds the forensic copy
+/// recovery makes of a database that turns out to be corrupt.
+///
+/// `Unreadable` is kept apart from `Absent` because the two ask for opposite
+/// handling during recovery: a SHM that appeared under our own probe is
+/// transient and gets removed, while one we could not read must be preserved.
+enum ShmSnapshot {
+    /// No `-shm` file was there.
+    Absent,
+    /// The bytes as they were before the probe.
+    Captured(Vec<u8>),
+    /// A `-shm` file exists and could not be read.
+    Unreadable,
+}
+
 impl ProgressStore {
     /// Prepare and validate a project-local Progress store.
     ///
@@ -89,28 +111,25 @@ impl ProgressStore {
             )
         })?;
         let original_shm = store.read_existing_shm();
-        let result = match original_shm {
-            Err(error) => Err(error),
-            Ok(original_shm) => match store
-                .validate_existing_database_read_only()
-                .and_then(|()| store.connect())
-            {
-                Ok(_) => Ok(store),
-                Err(error) if error.starts_with("progress_store_corrupt:") => {
-                    match store.recover_corrupt_database(&error, original_shm.as_deref()) {
-                        Ok(preserved) => Err(format!(
-                            "progress_store_recovered: corrupt progress history was preserved as {}; a new empty database is ready, retry the operation",
-                            preserved
-                                .iter()
-                                .map(|path| format!("'{}'", path.display()))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )),
-                        Err(recovery_error) => Err(recovery_error),
-                    }
+        let result = match store
+            .validate_existing_database_read_only()
+            .and_then(|()| store.connect())
+        {
+            Ok(_) => Ok(store),
+            Err(error) if error.starts_with("progress_store_corrupt:") => {
+                match store.recover_corrupt_database(&error, &original_shm) {
+                    Ok(preserved) => Err(format!(
+                        "progress_store_recovered: corrupt progress history was preserved as {}; a new empty database is ready, retry the operation",
+                        preserved
+                            .iter()
+                            .map(|path| format!("'{}'", path.display()))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                    Err(recovery_error) => Err(recovery_error),
                 }
-                Err(error) => Err(error),
-            },
+            }
+            Err(error) => Err(error),
         };
         lock.unlock().map_err(|error| {
             format!(
@@ -672,17 +691,15 @@ impl ProgressStore {
         Ok(())
     }
 
-    fn read_existing_shm(&self) -> Result<Option<Vec<u8>>, String> {
+    fn read_existing_shm(&self) -> ShmSnapshot {
         let path = append_to_path(&self.db_path, "-shm");
         if !path.exists() {
-            return Ok(None);
+            return ShmSnapshot::Absent;
         }
-        fs::read(&path).map(Some).map_err(|error| {
-            format!(
-                "progress_store_unavailable: cannot preserve SQLite SHM state '{}': {error}",
-                path.display()
-            )
-        })
+        match fs::read(&path) {
+            Ok(bytes) => ShmSnapshot::Captured(bytes),
+            Err(_) => ShmSnapshot::Unreadable,
+        }
     }
 
     /// Preserve a corrupt database and establish a validated empty replacement.
@@ -697,15 +714,61 @@ impl ProgressStore {
     fn recover_corrupt_database(
         &self,
         original_error: &str,
-        original_shm: Option<&[u8]>,
+        original_shm: &ShmSnapshot,
     ) -> Result<Vec<PathBuf>, String> {
         let recovery_id = uuid::Uuid::new_v4();
         let mut preserved = Vec::new();
         let shm = append_to_path(&self.db_path, "-shm");
-        if let Some(bytes) = original_shm {
-            let destination = append_to_path(&shm, &format!(".corrupt-{recovery_id}"));
-            let current_matches = fs::read(&shm).is_ok_and(|current| current == bytes);
-            if current_matches {
+        match original_shm {
+            ShmSnapshot::Captured(bytes) => {
+                let destination = append_to_path(&shm, &format!(".corrupt-{recovery_id}"));
+                let current_matches = fs::read(&shm).is_ok_and(|current| &current == bytes);
+                if current_matches {
+                    fs::rename(&shm, &destination).map_err(|error| {
+                        format!(
+                            "progress_store_recovery_failed: cannot preserve '{}' as '{}': {error}",
+                            shm.display(),
+                            destination.display()
+                        )
+                    })?;
+                } else {
+                    let mut file = OpenOptions::new()
+                        .create_new(true)
+                        .write(true)
+                        .open(&destination)
+                        .map_err(|error| {
+                            format!(
+                                "progress_store_recovery_failed: cannot preserve original SHM state as '{}': {error}",
+                                destination.display()
+                            )
+                        })?;
+                    file.write_all(bytes).map_err(|error| {
+                        format!(
+                            "progress_store_recovery_failed: cannot write preserved SHM state '{}': {error}",
+                            destination.display()
+                        )
+                    })?;
+                    file.sync_all().map_err(|error| {
+                        format!(
+                            "progress_store_recovery_failed: cannot sync preserved SHM state '{}': {error}",
+                            destination.display()
+                        )
+                    })?;
+                    if shm.exists() {
+                        fs::remove_file(&shm).map_err(|error| {
+                            format!(
+                                "progress_store_recovery_failed: cannot remove probed SHM state '{}': {error}",
+                                shm.display()
+                            )
+                        })?;
+                    }
+                }
+                preserved.push(destination);
+            }
+            // No copy of the bytes exists, so moving the file is the only way
+            // to keep it with the database it belongs to.
+            ShmSnapshot::Unreadable => {
+                let destination = append_to_path(&shm, &format!(".corrupt-{recovery_id}"));
                 fs::rename(&shm, &destination).map_err(|error| {
                     format!(
                         "progress_store_recovery_failed: cannot preserve '{}' as '{}': {error}",
@@ -713,46 +776,18 @@ impl ProgressStore {
                         destination.display()
                     )
                 })?;
-            } else {
-                let mut file = OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&destination)
-                    .map_err(|error| {
-                        format!(
-                            "progress_store_recovery_failed: cannot preserve original SHM state as '{}': {error}",
-                            destination.display()
-                        )
-                    })?;
-                file.write_all(bytes).map_err(|error| {
-                    format!(
-                        "progress_store_recovery_failed: cannot write preserved SHM state '{}': {error}",
-                        destination.display()
-                    )
-                })?;
-                file.sync_all().map_err(|error| {
-                    format!(
-                        "progress_store_recovery_failed: cannot sync preserved SHM state '{}': {error}",
-                        destination.display()
-                    )
-                })?;
+                preserved.push(destination);
+            }
+            ShmSnapshot::Absent => {
                 if shm.exists() {
                     fs::remove_file(&shm).map_err(|error| {
                         format!(
-                            "progress_store_recovery_failed: cannot remove probed SHM state '{}': {error}",
+                            "progress_store_recovery_failed: cannot remove transient SHM state '{}': {error}",
                             shm.display()
                         )
                     })?;
                 }
             }
-            preserved.push(destination);
-        } else if shm.exists() {
-            fs::remove_file(&shm).map_err(|error| {
-                format!(
-                    "progress_store_recovery_failed: cannot remove transient SHM state '{}': {error}",
-                    shm.display()
-                )
-            })?;
         }
 
         for source in [append_to_path(&self.db_path, "-wal"), self.db_path.clone()] {
@@ -2135,7 +2170,10 @@ mod tests {
     #[test]
     fn corrupt_databases_are_preserved_and_replaced_before_retry() {
         let project = git_project();
-        let dir = project.path().join(STORE_DIR);
+        // `ProgressStore::open` canonicalises the root, so the paths it names
+        // in its error are canonical too. On Windows that spelling carries the
+        // `\\?\` prefix, which a plain join never produces.
+        let dir = fs::canonicalize(project.path()).unwrap().join(STORE_DIR);
         fs::create_dir(&dir).unwrap();
         let path = dir.join(STORE_FILE);
         fs::write(&path, b"not sqlite").unwrap();
@@ -2182,7 +2220,8 @@ mod tests {
     #[test]
     fn recovery_preserves_sqlite_sidecars_with_the_corrupt_database() {
         let project = git_project();
-        let dir = project.path().join(STORE_DIR);
+        // Canonical, like the paths the recovery error names. See above.
+        let dir = fs::canonicalize(project.path()).unwrap().join(STORE_DIR);
         fs::create_dir(&dir).unwrap();
         let database = dir.join(STORE_FILE);
         fs::write(&database, b"not sqlite").unwrap();
@@ -2224,6 +2263,53 @@ mod tests {
             preserved
                 .iter()
                 .all(|path| error.contains(&path.display().to_string()))
+        );
+        assert!(ProgressStore::open(project.path()).is_ok());
+    }
+
+    /// Another live connection is the normal case, not a fault: TUIC runs more
+    /// than one process against the same project. Windows byte-range locks the
+    /// `-shm` file for every connection, so reading it fails there while this
+    /// one is held — and that must not be a reason to refuse the store.
+    #[test]
+    fn a_live_connection_elsewhere_does_not_block_opening_the_store() {
+        let project = git_project();
+        let store = ProgressStore::open(project.path()).unwrap();
+        store
+            .record(&event(ProgressKind::Milestone, "A live WAL.", None))
+            .unwrap();
+        let held = store.connect().unwrap();
+        held.query_row("SELECT COUNT(*) FROM events", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+
+        let reopened =
+            ProgressStore::open(project.path()).expect("a locked SHM is not a broken store");
+        assert_eq!(reopened.list(None, Some(10)).unwrap().events.len(), 1);
+        drop(held);
+    }
+
+    /// A SHM the store could not read is one it must not silently drop either:
+    /// recovery keeps it with the database it belongs to.
+    #[test]
+    fn recovery_preserves_an_unreadable_sidecar_instead_of_refusing() {
+        let project = git_project();
+        let dir = fs::canonicalize(project.path()).unwrap().join(STORE_DIR);
+        fs::create_dir(&dir).unwrap();
+        let database = dir.join(STORE_FILE);
+        fs::write(&database, b"not sqlite").unwrap();
+        // A directory is the one shape `fs::read` refuses on every platform.
+        fs::create_dir(append_to_path(&database, "-shm")).unwrap();
+
+        let error = ProgressStore::open(project.path()).unwrap_err();
+        assert!(error.starts_with("progress_store_recovered:"), "{error}");
+        assert!(
+            fs::read_dir(&dir).unwrap().filter_map(Result::ok).any(|e| {
+                e.path()
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("progress.sqlite3-shm.corrupt-"))
+            }),
+            "the unreadable SHM must be preserved, not deleted"
         );
         assert!(ProgressStore::open(project.path()).is_ok());
     }

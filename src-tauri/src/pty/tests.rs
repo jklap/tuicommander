@@ -7218,7 +7218,11 @@ fn test_chunk_processor_planfile_resolution() {
     let cp = ChunkProcessor::new(Some("/home/user/repo".to_string()), None);
     // Test that resolve_planfile_path resolves relative paths
     let resolved = cp.resolve_planfile_path("plans/foo.md");
-    assert_eq!(resolved, Some("/home/user/repo/plans/foo.md".to_string()));
+    // Joined and normalised with the host separator, so compare in one spelling.
+    assert_eq!(
+        resolved.as_deref().map(crate::test_support::slashed),
+        Some("/home/user/repo/plans/foo.md".to_string())
+    );
 }
 
 #[test]
@@ -7240,7 +7244,10 @@ fn test_chunk_processor_planfile_resolution_no_cwd() {
 fn test_chunk_processor_planfile_normalizes_dotdot() {
     let cp = ChunkProcessor::new(Some("/home/user/repo__wt/feat".to_string()), None);
     let resolved = cp.resolve_planfile_path("../../repo/plans/foo.md");
-    assert_eq!(resolved, Some("/home/user/repo/plans/foo.md".to_string()));
+    assert_eq!(
+        resolved.as_deref().map(crate::test_support::slashed),
+        Some("/home/user/repo/plans/foo.md".to_string())
+    );
 }
 
 // --- transform_xterm tests ---

@@ -5391,7 +5391,11 @@ impl ChunkProcessor {
     /// Resolve a relative plan-file path to absolute using session CWD.
     /// Returns None if the path is relative and no CWD is available.
     fn resolve_planfile_path(&self, path: &str) -> Option<String> {
-        if path.starts_with('/') {
+        // Both shapes of absolute: `Path::is_absolute` covers `C:\…` on Windows
+        // but not a leading `/`, and the agents that emit these lines write
+        // either one there. Joining an absolute path onto the session cwd would
+        // produce a path that does not exist.
+        if path.starts_with('/') || std::path::Path::new(path).is_absolute() {
             Some(path.to_string())
         } else if let Some(ref cwd) = self.session_cwd {
             let joined = std::path::PathBuf::from(cwd).join(path);
