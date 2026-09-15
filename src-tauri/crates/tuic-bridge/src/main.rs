@@ -881,11 +881,11 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::{BridgeState, dispatch_loop};
     use super::{
         read_http_response, request_protocol_version, response_timeout, tuic_session_header_line,
     };
-    #[cfg(unix)]
-    use super::{BridgeState, dispatch_loop};
     #[cfg(unix)]
     use std::path::PathBuf;
     #[cfg(unix)]
