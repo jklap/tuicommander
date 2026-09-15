@@ -1121,6 +1121,7 @@
 	"settings.terminal": "Terminal",
 	"settings.title": "Settings",
 	"settings.voice": "Voice",
+	"settings.streamdock": "StreamDock",
 	"sidebar.worktreeDiagnostics": "diagnostics",
 	"sidebar.addRepository": "Add Repository",
 	"sidebar.copySessionId": "Copy session ID",

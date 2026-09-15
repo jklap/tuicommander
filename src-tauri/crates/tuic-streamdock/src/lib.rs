@@ -13,9 +13,11 @@
 pub mod coordinator;
 pub mod device;
 pub mod dispatch;
+pub mod leds;
 pub mod policy;
 pub mod port;
 pub mod render;
 
 pub use coordinator::Coordinator;
+pub use leds::AmbientLed;
 pub use port::{ActionSink, Doorbell, SessionSnapshot, StateSource};
