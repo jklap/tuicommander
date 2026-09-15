@@ -7953,6 +7953,8 @@ mod tests {
                 ));
                 std::sync::Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
             },
+            #[cfg(feature = "desktop")]
+            streamdock: std::sync::Arc::new(crate::streamdock::StreamDockManager::new()),
             tunnel_audit: std::sync::Arc::new(parking_lot::Mutex::new(
                 crate::tunnels::audit::AuditLog::open(
                     &std::env::temp_dir().join("test-tunnel-audit2.db"),

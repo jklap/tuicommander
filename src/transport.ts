@@ -341,6 +341,31 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { visible: args.visible },
 		}),
 	},
+	focus_session: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${args.sessionId}/focus`,
+		}),
+	},
+	run_ui_action: {
+		map: (args) => ({
+			method: "POST",
+			path: `/ui/action`,
+			body: { name: args.name },
+		}),
+	},
+	streamdock_status: {
+		map: () => ({
+			method: "GET",
+			path: `/streamdock/status`,
+		}),
+	},
+	streamdock_list_devices: {
+		map: () => ({
+			method: "GET",
+			path: `/streamdock/devices`,
+		}),
+	},
 
 	// --- Terminal grid commands ---
 	terminal_scroll: {

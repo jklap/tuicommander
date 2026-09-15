@@ -12826,6 +12826,30 @@ pub(crate) async fn set_session_visible(
     Ok(())
 }
 
+/// IPC twin of `POST /sessions/{id}/focus` — see
+/// `mcp_http::session::focus_session_impl`, which both transports call so
+/// they cannot drift.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn focus_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Result<(), String> {
+    crate::mcp_http::session::focus_session_impl(&state, &session_id)
+}
+
+/// IPC twin of `POST /ui/action` — see
+/// `mcp_http::session::run_ui_action_impl`, which both transports call so
+/// they cannot drift.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn run_ui_action(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+) -> Result<(), String> {
+    crate::mcp_http::session::run_ui_action_impl(&state, &name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

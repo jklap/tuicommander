@@ -140,6 +140,7 @@ cleartext copy does not survive on disk.
 | `language` | `String` | `"en"` | UI language code |
 | `max_tab_name_length` | `u32` | `25` | Max tab name display length |
 | `split_tab_mode` | `SplitTabMode` | `"separate"` | Split tab mode: `"separate"` (each pane gets a tab) or `"unified"` (one shared tab) |
+| `streamdock` | `StreamDockConfig` | `{}` | StreamDock M18 macropad integration: `enabled`, `device_serial` (`null` = first found), `screen_brightness` (0-100, default `70`), `led_brightness` (0-100, default `40`), `pinned_sessions` (never evicted from a slot). See `src-tauri/src/streamdock/` |
 | `tab_ordering_mode` | `TabOrderingMode` | `"grouped-by-type"` | Tab ordering mode: `"grouped-by-type"`, `"terminals-first"`, or `"free"` |
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
 | `tab_tree_enabled` | `bool` | `false` | When true, a branch with >1 terminal shows a collapsible nested list of its terminals under the branch row in the sidebar |

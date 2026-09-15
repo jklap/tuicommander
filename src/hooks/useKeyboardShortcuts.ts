@@ -177,7 +177,15 @@ export function eventToCombo(e: KeyboardEvent): string {
 }
 
 /** Dispatch an action to the appropriate handler. Returns true if handled. */
-function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean {
+/**
+ * Runs one action by name against the same dispatch table real keydown
+ * events use. Exported so a non-keyboard trigger (a hardware controller's
+ * `ui-action-requested` event, see `useShortcutRegistration.ts`) can invoke
+ * an action without duplicating this switch. Returns `false` for an
+ * unrecognized name rather than throwing — callers decide what a "no such
+ * action" case means for them.
+ */
+export function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean {
 	switch (action) {
 		// Zoom
 		case "zoom-in":

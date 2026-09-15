@@ -160,6 +160,25 @@ pub enum AppEvent {
     /// [`crate::pty::ACTIVITY_PULSE_WINDOW`] for why dropping pulses is sound.
     #[serde(rename = "pty-activity")]
     PtyActivity { session_id: String },
+    /// A hardware controller (StreamDock macropad key, etc.) asked the UI to
+    /// focus this session's tab. Not a Tauri window-focus signal by itself —
+    /// the frontend listener must set both `terminalsStore.setActive` and
+    /// `conversationStore.setActiveTerminal` (see `watcherFire.ts`'s own
+    /// doc comment on why both are required). Dual-emitted alongside the
+    /// Tauri `emit` by `POST /sessions/{id}/focus` — see AGENTS.md's IPC/HTTP
+    /// parity rule.
+    #[serde(rename = "session-focus-requested")]
+    SessionFocusRequested { session_id: String },
+    /// A hardware controller asked the UI to run a frontend-only action by
+    /// its `actionRegistry` name (e.g. `"jump-waiting-terminal"`). The
+    /// frontend dispatches through the existing action registry so this one
+    /// event makes every registry action controller-bindable, but the
+    /// allowlist gating which names are actually accepted lives in Rust
+    /// (`streamdock::sink`), not here — this event itself carries no
+    /// restriction, so any future producer of it must apply its own
+    /// allowlist before emitting.
+    #[serde(rename = "ui-action-requested")]
+    UiActionRequested { name: String },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust
     /// already matched. The frontend re-runs the real `RegExp` on the cleaned
     /// text to hand the plugin a genuine `RegExpExecArray`, and scans the line
@@ -1934,6 +1953,11 @@ pub struct AppState {
     pub(crate) tunnel_manager: Arc<crate::tunnels::manager::TunnelManager>,
     /// SSH tunnel audit log — persisted event history for all tunnels.
     pub(crate) tunnel_audit: Arc<parking_lot::Mutex<crate::tunnels::audit::AuditLog>>,
+    /// StreamDock M18 macropad supervisor — see `crate::streamdock`.
+    /// Desktop-only like `app_handle`: `tuic_streamdock` is a `desktop`-feature
+    /// optional dependency, so `tuic-remote` never builds this field at all.
+    #[cfg(feature = "desktop")]
+    pub(crate) streamdock: Arc<crate::streamdock::StreamDockManager>,
     /// Task registry for long-running MCP orchestration. Survives client
     /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
     pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
@@ -2973,6 +2997,8 @@ impl AppState {
             ai_suggestions_enabled: DashMap::new(),
             tunnel_manager,
             tunnel_audit,
+            #[cfg(feature = "desktop")]
+            streamdock: Arc::new(crate::streamdock::StreamDockManager::new()),
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
@@ -3737,6 +3763,10 @@ impl AppState {
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
+            // Transient UI commands (a macropad key asking the UI to focus a
+            // tab or run a frontend action) carry no session state to
+            // accumulate — purely a bus signal for live listeners.
+            AppEvent::SessionFocusRequested { .. } | AppEvent::UiActionRequested { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
             AppEvent::PluginWatcherLines { .. } => {}
@@ -6863,6 +6893,8 @@ mod tests {
                 ));
                 Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
             },
+            #[cfg(feature = "desktop")]
+            streamdock: std::sync::Arc::new(crate::streamdock::StreamDockManager::new()),
             tunnel_audit: Arc::new(parking_lot::Mutex::new(
                 crate::tunnels::audit::AuditLog::open(
                     &std::env::temp_dir().join("test-tunnel-audit2.db"),

@@ -31,6 +31,7 @@ import {
 	SelectionTab,
 	ServicesTab,
 	SmartPromptsTab,
+	StreamDockTab,
 	TerminalTab,
 } from "./tabs";
 import { ProvidersTab } from "./tabs/ProvidersTab";
@@ -54,6 +55,7 @@ const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "selection", label: t("settings.selection", "Smart Selection") },
 	{ key: "notifications", label: t("settings.notifications", "Notifications") },
 	{ key: "dictation", label: t("settings.dictation", "Dictation") },
+	{ key: "streamdock", label: t("settings.streamdock", "StreamDock") },
 	{ key: "github", label: "Git & GitHub" },
 	{ key: "services", label: t("settings.services", "Services & MCP") },
 	{ key: "plugins", label: t("settings.plugins", "Plugins") },
@@ -63,7 +65,9 @@ const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 ];
 
 function getGlobalTabs(): SettingsShellTab[] {
-	const tabs = isTauri() ? BASE_GLOBAL_TABS : BASE_GLOBAL_TABS.filter((tab) => tab.key !== "dictation");
+	const tabs = isTauri()
+		? BASE_GLOBAL_TABS
+		: BASE_GLOBAL_TABS.filter((tab) => tab.key !== "dictation" && tab.key !== "streamdock");
 	if (settingsStore.isAiChatEnabled()) {
 		return [...tabs, { key: "ai-chat", label: "AI Chat" }];
 	}
@@ -365,6 +369,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</Show>
 				<Show when={activeTab() === "dictation"}>
 					<DictationSettings />
+				</Show>
+				<Show when={activeTab() === "streamdock"}>
+					<StreamDockTab />
 				</Show>
 				<Show when={activeTab() === "github"}>
 					<GitHubTab />

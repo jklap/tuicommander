@@ -428,6 +428,42 @@ const RAW_ITEMS: SettingsSearchItem[] = [
 		hint: "Automatically replace dictation output. Useful for technical terms.",
 	},
 
+	// ── StreamDock ── (per-key role grid is a dynamic <For> — excluded, same
+	// reasoning as SmartPromptsTab/ProvidersTab above)
+	{
+		tab: "streamdock",
+		tabLabel: "StreamDock",
+		section: "StreamDock M18",
+		label: "Enable StreamDock integration",
+		hint: "Attach to a connected StreamDock M18 and mirror live session state to its keys.",
+	},
+	{
+		tab: "streamdock",
+		tabLabel: "StreamDock",
+		section: "StreamDock M18",
+		label: "StreamDock status",
+	},
+	{
+		tab: "streamdock",
+		tabLabel: "StreamDock",
+		section: "StreamDock M18",
+		label: "StreamDock device",
+		hint: "Pick which device to use when more than one is connected.",
+	},
+	{
+		tab: "streamdock",
+		tabLabel: "StreamDock",
+		section: "StreamDock M18",
+		label: "Screen brightness",
+	},
+	{
+		tab: "streamdock",
+		tabLabel: "StreamDock",
+		section: "StreamDock M18",
+		label: "LED brightness",
+		hint: "Only applies on firmware that reports RGB support (V3-class M18 units).",
+	},
+
 	// ── Git & GitHub ──
 	{
 		tab: "github",

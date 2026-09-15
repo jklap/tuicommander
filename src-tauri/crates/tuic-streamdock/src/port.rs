@@ -44,6 +44,14 @@ pub struct SessionSnapshot {
     pub shell_state: Option<String>,
     pub awaiting_input: bool,
     pub choice_prompt_pending: bool,
+    /// The pending choice prompt's option keys, in display order (e.g.
+    /// `["y", "n"]`), if `choice_prompt_pending` — empty otherwise. This is
+    /// what `dispatch::dispatch` answers a choice prompt with: the
+    /// highlighted/first option on a tap, the second on a double-tap. Kept
+    /// on the snapshot itself (not fetched separately at press time) so the
+    /// coordinator never needs a second round-trip back through
+    /// `StateSource` between "gesture resolved" and "action dispatched."
+    pub choice_prompt_options: Vec<String>,
     pub rate_limited: bool,
     /// `suggested_actions.is_some()` — the turn-completion declaration.
     pub suggested_actions_pending: bool,

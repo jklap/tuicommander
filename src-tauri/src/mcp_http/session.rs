@@ -929,6 +929,80 @@ pub(super) async fn set_session_visible(
     (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
 
+/// Ask the UI to focus a session's tab. Did not exist before the StreamDock
+/// integration — `src/transport.ts`'s `INTENTIONALLY_UNMAPPED` list
+/// confirms focus was purely frontend-local state with no backend command,
+/// so a hardware controller had nothing to call. Dual-emitted like
+/// `set_pty_description`/`SessionRenamed`: event_bus/SSE for browser
+/// clients, Tauri emit for desktop — there is no bus->window forwarder.
+/// Shared by the HTTP route and the Tauri IPC command so the two transports
+/// cannot drift (same reasoning as `resolve_mcp_confirm` in `mod.rs`).
+pub(crate) fn focus_session_impl(state: &Arc<AppState>, session_id: &str) -> Result<(), String> {
+    if !state.sessions.contains_key(session_id) {
+        return Err("Session not found".to_string());
+    }
+    state.emit_pty_event(crate::state::AppEvent::SessionFocusRequested {
+        session_id: session_id.to_string(),
+    });
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit(
+            "session-focus-requested",
+            serde_json::json!({ "session_id": session_id }),
+        );
+    }
+    Ok(())
+}
+
+pub(super) async fn focus_session(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    match focus_session_impl(&state, &session_id) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
+        Err(_) => session_not_found(),
+    }
+}
+
+/// Names `POST /ui/action` is allowed to trigger. `AppEvent::UiActionRequested`
+/// itself carries no restriction (see its doc comment) — this is the one
+/// place that actually emits it, so the allowlist has to live here, in
+/// Rust, not in the frontend's action registry. Narrow on purpose: this is
+/// meant for a small set of navigation/toggle actions a hardware controller
+/// can reach, not a general remote-command channel into the whole registry.
+pub(crate) const UI_ACTION_ALLOWLIST: &[&str] = &["jump-waiting-terminal", "activity-dashboard"];
+
+/// Shared by the HTTP route and the Tauri IPC command — see
+/// `focus_session_impl`'s doc comment for why.
+pub(crate) fn run_ui_action_impl(state: &Arc<AppState>, name: &str) -> Result<(), String> {
+    if !UI_ACTION_ALLOWLIST.contains(&name) {
+        return Err(format!(
+            "action '{name}' is not allowlisted for POST /ui/action"
+        ));
+    }
+    state.emit_pty_event(crate::state::AppEvent::UiActionRequested {
+        name: name.to_string(),
+    });
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit("ui-action-requested", serde_json::json!({ "name": name }));
+    }
+    Ok(())
+}
+
+pub(super) async fn run_ui_action(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<UiActionRequest>,
+) -> impl IntoResponse {
+    match run_ui_action_impl(&state, &body.name) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
+        Err(e) => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e })),
+        ),
+    }
+}
+
 pub(super) async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(state.orchestrator_stats())
 }

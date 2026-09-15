@@ -480,6 +480,55 @@ impl<'de> serde::Deserialize<'de> for TlsConfig {
     }
 }
 
+/// StreamDock M18 macropad integration config — see `crate::streamdock`.
+/// Deliberately does not reference `tuic_streamdock`'s own types (e.g.
+/// `policy::KeyRole`) even though several would serialize identically:
+/// `config.rs` is compiled for both the desktop build and `tuic-remote`
+/// (`--no-default-features`), and `tuic_streamdock` is a `desktop`-feature
+/// optional dependency — `streamdock::mod` (desktop-only) is the one place
+/// that translates between these wire types and the crate's real ones.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct StreamDockConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// `None` = attach to the first StreamDock found; otherwise the exact
+    /// unit to use when more than one is plugged in.
+    #[serde(default)]
+    pub(crate) device_serial: Option<String>,
+    #[serde(default = "default_streamdock_screen_brightness")]
+    pub(crate) screen_brightness: u8,
+    #[serde(default = "default_streamdock_led_brightness")]
+    pub(crate) led_brightness: u8,
+    /// Session ids that must never be evicted from a slot by
+    /// `SlotPlanner`'s priority ordering — see `policy::plan`'s doc comment.
+    #[serde(default)]
+    pub(crate) pinned_sessions: Vec<String>,
+}
+
+fn default_streamdock_screen_brightness() -> u8 {
+    70
+}
+
+fn default_streamdock_led_brightness() -> u8 {
+    40
+}
+
+// A `#[derive(Default)]` would silently give screen_brightness/led_brightness
+// 0 instead of the intended 70/40 — Rust's derive ignores each field's own
+// `#[serde(default = "...")]` function, which only affects deserialization
+// of a document missing that key. Hand-written to match those.
+impl Default for StreamDockConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            device_serial: None,
+            screen_brightness: default_streamdock_screen_brightness(),
+            led_brightness: default_streamdock_led_brightness(),
+            pinned_sessions: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct RelayConfig {
     #[serde(default)]
@@ -704,6 +753,9 @@ pub(crate) struct AppConfig {
     /// Global OS-level hotkey combo to toggle window visibility (e.g. "CommandOrControl+Shift+T")
     #[serde(default)]
     pub(crate) global_hotkey: Option<String>,
+    /// StreamDock M18 macropad integration — see `crate::streamdock`.
+    #[serde(default)]
+    pub(crate) streamdock: StreamDockConfig,
     /// Default issue filter mode: "assigned", "created", "mentioned", "all", or "disabled"
     #[serde(default = "default_issue_filter")]
     pub(crate) issue_filter: String,
@@ -1041,6 +1093,7 @@ impl Default for AppConfig {
             show_last_prompt: true,
             bell_style: default_bell_style(),
             global_hotkey: None,
+            streamdock: StreamDockConfig::default(),
             collapse_tools: false,
             issue_filter: default_issue_filter(),
             experimental_features_enabled: false,
@@ -2275,6 +2328,9 @@ pub(crate) struct ConfigSaveEffects {
     pub tools_changed: bool,
     /// A listener-affecting field moved — rebind the HTTP server.
     pub server_changed: bool,
+    /// `streamdock` moved — reconcile the macropad supervisor (attach/detach
+    /// on `enabled`, or hot-apply brightness/pinning without a reattach).
+    pub streamdock_changed: bool,
 }
 
 /// Atomically apply a change to the app config.
@@ -2317,6 +2373,7 @@ where
         tools_changed: cached.disabled_native_tools != next.disabled_native_tools
             || cached.collapse_tools != next.collapse_tools,
         server_changed: server_settings_changed(&cached, &next),
+        streamdock_changed: cached.streamdock != next.streamdock,
     };
 
     // The file lock is already held from the authoritative read above. Acquiring it
@@ -3601,6 +3658,13 @@ mod tests {
             intent_tab_title: false,
             suggest_followups: false,
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
+            streamdock: StreamDockConfig {
+                enabled: true,
+                device_serial: Some("81D0DA783A4C".to_string()),
+                screen_brightness: 55,
+                led_brightness: 20,
+                pinned_sessions: vec!["s1".to_string()],
+            },
             copy_on_select: true,
             osc52_clipboard: true,
             osc1337_focus_attention: false,

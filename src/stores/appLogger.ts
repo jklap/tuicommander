@@ -46,6 +46,7 @@ export type AppLogSource =
 	| "github"
 	| "ci-heal"
 	| "dictation"
+	| "streamdock"
 	| "store"
 	| "config"
 	| "settings"

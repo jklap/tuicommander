@@ -52,6 +52,7 @@ describe("settingsSearchIndex", () => {
 			"selection",
 			"notifications",
 			"dictation",
+			"streamdock",
 			"github",
 			"services",
 			"plugins",

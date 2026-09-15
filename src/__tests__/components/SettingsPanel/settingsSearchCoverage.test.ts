@@ -27,6 +27,7 @@ const TAB_FILES: Record<string, string> = {
 	selection: "src/components/SettingsPanel/tabs/SelectionTab.tsx",
 	notifications: "src/components/SettingsPanel/tabs/NotificationsTab.tsx",
 	dictation: "src/components/SettingsPanel/DictationSettings.tsx",
+	streamdock: "src/components/SettingsPanel/tabs/StreamDockTab.tsx",
 	github: "src/components/SettingsPanel/tabs/GitHubTab.tsx",
 	services: "src/components/SettingsPanel/tabs/ServicesTab.tsx",
 	agents: "src/components/SettingsPanel/tabs/AgentsTab.tsx",

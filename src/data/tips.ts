@@ -492,4 +492,10 @@ export const TIPS: Tip[] = [
 			"Settings → Services & MCP → File Access lets browser/remote clients read files outside your registered repositories — ~/.claude/plans is enabled by default, so clicking an agent's plan-file link just works.",
 		shortcut: null,
 	},
+	{
+		feature: "StreamDock Macropad",
+		description:
+			"Connect a StreamDock M18 and its 15 keys mirror your live sessions — status colors, tap to focus, hold to interrupt. Set it up in Settings → StreamDock.",
+		shortcut: null,
+	},
 ];

@@ -13,7 +13,7 @@ mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
-mod session;
+pub(crate) mod session;
 mod session_review_routes;
 pub(crate) mod sse_routes;
 mod static_files;
@@ -590,6 +590,8 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::has_foreground_process),
         )
         .route("/sessions/{id}/visible", post(session::set_session_visible))
+        .route("/sessions/{id}/focus", post(session::focus_session))
+        .route("/ui/action", post(session::run_ui_action))
         .route("/sessions/{id}", delete(session::close_session))
         // tmux compat shim topology (see tmux_routes.rs; backs `tuic`-as-`tmux`'s
         // split-window/new-window/list-panes/etc.)
@@ -1643,6 +1645,20 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         post(ai_routes::create_issue_from_proposal_http),
     );
 
+    // StreamDock M18 macropad — desktop-only: `tuic_streamdock` is a
+    // desktop-feature optional dependency, so `state.streamdock` doesn't
+    // exist on a `tuic-remote` build at all.
+    #[cfg(feature = "desktop")]
+    let routes = routes.route(
+        "/streamdock/status",
+        get(crate::streamdock::commands::get_status),
+    );
+    #[cfg(feature = "desktop")]
+    let routes = routes.route(
+        "/streamdock/devices",
+        get(crate::streamdock::commands::list_devices),
+    );
+
     // Static files — SPA frontend (desktop only; not embedded in the remote binary)
     #[cfg(feature = "desktop")]
     let routes = routes
@@ -2408,6 +2424,8 @@ mod tests {
                 ));
                 std::sync::Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
             },
+            #[cfg(feature = "desktop")]
+            streamdock: std::sync::Arc::new(crate::streamdock::StreamDockManager::new()),
             tunnel_audit: std::sync::Arc::new(parking_lot::Mutex::new(
                 crate::tunnels::audit::AuditLog::open(
                     &std::env::temp_dir().join("test-tunnel-audit2.db"),

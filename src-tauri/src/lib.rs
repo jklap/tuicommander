@@ -114,6 +114,8 @@ pub(crate) mod terminal_grid;
 // Phase 3 (Kitty graphics) are the real callers of `ImageStore::store`. Fully
 // covered by its own unit tests (including the refcount-eviction property the
 // whole design exists for) in the meantime.
+#[cfg(feature = "desktop")]
+mod streamdock;
 #[allow(dead_code)]
 pub(crate) mod terminal_image_transmission;
 pub(crate) mod terminal_images;
@@ -597,6 +599,16 @@ fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Re
 
     if effects.server_changed {
         restart_server(state.inner(), "remote-access configuration changed");
+    }
+
+    if effects.streamdock_changed {
+        let streamdock_state = state.inner().clone();
+        tauri::async_runtime::spawn(async move {
+            streamdock_state
+                .streamdock
+                .apply_config(&streamdock_state)
+                .await;
+        });
     }
 
     Ok(())
@@ -2116,6 +2128,21 @@ pub fn run() {
                     global_hotkey::restore_from_config(app.handle());
                 }
 
+                // StreamDock M18 macropad — same "apply_config is the single
+                // entry point for both startup and a later toggle" pattern
+                // as global_hotkey above. Spawned, not awaited: attaching
+                // involves a hot-plug wait plus a USB connect and must never
+                // block app startup.
+                {
+                    let streamdock_state = Arc::clone(app_state);
+                    tauri::async_runtime::spawn(async move {
+                        streamdock_state
+                            .streamdock
+                            .apply_config(&streamdock_state)
+                            .await;
+                    });
+                }
+
                 // Install Fn/Globe key monitor for push-to-talk dictation
                 dictation::fn_key_monitor::install(app.handle().clone());
 
@@ -2312,6 +2339,10 @@ pub fn run() {
             pty::terminal_image_meta,
             pty::terminal_image_placements,
             pty::set_session_visible,
+            pty::focus_session,
+            pty::run_ui_action,
+            streamdock::tauri_commands::streamdock_status,
+            streamdock::tauri_commands::streamdock_list_devices,
             pty::set_session_name,
             pty::set_session_accent_color,
             pty::get_session_foreground_process,
@@ -2721,6 +2752,19 @@ pub fn run() {
                         // Final scrollback flush — the periodic task's 30s
                         // interval may not have ticked since the last output.
                         scrollback_store::sweep_all(state.inner());
+                        // Best-effort, bounded: clears the panel and sends the
+                        // device's own disconnect opcode before the process
+                        // exits. Low stakes if it doesn't finish in time — a
+                        // device left mid-shutdown just shows stale content
+                        // until the next reconnect, not a stability risk — so
+                        // this is a timeout, not something exit waits on
+                        // indefinitely the way the Whisper GGML teardown above
+                        // must.
+                        let streamdock = state.streamdock.clone();
+                        let _ = tauri::async_runtime::block_on(tokio::time::timeout(
+                            std::time::Duration::from_millis(750),
+                            streamdock.shutdown(),
+                        ));
                     }
                 }
                 _ => {}
