@@ -7,7 +7,7 @@ import { appLogger } from "../../stores/appLogger";
 import { initLinkModifier, linkModifierHeld } from "../../stores/linkModifier";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
-import { terminalsStore } from "../../stores/terminals";
+import { rowAnchoredBlocks, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { getSessionConnection } from "../../transportRuntime";
@@ -1004,7 +1004,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (searchBlockScope && currentFrame) {
 			const term = terminalsStore.get(props.terminalId);
 			if (term) {
-				const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+				// Alt-screen blocks have no valid row to anchor to (CommandBlock.onAltScreen).
+				const allBlocks = rowAnchoredBlocks(
+					term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks,
+				);
 				const viewTop = currentFrame.historySize - currentFrame.displayOffset;
 				const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
 				scopedSearchBlock = resolveScopedBlock(allBlocks, viewCenter, currentFrame.historyBase) ?? null;
@@ -1156,7 +1159,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function paintGutterMarkers(m: CellMetrics) {
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
-		const blocks = term.commandBlocks;
+		const blocks = rowAnchoredBlocks(term.commandBlocks);
 		if (blocks.length === 0) return;
 		for (const block of blocks) {
 			const kind = gutterMarkKind(block);
@@ -1180,7 +1183,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const fontFamily = settingsStore.getFontFamily();
 		octx.font = `${Math.round(m.cellHeight * 0.7)}px ${fontFamily}`;
 		octx.fillStyle = "rgba(150,150,150,0.8)";
-		for (const block of term.commandBlocks) {
+		for (const block of rowAnchoredBlocks(term.commandBlocks)) {
 			const folded = term.foldedBlocks.has(block.promptLine);
 			if (!folded && !foldRange(block)) continue; // nothing to fold, don't imply otherwise
 			const headerRow = block.executionLine ?? block.promptLine;
@@ -1200,7 +1203,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (painted.has(promptLine)) continue;
 			painted.add(promptLine);
 			const block = term.commandBlocks.find((b) => b.promptLine === promptLine);
-			if (!block) continue;
+			if (!block || block.onAltScreen) continue;
 			const range = foldRange(block);
 			if (!range) continue;
 			const { foldStart, foldedCount } = range;
@@ -1237,7 +1240,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (mode === "modifier" && !blockTimestampsVisible) return;
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
-		const all = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+		const all = rowAnchoredBlocks(term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks);
 		if (all.length === 0) return;
 		const fontFamily = settingsStore.getFontFamily();
 		const fontSize = Math.round(m.cellHeight * 0.7);
@@ -1367,7 +1370,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// Same gating as paintScrollbarMarks: `showScrollbarMarks` is the master toggle.
 			showBlockMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showBlockMarks,
 			showPromptMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showPromptMarks,
-			blocks: term?.commandBlocks ?? [],
+			blocks: term ? rowAnchoredBlocks(term.commandBlocks) : [],
 			promptLines: term?.userPromptLines ?? [],
 		});
 		if (!showScrollbar) {
@@ -1427,7 +1430,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const marksOn = settingsStore.state.showScrollbarMarks;
 		const showBlockMarks = marksOn && settingsStore.state.showBlockMarks;
 		const showPromptMarks = marksOn && settingsStore.state.showPromptMarks;
-		const blocks = term.commandBlocks;
+		const blocks = rowAnchoredBlocks(term.commandBlocks);
 		const promptLines = term.userPromptLines;
 		const historyBase = currentFrame?.historyBase ?? 0;
 		const searchCount = search.matches.length;
@@ -3486,9 +3489,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					const historyBase = currentFrame?.historyBase;
 					const gridRow = currentFrame ? selectionRowToGridRow(currentFrame, absRow) : null;
 					if (term && historyBase !== undefined && gridRow !== null) {
-						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
-							Boolean,
-						) as import("../../stores/terminals").CommandBlock[];
+						const allBlocks = rowAnchoredBlocks(
+							[...term.commandBlocks, term.activeBlock].filter(
+								Boolean,
+							) as import("../../stores/terminals").CommandBlock[],
+						);
 						const block = findBlockAtViewport(allBlocks, absRow, 0);
 						if (block) {
 							// Only treat the header row as a fold target when folding is
@@ -4075,14 +4080,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		function scrollToBlock(direction: "previous" | "next") {
 			const term = terminalsStore.get(props.terminalId);
 			if (!term || !currentFrame) return;
-			const blocks = term.commandBlocks;
 			const active = term.activeBlock;
 			// Block lines are eviction-stable all-time rows; anything below
 			// `historyBase` has been evicted and can no longer be scrolled to.
+			// Alt-screen blocks have no valid row at all (CommandBlock.onAltScreen).
 			const historyBase = currentFrame.historyBase;
-			const allPromptLines = blocks
+			const allPromptLines = rowAnchoredBlocks(active ? [...term.commandBlocks, active] : term.commandBlocks)
 				.map((b) => b.promptLine)
-				.concat(active ? [active.promptLine] : [])
 				.filter((line) => line >= historyBase);
 			if (allPromptLines.length === 0) return;
 			const currentViewLine = historyBase + currentFrame.historySize - currentFrame.displayOffset;
@@ -4126,9 +4130,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const term = terminalsStore.get(props.terminalId);
 			if (!term || !currentFrame) return;
 			const viewTop = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
-			const blocks = [...term.commandBlocks, term.activeBlock].filter(
-				Boolean,
-			) as import("../../stores/terminals").CommandBlock[];
+			const blocks = rowAnchoredBlocks(
+				[...term.commandBlocks, term.activeBlock].filter(Boolean) as import("../../stores/terminals").CommandBlock[],
+			);
 			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
 			if (!current) return;
 			toggleFoldForBlock(current);

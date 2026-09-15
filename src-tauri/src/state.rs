@@ -216,6 +216,9 @@ pub enum AppEvent {
         marker: String,
         line: usize,
         exit_code: Option<i32>,
+        /// See `Osc133Event::on_alt_screen` (`terminal_grid.rs`) — kept
+        /// field-for-field identical.
+        on_alt_screen: bool,
     },
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
