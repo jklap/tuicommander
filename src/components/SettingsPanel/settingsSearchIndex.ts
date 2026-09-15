@@ -634,16 +634,16 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Working directory" },
 	// tabs/services/RemoteAccessPanel.tsx
 	{ tab: "remote-access", section: "File Access", sectionKey: "services.heading.fileAccess" },
+	{ tab: "remote-access", section: "Remote Access", sectionKey: "services.heading.remoteAccess" },
+	{ tab: "remote-access", section: "Tailscale HTTPS" },
+	{ tab: "remote-access", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
+	{ tab: "remote-access", section: "Cloud Relay", sectionKey: "services.heading.cloudRelay" },
 	{
 		tab: "remote-access",
 		section: "File Access",
 		label: "Additional Readable Directories",
 		labelKey: "services.label.additionalReadableDirs",
 	},
-	{ tab: "remote-access", section: "Remote Access", sectionKey: "services.heading.remoteAccess" },
-	{ tab: "remote-access", section: "Tailscale HTTPS" },
-	{ tab: "remote-access", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
-	{ tab: "remote-access", section: "Cloud Relay", sectionKey: "services.heading.cloudRelay" },
 	{
 		tab: "remote-access",
 		section: "Remote Access",
@@ -725,6 +725,15 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "ai-chat", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
 	{ tab: "ai-chat", section: "Providers", sectionKey: "providers.heading.providers" },
 	{ tab: "ai-chat", section: "Default Model", label: "Default model", labelKey: "providers.label.defaultModel" },
+	// tabs/StreamDockTab.tsx — hidden from the nav in browser mode (the macropad
+	// is a local USB device); the per-key role grid is a dynamic <For>.
+	{ tab: "streamdock", section: "StreamDock M18" },
+	{ tab: "streamdock", section: "Pinned sessions" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Enable StreamDock integration" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "StreamDock status" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Device" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Screen brightness" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "LED brightness" },
 ];
 
 /** Section heading as rendered, i18n applied. */

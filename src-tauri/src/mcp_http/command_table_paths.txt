@@ -290,6 +290,7 @@
 /sessions/worktree
 /sessions/x
 /sessions/x/accent-color
+/sessions/x/focus
 /sessions/x/foreground
 /sessions/x/has-foreground
 /sessions/x/input-buffer
@@ -330,6 +331,8 @@
 /stats
 /stories/action
 /stories/capabilities
+/streamdock/devices
+/streamdock/status
 /system/check-update
 /system/home-directory
 /system/local-ip
@@ -349,6 +352,7 @@
 /tunnels/start/x
 /tunnels/status/x
 /tunnels/stop/x
+/ui/action
 /watchers/dir
 /watchers/hot-repos
 /watchers/repo

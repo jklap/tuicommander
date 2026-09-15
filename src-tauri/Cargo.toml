@@ -240,6 +240,17 @@ rfd = { version = "0.16", default-features = false, features = [
 ], optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback", "wav", "mp3", "vorbis", "flac"], optional = true }
+# StreamDock M18 macropad integration. Kept as its own workspace crate (not
+# inline in this one) so its HID/rasterizer deps don't weigh on tuic-remote's
+# build — see crates/tuic-streamdock's own doc comments for the full design.
+tuic-streamdock = { path = "crates/tuic-streamdock", optional = true }
+# Direct dep, not just transitive through tuic-streamdock: streamdock/mod.rs
+# owns device *lifecycle* (connect, hot-plug watch) which sits outside that
+# crate's StateSource/ActionSink port boundary, and `actor::spawn`/
+# `reader::spawn`'s own public signatures already take `mirajazz::device::Device`
+# — so this was never actually hidden at the crate boundary, only the state
+# mirror and action dispatch are. Exact-pinned to match tuic-streamdock's pin.
+mirajazz = { version = "=0.16.2", optional = true }
 # gzip/brotli: the daemon compresses every response above 860 bytes
 # (`CompressionLayer` in mcp_http), but only for a client that advertises the
 # encoding. A browser does it unasked; reqwest does not, so without these two
@@ -335,6 +346,8 @@ desktop = [
     "dep:tauri-plugin-global-shortcut",
     "dep:drag",
     "dep:rodio",
+    "dep:tuic-streamdock",
+    "dep:mirajazz",
     "dep:objc2",
     "dep:objc2-foundation",
     "dep:objc2-app-kit",
