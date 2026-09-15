@@ -461,8 +461,10 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
 
     <div class="evt">
       <div class="evt-top"><span class="name">ParsedEvent::AgentBlock</span></div>
-      <p><code>{ action: "start"|"end", line, exit_code: Option&lt;i32&gt;, prompt_text: Option&lt;String&gt; }</code>.
-      Two producers, mutually exclusive per session for its whole lifetime:</p>
+      <p><code>{ action: "start"|"end", line, exit_code: Option&lt;i32&gt;, prompt_text: Option&lt;String&gt;,
+      on_alt_screen: bool, from_transcript_dump: bool, new_dump_generation: bool }</code>.
+      Two producers, mutually exclusive per session for its whole lifetime (the third,
+      <code>synthesize_transcript_dump_block_events</code>, is independent of both — see below):</p>
       <div class="tablewrap">
         <table>
           <thead><tr><th></th><th>Hook-driven</th><th>Screen-scraped fallback</th></tr></thead>
@@ -480,6 +482,106 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
       authoritative for the rest of that session's life — with a one-shot cleanup that closes any block
       the screen-scrape heuristic had left open at the moment of the switch, so a mid-turn hook
       detection can't orphan an open block forever.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Fullscreen-mode fix (2026-09-15)</span></div>
+      <p><code>line</code> is not always a valid scrollback anchor. Both <code>osc133()</code> and
+      <code>osc7770()</code> (<code>patches/alacritty_terminal/src/term/mod.rs</code>) compute
+      <code>line</code> as <code>self.grid.total_scrolled() + cursor.point.line</code> (eviction-stable
+      since 2026-09-15 — see the entry below; originally <code>history_size() + cursor.point.line</code>),
+      where <code>self.grid</code> is whichever screen (primary or alt) is <em>currently active</em>.
+      Claude Code's default "fullscreen" renderer draws entirely inside the alternate screen
+      buffer, and — being a fully-repainted TUI — never triggers a real terminal scroll, so the
+      alt screen's own <code>history_size()</code> never grows (confirmed live: a real fullscreen
+      session reports <code>total_lines == screen_lines</code>, zero scrollback, for its entire
+      life). During that time <code>line</code> is just the transient on-screen cursor row,
+      disconnected from the durable scrollback <code>CanvasTerminal</code> actually renders.</p>
+      <p><code>on_alt_screen</code> is tagged fresh, per event. A code-review pass caught that
+      sampling <code>is_alternate_screen()</code> once per PTY chunk downstream in
+      <code>pty.rs</code> (the first version) is too coarse — the alt screen can toggle more than
+      once within one 64KB PTY read, mistagging any event from earlier in that chunk with the
+      chunk's <em>final</em> state. Fixed by capturing it <strong>inside the vendored alacritty
+      patch's own <code>osc133()</code>/<code>osc7770()</code> handlers</strong>
+      (<code>self.mode().contains(TermMode::ALT_SCREEN)</code>, atomic with <code>line</code>
+      itself), threaded through <code>Event::Osc133</code>/<code>Tuic</code> →
+      <code>TermEvent::Osc133</code>/<code>Tuic</code> — not <code>ChunkProcessor.in_alt_buffer</code>
+      (also one-chunk-stale) and not a downstream re-sample either. The two heuristic,
+      text-scanning paths below (<code>synthesize_cc_block_events</code>,
+      <code>synthesize_transcript_dump_block_events</code>) still use the coarser per-chunk flag,
+      since they react to row <em>content</em> rather than a discrete VTE event — full per-row
+      precision there would need a bigger change, for a lower-probability overlap. The block
+      still fires either way, so <code>CommandOverview</code>'s prompt/duration/exit-status
+      metadata keeps working through a fullscreen turn — except its grid-slice fallback
+      (<code>getCommandText</code>, used when a real shell block has no hook-driven
+      <code>promptText</code>), which the same review caught reading buffer rows unguarded; it
+      now checks <code>onAltScreen</code> too. Every other row-anchored consumer (gutter,
+      scrollbar, fold, jump-nav, block-scoped search, "Copy Block Output") reads blocks through
+      <code>rowAnchoredBlocks()</code> (<code>terminals.ts</code>) instead, which drops
+      <code>onAltScreen: true</code> entries rather than rendering a mark at a meaningless row.</p>
+      <p><strong>Stretch addition, same fix:</strong> Claude Code's fullscreen "transcript mode"
+      (<code>Ctrl+O</code>) stays inside the alt screen too — no help there. But its <code>[</code>
+      key ("write to native scrollback") verified live to genuinely exit the alt screen and dump
+      the whole conversation as real primary-screen text. <code>synthesize_transcript_dump_block_events</code>
+      (<code>pty.rs</code>) recognizes that dump's own <code>❯ &lt;prompt&gt;</code> /
+      <code>✻ … · done</code> markers and synthesizes real, <code>on_alt_screen: false</code>
+      blocks from it — narrowly scoped to a hook-instrumented Claude Code session, since the `❯`
+      glyph isn't exclusive to this dump (this repo's own zsh prompt can use one too).</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Scrollback-ring eviction (2026-09-15)</span><span class="pill warn fixed">fixed</span></div>
+      <p><code>history_size()</code> — the value both OSC handlers used for <code>line</code> before
+      this fix — <strong>plateaus</strong> once the grid's scroll-limit cap starts evicting old
+      lines (per <code>Grid</code>'s own doc comment: unlike <code>total_scrolled()</code> it "does
+      not plateau or shrink when the scrollback cap evicts old lines"). Once a session accumulates
+      enough real primary-screen scrollback to saturate that cap (<code>GRID_SCROLLBACK</code>,
+      <code>state.rs</code>, 10,000 lines), the on-screen cursor row keeps cycling through the same
+      small range while <code>history_size()</code> stays frozen — so two blocks recorded far apart
+      in real time can land on the identical <code>line</code>, and a stale gutter mark/scrollbar
+      tick can silently alias onto whatever content later rotated into that same ring slot. This is
+      the same physical-row-coordinate-space collision the fullscreen-mode fix above closes for a
+      <em>different</em> cause (alt-screen's own reset-to-zero history), discovered during this
+      session's own code-review pass over the fullscreen-mode fix's deferred items.</p>
+      <p>Fixed by switching to <code>Grid::total_scrolled()</code> — not new plumbing:
+      <code>reserve_image_footprint</code>'s <code>abs_row</code> and
+      <code>serialize_styled_range</code>'s <code>history_base</code> (both already shipped, for
+      inline images and the scroll row cache) already used this exact primitive and its
+      <code>history_base + grid_relative</code> convention. The frontend must now convert a stored
+      <code>CommandBlock</code> row back into a live viewport/buffer-line row via the new
+      <code>evictionStableToGridRelative(line, historyBase)</code> (<code>canvasTerminalUtils.ts</code>)
+      before comparing it against anything grid-relative (<code>absRowToViewport</code>,
+      <code>terminal_get_lines</code>, a search match's <code>row</code>) — a raw stored row is no
+      longer directly comparable to a live one. Regression test:
+      <code>osc133_line_stays_eviction_stable_and_never_aliases_past_scrollback_saturation</code>
+      (<code>terminal_grid.rs</code>) uses a tiny 5-line scroll cap to make real saturation cheap to
+      hit in a unit test.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">Transcript-dump de-duplication (2026-09-15)</span><span class="pill warn fixed">fixed</span></div>
+      <p>Per Claude Code's own docs, <code>[</code> re-dumps the <em>entire</em> conversation from
+      scratch every time it's pressed — repeating the gesture used to leave a second, overlapping
+      copy of the same blocks sitting in <code>commandBlocks[]</code> forever (originally flagged as
+      a known, accepted limitation, not engineered around — see the "Stretch addition" entry above
+      and this fix's own predecessor commit). <code>[</code> is only reachable from transcript mode
+      (the alternate screen), so a visit back to the alternate screen since the last dump activity
+      is an unambiguous signal that whatever dump activity resumes next is a genuinely
+      <em>new</em> dump, not a continuation of the one already on screen.</p>
+      <p><code>ChunkProcessor.dump_saw_alt_screen</code> (<code>pty.rs</code>) tracks exactly that —
+      set whenever a chunk is processed with the alt screen active, consumed (and reset) the next
+      time a primary-screen chunk resumes dump activity. That consumed value becomes
+      <code>is_new_generation</code>, passed into <code>synthesize_transcript_dump_block_events</code>,
+      which tags <em>only</em> the first <code>start</code> event it synthesizes from that chunk
+      with <code>new_dump_generation: true</code> (a chunk with several <code>❯</code> rows must not
+      repeat the signal). On the frontend, <code>handleOsc133</code>'s <code>"A"</code> case responds
+      by pruning every existing <code>fromTranscriptDump: true</code> <code>CommandBlock</code> —
+      including a still-open <code>activeBlock</code> left unclosed by leaving transcript mode
+      mid-turn, discarded rather than finalized into <code>commandBlocks</code> — before adding the
+      new block. A real shell/hook/heuristic block (<code>fromTranscriptDump: false</code>) is never
+      touched. The prune must also cover the RAF-batched <code>_osc133Pending</code> flush buffer,
+      not just the already-flushed <code>commandBlocks</code> array — a completed dump-1 block can
+      still be sitting there, unflushed, at the exact moment dump-2's first event arrives.</p>
     </div>
 
     <div class="dead">
@@ -771,6 +873,37 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
       predating this session — not just reusing `notification_awaiting_outcome`. Flagging here so
       it isn't mistaken for already covered by today's fix, and isn't independently
       "discovered" again later.</p>
+    </div>
+
+    <div class="evt">
+      <div class="evt-top"><span class="name">2026-09-15 — <code>tuic-hook</code>'s <code>DERIVATIONS</code> lookup had no per-agent scope</span><span class="pill warn">fixed</span></div>
+      <p><strong>Not a live report</strong> — surfaced during the Command Blocks fullscreen-mode
+      review, then fixed the same day. <code>find_derivation</code> (`crates/tuic-hook/src/main.rs`)
+      matched purely on the `hook_event_name` string, with no awareness of which agent invoked it.
+      Gemini's own event names "Notification" and "SessionEnd" happen to be spelled identically to
+      two Claude-only <code>DERIVATIONS</code> rows — Gemini's map carried an explicit <code>--state</code>
+      (which always wins over derivation), so the *state* transition stayed correct either way, but
+      if Gemini's hook payload ever also carries a `hook_event_name` field (unverified either way —
+      see the still-open entry just above this one), "Notification" would ALSO have started emitting
+      `notify`/`notification_type` scrapes Gemini's map never asked for. The `notification_type` leak
+      was the bigger risk of the two: it feeds `pty.rs::notification_awaiting_outcome`'s confidence
+      classifier directly, not just inert free-text metadata — a Gemini payload's own (unrelated)
+      field coincidentally matching one of Claude's 12 documented values could have silently
+      suppressed a genuine Gemini awaiting badge.</p>
+      <p><strong>Fix:</strong> every `EventDerivation` row now carries an `agent: "claude"` field, and
+      every generated hook command carries an explicit `--agent <name>` (`agent_hook.rs`'s
+      `hook_command`/`derived_hook_command`) — absent-`--agent` defaults to `"claude"` only for
+      backward compatibility with already-installed commands from before this flag existed.
+      `find_derivation` now filters on `event == name && agent == agent`, so a Claude-only row can
+      never match a Gemini/Grok/Codex-tagged invocation regardless of payload shape. Verified against
+      the real compiled binary (`agent_hook.rs`'s `golden_wire_output` tests): a Gemini "Notification"
+      payload carrying both `message` and `notification_type` now emits `state=awaiting` alone, and
+      a matching Claude payload still emits both scrapes plus `state`, unchanged.</p>
+      <p><strong>Does NOT close</strong> the still-open entry directly above (Gemini's own
+      `Notification` → awaiting confidence gap) — that's a different problem (Gemini's hook map never
+      goes through stdin-JSON derivation at all today, so this scoping fix has nothing to protect yet
+      in practice for Gemini specifically). It closes the *latent* cross-agent leak this table's design
+      always carried, for whichever agent's payload shape turns out to collide next.</p>
     </div>
   </section>
 

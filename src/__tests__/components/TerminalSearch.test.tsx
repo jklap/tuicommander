@@ -37,6 +37,7 @@ function createMockCanvasRef(): CanvasTerminalRef {
 		paste: vi.fn(),
 		scrollToBlock: vi.fn(),
 		toggleBlockFoldAtViewport: vi.fn(),
+		getHistoryBase: vi.fn().mockReturnValue(0),
 	};
 }
 

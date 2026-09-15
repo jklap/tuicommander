@@ -206,6 +206,15 @@ two sources:
 A session only ever uses one source: once it's received a hook-driven signal, the heuristic is
 suppressed for that session.
 
+- **Fullscreen (alternate-screen) agents.** Claude Code's default "fullscreen" renderer draws
+  entirely inside the terminal's alternate screen buffer, which — being a fully-repainted TUI —
+  never grows real scrollback (confirmed empirically: `total_lines == screen_lines` for the
+  entire life of such a session). A block recorded while that's active still gets created (so
+  the Commands overview panel keeps showing live prompt text, duration, and pass/fail), but it
+  carries no valid row to anchor into — gutter marks, scrollbar ticks, fold, `Cmd+Shift+Up/Down`
+  jump-nav, block-scoped search, and "Copy Block Output" all skip it. This resumes normally for
+  whatever runs after the agent returns to a plain shell prompt.
+
 - **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary, always on. A distinct green tick marks each line where the user submitted a prompt, independent of the block boundary marks. Both are individually toggleable in settings
 - **Red ticks (turn failure)** — A block is flagged failed, primary tier: the `PostToolUseFailure`/`StopFailure` hooks (covers every tool type; the `tuic-hook` binary extracts the exit code from the hook's own stdin JSON natively, with no external dependency) — this tier flags the block on any tool failure during the turn, even one a later retry in the same turn resolves, since Claude Code's hooks expose no per-call retry-succeeded signal to clear it against; fallback tier for sessions without hook instrumentation enabled: text-pattern matching on `⎿ Error: Exit code N` (Bash tool call failures only) or a detected API error, which *is* recovery-aware — a failure the agent retries and resolves before the turn ends does not flag the block there
 - **Timestamp overlay** — Configurable display mode: off, always visible, or hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")

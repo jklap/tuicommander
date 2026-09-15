@@ -20,7 +20,12 @@ vi.mock("../../stores/contextMenuActionsStore", () => ({ contextMenuActionsStore
 vi.mock("../../stores/paneLayout", () => ({ paneLayoutStore: mockPaneLayout }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: { state: { activeRepoPath: "/repo" } } }));
 vi.mock("../../stores/settings", () => ({ settingsStore: { isAgentEnabled: vi.fn(() => true) } }));
-vi.mock("../../stores/terminals", () => ({ terminalsStore: mockTerminals }));
+vi.mock("../../stores/terminals", () => ({
+	terminalsStore: mockTerminals,
+	// The real filter is a pure function with no store dependency — reuse it
+	// rather than re-implementing "filter out onAltScreen" a second time here.
+	rowAnchoredBlocks: (blocks: Array<{ onAltScreen?: boolean }>) => blocks.filter((b) => !b.onAltScreen),
+}));
 vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
 vi.mock("../../utils/hotkey", () => ({ keyFor: (action: string) => action }));
 vi.mock("../../utils/sendCommand", () => ({
@@ -73,13 +78,58 @@ describe("useTerminalContextMenus", () => {
 		mockTerminals.state.activeId = "term-1";
 		mockTerminals.get.mockReturnValue({
 			commandBlocks: [{ executionLine: 10, endLine: 13 }],
-			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]) },
+			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]), getHistoryBase: () => 0 },
 		});
 		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
 
 		await items.find((item) => item.label === "Copy Block Output")?.action();
 
 		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+	});
+
+	it("skips a trailing alt-screen-tainted block and copies the last real one instead", async () => {
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({
+			commandBlocks: [
+				{ executionLine: 10, endLine: 13, onAltScreen: false },
+				// A Claude Code fullscreen turn that ran after the last real shell
+				// block — its executionLine/endLine are not valid buffer rows.
+				{ executionLine: 2, endLine: 4, onAltScreen: true },
+			],
+			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]), getHistoryBase: () => 0 },
+		});
+		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
+
+		await items.find((item) => item.label === "Copy Block Output")?.action();
+
+		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+	});
+
+	it("converts executionLine/endLine through getHistoryBase before reading the buffer", async () => {
+		mockTerminals.state.activeId = "term-1";
+		const getBufferLines = vi.fn().mockResolvedValue(["output", ""]);
+		mockTerminals.get.mockReturnValue({
+			// 1000 lines evicted since these eviction-stable rows were recorded.
+			commandBlocks: [{ executionLine: 1010, endLine: 1013 }],
+			ref: { getBufferLines, getHistoryBase: () => 1000 },
+		});
+		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
+
+		await items.find((item) => item.label === "Copy Block Output")?.action();
+
+		expect(getBufferLines).toHaveBeenCalledWith(11, 13);
+		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+	});
+
+	it("disables Copy Block Output when every command block is alt-screen-tainted", () => {
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({
+			commandBlocks: [{ executionLine: 2, endLine: 4, onAltScreen: true }],
+		});
+
+		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
+
+		expect(items.find((item) => item.label === "Copy Block Output")?.disabled).toBe(true);
 	});
 
 	it("logs instead of throwing when Copy Block Output's clipboard write is denied", async () => {
@@ -89,7 +139,7 @@ describe("useTerminalContextMenus", () => {
 		mockTerminals.state.activeId = "term-1";
 		mockTerminals.get.mockReturnValue({
 			commandBlocks: [{ executionLine: 10, endLine: 13 }],
-			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]) },
+			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]), getHistoryBase: () => 0 },
 		});
 		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
 

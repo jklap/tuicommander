@@ -112,6 +112,9 @@ pub enum AppEvent {
         marker: String,
         line: usize,
         exit_code: Option<i32>,
+        /// See `Osc133Event::on_alt_screen` (`terminal_grid.rs`) — kept
+        /// field-for-field identical.
+        on_alt_screen: bool,
     },
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
@@ -4769,6 +4772,12 @@ impl VtLogBuffer {
 
     pub(crate) fn grid_history_size(&self) -> usize {
         self.grid.scrollback_count()
+    }
+
+    /// Eviction-stable counterpart to `grid_history_size()` — see
+    /// `TerminalGrid::total_scrolled_count`'s doc comment.
+    pub(crate) fn grid_total_scrolled(&self) -> usize {
+        self.grid.total_scrolled_count()
     }
 
     /// Update the cell pixel size backing `CSI 14 t`/`CSI 16 t` replies.

@@ -72,7 +72,16 @@ type ParsedEvent =
 	| { type: "active-subtasks"; count: number; task_type: string }
 	| { type: "shell-state"; state: "busy" | "idle" }
 	| { type: "agent-session-conflict"; matched_text: string; kind: "in-use" | "not-found" }
-	| { type: "agent-block"; action: "start" | "end"; line: number; exit_code?: number; prompt_text?: string | null };
+	| {
+			type: "agent-block";
+			action: "start" | "end";
+			line: number;
+			exit_code?: number;
+			prompt_text?: string | null;
+			on_alt_screen: boolean;
+			from_transcript_dump: boolean;
+			new_dump_generation: boolean;
+	  };
 
 type BackendSessionState = {
 	shell_state?: "busy" | "idle";
@@ -574,9 +583,26 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				case "agent-block": {
 					if (parsed.action === "start") {
-						terminalsStore.handleOsc133(props.id, "A", parsed.line, undefined, parsed.prompt_text ?? null);
+						terminalsStore.handleOsc133(
+							props.id,
+							"A",
+							parsed.line,
+							undefined,
+							parsed.prompt_text ?? null,
+							parsed.on_alt_screen,
+							parsed.from_transcript_dump,
+							parsed.new_dump_generation,
+						);
 					} else if (parsed.action === "end") {
-						terminalsStore.handleOsc133(props.id, "D", parsed.line, parsed.exit_code ?? undefined);
+						terminalsStore.handleOsc133(
+							props.id,
+							"D",
+							parsed.line,
+							parsed.exit_code ?? undefined,
+							undefined,
+							parsed.on_alt_screen,
+							parsed.from_transcript_dump,
+						);
 					}
 					break;
 				}
@@ -1115,6 +1141,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			}
 		},
 		getSelection: () => canvasTerminalRef()?.getSelectionText() ?? "",
+		getHistoryBase: () => canvasTerminalRef()?.getHistoryBase() ?? 0,
 		getBufferLines: (startLine: number, endLine: number) => {
 			if (!sessionId) return [];
 			return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;

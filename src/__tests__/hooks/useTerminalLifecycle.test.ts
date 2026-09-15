@@ -674,6 +674,7 @@ describe("useTerminalLifecycle", () => {
 					scrollToBottom: vi.fn(),
 					scrollPages: vi.fn(),
 					getBufferLines: vi.fn(() => []),
+					getHistoryBase: vi.fn(() => 0),
 					refresh: vi.fn(),
 				},
 			});
@@ -887,6 +888,7 @@ describe("useTerminalLifecycle", () => {
 				scrollToBottom: vi.fn(),
 				scrollPages: vi.fn(),
 				getBufferLines: vi.fn(() => []),
+				getHistoryBase: vi.fn(() => 0),
 				refresh: vi.fn(),
 				...overrides,
 			};
