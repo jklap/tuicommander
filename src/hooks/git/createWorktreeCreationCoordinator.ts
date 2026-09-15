@@ -1,6 +1,7 @@
 import type { Accessor, Setter } from "solid-js";
 import { AGENTS } from "../../agents";
 import type { WorktreeCreateOptions } from "../../components/CreateWorktreeDialog";
+import { listen } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
@@ -8,6 +9,49 @@ import { terminalsStore } from "../../stores/terminals";
 import type { BaseRefOption } from "../useRepository";
 import type { AgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
+
+/** How long to wait for the backend's setup-script chain (sync, then the script
+ * itself) before giving up and letting the Run Script proceed anyway — must
+ * exceed the backend's own setup-script timeout (600s default,
+ * `RepoDefaultsConfig.setupScriptTimeoutSecs`) with real headroom, since the
+ * wait also covers the file sync that precedes the script. */
+const SETUP_SCRIPT_WAIT_TIMEOUT_MS = 900_000;
+
+/** Waits for the `worktree-setup-script-completed` event matching this
+ * `repoPath`/`branch`, so the Run Script (typed into the terminal right after
+ * this resolves) can't race the Setup Script the backend runs in its own
+ * background chain (`worktree::spawn_worktree_setup_chain`) — without this,
+ * e.g. `npm run dev` could start before `npm install` finished. Resolves
+ * (never rejects) either on the matching event or after `timeoutMs`, so a
+ * lost event — the backend crashing, an SSE disconnect — can't hang worktree
+ * creation forever; the caller proceeds either way. */
+function waitForSetupScriptCompletion(
+	repoPath: string,
+	branch: string,
+	timeoutMs = SETUP_SCRIPT_WAIT_TIMEOUT_MS,
+): Promise<void> {
+	return new Promise((resolve) => {
+		let settled = false;
+		let unlisten: (() => void) | undefined;
+		const timer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			unlisten?.();
+			resolve();
+		}, timeoutMs);
+		listen<{ repoPath: string; branch: string }>("worktree-setup-script-completed", (event) => {
+			if (settled) return;
+			if (event.payload.repoPath !== repoPath || event.payload.branch !== branch) return;
+			settled = true;
+			clearTimeout(timer);
+			unlisten?.();
+			resolve();
+		}).then((fn) => {
+			unlisten = fn;
+			if (settled) fn();
+		});
+	});
+}
 
 export interface WorktreeDialogState {
 	repoPath: string;
@@ -182,8 +226,18 @@ export function createWorktreeCreationCoordinator(deps: WorktreeCreationCoordina
 		// race a copy_ignored_files/copy_untracked_files/copy_paths sync the
 		// script might depend on. Its outcome (if any script is configured)
 		// arrives via the "worktree-setup-script-completed" event — see
-		// useAppInit.ts's listener — rather than being awaited here.
+		// useAppInit.ts's listener — which handles logging/status-reporting.
+		// We still WAIT for that event here (with a generous timeout) before
+		// creating the terminal / queuing the Run Script — without this, the
+		// Run Script can start concurrently with (or before) the Setup
+		// Script, e.g. `npm run dev` racing `npm install`. This restores the
+		// ordering guarantee the old inline `await runSetupScript(...)` call
+		// used to provide, without reintroducing a synchronous script-execution
+		// IPC call here.
 		const effective = repoSettingsStore.getEffective(repoPath);
+		if (effective?.setupScript) {
+			await waitForSetupScriptCompletion(repoPath, result.branch);
+		}
 
 		const termId = await handleAddTerminalToBranch(repoPath, result.branch);
 

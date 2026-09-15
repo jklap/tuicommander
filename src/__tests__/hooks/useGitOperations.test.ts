@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
@@ -28,6 +29,22 @@ function resetStores() {
 	editorTabsStore.clearAll();
 	diffTabsStore.clearAll();
 	mdTabsStore.clearAll();
+}
+
+/** Capture the handler registered for `eventName` via `listen()`, whatever else
+ *  is also registered. Mirrors `useAppInit.test.ts`'s `captureListener` — used
+ *  to unblock `waitForSetupScriptCompletion` (`createWorktreeCreationCoordinator.ts`),
+ *  which otherwise waits on `worktree-setup-script-completed` for real. */
+function captureListener<T>(eventName: string) {
+	const listenMock = vi.mocked(listen);
+	let callback: ((event: { payload: T }) => void) | null = null;
+	listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+		if (event === eventName) {
+			callback = handler as unknown as (event: { payload: T }) => void;
+		}
+		return Promise.resolve(vi.fn());
+	}) as unknown as typeof listen);
+	return { getCallback: () => callback };
 }
 
 describe("buildAgentSeed", () => {
@@ -2643,7 +2660,9 @@ describe("useGitOperations", () => {
 			// it at all anymore, regardless of what's configured — its
 			// outcome instead arrives via handleWorktreeSetupScriptCompleted
 			// (see the describe block below), driven by the
-			// "worktree-setup-script-completed" event.
+			// "worktree-setup-script-completed" event. It DOES wait for that
+			// event before creating the terminal (the ordering fix), so this
+			// test must fire it — otherwise the wait would hang for real.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
@@ -2657,8 +2676,12 @@ describe("useGitOperations", () => {
 			});
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
+			const { getCallback } = captureListener<{ repoPath: string; branch: string }>("worktree-setup-script-completed");
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			const done = gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			await vi.waitFor(() => expect(getCallback()).not.toBeNull());
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-test" } });
+			await done;
 
 			// mockRepo has no runSetupScript field at all (removed alongside the
 			// coordinator's deps.repo interface) — if setupNewWorktree still
@@ -2714,7 +2737,10 @@ describe("useGitOperations", () => {
 			// test used to cover moved to handleWorktreeSetupScriptCompleted
 			// (see the describe block below) — confirmCreateWorktree/
 			// setupNewWorktree no longer touch the setup script at all, so a
-			// configured (even failing) setupScript has zero effect here.
+			// configured (even failing) setupScript has zero effect on the
+			// TERMINAL that eventually gets created here — it just waits for
+			// the completion event first (the ordering fix), which this test
+			// fires itself so the wait doesn't hang for real.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 			repoSettingsStore.getOrCreate("/repo", "Repo");
@@ -2728,8 +2754,12 @@ describe("useGitOperations", () => {
 			});
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
+			const { getCallback } = captureListener<{ repoPath: string; branch: string }>("worktree-setup-script-completed");
 			await gitOps.handleAddWorktree("/repo");
-			await gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			const done = gitOps.confirmCreateWorktree({ branchName: "feat-test", createBranch: true, baseRef: "main" });
+			await vi.waitFor(() => expect(getCallback()).not.toBeNull());
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-test" } });
+			await done;
 
 			const branch = repositoriesStore.get("/repo")?.branches["feat-test"];
 			expect(branch?.terminals.length).toBeGreaterThan(0);
@@ -2782,7 +2812,14 @@ describe("useGitOperations", () => {
 			});
 			mockRepo.getDiffStats.mockResolvedValue({ additions: 0, deletions: 0 });
 
-			await gitOps.handleCreateWorktreeFromBranch("/repo", "main");
+			// Configured setupScript makes setupNewWorktree wait for the
+			// completion event before creating the terminal (the ordering fix)
+			// — fire it here so that wait doesn't hang for real.
+			const { getCallback } = captureListener<{ repoPath: string; branch: string }>("worktree-setup-script-completed");
+			const done = gitOps.handleCreateWorktreeFromBranch("/repo", "main");
+			await vi.waitFor(() => expect(getCallback()).not.toBeNull());
+			getCallback()!({ payload: { repoPath: "/repo", branch: "main--wt-42" } });
+			await done;
 
 			// mockRepo has no runSetupScript field — a lingering call would throw.
 			const branch = repositoriesStore.get("/repo")?.branches["main--wt-42"];
