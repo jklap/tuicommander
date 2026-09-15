@@ -42,6 +42,11 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # src/plugins.rs embeds the bundled plugins with include_str!, and
+          # they live in the `plugins` submodule. Without this the crate
+          # cannot compile at all.
+          submodules: recursive
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -217,6 +222,11 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # src/plugins.rs embeds the bundled plugins with include_str!, and
+          # they live in the `plugins` submodule. Without this the crate
+          # cannot compile at all.
+          submodules: recursive
 
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'ubuntu')
