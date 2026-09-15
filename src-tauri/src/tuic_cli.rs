@@ -194,6 +194,13 @@ fn replace_cli_atomically(
     result
 }
 
+/// Where the CLI is (or would be) installed on this platform.
+///
+/// NOT used by `finder_service.rs`'s Automator bundle: that bundle's shell
+/// action is a static bash script, which can't call into this compiled
+/// binary — it independently hardcodes the same macOS path with its own
+/// `command -v tuic` PATH fallback. The two happen to agree today; nothing
+/// keeps them in sync if this function's macOS branch ever changes.
 fn resolve_install_path() -> String {
     #[cfg(test)]
     if let Some(root) = crate::agent_test::test_root() {

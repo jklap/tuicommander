@@ -16,6 +16,8 @@ use uuid::Uuid;
 use super::mcp_transport_ancillary::CONFIRM_TIMEOUT;
 #[cfg(test)]
 use super::mcp_transport_ancillary::SESSION_HTML_TAB_LIMIT;
+#[cfg(test)]
+use super::mcp_transport_ancillary::TOAST_SOUNDS;
 pub(crate) use super::mcp_transport_ancillary::create_daemon_workflow_worktree;
 pub(crate) use super::mcp_transport_ancillary::emit_progress_entry;
 #[cfg(test)]

@@ -18,8 +18,10 @@ import { sidebarPluginStore } from "../stores/sidebarPluginStore";
 import { statusBarTicker } from "../stores/statusBarTicker";
 import { terminalsStore } from "../stores/terminals";
 import { workItemLinksStore } from "../stores/workItemLinks";
+import { isTauri } from "../transport";
 import type { WorkItemRef } from "../types/work-items.gen";
 import type { GitRemote } from "../types/workItemLinks";
+import { handleOpenUrl } from "../utils/openUrl";
 import { randomId, randomUuid } from "../utils/randomId";
 import { sanitizeSvgIcon } from "../utils/sanitizeSvg";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
@@ -863,6 +865,29 @@ function createPluginRegistry() {
 			openEditorTab(filePath, repoPath, opts) {
 				requireCapability(pluginId, capabilities, "ui:panel");
 				editorTabsStore.add(repoPath, filePath, opts?.line, { fsRoot: opts?.fsRoot ?? repoPath });
+			},
+
+			// -- Tier 3k: External links & native file picker --
+
+			openExternalUrl(url: string): void {
+				requireCapability(pluginId, capabilities, "ui:external-link");
+				handleOpenUrl(url);
+			},
+
+			async pickFile(options?: {
+				filters?: Array<{ name: string; extensions: string[] }>;
+				defaultPath?: string;
+			}): Promise<string | null> {
+				requireCapability(pluginId, capabilities, "ui:file-picker");
+				if (!isTauri()) return null;
+				const { open } = await import("@tauri-apps/plugin-dialog");
+				const picked = await open({
+					multiple: false,
+					directory: false,
+					filters: options?.filters,
+					defaultPath: options?.defaultPath,
+				});
+				return typeof picked === "string" ? picked : null;
 			},
 
 			// -- Tier 3e: Credential access --

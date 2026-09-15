@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.tuicommander.finder-service.open-here</string>
+	<key>CFBundleName</key>
+	<string>New TUICommander Tab Here</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>New TUICommander Tab Here</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>runWorkflowAsService</string>
+			<key>NSSendFileTypes</key>
+			<array>
+				<!-- public.item is the root UTI for any filesystem item, so this
+				     service accepts both files and folders (a file resolves to its
+				     parent directory in `tuic open-here`, not here). -->
+				<string>public.item</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

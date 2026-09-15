@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "../../invoke";
+import { notificationManager } from "../../notifications";
 import { dashboardRegistry } from "../../plugins/dashboardRegistry";
 import { filePreviewRegistry } from "../../plugins/filePreviewRegistry";
 import { markdownProviderRegistry } from "../../plugins/markdownProviderRegistry";
@@ -9,6 +10,7 @@ import type { PluginHost, TuiPlugin } from "../../plugins/types";
 import { PluginCapabilityError } from "../../plugins/types";
 import { workItemProviderRegistry } from "../../plugins/workItemProviderRegistry";
 import { activityStore } from "../../stores/activityStore";
+import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { pluginStore } from "../../stores/pluginStore";
@@ -1433,6 +1435,70 @@ describe("PluginHost — Tier 3 capability gating", () => {
 		);
 		await expect(host!.playNotificationSound()).resolves.toBeUndefined();
 	});
+
+	it("falls back to 'info' and logs a warning for an unknown sound name", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:sound"],
+		);
+		const playSpy = vi.spyOn(notificationManager, "play").mockResolvedValue(undefined);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+
+		// biome-ignore lint/suspicious/noExplicitAny: deliberately passing an invalid sound name
+		await host!.playNotificationSound("bogus-sound" as any);
+
+		expect(playSpy).toHaveBeenCalledWith("info");
+		expect(warnSpy).toHaveBeenCalledWith(
+			"plugin",
+			expect.stringContaining('unknown sound "bogus-sound", defaulting to "info"'),
+		);
+
+		playSpy.mockRestore();
+		warnSpy.mockRestore();
+	});
+
+	it("forwards a valid non-default sound unchanged, with no warning", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:sound"],
+		);
+		const playSpy = vi.spyOn(notificationManager, "play").mockResolvedValue(undefined);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+
+		await host!.playNotificationSound("attention");
+
+		expect(playSpy).toHaveBeenCalledWith("attention");
+		expect(warnSpy).not.toHaveBeenCalled();
+
+		playSpy.mockRestore();
+		warnSpy.mockRestore();
+	});
+
+	it("defaults to 'info' with no warning when no sound is given at all", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:sound"],
+		);
+		const playSpy = vi.spyOn(notificationManager, "play").mockResolvedValue(undefined);
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+
+		await host!.playNotificationSound();
+
+		expect(playSpy).toHaveBeenCalledWith("info");
+		expect(warnSpy).not.toHaveBeenCalled();
+
+		playSpy.mockRestore();
+		warnSpy.mockRestore();
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -2126,6 +2192,237 @@ describe("PluginHost — watchPath fan-out (613-00e8 F104)", () => {
 		expect(onA).toHaveBeenCalledOnce();
 		expect(onA).toHaveBeenCalledWith([{ type: "modify", path: "/a/x" }]);
 		expect(onB).not.toHaveBeenCalled();
+	});
+});
+
+describe("PluginHost — watchPath capability gating", () => {
+	it("external plugin without fs:watch throws PluginCapabilityError on watchPath", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		await expect(host!.watchPath("/a", () => {})).rejects.toThrow(PluginCapabilityError);
+	});
+
+	it("external plugin with fs:watch can call watchPath", async () => {
+		const invoked = vi.mocked(invoke);
+		invoked.mockResolvedValueOnce("watch-gate");
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["fs:watch"],
+		);
+		await expect(host!.watchPath("/a", () => {})).resolves.toBeDefined();
+	});
+});
+
+describe("PluginHost — registerTerminalAction capability gating", () => {
+	it("external plugin without ui:context-menu throws PluginCapabilityError on registerTerminalAction", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		expect(() => host!.registerTerminalAction({ id: "a", label: "A", action: () => {} })).toThrow(
+			PluginCapabilityError,
+		);
+	});
+
+	it("external plugin with ui:context-menu can call registerTerminalAction", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:context-menu"],
+		);
+		expect(() => host!.registerTerminalAction({ id: "a", label: "A", action: () => {} })).not.toThrow();
+	});
+});
+
+describe("PluginHost — openMarkdownFile capability gating and repo routing", () => {
+	afterEach(() => {
+		repositoriesStore.setActive(null);
+		repositoriesStore.remove("/gap-fill/repo");
+	});
+
+	it("external plugin without ui:markdown throws PluginCapabilityError on openMarkdownFile", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		expect(() => host!.openMarkdownFile("/abs/path.md")).toThrow(PluginCapabilityError);
+	});
+
+	it("opens a file inside a registered repo scoped to that repo", async () => {
+		repositoriesStore.add({ path: "/gap-fill/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/gap-fill/repo", "main", { worktreePath: "/gap-fill/repo" });
+
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:markdown"],
+		);
+		host!.openMarkdownFile("/gap-fill/repo/docs/x.md");
+
+		const tab = mdTabsStore.get(mdTabsStore.getIds()[0]);
+		expect(tab).toMatchObject({ type: "file", repoPath: "/gap-fill/repo", filePath: "docs/x.md" });
+	});
+
+	it("opens a file under no registered repo as an unowned, absolute-path tab without throwing", async () => {
+		// md-kanban's board files commonly live outside any registered repo (a
+		// personal notes vault, say) — this is the exact case that plugin depends on.
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:markdown"],
+		);
+		expect(() => host!.openMarkdownFile("/elsewhere/notes/board.md")).not.toThrow();
+
+		const tab = mdTabsStore.get(mdTabsStore.getIds()[0]);
+		expect(tab).toMatchObject({ type: "file", repoPath: "", filePath: "/elsewhere/notes/board.md" });
+	});
+});
+
+describe("PluginHost — Tier 3k openExternalUrl capability gating", () => {
+	it("built-in plugin (no capabilities) can call openExternalUrl without throwing", async () => {
+		let host: PluginHost | null = null;
+		pluginRegistry.register(
+			makePlugin("builtin", (h) => {
+				host = h;
+			}),
+		);
+		expect(() => host!.openExternalUrl("https://example.com")).not.toThrow();
+	});
+
+	it("external plugin without ui:external-link throws PluginCapabilityError", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		expect(() => host!.openExternalUrl("https://example.com")).toThrow(PluginCapabilityError);
+	});
+
+	it("external plugin with ui:external-link delegates to the real openUrl allowlist for an allowed scheme", async () => {
+		// main's handleOpenUrl routes the allowed URL through `open_default_app`
+		// (not the opener plugin's `openUrl`).
+		vi.mocked(invoke).mockClear();
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:external-link"],
+		);
+		host!.openExternalUrl("https://example.com");
+		expect(invoke).toHaveBeenCalledWith("open_default_app", { target: "https://example.com", kind: "url" });
+	});
+
+	it("does not call the opener for a disallowed scheme, proving delegation rather than reimplementation", async () => {
+		const { openUrl } = await import("@tauri-apps/plugin-opener");
+		vi.mocked(openUrl).mockClear();
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:external-link"],
+		);
+		host!.openExternalUrl("file:///etc/passwd");
+		expect(openUrl).not.toHaveBeenCalled();
+	});
+});
+
+describe("PluginHost — Tier 3k pickFile capability gating", () => {
+	/** setup.ts sets __TAURI_INTERNALS__ globally so every other suite defaults
+	 *  to Tauri mode; the browser-mode test below flips it off and restores it. */
+	function setTauriMode(enabled: boolean) {
+		if (enabled) {
+			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+		} else {
+			delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+		}
+	}
+
+	afterEach(() => {
+		setTauriMode(true);
+	});
+
+	it("external plugin without ui:file-picker rejects with PluginCapabilityError", async () => {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			[], // no capabilities
+		);
+		await expect(host!.pickFile()).rejects.toThrow(PluginCapabilityError);
+	});
+
+	it("external plugin with ui:file-picker resolves the dialog's chosen path", async () => {
+		const { open } = await import("@tauri-apps/plugin-dialog");
+		vi.mocked(open).mockResolvedValueOnce("/home/u/board.md");
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:file-picker"],
+		);
+		const result = await host!.pickFile({ filters: [{ name: "Markdown", extensions: ["md"] }] });
+		expect(result).toBe("/home/u/board.md");
+		expect(open).toHaveBeenCalledWith(
+			expect.objectContaining({
+				multiple: false,
+				directory: false,
+				filters: [{ name: "Markdown", extensions: ["md"] }],
+			}),
+		);
+	});
+
+	it("resolves null when the dialog is cancelled", async () => {
+		const { open } = await import("@tauri-apps/plugin-dialog");
+		vi.mocked(open).mockResolvedValueOnce(null);
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:file-picker"],
+		);
+		await expect(host!.pickFile()).resolves.toBeNull();
+	});
+
+	it("resolves null in browser mode without importing the dialog plugin", async () => {
+		const { open } = await import("@tauri-apps/plugin-dialog");
+		vi.mocked(open).mockClear();
+		setTauriMode(false);
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			["ui:file-picker"],
+		);
+		await expect(host!.pickFile()).resolves.toBeNull();
+		expect(open).not.toHaveBeenCalled();
 	});
 });
 
