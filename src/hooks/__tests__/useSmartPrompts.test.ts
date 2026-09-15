@@ -937,4 +937,18 @@ describe("executeSmartPrompt — explicit targetPath override (GitPanel/ChangesT
 		const call = mockedInvoke.mock.calls.find(([cmd]) => cmd === "execute_headless_prompt");
 		expect(call?.[1]).toMatchObject({ repoPath: "/completely/unrelated/terminal/cwd" });
 	});
+
+	it("falls back to the active repo when targetPath itself belongs to no registered repo", async () => {
+		// A caller-supplied targetPath isn't guaranteed to resolve either (a
+		// stale/unregistered path) — must fall back the same way the
+		// terminal-cwd path already does, not silently resolve against nothing
+		// or throw.
+		const { executeSmartPrompt } = useSmartPrompts();
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }), undefined, "/tmp/some/unregistered/dir");
+
+		expect(mockedInvoke).toHaveBeenCalledWith("resolve_prompt_variables", {
+			content: "Do something",
+			repoPath: OTHER_REPO,
+		});
+	});
 });
