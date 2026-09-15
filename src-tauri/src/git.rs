@@ -2754,7 +2754,7 @@ fn validate_paths_within_repo(repo_path: &Path, files: &[String]) -> Result<(), 
         .map_err(|e| format!("Failed to resolve repo path: {e}"))?;
     for file in files {
         // Reject absolute paths — all file args must be relative to repo root
-        if Path::new(file).is_absolute() {
+        if crate::fs::is_absolute_on_any_platform(file) {
             return Err(format!(
                 "Access denied: absolute path '{}' not allowed",
                 file
@@ -4580,6 +4580,22 @@ mod tests {
         let result = validate_paths_within_repo(&repo, &["/etc/passwd".to_string()]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("absolute path"));
+    }
+
+    /// The absolute shapes of the *other* platform have to go too. Windows
+    /// `Path::join` replaces the root when the joined path carries one, so a
+    /// `/etc/passwd` that slipped through as "relative" would land at the root
+    /// of the repo's drive instead of inside the repo.
+    #[test]
+    fn validate_paths_rejects_the_other_platforms_absolute_shapes() {
+        let (_dir, repo) = validate_paths_fixture();
+        for file in ["/etc/passwd", "C:\\Windows\\win.ini", "\\\\host\\share\\f"] {
+            let result = validate_paths_within_repo(&repo, &[file.to_string()]);
+            assert!(
+                result.is_err_and(|error| error.contains("absolute path")),
+                "{file} must be rejected as absolute"
+            );
+        }
     }
 
     // --- Integration tests for stage/unstage/discard ---

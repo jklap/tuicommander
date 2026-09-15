@@ -3588,14 +3588,20 @@ fn sanitized_background_command_keeps_agent_working_across_adapters() {
 
 #[test]
 fn persistent_helpers_are_not_background_work() {
-    let processes = vec![
+    let mut processes = vec![
         process(10, 1, "codex", "codex"),
         process(11, 10, "tuic-bridge", "tuic-bridge"),
         process(12, 10, "mdkb", "mdkb serve"),
-        process(13, 10, "node", "node /opt/codex/node_repl.js"),
         // Descendants owned by helper plumbing are ignored with the helper.
         process(14, 12, "sqlite-worker", "sqlite-worker"),
     ];
+    // Recognised by its command line rather than its name, which only holds
+    // where the process snapshot reports one — Toolhelp gives the executable
+    // name alone, so `node` stays meaningful work on Windows by design. See
+    // `windows_helper_classification_does_not_guess_node_arguments`.
+    if cfg!(not(windows)) {
+        processes.push(process(13, 10, "node", "node /opt/codex/node_repl.js"));
+    }
     assert!(!has_meaningful_descendant(10, &processes));
 
     let mut with_real_child = processes;
@@ -7671,6 +7677,16 @@ fn unspawnable_command() -> CommandBuilder {
     CommandBuilder::new("/nonexistent/tuic-spawn-retry-probe")
 }
 
+/// A command that spawns and exits at once, whatever the host is. `/bin/echo`
+/// is not a path Windows can start.
+fn trivial_command() -> CommandBuilder {
+    let (shell, flag) = crate::test_support::host_shell();
+    let mut command = CommandBuilder::new(shell);
+    command.arg(flag);
+    command.arg("echo tuic-spawn-probe");
+    command
+}
+
 /// Kill and reap a probe child without blocking the test: `wait()` on a live
 /// PTY child does not return while the pair is still open in this process.
 fn reap(mut child: Box<dyn portable_pty::Child + Send + Sync>) {
@@ -7776,7 +7792,7 @@ fn a_working_spawn_is_built_once() {
     let attempts = std::cell::Cell::new(0);
     let (_pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
         attempts.set(attempts.get() + 1);
-        CommandBuilder::new("/bin/echo")
+        trivial_command()
     })
     .expect("echo must spawn");
 

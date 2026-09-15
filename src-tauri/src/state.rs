@@ -8897,10 +8897,14 @@ mod tests {
             Err(e) => panic!("open pty: {e}"),
         };
 
-        // Spawn a shell that echos numbered lines and exits
-        let mut cmd = CommandBuilder::new("/bin/sh");
-        cmd.arg("-c");
-        cmd.arg("for i in $(seq 1 30); do echo \"test-line-$i\"; done; exit 0");
+        // Replay 30 numbered lines through the PTY. CRLF because the file is
+        // written as bytes rather than produced by the tty's own `\n`
+        // translation, and a bare LF would leave the cursor off column 0.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let stream = dir.path().join("lines.txt");
+        let body: String = (1..=30).map(|i| format!("test-line-{i}\r\n")).collect();
+        std::fs::write(&stream, body).expect("write stream");
+        let cmd = crate::test_support::replay_file_command(&stream);
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave); // close slave so reads see EOF
 
@@ -8969,19 +8973,20 @@ mod tests {
             Err(e) => panic!("open pty: {e}"),
         };
 
-        // Script: echo normal lines, enter alternate screen, write TUI garbage,
-        // exit alternate screen, echo more lines.
-        let script = concat!(
-            "echo 'before-alt-1'; echo 'before-alt-2'; ",
-            "printf '\\033[?1049h'; ", // enter alternate screen
-            "echo 'TUI-GARBAGE-LINE'; ",
-            "printf '\\033[?1049l'; ", // exit alternate screen
-            "echo 'after-alt-1'; echo 'after-alt-2'; ",
-            "exit 0"
+        // Normal lines, enter alternate screen, TUI garbage, exit alternate
+        // screen, more normal lines — written as the bytes themselves rather
+        // than as a shell script, since `cmd` has no `printf` to emit an ESC.
+        let stream = concat!(
+            "before-alt-1\r\nbefore-alt-2\r\n",
+            "\x1b[?1049h", // enter alternate screen
+            "TUI-GARBAGE-LINE\r\n",
+            "\x1b[?1049l", // exit alternate screen
+            "after-alt-1\r\nafter-alt-2\r\n",
         );
-        let mut cmd = CommandBuilder::new("/bin/sh");
-        cmd.arg("-c");
-        cmd.arg(script);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("alt.raw");
+        std::fs::write(&path, stream).expect("write stream");
+        let cmd = crate::test_support::replay_file_command(&path);
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave);
 
@@ -9038,8 +9043,7 @@ mod tests {
             Err(e) => panic!("open pty: {e}"),
         };
 
-        let mut cmd = CommandBuilder::new("/bin/cat");
-        cmd.arg(&fixture);
+        let cmd = crate::test_support::replay_file_command(&fixture);
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave);
 

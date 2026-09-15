@@ -79,16 +79,7 @@ fn validate_path_string(path: &str) -> Result<(), String> {
     if path.contains("..") || path.contains('\0') {
         return Err("Path traversal is not allowed".to_string());
     }
-    // `Path::is_absolute` answers for the host platform only, so each shape the
-    // other platform uses gets an explicit string check: `C:\…` and `\\…` do
-    // not parse as absolute on unix, and a leading `/` does not parse as
-    // absolute on Windows, where a path without a drive letter is merely
-    // rooted. The rule this enforces is the same on both.
-    let is_abs = std::path::Path::new(path).is_absolute()
-        || path.get(1..3) == Some(":\\")
-        || path.starts_with("\\\\")
-        || path.starts_with('/');
-    if !is_abs {
+    if !crate::fs::is_absolute_on_any_platform(path) {
         return Err("Path must be absolute".to_string());
     }
     Ok(())

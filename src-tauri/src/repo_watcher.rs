@@ -1625,9 +1625,12 @@ mod tests {
         let gitconfig = dir.path().join("gitconfig");
         std::fs::write(
             &gitconfig,
+            // Forward slashes: a git config value treats `\` as the start of an
+            // escape sequence, so a Windows path written verbatim reaches git
+            // mangled and the excludes file is silently never found.
             format!(
                 "[core]\n\texcludesFile = {}\n",
-                global_ignore.to_string_lossy()
+                crate::test_support::slashed(&global_ignore.to_string_lossy())
             ),
         )
         .unwrap();

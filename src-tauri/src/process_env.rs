@@ -13,10 +13,18 @@
 /// the variable is not set, or the platform read fails.
 pub fn read_process_env_var(pid: u32, name: &str) -> Option<String> {
     let entries = read_environ_raw(pid).ok()?;
-    let prefix = format!("{name}=");
-    entries
-        .into_iter()
-        .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_owned))
+    entries.into_iter().find_map(|entry| {
+        let (key, value) = entry.split_once('=')?;
+        // Windows environment names are case-insensitive, and the block keeps
+        // whatever case the parent wrote: `Path`, not `PATH`. A case-sensitive
+        // match there reports the most common variables as unset.
+        let found = if cfg!(windows) {
+            key.eq_ignore_ascii_case(name)
+        } else {
+            key == name
+        };
+        found.then(|| value.to_owned())
+    })
 }
 
 /// Read `argv[0]` of a process by PID.

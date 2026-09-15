@@ -162,7 +162,12 @@ fn replace_cli_atomically(
             std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| format!("Failed to make staged CLI executable: {e}"))?;
         }
-        std::fs::File::open(&staged)
+        // Opened for writing, not reading: Windows `FlushFileBuffers` needs a
+        // handle with write access and answers a read-only one with
+        // ERROR_ACCESS_DENIED, so the update never reached the install path.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&staged)
             .and_then(|file| file.sync_all())
             .map_err(|e| format!("Failed to flush staged CLI update: {e}"))?;
         std::fs::rename(&staged, install_path)

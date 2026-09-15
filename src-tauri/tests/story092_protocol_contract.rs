@@ -4,8 +4,6 @@
 //! implementation must provide.  They do not exercise later session or turn
 //! lifecycle behavior.
 
-use std::path::{Path, PathBuf};
-
 use agent_client_protocol::schema::{ProtocolVersion, v1};
 use serde_json::json;
 use tuicommander_lib::acp::{
@@ -17,12 +15,21 @@ mod acp_support;
 
 #[test]
 fn configured_ego_launch_is_direct_and_has_exact_argv() {
-    let executable = PathBuf::from("/opt/ego/bin/ego");
-    let root = PathBuf::from("/private/tmp/worktree");
-    let spec = launch_spec(&EgoAcpConfig { executable }, &root).unwrap();
+    let executable = acp_support::absolute("/opt/ego/bin/ego");
+    let root = acp_support::absolute("/private/tmp/worktree");
+    let spec = launch_spec(
+        &EgoAcpConfig {
+            executable: executable.clone(),
+        },
+        &root,
+    )
+    .unwrap();
 
-    assert_eq!(spec.program, Path::new("/opt/ego/bin/ego"));
-    assert_eq!(spec.args, ["acp", "-C", "/private/tmp/worktree"]);
+    assert_eq!(spec.program, executable);
+    assert_eq!(
+        spec.args,
+        ["acp", "-C", root.to_str().expect("a UTF-8 root")]
+    );
 }
 
 #[test]
