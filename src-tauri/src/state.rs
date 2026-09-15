@@ -8901,8 +8901,8 @@ mod tests {
         // translation, and a bare LF would leave the cursor off column 0.
         let dir = tempfile::tempdir().expect("temp dir");
         let stream = dir.path().join("lines.txt");
-        let body: String = (1..=30).map(|i| format!("test-line-{i}\r\n")).collect();
-        std::fs::write(&stream, body).expect("write stream");
+        let sent: Vec<String> = (1..=30).map(|i| format!("test-line-{i}")).collect();
+        std::fs::write(&stream, format!("{}\r\n", sent.join("\r\n"))).expect("write stream");
         let cmd = crate::test_support::replay_file_command(&stream);
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         // Unix only: closing the slave is what makes the master report EOF
@@ -8913,7 +8913,13 @@ mod tests {
 
         let reader = pair.master.try_clone_reader().expect("reader");
         let mut buf = VtLogBuffer::new(24, 80, 1000);
+        // Kept so a failure can name what the tty actually sent. A ConPTY is a
+        // VT interpreter rather than a pass-through, so "no lines" there could
+        // be a shell that never ran or a re-render that never scrolls, and the
+        // two need different fixes.
+        let mut seen = Vec::new();
         crate::test_support::drain_pty(reader, |chunk| {
+            seen.extend_from_slice(chunk);
             buf.process(chunk);
         });
         let _ = child.kill();
@@ -8927,9 +8933,13 @@ mod tests {
             .collect();
         assert!(
             !matching.is_empty(),
-            "expected some 'test-line-N' lines in log, got 0 out of {} total lines: {:?}",
+            "expected some 'test-line-N' lines in log, got 0 out of {} total lines: {:?}\n\
+             screen: {:?}\nthe tty sent {} bytes: {}",
             lines.len(),
             lines,
+            buf.screen_rows(),
+            seen.len(),
+            String::from_utf8_lossy(&seen).escape_debug(),
         );
         // Verify the captured lines cover a reasonable range.
         let nums: Vec<u32> = matching
@@ -9035,13 +9045,21 @@ mod tests {
 
         let reader = pair.master.try_clone_reader().expect("reader");
         let mut buf = VtLogBuffer::new(24, 120, 1000);
+        // See `test_vt_log_real_pty_echo`: kept for the failure message.
+        let mut seen = Vec::new();
         crate::test_support::drain_pty(reader, |chunk| {
+            seen.extend_from_slice(chunk);
             buf.process(chunk);
         });
         let _ = child.kill();
         let _ = child.wait();
 
-        assert!(buf.is_alternate_screen(), "stream leaves us in alt screen");
+        assert!(
+            buf.is_alternate_screen(),
+            "stream leaves us in alt screen; the tty sent {} bytes: {}",
+            seen.len(),
+            String::from_utf8_lossy(&seen[..seen.len().min(4000)]).escape_debug(),
+        );
         assert!(
             buf.grid_history_size() > 0,
             "alt-screen scrollback must exist — 0 is the bug (no scrollbar, no scrollback)"
