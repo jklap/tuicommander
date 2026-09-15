@@ -19,11 +19,17 @@ export function useShortcutRegistration(handlers: ShortcutHandlers): void {
 	// mcp_http/session.rs); `dispatchAction` itself safely no-ops on an
 	// unrecognized name regardless.
 	onMount(() => {
+		let unlisten: (() => void) | undefined;
 		listen<{ name: string }>("ui-action-requested", (event) => {
 			const ran = dispatchAction(event.payload.name as ActionName, handlers);
 			if (!ran) {
 				appLogger.warn("app", `ui-action-requested: unrecognized action '${event.payload.name}'`);
 			}
-		}).catch((err) => appLogger.error("app", "Failed to register ui-action-requested listener", err));
+		})
+			.then((fn) => {
+				unlisten = fn;
+			})
+			.catch((err) => appLogger.error("app", "Failed to register ui-action-requested listener", err));
+		onCleanup(() => unlisten?.());
 	});
 }
