@@ -392,6 +392,20 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
     }
     #[cfg(not(unix))]
     {
+        // The tree, not just the child. `Child::kill` calls `TerminateProcess`,
+        // which leaves grandchildren running — and a grandchild keeps the
+        // stderr write handle open, so the drainer's read never sees EOF. On
+        // Windows that read holds a blocking thread the tokio runtime waits for
+        // at shutdown, which is a hang rather than a leak. An `ssh` with a
+        // `ProxyCommand` has exactly that shape.
+        if let Some(id) = child.id() {
+            let _ = tokio::process::Command::new(crate::fs::system32_exe("taskkill.exe"))
+                .args(["/PID", &id.to_string(), "/T", "/F"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+        }
         let _ = child.kill().await;
     }
 

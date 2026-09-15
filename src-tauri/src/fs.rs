@@ -103,6 +103,30 @@ pub(crate) fn long_form(path: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
+/// A stock Windows tool, spelled as an absolute path. On unix the bare name is
+/// already absolute enough — nothing there lives in a system directory a shell
+/// cannot reach.
+///
+/// `CreateProcess` finds a system binary whether or not `PATH` names its
+/// directory, but `cmd` resolves the commands *inside* a script through `PATH`
+/// alone. On the Windows CI runner that split is visible: every test spawning
+/// `cmd` started fine and then reported `'ping' is not recognized as an
+/// internal or external command`. Nothing that must run should depend on what
+/// the host put in `PATH`.
+#[cfg(any(windows, test))]
+pub(crate) fn system32_exe(exe: &str) -> String {
+    if cfg!(windows) {
+        // No quoting: `SystemRoot` holds no spaces, and a quoted first token
+        // makes `cmd /C` apply its own quote-stripping rule to the whole line.
+        format!(
+            "{}\\System32\\{exe}",
+            std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string())
+        )
+    } else {
+        exe.to_string()
+    }
+}
+
 /// A directory entry returned by `list_directory`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {
