@@ -251,6 +251,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "services", section: "HTTP API Server", label: "MCP Connection", labelKey: "services.label.mcpConnection" },
 	{
 		tab: "services",
+		tabLabel: "Services & MCP",
+		section: "File Access",
+		label: "Additional Readable Directories",
+		hint: "Directories web and remote clients may read files from, in addition to registered repositories",
+	},
+	{
+		tab: "services",
+		tabLabel: "Services & MCP",
 		section: "Remote Access",
 		label: "Enable remote access",
 		labelKey: "services.toggle.enableRemoteAccess",

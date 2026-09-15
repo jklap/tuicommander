@@ -1536,4 +1536,59 @@ describe("settingsStore", () => {
 			});
 		});
 	});
+
+	describe("additional readable directories (HTTP read allow-list)", () => {
+		it("defaults to ['~/.claude/plans']", () => {
+			testInScope(() => {
+				expect(store.state.additionalReadableDirs).toEqual(["~/.claude/plans"]);
+			});
+		});
+
+		it("round-trips through hydrate + debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setAdditionalReadableDirs(["/tmp/notes", "~/scratch"]);
+				expect(store.state.additionalReadableDirs).toEqual(["/tmp/notes", "~/scratch"]);
+
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ additional_readable_dirs: ["/tmp/notes", "~/scratch"] }),
+				});
+			});
+		});
+
+		it("defaults to ['~/.claude/plans'] when absent from the hydrated config", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				font_family: "JetBrains Mono",
+				font_size: 14,
+				theme: "dark",
+				mcp_server_enabled: false,
+				ide: "vscode",
+			});
+			mockInvoke.mockResolvedValueOnce({ primary_agent: "claude" });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.additionalReadableDirs).toEqual(["~/.claude/plans"]);
+			});
+		});
+
+		it("persists an explicit empty list without silently re-defaulting", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				font_family: "JetBrains Mono",
+				font_size: 14,
+				theme: "dark",
+				mcp_server_enabled: false,
+				ide: "vscode",
+				additional_readable_dirs: [],
+			});
+			mockInvoke.mockResolvedValueOnce({ primary_agent: "claude" });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.additionalReadableDirs).toEqual([]);
+			});
+		});
+	});
 });

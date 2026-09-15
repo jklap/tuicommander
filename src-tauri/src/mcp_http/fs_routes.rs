@@ -164,11 +164,26 @@ fn is_within_repo_roots(path: &std::path::Path, roots: &[String]) -> bool {
 /// as well as the loopback one. The caller there is a narrower trust level than the desktop
 /// user, which is why this boundary exists at all — see `read_external_file_http`.
 fn deny_unless_in_roots(path: &str, roots: &[String]) -> Option<Response> {
+    deny_unless_in_roots_with(path, roots, access_denied)
+}
+
+/// Same two-layer gate as `deny_unless_in_roots`, but for the two READ routes,
+/// whose 403 additionally mentions `additional_readable_dirs` — the write/copy/
+/// move/transfer routes keep the plain wording since that list never widens them.
+fn deny_unless_readable(path: &str, roots: &[String]) -> Option<Response> {
+    deny_unless_in_roots_with(path, roots, access_denied_readable)
+}
+
+fn deny_unless_in_roots_with(
+    path: &str,
+    roots: &[String],
+    denied: fn() -> Response,
+) -> Option<Response> {
     if validate_path_string(path).is_err() {
-        return Some(access_denied());
+        return Some(denied());
     }
     if !is_within_repo_roots(std::path::Path::new(path), roots) {
-        return Some(access_denied());
+        return Some(denied());
     }
     None
 }
@@ -182,20 +197,68 @@ fn registered_repo_roots() -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(super) async fn read_external_file_http(Query(q): Query<FsExternalFileQuery>) -> Response {
-    // Restrict to files within registered repos — prevents arbitrary file reads via HTTP
-    if let Some(resp) = deny_unless_in_roots(&q.path, &registered_repo_roots()) {
+/// Expand and validate one user-configured additional-read root. `None` = must never
+/// become a root (blank, `..`, or not absolute after expansion).
+///
+/// `Path::starts_with("")` returns `true` for every path — an empty component
+/// iterator is a prefix of anything. `registered_repo_roots()` never hits this
+/// (keys of a JSON object are never blank), but a free-text Settings list *can*
+/// contain a blank/whitespace row, so this must filter, not just expand — see
+/// `empty_root_would_allow_everything_hence_the_filter`.
+fn expand_readable_root(entry: &str) -> Option<String> {
+    let entry = entry.trim();
+    if entry.is_empty() || entry.contains("..") {
+        return None;
+    }
+    let expanded = if entry == "~" || entry.starts_with("~/") {
+        format!("{}{}", dirs::home_dir()?.display(), &entry[1..])
+    } else {
+        entry.to_string()
+    };
+    std::path::Path::new(&expanded)
+        .is_absolute()
+        .then_some(expanded)
+}
+
+/// The user's additional readable directories, expanded and filtered.
+fn additional_readable_roots(state: &crate::state::AppState) -> Vec<String> {
+    state
+        .config
+        .read()
+        .additional_readable_dirs
+        .iter()
+        .filter_map(|e| expand_readable_root(e))
+        .collect()
+}
+
+/// Roots the two READ routes may serve: registered repos ∪ additional readable dirs.
+/// Deliberately separate from `registered_repo_roots()` so the four write/copy/move/
+/// transfer routes cannot accidentally pick up the wider list.
+fn readable_roots(state: &crate::state::AppState) -> Vec<String> {
+    let mut roots = registered_repo_roots();
+    roots.extend(additional_readable_roots(state));
+    roots
+}
+
+pub(super) async fn read_external_file_http(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
+    Query(q): Query<FsExternalFileQuery>,
+) -> Response {
+    // Restrict to files within registered repos or an allowed directory — prevents
+    // arbitrary file reads via HTTP
+    if let Some(resp) = deny_unless_readable(&q.path, &readable_roots(&state)) {
         return resp;
     }
     json_result(crate::read_external_file(q.path).await)
 }
 
 /// External (absolute-path) file read for the code editor, at the larger
-/// `MAX_EDITOR_LARGE_FILE_SIZE` cap. Same repo-root restriction as `read_external_file_http`.
+/// `MAX_EDITOR_LARGE_FILE_SIZE` cap. Same restriction as `read_external_file_http`.
 pub(super) async fn read_editor_file_external_http(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
     Query(q): Query<FsExternalFileQuery>,
 ) -> Response {
-    if let Some(resp) = deny_unless_in_roots(&q.path, &registered_repo_roots()) {
+    if let Some(resp) = deny_unless_readable(&q.path, &readable_roots(&state)) {
         return resp;
     }
     // Through the command, for the same threading-parity reason as
@@ -359,11 +422,25 @@ pub(super) async fn fs_transfer_paths_http(Json(body): Json<FsTransferPathsReque
 }
 
 /// 403 response for an absolute path that escapes every registered repo root.
+/// Used by the write/copy/move/transfer routes, which never consult
+/// `additional_readable_dirs` — the wording must not imply they do.
 fn access_denied() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({
             "error": "Access denied: path must be within a registered repository"
+        })),
+    )
+        .into_response()
+}
+
+/// 403 response for the two READ routes, which also accept
+/// `additional_readable_dirs` — see `deny_unless_readable`.
+fn access_denied_readable() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "error": "Access denied: path must be within a registered repository or an allowed directory"
         })),
     )
         .into_response()
@@ -479,5 +556,77 @@ mod tests {
                 .or_else(|| deny_unless_in_roots(good, &roots))
                 .is_some()
         );
+    }
+
+    /// The security-critical fact driving `additional_readable_roots`'s filter: an
+    /// empty root string is a prefix of *any* path, so a blank Settings row must
+    /// never survive into the merged root list. Order matters here — this reads as
+    /// a proof: first the hazard, then the guard that prevents it.
+    #[test]
+    fn empty_root_would_allow_everything_hence_the_filter() {
+        assert!(is_within_repo_roots(
+            Path::new("/etc/passwd"),
+            &["".to_string()]
+        ));
+        assert_eq!(expand_readable_root(""), None);
+        assert_eq!(expand_readable_root("   "), None);
+    }
+
+    #[test]
+    fn expand_readable_root_expands_tilde() {
+        let Some(home) = dirs::home_dir() else {
+            return; // no home dir in this environment; nothing to prove
+        };
+        assert_eq!(
+            expand_readable_root("~/.claude/plans"),
+            Some(format!("{}/.claude/plans", home.display()))
+        );
+        assert_eq!(expand_readable_root("~"), Some(home.display().to_string()));
+    }
+
+    #[test]
+    fn expand_readable_root_rejects_traversal_and_relative() {
+        assert_eq!(expand_readable_root("~/../etc"), None);
+        assert_eq!(expand_readable_root("/a/../../etc"), None);
+        assert_eq!(expand_readable_root("relative/dir"), None);
+        assert_eq!(expand_readable_root("plans"), None);
+    }
+
+    #[test]
+    fn expand_readable_root_passes_through_a_plain_absolute_path() {
+        assert_eq!(
+            expand_readable_root("/Users/dev/notes"),
+            Some("/Users/dev/notes".to_string())
+        );
+    }
+
+    #[test]
+    fn gate_allows_a_path_under_an_additional_root() {
+        let roots = vec!["/Users/dev/notes".to_string()];
+        assert!(deny_unless_in_roots("/Users/dev/notes/plan.md", &roots).is_none());
+    }
+
+    /// Proves reuse of `is_within_repo_roots`'s prefix-trick guard, not an ad hoc
+    /// string comparison, for the additional-roots list too.
+    #[test]
+    fn additional_roots_inherit_the_prefix_trick_guard() {
+        let roots = vec!["/x/plans".to_string()];
+        assert!(deny_unless_in_roots("/x/plansX/f.md", &roots).is_some());
+    }
+
+    #[test]
+    fn additional_roots_inherit_the_traversal_guard() {
+        let roots = vec!["/x/plans".to_string()];
+        assert!(deny_unless_in_roots("/x/plans/../../etc/passwd", &roots).is_some());
+    }
+
+    /// Pre-existing gap in the base gate: a root with a trailing slash must still
+    /// match a path under it, and must not accidentally widen to a sibling
+    /// directory whose name happens to share the same prefix.
+    #[test]
+    fn gate_allows_a_path_under_a_root_with_a_trailing_slash() {
+        let roots = vec!["/x/project-a/".to_string()];
+        assert!(deny_unless_in_roots("/x/project-a/src/main.rs", &roots).is_none());
+        assert!(deny_unless_in_roots("/x/project-abc/f.txt", &roots).is_some());
     }
 }

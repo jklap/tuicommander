@@ -11,6 +11,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { themeGeneration } from "../../themes";
 import { writeClipboard } from "../../utils/clipboard";
+import { accessDeniedMessage, isAccessDeniedError } from "../../utils/fileReadErrors";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SEARCH_SCRIPT } from "../../utils/iframeSearch";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
@@ -488,8 +489,17 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 					setSrcdoc(injectThemeVars(withBase, props.tab.selfStyled ?? false));
 				})
 				.catch((err) => {
-					appLogger.error("plugin", `Failed to read file:// tab content: ${filePath}`, err);
-					setSrcdoc(`<body style="color:#e55;padding:24px">Failed to load ${filePath}: ${err}</body>`);
+					const msg = err instanceof Error ? err.message : String(err);
+					// An access-denied 403 is HTTP-transport-only and user-fixable (widen the
+					// allow-list in Settings) — log it quietly and show a friendly message
+					// instead of the raw RPC string. Matches MarkdownTab/CodeEditorTab.
+					if (isAccessDeniedError(msg)) {
+						appLogger.debug("plugin", `file:// tab content denied by the HTTP read gate: ${filePath}`);
+						setSrcdoc(`<body style="color:#e55;padding:24px">${accessDeniedMessage()}</body>`);
+					} else {
+						appLogger.error("plugin", `Failed to read file:// tab content: ${filePath}`, err);
+						setSrcdoc(`<body style="color:#e55;padding:24px">Failed to load ${filePath}: ${err}</body>`);
+					}
 				});
 		} else if (!url) {
 			setSrcdoc(injectThemeVars(props.tab.html, props.tab.selfStyled ?? false));
