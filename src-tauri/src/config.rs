@@ -1322,10 +1322,24 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates custom launchers for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}, "x-collection-key" = "id"))]
     pub(crate) custom_launchers: Vec<CustomLauncher>,
+    /// Extra absolute directories the HTTP READ path may serve, on top of registered
+    /// repository roots. Global (not per-repo) — a plans/notes dir isn't owned by one repo.
+    /// Stored as typed (`~/.claude/plans`); expanded at comparison time in
+    /// `mcp_http::fs_routes`, never baked into an absolute string here.
+    /// READ ONLY — write/copy/move/transfer routes stay confined to registered repo roots.
+    #[serde(default = "default_additional_readable_dirs")]
+    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Widens which directories the HTTP read routes may serve to browser and remote clients.","operations":["get","set"],"confirmationClass":"network_exposure"}, "x-atomic-list" = true))]
+    pub(crate) additional_readable_dirs: Vec<String>,
     /// Show GitLens-style inline git blame on the active line in the code editor.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates inline blame enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) inline_blame_enabled: bool,
+}
+
+/// Ships `~/.claude/plans` so clicking a plan-file link an agent printed
+/// (`output_parser.rs`'s `PLAN_RE`) works in browser/remote mode with no user action.
+fn default_additional_readable_dirs() -> Vec<String> {
+    vec!["~/.claude/plans".to_string()]
 }
 
 /// A user-defined launcher for the "Open in" menu. The executable is spawned
@@ -1643,6 +1657,7 @@ impl Default for AppConfig {
             index_memory_budget_mb: default_index_memory_budget_mb(),
             standby_timeout_minutes: default_standby_timeout(),
             custom_launchers: Vec::new(),
+            additional_readable_dirs: default_additional_readable_dirs(),
             inline_blame_enabled: true,
         }
     }
@@ -6095,6 +6110,7 @@ mod tests {
             eager_resume_after_update: false,
             standby_timeout_minutes: 5,
             custom_launchers: Vec::new(),
+            additional_readable_dirs: vec!["/tmp/plans".to_string()],
             inline_blame_enabled: true,
         };
         let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);
@@ -6196,6 +6212,10 @@ mod tests {
         assert_eq!(
             loaded.smart_selection_rules[0].actions[0].kind,
             "run_command"
+        );
+        assert_eq!(
+            loaded.additional_readable_dirs,
+            vec!["/tmp/plans".to_string()]
         );
     }
 
@@ -6435,6 +6455,19 @@ mod tests {
         assert_eq!(loaded.word_separators, " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\");
         assert_eq!(loaded.word_selection_regex, "");
         assert!(loaded.smart_selection_rules.is_empty());
+        assert_eq!(
+            loaded.additional_readable_dirs,
+            vec!["~/.claude/plans".to_string()],
+            "a config.json predating this field must still ship the default readable dir"
+        );
+    }
+
+    #[test]
+    fn default_additional_readable_dirs_ships_the_claude_plans_dir() {
+        assert_eq!(
+            AppConfig::default().additional_readable_dirs,
+            vec!["~/.claude/plans".to_string()]
+        );
     }
 
     /// `docs/backend/config.md` promises a row for every top-level `AppConfig` field. Mirrors
@@ -6609,6 +6642,25 @@ mod tests {
         assert!(
             merged.disabled_plugin_ids.is_empty(),
             "list must be cleared"
+        );
+    }
+
+    #[test]
+    fn merge_partial_clears_additional_readable_dirs() {
+        // The non-empty serde default must not resurrect an explicit clear: a
+        // caller sending `[]` means "no additional dirs," not "use the default."
+        let mut current = AppConfig::default();
+        current.additional_readable_dirs = vec!["/tmp/plans".to_string()];
+
+        let merged = merge_partial_app_config(
+            &current,
+            serde_json::json!({ "additional_readable_dirs": [] }),
+        )
+        .expect("explicit clear must merge");
+
+        assert!(
+            merged.additional_readable_dirs.is_empty(),
+            "an explicit empty list must survive the merge, not fall back to the default"
         );
     }
 

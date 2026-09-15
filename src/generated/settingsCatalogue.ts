@@ -1057,6 +1057,45 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "app.additional_readable_dirs": {
+      "id": "app.additional_readable_dirs",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "additional_readable_dirs",
+      "order": 118,
+      "path": "/additional_readable_dirs",
+      "labelKey": "settings.catalogue.app.additional_readable_dirs.label",
+      "helpKey": "settings.catalogue.app.additional_readable_dirs.help",
+      "label": "additional readable dirs",
+      "schema": {
+        "description": "Extra absolute directories the HTTP READ path may serve, on top of registered\nrepository roots. Global (not per-repo) — a plans/notes dir isn't owned by one repo.\nStored as typed (`~/.claude/plans`); expanded at comparison time in\n`mcp_http::fs_routes`, never baked into an absolute string here.\nREAD ONLY — write/copy/move/transfer routes stay confined to registered repo roots.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [
+          "~/.claude/plans"
+        ]
+      },
+      "nullable": false,
+      "default": [
+        "~/.claude/plans"
+      ],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Widens which directories the HTTP read routes may serve to browser and remote clients.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "network_exposure"
+    },
     "app.ai_chat_launches.{key}.executable": {
       "id": "app.ai_chat_launches.{key}.executable",
       "store": "app",
@@ -2752,7 +2791,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "app",
       "group": "inline_blame_enabled",
-      "order": 118,
+      "order": 119,
       "path": "/inline_blame_enabled",
       "labelKey": "settings.catalogue.app.inline_blame_enabled.label",
       "helpKey": "settings.catalogue.app.inline_blame_enabled.help",

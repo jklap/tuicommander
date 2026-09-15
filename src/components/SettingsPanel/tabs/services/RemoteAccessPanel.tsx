@@ -4,10 +4,12 @@ import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { t } from "../../../../i18n";
 import { reportSettingsConflicts, settingsRefresh } from "../../../../services/settingsRefresh";
 import { appLogger } from "../../../../stores/appLogger";
+import { settingsStore } from "../../../../stores/settings";
 import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { mergeSettingsSnapshot } from "../../../../utils/mergeSettingsSnapshot";
+import { isAbsolutePath } from "../../../../utils/pathUtils";
 import { randomUuid } from "../../../../utils/randomId";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import { Input } from "../../../ui/Input";
@@ -60,6 +62,34 @@ export const RemoteAccessPanel: Component = () => {
 	const [localIps, { refetch: refetchLocalIps }] = createResource(() => rpc<LocalIpEntry[]>("get_local_ips"));
 	const availableIps = () => (localIps.error ? undefined : localIps());
 	const [selectedIp, setSelectedIp] = createSignal<string>("");
+
+	// --- Additional HTTP-readable directories ---
+	const [newReadableDir, setNewReadableDir] = createSignal("");
+	const [readableDirError, setReadableDirError] = createSignal<string | null>(null);
+	const readableDirs = (): string[] => settingsStore.state.additionalReadableDirs;
+	/** Mirrors the backend's `expand_readable_root` acceptance rule (fs_routes.rs) —
+	 *  an absolute path, or `~`/`~/...` — so a client-side entry that can never
+	 *  resolve to a real root is rejected here instead of silently sitting in the
+	 *  list looking identical to a working entry. Defense-in-depth only: the
+	 *  backend re-validates independently and is the actual enforcement point. */
+	const isValidReadableDirEntry = (entry: string): boolean =>
+		!entry.includes("..") && (entry === "~" || entry.startsWith("~/") || isAbsolutePath(entry));
+	const addReadableDir = () => {
+		const dir = newReadableDir().trim();
+		if (!dir) return;
+		if (!isValidReadableDirEntry(dir)) {
+			setReadableDirError(
+				t("services.readableDirs.invalid", "Must be an absolute path, or start with ~/ for your home directory"),
+			);
+			return;
+		}
+		setReadableDirError(null);
+		if (readableDirs().includes(dir)) return;
+		settingsStore.setAdditionalReadableDirs([...readableDirs(), dir]);
+		setNewReadableDir("");
+	};
+	const removeReadableDir = (dir: string) =>
+		settingsStore.setAdditionalReadableDirs(readableDirs().filter((d) => d !== dir));
 
 	// Remote access form state
 	const [raEnabled, setRaEnabled] = createSignal(false);
@@ -286,6 +316,64 @@ export const RemoteAccessPanel: Component = () => {
 	return (
 		<div class={`${s.section} ${layout.page}`}>
 			<SettingPageHeader title="Remote Access" scope="This machine" breadcrumb="Integrations / Remote Access" />
+			<SectionCard title={t("services.heading.fileAccess", "File Access")}>
+				<SettingRow
+					settingId="app.additional_readable_dirs"
+					label={t("services.label.additionalReadableDirs", "Additional Readable Directories")}
+					hint={t(
+						"services.hint.additionalReadableDirs",
+						"Absolute directories that web and remote clients may READ files from, in addition to your registered repositories. Desktop reads are never restricted. Never widens writing, copying, or moving. Use ~ for your home directory.",
+					)}
+					error={readableDirError() ?? undefined}
+				>
+					{(id, descriptionId) => (
+						<div>
+							<For each={readableDirs()}>
+								{(dir) => (
+									<div class={s.copyPathRow}>
+										<span class={s.copyPathText}>{dir}</span>
+										<button
+											type="button"
+											class={s.transferBtn}
+											data-setting-id="app.additional_readable_dirs"
+											onClick={() => removeReadableDir(dir)}
+										>
+											{t("services.readableDirs.remove", "Remove")}
+										</button>
+									</div>
+								)}
+							</For>
+							<div class={s.copyPathRow}>
+								<Input
+									id={id}
+									aria-describedby={descriptionId()}
+									type="text"
+									class={s.copyPathInput}
+									data-setting-id="app.additional_readable_dirs"
+									value={newReadableDir()}
+									onInput={(e) => {
+										setNewReadableDir(e.currentTarget.value);
+										setReadableDirError(null);
+									}}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") addReadableDir();
+									}}
+									placeholder={t("services.readableDirs.placeholder", "e.g. ~/.claude/plans")}
+								/>
+								<button
+									type="button"
+									class={s.transferBtn}
+									data-setting-id="app.additional_readable_dirs"
+									onClick={addReadableDir}
+									disabled={!newReadableDir().trim()}
+								>
+									{t("services.readableDirs.add", "Add")}
+								</button>
+							</div>
+						</div>
+					)}
+				</SettingRow>
+			</SectionCard>
 			<SectionCard title="Connection status">
 				<SettingToggle
 					settingId="app.services.server.enabled"

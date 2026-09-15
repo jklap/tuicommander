@@ -737,11 +737,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Args" },
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Working directory" },
 	{ tab: "remote-access", section: "Remote Access" },
+	{ tab: "remote-access", section: "File Access", sectionKey: "services.heading.fileAccess" },
 	{ tab: "remote-access", section: "Connection status" },
 	{ tab: "remote-access", section: "Tailscale HTTPS" },
 	{ tab: "remote-access", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
 	{ tab: "remote-access", section: "Danger zone" },
 	{ tab: "remote-access", section: "Cloud Relay", sectionKey: "services.heading.cloudRelay" },
+	{
+		tab: "remote-access",
+		section: "File Access",
+		label: "Additional Readable Directories",
+		labelKey: "services.label.additionalReadableDirs",
+	},
 	{
 		tab: "remote-access",
 		section: "Connection status",
