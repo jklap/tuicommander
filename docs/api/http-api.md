@@ -1660,8 +1660,25 @@ configured Setup Script, if any, both run **afterward in the background**
 (`worktree::spawn_worktree_setup_chain`, always sync-then-script in that order),
 so this response never carries `setup_script`/`setup_script_error`. The setup
 script's outcome — if one is configured — is reported later via the
-dual-emitted `worktree-setup-script-completed` event (see `docs/sync-matrix.md`);
-there is currently no way to poll for it over this HTTP surface.
+dual-emitted `worktree-setup-script-completed` event (see `docs/sync-matrix.md`),
+or can be polled via `GET /worktrees/setup-status` below.
+
+### Poll Worktree Setup Status
+
+```
+GET /worktrees/setup-status?repoPath=/path/to/repo&branch=feature-x
+```
+
+Read-only status check for the background setup chain kicked off by worktree
+creation — the only way an MCP client (no SSE/event stream) can ever learn a
+configured Setup Script's outcome, since `POST /worktrees` doesn't return it
+synchronously (see above). Response is
+`{ "state": "running" | "not_configured" | "completed" | "unknown" }`, with
+`exit_code`/`error` also present when `state` is `"completed"`. `"unknown"`
+means nothing is tracked for this `(repoPath, branch)` pair — never created
+this way, aged out (30 minute TTL), or the app restarted since — treat it as
+"can't tell," not as "definitely no script." No auth gate beyond the standard
+server auth (read-only, same as `GET /worktrees/paths`).
 
 ### Run a Worktree Script
 

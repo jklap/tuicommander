@@ -163,6 +163,7 @@ serving a configuration the disk disagrees with. See
 | `DELETE` | `/worktrees` | Remove worktree |
 | `GET` | `/worktrees/paths?path=` | Get worktree paths for repo |
 | `POST` | `/worktrees/run-script` | Run a Setup/Archive/Run script (`{script, cwd}`) with the `TUIC_*` env injected and a timeout enforced — loopback or authenticated only, see below |
+| `GET` | `/worktrees/setup-status` | Poll a worktree's background setup chain (`?repoPath=&branch=`) — `{state: "running"\|"not_configured"\|"completed"\|"unknown"}`, `+exit_code`/`error` when completed |
 
 ## Streaming
 
@@ -321,7 +322,7 @@ Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 | `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
-| `repo` | list, active, prs, status, worktree_list, worktree_create, worktree_remove | Enabled |
+| `repo` | list, active, prs, status, worktree_list, worktree_create, worktree_remove, worktree_setup_status | Enabled |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `config` | get, save | Disabled |

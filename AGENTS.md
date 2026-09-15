@@ -1097,12 +1097,28 @@ returns `setup_script`/`setup_script_error` synchronously: that information does
 exist yet by the time the response is built. The outcome is instead reported via a new
 dual-emitted `AppEvent::WorktreeSetupScriptCompleted` (`worktree-setup-script-completed`),
 silent when no script is configured (matching `worktree-sync-*`'s own
-nothing-to-do-is-silent precedent). **An MCP client currently has no way to observe
-this event** — accepted as a deliberate tradeoff for fixing the ordering bug, confirmed
+nothing-to-do-is-silent precedent). **An MCP client has no SSE/event stream to receive
+this event on** — accepted as a deliberate tradeoff for fixing the ordering bug, confirmed
 with Boss before implementing (see `feedback_confirm_scope_cuts_before_deferring.md` in
 memory for why this needed asking rather than assuming). Do not "fix" this by making the
 chain synchronous again — that reintroduces the blocking-worktree-creation behavior the
 original (now-fixed) unsequenced design was built to avoid.
+
+**Closed via a pollable status snapshot, not by making the event reach MCP clients.**
+`AppState::worktree_setup_status` (`state.rs`) is a bounded, TTL-evicted
+`moka::sync::Cache<(String, String), Arc<WorktreeSetupStatus>>` keyed by
+`(repo_path, branch)` — the same pair the event carries. `spawn_worktree_setup_chain`
+writes into it at each transition (`Running` synchronously before the background task
+even starts, then `NotConfigured` or `Completed { exit_code, error }` once the chain
+finishes) — the same three states, just pollable instead of push-only. Read via
+`worktree::get_worktree_setup_status` / `repo action=worktree_setup_status` (requires
+`path`+`branch`) / `GET /worktrees/setup-status?repoPath=...&branch=...` (no
+`require_local_or_auth` gate — read-only, same as `list_worktrees_http`/
+`get_worktree_paths_http`). A pair with no tracked entry (never created this way, aged
+out past the 30-minute TTL, or the app restarted) reports `{"state": "unknown"}` — treat
+that as "ask again differently," never as "definitely no script was configured." This is
+purely additive: the event itself, its silence-when-nothing-configured behavior, and the
+desktop frontend's own event-based flow are all unchanged.
 
 **Smart Prompts' `{var}` context-variable list is single-sourced in
 `src/data/contextVariables.ts`** (name, description, group, `source` — who resolves it:
@@ -1129,17 +1145,30 @@ the terminal's cwd belongs to no registered repo. `resolveFrontendVars` still ne
 keyed by repo root, so passing a worktree path there silently drops every `pr_*`
 variable — carry repo-root and tree-path as two separate values, don't conflate them.
 
-**`GitPanel/ChangesTab.tsx`'s "Generate commit message" has the same shape of bug,
-pre-existing and NOT fixed by the above** — it calls `executeSmartPrompt(prompt)` with
-no target override, so it inherits whatever `executeSmartPrompt` resolves against (now
-the active terminal's tree; before this session's fix, `repositoriesStore.getActive()`)
-rather than `props.repoPath` — the specific repo/worktree *this GitPanel instance* is
-showing, which can be a different repo than the one currently active/focused. Either could
-generate a commit message from one repo's diff and commit it into another. Confirmed via
-`git diff main..HEAD -- src/components/GitPanel/ChangesTab.tsx`: this file's only change on
-this branch is an unrelated indicators feature, so this is not a regression this feature
-introduced — it needs its own fix (`executeSmartPrompt` accepting an explicit target
-repo/tree path, with `ChangesTab` passing `props.repoPath`), out of scope here.
+**`GitPanel/ChangesTab.tsx`'s "Generate commit message" had the same shape of bug** — it
+called `executeSmartPrompt(prompt)` with no target override, so it inherited whatever
+`executeSmartPrompt` resolves against (the active terminal's tree) rather than
+`props.repoPath` — the specific repo/worktree *that GitPanel instance* is showing, which
+can differ from whichever repo is currently active/focused. This could generate a commit
+message from one repo's diff and commit it (via `doCommit`, which always uses
+`props.repoPath`) into another. Confirmed pre-existing via
+`git diff main..HEAD -- src/components/GitPanel/ChangesTab.tsx` (that file's only prior
+change on this branch was an unrelated indicators feature) before fixing it.
+
+**Fixed by giving `executeSmartPrompt` an optional third `targetPath` parameter** —
+when a caller supplies one (a real filesystem path, worktree or repo root, same shape as
+the active terminal's cwd), it's what `resolvePromptTreeIn` resolves against instead of
+the active terminal's cwd, for BOTH variable resolution and — since `executeHeadless`/
+`executeShell` independently derived their own execution cwd from
+`active?.cwd ?? repositoriesStore.getActive()?.path` — the actual directory a
+shell/headless prompt runs in. `ChangesTab.tsx` now passes its own `props.repoPath`
+(already the correct worktree-aware filesystem path — `GitPanel.tsx`'s `gitPath()`, not
+its `storeRepoPath`). Omitting `targetPath` (every other existing caller) is
+byte-for-byte the old behavior — nothing else needed to change. If you add a new caller
+that is itself bound to a specific repo/worktree independent of terminal focus (the same
+shape recurs in `SmartButtonStrip.tsx`, which also takes a `repoPath` prop it doesn't yet
+forward — not fixed here, flagged for a follow-up), pass its own path through
+`targetPath` rather than trusting the active-terminal fallback.
 
 **The setup-script/run-script ordering fix threads a real wait, not just documentation.**
 `createWorktreeCreationCoordinator.ts`'s `setupNewWorktree` used to `await
