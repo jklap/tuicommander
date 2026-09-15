@@ -106,6 +106,7 @@ interface RustAppConfig {
 	index_strategy?: string;
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
+	additional_readable_dirs?: string[];
 	inline_blame_enabled?: boolean;
 	/** The one binary the host may launch for ACP. Empty means ACP is unconfigured. */
 	ego_executable?: string;
@@ -422,6 +423,7 @@ interface SettingsStoreState {
 	indexStrategy: "disabled" | "active_only" | "active_and_switch" | "all_sequential";
 	standbyTimeoutMinutes: number;
 	customLaunchers: CustomLauncher[];
+	additionalReadableDirs: string[];
 	inlineBlameEnabled: boolean;
 	/**
 	 * Path to the ego binary the AI Chat panel talks ACP to.
@@ -499,6 +501,7 @@ function createSettingsStore() {
 		indexStrategy: "active_and_switch",
 		standbyTimeoutMinutes: 5,
 		customLaunchers: [],
+		additionalReadableDirs: ["~/.claude/plans"],
 		inlineBlameEnabled: true,
 		egoExecutable: "",
 		egoProfile: "",
@@ -586,6 +589,7 @@ function createSettingsStore() {
 		config.index_strategy = state.indexStrategy;
 		config.standby_timeout_minutes = state.standbyTimeoutMinutes;
 		config.custom_launchers = [...state.customLaunchers];
+		config.additional_readable_dirs = [...state.additionalReadableDirs];
 		config.inline_blame_enabled = state.inlineBlameEnabled;
 		config.ego_executable = state.egoExecutable;
 		config.ego_profile = state.egoProfile;
@@ -728,6 +732,7 @@ function createSettingsStore() {
 				);
 				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
 				setState("customLaunchers", config.custom_launchers ?? []);
+				setState("additionalReadableDirs", config.additional_readable_dirs ?? ["~/.claude/plans"]);
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
 				setState("egoExecutable", config.ego_executable ?? "");
 				setState("egoProfile", config.ego_profile ?? "");
@@ -914,6 +919,12 @@ function createSettingsStore() {
 		/** Replace the full list of custom launchers (add/edit/remove all go through here) */
 		setCustomLaunchers(launchers: CustomLauncher[]): void {
 			setState("customLaunchers", launchers);
+			save();
+		},
+
+		/** Replace the full list of additional HTTP-readable directories (add/remove go through here) */
+		setAdditionalReadableDirs(dirs: string[]): void {
+			setState("additionalReadableDirs", dirs);
 			save();
 		},
 
