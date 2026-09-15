@@ -33,6 +33,7 @@ function terminal(over: Partial<ActivityTerminalRow> = {}): ActivityTerminalRow 
 		isRateLimited: false,
 		agentState: null,
 		backgroundWork: false,
+		declaredBackgroundWork: false,
 		isBusy: false,
 		isPromoted: false,
 		...over,

@@ -21,6 +21,7 @@ type SessionLifecycleResponse = {
 		awaiting_input?: boolean;
 		question_confident?: boolean;
 		background_work?: boolean;
+		declared_background_work?: boolean;
 		queued_commands?: number;
 	} | null;
 };
@@ -124,6 +125,7 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 			awaitingInput: session.state?.awaiting_input === true ? "question" : null,
 			awaitingInputConfident: session.state?.question_confident === true,
 			backgroundWork: session.state?.background_work === true,
+			declaredBackgroundWork: session.state?.declared_background_work === true,
 			// Omitted by the backend when zero (serde skips it), so absence is an
 			// empty queue — not "unknown".
 			queuedCommands: session.state?.queued_commands ?? 0,

@@ -495,6 +495,17 @@ pub(crate) struct SessionState {
     /// are excluded by the PTY process-tree classifier.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub background_work: bool,
+    /// True while Claude's own hook payload (the `bgtasks` OSC 7770 verb,
+    /// scraped from `background_tasks` on `Stop`/`StopFailure`) declared at
+    /// least one background task still running, for the CURRENT turn.
+    /// Deliberately separate from `background_work` above (an OS process-tree
+    /// observation, demand-gated and refreshed every 1s — see
+    /// `set_background_work_for_epoch_with_hook`'s doc comment): this field
+    /// is computed at snapshot time in `session_state_with_shell` from
+    /// `SilenceState::declared_background_work_for_epoch`, never written
+    /// directly, and never touched by any polling loop.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub declared_background_work: bool,
     /// Turn whose confirmed-ready observation is waiting for a process snapshot
     /// newer than `background_probe_after_generation`.
     #[serde(skip)]
@@ -3444,6 +3455,20 @@ impl AppState {
     /// Default rate limit expiry when no retry_after_ms is provided (120s).
     const RATE_LIMIT_DEFAULT_EXPIRY_MS: u64 = 120_000;
 
+    /// True if Claude's own hook payload declared background tasks still
+    /// running as of `turn_epoch` — self-expires the moment a new turn
+    /// starts (see `SilenceState::declared_background_work_for_epoch`).
+    /// Shared by `session_state_with_shell`'s ladder and every other read
+    /// site that needs to know about hook-declared background work, so a
+    /// future change to how this is stored only needs updating here.
+    pub(crate) fn declared_background_work_for(&self, session_id: &str, turn_epoch: u64) -> bool {
+        self.silence_states.get(session_id).is_some_and(|silence| {
+            silence
+                .lock()
+                .declared_background_work_for_epoch(turn_epoch)
+        })
+    }
+
     /// Get a SessionState snapshot with shell_state from the PTY reader's state machine.
     /// Also expires stale rate limits based on retry_after_ms + timestamp.
     pub(crate) fn session_state_with_shell(&self, session_id: &str) -> Option<SessionState> {
@@ -3480,7 +3505,12 @@ impl AppState {
                     .lock()
                     .completion_declared_for_epoch(state.turn_epoch)
             });
-        let background_work = state.has_pending_background_probe() || state.background_work;
+        let declared_background_work =
+            self.declared_background_work_for(session_id, state.turn_epoch);
+        state.declared_background_work = declared_background_work;
+        let background_work = state.has_pending_background_probe()
+            || state.background_work
+            || declared_background_work;
         // A current-turn completion marker is stronger than a stale BUSY atom
         // (for example a completed Codex screen that still contains its last
         // Working row). Keep real background work authoritative, but normalize

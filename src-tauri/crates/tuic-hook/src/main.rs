@@ -111,8 +111,8 @@ DERIVATION (Claude Code events):
     Notification          state=awaiting  scrapes message, notification_type
     Elicitation           state=awaiting  MCP server asking the user for input mid tool call
     ElicitationResult     state=busy      paired retraction for Elicitation
-    Stop                  state=idle
-    StopFailure           state=idle      toolfail=1
+    Stop                  state=idle      scrapes background_tasks
+    StopFailure           state=idle      toolfail=1; scrapes background_tasks
     SessionEnd            state=idle
 An unrecognized or absent `hook_event_name` derives nothing; only explicit flags apply.
 
@@ -126,6 +126,7 @@ FLAGS (override the derived value; freely combinable):
     --emit-tool                    Force scraping tool_name.
     --emit-notify                  Force scraping message.
     --emit-notification-type       Force scraping notification_type.
+    --emit-background-tasks        Force scraping background_tasks.
     --version                      Print the version and exit (no TUIC_SESSION needed).
     --help, -h                     Print this message and exit (no TUIC_SESSION needed).
 
@@ -136,7 +137,7 @@ understand, never fail the hook.
 STDIN:
     A JSON object, read in full (bounded to 1 MiB). Fields read: hook_event_name,
     session_id, cwd, transcript_path, tool_name, message, notification_type,
-    exit_code, is_interrupt.
+    exit_code, is_interrupt, background_tasks.
     Missing, empty, or malformed fields are treated as absent — never an error. A
     payload truncated past the bound loses the whole fire's derivation, not just
     the oversized field.
@@ -150,9 +151,9 @@ ENVIRONMENT:
 
 WIRE FORMAT:
     ESC ] 7770 ; verb=payload ESC \    (one sequence per verb, one write per fire)
-    Free-text payloads (ccsession, cwd, transcript, tool, notify, notifytype) are
-    percent-encoded; state and toolfail are fixed enum/numeric values, emitted
-    verbatim.
+    Free-text payloads (ccsession, cwd, transcript, tool, notify, notifytype,
+    bgtasks) are percent-encoded; state and toolfail are fixed enum/numeric
+    values, emitted verbatim.
 "#,
         version = env!("CARGO_PKG_VERSION")
     )
@@ -181,6 +182,7 @@ struct ParsedArgs {
     emit_tool: bool,
     emit_notify: bool,
     emit_notification_type: bool,
+    emit_background_tasks: bool,
 }
 
 /// Hand-rolled, not clap: this is most of the per-fire cost a compiled
@@ -210,6 +212,7 @@ fn parse_args(args: &[String]) -> ParsedArgs {
             "--emit-tool" => out.emit_tool = true,
             "--emit-notify" => out.emit_notify = true,
             "--emit-notification-type" => out.emit_notification_type = true,
+            "--emit-background-tasks" => out.emit_background_tasks = true,
             _ => {} // unrecognized — ignore, don't error
         }
         i += 1;
@@ -288,6 +291,7 @@ struct EventDerivation {
     scrape_message: bool,
     scrape_notification_type: bool,
     scrape_session_metadata: bool,
+    scrape_background_tasks: bool,
     toolfail: DerivedToolfail,
 }
 
@@ -314,6 +318,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: true,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -323,6 +328,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -332,6 +338,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -341,6 +348,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -350,6 +358,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::FromStdinExitCode,
     },
     EventDerivation {
@@ -359,6 +368,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: true,
         scrape_notification_type: true,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -373,6 +383,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -384,15 +395,25 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
+        // `background_tasks` (an array of {id,type,status,description,command})
+        // rides on Claude Code's own `Stop`/`StopFailure` payload when a
+        // backgrounded tool call (e.g. a `run_in_background` Bash command) is
+        // still outstanding as the turn ends. Scraped here as raw per-task
+        // `status` strings (see `scrape_background_tasks_statuses`) — this
+        // binary stays a dumb extractor; `pty.rs` decides which status values
+        // mean "still running" (see crate AGENTS.md's "Extending an existing
+        // event's scrape set").
         event: "Stop",
         state: Some("idle"),
         scrape_tool_name: false,
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: true,
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
@@ -402,6 +423,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: true,
         toolfail: DerivedToolfail::Fixed("1"),
     },
     EventDerivation {
@@ -411,6 +433,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         scrape_message: false,
         scrape_notification_type: false,
         scrape_session_metadata: false,
+        scrape_background_tasks: false,
         toolfail: DerivedToolfail::None,
     },
 ];
@@ -430,6 +453,8 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
     let scrape_message = parsed.emit_notify || derivation.is_some_and(|d| d.scrape_message);
     let scrape_notification_type =
         parsed.emit_notification_type || derivation.is_some_and(|d| d.scrape_notification_type);
+    let scrape_background_tasks =
+        parsed.emit_background_tasks || derivation.is_some_and(|d| d.scrape_background_tasks);
 
     if scrape_session_metadata {
         if let Some(v) = str_field(stdin_json, "session_id") {
@@ -460,6 +485,20 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
     // deterministically instead of guessing from prose.
     if scrape_notification_type && let Some(v) = str_field(stdin_json, "notification_type") {
         pairs.push(Emission::encoded("notifytype", v));
+    }
+
+    // `background_tasks`: an array Claude Code includes on `Stop`/`StopFailure`
+    // when a backgrounded tool call (e.g. a `run_in_background` Bash command)
+    // is still outstanding as the turn ends. Scraped as the raw, comma-joined
+    // per-task `status` strings — NOT reduced to a "still running" boolean
+    // here, per this crate's own rule against baking Claude Code's evolving
+    // vocabulary into this binary (see crate AGENTS.md). `pty.rs` decides
+    // which status values mean "still running". Emitted whenever the field is
+    // present, even as an empty array (empty payload) — that's a real
+    // observation ("no background tasks"), same as an empty-but-present list
+    // for every other opportunistic scrape here.
+    if scrape_background_tasks && let Some(v) = background_task_statuses(stdin_json) {
+        pairs.push(Emission::encoded("bgtasks", v));
     }
 
     // toolfail: an explicit fixed value or `--toolfail-from-stdin` always
@@ -502,6 +541,26 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
     // exact moment it processes `state=idle`.
     let (toolfail, rest): (Vec<_>, Vec<_>) = pairs.into_iter().partition(|p| p.verb == "toolfail");
     toolfail.into_iter().chain(rest).collect()
+}
+
+/// Extracts the raw `status` string of every entry in stdin's
+/// `background_tasks` array, comma-joined (e.g. `"running,completed"`).
+/// `None` when the field is absent (no observation to report — the receiving
+/// end should leave its prior value alone). `Some("")` when the field is
+/// present but empty, or when every entry's `status` is missing/non-string —
+/// a real "nothing outstanding" observation, distinct from absence. A comma
+/// itself can never appear inside a status value from this source (Claude
+/// Code's own enum strings), and the payload is percent-encoded on the wire
+/// regardless (`Emission::encoded`), so a plain join needs no escaping.
+fn background_task_statuses(stdin_json: &Value) -> Option<String> {
+    let tasks = stdin_json.get("background_tasks")?.as_array()?;
+    Some(
+        tasks
+            .iter()
+            .filter_map(|t| t.get("status").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(","),
+    )
 }
 
 /// `None` suppresses the toolfail emission entirely — used for
@@ -559,12 +618,14 @@ mod tests {
             "--emit-tool".into(),
             "--emit-notify".into(),
             "--emit-notification-type".into(),
+            "--emit-background-tasks".into(),
         ]);
         assert!(a.toolfail_from_stdin);
         assert!(a.emit_session);
         assert!(a.emit_tool);
         assert!(a.emit_notify);
         assert!(a.emit_notification_type);
+        assert!(a.emit_background_tasks);
     }
 
     #[test]
@@ -984,6 +1045,101 @@ mod tests {
     }
 
     #[test]
+    fn derives_background_tasks_before_state_for_stop() {
+        // Real production shape (2026-09-14 capture, diff-tool worktree): Claude
+        // Code's Stop payload can carry `background_tasks` when a backgrounded
+        // tool call is still outstanding as the turn ends. Scraped as raw
+        // comma-joined statuses, ordered before `state` on the wire (mirrors
+        // notify/notifytype preceding state) since `pty.rs` reads it that way.
+        let json = serde_json::json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [{"id": "bzala5foe", "type": "shell", "status": "running"}],
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(verbs, ["bgtasks", "state"]);
+        assert_eq!(pairs[0].payload, "running");
+        assert_eq!(pairs[1].payload, "idle");
+    }
+
+    #[test]
+    fn background_tasks_multiple_statuses_are_comma_joined() {
+        let json = serde_json::json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [
+                {"id": "a", "status": "running"},
+                {"id": "b", "status": "completed"},
+            ],
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        assert_eq!(pairs[0].verb, "bgtasks");
+        // `,` is outside the unreserved set, so `Emission::encoded` percent-
+        // encodes it at construction time — the receiving end percent-decodes
+        // before splitting on commas (see `background_task_statuses`'s doc).
+        assert_eq!(pairs[0].payload, "running%2Ccompleted");
+    }
+
+    #[test]
+    fn background_tasks_present_but_empty_emits_empty_payload() {
+        // An empty array is a real observation ("nothing outstanding right
+        // now"), distinct from the field being absent entirely — must still
+        // emit, so the receiving end can clear a stale prior declaration.
+        let json = serde_json::json!({"hook_event_name": "Stop", "background_tasks": []});
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        assert_eq!(pairs[0].verb, "bgtasks");
+        assert_eq!(pairs[0].payload, "");
+    }
+
+    #[test]
+    fn background_tasks_absent_field_emits_nothing_for_it() {
+        let json = serde_json::json!({"hook_event_name": "Stop"});
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        assert_eq!(pairs.len(), 1, "must derive only `state`, no `bgtasks`");
+        assert_eq!(pairs[0].verb, "state");
+    }
+
+    #[test]
+    fn background_tasks_scraped_for_stop_failure_too() {
+        let json = serde_json::json!({
+            "hook_event_name": "StopFailure",
+            "background_tasks": [{"id": "a", "status": "running"}],
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(verbs, ["toolfail", "bgtasks", "state"]);
+    }
+
+    #[test]
+    fn background_tasks_not_scraped_for_unrelated_events() {
+        // PostToolUse's Claude-generated matcher only fires for
+        // AskUserQuestion|ExitPlanMode in practice, but even a bare
+        // derivation-table lookup must not scrape background_tasks here —
+        // only Stop/StopFailure do.
+        let json = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "background_tasks": [{"id": "a", "status": "running"}],
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        assert!(pairs.iter().all(|p| p.verb != "bgtasks"));
+    }
+
+    #[test]
+    fn emit_background_tasks_flag_forces_the_scrape() {
+        let parsed = ParsedArgs {
+            emit_background_tasks: true,
+            ..Default::default()
+        };
+        let json = serde_json::json!({
+            "hook_event_name": "SomeFutureEvent",
+            "background_tasks": [{"id": "a", "status": "running"}],
+        });
+        let pairs = build_emissions(&parsed, &json);
+        assert_eq!(pairs[0].verb, "bgtasks");
+        assert_eq!(pairs[0].payload, "running");
+    }
+
+    #[test]
     fn unrecognized_hook_event_name_derives_nothing() {
         let json = serde_json::json!({"hook_event_name": "SomeFutureEvent", "tool_name": "Bash"});
         let pairs = build_emissions(&ParsedArgs::default(), &json);
@@ -1078,6 +1234,7 @@ mod tests {
             "--emit-tool",
             "--emit-notify",
             "--emit-notification-type",
+            "--emit-background-tasks",
             "--version",
             "--help",
             "TUIC_SESSION",
@@ -1089,6 +1246,30 @@ mod tests {
             "is_interrupt",
         ] {
             assert!(text.contains(needle), "help text missing {needle}");
+        }
+    }
+
+    #[test]
+    fn help_text_stdin_field_list_matches_what_is_actually_read() {
+        // Nothing previously enforced that help_text()'s hand-written STDIN
+        // field list stays in sync with what build_emissions/toolfail_from_exit_code
+        // actually read from stdin — per this crate's own AGENTS.md rule
+        // ("when fixing a stale doc claim... add the assertion that would
+        // have caught it"), this is that assertion.
+        let text = help_text();
+        for field in [
+            "hook_event_name",
+            "session_id",
+            "cwd",
+            "transcript_path",
+            "tool_name",
+            "message",
+            "notification_type",
+            "exit_code",
+            "is_interrupt",
+            "background_tasks",
+        ] {
+            assert!(text.contains(field), "STDIN field list missing {field}");
         }
     }
 

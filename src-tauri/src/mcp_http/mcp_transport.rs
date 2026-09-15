@@ -2886,6 +2886,9 @@ fn handle_session(
                     let background_work = session_state
                         .as_ref()
                         .is_some_and(|snapshot| snapshot.background_work);
+                    let declared_background_work = session_state
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.declared_background_work);
                     let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
                     let child_pid = s._child.process_id();
                     #[cfg(unix)]
@@ -2895,6 +2898,7 @@ fn handle_session(
                     let mut session = serde_json::json!({
                         "session_id": id,
                         "background_work": background_work,
+                        "declared_background_work": declared_background_work,
                         "standby": standby,
                         "is_caller": caller_tuic.as_deref() == Some(id.as_str()),
                     });
@@ -3362,6 +3366,7 @@ fn handle_session(
                     let mut response = serde_json::json!({
                         "session_id": session_id,
                         "background_work": ss.background_work,
+                        "declared_background_work": ss.declared_background_work,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,
                         "delivery_uncertain": delivery_uncertain,
@@ -8032,6 +8037,7 @@ mod tests {
             assert!(!entry.contains_key(absent), "{absent} must be omitted");
         }
         assert!(entry.contains_key("background_work"));
+        assert!(entry.contains_key("declared_background_work"));
         assert!(entry.contains_key("standby"));
         assert!(entry.contains_key("is_caller"));
 
@@ -15312,6 +15318,7 @@ mod tests {
             assert!(!object.contains_key(absent), "{absent} must be omitted");
         }
         assert!(object.contains_key("background_work"));
+        assert!(object.contains_key("declared_background_work"));
         assert!(object.contains_key("awaiting_input"));
     }
 

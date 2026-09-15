@@ -75,6 +75,7 @@ export interface ActiveSessionInfo {
 		agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
 		agent_type?: string | null;
 		background_work?: boolean;
+		declared_background_work?: boolean;
 		queued_commands?: number;
 	} | null;
 }

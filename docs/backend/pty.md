@@ -734,6 +734,30 @@ and stops scanning stable idle sessions. Enumeration or parse failures preserve
 the prior `background_work` value. On Windows, where Toolhelp does not provide
 command lines, generic `node.exe` processes are kept as meaningful work rather
 than guessed to be `node_repl` helpers.
+**`declared_background_work` — a second, hook-authoritative source, deliberately not merged into `background_work` above:**
+Claude Code's own `Stop`/`StopFailure` hook payload can include a `background_tasks`
+array naming a backgrounded tool call (e.g. `run_in_background` Bash) still running
+as the turn ends — `tuic-hook` scrapes it and emits the `bgtasks` OSC 7770 verb (see
+[Alacritty Integration → OSC 7770](./alacritty-integration.md#osc-7770--tuic-protocol)).
+This can't feed the process-tree `background_work` field above: that field's
+refresher is demand-gated on `background_work` itself being `true` and runs every
+second, so a hook-set value would be overwritten (and its clear path would spuriously
+publish a completion) on the refresher's very next tick. Instead it's stored as
+`SilenceState::declared_background_work`, shaped exactly like `completion_declared`
+just above — single writer, epoch-stamped, self-expiring on the next submitted
+turn, untouched by any polling loop — and folded into the `agent_state` ladder
+(`state.rs::session_state_with_shell`) as an additional term alongside
+`background_work`. Wire-exposed as its own `declared_background_work` field
+specifically so the frontend can bypass `background_work`'s idle-preserving carve-out
+for this authoritative, Claude-self-reported case (see `activitySnapshot.ts`'s
+`effectiveActivityState`). Classified fail-safe, not by an exact `"running"` match:
+`background_tasks[].status` is not a documented closed set anywhere (unlike
+`notification_type`'s enumerated values) — only `completed`/`failed` are confirmed
+terminal from real production captures, so any other status (including a future or
+unrecognized one) counts as still active, the same "unanswered evidence counts as
+work" philosophy `has_pending_background_probe` already applies to the OS-heuristic
+path.
+
 Submitting new user or PTY-injected peer input starts a new task epoch immediately,
 clearing the prior completion marker and its stale suggested actions before new output arrives.
 Claude channel and inbox delivery do not claim a submitted turn; the channel is used only

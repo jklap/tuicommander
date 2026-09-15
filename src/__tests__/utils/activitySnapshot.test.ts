@@ -187,6 +187,7 @@ describe("activitySnapshot", () => {
 					isRateLimited: false,
 					agentState: null,
 					backgroundWork: false,
+					declaredBackgroundWork: false,
 					isBusy: true,
 					isPromoted: false,
 				},
@@ -242,6 +243,32 @@ describe("terminalStatusLabel", () => {
 	it("keeps background work authoritative until the composer is ready", () => {
 		expect(effectiveActivityState("busy", null, false, "working", true)).toBe("working");
 		expect(effectiveActivityState(null, null, false, "working", true)).toBe("working");
+	});
+
+	it("shows Working, not Idle, when Claude has declared background work — even with a ready composer", () => {
+		// The direct contrast with the Codex carve-out two tests above: an
+		// authoritative, Claude-self-reported declaration bypasses the
+		// idle-preserving rule that plain OS-heuristic `backgroundWork` is
+		// subject to.
+		expect(effectiveActivityState("idle", null, false, "working", false, true)).toBe("working");
+		expect(terminalStatusLabel("idle", null, false, cls, "working", false, true)).toEqual({
+			label: "Working",
+			className: "WORK",
+		});
+	});
+
+	it("does not let a declared-background-work default of false change the Codex carve-out", () => {
+		// Regression guard: omitting the new parameter entirely (every
+		// pre-existing call site) must keep behaving exactly as before.
+		expect(effectiveActivityState("idle", null, false, "working", true)).toBe("idle");
+	});
+
+	it("declared background work outranks the OS-heuristic idle carve-out even when both are true", () => {
+		expect(effectiveActivityState("idle", null, false, "working", true, true)).toBe("working");
+	});
+
+	it("awaiting_input still outranks declared background work", () => {
+		expect(effectiveActivityState("idle", "question", false, "working", false, true)).toBe("awaiting_input");
 	});
 
 	it("preserves completed instead of reviving stale shell activity", () => {
