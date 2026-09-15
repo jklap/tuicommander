@@ -802,6 +802,16 @@ export async function initApp(deps: AppInitDeps) {
 		paneLayoutStore.arrangeSessionsAsLayout(session_ids, layout);
 	}).catch((err) => appLogger.error("app", "Failed to register tmux-window-layout-requested listener", err));
 
+	// A hardware controller (StreamDock macropad, etc.) asking the UI to
+	// focus a session's tab — see `AppEvent::SessionFocusRequested`'s doc
+	// comment (state.rs). `navigateToTerminal` is the one full focus path
+	// (repo/workspace context, pane group, keyboard focus), the same one a
+	// notification click uses.
+	listen<{ session_id: string }>("session-focus-requested", (event) => {
+		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
+		if (termId) navigateToTerminal(termId);
+	}).catch((err) => appLogger.error("app", "Failed to register session-focus-requested listener", err));
+
 	listen<{ session_id: string; standby: boolean }>("session-standby", (event) => {
 		const { session_id, standby } = event.payload;
 		const termId = terminalsStore.getTerminalForSession(session_id);

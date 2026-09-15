@@ -832,10 +832,12 @@ const API_PREFIXES: &[&str] = &[
     "sessions",
     "stats",
     "stories",
+    "streamdock",
     "system",
     "terminal",
     "tmux",
     "tunnels",
+    "ui",
     "watchers",
     "workflows",
     "worktrees",
@@ -1015,6 +1017,8 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::has_foreground_process),
         )
         .route("/sessions/{id}/visible", post(session::set_session_visible))
+        .route("/sessions/{id}/focus", post(session::focus_session))
+        .route("/ui/action", post(session::run_ui_action))
         .route("/sessions/{id}", delete(session::close_session))
         // tmux compat shim topology (see tmux_routes.rs; backs `tuic`-as-`tmux`'s
         // split-window/new-window/list-panes/etc.)
@@ -2177,6 +2181,20 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/github/resolve-repos",
             post(github_routes::github_resolve_repos),
         );
+
+    // StreamDock M18 macropad — desktop-only: `tuic_streamdock` is a
+    // desktop-feature optional dependency, so `state.streamdock` doesn't
+    // exist on a `tuic-remote` build at all.
+    #[cfg(feature = "desktop")]
+    let routes = routes.route(
+        "/streamdock/status",
+        get(crate::streamdock::commands::get_status),
+    );
+    #[cfg(feature = "desktop")]
+    let routes = routes.route(
+        "/streamdock/devices",
+        get(crate::streamdock::commands::list_devices),
+    );
 
     // Dictation — desktop-only: `crate::dictation` owns the audio capture and
     // the whisper model, both gated on the opt-in `dictation` feature.

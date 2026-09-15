@@ -478,6 +478,22 @@ direct URL. **Auto-update remote daemons** is a per-connection option, off by
 default. It updates on connect only when the daemon has no live PTY sessions.
 See [Remote Access → Remote Connection Manager](remote-access.md#remote-connection-manager).
 
+### StreamDock
+
+Configure a StreamDock M18 macropad (15-key LCD grid + 3 plain buttons) that mirrors live session
+state to its keys. Desktop only.
+
+- **Enable StreamDock integration** — attach to the first connected device (or the one selected below)
+- **StreamDock status** — live connection state, polled every 2s
+- **Device** — pick which unit to use when more than one is connected, with a rescan button
+- **Screen brightness** / **LED brightness** — 0-100%; LED brightness only applies on firmware that reports RGB support
+- **Pinned sessions** — a toggle per live session; a pinned session's key is never evicted to make room for another, even one that needs input more urgently
+
+Each key shows a session's status color, its short alias (e.g. `tc-1`), and current task. Tap a
+key to answer its pending choice prompt (if any) or focus that tab; double-tap answers the
+second option; hold sends an interrupt. The bottom row and the 3 plain buttons are fixed verb
+keys (approve/reject/interrupt/jump-to-waiting).
+
 ### Plugins
 
 Install, manage, and browse plugins. See [Plugins](plugins.md) for the full guide.

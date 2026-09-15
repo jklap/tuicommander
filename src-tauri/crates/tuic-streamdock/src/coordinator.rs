@@ -202,13 +202,8 @@ impl Coordinator {
             .max_by_key(|s| priority_of(s, self.last_now_ms))
     }
 
-    /// Placeholder until the choice-prompt option list is threaded through
-    /// `SessionSnapshot` (it is not yet a field on that DTO — see the
-    /// `port.rs` TODO — because `Plan 4`'s dispatch work lands the option
-    /// list alongside `choice_prompt_pending` once the host adapter starts
-    /// populating it from `SessionState::choice_prompt.options[]`).
-    fn choice_option_keys(&self, _session: &SessionSnapshot) -> Vec<String> {
-        Vec::new()
+    fn choice_option_keys(&self, session: &SessionSnapshot) -> Vec<String> {
+        session.choice_prompt_options.clone()
     }
 }
 
@@ -298,6 +293,7 @@ mod tests {
             shell_state: None,
             awaiting_input: false,
             choice_prompt_pending: false,
+            choice_prompt_options: Vec::new(),
             rate_limited: false,
             suggested_actions_pending: false,
             last_activity_ms: 0,
