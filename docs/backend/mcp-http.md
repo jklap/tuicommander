@@ -350,6 +350,7 @@ serving a configuration the disk disagrees with. See
 | `GET` | `/worktrees/paths?path=` | Get linked-worktree paths for a repo, keyed by workspace id and carrying `kind` |
 | `GET` | `/worktrees/lifecycle?repoPath=&workspaceId=` | Fresh dirty/commit/removal-safety verdict for one exact workspace; unknown fails closed |
 | `POST` | `/worktrees/run-script` | Run a Setup/Archive/Run script (`{script, cwd}`) with the `TUIC_*` env injected and the 900 s deadline — loopback or authenticated only (`require_local_or_auth`); `cwd` must be absolute after `~` expansion |
+| `GET` | `/worktrees/setup-status` | Poll a worktree's background setup chain (`?repoPath=&branch=`) — `{state: "running"\|"not_configured"\|"completed"\|"unknown"}`, `+exit_code`/`error` when completed |
 
 ### Dictation and Desktop Integration
 
@@ -830,7 +831,7 @@ say what was measured, not what the list costs today.
 | `agent` | spawn, wait, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `remote` | preview, update | Enabled |
-| `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
+| `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, worktree_setup_status, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |

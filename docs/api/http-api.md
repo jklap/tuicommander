@@ -2563,8 +2563,30 @@ are identical by construction. Payload table: `docs/sync-matrix.md`.
 `{exit_code, stdout, stderr}` result or error string rode on this response).
 The outcome is reported later via the dual-emitted
 `worktree-setup-script-completed` event (`/events` SSE; payload in
-`docs/sync-matrix.md`), silent when no script is configured. The same applies
-to MCP `repo action=worktree_create` and `POST /sessions/worktree`.
+`docs/sync-matrix.md`), silent when no script is configured, or polled via
+`GET /worktrees/setup-status` below. The same applies to MCP
+`repo action=worktree_create` (poll with `action=worktree_setup_status`) and
+`POST /sessions/worktree`.
+
+### Poll Worktree Setup Status
+
+```
+GET /worktrees/setup-status?repoPath=/path/to/repo&branch=feature-x
+```
+
+Read-only status check for the background setup chain kicked off by worktree
+creation — the only way an MCP client (no SSE/event stream) can ever learn a
+configured Setup Script's outcome, since `POST /worktrees` doesn't return it
+synchronously (see above). Response is
+`{ "state": "running" | "not_configured" | "completed" | "unknown" }`, with
+`exit_code`/`error` also present when `state` is `"completed"`. `"unknown"`
+means nothing is tracked for this `(repoPath, branch)` pair — never created
+this way, aged out (30 minute TTL), or the app restarted since — treat it as
+"can't tell," not as "definitely no script." A chain stopped because the
+workspace was removed drops its entry (`unknown`); an aborted chain reports
+`completed` with `exit_code: null` and an `error`. `completed` is recorded before
+the workspace's `warm_artifacts.status` turns `done`/`failed`. No auth gate beyond
+the standard server auth (read-only, same as `GET /worktrees/paths`).
 
 ### Worktrees Base Directory
 
