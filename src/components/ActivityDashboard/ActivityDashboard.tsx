@@ -179,6 +179,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			isRL,
 			term.agentState,
 			term.backgroundWork,
+			term.declaredBackgroundWork,
 		);
 		const status = terminalStatusLabel(
 			term.shellState,
@@ -187,6 +188,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			statusClasses,
 			term.agentState,
 			term.backgroundWork,
+			term.declaredBackgroundWork,
 		);
 		const repoPath = repositoriesStore.getRepoPathForTerminal(id);
 		return {
@@ -223,7 +225,14 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			return (
 				!!term &&
 				isActivityWorking(
-					effectiveActivityState(term.shellState, term.awaitingInput, isRL, term.agentState, term.backgroundWork),
+					effectiveActivityState(
+						term.shellState,
+						term.awaitingInput,
+						isRL,
+						term.agentState,
+						term.backgroundWork,
+						term.declaredBackgroundWork,
+					),
 				)
 			);
 		};
