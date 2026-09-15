@@ -224,10 +224,11 @@ async fn run_one_device(
     reader::spawn(model, Arc::clone(&device), input_tx);
 
     let cfg = state.config.read().streamdock.clone();
+    let rgb_supported = model_supports_rgb(model, &device).await;
     let _ = handle
         .send(actor::DeviceMsg::ScreenBrightness(cfg.screen_brightness))
         .await;
-    if model_supports_rgb(model, &device).await {
+    if rgb_supported {
         let _ = handle
             .send(actor::DeviceMsg::LedBrightness(cfg.led_brightness))
             .await;
@@ -239,7 +240,8 @@ async fn run_one_device(
     let sink = AppStateSink {
         state: Arc::clone(state),
     };
-    let mut coordinator = tuic_streamdock::Coordinator::new(15, model.key_px as u32, 90);
+    let mut coordinator =
+        tuic_streamdock::Coordinator::new(15, model.led_count, model.key_px as u32, 90);
     coordinator.set_pinned(cfg.pinned_sessions.iter().cloned());
 
     let mut dirty = true;
@@ -279,6 +281,11 @@ async fn run_one_device(
                     .as_millis() as u64;
                 coordinator.tick(&source, &handle, &mut dirty, now_ms).await;
                 coordinator.tick_gestures(&sink, Instant::now());
+                if rgb_supported
+                    && let Some(colors) = coordinator.ambient_led_update(now_ms)
+                {
+                    let _ = handle.send(actor::DeviceMsg::SetLedColors(colors)).await;
+                }
             }
         }
     }

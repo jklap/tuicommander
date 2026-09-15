@@ -2291,3 +2291,7 @@ and pressing it focuses that session's tab. Desktop only.
 ### 26.5 Hardware Notes
 - Reading a button press and writing a key's LCD image use two independent numbering spaces on this hardware for the same physical key — confirmed empirically, not documented by the vendor
 - Hot-plug (unplug/replug) recovers automatically via a 2s discovery poll; the vendor's own Creator app holds the device exclusively and must not be running alongside TUICommander
+
+### 26.6 Ambient LED Ring
+- The 24-LED ring renders one aggregate color for the whole panel, not per-key: green when nothing needs you, peach when at least one live session is awaiting input, red on an error/rate-limited session
+- Only sent when it actually changes (one write per state transition, not per tick) and only on firmware that negotiated RGB support at connect time — an `V2.M18` unit has no LEDs and this is skipped entirely, never attempted
