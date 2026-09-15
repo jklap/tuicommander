@@ -2264,6 +2264,7 @@ mod tests {
         open_url_payloads: Vec<Vec<u8>>,
         printed: Vec<char>,
         kitty_graphics_calls: Vec<Vec<u8>>,
+        osc133_calls: Vec<(char, String)>,
     }
 
     impl Handler for MockHandler {
@@ -2335,6 +2336,10 @@ mod tests {
         fn kitty_graphics(&mut self, data: &[u8]) {
             self.kitty_graphics_calls.push(data.to_vec());
         }
+
+        fn osc133(&mut self, command: char, params: &str) {
+            self.osc133_calls.push((command, params.to_string()));
+        }
     }
 
     impl Default for MockHandler {
@@ -2356,6 +2361,7 @@ mod tests {
                 open_url_payloads: Vec::new(),
                 printed: Vec::new(),
                 kitty_graphics_calls: Vec::new(),
+                osc133_calls: Vec::new(),
             }
         }
     }
@@ -2626,7 +2632,7 @@ mod tests {
     /// cleanly on the sequence that follows.
     #[test]
     fn apc_pm_sos_strings_are_fully_swallowed_without_leaking_to_print() {
-        for introducer in [b'_', b'^', b'X'] {
+        for introducer in *b"_^X" {
             let mut bytes: Vec<u8> = vec![0x1b, introducer];
             bytes.extend_from_slice(b"Gi=1,a=t,f=24;not-real-payload\x07also not real");
             bytes.extend_from_slice(&[0x1b, b'\\']);
@@ -2666,7 +2672,7 @@ mod tests {
 
     #[test]
     fn pm_and_sos_never_reach_kitty_graphics() {
-        for introducer in [b'^', b'X'] {
+        for introducer in *b"^X" {
             let mut bytes: Vec<u8> = vec![0x1b, introducer];
             bytes.extend_from_slice(b"Gi=1,a=T,f=24;aGVsbG8=");
             bytes.extend_from_slice(&[0x1b, b'\\']);
@@ -2785,6 +2791,118 @@ mod tests {
         parser.advance(&mut handler, bytes);
         assert!(handler.open_url_payloads.is_empty());
         assert!(handler.capture_started.is_none());
+    }
+
+    // OSC 133 (shell integration / semantic prompt) had zero dedicated parse
+    // tests here despite OSC 1337 having several — this group closes that
+    // gap. Mirrors the dispatch grammar in `osc_dispatch`'s `b"133"` arm
+    // directly: `params[1][0]` is the command char; the "rest" text comes
+    // from either `params[1]`'s own tail after an inline `;` (the
+    // `params[1][1] == b';'` branch) or a separate third top-level param
+    // (`params.len() > 2`, the common real-world encoding for `D;<exit_code>`).
+
+    #[test]
+    fn parse_osc133_prompt_start_bare() {
+        let bytes: &[u8] = b"\x1b]133;A\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.osc133_calls, vec![('A', String::new())]);
+    }
+
+    #[test]
+    fn parse_osc133_command_start() {
+        let bytes: &[u8] = b"\x1b]133;B\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.osc133_calls, vec![('B', String::new())]);
+    }
+
+    #[test]
+    fn parse_osc133_execution_start() {
+        let bytes: &[u8] = b"\x1b]133;C\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.osc133_calls, vec![('C', String::new())]);
+    }
+
+    #[test]
+    fn parse_osc133_command_finished_with_exit_code_as_a_separate_param() {
+        // The common real-world encoding: a terminal emits `133;D;42` as
+        // THREE top-level OSC params (`133`, `D`, `42`), which vte's own
+        // `;`-splitting produces naturally — no special-casing needed on the
+        // input side, exercising the `params.len() > 2` branch.
+        let bytes: &[u8] = b"\x1b]133;D;42\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.osc133_calls, vec![('D', "42".to_string())]);
+    }
+
+    #[test]
+    fn parse_osc133_command_finished_with_no_exit_code() {
+        let bytes: &[u8] = b"\x1b]133;D\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.osc133_calls, vec![('D', String::new())]);
+    }
+
+    #[test]
+    fn parse_osc133_bell_terminated() {
+        // Real shells commonly BEL-terminate OSC 133, not just ST — mirrors
+        // `osc_bell_terminated`'s coverage of the generic OSC path for this
+        // specific semantic-prompt command.
+        let bytes: &[u8] = b"\x1b]133;D;0\x07";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.osc133_calls, vec![('D', "0".to_string())]);
+    }
+
+    #[test]
+    fn parse_osc133_multiple_markers_in_one_chunk() {
+        let bytes: &[u8] =
+            b"\x1b]133;A\x1b\\prompt$ \x1b]133;B\x1b\\ls\x1b]133;C\x1b\\out\x1b]133;D;0\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(
+            handler.osc133_calls,
+            vec![
+                ('A', String::new()),
+                ('B', String::new()),
+                ('C', String::new()),
+                ('D', "0".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_osc133_with_no_command_char_is_unhandled_and_does_not_panic() {
+        // `133` with nothing after it: `params.len() >= 2` fails, so
+        // `osc133` must never be called — not a malformed-input panic.
+        let bytes: &[u8] = b"\x1b]133\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert!(handler.osc133_calls.is_empty());
+    }
+
+    #[test]
+    fn parse_osc133_unrecognized_command_char_is_still_forwarded() {
+        // vte itself does no allowlisting of the command char — that's
+        // `Handler::osc133`'s own job (see `terminal_grid.rs`'s
+        // `Event::Osc133` handling, which only reacts to 'A'/'B'/'C'/'D').
+        // An unrecognized char must still reach the handler, not be dropped
+        // at the parser layer.
+        let bytes: &[u8] = b"\x1b]133;Z\x1b\\";
+        let mut parser = Processor::<TestSyncHandler>::new();
+        let mut handler = MockHandler::default();
+        parser.advance(&mut handler, bytes);
+        assert_eq!(handler.osc133_calls, vec![('Z', String::new())]);
     }
 
     #[test]

@@ -4875,6 +4875,152 @@ fn is_cc_tool_call_header(text: &str) -> bool {
     })
 }
 
+/// Detect a `❯ ` prompt line in a Claude Code fullscreen transcript-mode `[`
+/// dump — see `synthesize_transcript_dump_block_events`'s doc comment.
+/// Returns the prompt text (everything after "❯ ", possibly empty).
+fn transcript_dump_prompt_text(text: &str) -> Option<&str> {
+    text.trim_start().strip_prefix("\u{276F} ")
+}
+
+/// Detect a `✻ ... · done ...` turn-completion line in a `[` dump.
+fn is_transcript_dump_turn_end(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with('\u{273B}') && trimmed.contains("\u{b7} done")
+}
+
+/// Synthesize `AgentBlock` events from a Claude Code fullscreen
+/// transcript-mode `[` dump — the "write the full conversation to native
+/// scrollback" gesture (`Ctrl+O` to enter transcript mode, then `[`).
+/// Verified live (throwaway session via the HTTP API, 2026-09-15): pressing
+/// `[` genuinely exits the alternate screen buffer and prints the whole
+/// conversation as plain, human-formatted text into REAL primary-screen
+/// scrollback — `❯ <prompt>` starts each turn, `✻ ... · done <time>` ends
+/// it. Unlike live/transcript-mode fullscreen (which has no real scrollback
+/// to anchor into at all — see `is_alternate_screen()`'s callers elsewhere in
+/// this file), this dump IS real, monotonically-increasing primary content,
+/// so blocks synthesized from it get `on_alt_screen: false` and work with
+/// every row-anchored feature (gutter, scrollbar, fold, jump-nav,
+/// block-scoped search) exactly like a real shell block would.
+///
+/// Deliberately narrow: only for a hook-instrumented Claude Code session
+/// (`agent_type == "claude" && hook_instrumented`) — a `❯ ` prompt glyph is
+/// not exclusive to this dump (this repo's own zsh prompt can use one), so
+/// this stays scoped to exactly the one agent/scenario it was verified
+/// against. The caller is also expected to only invoke this for chunks where
+/// the alternate screen is NOT active — this function does not check that
+/// itself, since by construction (`on_alt_screen: false` always) it has
+/// nothing else to gate on.
+///
+/// Per the docs, `[` re-dumps the *entire* conversation from scratch each
+/// time it's pressed — every `❯ ` line here is just treated as a fresh block
+/// boundary, the same as `synthesize_cc_block_events` does for `⏺` headers,
+/// regardless of whether the same logical turn was already recorded by an
+/// earlier dump. What stops a repeat gesture from leaving a second,
+/// overlapping copy of the same blocks in `commandBlocks[]` forever
+/// (2026-09-15) is `is_new_generation`, not text-level dedup: the caller
+/// tracks whether the alternate screen was visited since the last dump
+/// activity (only possible between two dumps, since `[` is only reachable
+/// from transcript mode) and passes `true` exactly once, for the chunk that
+/// resumes dump activity after such a visit. This function marks the first
+/// `start` event it synthesizes from that chunk `new_dump_generation: true`;
+/// the frontend responds by pruning every prior `fromTranscriptDump: true`
+/// block (including a still-open `activeBlock`) before adding the new one —
+/// see `terminals.ts`'s `handleOsc133`. A dump that only ever *adds* turns to
+/// the screen without an intervening alt-screen visit (impossible today,
+/// since Claude Code's fullscreen renderer owns the whole session between
+/// dumps, but not a structural assumption this function makes) would
+/// correctly keep `is_new_generation: false` and never prune.
+///
+/// `teardown_end_line` closes a still-open dump block the moment this
+/// function's own gate (`agent_type`/`hook_instrumented`) stops holding —
+/// mirrors `synthesize_cc_block_events`'s `!agent_active` branch. Without
+/// this, `last_dump_block_line` could stay `Some` forever if the gate flips
+/// before a `✻ … · done` marker ever appears (the agent exits). A dump left
+/// open by leaving transcript mode instead (no gate flip) is handled by the
+/// generation-prune above once the next dump starts, not by this teardown.
+fn synthesize_transcript_dump_block_events(
+    changed_rows: &[crate::state::ChangedRow],
+    total_scrolled: usize,
+    agent_type: Option<&str>,
+    hook_instrumented: bool,
+    teardown_end_line: usize,
+    last_dump_block_line: &mut Option<usize>,
+    is_new_generation: bool,
+) -> Vec<ParsedEvent> {
+    if agent_type != Some("claude") || !hook_instrumented {
+        if let Some(prev) = last_dump_block_line.take() {
+            return vec![ParsedEvent::AgentBlock {
+                action: "end".into(),
+                line: teardown_end_line.max(prev + 1) as i64,
+                exit_code: None,
+                prompt_text: None,
+                on_alt_screen: false,
+                from_transcript_dump: true,
+                new_dump_generation: false,
+            }];
+        }
+        return Vec::new();
+    }
+    let mut events = Vec::new();
+    // Only the very first `start` event synthesized after `is_new_generation`
+    // came in true carries `new_dump_generation: true` — consumed here so a
+    // chunk containing several `❯` rows doesn't repeat the signal for every one.
+    let mut pending_new_generation = is_new_generation;
+    for row in changed_rows {
+        let abs_line = total_scrolled + row.row_index;
+        if let Some(prompt_text) = transcript_dump_prompt_text(&row.text) {
+            if Some(abs_line) == *last_dump_block_line {
+                continue;
+            }
+            // Mirrors synthesize_cc_block_events's clamp: the new block's
+            // start must never precede the end just emitted for the block
+            // it's closing.
+            let start_line = if let Some(prev) = *last_dump_block_line {
+                let end_line = abs_line.max(prev + 1);
+                events.push(ParsedEvent::AgentBlock {
+                    action: "end".into(),
+                    line: end_line as i64,
+                    exit_code: None,
+                    prompt_text: None,
+                    on_alt_screen: false,
+                    from_transcript_dump: true,
+                    new_dump_generation: false,
+                });
+                end_line
+            } else {
+                abs_line
+            };
+            events.push(ParsedEvent::AgentBlock {
+                action: "start".into(),
+                line: start_line as i64,
+                exit_code: None,
+                prompt_text: if prompt_text.is_empty() {
+                    None
+                } else {
+                    Some(prompt_text.to_string())
+                },
+                on_alt_screen: false,
+                from_transcript_dump: true,
+                new_dump_generation: std::mem::take(&mut pending_new_generation),
+            });
+            *last_dump_block_line = Some(start_line);
+        } else if is_transcript_dump_turn_end(&row.text)
+            && let Some(prev) = last_dump_block_line.take()
+        {
+            events.push(ParsedEvent::AgentBlock {
+                action: "end".into(),
+                line: abs_line.max(prev + 1) as i64,
+                exit_code: None,
+                prompt_text: None,
+                on_alt_screen: false,
+                from_transcript_dump: true,
+                new_dump_generation: false,
+            });
+        }
+    }
+    events
+}
+
 /// Synthesize `AgentBlock` start/end events from Claude Code `⏺ ToolName(args)`
 /// tool-call headers — the fallback block source for sessions without hook
 /// instrumentation (see `has_tuic_state_integration`; the turn-level idle↔busy
@@ -4887,15 +5033,29 @@ fn is_cc_tool_call_header(text: &str) -> bool {
 /// frontend (fold height, block-scoped search), so a block whose `endLine`
 /// equals its own `promptLine` silently breaks folding.
 ///
-/// Both branches clamp to `.max(prev + 1)`: once the scrollback ring
-/// saturates, `history_size` stops growing while `row_index` keeps cycling,
-/// so `abs_line` is not globally monotonic — without the clamp a full-screen
-/// redraw could emit `end < start`.
+/// `total_scrolled` (the grid's eviction-stable running total — see
+/// `TerminalGrid::screen_origin`) replaced a plain `history_size` here
+/// 2026-09-15: `history_size` plateaus once the scrollback ring saturates
+/// while `row_index` keeps cycling through the same on-screen rows, so two
+/// unrelated headers far apart in real time could land on the identical
+/// `abs_line` — not just risk `end < start` for the block being closed right
+/// now (the `.max(prev + 1)` clamp below still guards that narrower case),
+/// but alias a long-past block's stored row onto a brand new one. See
+/// TUICommander AGENTS.md > Command Blocks > "Scrollback-ring eviction".
+///
+/// `on_alt_screen` reflects whether the alternate screen buffer was active
+/// for this chunk. `total_scrolled`/`row_index` are read from whichever screen
+/// (primary or alt) was active at that instant — a fullscreen TUI never grows
+/// real alt-screen history, so `abs_line` there is a transient on-screen
+/// cursor row, not a valid scrollback anchor. Tagged through unchanged so
+/// row-anchored consumers can skip these blocks without this function having
+/// to know anything about rendering.
 fn synthesize_cc_block_events(
     changed_rows: &[crate::state::ChangedRow],
-    history_size: usize,
+    total_scrolled: usize,
     agent_active: bool,
     teardown_end_line: usize,
+    on_alt_screen: bool,
     last_agent_block_line: &mut Option<usize>,
 ) -> Vec<ParsedEvent> {
     let mut events = Vec::new();
@@ -4906,6 +5066,9 @@ fn synthesize_cc_block_events(
                 line: teardown_end_line.max(prev + 1) as i64,
                 exit_code: None,
                 prompt_text: None,
+                on_alt_screen,
+                from_transcript_dump: false,
+                new_dump_generation: false,
             });
         }
         return events;
@@ -4914,7 +5077,7 @@ fn synthesize_cc_block_events(
         if !is_cc_tool_call_header(&row.text) {
             continue;
         }
-        let abs_line = history_size + row.row_index;
+        let abs_line = total_scrolled + row.row_index;
         if Some(abs_line) == *last_agent_block_line {
             continue;
         }
@@ -4931,6 +5094,9 @@ fn synthesize_cc_block_events(
                 line: end_line as i64,
                 exit_code: None,
                 prompt_text: None,
+                on_alt_screen,
+                from_transcript_dump: false,
+                new_dump_generation: false,
             });
             end_line
         } else {
@@ -4941,6 +5107,9 @@ fn synthesize_cc_block_events(
             line: start_line as i64,
             exit_code: None,
             prompt_text: None,
+            on_alt_screen,
+            from_transcript_dump: false,
+            new_dump_generation: false,
         });
         *last_agent_block_line = Some(start_line);
     }
@@ -6321,6 +6490,22 @@ struct ChunkProcessor {
     /// Absolute buffer line of the last heuristic agent-block start.
     /// Used to emit AgentBlock end when the next block starts or agent exits.
     last_agent_block_line: Option<usize>,
+    /// Absolute buffer line of the last block start synthesized from a
+    /// Claude Code fullscreen transcript-mode `[` dump (see
+    /// `synthesize_transcript_dump_block_events`). Independent of
+    /// `last_agent_block_line` — the dump is a one-shot snapshot printed to
+    /// the primary screen, structurally unrelated to either live block
+    /// source, so it needs its own open/close bookkeeping.
+    last_dump_block_line: Option<usize>,
+    /// Set whenever a chunk is processed with the alternate screen active;
+    /// consumed (and reset false) the next time a primary-screen chunk
+    /// synthesizes a fresh dump `start` event. Since `[` is only reachable
+    /// from transcript mode (the alternate screen), a `true` reading there
+    /// means real primary-screen dump activity resumed after a visit back to
+    /// the agent — i.e. a genuinely new `[`-dump, not a continuation of the
+    /// one already in progress. Drives `new_dump_generation` — see
+    /// `synthesize_transcript_dump_block_events`'s doc comment.
+    dump_saw_alt_screen: bool,
     /// Edge-detect an "Action Required" OSC 0 title so a permission prompt fires
     /// the question notification exactly once (the title repaints every spinner
     /// tick). Agent-agnostic: any agent that puts "Action Required" in its title
@@ -6442,6 +6627,8 @@ impl ChunkProcessor {
             tuic_session,
             last_session_conflict_mark: None,
             last_agent_block_line: None,
+            last_dump_block_line: None,
+            dump_saw_alt_screen: false,
             title_awaiting: false,
             codex_approval_question: None,
             codex_approval_canceled: false,
@@ -6455,11 +6642,20 @@ impl ChunkProcessor {
     /// start/end — the primary block source for any hook-instrumented
     /// session, matching the original one-block-per-prompt+output-cycle
     /// design intent independent of the agent's terminal rendering.
+    ///
+    /// `on_alt_screen` reflects whether the alternate screen buffer was
+    /// active when `line` was computed (by the caller, from
+    /// `history_size() + cursor row` against whichever screen was active at
+    /// that instant). A fullscreen TUI (Claude Code's default renderer) never
+    /// grows real alt-screen history, so `line` there is a transient
+    /// on-screen cursor row, not a valid scrollback anchor — tagged through
+    /// unchanged so row-anchored consumers can skip it.
     fn handle_tuic_state(
         &self,
         payload: &str,
         session_id: &str,
         line: i64,
+        on_alt_screen: bool,
         state: &AppState,
     ) -> (bool, Option<ParsedEvent>) {
         let (target, label) = match payload {
@@ -6487,6 +6683,9 @@ impl ChunkProcessor {
                     line,
                     exit_code: None,
                     prompt_text: last_prompt_text(state, session_id),
+                    on_alt_screen,
+                    from_transcript_dump: false,
+                    new_dump_generation: false,
                 })
             }
             SHELL_IDLE => {
@@ -6500,6 +6699,9 @@ impl ChunkProcessor {
                     line,
                     exit_code: if flagged { Some(1) } else { None },
                     prompt_text: None,
+                    on_alt_screen,
+                    from_transcript_dump: false,
+                    new_dump_generation: false,
                 })
             }
             _ => None,
@@ -6838,9 +7040,10 @@ impl ChunkProcessor {
             cursor_row,
             logical_prefix,
             physical_prefix,
-            history_size,
+            _history_size,
             intent_origin,
             intent_candidate,
+            on_alt_screen,
         ): VtProcessResult = if let Some(vt_log) = state.grid.vt_log_buffers.get(session_id) {
             // Phase 1: process the chunk and drain events under the lock,
             // but do NOT write any reply while holding it — write_terminal_reply's
@@ -7190,6 +7393,7 @@ impl ChunkProcessor {
                 hist,
                 intent_origin,
                 intent_candidate,
+                alt_screen,
             )
         } else {
             (
@@ -7204,8 +7408,13 @@ impl ChunkProcessor {
                 0,
                 0,
                 None,
+                false,
             )
         };
+        // The grid's eviction-stable screen origin (`TerminalGrid::screen_origin`,
+        // i.e. `total_scrolled()`): the coordinate every stored block row is built
+        // from, so heuristic/transcript-dump blocks match OSC 133 ones.
+        let total_scrolled = intent_origin;
 
         if screen_present
             && agent_type.as_deref() == Some("claude")
@@ -7373,6 +7582,7 @@ impl ChunkProcessor {
                         command,
                         params,
                         line,
+                        on_alt_screen,
                     } => {
                         explicit_idle_in_chunk |= command == 'A';
                         state
@@ -7394,6 +7604,7 @@ impl ChunkProcessor {
                                     marker: command.to_string(),
                                     line,
                                     exit_code,
+                                    on_alt_screen,
                                 },
                             );
                         }
@@ -7402,6 +7613,7 @@ impl ChunkProcessor {
                             marker: command.to_string(),
                             line,
                             exit_code,
+                            on_alt_screen,
                         });
                     }
                     TermEvent::Osc7(url) => {
@@ -7432,6 +7644,7 @@ impl ChunkProcessor {
                         verb,
                         payload,
                         line,
+                        on_alt_screen,
                     } => match verb.as_str() {
                         "state" => {
                             // idle/busy drive the shell-state machine; awaiting is
@@ -7451,8 +7664,13 @@ impl ChunkProcessor {
                                     .has_tuic_state_integration
                                     .insert(session_id.to_string(), ());
                             }
-                            let (_, block_event) =
-                                self.handle_tuic_state(&payload, session_id, line as i64, state);
+                            let (_, block_event) = self.handle_tuic_state(
+                                &payload,
+                                session_id,
+                                line as i64,
+                                on_alt_screen,
+                                state,
+                            );
                             if let Some(evt) = block_event {
                                 tuic_events.push(evt);
                             }
@@ -7560,6 +7778,9 @@ impl ChunkProcessor {
                                     line: line as i64,
                                     exit_code,
                                     prompt_text: None,
+                                    on_alt_screen,
+                                    from_transcript_dump: false,
+                                    new_dump_generation: false,
                                 });
                             }
                         }
@@ -7959,22 +8180,54 @@ impl ChunkProcessor {
             // Close it now, at the current cursor position, then let the
             // primary source take over for everything after.
             if let Some(prev) = self.last_agent_block_line.take() {
-                let close_line = history_size + cursor_row.map_or(0, |r| r + 1);
+                let close_line = total_scrolled + cursor_row.map_or(0, |r| r + 1);
                 events.push(ParsedEvent::AgentBlock {
                     action: "end".into(),
                     line: close_line.max(prev + 1) as i64,
                     exit_code: None,
                     prompt_text: None,
+                    on_alt_screen,
+                    from_transcript_dump: false,
+                    new_dump_generation: false,
                 });
             }
         } else {
-            let teardown_end_line = history_size + cursor_row.map_or(0, |r| r + 1);
+            let teardown_end_line = total_scrolled + cursor_row.map_or(0, |r| r + 1);
             events.extend(synthesize_cc_block_events(
                 &changed_rows,
-                history_size,
+                total_scrolled,
                 agent_active_for_parse,
                 teardown_end_line,
+                on_alt_screen,
                 &mut self.last_agent_block_line,
+            ));
+        }
+
+        // A Claude Code fullscreen transcript-mode `[` dump — independent of
+        // (and never conflicting with) the two sources above: it never fires
+        // during a live hook-driven or heuristic turn, only when the user
+        // explicitly bridges the fullscreen conversation into real primary
+        // scrollback. See `synthesize_transcript_dump_block_events`'s doc
+        // comment.
+        //
+        // Recorded unconditionally (not just inside the `!on_alt_screen`
+        // branch below) — a visit back to the alternate screen is exactly
+        // the signal `is_new_generation` needs, and it can only be observed
+        // on the chunk where it actually happens.
+        if on_alt_screen {
+            self.dump_saw_alt_screen = true;
+        }
+        if !on_alt_screen {
+            let dump_teardown_end_line = total_scrolled + cursor_row.map_or(0, |r| r + 1);
+            let is_new_dump_generation = std::mem::take(&mut self.dump_saw_alt_screen);
+            events.extend(synthesize_transcript_dump_block_events(
+                &changed_rows,
+                total_scrolled,
+                agent_type.as_deref(),
+                hook_instrumented,
+                dump_teardown_end_line,
+                &mut self.last_dump_block_line,
+                is_new_dump_generation,
             ));
         }
 
@@ -9171,6 +9424,8 @@ type VtProcessResult = (
     usize,
     usize,
     Option<(crate::terminal_grid::LogicalPrefix, String)>,
+    // Whether the alternate screen was active when this chunk finished.
+    bool,
 );
 
 /// Render one lifecycle payload as a single human-facing line, without the

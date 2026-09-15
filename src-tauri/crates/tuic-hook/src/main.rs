@@ -101,7 +101,12 @@ from stdin, which Claude Code populates on every hook event). Flags OVERRIDE the
 derived counterpart rather than replacing derivation outright — a plain Claude Code
 hook needs no flags at all.
 
-DERIVATION (Claude Code events):
+Derivation is scoped per agent via `--agent` (default: claude, for backward
+compatibility with commands generated before this flag existed) — matching is
+never done on event name alone, since Gemini's own event names can collide with
+Claude's (e.g. "Notification", "SessionEnd").
+
+DERIVATION (Claude Code events, --agent claude):
     SessionStart          state=busy      scrapes session_id, cwd, transcript_path
     UserPromptSubmit      state=prompt    busy + "the user submitted a prompt here" (scrollbar tick)
     PreToolUse            state=busy      scrapes tool_name
@@ -117,6 +122,9 @@ DERIVATION (Claude Code events):
 An unrecognized or absent `hook_event_name` derives nothing; only explicit flags apply.
 
 FLAGS (override the derived value; freely combinable):
+    --agent <claude|gemini|grok|codex>  Scope hook_event_name derivation to this
+                                    agent (default: claude). Every generated hook
+                                    command now passes this explicitly.
     --state <busy|prompt|awaiting|idle>
                                    Force the state verb, regardless of derivation.
     --toolfail <code>              Force a fixed toolfail verb.
@@ -176,6 +184,13 @@ fn session_active() -> bool {
 
 #[derive(Default, Debug, PartialEq)]
 struct ParsedArgs {
+    /// Which agent generated this invocation — `--agent claude`/`gemini`/
+    /// `grok`/`codex`. Absent for a stale, already-installed hook command
+    /// generated before this flag existed (see `find_derivation`'s
+    /// `unwrap_or("claude")` — every pre-existing installed command relied
+    /// purely on Claude-shaped derivation, so that's the only backward-
+    /// compatible default).
+    agent: Option<String>,
     state: Option<String>,
     toolfail: Option<String>,
     toolfail_from_stdin: bool,
@@ -196,6 +211,12 @@ fn parse_args(args: &[String]) -> ParsedArgs {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--agent" => {
+                if let Some(v) = args.get(i + 1) {
+                    out.agent = Some(v.clone());
+                    i += 1;
+                }
+            }
             "--state" => {
                 if let Some(v) = args.get(i + 1) {
                     out.state = Some(v.clone());
@@ -286,6 +307,14 @@ const TOOLFAIL_FALLBACK: &str = "1";
 /// Claude Code fires (not `PostToolUse`/`Stop` plus a secondary flag), each
 /// reporting its own literal name as `hook_event_name`.
 struct EventDerivation {
+    /// Which agent this row's `event`/semantics were verified against.
+    /// `DERIVATIONS` used to be matched on `event` alone, with no per-agent
+    /// scope — Gemini's own "Notification" and "SessionEnd" hook events
+    /// happen to be spelled identically to two Claude-specific rows here, so
+    /// a Gemini payload that (unverified, but plausible) also carries a
+    /// `hook_event_name` field could silently inherit Claude's scrape
+    /// behavior for those events. See `find_derivation`.
+    agent: &'static str,
     event: &'static str,
     state: Option<&'static str>,
     scrape_tool_name: bool,
@@ -313,6 +342,7 @@ enum DerivedToolfail {
 
 const DERIVATIONS: &[EventDerivation] = &[
     EventDerivation {
+        agent: "claude",
         event: "SessionStart",
         state: Some("busy"),
         scrape_tool_name: false,
@@ -326,6 +356,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         // `prompt`, not `busy` (#1388): the receiving side records the
         // scrollbar's user-prompt tick from `state=prompt` alone, so sharing
         // `PreToolUse`'s `busy` would tick every tool call as a prompt too.
+        agent: "claude",
         event: "UserPromptSubmit",
         state: Some("prompt"),
         scrape_tool_name: false,
@@ -336,6 +367,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
+        agent: "claude",
         event: "PreToolUse",
         state: Some("busy"),
         scrape_tool_name: true,
@@ -346,6 +378,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
+        agent: "claude",
         event: "PostToolUse",
         state: Some("busy"),
         scrape_tool_name: true,
@@ -356,6 +389,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
+        agent: "claude",
         event: "PostToolUseFailure",
         state: None,
         scrape_tool_name: true,
@@ -366,6 +400,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         toolfail: DerivedToolfail::FromStdinExitCode,
     },
     EventDerivation {
+        agent: "claude",
         event: "Notification",
         state: Some("awaiting"),
         scrape_tool_name: false,
@@ -381,6 +416,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         // it, and its dialog matches none of the screen heuristics (options
         // render horizontally, footer reads "Esc to cancel", not "Enter to
         // select"). Without this the tab stays "busy" while blocked on the user.
+        agent: "claude",
         event: "Elicitation",
         state: Some("awaiting"),
         scrape_tool_name: false,
@@ -393,6 +429,7 @@ const DERIVATIONS: &[EventDerivation] = &[
     EventDerivation {
         // Paired retraction for `Elicitation` — awaiting is sticky, so a set
         // with no matching clear latches the badge forever once the user answers.
+        agent: "claude",
         event: "ElicitationResult",
         state: Some("busy"),
         scrape_tool_name: false,
@@ -411,6 +448,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         // binary stays a dumb extractor; `pty.rs` decides which status values
         // mean "still running" (see crate AGENTS.md's "Extending an existing
         // event's scrape set").
+        agent: "claude",
         event: "Stop",
         state: Some("idle"),
         scrape_tool_name: false,
@@ -421,6 +459,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         toolfail: DerivedToolfail::None,
     },
     EventDerivation {
+        agent: "claude",
         event: "StopFailure",
         state: Some("idle"),
         scrape_tool_name: false,
@@ -431,6 +470,7 @@ const DERIVATIONS: &[EventDerivation] = &[
         toolfail: DerivedToolfail::Fixed("1"),
     },
     EventDerivation {
+        agent: "claude",
         event: "SessionEnd",
         state: Some("idle"),
         scrape_tool_name: false,
@@ -442,13 +482,26 @@ const DERIVATIONS: &[EventDerivation] = &[
     },
 ];
 
-fn find_derivation(stdin_json: &Value) -> Option<&'static EventDerivation> {
+/// Scoped per agent — `DERIVATIONS` models Claude Code's own event names and
+/// payload shape specifically, and every current row is `agent: "claude"`.
+/// Without this scope, a same-named event from a different agent (Gemini's
+/// own "Notification"/"SessionEnd" happen to collide) would silently inherit
+/// Claude's scrape behavior if that agent's payload ever also carries a
+/// `hook_event_name` field — unverified for Gemini/Grok/Codex, but plausible.
+fn find_derivation(stdin_json: &Value, agent: &str) -> Option<&'static EventDerivation> {
     let name = str_field(stdin_json, "hook_event_name")?;
-    DERIVATIONS.iter().find(|d| d.event == name)
+    DERIVATIONS
+        .iter()
+        .find(|d| d.event == name && d.agent == agent)
 }
 
 fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
-    let derivation = find_derivation(stdin_json);
+    // Absent `--agent` means a stale, already-installed command generated
+    // before this flag existed — every one of those was Claude-shaped
+    // (`derived_hook_command()`, no explicit `--agent`), so `"claude"` is the
+    // only backward-compatible default, not an arbitrary choice.
+    let agent = parsed.agent.as_deref().unwrap_or("claude");
+    let derivation = find_derivation(stdin_json, agent);
     let mut pairs = Vec::new();
 
     let scrape_session_metadata =
@@ -1231,6 +1284,7 @@ mod tests {
     fn help_text_mentions_every_flag_and_env_var() {
         let text = help_text();
         for needle in [
+            "--agent",
             "--state",
             "--toolfail",
             "--toolfail-from-stdin",

@@ -12,7 +12,18 @@ import { activatePaneExclusively, registerPaneDeactivator, tabOrderingStore } fr
 /** Type of input being awaited */
 export type AwaitingInputType = "question" | "error" | null;
 
-/** A completed or in-progress command block detected via OSC 133 shell integration. */
+/**
+ * A completed or in-progress command block detected via OSC 133 shell integration.
+ *
+ * `promptLine`/`commandLine`/`executionLine`/`endLine` are eviction-stable absolute
+ * rows (the backend's `total_scrolled() + cursor row`) — NOT the grid-relative row
+ * space `absRowToViewport`/`terminal_get_lines` expect. A block can be read long
+ * after it was recorded, once real scrollback eviction has moved on; a grid-relative
+ * row plateaus once the scroll-limit cap is hit, so two blocks far apart in time
+ * could otherwise land on the same row. Subtract the terminal's `historyBase`
+ * (`TerminalData.historyBase`, the latest frame's evicted-row count) before using
+ * one of these fields as a buffer-line row; a result below 0 has been evicted.
+ */
 export interface CommandBlock {
 	/** Prompt start marker line (OSC 133;A) */
 	promptLine: number;
@@ -38,6 +49,39 @@ export interface CommandBlock {
 	 * short prompts leave this `null`.
 	 */
 	promptText: string | null;
+	/**
+	 * True when every row this block references was recorded while the
+	 * alternate screen buffer was active. A fullscreen TUI (Claude Code's
+	 * default renderer) never grows real alt-screen scrollback — its
+	 * `promptLine`/`commandLine`/`executionLine`/`endLine` are transient
+	 * on-screen cursor rows, not valid anchors into the durable scrollback
+	 * `CanvasTerminal` actually renders. Every row-anchored feature (gutter
+	 * marks, scrollbar ticks, fold, jump-nav, block-scoped search, "Copy
+	 * Block Output") must skip a block where this is true. `CommandOverview`
+	 * must NOT skip it — `promptText`/timestamps/`exitCode` stay meaningful
+	 * either way, since they never depend on row validity.
+	 */
+	onAltScreen: boolean;
+	/**
+	 * True for a block synthesized from a Claude Code fullscreen transcript-mode
+	 * `[` dump (see `synthesize_transcript_dump_block_events`), rather than a real
+	 * shell block, a hook-driven turn block, or the `⏺`-heuristic fallback. Drives
+	 * `handleOsc133`'s generation-prune on a repeat `[` gesture — see its "A" case.
+	 */
+	fromTranscriptDump: boolean;
+}
+
+/**
+ * Filters out blocks recorded on the alternate screen buffer. Every
+ * row-anchored consumer (gutter marks, scrollbar ticks, fold, jump-nav,
+ * block-scoped search, "Copy Block Output") must read `commandBlocks`
+ * through this — never directly — since a raw `onAltScreen` block has no
+ * valid row to anchor to (see `CommandBlock.onAltScreen`). `CommandOverview`
+ * is the one deliberate exception: it must keep reading `commandBlocks`
+ * directly, since it never depends on row validity.
+ */
+export function rowAnchoredBlocks(blocks: readonly CommandBlock[]): CommandBlock[] {
+	return blocks.filter((b) => !b.onAltScreen);
 }
 
 /** Shell activity state: null=never had output, busy=producing output, idle=waiting for input, exited=process terminated */
@@ -258,7 +302,10 @@ export interface TerminalRef {
 	scrollToTop: () => void;
 	scrollToBottom: () => void;
 	scrollPages: (pages: number) => void;
-	/** Read buffer lines between two absolute line indices (exclusive end) */
+	/** Read buffer lines between two grid-relative absolute line indices (exclusive
+	 *  end — 0 = oldest line CURRENTLY in scrollback). NOT the eviction-stable space
+	 *  `CommandBlock.promptLine`/etc. are stored in — subtract the terminal's
+	 *  `historyBase` first when the indices come from a stored block. */
 	getBufferLines: (startLine: number, endLine: number) => string[] | Promise<string[]>;
 	/** Paste text into the terminal, applying bracketed paste wrapping based on terminal state */
 	paste: (text: string) => void;
@@ -837,20 +884,61 @@ function createTerminalsStore() {
 		 *  A=prompt start, B=command start, C=pre-execution, D=command finished.
 		 *  `line` is the eviction-stable all-time row (total_scrolled + cursorY) when the marker was processed.
 		 *  `promptText` (only ever set on "A", from the backend's turn-level idle→busy edge)
-		 *  is the submitted prompt text — see `CommandBlock.promptText`. */
-		handleOsc133(id: string, type: string, line: number, exitCode?: number, promptText?: string | null): void {
+		 *  is the submitted prompt text — see `CommandBlock.promptText`.
+		 *  `onAltScreen` is true when THIS marker's `line` was recorded while the
+		 *  alternate screen buffer was active (see `CommandBlock.onAltScreen`).
+		 *  OR'd onto the block's existing flag on "B"/"C"/"D" rather than
+		 *  overwritten, so a block tainted by even one alt-screen marker stays
+		 *  tainted even if a later marker for the same block lands back on the
+		 *  primary screen — any one invalid row makes the whole block's
+		 *  row-anchored rendering unsafe. */
+		handleOsc133(
+			id: string,
+			type: string,
+			line: number,
+			exitCode?: number,
+			promptText?: string | null,
+			onAltScreen = false,
+			fromTranscriptDump = false,
+			newDumpGeneration = false,
+		): void {
 			const term = state.terminals[id];
 			if (!term) return;
 			const now = Date.now();
 
 			switch (type) {
 				case "A": {
+					// `[` re-dumps Claude Code's entire transcript from scratch every
+					// time it's pressed — `newDumpGeneration` marks the first block of a
+					// fresh dump (see synthesize_transcript_dump_block_events's doc
+					// comment), so prune every block left over from the PREVIOUS dump
+					// (including a still-open activeBlock) before anything else, rather
+					// than piling up a second, overlapping copy of the same blocks.
+					if (newDumpGeneration) {
+						setState("terminals", id, "commandBlocks", (prev) => prev.filter((b) => !b.fromTranscriptDump));
+						// A completed dump-1 block can still be sitting in the RAF-batched
+						// flush buffer (see _scheduleOsc133Flush) rather than already in
+						// commandBlocks — pruning only the latter would let it slip through
+						// once that pending flush runs, right after this prune.
+						const pending = _osc133Pending.get(id);
+						if (pending?.length) {
+							const kept = pending.filter((b) => !b.fromTranscriptDump);
+							if (kept.length) _osc133Pending.set(id, kept);
+							else _osc133Pending.delete(id);
+						}
+					}
 					// Prompt start — begin a new block. If there's already an active block
-					// without a D marker (e.g. Ctrl+C), finalize it first.
+					// without a D marker (e.g. Ctrl+C), finalize it — unless it's a stale
+					// dump block this generation bump just pruned, in which case it must
+					// be discarded, not resurrected into commandBlocks.
 					if (term.activeBlock) {
-						const completed: CommandBlock = { ...term.activeBlock, endedAt: now };
-						_osc133Pending.get(id)?.push(completed) ?? _osc133Pending.set(id, [completed]);
-						_scheduleOsc133Flush(id);
+						if (newDumpGeneration && term.activeBlock.fromTranscriptDump) {
+							setState("terminals", id, "activeBlock", null);
+						} else {
+							const completed: CommandBlock = { ...term.activeBlock, endedAt: now };
+							_osc133Pending.get(id)?.push(completed) ?? _osc133Pending.set(id, [completed]);
+							_scheduleOsc133Flush(id);
+						}
 					}
 					setState("terminals", id, "activeBlock", {
 						promptLine: line,
@@ -861,18 +949,28 @@ function createTerminalsStore() {
 						startedAt: now,
 						endedAt: null,
 						promptText: promptText ?? null,
+						onAltScreen,
+						fromTranscriptDump,
 					});
 					break;
 				}
 				case "B": {
 					if (term.activeBlock) {
-						setState("terminals", id, "activeBlock", { ...term.activeBlock, commandLine: line });
+						setState("terminals", id, "activeBlock", {
+							...term.activeBlock,
+							commandLine: line,
+							onAltScreen: term.activeBlock.onAltScreen || onAltScreen,
+						});
 					}
 					break;
 				}
 				case "C": {
 					if (term.activeBlock) {
-						setState("terminals", id, "activeBlock", { ...term.activeBlock, executionLine: line });
+						setState("terminals", id, "activeBlock", {
+							...term.activeBlock,
+							executionLine: line,
+							onAltScreen: term.activeBlock.onAltScreen || onAltScreen,
+						});
 					}
 					// Record that a real command executed (not a bare prompt redraw).
 					// Monotonic and never evicted, so onBusyToIdle can tell genuine work
@@ -887,6 +985,7 @@ function createTerminalsStore() {
 							endLine: line,
 							exitCode: exitCode ?? null,
 							endedAt: now,
+							onAltScreen: term.activeBlock.onAltScreen || onAltScreen,
 						};
 						_osc133Pending.get(id)?.push(completed) ?? _osc133Pending.set(id, [completed]);
 						_scheduleOsc133Flush(id);

@@ -9,7 +9,7 @@ import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
-import { terminalsStore } from "../stores/terminals";
+import { rowAnchoredBlocks, terminalsStore } from "../stores/terminals";
 import { prepareAgentLaunchCommand } from "../utils/agentSession";
 import { writeClipboard } from "../utils/clipboard";
 import { keyFor } from "../utils/hotkey";
@@ -220,7 +220,11 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 			action: async () => {
 				const activeId = terminalsStore.state.activeId;
 				const term = activeId ? terminalsStore.get(activeId) : undefined;
-				const lastBlock = term?.commandBlocks[term.commandBlocks.length - 1];
+				// Skip back past any trailing alt-screen-tainted blocks (e.g. a
+				// Claude Code fullscreen session running after the last real shell
+				// block) — their executionLine/endLine are not valid buffer rows.
+				const anchoredBlocks = rowAnchoredBlocks(term?.commandBlocks ?? []);
+				const lastBlock = anchoredBlocks[anchoredBlocks.length - 1];
 				if (
 					!term?.ref ||
 					!lastBlock ||
@@ -250,7 +254,8 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 			},
 			disabled: (() => {
 				const activeId = terminalsStore.state.activeId;
-				return !activeId || !terminalsStore.get(activeId)?.commandBlocks.length;
+				const blocks = activeId ? terminalsStore.get(activeId)?.commandBlocks : undefined;
+				return !blocks || rowAnchoredBlocks(blocks).length === 0;
 			})(),
 		},
 		{
