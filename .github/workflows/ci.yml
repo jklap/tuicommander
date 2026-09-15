@@ -106,6 +106,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # src/plugins.rs embeds the bundled plugins with include_str!, and they
+          # live in the `plugins` submodule. Without this the crate cannot compile
+          # at all: "couldn't read src/../../plugins/plan/manifest.json".
+          submodules: recursive
 
       - name: Install Linux dependencies
         run: |
@@ -197,6 +201,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          # See the rust job: include_str! reaches into the `plugins` submodule.
+          submodules: recursive
 
       - name: Install Linux dependencies
         run: |
@@ -273,6 +280,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # See the rust job: include_str! reaches into the `plugins` submodule.
+          submodules: recursive
 
       # Keep the Windows build/target dir short (C:/t): whisper.cpp's nested
       # CMake TryCompile paths can exceed the 260-char MAX_PATH that MSBuild's
