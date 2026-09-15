@@ -8,6 +8,11 @@ When Boss asks to tag a release:
 4. **Prepare the public snapshot** — keep development `main` private. Create a reviewed JSON file with the groups `Breaking changes`, `New features`, and `Fixes` (arrays of public-facing sentences). Run `make github-release RELEASE_NOTES=/absolute/path/to/groups.json`. The target uses the shared orchestrator `tools/release/snapshot.py` tool, removes its configured private paths, refreshes public refs, and pushes only `release/<version>`. It prints the snapshot SHA. The existing generated `release-notes.json` is a different format; do not pass it as grouped notes.
 5. **Integrate and tag** — open a PR from `release/<version>` to public `main`, wait for CI, then fast-forward public `main` to the reviewed snapshot. Run `make github-release RELEASE_COMMIT=<snapshot-sha>`. It refuses tagging until public `main` equals that commit and its release version matches. The shared guard checks the public tag target before the push. The `Release` workflow builds the signed installers, remote daemon, and `latest.json`, then publishes the release. Verify its assets; do not create a second release.
 6. **Milestone** — close the matching milestone if one exists, create the next one
+7. **macOS Finder Service** — after a packaged `.dmg`/`.app` build, confirm the "New TUICommander
+   Tab Here" Finder integration still installs and works: install it from Settings → General,
+   right-click a folder in Finder, and confirm the pane opens. The bundle is hand-authored
+   (`src-tauri/services/`), not machine-generated, so a packaging change (resource paths,
+   `externalBin` layout) can silently break it without any build error.
 
 ## Prereleases (betas)
 

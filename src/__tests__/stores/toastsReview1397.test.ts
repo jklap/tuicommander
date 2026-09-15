@@ -54,31 +54,15 @@ describe("1397 critic fix-round notification invariants", () => {
 		expect(store.toasts.some((item) => item.title === "Failure")).toBe(true);
 	});
 
-	it("an overflowed error still plays its explicitly requested sound", () => {
+	it("an overflowed error still plays its explicitly requested sound", async () => {
 		// catches: early overflow return skips the error sound when both slots hold errors
-		const start = vi.fn();
-		vi.stubGlobal(
-			"AudioContext",
-			class {
-				currentTime = 0;
-				destination = {};
-				createOscillator() {
-					return {
-						frequency: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
-						connect: (gain: { connect: (destination: unknown) => unknown }) => gain,
-						start,
-						stop: vi.fn(),
-					};
-				}
-				createGain() {
-					return { gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }, connect: vi.fn() };
-				}
-			},
-		);
+		// (toast sounds route through the customizable Error sound since c7962d557)
+		const { notificationManager } = await import("../../notifications");
+		const playError = vi.spyOn(notificationManager, "playError").mockResolvedValue(undefined);
 		store.add("First error", "", "error");
 		store.add("Second error", "", "error");
 		store.add("Overflow error", "", "error", true);
-		expect(start).toHaveBeenCalledTimes(1);
+		expect(playError).toHaveBeenCalledTimes(1);
 		expect(bell.getForSection("messages").some((item) => item.title === "Overflow error")).toBe(true);
 	});
 
