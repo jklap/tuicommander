@@ -2423,6 +2423,7 @@ fn test_opencode_ready_screen_recovers_long_lived_shell_busy() {
     assert!(silence.idle_confirmed());
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn test_only_interpreters_take_the_argv0_detour() {
     assert!(is_script_interpreter("node"));

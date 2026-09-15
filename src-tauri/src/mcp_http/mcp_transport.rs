@@ -9651,6 +9651,7 @@ mod tests {
     /// link to its old identity, so its inbox used to be stranded with nobody told.
     /// `replaces` is how it says which identity it supersedes — guessing by name
     /// is not an option, since peer identity decides who may read whose mail.
+    #[cfg(unix)]
     #[test]
     fn replaces_carries_mail_over_from_a_new_protocol_session() {
         let state = test_state();
@@ -11122,6 +11123,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn mcp_delivery_regression_completed_claude_sse_submits_through_pty() {
         let state = test_state();
@@ -11344,6 +11346,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn mcp_delivery_regression_working_claude_keeps_sse_turn_delivery() {
         let state = test_state();
