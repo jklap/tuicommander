@@ -421,6 +421,15 @@ jobs:
             Write-Host "Dependencies.exe not found after install"
           }
 
+          # The four comctl32 symbols the binary imports exist only in version 6,
+          # which a process reaches through a manifest. If System32's 5.82 copy
+          # lists none of them here, that is the unresolved entry point.
+          Write-Host "== comctl32 exports =="
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          & $dumpbin.FullName /exports C:\Windows\System32\comctl32.dll |
+            Select-String -Pattern 'TaskDialogIndirect|SetWindowSubclass|DefSubclassProc|RemoveWindowSubclass'
+
           # Does the same lib load when nothing desktop-specific is linked in?
           # check-remote already proves the no-default-features build is sound on
           # Linux, so a load here would put the fault squarely in the desktop

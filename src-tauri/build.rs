@@ -36,5 +36,24 @@ fn main() {
     );
 
     #[cfg(feature = "desktop")]
-    tauri_build::build();
+    {
+        tauri_build::build();
+
+        // tauri_build embeds the Windows application manifest through
+        // `cargo:rustc-link-arg-bins`, which reaches binaries and not test
+        // targets. A test binary therefore binds comctl32 5.82 from System32,
+        // which exports none of the four version-6 symbols tao and the dialog
+        // plugin import, and the loader kills it with STATUS_ENTRYPOINT_NOT_FOUND
+        // before any test runs. Give the test binaries the same manifest.
+        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+            let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("windows-tests.manifest");
+            println!("cargo:rerun-if-changed={}", manifest.display());
+            println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+            println!(
+                "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
+                manifest.display()
+            );
+        }
+    }
 }
