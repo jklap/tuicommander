@@ -81,6 +81,8 @@ describe("scrollbar track visibility with zero scrollback", () => {
 					startedAt: 0,
 					endedAt: 1,
 					promptText: null,
+					onAltScreen: false,
+					fromTranscriptDump: false,
 				},
 			],
 		});
@@ -124,6 +126,8 @@ describe("scrollbar track visibility with zero scrollback", () => {
 					startedAt: 0,
 					endedAt: 1,
 					promptText: null,
+					onAltScreen: false,
+					fromTranscriptDump: false,
 				},
 			],
 		});
@@ -139,6 +143,36 @@ describe("scrollbar track visibility with zero scrollback", () => {
 
 	it("keeps the track hidden with zero history and no marks — preserves the plain-terminal look", async () => {
 		terminalsStore.register("scrollbar-marks-t1", makeTerminal({ sessionId: "s1" }));
+
+		const mounted = await mountCanvasTerminal({ sessionId: "s1", terminalId: "scrollbar-marks-t1" });
+		fakeTransport.current!.pushFrame(buildTextFrame(["a", "b"], 40, { historySize: 0 }));
+		await new Promise((r) => setTimeout(r, 0));
+		expect(scrollbarEl(mounted.container).style.display).toBe("none");
+
+		await mounted.dispose();
+	});
+
+	/** Fullscreen-mode fix: a block recorded on the alternate screen has no
+	 *  valid row to mark — it must not force the track visible on its own,
+	 *  the same as having no blocks at all. */
+	it("keeps the track hidden when the only block is alt-screen-tainted", async () => {
+		terminalsStore.register("scrollbar-marks-t1", makeTerminal({ sessionId: "s1" }));
+		terminalsStore.update("scrollbar-marks-t1", {
+			commandBlocks: [
+				{
+					promptLine: 2,
+					commandLine: null,
+					executionLine: null,
+					endLine: 5,
+					exitCode: 0,
+					startedAt: 0,
+					endedAt: 1,
+					promptText: null,
+					onAltScreen: true,
+					fromTranscriptDump: false,
+				},
+			],
+		});
 
 		const mounted = await mountCanvasTerminal({ sessionId: "s1", terminalId: "scrollbar-marks-t1" });
 		fakeTransport.current!.pushFrame(buildTextFrame(["a", "b"], 40, { historySize: 0 }));

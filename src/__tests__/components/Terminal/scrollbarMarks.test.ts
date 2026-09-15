@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	buildScrollbarMarksHtml,
 	type ScrollbarMarksInput,
+	scrollbarMarksKey,
 	shouldShowScrollbar,
 } from "../../../components/Terminal/scrollbarMarks";
 
@@ -144,5 +145,28 @@ describe("shouldShowScrollbar", () => {
 
 	it("is false with no history and nothing to mark", () => {
 		expect(shouldShowScrollbar({ ...visBase, blocks: [], promptLines: [] })).toBe(false);
+	});
+});
+
+describe("scrollbarMarksKey", () => {
+	const keyOf = (over: Partial<ScrollbarMarksInput> = {}) => {
+		const { trackH: _trackH, ...rest } = input(over);
+		return scrollbarMarksKey(rest);
+	};
+
+	it("changes when eviction moves historyBase, so every tick is repainted", () => {
+		expect(keyOf({ historyBase: 0 })).not.toBe(keyOf({ historyBase: 5 }));
+	});
+
+	it("changes when either category toggle flips, independently", () => {
+		const on = keyOf();
+		expect(keyOf({ showBlockMarks: false })).not.toBe(on);
+		expect(keyOf({ showPromptMarks: false })).not.toBe(on);
+		expect(keyOf({ showBlockMarks: false })).not.toBe(keyOf({ showPromptMarks: false }));
+	});
+
+	it("ignores block changes while block marks are hidden", () => {
+		const hidden = { showBlockMarks: false };
+		expect(keyOf({ ...hidden, blocks: [{ promptLine: 3, exitCode: 1 }] })).toBe(keyOf(hidden));
 	});
 });
