@@ -431,7 +431,7 @@ When touching Setup/Archive/Run script execution, their `TUIC_*` environment, or
 | `src-tauri/src/mcp_http/worktree_routes.rs` | `run_setup_script_http` (`POST /worktrees/run-script`) — keep its response shape (`{exit_code, stdout, stderr}`) identical to the Tauri command, no `transform` needed in `transport.ts` |
 | `src/transport.ts` + `src/__tests__/transport.test.ts` | The `run_setup_script` → `/worktrees/run-script` mapping and its parity assertions |
 | `docs/user-guide/settings.md` | The `TUIC_*` table (Scripts Tab section) — the canonical user-facing list |
-| `docs/user-guide/terminals.md` | PTY env vars section — the fixed-at-spawn caveat |
+| `docs/user-guide/ai-agents.md` | "Worktree Context (TUIC_\*)" section (grouped with `TUIC_SESSION` above it) — the fixed-at-spawn caveat |
 | `docs/backend/config.md` | The two timeout fields |
 | `docs/api/tauri-commands.md` | `run_setup_script`'s signature/response |
 

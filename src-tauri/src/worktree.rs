@@ -2926,6 +2926,21 @@ pub(crate) fn archive_worktree_dir(
 ///   timeout can `killpg` the whole tree (SIGTERM, then SIGKILL after a short
 ///   grace period if it hasn't exited). Windows gets a plain `child.kill()` —
 ///   no process-group equivalent here today.
+///
+/// **Accepted, not a gap**: the two reader threads' `read_to_end` buffers are
+/// unbounded — a script that writes gigabytes to stdout/stderr grows this
+/// process's memory by that much before `timeout` ever has a chance to fire.
+/// Unlike the untrusted-PTY-escape-sequence caps elsewhere in this codebase
+/// (arbitrary process output, wire-driven), the script text itself is always
+/// either user-authored in Settings (Setup/Archive Script — same trust level
+/// as `POST /config/execute-shell-script`) or comes from the same
+/// `require_local_or_auth`-gated caller as the rest of the MCP HTTP surface
+/// (`run_setup_script_http`) — there is no untrusted party who can hand this
+/// function a script without already being able to run arbitrary code
+/// locally. A misbehaving (not malicious) script is bounded by `timeout`
+/// eventually killing it, just not by memory. Do not "fix" this with a
+/// silent truncation cap unless a real OOM report shows up — a cap changes
+/// `stdout`/`stderr`'s contract for every existing caller.
 fn run_shell_capture(
     script: &str,
     cwd: &Path,
