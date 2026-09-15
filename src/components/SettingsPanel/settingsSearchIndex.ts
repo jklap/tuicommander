@@ -568,6 +568,13 @@ const RAW_ITEMS: SettingsSearchItem[] = [
 	{
 		tab: "services",
 		tabLabel: "Services & MCP",
+		section: "File Access",
+		label: "Additional Readable Directories",
+		hint: "Directories web and remote clients may read files from, in addition to registered repositories",
+	},
+	{
+		tab: "services",
+		tabLabel: "Services & MCP",
 		section: "Remote Access",
 		label: "Enable remote access",
 		hint: "Warning: exposes a web interface on your local network. Secure with a strong password.",

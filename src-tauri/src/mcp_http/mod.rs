@@ -2895,6 +2895,260 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_read_external_allows_a_path_under_an_additional_readable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plan.md");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = test_state();
+        state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/fs/read-external?path={}", file.display()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "a path under a configured additional readable dir must be served, with no repo registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_external_still_denies_outside_the_additional_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let state = test_state();
+        state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get("/fs/read-external?path=/etc/passwd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_read_external_denies_a_prefix_sibling_of_an_additional_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("plans");
+        std::fs::create_dir_all(&root).unwrap();
+        let sibling = dir.path().join("plans-archive");
+        std::fs::create_dir_all(&sibling).unwrap();
+        let sibling_file = sibling.join("f.md");
+        std::fs::write(&sibling_file, "x").unwrap();
+
+        let state = test_state();
+        state.config.write().additional_readable_dirs = vec![root.display().to_string()];
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/fs/read-external?path={}", sibling_file.display()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "a prefix-sibling directory must not match the additional-root gate"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_editor_external_allows_a_path_under_an_additional_readable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plan.md");
+        std::fs::write(&file, "hello").unwrap();
+
+        let state = test_state();
+        state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/fs/read-editor-external?path={}", file.display()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// Critical regression guard: the write/copy/move/transfer routes must stay
+    /// confined to registered repo roots even when `additional_readable_dirs`
+    /// points somewhere else — the additional list is READ-only.
+    #[tokio::test]
+    async fn test_write_external_is_not_widened_by_additional_readable_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plan.md");
+        std::fs::write(&file, "hello").unwrap();
+        let other = dir.path().join("other.md");
+        std::fs::write(&other, "x").unwrap();
+
+        let state = test_state();
+        state.config.write().additional_readable_dirs = vec![dir.path().display().to_string()];
+        let app = build_router(state, false, true);
+
+        let resp = app
+            .clone()
+            .oneshot(mcp_post(
+                "/fs/write-external",
+                &serde_json::json!({"path": file.display().to_string(), "content": "x"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "write-external");
+
+        let resp = app
+            .clone()
+            .oneshot(mcp_post(
+                "/fs/copy-abs",
+                &serde_json::json!({"from": file.display().to_string(), "to": other.display().to_string()}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "copy-abs");
+
+        let resp = app
+            .clone()
+            .oneshot(mcp_post(
+                "/fs/move-abs",
+                &serde_json::json!({"from": file.display().to_string(), "to": other.display().to_string()}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "move-abs");
+
+        let resp = app
+            .oneshot(mcp_post(
+                "/fs/transfer",
+                &serde_json::json!({
+                    "destDir": dir.path().display().to_string(),
+                    "paths": [file.display().to_string()],
+                    "mode": "copy",
+                    "allowRecursive": false
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "transfer");
+    }
+
+    /// The 403 body wording must not claim a write-side route honors
+    /// `additional_readable_dirs` when it never consults that list.
+    #[tokio::test]
+    async fn test_write_external_403_does_not_mention_allowed_directory() {
+        let state = test_state();
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(mcp_post(
+                "/fs/write-external",
+                &serde_json::json!({"path": "/etc/passwd", "content": "x"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let msg = body["error"].as_str().unwrap();
+        assert!(
+            msg.contains("registered repository") && !msg.contains("allowed directory"),
+            "write-external's 403 must not imply it honors additional_readable_dirs: {msg}"
+        );
+    }
+
+    /// The read-side 403 body wording DOES mention the allowed-directory list,
+    /// since that's the whole point of the friendlier message.
+    #[tokio::test]
+    async fn test_read_external_403_mentions_allowed_directory() {
+        let state = test_state();
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get("/fs/read-external?path=/etc/passwd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let msg = body["error"].as_str().unwrap();
+        assert!(msg.contains("allowed directory"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn test_read_external_allows_a_path_inside_a_registered_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let repo = tempfile::tempdir().unwrap();
+        let file = repo.path().join("main.rs");
+        std::fs::write(&file, "fn main() {}").unwrap();
+        std::fs::write(
+            tmp.path().join("repositories.json"),
+            serde_json::json!({
+                "repositories": { repo.path().display().to_string(): {} }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let state = test_state();
+        // Prove the *repo-root* path specifically, not the additional-dirs list.
+        state.config.write().additional_readable_dirs = vec![];
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/fs/read-external?path={}", file.display()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "a path inside a registered repository root must be served over HTTP"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_external_rejects_a_blank_additional_readable_dir() {
+        let state = test_state();
+        state.config.write().additional_readable_dirs = vec!["".to_string(), "  ".to_string()];
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get("/fs/read-external?path=/etc/passwd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "a blank/whitespace-only additional readable dir must never widen the gate"
+        );
+    }
+
     // --- Path validation tests ---
 
     #[test]

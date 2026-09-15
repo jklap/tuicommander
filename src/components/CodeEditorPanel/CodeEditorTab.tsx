@@ -35,6 +35,7 @@ import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
+import { accessDeniedMessage, isAccessDeniedError } from "../../utils/fileReadErrors";
 import { isAbsolutePath } from "../../utils/pathUtils";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import e from "../shared/editor-header.module.css";
@@ -284,7 +285,14 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 					setNotDisplayable(/valid UTF-8/i.test(msg));
 					// The backend refused an oversized file before reading (size guard).
 					setTooLarge(/too large/i.test(msg));
-					setError(msg);
+					if (isAccessDeniedError(msg)) {
+						appLogger.debug("editor", "readContent denied by the HTTP read gate", {
+							filePath,
+						});
+						setError(accessDeniedMessage());
+					} else {
+						setError(msg);
+					}
 					currentCode = "";
 					setCode("");
 					setSavedContent("");

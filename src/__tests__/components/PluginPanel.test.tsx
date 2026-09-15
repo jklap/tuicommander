@@ -881,4 +881,46 @@ describe("PluginPanel", () => {
 			});
 		});
 	});
+
+	describe("file:// tab content", () => {
+		it("reads the file over IPC and injects it as srcdoc", async () => {
+			vi.mocked(tauriInvoke).mockResolvedValueOnce("<html><body>hi</body></html>");
+			const tab = makeTab({ html: "", url: "file:///Users/dev/notes.html" });
+			const { container } = render(() => <PluginPanel tab={tab} />);
+
+			expect(tauriInvoke).toHaveBeenCalledWith("read_external_file", { path: "/Users/dev/notes.html" });
+			await vi.waitFor(() => {
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				expect(iframe.getAttribute("srcdoc")).toContain("hi");
+			});
+		});
+
+		// HTTP-transport-only: this 403 can only come back from `invoke("read_external_file", ...)`,
+		// which is unreachable on native Tauri.
+		it("shows a friendly message and logs quietly for an HTTP read-gate 403", async () => {
+			vi.mocked(tauriInvoke).mockRejectedValueOnce(
+				new Error(
+					'RPC read_external_file failed: 403 {"error":"Access denied: path must be within a registered repository or an allowed directory"}',
+				),
+			);
+			const tab = makeTab({ html: "", url: "file:///Users/dev/notes.html" });
+			const { container } = render(() => <PluginPanel tab={tab} />);
+
+			await vi.waitFor(() => {
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				expect(iframe.getAttribute("srcdoc")).toContain("registered repositories");
+			});
+		});
+
+		it("still shows the raw error for a real failure (regression guard)", async () => {
+			vi.mocked(tauriInvoke).mockRejectedValueOnce(new Error("permission denied"));
+			const tab = makeTab({ html: "", url: "file:///Users/dev/notes.html" });
+			const { container } = render(() => <PluginPanel tab={tab} />);
+
+			await vi.waitFor(() => {
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				expect(iframe.getAttribute("srcdoc")).toContain("permission denied");
+			});
+		});
+	});
 });

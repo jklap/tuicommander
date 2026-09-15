@@ -67,6 +67,21 @@ The browser client provides the same UI as the desktop app:
 - **Local network only** — The server binds to your machine's IP; it's not exposed to the internet unless you configure port forwarding (don't do this without a VPN)
 - **CORS** — When remote access is enabled, any origin is allowed (necessary for browser access from different IPs)
 
+### Reading a file outside your registered repositories
+
+The desktop app can open any file you can see, but a browser/remote/PWA client
+is a narrower-trust caller: opening an absolute file path (a Markdown/plan-file
+link, or a file opened directly in the code editor) is gated to your
+**registered repositories**, plus any directory you've explicitly added under
+**Settings → Services & MCP → File Access → Additional Readable Directories**.
+`~/.claude/plans` is included by default, so a Claude Code plan-file link an
+agent printed opens with no extra setup. If you click a link elsewhere and see
+a friendly "outside your registered repositories and allowed directories"
+message instead of the file, add that file's folder to the same setting. This
+only affects **reading** files over HTTP — it never widens what a remote
+client can write, copy, or move; those stay confined to registered repository
+roots regardless of this setting.
+
 ## MCP HTTP Server
 
 Separate from remote access, TUICommander runs an **HTTP API server** for AI tool integration:

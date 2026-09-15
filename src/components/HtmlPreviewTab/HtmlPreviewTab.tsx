@@ -8,6 +8,7 @@ import { appLogger } from "../../stores/appLogger";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { type HtmlPreviewTab as HtmlPreviewTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { accessDeniedMessage, isAccessDeniedError } from "../../utils/fileReadErrors";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SCROLLBAR_STYLE, IFRAME_SEARCH_BRIDGE_SCRIPT } from "../../utils/iframeSearch";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
@@ -216,8 +217,16 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 				setContent(fileContent);
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				appLogger.error("app", "File preview: read failed", { repoPath, filePath, error: msg });
-				setError(msg);
+				// An access-denied 403 is HTTP-transport-only and user-fixable (widen the
+				// allow-list in Settings) — log it quietly and show a friendly message
+				// instead of the raw RPC string. Matches MarkdownTab/CodeEditorTab.
+				if (isAccessDeniedError(msg)) {
+					appLogger.debug("app", "File preview: read denied by the HTTP read gate", { repoPath, filePath });
+					setError(accessDeniedMessage());
+				} else {
+					appLogger.error("app", "File preview: read failed", { repoPath, filePath, error: msg });
+					setError(msg);
+				}
 				setContent("");
 			} finally {
 				setLoading(false);

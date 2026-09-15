@@ -108,6 +108,48 @@ describe("CodeEditorTab", () => {
 		expect(queryByTitle("View diff")).toBeNull();
 	});
 
+	// HTTP-transport-only: this 403 can only come back from `read_editor_file_external`,
+	// which is unreachable on native Tauri — the IPC command has no repo-root gate at all.
+	// Note: this component never logs at `error` level for a read failure regardless of
+	// cause (unlike MarkdownTab), so the meaningful assertion here is the friendly message
+	// replacing the raw RPC string — a NOT-called check on `appLogger.error` would only be
+	// asserting an unrelated, pre-existing settings-hydration log noise stays absent.
+	it("shows a friendly message instead of the raw RPC string for an HTTP read-gate 403", async () => {
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "read_editor_file_external"
+				? Promise.reject(
+						new Error(
+							'RPC read_editor_file_external failed: 403 {"error":"Access denied: path must be within a registered repository or an allowed directory"}',
+						),
+					)
+				: Promise.resolve(undefined),
+		);
+		const { getByText, queryByText } = renderTab({ filePath: "/etc/hosts", repoPath: "" });
+
+		await waitFor(() => expect(getByText(/registered repositories/)).toBeTruthy());
+		expect(queryByText(/RPC read_editor_file_external failed/)).toBeNull();
+	});
+
+	it("logs at debug level with a distinct message for an HTTP read-gate 403", async () => {
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "read_editor_file_external"
+				? Promise.reject(
+						new Error(
+							'RPC read_editor_file_external failed: 403 {"error":"Access denied: path must be within a registered repository or an allowed directory"}',
+						),
+					)
+				: Promise.resolve(undefined),
+		);
+		const rendered = renderTab({ filePath: "/etc/hosts", repoPath: "" });
+		await waitForLoaded(rendered);
+
+		expect(appLogger.debug).toHaveBeenCalledWith(
+			"editor",
+			"readContent denied by the HTTP read gate",
+			expect.anything(),
+		);
+	});
+
 	it("marks the tab dirty on edit and clears it on save", async () => {
 		const rendered = renderTab();
 		const { container, getByTitle, queryByTitle } = rendered;

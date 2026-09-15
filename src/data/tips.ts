@@ -486,4 +486,10 @@ export const TIPS: Tip[] = [
 			"Search 'Session diff review' in the Command Palette to step through everything a Claude Code session changed — grouped by file or in chronological order, with per-step or per-file revert.",
 		shortcut: null,
 	},
+	{
+		feature: "Additional Readable Directories",
+		description:
+			"Settings → Services & MCP → File Access lets browser/remote clients read files outside your registered repositories — ~/.claude/plans is enabled by default, so clicking an agent's plan-file link just works.",
+		shortcut: null,
+	},
 ];

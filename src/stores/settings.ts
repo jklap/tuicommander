@@ -107,6 +107,7 @@ interface RustAppConfig {
 	index_strategy?: string;
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
+	additional_readable_dirs?: string[];
 	inline_blame_enabled?: boolean;
 	indicator_overrides?: IndicatorOverride[];
 	show_diff_stats?: boolean;
@@ -486,6 +487,7 @@ interface SettingsStoreState {
 	indexStrategy: "disabled" | "active_only" | "active_and_switch" | "all_sequential";
 	standbyTimeoutMinutes: number;
 	customLaunchers: CustomLauncher[];
+	additionalReadableDirs: string[];
 	inlineBlameEnabled: boolean;
 	indicatorOverrides: IndicatorOverride[];
 	showDiffStats: boolean;
@@ -555,6 +557,7 @@ function createSettingsStore() {
 		indexStrategy: "active_and_switch",
 		standbyTimeoutMinutes: 5,
 		customLaunchers: [],
+		additionalReadableDirs: ["~/.claude/plans"],
 		inlineBlameEnabled: true,
 		indicatorOverrides: [],
 		showDiffStats: true,
@@ -640,6 +643,7 @@ function createSettingsStore() {
 		config.index_strategy = state.indexStrategy;
 		config.standby_timeout_minutes = state.standbyTimeoutMinutes;
 		config.custom_launchers = [...state.customLaunchers];
+		config.additional_readable_dirs = [...state.additionalReadableDirs];
 		config.inline_blame_enabled = state.inlineBlameEnabled;
 		config.indicator_overrides = state.indicatorOverrides.map((o) => ({ ...o }));
 		config.show_diff_stats = state.showDiffStats;
@@ -780,6 +784,7 @@ function createSettingsStore() {
 				);
 				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
 				setState("customLaunchers", config.custom_launchers ?? []);
+				setState("additionalReadableDirs", config.additional_readable_dirs ?? ["~/.claude/plans"]);
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
 				// Revalidated here, not just on write — a hand-edited config.json is
 				// untrusted input reaching document.documentElement.style (apply.ts).
@@ -963,6 +968,12 @@ function createSettingsStore() {
 		/** Replace the full list of custom launchers (add/edit/remove all go through here) */
 		setCustomLaunchers(launchers: CustomLauncher[]): void {
 			setState("customLaunchers", launchers);
+			save();
+		},
+
+		/** Replace the full list of additional HTTP-readable directories (add/remove go through here) */
+		setAdditionalReadableDirs(dirs: string[]): void {
+			setState("additionalReadableDirs", dirs);
 			save();
 		},
 

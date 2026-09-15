@@ -12,6 +12,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { toastsStore } from "../../stores/toasts";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
+import { accessDeniedMessage, isAccessDeniedError } from "../../utils/fileReadErrors";
 import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
 import {
 	insertTweakComment,
@@ -156,10 +157,22 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					// A deleted file is expected for a stale tab and this effect re-runs on
 					// every repo-revision bump, so an ERROR log here spams. Match the
 					// focus-reload effect below: silent for missing files, log anything else.
-					if (!isMissingFileError(msg)) {
-						appLogger.error("app", "readFileContent failed", { repoPath, filePath, fsRoot, error: msg });
+					// An access-denied 403 is HTTP-transport-only and user-fixable (widen the
+					// allow-list in Settings) — log it quietly and show a friendly message
+					// instead of the raw RPC string.
+					if (isAccessDeniedError(msg)) {
+						appLogger.debug("app", "readFileContent denied by the HTTP read gate", {
+							repoPath,
+							filePath,
+							fsRoot,
+						});
+						setError(accessDeniedMessage());
+					} else {
+						if (!isMissingFileError(msg)) {
+							appLogger.error("app", "readFileContent failed", { repoPath, filePath, fsRoot, error: msg });
+						}
+						setError(msg);
 					}
-					setError(msg);
 					setContent("");
 				} finally {
 					setLoading(false);
@@ -229,8 +242,9 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 			} catch (err) {
 				if (cancelled) return;
 				const msg = err instanceof Error ? err.message : String(err);
-				// Silently ignore expected errors (file deleted); log anything else.
-				if (!isMissingFileError(msg)) {
+				// Silently ignore expected errors (file deleted, or denied by the HTTP
+				// read gate — both are expected/user-fixable, not a real regression).
+				if (!isMissingFileError(msg) && !isAccessDeniedError(msg)) {
 					appLogger.warn("app", "focus-reload readFileContent failed", { repoPath, filePath, error: msg });
 				}
 			}
