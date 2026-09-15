@@ -329,6 +329,9 @@ mod tests {
             // payload carries them, and pty.rs::notification_awaiting_outcome decides
             // whether this awaiting badges (see the real-binary wire test below).
             ("claude", "Notification", "", &[("state", "awaiting")]),
+            // `bgtasks` (raw `background_tasks[].status`, comma-joined) precedes the
+            // state when the payload carries the field; pty.rs decides "still
+            // running" (declared_background_work). Same for StopFailure.
             ("claude", "Stop", "", &[("state", "idle")]),
             (
                 "claude",
