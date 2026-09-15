@@ -8905,7 +8905,11 @@ mod tests {
         std::fs::write(&stream, body).expect("write stream");
         let cmd = crate::test_support::replay_file_command(&stream);
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
-        drop(pair.slave); // close slave so reads see EOF
+        // Unix only: closing the slave is what makes the master report EOF
+        // there. A ConPTY has no such handshake, and dropping the slave while
+        // the console host is still starting loses the child's output.
+        #[cfg(unix)]
+        drop(pair.slave);
 
         let reader = pair.master.try_clone_reader().expect("reader");
         let mut buf = VtLogBuffer::new(24, 80, 1000);
@@ -8975,6 +8979,8 @@ mod tests {
         std::fs::write(&path, stream).expect("write stream");
         let cmd = crate::test_support::replay_file_command(&path);
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
+        // See `test_vt_log_real_pty_echo`: unix only.
+        #[cfg(unix)]
         drop(pair.slave);
 
         let reader = pair.master.try_clone_reader().expect("reader");
@@ -9023,6 +9029,8 @@ mod tests {
 
         let cmd = crate::test_support::replay_file_command(&fixture);
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
+        // See `test_vt_log_real_pty_echo`: unix only.
+        #[cfg(unix)]
         drop(pair.slave);
 
         let reader = pair.master.try_clone_reader().expect("reader");
