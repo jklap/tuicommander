@@ -144,6 +144,7 @@ impl Store for AppSettingsStore {
             || cached.collapse_tools != next.collapse_tools;
         let server_changed = server_settings_changed(&cached, &next);
         let reflow_changed = cached.scrollback_reflow != next.scrollback_reflow;
+        let streamdock_changed = cached.streamdock != next.streamdock;
         drop(cached);
         // Preserve the existing vault snapshot/rollback and atomic config-file write.
         save_app_config_with(next.clone(), |disk| file.write_atomic(disk))
@@ -159,6 +160,7 @@ impl Store for AppSettingsStore {
             (tools_changed, "tools_changed"),
             (server_changed, "server_changed"),
             (reflow_changed, "reflow_changed"),
+            (streamdock_changed, "streamdock_changed"),
         ] {
             if enabled {
                 reply.effects.push(effect.into());
@@ -215,6 +217,18 @@ impl AppSettingsStore {
             .state
             .upgrade()
             .ok_or_else(|| Error::new("app", "unavailable"))?;
+        // Parity with the legacy `save_config` path: `streamdock.*` is `apply: live`,
+        // so attach/detach the supervisor now rather than on the next restart.
+        #[cfg(feature = "desktop")]
+        if reply.effects.iter().any(|e| e == "streamdock_changed") {
+            let streamdock_state = state.clone();
+            tauri::async_runtime::spawn(async move {
+                streamdock_state
+                    .streamdock
+                    .apply_config(&streamdock_state)
+                    .await;
+            });
+        }
         crate::relay_client::notify_config_changed(state.as_ref());
         #[cfg(not(feature = "desktop"))]
         if server_changed {

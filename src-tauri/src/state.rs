@@ -315,6 +315,28 @@ pub enum AppEvent {
         session_id: String,
         since_ms: Option<u64>,
     },
+    /// A hardware controller (StreamDock macropad key, etc.) asked the UI to
+    /// focus this session's tab. Not a Tauri window-focus signal by itself —
+    /// the frontend listener must set both `terminalsStore.setActive` and
+    /// `conversationStore.setActiveTerminal` (see `watcherFire.ts`'s own
+    /// doc comment on why both are required). Dual-emitted alongside the
+    /// Tauri `emit` by `POST /sessions/{id}/focus` — see AGENTS.md's IPC/HTTP
+    /// parity rule.
+    #[serde(rename = "session-focus-requested")]
+    SessionFocusRequested { session_id: String },
+    /// A hardware controller asked the UI to run a frontend-only action by
+    /// its `actionRegistry` name (e.g. `"jump-waiting-terminal"`). The
+    /// frontend dispatches through the existing action registry so this one
+    /// event makes every registry action controller-bindable, but the
+    /// allowlist gating which names are actually accepted lives in Rust —
+    /// `UI_ACTION_ALLOWLIST` / `run_ui_action_impl` in
+    /// `mcp_http::session` (the single choke point both the HTTP route and
+    /// `streamdock::sink::AppStateSink::run_ui_action` call through) — not
+    /// here. This event itself carries no restriction, so any future
+    /// producer of it must route through that same function, not construct
+    /// this variant directly, or it bypasses the allowlist silently.
+    #[serde(rename = "ui-action-requested")]
+    UiActionRequested { name: String },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust
     /// already matched. The frontend re-runs the real `RegExp` on the cleaned
     /// text to hand the plugin a genuine `RegExpExecArray`, and scans the line
@@ -2643,6 +2665,11 @@ pub struct AppState {
     pub(crate) remote_sessions: crate::remote_mirror::RemoteSessions,
     /// Duplex, authenticated agent mail links through this desktop hub.
     pub(crate) remote_mail: crate::mcp_http::remote_peer::RemoteMail,
+    /// StreamDock M18 macropad supervisor — see `crate::streamdock`.
+    /// Desktop-only like `app_handle`: `tuic_streamdock` is a `desktop`-feature
+    /// optional dependency, so `tuic-remote` never builds this field at all.
+    #[cfg(feature = "desktop")]
+    pub(crate) streamdock: Arc<crate::streamdock::StreamDockManager>,
     /// Task registry for long-running MCP orchestration. Survives client
     /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
     pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
@@ -4188,6 +4215,8 @@ impl AppState {
             remote_sessions: Default::default(),
             remote_mail: Default::default(),
             tunnel_audit,
+            #[cfg(feature = "desktop")]
+            streamdock: Arc::new(crate::streamdock::StreamDockManager::new()),
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             work_item_requests: DashMap::new(),
@@ -5549,6 +5578,10 @@ impl AppState {
             AppEvent::SessionRenamed { .. } => {}
             AppEvent::SessionSuspended { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
+            // Transient UI commands (a macropad key asking the UI to focus a
+            // tab or run a frontend action) carry no session state to
+            // accumulate — purely a bus signal for live listeners.
+            AppEvent::SessionFocusRequested { .. } | AppEvent::UiActionRequested { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
             AppEvent::PluginWatcherLines { .. } => {}

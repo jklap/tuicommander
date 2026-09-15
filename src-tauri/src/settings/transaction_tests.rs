@@ -347,3 +347,44 @@ async fn wrong_owner_malformed_paths_and_secret_objects_never_commit() {
 
 #[path = "failure_tests.rs"]
 mod failures;
+
+#[tokio::test]
+#[serial_test::serial]
+async fn streamdock_change_schedules_the_live_streamdock_effect() {
+    crate::credentials::reset_test_faults();
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = config::set_config_dir_override(dir.path().to_path_buf());
+    let (state, service) = service();
+    let snapshot = read(&service).await;
+    // led_brightness, not enabled: the effect fires without attaching a real device.
+    let reply = service
+        .patch(
+            Target::Machine,
+            "app".into(),
+            snapshot.revision,
+            vec![set("/streamdock/led_brightness", json!(12))],
+        )
+        .await
+        .unwrap();
+    assert!(reply.persisted);
+    assert_eq!(state.config.read().streamdock.led_brightness, 12);
+    assert!(
+        reply.effects.iter().any(|e| e == "streamdock_changed"),
+        "a streamdock edit must carry streamdock_changed: {:?}",
+        reply.effects
+    );
+    let other = service
+        .patch(
+            Target::Machine,
+            "app".into(),
+            reply.revision,
+            vec![set("/font_size", json!(21))],
+        )
+        .await
+        .unwrap();
+    assert!(
+        !other.effects.iter().any(|e| e == "streamdock_changed"),
+        "an unrelated edit must not touch the StreamDock supervisor: {:?}",
+        other.effects
+    );
+}

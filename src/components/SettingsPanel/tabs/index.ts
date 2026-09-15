@@ -12,6 +12,7 @@ export type { RepoTabProps } from "./RepoWorktreeTab";
 export { RepoWorktreeTab } from "./RepoWorktreeTab";
 export { SelectionTab } from "./SelectionTab";
 export { SmartPromptsTab } from "./SmartPromptsTab";
+export { StreamDockTab } from "./StreamDockTab";
 export { LocalMcpPanel } from "./services/LocalMcpPanel";
 export { RemoteAccessPanel } from "./services/RemoteAccessPanel";
 export { UpstreamMcpPanel } from "./services/UpstreamMcpPanel";
