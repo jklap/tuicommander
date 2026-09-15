@@ -286,23 +286,51 @@ unsafe fn read_environ_from_handle(
         return Ok(Vec::new());
     }
 
-    // Step 4: Read the environment block (UTF-16 null-terminated strings, double-null terminated)
-    // Read in 32KB chunks until we find the double-null terminator
-    let mut env_buf: Vec<u16> = vec![0u16; 16384];
-    if unsafe {
-        ReadProcessMemory(
-            handle,
-            env_ptr as *const _,
-            env_buf.as_mut_ptr().cast(),
-            env_buf.len() * 2,
-            &mut bytes_read,
-        )
-    } == 0
-    {
-        return Err(Error::last_os_error());
+    // Step 4: Read the environment block (UTF-16 null-terminated strings,
+    // double-null terminated) a page at a time, stopping at the terminator.
+    //
+    // One big read is what the first version did, and it never worked: the
+    // block is a few kilobytes at the end of its own region, so a 32 KB request
+    // runs off the end of the mapping, `ReadProcessMemory` fails the whole call
+    // with ERROR_PARTIAL_COPY and every lookup — `CLAUDE_CONFIG_DIR`, the
+    // agent's own launch env — answered "not set" on Windows. Page-sized reads
+    // stay inside the mapping, and a read that does fail after the first ends
+    // the walk with what the earlier ones already returned rather than
+    // discarding it.
+    const PAGE: usize = 2048; // u16s: one 4 KB page
+    let mut env_buf: Vec<u16> = Vec::new();
+    loop {
+        let mut page = [0u16; PAGE];
+        let ok = unsafe {
+            ReadProcessMemory(
+                handle,
+                (env_ptr + env_buf.len() * 2) as *const _,
+                page.as_mut_ptr().cast(),
+                PAGE * 2,
+                &mut bytes_read,
+            )
+        } != 0;
+        if !ok {
+            // A failed page after a good one is the end of the mapping, not an
+            // error: the entries already read are the answer.
+            if env_buf.is_empty() {
+                return Err(Error::last_os_error());
+            }
+            break;
+        }
+        let words_read = bytes_read / 2;
+        if words_read == 0 {
+            break;
+        }
+        // The block ends at a double null; anything past it belongs to whatever
+        // the process put there next. Look from one word before the new page so
+        // a terminator split across the boundary is still seen.
+        let scan_from = env_buf.len().saturating_sub(1);
+        env_buf.extend_from_slice(&page[..words_read]);
+        if env_buf[scan_from..].windows(2).any(|w| w == [0, 0]) {
+            break;
+        }
     }
-    let words_read = bytes_read / 2;
-    env_buf.truncate(words_read);
 
     // Parse: split on null u16, stop at double-null (empty string)
     let mut entries = Vec::new();

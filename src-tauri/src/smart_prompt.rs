@@ -29,6 +29,19 @@ const ENV_ALLOWLIST: &[&str] = &[
     "USERNAME",
     "SYSTEMROOT",
     "COMSPEC",
+    // Windows essentials with no POSIX counterpart, so easy to leave out and
+    // hard to diagnose. `PATHEXT` is half of what `PATH` means there — without
+    // it a bare `claude` or `npm`, which are `.cmd` shims, resolves to nothing.
+    // The rest is where a Windows program keeps its own configuration: strip
+    // them and a working agent CLI reports a broken install.
+    "PATHEXT",
+    "WINDIR",
+    "SYSTEMDRIVE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
 ];
 
 /// Clear the child's env, re-populate from the allowlist inherited from the
@@ -192,7 +205,9 @@ pub(crate) async fn execute_shell_script(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{host_shell, normalize_newlines, print_var_script, sleep_script};
+    use crate::test_support::{
+        host_shell, normalize_newlines, print_var_script, sleep_script, system32_exe,
+    };
 
     /// These tests drive real child processes, so they need a directory that
     /// exists and commands that resolve on the host. `/tmp` and the POSIX
@@ -226,8 +241,15 @@ mod tests {
     #[tokio::test]
     async fn headless_stdin_piped() {
         // `sort` is the stock Windows filter that reads stdin and writes it
-        // back; with a single line it cannot reorder anything.
-        let (command, args) = shell_argv(if cfg!(windows) { "sort" } else { "cat" });
+        // back; with a single line it cannot reorder anything. By absolute
+        // path, because `cmd` resolves a bare name through the child's `PATH`
+        // and this test is about stdin, not about the host's `PATH`.
+        let filter = if cfg!(windows) {
+            system32_exe("sort.exe")
+        } else {
+            "cat".to_string()
+        };
+        let (command, args) = shell_argv(&filter);
         let result = execute_headless_prompt(
             command,
             args,
@@ -249,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn headless_timeout() {
-        let (command, args) = shell_argv(sleep_script());
+        let (command, args) = shell_argv(&sleep_script());
         let result = execute_headless_prompt(command, args, None, 100, tmp_cwd(), None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Timed out"));
@@ -335,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_script_timeout() {
-        let result = execute_shell_script(sleep_script().to_string(), 100, tmp_cwd()).await;
+        let result = execute_shell_script(sleep_script(), 100, tmp_cwd()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Timed out"));
     }

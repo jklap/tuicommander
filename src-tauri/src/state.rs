@@ -8879,8 +8879,7 @@ mod tests {
     /// VtLogBuffer, and verify that clean log lines are extracted.
     #[test]
     fn test_vt_log_real_pty_echo() {
-        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-        use std::io::Read;
+        use portable_pty::{PtySize, native_pty_system};
 
         let pty_system = native_pty_system();
         let pair = match pty_system.openpty(PtySize {
@@ -8908,23 +8907,12 @@ mod tests {
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave); // close slave so reads see EOF
 
-        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let reader = pair.master.try_clone_reader().expect("reader");
         let mut buf = VtLogBuffer::new(24, 80, 1000);
-        // Use a small read buffer (64 bytes) to force multiple reads,
-        // simulating the incremental reads the production reader thread does.
-        let mut raw = [0u8; 64];
-
-        // Read all output from the PTY and feed into VtLogBuffer
-        loop {
-            match reader.read(&mut raw) {
-                Ok(0) => break,
-                Ok(n) => {
-                    buf.process(&raw[..n]);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(_) => break,
-            }
-        }
+        crate::test_support::drain_pty(reader, |chunk| {
+            buf.process(chunk);
+        });
+        let _ = child.kill();
         let _ = child.wait();
 
         let lines = log_texts(&buf);
@@ -8955,8 +8943,7 @@ mod tests {
     /// captured by VtLogBuffer when using a real PTY.
     #[test]
     fn test_vt_log_real_pty_alternate_screen_suppressed() {
-        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-        use std::io::Read;
+        use portable_pty::{PtySize, native_pty_system};
 
         let pty_system = native_pty_system();
         let pair = match pty_system.openpty(PtySize {
@@ -8990,20 +8977,12 @@ mod tests {
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave);
 
-        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let reader = pair.master.try_clone_reader().expect("reader");
         let mut buf = VtLogBuffer::new(24, 80, 1000);
-        let mut raw = [0u8; 64]; // small buffer for incremental reads
-
-        loop {
-            match reader.read(&mut raw) {
-                Ok(0) => break,
-                Ok(n) => {
-                    buf.process(&raw[..n]);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(_) => break,
-            }
-        }
+        crate::test_support::drain_pty(reader, |chunk| {
+            buf.process(chunk);
+        });
+        let _ = child.kill();
         let _ = child.wait();
 
         let lines = log_texts(&buf);
@@ -9022,8 +9001,7 @@ mod tests {
     /// *together* — scrollback the user can scroll, no alt noise in the logs.
     #[test]
     fn test_vt_log_real_pty_gh_run_watch_builds_alt_scrollback() {
-        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-        use std::io::Read;
+        use portable_pty::{PtySize, native_pty_system};
 
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("src/fixtures/alt_screen/gh-run-watch.raw");
@@ -9047,19 +9025,12 @@ mod tests {
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave);
 
-        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let reader = pair.master.try_clone_reader().expect("reader");
         let mut buf = VtLogBuffer::new(24, 120, 1000);
-        let mut raw = [0u8; 4096];
-        loop {
-            match reader.read(&mut raw) {
-                Ok(0) => break,
-                Ok(n) => {
-                    buf.process(&raw[..n]);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(_) => break,
-            }
-        }
+        crate::test_support::drain_pty(reader, |chunk| {
+            buf.process(chunk);
+        });
+        let _ = child.kill();
         let _ = child.wait();
 
         assert!(buf.is_alternate_screen(), "stream leaves us in alt screen");

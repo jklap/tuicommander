@@ -1620,17 +1620,22 @@ mod tests {
         let root = dir.path();
         let git_dir = root.join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
-        let global_ignore = dir.path().join("global-ignore");
+        // Canonicalised, because the Windows CI runner's temp directory is an
+        // 8.3 short name (`C:\Users\RUNNER~1\…`) and `ignore`'s config reader
+        // expands *every* `~` in `core.excludesFile` to the home directory, not
+        // just a leading one. The path it then looks for does not exist, so the
+        // global ignore is silently empty and every file reads as a working-tree
+        // change. `long_form` also drops the `\\?\` prefix canonicalising adds,
+        // which git config cannot read, and gives forward slashes — a git config
+        // *value* treats `\` as the start of an escape sequence.
+        let global_ignore = crate::fs::long_form(dir.path()).join("global-ignore");
         std::fs::write(&global_ignore, "*.swp\n").unwrap();
         let gitconfig = dir.path().join("gitconfig");
         std::fs::write(
             &gitconfig,
-            // Forward slashes: a git config value treats `\` as the start of an
-            // escape sequence, so a Windows path written verbatim reaches git
-            // mangled and the excludes file is silently never found.
             format!(
                 "[core]\n\texcludesFile = {}\n",
-                crate::test_support::slashed(&global_ignore.to_string_lossy())
+                crate::fs::portable_spelling(&global_ignore.to_string_lossy())
             ),
         )
         .unwrap();
