@@ -3864,4 +3864,58 @@ mod tests {
             "copy_ignored_files should have synced ignored.txt into the new worktree"
         );
     }
+
+    #[test]
+    fn run_ui_action_impl_rejects_names_outside_the_allowlist() {
+        let state = super::super::tests::test_state();
+        let err = run_ui_action_impl(&state, "delete-repo")
+            .expect_err("an unallowlisted name must be rejected");
+        assert!(
+            err.contains("not allowlisted"),
+            "error should explain why: {err}"
+        );
+    }
+
+    #[test]
+    fn run_ui_action_impl_rejects_a_case_or_prefix_variant_of_an_allowed_name() {
+        let state = super::super::tests::test_state();
+        // Guards against an allowlist check that's accidentally
+        // case-insensitive or does a substring/prefix match instead of an
+        // exact one — both would let a superficially-similar-looking name
+        // slip through.
+        for name in [
+            "jump-waiting-terminal-and-something-else",
+            "Jump-Waiting-Terminal",
+            "activity-dashboard-extra",
+        ] {
+            assert!(
+                run_ui_action_impl(&state, name).is_err(),
+                "{name:?} must not be accepted as an allowlist match"
+            );
+        }
+    }
+
+    #[test]
+    fn run_ui_action_impl_accepts_every_allowlisted_name() {
+        let state = super::super::tests::test_state();
+        for name in UI_ACTION_ALLOWLIST {
+            run_ui_action_impl(&state, name)
+                .unwrap_or_else(|e| panic!("allowlisted name {name:?} was rejected: {e}"));
+        }
+    }
+
+    #[test]
+    fn focus_session_impl_rejects_an_unknown_session_id() {
+        let state = super::super::tests::test_state();
+        let err = focus_session_impl(&state, "no-such-session")
+            .expect_err("focusing a nonexistent session must fail");
+        assert_eq!(err, "Session not found");
+    }
+
+    #[test]
+    fn focus_session_impl_succeeds_for_a_live_session() {
+        let state = super::super::tests::test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "focus-me");
+        focus_session_impl(&state, "focus-me").expect("a live session must be focusable");
+    }
 }
