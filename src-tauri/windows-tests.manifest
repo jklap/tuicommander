@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Application manifest for the Windows TEST binaries.
+
+  tauri_build::build() embeds the app manifest through cargo:rustc-link-arg-bins,
+  which reaches binaries and not test targets. Without it a test binary loads
+  C:\Windows\System32\comctl32.dll, which is version 5.82 and exports none of
+  SetWindowSubclass, DefSubclassProc, RemoveWindowSubclass or TaskDialogIndirect
+  — all four are version 6 only, and tao and the dialog plugin import all four.
+  The loader then aborts the process with STATUS_ENTRYPOINT_NOT_FOUND
+  (0xc0000139) before a single test runs.
+
+  This declares the same Common-Controls 6 dependency, so the loader binds the
+  side-by-side version 6 that does export them.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
