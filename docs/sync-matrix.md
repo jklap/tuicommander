@@ -132,6 +132,8 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `pty-watcher-lines-{session_id}` | `{ session_id: string, lines: [{ text: string, matched_ids: string[] }] }` | `pty.rs emit_watcher_lines()` — one emit per 100 ms batch of assembled lines; `text` is the CLEANED text Rust matched on, `matched_ids` are qualified `client_id/watcher_id`. Rust ships every line only while a registered pattern could not be compiled, otherwise the matched ones alone. Dual-emitted on `event_bus` as `PluginWatcherLines` (`watcher-lines` WS frame on `/sessions/:id/stream` in both `?format=grid` and raw mode — **not** `?format=log|text`, which returns before the event loop — plus `plugin-watcher-lines` SSE) | `CanvasTerminal.tsx` → `transport.onEvent("watcher-lines", …)` → `pluginRegistry.handleWatcherLines()`, which re-runs the JS `RegExp` on each line. The listener is installed BEFORE the grid subscription — a line that lands while it is being attached is lost. **Not** in `useAppInit.ts` — the listener is per-session |
 | `session-state-changed` | `{ session_id: string, state: SessionState }` — `state` is exactly the object `list_active_sessions` returns per session, snake_case, with serde skipping the zero-valued fields. Both transports build it from `state.rs session_state_payload()`, one function on purpose | `state.rs publish_session_state_change()`, called only from the session-state accumulator — the sole writer of `session_states` and therefore the only place that can see a transition. Deduped by `SessionState`'s `PartialEq` (which excludes `last_activity_ms`), so a repaint that changes nothing a client renders emits nothing. Dual-emitted on `event_bus` as `SessionStateChanged` (`session-state-changed` SSE on `/events`). Ignored by `apply_event_to_session_state` — it is the accumulator's output, never its input | `useAgentPolling.ts` → `subscribeEvents({"session-state-changed"})` → `applySessionState()` → tab awaiting/busy badges + Activity Dashboard. Replaced a 1 Hz `list_active_sessions` poll; the only remaining reads are a single mount-time catch-up, for sessions already idle and silent, and the same catch-up re-run from `subscribeEvents`' `onResync` when the SSE stream reconnects or reports `lagged` (browser only — Tauri `listen()` cannot drop) |
 | `acp-notice` | `{ connectionId, generation, sessionId?, requestId?, sequence, kind }` — `kind` is `ready` \| `settled` \| `interaction_pending` \| `interaction_settled`. camelCase, unlike the PTY rows above: it is the same object the `/acp` routes and the `acp_*` commands return, and a second spelling would be a second thing to keep in sync | `state.rs spawn_acp_notice_pump()`, fed by `acp/events.rs` `AcpEventJournal::append` — the one place every ACP event is stamped, so a notice cannot be forgotten by a new producer. Dual-emitted on `event_bus` as `AcpNotice` (`acp-notice` SSE on `/events`) | TBD — no ACP frontend yet. It is a wake signal: react by reading `acp_connection_snapshot`, `acp_pending_interactions`, or the stream from the `sequence` it names. The ordered turn frames stay on `acp_subscribe` / the `/acp/connections/:id/stream` WebSocket and never ride this bus |
+| `session-focus-requested` | `{ session_id: string }` | `mcp_http/session.rs focus_session_impl()` via `POST /sessions/{id}/focus` or its `focus_session` IPC twin — did not exist before the StreamDock integration; `INTENTIONALLY_UNMAPPED` in `transport.ts` used to list window/panel focus as host-only because there was nothing to call. Dual-emitted on `event_bus` as `SessionFocusRequested` (`session-focus-requested` SSE) | `useAppInit.ts` → `terminalsStore.getTerminalForSession()` then **both** `terminalsStore.setActive` and `conversationStore.setActiveTerminal` (see `watcherFire.ts`'s own `setActiveSession` for why both) |
+| `ui-action-requested` | `{ name: string }` | `mcp_http/session.rs run_ui_action_impl()` via `POST /ui/action` or its IPC twin — gated by `session::UI_ACTION_ALLOWLIST` in Rust (currently `jump-waiting-terminal`, `activity-dashboard`); the event itself carries no restriction, so any future producer must apply its own allowlist. Dual-emitted on `event_bus` as `UiActionRequested` (`ui-action-requested` SSE) | `useShortcutRegistration.ts` → `dispatchAction()` (exported from `useKeyboardShortcuts.ts`) — the same dispatch table real keydown events use, so this makes every registry action controller-bindable without a second handler list |
 
 ### HTTP & MCP Server
 When adding routes or changing server behavior:
@@ -386,6 +388,36 @@ When modifying tunnel profiles, supervisor, audit logging, backoff, or tunnel UI
 | `docs/features/ssh-tunnels.md` | Feature architecture doc |
 | `docs/FEATURES.md` | Section 23 (SSH Tunnel Manager) |
 | `docs/user-guide/remote-access.md` | SSH Tunnel Management section |
+
+### StreamDock M18 Macropad
+When modifying the StreamDock device model, render pipeline, gesture resolution, slot-assignment
+policy, or the in-app supervisor/config/Settings UI:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/crates/tuic-streamdock/src/device/model.rs` | Device table (VID/PID, geometry, hw/write_key maps) — **transcribe hw/write_key changes only from confirmed hardware testing**, never the vendor SDK comment alone (see the module's own doc comment for why) |
+| `src-tauri/crates/tuic-streamdock/src/device/actor.rs` | The serializing write actor, heartbeat, shutdown ordering |
+| `src-tauri/crates/tuic-streamdock/src/device/reader.rs` | Button-state polling → `InputEvent` |
+| `src-tauri/crates/tuic-streamdock/src/device/hotplug.rs` | Device discovery + hot-plug watching |
+| `src-tauri/crates/tuic-streamdock/src/dispatch.rs` | Tap/DoubleTap/Hold gesture resolution — see its doc comment for the confirmed press/release timing model before changing thresholds |
+| `src-tauri/crates/tuic-streamdock/src/render/` | KeyFace → JPEG rendering (palette, font, cache) |
+| `src-tauri/crates/tuic-streamdock/src/policy/` | SlotPlanner (sticky assignment, eviction) and priority ranking |
+| `src-tauri/crates/tuic-streamdock/src/port.rs` | `StateSource`/`ActionSink` — the entire coupling surface to any host |
+| `src-tauri/crates/tuic-streamdock/src/coordinator.rs` | The 250ms tick loop tying render+policy+device together |
+| `src-tauri/src/streamdock/mod.rs` | `StreamDockManager` supervisor (`apply_config`, start/stop, hot-plug reconnect loop) |
+| `src-tauri/src/streamdock/source.rs` | `StateSource` impl reading `AppState` directly |
+| `src-tauri/src/streamdock/sink.rs` | `ActionSink` impl — calls the same shared functions the HTTP/IPC surfaces use |
+| `src-tauri/src/streamdock/commands.rs` / `tauri_commands.rs` | HTTP routes / IPC twins for status + device listing |
+| `src-tauri/src/config.rs` | `StreamDockConfig`, `ConfigSaveEffects::streamdock_changed` |
+| `src-tauri/src/state.rs` | `AppEvent::SessionFocusRequested` / `UiActionRequested`, `AppState.streamdock` field |
+| `src-tauri/src/mcp_http/session.rs` | `focus_session_impl` / `run_ui_action_impl` / `UI_ACTION_ALLOWLIST` |
+| `src/components/SettingsPanel/tabs/StreamDockTab.tsx` | Settings UI (enable, device picker, brightness, pinned sessions) |
+| `src/hooks/useAppInit.ts` | `session-focus-requested` listener |
+| `src/hooks/useShortcutRegistration.ts` | `ui-action-requested` listener → `dispatchAction` |
+| `docs/backend/config.md` | `StreamDockConfig` schema row |
+| `docs/api/tauri-commands.md` | `focus_session`, `run_ui_action`, `streamdock_status`, `streamdock_list_devices` |
+| `docs/api/http-api.md` | `/sessions/{id}/focus`, `/ui/action`, `/streamdock/status`, `/streamdock/devices` |
+| `docs/FEATURES.md` | StreamDock section |
 
 ### Remote Connection Manager
 When modifying remote connection config, storage, or transport routing:

@@ -285,6 +285,22 @@ Install, manage, and browse plugins. See [Plugins](plugins.md) for the full guid
 - **Installed** — List all plugins with enable/disable toggle, logs viewer, uninstall
 - **Browse** — Discover and install from the community registry
 
+## StreamDock Tab
+
+Configure a StreamDock M18 macropad (15-key LCD grid + 3 plain buttons) that mirrors live session
+state to its keys. Desktop only.
+
+- **Enable StreamDock integration** — attach to the first connected device (or the one selected below)
+- **StreamDock status** — live connection state, polled every 2s
+- **Device** — pick which unit to use when more than one is connected, with a rescan button
+- **Screen brightness** / **LED brightness** — 0-100%; LED brightness only applies on firmware that reports RGB support
+- **Pinned sessions** — a toggle per live session; a pinned session's key is never evicted to make room for another, even one that needs input more urgently
+
+Each key shows a session's status color, its short alias (e.g. `tc-1`), and current task. Tap a
+key to answer its pending choice prompt (if any) or focus that tab; double-tap answers the
+second option; hold sends an interrupt. The bottom row and the 3 plain buttons are fixed verb
+keys (approve/reject/interrupt/jump-to-waiting).
+
 ## Smart Prompts Tab
 
 Manage the AI-powered actions surfaced in the toolbar, context menus, and command palette. Reachable from the nav or directly via "Manage Smart Prompts..." in the Smart Prompts drawer.

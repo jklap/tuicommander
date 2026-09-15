@@ -220,6 +220,31 @@ a choice prompt, and a joined payload matches neither. The transport uses this
 route when keystrokes arrive while an earlier write is still in flight; a
 solitary keystroke keeps the plain `/write` route.
 
+### Focus a Session's Tab
+
+```
+POST /sessions/:id/focus  -> { "ok": true }
+```
+
+Asks the UI to focus this session's tab — dual-emits `AppEvent::SessionFocusRequested`
+(`session-focus-requested` on `/events` SSE, plus the desktop Tauri event of the same name).
+Did not exist before the StreamDock M18 integration; `404` if the session is gone. See the
+`session-focus-requested` row in `docs/sync-matrix.md`'s event table for the frontend listener.
+
+### Run a Named UI Action
+
+```
+POST /ui/action
+Content-Type: application/json
+
+{ "name": "jump-waiting-terminal" }  -> { "ok": true }
+```
+
+Runs a frontend-only action (the same ones real keyboard shortcuts dispatch) by its
+`actionRegistry` name. `name` must be in the Rust-side allowlist (`UI_ACTION_ALLOWLIST` in
+`mcp_http/session.rs` — currently `jump-waiting-terminal`, `activity-dashboard`); anything else
+is `403`. Dual-emits `AppEvent::UiActionRequested` (`ui-action-requested` SSE + Tauri event).
+
 ### Queue a Command for the Next Idle Window
 
 ```
@@ -2350,6 +2375,34 @@ subscriber. `/events` carries only the low-frequency `acp-notice` wake signal
 (`ready`, `settled`, `interaction_pending`, `interaction_settled`), whose
 payload names the connection, generation, sequence and — when it has one — the
 session and request it is about.
+
+## StreamDock M18 Macropad
+
+Desktop-only — `#[cfg(feature = "desktop")]`, since `tuic_streamdock` is a `desktop`-feature
+optional dependency; these routes don't exist on a `tuic-remote` build. See
+`src-tauri/crates/tuic-streamdock/` and `src-tauri/src/streamdock/`.
+
+### Status
+
+```
+GET /streamdock/status  -> { "enabled": true, "running": true, "device": "StreamDock M18",
+                              "last_error": null, "restarts": 0 }
+```
+
+Current supervisor state. Poll this (the Settings UI does, every 2s) rather than inferring
+state from config — `enabled` can be true while `running` is false (waiting for a device) or
+while `last_error` names why the last attempt failed (e.g. the vendor's Mirabox Creator app
+holding the device exclusively).
+
+### List Connected Devices
+
+```
+GET /streamdock/devices  -> [ { "product_name": "StreamDock M18", "serial_number": "81D0DA783A4C",
+                                 "vendor_id": 21832, "product_id": 4096 } ]
+```
+
+Enumerates currently-connected StreamDock-family devices, independent of whether the
+integration is enabled — listing should work while still deciding whether to turn it on.
 
 ## Tauri-Only Commands (No HTTP Route)
 

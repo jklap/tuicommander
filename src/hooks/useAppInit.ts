@@ -5,6 +5,7 @@ import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
+import { conversationStore } from "../stores/conversationStore";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
@@ -648,6 +649,20 @@ export async function initApp(deps: AppInitDeps) {
 		const { session_ids, layout } = event.payload;
 		paneLayoutStore.arrangeSessionsAsLayout(session_ids, layout);
 	}).catch((err) => appLogger.error("app", "Failed to register tmux-window-layout-requested listener", err));
+
+	// A hardware controller (StreamDock macropad, etc.) asking the UI to
+	// focus a session's tab — see `AppEvent::SessionFocusRequested`'s doc
+	// comment (state.rs). Must set BOTH stores: `executeSmartPrompt` reads
+	// `terminalsStore.getActive()`, but the conversation engine keys on the
+	// active conversation — see `watcherFire.ts`'s own `setActiveSession`
+	// for the same requirement.
+	listen<{ session_id: string }>("session-focus-requested", (event) => {
+		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
+		if (termId) {
+			terminalsStore.setActive(termId);
+			conversationStore.setActiveTerminal(termId);
+		}
+	}).catch((err) => appLogger.error("app", "Failed to register session-focus-requested listener", err));
 
 	listen<{ session_id: string; standby: boolean }>("session-standby", (event) => {
 		const { session_id, standby } = event.payload;

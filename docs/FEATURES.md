@@ -2344,3 +2344,36 @@ connect rather than failing later inside a spawn.
 - Pause/resume, selected delete, clear-and-pause, event/workstream corrections and merges, blocker resolution, explicit state changes, and mark-viewed controls
 - Provenance keeps closed sources readable and opens a terminal only when the exact recorded session remains live
 - Manual deterministic `progress.md` preview/export at the owning project root, with optional provenance, snapshot and existing-content preconditions, symlink/directory refusal, and atomic replacement
+
+---
+
+## 27. StreamDock M18 Macropad
+
+A 15-key LCD macropad (5×3 grid, 64×64px keys, plus 3 plain push buttons) that mirrors live
+session state — each key shows a session's status (working/idle/needs input/error/completed)
+and pressing it focuses that session's tab. Desktop only.
+
+### 27.1 Rendering
+- Each key face is content-hash cached: an unchanged session never re-encodes or re-transfers its image
+- Full-bleed background color encodes state; only the "needs input" state pulses (a scarce, deliberately reserved signal)
+- Primary label is the session's short `term_alias` (e.g. `tc-1`); secondary line shows the current task or an elapsed-idle "ready (Nm)" escalation
+
+### 27.2 Slot Assignment
+- Sessions are assigned to keys by **stable identity**, never arrival order — a closed session's slot goes blank rather than shifting its neighbors, and a session keeps its slot for as long as it exists
+- With no empty slot, the lowest-priority occupant is evicted — but a session awaiting input is never evicted by another session also awaiting input, and a pinned session (Settings) is never evicted
+- More live sessions than slots renders as an overflow count rather than paginating
+
+### 27.3 Gestures
+- Tap, double-tap, and hold are all resolved from the device's own press/release event pairing — a hold is only knowable once the physical release arrives, since the hardware reports no "still held" signal
+- Tap answers a pending choice prompt (highlighted option) or focuses the session's tab; double-tap answers the second option; hold sends an interrupt (Ctrl-C)
+- Three plain buttons and the bottom LCD row are fixed verb keys: jump to the next session awaiting input, approve/reject a choice prompt, interrupt the focused session
+
+### 26.4 Architecture
+- `src-tauri/crates/tuic-streamdock/` — device transport (built on the `mirajazz` crate), rendering, gesture resolution, and slot-assignment policy, all decoupled from `AppState` behind a `StateSource`/`ActionSink` port so a future sidecar split needs no changes here
+- `src-tauri/src/streamdock/` — the in-process supervisor: reconciles the device connection with config, implements the two ports against `AppState` directly, and exposes status/device-list over HTTP + Tauri IPC
+- Config: `AppConfig.streamdock` (enable, device selection, screen/LED brightness, pinned sessions) — see [config.md](backend/config.md)
+- Settings tab: enable toggle, live status, device picker with rescan, brightness sliders, per-session pin toggles
+
+### 26.5 Hardware Notes
+- Reading a button press and writing a key's LCD image use two independent numbering spaces on this hardware for the same physical key — confirmed empirically, not documented by the vendor
+- Hot-plug (unplug/replug) recovers automatically via a 2s discovery poll; the vendor's own Creator app holds the device exclusively and must not be running alongside TUICommander

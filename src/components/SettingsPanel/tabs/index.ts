@@ -12,4 +12,5 @@ export { RepoWorktreeTab } from "./RepoWorktreeTab";
 export { SelectionTab } from "./SelectionTab";
 export { ServicesTab } from "./ServicesTab";
 export { SmartPromptsTab } from "./SmartPromptsTab";
+export { StreamDockTab } from "./StreamDockTab";
 export { TerminalTab } from "./TerminalTab";
