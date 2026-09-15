@@ -270,6 +270,86 @@ function lastLeaf(node: PaneNode): string {
 	return lastLeaf(node.children[node.children.length - 1]);
 }
 
+// ---- tmux `select-layout` bridging ----
+//
+// `tileLeaves`/`mainVertical` build a whole tree DIRECTLY as a literal and
+// hand it to `setRoot()`, rather than reaching it via repeated `splitLeaf()`
+// calls. This deliberately sidesteps `splitLeaf`'s `MAX_SPLIT_DEPTH` check
+// (line ~143 above): that guard only bounds *incremental* single-step
+// splitting (the interactive Cmd+\ path), and `setRoot()` itself enforces no
+// depth limit at all — a leaf's own depth from the root is irrelevant to
+// whether the tree can be *set*, only to whether it can be *split further*.
+// A single row of N panes is depth 1; a 2D grid is depth 2 — both trivially
+// fine either way.
+
+/**
+ * Arrange `ids` into a balanced grid, real tmux's own `tiled` layout.
+ * `ids.length <= 1` returns a bare leaf (or `null` for zero ids) — no
+ * branch node for a single pane.
+ */
+export function tileLeaves(ids: string[]): PaneNode | null {
+	if (ids.length === 0) return null;
+	if (ids.length === 1) return { type: "leaf", id: ids[0] };
+
+	const cols = Math.ceil(Math.sqrt(ids.length));
+	const rows = Math.ceil(ids.length / cols);
+	const columns: string[][] = [];
+	for (let c = 0; c < cols; c++) {
+		const column = ids.slice(c * rows, c * rows + rows);
+		if (column.length > 0) columns.push(column);
+	}
+
+	const toColumnNode = (column: string[]): PaneNode =>
+		column.length === 1
+			? { type: "leaf", id: column[0] }
+			: {
+					type: "branch",
+					direction: "vertical",
+					children: column.map((id) => ({ type: "leaf", id }) as PaneNode),
+					ratios: normalizeRatios(column.map(() => 1)),
+				};
+
+	const children = columns.map(toColumnNode);
+	if (children.length === 1) return children[0];
+	return {
+		type: "branch",
+		direction: "horizontal",
+		children,
+		ratios: normalizeRatios(children.map(() => 1)),
+	};
+}
+
+/**
+ * Real tmux's `main-vertical`: the first id ("leader") keeps a fixed 30%
+ * column (matching `resize-pane -x 30%`, which `TmuxBackend.rebalancePanesWithLeader`
+ * always issues right after `select-layout main-vertical` — see Appendix A
+ * of the tmux-shim plan), the rest stack vertically in the remaining 70%.
+ * Unreachable from TUIC's environment today (only the "inside a real tmux
+ * session" leader branch calls it, and TUIC deliberately never sets `$TMUX`)
+ * — built alongside `tileLeaves` for forward-compat, at near-zero extra cost.
+ */
+export function mainVertical(ids: string[]): PaneNode | null {
+	if (ids.length === 0) return null;
+	if (ids.length === 1) return { type: "leaf", id: ids[0] };
+
+	const [leader, ...rest] = ids;
+	const restNode: PaneNode =
+		rest.length === 1
+			? { type: "leaf", id: rest[0] }
+			: {
+					type: "branch",
+					direction: "vertical",
+					children: rest.map((id) => ({ type: "leaf", id }) as PaneNode),
+					ratios: normalizeRatios(rest.map(() => 1)),
+				};
+	return {
+		type: "branch",
+		direction: "horizontal",
+		children: [{ type: "leaf", id: leader }, restNode],
+		ratios: [0.3, 0.7],
+	};
+}
+
 // ---- Store ----
 // The tree (root) lives in plain JS to avoid SolidJS deep-proxy issues.
 // Groups and activeGroupId live in a SolidJS store for fine-grained reactivity.
@@ -545,6 +625,93 @@ function createPaneLayoutStore() {
 				}
 			}
 			return ids;
+		},
+
+		/**
+		 * Arrange `sessionIds` (terminal tab ids, in the order they should
+		 * appear) into a fresh split view for `layout` ("tiled" or
+		 * "main-vertical") — the tmux compatibility shim's `select-layout`
+		 * bridge (see `useAppInit.ts`'s `tmux-window-layout-requested`
+		 * listener). Rebuilds the WHOLE layout from this call's id list,
+		 * matching real tmux's own "tiled"/"main-vertical" semantics (they
+		 * always re-tile everything, discarding the prior arrangement) —
+		 * `select-layout tiled` arrives once per `split-window` in the live
+		 * swarm flow, so each call already carries that window's current
+		 * full pane list.
+		 *
+		 * SAFETY (code-review finding, 2026-09-15): a background tmux event
+		 * must never destroy split-view state it doesn't own. Before
+		 * touching anything, checks whether every group CURRENTLY in the
+		 * split tree either already holds one of `sessionIds`, or the tree
+		 * doesn't exist yet. If some other, unrelated group is also in the
+		 * tree (the user's own manual split of unrelated terminals), this
+		 * bails out entirely rather than clobbering it — the swarm's
+		 * sessions simply stay whatever they already were (plain flat-view
+		 * tabs, same as before this feature existed), which is the same
+		 * "safe do less" degrade `closePane`'s "cancels an empty split
+		 * instead of destroying the active terminal" already uses elsewhere
+		 * in this file.
+		 *
+		 * A session already the SOLE tab of some group reuses that group
+		 * (avoiding a duplicate tab reference — the exact invariant
+		 * `paneLayout.test.ts`'s "pane tab identity" suite protects for the
+		 * general case); a session sharing a group with other tabs, or not
+		 * in any group yet, gets a fresh one. Any group left empty by a
+		 * move is deleted, mirroring `closePane`'s own cleanup. The
+		 * previously-active group is preserved if it's still one of the
+		 * groups being arranged (the user is looking at one of these
+		 * sessions already) — only falls back to the first arranged group
+		 * when there was no sensible focus to preserve.
+		 */
+		arrangeSessionsAsLayout(sessionIds: string[], layout: string): void {
+			const ids = [...new Set(sessionIds)].filter(Boolean);
+			if (ids.length === 0) return;
+
+			const existingLeafGroupIds = tree ? allLeafIds(tree) : [];
+			const ownedGroupIds = new Set(ids.map((id) => this.getGroupForTab(id)).filter((g): g is string => g !== null));
+			const hasUnrelatedGroupInTree = existingLeafGroupIds.some((g) => !ownedGroupIds.has(g));
+			if (hasUnrelatedGroupInTree) {
+				appLogger.warn(
+					"app",
+					"tmux select-layout request skipped: the current split view has other panes " +
+						"this swarm doesn't own — leaving the split as-is rather than replacing it.",
+				);
+				return;
+			}
+
+			const groupIds: string[] = [];
+			const emptiedGroupIds = new Set<string>();
+			for (const sessionId of ids) {
+				const existingGroupId = this.getGroupForTab(sessionId);
+				const existingGroup = existingGroupId ? state.groups[existingGroupId] : null;
+				if (existingGroup && existingGroup.tabs.length === 1) {
+					groupIds.push(existingGroupId as string);
+					continue;
+				}
+				const newGroupId = this.createGroup();
+				if (existingGroupId) {
+					this.moveTab(existingGroupId, newGroupId, sessionId);
+					if (state.groups[existingGroupId]?.tabs.length === 0) {
+						emptiedGroupIds.add(existingGroupId);
+					}
+				} else {
+					this.addTab(newGroupId, { id: sessionId, type: "terminal" });
+				}
+				groupIds.push(newGroupId);
+			}
+
+			const newRoot = layout === "main-vertical" ? mainVertical(groupIds) : tileLeaves(groupIds);
+			tree = newRoot;
+			bumpTree();
+			setState(
+				produce((s) => {
+					for (const emptied of emptiedGroupIds) delete s.groups[emptied];
+					if (!s.activeGroupId || !groupIds.includes(s.activeGroupId)) {
+						s.activeGroupId = groupIds[0] ?? s.activeGroupId;
+					}
+				}),
+			);
+			scheduleSave();
 		},
 
 		/** Serialize layout for persistence (JSON-safe, no proxies involved) */

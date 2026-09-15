@@ -159,7 +159,19 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 												active: shouldShow(id, terminalsStore.state.activeId === id && !isDetached()),
 												detached: isDetached(),
 											}}
-											style={isDetached() ? { display: "none" } : undefined}
+											style={
+												isDetached() || terminal?.accentColor
+													? {
+															...(isDetached() ? { display: "none" } : {}),
+															// Set by the tmux shim's `set-option ... *-border-style`
+															// (Claude Code's per-teammate `--agent-color`) — same
+															// `--pane-accent` var and CSS rule PaneTree.css uses
+															// for the split-view case, so a session shows the
+															// same accent whether or not it's inside a split.
+															...(terminal?.accentColor ? { "--pane-accent": terminal.accentColor } : {}),
+														}
+													: undefined
+											}
 											data-drop-target="pane"
 										>
 											<Terminal

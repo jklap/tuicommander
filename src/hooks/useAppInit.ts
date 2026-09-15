@@ -567,6 +567,25 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.update(termId, { name: display_name ?? "", nameIsCustom: is_custom });
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
+	// The tmux compatibility shim's `set-option ... window-style|
+	// pane-border-style|pane-active-border-style` (Claude Code's per-teammate
+	// `--agent-color`) resolves to this — see `mcp_http::tmux_routes`.
+	listen<{ session_id: string; color?: string | null }>("session-accent-color-changed", (event) => {
+		const { session_id, color } = event.payload;
+		const termId = terminalsStore.getTerminalForSession(session_id);
+		if (termId) terminalsStore.update(termId, { accentColor: color ?? null });
+	}).catch((err) => appLogger.error("app", "Failed to register session-accent-color-changed listener", err));
+
+	// The tmux compatibility shim's `select-layout tiled`/`main-vertical`
+	// resolves to this — arrange the swarm window's teammate sessions into
+	// an actual split view. Sidebar tab list is unaffected: each teammate
+	// remains its own independent tab, this only changes what's visible in
+	// the terminal area's current split arrangement.
+	listen<{ session_ids: string[]; layout: string }>("tmux-window-layout-requested", (event) => {
+		const { session_ids, layout } = event.payload;
+		paneLayoutStore.arrangeSessionsAsLayout(session_ids, layout);
+	}).catch((err) => appLogger.error("app", "Failed to register tmux-window-layout-requested listener", err));
+
 	listen<{ session_id: string; standby: boolean }>("session-standby", (event) => {
 		const { session_id, standby } = event.payload;
 		const termId = terminalsStore.getTerminalForSession(session_id);

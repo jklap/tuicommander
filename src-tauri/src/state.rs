@@ -242,6 +242,29 @@ pub enum AppEvent {
         display_name: Option<String>,
         is_custom: bool,
     },
+    /// A session's accent color changed — set by the tmux compatibility
+    /// shim's `set-option ... window-style|pane-border-style|
+    /// pane-active-border-style` (Claude Code's per-teammate
+    /// `--agent-color`), via `set_pty_accent_color`. `color` is a
+    /// CSS-usable string (an ANSI keyword or `#rrggbb`); `None` clears it.
+    #[serde(rename = "session-accent-color-changed")]
+    SessionAccentColorChanged {
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
+    /// The tmux compatibility shim's `select-layout tiled`/`main-vertical`
+    /// resolved against a window whose panes are (at least partially)
+    /// materialized — arrange these TUIC sessions into a split view.
+    /// `session_ids` is in tmux pane order; a still-virtual pane (no TUIC
+    /// session yet) is simply omitted, not represented as a gap. Not
+    /// session-scoped (no single `pty_session_id`) — broadcast on the
+    /// general event bus, same as `WorktreeCreated`/`RepositoriesChanged`.
+    #[serde(rename = "tmux-window-layout-requested")]
+    TmuxWindowLayoutRequested {
+        session_ids: Vec<String>,
+        layout: String,
+    },
     #[serde(rename = "plugin-changed")]
     #[allow(dead_code)] // reserved for future plugin hot-reload notifications
     PluginChanged { plugin_ids: Vec<String> },
@@ -468,6 +491,7 @@ impl AppEvent {
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
+            | AppEvent::SessionAccentColorChanged { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
         }
@@ -1770,6 +1794,13 @@ pub struct SessionMaps {
     /// Separate from `last_prompts`: one describes assigned work, the other records
     /// the latest user instruction actually submitted to the agent.
     pub(crate) pty_descriptions: DashMap<String, String>,
+    /// Per-session accent color (a CSS-usable color string), set by the tmux
+    /// compatibility shim's `set-option ... window-style|pane-border-style|
+    /// pane-active-border-style` (Claude Code's per-teammate `--agent-color`)
+    /// via `set_pty_accent_color`. A separate `DashMap` rather than a field
+    /// on `PtySession`, matching `pty_descriptions`'s own precedent, so
+    /// adding it touches no `PtySession` construction site.
+    pub(crate) pty_accent_colors: DashMap<String, String>,
     /// Per-session silence state for fallback question detection.
     /// Shared between the reader thread and write_pty so user-typed lines can be suppressed.
     pub(crate) silence_states: DashMap<String, Arc<Mutex<crate::pty::SilenceState>>>,
@@ -2194,33 +2225,63 @@ impl AppState {
         }
         let _ = self.event_bus.send(event);
     }
+}
 
+/// Outcome of [`set_or_clear_string_mirror`]. A plain `Option<Option<String>>`
+/// would say the same thing but trips `clippy::option_option` for good
+/// reason — nesting the same type twice makes "unchanged" and "changed to
+/// `None`" easy to conflate at the call site; this names both cases instead.
+enum MirrorUpdate {
+    /// The value didn't actually change — the caller should skip its emit
+    /// entirely; this is the guard that stops a frontend's echo of its own
+    /// applied value from looping forever (see `set_session_name`'s
+    /// identical guard, `session.rs`, for the historical bug this class of
+    /// check exists to prevent).
+    Unchanged,
+    /// It changed to this value (`None` means cleared). Never re-read from
+    /// `map` — `insert`/`remove` already told us exactly what's there now.
+    Changed(Option<String>),
+}
+
+/// Shared core for `AppState::set_pty_description`/`set_pty_accent_color`:
+/// insert or remove `value` in `map` under `session_id` (an empty string is
+/// treated the same as absent — clears the entry, since neither an empty
+/// description nor an empty color is ever meaningful).
+fn set_or_clear_string_mirror(
+    map: &DashMap<String, String>,
+    session_id: &str,
+    value: Option<String>,
+) -> MirrorUpdate {
+    match value {
+        Some(v) if !v.is_empty() => {
+            let changed =
+                map.insert(session_id.to_string(), v.clone()).as_deref() != Some(v.as_str());
+            if changed {
+                MirrorUpdate::Changed(Some(v))
+            } else {
+                MirrorUpdate::Unchanged
+            }
+        }
+        _ => {
+            if map.remove(session_id).is_some() {
+                MirrorUpdate::Changed(None)
+            } else {
+                MirrorUpdate::Unchanged
+            }
+        }
+    }
+}
+
+impl AppState {
     /// Set or clear the orchestrator-owned description shown above a PTY.
     /// The event is dual-emitted for desktop Tauri listeners and browser/SSE
     /// clients, and is suppressed when the value did not change.
     pub(crate) fn set_pty_description(&self, session_id: &str, description: Option<String>) {
-        let changed = match description.as_deref() {
-            Some(value) if !value.is_empty() => {
-                self.session_maps
-                    .pty_descriptions
-                    .insert(session_id.to_string(), value.to_string())
-                    .as_deref()
-                    != Some(value)
-            }
-            _ => self
-                .session_maps
-                .pty_descriptions
-                .remove(session_id)
-                .is_some(),
-        };
-        if !changed {
+        let MirrorUpdate::Changed(description) =
+            set_or_clear_string_mirror(&self.session_maps.pty_descriptions, session_id, description)
+        else {
             return;
-        }
-        let description = self
-            .session_maps
-            .pty_descriptions
-            .get(session_id)
-            .map(|value| value.value().clone());
+        };
         self.emit_pty_event(AppEvent::PtyDescriptionChanged {
             session_id: session_id.to_string(),
             description: description.clone(),
@@ -2232,6 +2293,34 @@ impl AppState {
                 serde_json::json!({
                     "session_id": session_id,
                     "description": description,
+                }),
+            );
+        }
+    }
+
+    /// Set or clear a PTY's accent color (the tmux compatibility shim's
+    /// real per-teammate `--agent-color`/`set-option ... *-border-style`
+    /// dispatch — see `mcp_http::tmux_routes`). Dual-emitted like
+    /// `set_pty_description`, and — same reasoning as `set_session_name`'s
+    /// unchanged-value guard — suppressed when the value did not actually
+    /// change, so a frontend echo of its own applied color can never loop.
+    pub(crate) fn set_pty_accent_color(&self, session_id: &str, color: Option<String>) {
+        let MirrorUpdate::Changed(color) =
+            set_or_clear_string_mirror(&self.session_maps.pty_accent_colors, session_id, color)
+        else {
+            return;
+        };
+        self.emit_pty_event(AppEvent::SessionAccentColorChanged {
+            session_id: session_id.to_string(),
+            color: color.clone(),
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "session-accent-color-changed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "color": color,
                 }),
             );
         }
@@ -4415,6 +4504,12 @@ impl AppState {
             // Global events don't affect per-session state
             AppEvent::HeadChanged { .. }
             | AppEvent::SessionRenamed { .. }
+            // Accent color is cosmetic tab styling, not agent/shell state — no
+            // SessionState field cares about it. TmuxWindowLayoutRequested
+            // carries no single session_id (see its doc comment) and is
+            // frontend-only routing, same reasoning as the other globals here.
+            | AppEvent::SessionAccentColorChanged { .. }
+            | AppEvent::TmuxWindowLayoutRequested { .. }
             | AppEvent::RepoChanged { .. }
             | AppEvent::PluginChanged { .. }
             | AppEvent::UpstreamStatusChanged { .. }

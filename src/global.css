@@ -567,3 +567,15 @@ button:focus-visible {
   /* Touch devices have no hover — never show the bubble. */
   [data-tooltip]:hover::after { opacity: 0; }
 }
+
+/* Agent accent color — tmux compatibility shim's per-teammate --agent-color
+   (set-option ... *-border-style), applied via terminals.ts's accentColor
+   field. One shared rule for both places a terminal renders — the split
+   view's pane group (PaneTree.tsx) and the flat/unsplit view's terminal
+   pane (TerminalArea.tsx) — so the two never drift out of sync (they used
+   to duplicate this declaration verbatim in PaneTree.css/styles.css). */
+.pane-group[style*="--pane-accent"],
+.terminal-pane.active[style*="--pane-accent"] {
+  outline: 2px solid var(--pane-accent);
+  outline-offset: -2px;
+}

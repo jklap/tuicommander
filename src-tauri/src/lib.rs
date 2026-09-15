@@ -2423,6 +2423,7 @@ pub fn run() {
             pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::set_session_name,
+            pty::set_session_accent_color,
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
