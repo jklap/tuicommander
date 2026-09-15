@@ -160,6 +160,97 @@ describe("Terminal.tsx event bridge (real mount)", () => {
 		unmount();
 	});
 
+	it("passes on_alt_screen through to CommandBlock.onAltScreen on both start and end (fullscreen-mode fix)", async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, {
+			type: "agent-block",
+			action: "start",
+			line: 3,
+			on_alt_screen: true,
+		});
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.activeBlock?.onAltScreen).toBe(true);
+		});
+
+		fire(`pty-parsed-${SESSION_ID}`, {
+			type: "agent-block",
+			action: "end",
+			line: 1,
+			on_alt_screen: true,
+		});
+		await waitFor(() => {
+			const blocks = terminalsStore.get(TERMINAL_ID)?.commandBlocks ?? [];
+			expect(blocks.length).toBe(1);
+		});
+		expect(terminalsStore.get(TERMINAL_ID)!.commandBlocks[0].onAltScreen).toBe(true);
+
+		unmount();
+	});
+
+	// Scrollback-ring-eviction fix's sibling for #11 (repeated `[`-dump gesture):
+	// a `new_dump_generation: true` start event must prune every existing
+	// `fromTranscriptDump: true` block — including a still-open activeBlock left
+	// over from the previous dump — before adding the new one, so a repeat
+	// gesture never leaves a second, overlapping copy sitting in commandBlocks[].
+	it("prunes stale transcript-dump blocks on new_dump_generation, but never a real shell block", async () => {
+		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
+		await waitFor(() => {
+			if (!listenCalls.includes(`pty-parsed-${SESSION_ID}`)) throw new Error("not attached yet");
+		});
+
+		// A real shell block, unrelated to any dump, closes normally.
+		fire(`pty-parsed-${SESSION_ID}`, { type: "agent-block", action: "start", line: 1, from_transcript_dump: false });
+		fire(`pty-parsed-${SESSION_ID}`, { type: "agent-block", action: "end", line: 2, from_transcript_dump: false });
+
+		// First dump: two closed turns plus a third left open (the user left
+		// transcript mode before its "done" marker ever appeared).
+		fire(`pty-parsed-${SESSION_ID}`, {
+			type: "agent-block",
+			action: "start",
+			line: 10,
+			from_transcript_dump: true,
+			new_dump_generation: true,
+		});
+		fire(`pty-parsed-${SESSION_ID}`, { type: "agent-block", action: "end", line: 20, from_transcript_dump: true });
+		fire(`pty-parsed-${SESSION_ID}`, { type: "agent-block", action: "start", line: 20, from_transcript_dump: true });
+		fire(`pty-parsed-${SESSION_ID}`, { type: "agent-block", action: "end", line: 30, from_transcript_dump: true });
+		fire(`pty-parsed-${SESSION_ID}`, { type: "agent-block", action: "start", line: 30, from_transcript_dump: true });
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.activeBlock?.promptLine).toBe(30);
+		});
+		// commandBlocks is RAF-batched (_scheduleOsc133Flush) — wait for the flush.
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)!.commandBlocks).toHaveLength(3);
+		});
+
+		// Second dump (a repeat `[` gesture) — its first start event carries
+		// new_dump_generation: true.
+		fire(`pty-parsed-${SESSION_ID}`, {
+			type: "agent-block",
+			action: "start",
+			line: 100,
+			from_transcript_dump: true,
+			new_dump_generation: true,
+		});
+
+		await waitFor(() => {
+			expect(terminalsStore.get(TERMINAL_ID)?.activeBlock?.promptLine).toBe(100);
+		});
+		const term = terminalsStore.get(TERMINAL_ID)!;
+		// Every dump-1 block (2 closed + the stale open one, discarded rather
+		// than resurrected into commandBlocks) is gone; the one real shell
+		// block from before the first dump survives untouched.
+		expect(term.commandBlocks).toHaveLength(1);
+		expect(term.commandBlocks[0].fromTranscriptDump).toBe(false);
+		expect(term.commandBlocks[0].promptLine).toBe(1);
+
+		unmount();
+	});
+
 	it('routes a "progress" normal-state event into terminalsStore.progress', async () => {
 		const { unmount } = render(() => Terminal({ id: TERMINAL_ID }));
 		await waitFor(() => {

@@ -8,7 +8,7 @@ import { designModeBrowsers } from "../../stores/designMode";
 import { initLinkModifier, linkModifierHeld } from "../../stores/linkModifier";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
-import { terminalsStore } from "../../stores/terminals";
+import { rowAnchoredBlocks, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
@@ -133,7 +133,7 @@ import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { ImageLayer, type ImagePlacement } from "./imageLayer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
-import { buildScrollbarMarksHtml, shouldShowScrollbar } from "./scrollbarMarks";
+import { buildScrollbarMarksHtml, scrollbarMarksKey, shouldShowScrollbar } from "./scrollbarMarks";
 import { findSmartMatch, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
 import { runSmartSelectionAction, type SmartSelectionActionDeps } from "./smartSelectionActions";
 import { resolveSmartSelectionRules } from "./smartSelectionDefaults";
@@ -1103,7 +1103,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (searchBlockScope && currentFrame) {
 			const term = terminalsStore.get(props.terminalId);
 			if (term) {
-				const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+				// Alt-screen blocks have no valid row to anchor to (CommandBlock.onAltScreen).
+				const allBlocks = rowAnchoredBlocks(
+					term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks,
+				);
 				const viewTop = currentFrame.historySize - currentFrame.displayOffset;
 				const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
 				scopedSearchBlock = resolveScopedBlock(allBlocks, viewCenter, currentFrame.historyBase) ?? null;
@@ -1255,7 +1258,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function paintGutterMarkers(m: CellMetrics) {
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
-		const blocks = term.commandBlocks;
+		const blocks = rowAnchoredBlocks(term.commandBlocks);
 		if (blocks.length === 0) return;
 		for (const block of blocks) {
 			const kind = gutterMarkKind(block);
@@ -1279,7 +1282,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const fontFamily = settingsStore.getFontFamily();
 		octx.font = `${Math.round(m.cellHeight * 0.7)}px ${fontFamily}`;
 		octx.fillStyle = "rgba(150,150,150,0.8)";
-		for (const block of term.commandBlocks) {
+		for (const block of rowAnchoredBlocks(term.commandBlocks)) {
 			const folded = term.foldedBlocks.has(block.promptLine);
 			if (!folded && !foldRange(block)) continue; // nothing to fold, don't imply otherwise
 			const headerRow = block.executionLine ?? block.promptLine;
@@ -1299,7 +1302,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (painted.has(promptLine)) continue;
 			painted.add(promptLine);
 			const block = term.commandBlocks.find((b) => b.promptLine === promptLine);
-			if (!block) continue;
+			if (!block || block.onAltScreen) continue;
 			const range = foldRange(block);
 			if (!range) continue;
 			const { foldStart, foldedCount } = range;
@@ -1337,7 +1340,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (mode === "modifier" && !blockTimestampsVisible) return;
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
-		const all = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+		const all = rowAnchoredBlocks(term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks);
 		if (all.length === 0) return;
 		const fontFamily = settingsStore.getFontFamily();
 		const fontSize = Math.round(m.cellHeight * 0.7);
@@ -1369,7 +1372,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// Same gating as paintScrollbarMarks: `showScrollbarMarks` is the master toggle.
 			showBlockMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showBlockMarks,
 			showPromptMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showPromptMarks,
-			blocks: term?.commandBlocks ?? [],
+			blocks: term ? rowAnchoredBlocks(term.commandBlocks) : [],
 			promptLines: term?.userPromptLines ?? [],
 		});
 		if (!showScrollbar) {
@@ -1422,27 +1425,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// on early, which also fixes turning a setting OFF: an early return above
 		// the key computation left the last-painted marks on screen forever,
 		// because the repaint that would clear them never ran. `showScrollbarMarks`
-		// stays the master toggle main's Terminal settings tab exposes.
+		// stays the master toggle main's Terminal settings tab exposes. The flags are also
+		// part of the memo key (`scrollbarMarksKey`) so a toggle flip always
+		// invalidates the cache. Block and prompt rows stay eviction-stable;
+		// `historyBase` converts them to grid rows inside the builder and is part
+		// of the key, so eviction alone repaints.
 		const marksOn = settingsStore.state.showScrollbarMarks;
-		const showBlockMarks = marksOn && settingsStore.state.showBlockMarks;
-		const showPromptMarks = marksOn && settingsStore.state.showPromptMarks;
-		const blocks = term.commandBlocks;
-		const promptLines = term.userPromptLines;
-		const historyBase = currentFrame?.historyBase ?? 0;
-		const searchCount = search.matches.length;
-		const lastBlock = blocks.at(-1);
-		const lastPrompt = promptLines.at(-1);
+		const marksInput = {
+			showBlockMarks: marksOn && settingsStore.state.showBlockMarks,
+			showPromptMarks: marksOn && settingsStore.state.showPromptMarks,
+			blocks: rowAnchoredBlocks(term.commandBlocks),
+			promptLines: term.userPromptLines,
+			historyBase: currentFrame?.historyBase ?? 0,
+			matchRows: search.matches.map((m) => m.row),
+			totalRows,
+		};
 
-		// Each toggle's contribution to the key collapses to a fixed placeholder
-		// when that category is hidden, so the key doesn't churn on invisible
-		// changes — but the toggle flip itself always changes the count term
-		// (real count vs. 0), so re-enabling always invalidates the memo even if
-		// blocks/prompts/totalRows are otherwise unchanged since it was hidden.
-		const key =
-			`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
-			`:p${showPromptMarks ? promptLines.length : 0}:${showPromptMarks ? (lastPrompt ?? "") : ""}` +
-			`:t${totalRows}:h${historyBase}` +
-			`:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		const key = scrollbarMarksKey(marksInput);
 		if (key === lastScrollbarMarksKey) return;
 		lastScrollbarMarksKey = key;
 
@@ -1454,14 +1453,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		scrollbarMarksContainer.innerHTML = buildScrollbarMarksHtml({
-			blocks,
-			promptLines,
-			historyBase,
-			matchRows: search.matches.map((m) => m.row),
-			totalRows,
+			...marksInput,
 			trackH: scrollbarTrackHeight,
-			showBlockMarks,
-			showPromptMarks,
 		});
 	}
 
@@ -3600,9 +3593,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					const historyBase = currentFrame?.historyBase;
 					const gridRow = currentFrame ? selectionRowToGridRow(currentFrame, absRow) : null;
 					if (term && historyBase !== undefined && gridRow !== null) {
-						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
-							Boolean,
-						) as import("../../stores/terminals").CommandBlock[];
+						const allBlocks = rowAnchoredBlocks(
+							[...term.commandBlocks, term.activeBlock].filter(
+								Boolean,
+							) as import("../../stores/terminals").CommandBlock[],
+						);
 						const block = findBlockAtViewport(allBlocks, absRow, 0);
 						if (block) {
 							// Only treat the header row as a fold target when folding is
@@ -4186,14 +4181,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		function scrollToBlock(direction: "previous" | "next") {
 			const term = terminalsStore.get(props.terminalId);
 			if (!term || !currentFrame) return;
-			const blocks = term.commandBlocks;
 			const active = term.activeBlock;
 			// Block lines are eviction-stable all-time rows; anything below
 			// `historyBase` has been evicted and can no longer be scrolled to.
+			// Alt-screen blocks have no valid row at all (CommandBlock.onAltScreen).
 			const historyBase = currentFrame.historyBase;
-			const allPromptLines = blocks
+			const allPromptLines = rowAnchoredBlocks(active ? [...term.commandBlocks, active] : term.commandBlocks)
 				.map((b) => b.promptLine)
-				.concat(active ? [active.promptLine] : [])
 				.filter((line) => line >= historyBase);
 			if (allPromptLines.length === 0) return;
 			const currentViewLine = historyBase + currentFrame.historySize - currentFrame.displayOffset;
@@ -4237,9 +4231,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const term = terminalsStore.get(props.terminalId);
 			if (!term || !currentFrame) return;
 			const viewTop = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
-			const blocks = [...term.commandBlocks, term.activeBlock].filter(
-				Boolean,
-			) as import("../../stores/terminals").CommandBlock[];
+			const blocks = rowAnchoredBlocks(
+				[...term.commandBlocks, term.activeBlock].filter(Boolean) as import("../../stores/terminals").CommandBlock[],
+			);
 			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
 			if (!current) return;
 			toggleFoldForBlock(current);
