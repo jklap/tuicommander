@@ -28,6 +28,7 @@ type BackendSessionState = {
 	choice_prompt?: ChoicePrompt;
 	background_work?: boolean;
 	stalled?: boolean;
+	declared_background_work?: boolean;
 	queued_commands?: number;
 	last_activity_ms?: number;
 };
@@ -105,6 +106,7 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		backgroundWork: state?.background_work === true,
 		stalled: state?.stalled === true,
 		abandonedSinceMs: state?.abandoned_since_ms ?? null,
+		declaredBackgroundWork: state?.declared_background_work === true,
 		// Omitted by the backend when zero (serde skips it), so absence is an
 		// empty queue — not "unknown".
 		queuedCommands: state?.queued_commands ?? 0,

@@ -198,6 +198,14 @@ When enabled, TUIC writes a small guarded shell command into the agent's setting
 
 For OpenCode 2.2.3, update the managed plugin and launch `opencode --standalone` in the TUIC terminal. This starts a private native server that inherits the terminal. The shared background service cannot attribute its events to one terminal, so the plugin stays inactive there. Native question forms and permission requests set Input; answering or cancelling restores the current execution state without waiting for another tool. Concurrent requests keep Input until each owned wait settles. Execution success, failure, interruption, session deletion and plugin/location shutdown clear the affected waits. Native session and request ids stay separate from the TUIC tab id. The older named-function plugin is reported as outdated and needs an update; it does not load on this CLI.
 
+For Claude, the status stays "Working" while a backgrounded tool call (e.g. a
+`run_in_background` Bash command) is still outstanding, even after Claude's own
+turn ends and its composer is ready — Claude's `Stop` hook payload names any such
+outstanding task, so this doesn't rely on inference. This is a separate, more
+authoritative signal from the general "background process detected" heuristic
+(which deliberately shows "Idle" once the composer is ready, since Codex agents
+in particular may intentionally leave a long-lived dev server running).
+
 For Claude, `awaiting` also covers **MCP elicitation** — the dialog an MCP server raises to ask you for input (`MCP server "…" requests your input`, with Accept/Decline). It arrives through Claude's `Elicitation` event and is retracted by `ElicitationResult`; no screen scraping is involved, because that dialog matches none of the question heuristics.
 
 **Ownership is safe and reversible.** Each managed hook carries a `# tuic-managed-hook` sentinel; enabling installs only TUIC's entries and disabling removes only them — your own (and wiz/mdkb) hooks in the same file are never touched. The toggle is the source of truth; the effect applies on the agent's **next launch** (hooks are read at startup).
