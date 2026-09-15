@@ -34,6 +34,9 @@ use axum::{
     Json, Router,
     extract::{ConnectInfo, Extension, Path as AxumPath, Query, State},
 };
+// Only `named_socket_path` hashes, and Unix domain sockets are the only reason
+// it exists — so on Windows this import is dead and `-D warnings` rejects it.
+#[cfg(unix)]
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
