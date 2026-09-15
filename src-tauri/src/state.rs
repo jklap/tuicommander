@@ -8912,13 +8912,14 @@ mod tests {
         drop(pair.slave);
 
         let reader = pair.master.try_clone_reader().expect("reader");
+        let terminal = pair.master.take_writer().expect("writer");
         let mut buf = VtLogBuffer::new(24, 80, 1000);
         // Kept so a failure can name what the tty actually sent. A ConPTY is a
         // VT interpreter rather than a pass-through, so "no lines" there could
         // be a shell that never ran or a re-render that never scrolls, and the
         // two need different fixes.
         let mut seen = Vec::new();
-        crate::test_support::drain_pty(reader, |chunk| {
+        crate::test_support::drain_pty(reader, terminal, |chunk| {
             seen.extend_from_slice(chunk);
             buf.process(chunk);
         });
@@ -8994,8 +8995,9 @@ mod tests {
         drop(pair.slave);
 
         let reader = pair.master.try_clone_reader().expect("reader");
+        let terminal = pair.master.take_writer().expect("writer");
         let mut buf = VtLogBuffer::new(24, 80, 1000);
-        crate::test_support::drain_pty(reader, |chunk| {
+        crate::test_support::drain_pty(reader, terminal, |chunk| {
             buf.process(chunk);
         });
         let _ = child.kill();
@@ -9009,6 +9011,18 @@ mod tests {
             "alternate-screen content should be suppressed, but found TUI-GARBAGE in: {:?}",
             lines,
         );
+        // An absence proves nothing on its own: this assertion passed on
+        // Windows while the PTY had delivered zero bytes. What the test is
+        // really about is that the alt screen is suppressed *and* the stream
+        // around it survives. The survivors are on the screen, not in `lines`
+        // — four rows of a 24-row grid never scroll into the log.
+        let screen = buf.screen_rows();
+        for expected in ["before-alt-1", "before-alt-2", "after-alt-1", "after-alt-2"] {
+            assert!(
+                screen.iter().any(|l| l.contains(expected)),
+                "{expected} must survive the alternate screen, got {screen:?}",
+            );
+        }
     }
 
     /// End-to-end through a real PTY: replaying the recorded `gh run watch`
@@ -9044,10 +9058,11 @@ mod tests {
         drop(pair.slave);
 
         let reader = pair.master.try_clone_reader().expect("reader");
+        let terminal = pair.master.take_writer().expect("writer");
         let mut buf = VtLogBuffer::new(24, 120, 1000);
         // See `test_vt_log_real_pty_echo`: kept for the failure message.
         let mut seen = Vec::new();
-        crate::test_support::drain_pty(reader, |chunk| {
+        crate::test_support::drain_pty(reader, terminal, |chunk| {
             seen.extend_from_slice(chunk);
             buf.process(chunk);
         });
