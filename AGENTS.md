@@ -179,6 +179,12 @@ Never silently ship a Rust edit expecting hot reload — it will look like your 
 
 Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform primitives. Test in release mode (`cargo tauri build`) — release builds lack shell PATH and env vars.
 
+**A Windows checkout needs `git config core.autocrlf false`** (CI sets it globally before checkout). Git for Windows otherwise rewrites every file to CRLF, and the suite compares bytes it wrote itself against bytes git handed back, and reads its own source to check route and boot invariants — both assert on different content under the default.
+
+**Write a test's shell script once, through `test_support`.** `cmd` has no `printf`, `seq`, `cat`, `touch` or `sleep`, and `/tmp` and `/bin/*` do not exist there, so a POSIX one-liner in a test fails on the shell rather than on the behaviour it exists to check. `host_shell`, `print_file_script`, `replay_file_command`, `dir_outside_home` and friends hold the one spelling per step.
+
+**`Path::is_absolute` answers for the host only.** `C:\…` and `\\…` are not absolute on unix, and a leading `/` is merely *rooted* on Windows — while `Path::join` there **replaces** the root, so an unrejected `/etc/passwd` lands at the root of the repo's drive. Any validator deciding whether a path may escape a boundary uses `fs::is_absolute_on_any_platform`.
+
 ## Panel Refresh
 
 Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath)` in `createEffect` — not file watchers or polling. `repo_watcher` emits `"repo-changed"` → `bumpRevision()`.
