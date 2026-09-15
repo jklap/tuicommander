@@ -5150,6 +5150,92 @@ mod tests {
         assert!(entry.has_custom_settings());
     }
 
+    // -- resolve_effective_base_branch tests --
+    // These use the global config_dir override and must run serially.
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_effective_base_branch_uses_the_per_repo_override() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let mut map = RepoSettingsMap::default();
+        map.repos.insert(
+            "/my/repo".to_string(),
+            RepoSettingsEntry {
+                path: "/my/repo".to_string(),
+                base_branch: Some("develop".to_string()),
+                ..RepoSettingsEntry::default()
+            },
+        );
+        save_repo_settings(map).expect("save repo settings");
+
+        assert_eq!(
+            resolve_effective_base_branch("/my/repo"),
+            Some("develop".to_string())
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_effective_base_branch_falls_back_to_the_global_default_when_unset() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let file: ConfigFile<RepoDefaultsConfig> = ConfigFile::new(REPO_DEFAULTS_FILE);
+        file.save(&RepoDefaultsConfig {
+            base_branch: "release".to_string(),
+            ..RepoDefaultsConfig::default()
+        })
+        .expect("save repo defaults");
+
+        // No per-repo entry at all for "/my/repo" — falls through to the global default.
+        assert_eq!(
+            resolve_effective_base_branch("/my/repo"),
+            Some("release".to_string())
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_effective_base_branch_resolves_automatic_via_detect_base_branch() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let repo = TempDir::new().unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo.path())
+                .output()
+                .expect("git command");
+            assert!(out.status.success());
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::write(repo.path().join("README.md"), "# Test").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-m", "Initial commit"]);
+
+        let mut map = RepoSettingsMap::default();
+        map.repos.insert(
+            repo.path().to_string_lossy().to_string(),
+            RepoSettingsEntry {
+                path: repo.path().to_string_lossy().to_string(),
+                base_branch: Some("automatic".to_string()),
+                ..RepoSettingsEntry::default()
+            },
+        );
+        save_repo_settings(map).expect("save repo settings");
+
+        assert_eq!(
+            resolve_effective_base_branch(&repo.path().to_string_lossy()),
+            Some("main".to_string()),
+            "\"automatic\" must resolve through detect_base_branch, not be returned literally"
+        );
+    }
+
     // -- Note image tests --
     // These tests use the global config_dir override and must run serially.
 

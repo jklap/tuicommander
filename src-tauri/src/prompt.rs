@@ -317,7 +317,11 @@ fn resolve_single_var(repo_path: &str, var: &str) -> Option<String> {
         "stash_list" => git_output(repo_path, &["stash", "list"]),
         "remote_url" => git_output(repo_path, &["config", "--get", "remote.origin.url"]),
         "current_user" => git_output(repo_path, &["config", "user.name"]),
-        "base_branch" => detect_base_branch(repo_path),
+        // Delegates to the same override-aware resolver `TUIC_BASE_BRANCH`
+        // uses (per-repo setting → global default → `detect_base_branch` for
+        // "automatic") — calling `detect_base_branch` directly here used to
+        // diverge from that whenever a repo had a configured base branch.
+        "base_branch" => crate::config::resolve_effective_base_branch(repo_path),
         "branch_status" => git_output(
             repo_path,
             &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
@@ -794,6 +798,48 @@ mod tests {
         assert_eq!(
             vars.get("remote_url").map(String::as_str),
             Some("git@github.com:acme/widgets.git")
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_vars_base_branch_honors_the_configured_override() {
+        // Regression test: `resolve_single_var`'s "base_branch" arm used to call
+        // `detect_base_branch` directly, bypassing the per-repo "Branch From"
+        // setting entirely — so a Smart Prompt {base_branch} could disagree with
+        // TUIC_BASE_BRANCH (which already went through
+        // `config::resolve_effective_base_branch`) for the exact same repo.
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let repo = setup_prompt_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        // `main` is the repo's real current branch — configure an override that
+        // detect_base_branch alone would never produce, to prove the override
+        // (not just detection) is what's actually being consulted.
+        let out = Command::new("git")
+            .args(["checkout", "-b", "develop"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git checkout -b develop");
+        assert!(out.status.success());
+
+        let mut map = crate::config::RepoSettingsMap::default();
+        map.repos.insert(
+            repo_path.clone(),
+            crate::config::RepoSettingsEntry {
+                path: repo_path.clone(),
+                base_branch: Some("develop".to_string()),
+                ..crate::config::RepoSettingsEntry::default()
+            },
+        );
+        crate::config::save_repo_settings(map).expect("save repo settings");
+
+        let vars = resolve_vars(&repo_path, &["base_branch".to_string()]);
+        assert_eq!(
+            vars.get("base_branch").map(String::as_str),
+            Some("develop"),
+            "must reflect the configured override, matching config::resolve_effective_base_branch"
         );
     }
 
