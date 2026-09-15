@@ -25,6 +25,7 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 					kind: "file";
 					group: { abs_path: string; display_path: string };
 					steps: Array<{ tool_use_id: string; rel_path: string | null; abs_path: string }>;
+					expanded: boolean;
 			  }
 			| { kind: "step"; step: { tool_use_id: string; rel_path: string | null; abs_path: string } }
 		>;
@@ -33,12 +34,16 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 		onRevertFile: (group: never) => void;
 		onCopyStep: (step: never) => void;
 		onCopyFile: (group: never) => void;
+		onToggleExpanded: (absPath: string) => void;
 	}) => (
 		<div data-testid="stub-list">
 			{props.rows.map((row) =>
 				row.kind === "file" ? (
 					<div>
 						<span>{row.group.display_path}</span>
+						<button type="button" title="Toggle expanded" onClick={() => props.onToggleExpanded(row.group.abs_path)}>
+							{row.expanded ? "collapse" : "expand"}
+						</button>
 						<button
 							type="button"
 							title="Revert this file to its session-start content"
@@ -52,14 +57,15 @@ vi.mock("../../components/SessionDiffTab/SessionDiffList", () => ({
 						<button type="button" onClick={() => props.onOpenFile(row.group.abs_path)}>
 							open file
 						</button>
-						{row.steps.map((step) => (
-							<div>
-								<span>{step.rel_path ?? step.abs_path}</span>
-								<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(step as never)}>
-									revert step
-								</button>
-							</div>
-						))}
+						{row.expanded &&
+							row.steps.map((step) => (
+								<div>
+									<span data-testid="step-path">{step.rel_path ?? step.abs_path}</span>
+									<button type="button" title="Revert just this step" onClick={() => props.onRevertStep(step as never)}>
+										revert step
+									</button>
+								</div>
+							))}
 					</div>
 				) : (
 					<div>
@@ -338,6 +344,36 @@ describe("SessionDiffTab", () => {
 			await vi.advanceTimersByTimeAsync(2100);
 
 			expect(h.getSessionReview.mock.calls.length).toBe(initial + 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("a manually collapsed file stays collapsed across a live-session poll refresh (regression: expandedFiles must not reset on every review update)", async () => {
+		vi.useFakeTimers();
+		try {
+			const termId = terminalsStore.add(makeTerminal({ agentSessionId: "sess-1" }));
+			terminalsStore.setActive(termId);
+
+			const { getByText } = render(() => <SessionDiffTab tabId={tabId} repoPath={REPO} />);
+			await vi.advanceTimersByTimeAsync(0);
+
+			// Default: expanded, so the step shows.
+			expect(getByText("a.ts", { selector: "[data-testid=step-path]" })).toBeTruthy();
+
+			getByText("collapse").click();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(() => getByText("a.ts", { selector: "[data-testid=step-path]" })).toThrow();
+
+			// Simulate the live session's debounced poll refresh — same
+			// session, same file, review() updates again.
+			repositoriesStore.bumpRevision(REPO);
+			await vi.advanceTimersByTimeAsync(2100);
+
+			// Must still be collapsed — a fresh `review()` for the same
+			// session must not force it back open.
+			expect(() => getByText("a.ts", { selector: "[data-testid=step-path]" })).toThrow();
+			expect(getByText("expand")).toBeTruthy();
 		} finally {
 			vi.useRealTimers();
 		}

@@ -136,13 +136,27 @@ available, `~/.claude/file-history/` backups. Rust: new `session_review.rs`
 `unified_diff` feature). Frontend: `src/components/SessionDiffTab/` tree,
 `diffTabsStore`/`useRepository`/`transport.ts` extensions. Transcript
 parsing, base-resolution tiers, revert mechanisms, and the frontend
-orchestration are all unit-tested (30 Rust tests, ~40 vitest tests across
-`buildRows`/`SessionPicker`/`SessionDiffTab`/the extracted DiffTab helpers) —
-`DiffViewer`/`SessionDiffList`'s own rendering is stubbed in those tests since
-`@git-diff-view/solid` needs a real Canvas and `@tanstack/solid-virtual` can't
-measure rows in jsdom/happy-dom (both pre-existing, documented environment
-limitations — see `DiffViewer.test.tsx`/`DiffFileList.test.tsx`). What's NOT
-machine-verifiable:
+orchestration are all unit-tested (42 Rust tests, ~50 vitest tests across
+`buildRows`/`SessionPicker`/`SessionDiffTab`/`StepCard`/the extracted DiffTab
+helpers) — `DiffViewer`/`SessionDiffList`'s own rendering is stubbed in those
+tests since `@git-diff-view/solid` needs a real Canvas and
+`@tanstack/solid-virtual` can't measure rows in jsdom/happy-dom (both
+pre-existing, documented environment limitations — see
+`DiffViewer.test.tsx`/`DiffFileList.test.tsx`).
+
+**Post-implementation code/security review (2026-09-14)** found and fixed a
+path-traversal gap (`session_id` wasn't validated as a bare UUID before being
+joined into a filesystem path — closed with `validate_session_id`), a data
+corruption bug (`str::find("")` always matches at offset 0, so reverting a
+pure-deletion edit could silently reinsert text at the wrong location instead
+of failing cleanly), two review-cache staleness bugs (never invalidated after
+a revert; didn't include `include_subagents` in its key), a `classify_path`
+misclassification for a since-deleted in-repo file behind a symlinked root,
+and a frontend bug where the live-session poll refresh reset every manually
+collapsed file back to expanded. All have regression tests; see
+`AGENTS.md`'s "Session Diff Review — Replay Semantics and Cache-Invalidation
+Gotchas" section for the two replay/cache gotchas in case they recur
+elsewhere. What's NOT machine-verifiable:
 
 - [ ] Open the tab against a real, past Claude Code session for this repo (not a
       synthetic fixture) and confirm the grouped-by-file view's cumulative diffs
@@ -161,6 +175,10 @@ machine-verifiable:
       revert a session-created file and confirm it's deleted.
 - [ ] Hand-edit a file outside the session, then try to revert it — confirm the
       drift refusal appears and the "Force revert anyway" toast action works.
+- [ ] Revert a single step whose edit was a pure deletion (the `new_string`
+      Claude Code recorded was empty) — confirm it reports "not found" rather
+      than corrupting the file (this can no longer be located unambiguously
+      from content alone; see AGENTS.md's Session Diff Review section).
 - [ ] Visual check: file/step header layout, badges (drifted / outside repo /
       unknown base), and the warnings banner render correctly in both light and
       dark theme, matching `docs/frontend/STYLE_GUIDE.md`.

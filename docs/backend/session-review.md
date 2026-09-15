@@ -116,15 +116,31 @@ crate-wide for the one shared instance of the package.
   outright when `base_source == Unknown` (never write a guess).
 
 Both revert paths call `git::bump_working_tree_epoch` so the sidebar/Changes
-tab refresh, exactly as `git_discard_files` already does.
+tab refresh, exactly as `git_discard_files` already does, and evict any
+cached review for that transcript (see Caching below) so a re-fetch right
+after a revert reflects the new working-tree state rather than a stale one.
+
+A pure-deletion edit (`new_string == ""`) cannot be located unambiguously in
+content by a plain substring search — `str::find("")` matches at offset 0
+unconditionally, which would otherwise reinsert the deleted text at the
+wrong location instead of failing. Both substitution-based paths
+(`apply_reverse`'s Edit arm, `revert_step_via_substitution`) treat an empty
+search string as unlocatable and report "not found" rather than guessing.
 
 ## Caching
 
-An in-memory, `(len, mtime)`-validated full-review cache (last 4 sessions,
-evicted oldest) — not an incremental byte-offset-resume cache. Given the
-byte-level pre-filter above, a full re-scan is fast enough that incremental
-resume wasn't worth the added complexity for a first version; the cache
-still avoids re-parsing an unchanged transcript on every poll.
+An in-memory, `(len, mtime, include_subagents)`-validated full-review cache
+(last 4 sessions, evicted oldest) — not an incremental byte-offset-resume
+cache. Given the byte-level pre-filter above, a full re-scan is fast enough
+that incremental resume wasn't worth the added complexity for a first
+version; the cache still avoids re-parsing an unchanged transcript on every
+poll. `include_subagents` is part of the cache key (not just the transcript's
+own freshness signal) since it changes what the built review contains
+without changing the transcript file at all. Both revert commands evict the
+cached entry for their transcript on success, for the same reason: a revert
+mutates the *working tree*, which the built review also depends on
+(`base_source`/`net_change`/`drifted_from_disk`), without changing the
+transcript's `(len, mtime)`.
 
 `list_review_sessions` never parses a full transcript for the picker:
 `session_id`/`size_bytes`/timestamps come from the filename and

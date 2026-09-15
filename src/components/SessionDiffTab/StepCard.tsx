@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, Show } from "solid-js";
 import { CommentBox } from "../../components/DiffTab/CommentBox";
 import { extractHunks, extractSelectedLines } from "../../components/DiffTab/diffPatch";
 import { sendDiffComment } from "../../components/DiffTab/sendDiffComment";
@@ -32,6 +32,16 @@ export const StepCard: Component<StepCardProps> = (props) => {
 	const hunks = createMemo(() => extractHunks(props.step.patch));
 	const lineSelection = createLineSelection({ hunks, selectedClass: s.lineSelected });
 	const selectedCount = () => lineSelection.selectedLines().size;
+
+	// DiffViewer rebuilds its <tr> rows whenever `mode` (unified/split)
+	// changes, so the cached row map must be dropped too — otherwise
+	// findLineInfo keeps resolving against detached rows and click/drag
+	// selection silently stops working until a full remount (mirrors
+	// DiffTab.tsx's identical invalidate-on-mode-change effect).
+	createEffect(() => {
+		props.mode;
+		lineSelection.invalidate();
+	});
 
 	const [commentVisible, setCommentVisible] = createSignal(false);
 	const [commentText, setCommentText] = createSignal("");
