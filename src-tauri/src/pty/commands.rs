@@ -781,6 +781,29 @@ pub(crate) fn remove_queued_agent_command(
     remove_queued_command(&state, &session_id, command_id)
 }
 
+/// Set (or clear, with `color: None`) a PTY session's accent color — the
+/// desktop IPC twin of `mcp_http::session::set_session_accent_color`. Real
+/// consumer: the tmux compatibility shim's `set-option ... *-border-style`
+/// dispatch (`mcp_http::tmux_routes`), delivering Claude Code's per-teammate
+/// `--agent-color`. Unlike `set_session_name`, the value isn't a field on
+/// `PtySession` — `AppState::set_pty_accent_color` owns storage (a separate
+/// `pty_accent_colors` map, mirroring `pty_descriptions`), the
+/// unchanged-value no-op guard, and the dual emit, so this command is a
+/// thin existence check plus a call-through.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn set_session_accent_color(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    if !state.session_maps.sessions.contains_key(&session_id) {
+        return Err(format!("Session not found: {session_id}"));
+    }
+    state.set_pty_accent_color(&session_id, color);
+    Ok(())
+}
+
 /// List all active PTY sessions for reconnection after frontend reload.
 ///
 /// Sessions a connected remote machine runs are in the list too, each carrying

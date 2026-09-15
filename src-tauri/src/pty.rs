@@ -8358,6 +8358,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.session_maps.pty_descriptions.remove(session_id);
     state.session_maps.terminal_rows.remove(session_id);
     state.session_maps.resize_locks.remove(session_id);
+    state.session_maps.pty_accent_colors.remove(session_id);
     // Input mode and shell integration describe the process that just died.
     state.session_maps.slash_mode.remove(session_id);
     state.session_maps.last_input_ms.remove(session_id);

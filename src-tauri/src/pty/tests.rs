@@ -19654,6 +19654,10 @@ fn cleanup_session_clears_transient_session_maps() {
     state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
     state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
     state.session_maps.turn_error_flags.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .pty_accent_colors
+        .insert(sid.to_string(), "blue".to_string());
 
     cleanup_session(sid, &state);
 
@@ -19676,6 +19680,33 @@ fn cleanup_session_clears_transient_session_maps() {
         !state.session_maps.turn_error_flags.contains_key(sid),
         "must not leak a pending failure flag past session teardown"
     );
+    assert!(
+        !state.session_maps.pty_accent_colors.contains_key(sid),
+        "must not leak a permanent accent-color entry per session UUID — the tmux \
+         shim's set-option dispatch is the only writer, but every session that ever \
+         gets one must still have it reaped on close"
+    );
+}
+
+// ── list_active_sessions ────────────────────────────────────────
+
+/// `list_active_sessions` (the desktop IPC twin of
+/// `mcp_http::session::list_sessions`) builds its rows with the same
+/// `session_rows_including_remote` the HTTP route uses. The one thing worth
+/// proving: `pty_accent_colors` (a side-map, not a `PtySession` field)
+/// surfaces per-session.
+#[test]
+fn list_active_sessions_reports_each_sessions_own_accent_color() {
+    let state = crate::state::tests_support::make_test_app_state();
+    crate::state::tests_support::insert_dummy_session(&state, "colored");
+    crate::state::tests_support::insert_dummy_session(&state, "plain");
+    state.set_pty_accent_color("colored", Some("blue".to_string()));
+
+    let sessions = crate::mcp_http::session::session_rows_including_remote(&state);
+    let colored = sessions.iter().find(|s| s.session_id == "colored").unwrap();
+    let plain = sessions.iter().find(|s| s.session_id == "plain").unwrap();
+    assert_eq!(colored.accent_color.as_deref(), Some("blue"));
+    assert_eq!(plain.accent_color, None);
 }
 
 /// Populate the per-session maps that no teardown phase used to own, plus the
