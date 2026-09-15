@@ -215,7 +215,9 @@ panes.
 | `tmux resize-pane -t target -x 120 -y 40` | Resize |
 | `tmux attach-session` | Focus TUICommander window |
 | `tmux has-session -t target` | Check if session exists (exit code) |
-| `tmux select-layout`, `set-option`, `set-window-option`, `switch-client`, `rename-window` | Accepted and succeed with no effect — cosmetic in real tmux, no TUIC-tab equivalent |
+| `tmux set-option -p -t target window-style\|pane-border-style\|pane-active-border-style fg=<color>` | Sets the pane's real accent color (Claude Code's per-teammate `--agent-color`) — rendered as a sidebar tab marker and a terminal pane border. `colourN`/`color#rrggbb` and the 8 standard ANSI names are all understood; other `set-option` names remain cosmetic no-ops (see below) |
+| `tmux select-layout -t target tiled\|main-vertical` | Arranges that window's materialized panes into an actual TUICommander split view (the same mechanism as manually pressing Cmd+\\) — each pane remains its own independent sidebar tab; only the terminal area's current split arrangement changes. `main-vertical` is unreachable from TUIC's environment today (see `tmux-swarm-shim.md`) but supported for forward-compat |
+| `tmux select-layout` (any other layout name), `set-option`/`set-window-option` (any other option name), `switch-client`, `rename-window` | Accepted and succeed with no effect — cosmetic in real tmux, no TUIC-tab equivalent |
 
 Key names are translated: `Enter`, `Space`, `Tab`, `Escape`, `C-c`, `C-d`, `C-z`, etc.
 

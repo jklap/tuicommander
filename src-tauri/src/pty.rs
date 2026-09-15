@@ -7128,6 +7128,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.session_maps.pty_descriptions.remove(session_id);
     state.session_maps.terminal_rows.remove(session_id);
     state.session_maps.resize_locks.remove(session_id);
+    state.session_maps.pty_accent_colors.remove(session_id);
     // Input mode and shell integration describe the process that just died.
     state.session_maps.slash_mode.remove(session_id);
     state.session_maps.last_input_ms.remove(session_id);
@@ -10587,7 +10588,7 @@ pub(crate) fn close_pty_core(
     drop(session);
 
     if let Some(wt) = worktree_to_unlock {
-        // `state.sessions.remove` above already dropped this session, so any
+        // `state.session_maps.sessions.remove` above already dropped this session, so any
         // remaining hit here is a genuinely different, still-live session.
         if state.live_sessions_in_worktree(&wt.path).is_empty() {
             crate::worktree::unlock_worktree(&wt.base_repo, &wt.path);
@@ -10873,7 +10874,81 @@ pub(crate) struct ActiveSessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pty_description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    accent_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<crate::state::SessionState>,
+}
+
+/// Set (or clear, with `color: None`) a PTY session's accent color — the
+/// desktop IPC twin of `mcp_http::session::set_session_accent_color`. Real
+/// consumer: the tmux compatibility shim's `set-option ... *-border-style`
+/// dispatch (`mcp_http::tmux_routes`), delivering Claude Code's per-teammate
+/// `--agent-color`. Unlike `set_session_name`, the value isn't a field on
+/// `PtySession` — `AppState::set_pty_accent_color` owns storage (a separate
+/// `pty_accent_colors` map, mirroring `pty_descriptions`), the
+/// unchanged-value no-op guard, and the dual emit, so this command is a
+/// thin existence check plus a call-through.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn set_session_accent_color(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    color: Option<String>,
+) -> Result<(), String> {
+    if !state.session_maps.sessions.contains_key(&session_id) {
+        return Err(format!("Session not found: {session_id}"));
+    }
+    state.set_pty_accent_color(&session_id, color);
+    Ok(())
+}
+
+/// List all active PTY sessions for reconnection after frontend reload
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<ActiveSessionInfo> {
+    list_active_sessions_impl(&state)
+}
+
+/// The real body of `list_active_sessions`, taking a plain `&AppState`
+/// rather than a `tauri::State` — no test anywhere in this codebase
+/// constructs a `tauri::State` outside a running app, so a
+/// `#[tauri::command]` fn with one is otherwise untestable. Extracted so
+/// this logic (specifically: does it actually surface `pty_accent_colors`
+/// per-session, same as its HTTP twin `mcp_http::session::list_sessions`)
+/// has a direct test.
+fn list_active_sessions_impl(state: &AppState) -> Vec<ActiveSessionInfo> {
+    state
+        .session_maps
+        .sessions
+        .iter()
+        .map(|entry| {
+            let session_id = entry.key().clone();
+            let session = entry.value().lock();
+            ActiveSessionInfo {
+                session_id,
+                cwd: session.cwd.clone(),
+                worktree_path: session
+                    .worktree
+                    .as_ref()
+                    .map(|w| w.path.to_string_lossy().to_string()),
+                worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
+                display_name: session.display_name.clone(),
+                display_name_is_custom: session.display_name_is_custom,
+                is_remote: session.is_remote,
+                pty_description: state
+                    .session_maps
+                    .pty_descriptions
+                    .get(entry.key())
+                    .map(|value| value.value().clone()),
+                accent_color: state
+                    .session_maps
+                    .pty_accent_colors
+                    .get(entry.key())
+                    .map(|value| value.value().clone()),
+                state: state.session_state_with_shell(entry.key()),
+            }
+        })
+        .collect()
 }
 
 /// Per-process resource usage for the process manager modal.

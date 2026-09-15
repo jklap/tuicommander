@@ -46,6 +46,57 @@ tree: `prefer_tuic_messaging`/`prefer_tuic_spawning` settings and the
 `TeamCreate`/`TaskCreate` claim — this plan builds on top of it and does not
 re-litigate that part. Leave those changes in place.
 
+> **Second correction (2026-09-15): cosmetic calls turned real, and a
+> re-audit.** Re-verified against the current binary (v2.1.270) using the
+> same `strings` + recovered-source technique — the subcommand/option
+> catalog `docs/user-guide/cli.md` already documented is still complete, no
+> new tmux subcommands are used by the swarm path. A fresh 2864-invocation
+> capture from `<config dir>/logs/tmux-shim.log` confirms §1.5's inventory
+> and adds nothing new either.
+>
+> §4's disposition table below is now **stale in a second way**: `set-option`
+> and `select-layout` are no longer blanket no-ops.
+> - `set-option`'s three color options — `window-style`, `pane-border-style`,
+>   `pane-active-border-style` (carrying Claude Code's `--agent-color`) — now
+>   resolve to a real per-pane accent color (`resolve_tmux_color`,
+>   `tmux_routes.rs`, reusing `terminal_grid.rs`'s existing xterm 256-color
+>   palette rather than a second one), rendered as a sidebar tab marker
+>   (`TabViews.tsx`) and a terminal pane border (`PaneTree.tsx`/
+>   `TerminalArea.tsx`, both keyed off a shared `--pane-accent` CSS var).
+>   Every other option name (`remain-on-exit`, `pane-border-format`,
+>   `pane-border-status`, and anything a general `tuic alias` user sets)
+>   stays a no-op — deliberately: `pane-border-format` is redundant with
+>   `pane-border-style` (color) + `select-pane -T` (title, already real);
+>   `pane-border-status` has no TUIC equivalent since tab identity is always
+>   visible regardless. Critically, an irrelevant option name still triggers
+>   **zero backend calls** — the CLI-side `exec.rs` gate checks the option
+>   name before touching the network, so `set-option` for anything but the
+>   three color names keeps succeeding even when TUICommander isn't running,
+>   exactly as it did when the whole subcommand was a blanket `Noop`.
+> - `select-layout tiled` now resolves the window's *materialized* panes and
+>   emits `AppEvent::TmuxWindowLayoutRequested`, which the frontend turns
+>   into an actual split view via a new `paneLayoutStore.arrangeSessionsAsLayout`
+>   (built directly as a tree literal + `setRoot()`, sidestepping `splitLeaf`'s
+>   incremental `MAX_SPLIT_DEPTH` check entirely, since that guard only
+>   bounds single-step interactive splitting). Each teammate remains its own
+>   independent sidebar tab — confirmed with Boss this is a terminal-area
+>   display concern, not a sidebar one. `main-vertical` is built alongside
+>   (same near-zero marginal cost) but stays unreachable, per §1.5's
+>   `$TMUX`-gating finding — not revisited.
+> - `switch-client`/`rename-window` are unchanged: no TUIC equivalent, not
+>   observed in the swarm's live call set either.
+> - `select-pane -P` (pane style) — never observed live from Claude Code,
+>   currently hard-errors rather than degrading (`UnknownFlag`) — flagged but
+>   explicitly out of scope for this pass.
+> - Test coverage: `tuic-cli`'s crate test count went 111 → 154 (new
+>   `SetOption`/`SelectLayout` parse/dispatch coverage, plus the two
+>   previously-blanket no-op tests split into "real options dispatch" vs.
+>   "unrecognized options stay a silent no-op needing no backend call").
+>   `tmux_routes.rs` gained the accent-color/layout-request analogues of the
+>   existing `rename_pane`/`materialize` regression tests. See
+>   `docs/user-guide/cli.md`, `docs/api/http-api.md`, and
+>   `docs/backend/mcp-http.md` for the user-facing/HTTP surface.
+
 ## 1. What we verified, and how
 
 All of this was verified empirically against the installed Claude Code

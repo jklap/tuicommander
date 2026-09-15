@@ -814,6 +814,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             delete(session::remove_queued_command),
         )
         .route("/sessions/{id}/name", put(session::set_session_name))
+        .route(
+            "/sessions/{id}/accent-color",
+            put(session::set_session_accent_color),
+        )
         .route("/sessions/{id}/resize", post(session::resize_session))
         .route("/sessions/{id}/output", get(session::get_output))
         .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
@@ -861,6 +865,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/tmux/panes/{id}",
             put(tmux_routes::rename_pane).delete(tmux_routes::kill_pane),
+        )
+        .route(
+            "/tmux/panes/{id}/accent-color",
+            put(tmux_routes::set_pane_accent_color),
+        )
+        .route(
+            "/tmux/windows/{id}/layout",
+            post(tmux_routes::request_window_layout),
         )
         // WebSocket streaming
         .route("/sessions/{id}/stream", get(session::ws_stream))

@@ -261,6 +261,8 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::SessionRenamed { .. } => "session-renamed",
+        AppEvent::SessionAccentColorChanged { .. } => "session-accent-color-changed",
+        AppEvent::TmuxWindowLayoutRequested { .. } => "tmux-window-layout-requested",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
         AppEvent::McpOAuthStart { .. } => "mcp-oauth-start",
@@ -364,6 +366,15 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             is_custom,
         } => {
             serde_json::json!({ "session_id": session_id, "display_name": display_name, "is_custom": is_custom })
+        }
+        AppEvent::SessionAccentColorChanged { session_id, color } => {
+            serde_json::json!({ "session_id": session_id, "color": color })
+        }
+        AppEvent::TmuxWindowLayoutRequested {
+            session_ids,
+            layout,
+        } => {
+            serde_json::json!({ "session_ids": session_ids, "layout": layout })
         }
         AppEvent::PluginChanged { plugin_ids } => {
             serde_json::json!({ "plugin_ids": plugin_ids })
@@ -706,6 +717,32 @@ mod tests {
         assert_eq!(
             event_payload(&event),
             serde_json::json!({"session_id": "session-1", "description": null})
+        );
+    }
+
+    #[test]
+    fn session_accent_color_changed_has_matching_sse_name_and_payload() {
+        let event = AppEvent::SessionAccentColorChanged {
+            session_id: "session-1".into(),
+            color: Some("blue".into()),
+        };
+        assert_eq!(event_type_name(&event), "session-accent-color-changed");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"session_id": "session-1", "color": "blue"})
+        );
+    }
+
+    #[test]
+    fn tmux_window_layout_requested_has_matching_sse_name_and_payload() {
+        let event = AppEvent::TmuxWindowLayoutRequested {
+            session_ids: vec!["a".into(), "b".into()],
+            layout: "tiled".into(),
+        };
+        assert_eq!(event_type_name(&event), "tmux-window-layout-requested");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"session_ids": ["a", "b"], "layout": "tiled"})
         );
     }
 

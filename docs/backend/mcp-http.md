@@ -113,6 +113,7 @@ uncapping the server.
 | `GET` | `/sessions/:id/shell-family` | Shell classification (`posix`/`windows-native`/`unknown`, or `null`) so the client picks the right control sequences |
 | `POST` | `/sessions/:id/pause` | Pause session output |
 | `POST` | `/sessions/:id/resume` | Resume session output |
+| `PUT` | `/sessions/:id/accent-color` | Set/clear a session's accent color |
 | `DELETE` | `/sessions/:id` | Close session |
 
 ### tmux Compatibility Shim (`tmux_routes.rs`)
@@ -131,6 +132,8 @@ caller-supplied `label`, reconciled against live `GET /sessions` state on every 
 | `POST` | `/tmux/panes/:id/materialize` | Idempotent lazy PTY spawn for a virtual pane |
 | `PUT` | `/tmux/panes/:id` | Set a pane's title; renames its TUIC tab if materialised |
 | `DELETE` | `/tmux/panes/:id` | Remove a pane and close its PTY if materialised |
+| `PUT` | `/tmux/panes/:id/accent-color` | Resolve + set a pane's real accent color if materialised |
+| `POST` | `/tmux/windows/:id/layout` | Broadcast a layout-arrangement request for a window's materialized panes |
 
 `kill-server` has no dedicated route — the CLI calls `DELETE /tmux/sessions/:id` once per session
 tracked under the invoking `-L`/`-S` label, so it never touches a different label's sessions.

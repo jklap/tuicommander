@@ -30,6 +30,10 @@ pub(super) struct SessionInfo {
     pub is_remote: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pty_description: Option<String>,
+    /// Set by the tmux compatibility shim's `set-option ... *-border-style`
+    /// (Claude Code's per-teammate `--agent-color`) — see `tmux_routes.rs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_color: Option<String>,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,
@@ -68,6 +72,12 @@ pub(super) struct SetNameRequest {
     pub name: Option<String>,
     #[serde(default, rename = "isCustom")]
     pub is_custom: Option<bool>,
+}
+
+/// `PUT /sessions/{id}/accent-color` body — see `session::set_session_accent_color`.
+#[derive(Deserialize)]
+pub(super) struct SetAccentColorRequest {
+    pub color: Option<String>,
 }
 
 /// Compose-panel enqueue: text delivered on the session's next idle window.

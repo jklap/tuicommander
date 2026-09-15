@@ -71,6 +71,13 @@ struct TmuxPane {
     /// allocated (tmux always creates one on `new-session`/`new-window`) but
     /// no PTY has been spawned for it yet.
     tuic_session_id: Option<String>,
+    /// Set by `set-option ... window-style|pane-border-style|
+    /// pane-active-border-style` (Claude Code's per-teammate
+    /// `--agent-color`) — a CSS-usable color string, already resolved by
+    /// [`resolve_tmux_color`]. Like `title`, this can be set while the pane
+    /// is still virtual; [`materialize`] applies it retroactively the
+    /// moment a real session exists, mirroring `title`'s own handling.
+    accent_color: Option<String>,
 }
 
 impl TmuxTopology {
@@ -142,6 +149,53 @@ fn live_session_ids(state: &AppState) -> HashSet<String> {
     state.session_maps.sessions.iter().map(|e| e.key().clone()).collect()
 }
 
+/// Resolve a tmux `set-option` style value (e.g. `bg=default,fg=blue`, or a
+/// bare `fg=colour208`) to a CSS-usable color string, or `None` if there is
+/// no meaningful foreground color to apply (a `default`/`none` fg, or no
+/// `fg=` component at all).
+///
+/// Claude Code's own color→tmux mapping (`TmuxBackend`'s `T()`, recovered
+/// from the shipped binary) only ever emits 8 possible `fg=` values: the 6
+/// real ANSI names below, plus two 256-color indices (`colour208`
+/// "orange", `colour205` "pink"). The 6 names are already valid CSS
+/// keywords; only the numeric indices need real resolution — reusing
+/// [`crate::terminal_grid::xterm_color_rgb`] rather than a second palette.
+pub(crate) fn resolve_tmux_color(value: &str) -> Option<String> {
+    let fg = value
+        .split(',')
+        .find_map(|part| part.trim().strip_prefix("fg="))?
+        .trim();
+    if fg.is_empty() || fg.eq_ignore_ascii_case("default") || fg.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    const ANSI_NAMES: &[&str] = &[
+        "red", "green", "yellow", "blue", "magenta", "cyan", "white", "black",
+    ];
+    if ANSI_NAMES.iter().any(|n| n.eq_ignore_ascii_case(fg)) {
+        return Some(fg.to_ascii_lowercase());
+    }
+    if let Some(hex) = fg.strip_prefix('#') {
+        // Real tmux's own hex-color form (`#rrggbb`, tmux >= 3.0). Validate
+        // against CSS's own valid hex-color lengths (3/4/6/8 hex digits)
+        // before passing through — this is the only value here that isn't
+        // either a fixed ANSI keyword or something this function itself
+        // computed from a validated `u8` index, so it's the one path that
+        // must not trust its input shape.
+        let is_valid_hex =
+            matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit());
+        return is_valid_hex.then(|| fg.to_string());
+    }
+    // Case-insensitive, matching the ANSI-name/`default`/`none` handling
+    // above — real tmux itself treats color names case-insensitively.
+    let lower = fg.to_ascii_lowercase();
+    let index_str = lower
+        .strip_prefix("colour")
+        .or_else(|| lower.strip_prefix("color"))?;
+    let index: u8 = index_str.parse().ok()?;
+    let rgb = crate::terminal_grid::xterm_color_rgb(index);
+    Some(format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b))
+}
+
 // ---------------------------------------------------------------------------
 // Request/response shapes
 // ---------------------------------------------------------------------------
@@ -204,6 +258,22 @@ pub(crate) struct RenamePaneRequest {
     title: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct SetPaneAccentColorRequest {
+    /// Raw `set-option` value (e.g. `bg=default,fg=blue`, or a bare
+    /// `fg=colour208`) as sent by the tmux CLI — resolved server-side via
+    /// [`resolve_tmux_color`], not a pre-resolved CSS color. The CLI crate
+    /// cannot resolve it itself: it has no dependency on the main crate's
+    /// `xterm_color_rgb` palette. `None`/empty clears the accent.
+    value: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RequestWindowLayoutRequest {
+    label: Option<String>,
+    layout: String,
+}
+
 fn not_found(what: &str) -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::NOT_FOUND,
@@ -254,6 +324,7 @@ pub(crate) async fn create_tmux_session(
                 title: None,
                 cwd: body.cwd,
                 tuic_session_id: None, // virtual until first use
+                accent_color: None,
             }],
         }],
     });
@@ -324,6 +395,7 @@ pub(crate) async fn create_tmux_window(
                 title: None,
                 cwd: body.cwd,
                 tuic_session_id: None, // virtual until first use
+                accent_color: None,
             }],
         });
         session.active_window = Some(window_id.clone());
@@ -366,6 +438,7 @@ pub(crate) async fn create_tmux_pane(
             title: None,
             cwd: body.cwd.clone(),
             tuic_session_id: None,
+            accent_color: None,
         });
         window.active_pane = Some(pane_id.clone());
         (pane_id, previous_active_pane)
@@ -445,13 +518,20 @@ async fn materialize(
     // rename yet). Apply it now, retroactively, the moment a real session
     // exists — otherwise that title is silently lost forever and the tab
     // keeps its default name (found live, 2026-09-03).
-    let pending_title = if let Some(mut topology) = state.tmux_servers.get_mut(label)
+    // Same reasoning applies to a color set on a still-virtual pane — see
+    // `TmuxPane::accent_color`'s doc comment. Read both pending values in
+    // the SAME lock acquisition as recording `tuic_session_id`, so there is
+    // no window for a concurrent `set-option`/`select-pane -T` call between
+    // the two — reading them separately could otherwise apply one but miss
+    // a write that lands in between.
+    let (pending_title, pending_accent_color) = if let Some(mut topology) =
+        state.tmux_servers.get_mut(label)
         && let Some(pane) = topology.find_pane_mut(pane_id)
     {
         pane.tuic_session_id = Some(spawn.clone());
-        pane.title.clone()
+        (pane.title.clone(), pane.accent_color.clone())
     } else {
-        None
+        (None, None)
     };
     if let Some(title) = pending_title {
         let _ = super::session::set_session_name(
@@ -463,6 +543,9 @@ async fn materialize(
             }),
         )
         .await;
+    }
+    if let Some(color) = pending_accent_color {
+        state.set_pty_accent_color(&spawn, Some(color));
     }
     Ok(spawn)
 }
@@ -524,6 +607,38 @@ pub(crate) async fn rename_pane(
     (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
 }
 
+/// `PUT /tmux/panes/{id}/accent-color` — the real half of the tmux
+/// compatibility shim's `set-option ... window-style|pane-border-style|
+/// pane-active-border-style` dispatch (`tuic-cli/src/tmux/exec.rs`).
+/// Mirrors `rename_pane`'s shape exactly, including its still-virtual-pane
+/// handling: a color set before the pane materializes is stashed on
+/// `TmuxPane.accent_color` and applied retroactively by [`materialize`].
+pub(crate) async fn set_pane_accent_color(
+    State(state): State<Arc<AppState>>,
+    Path(pane_id): Path<String>,
+    Query(q): Query<LabelQuery>,
+    Json(body): Json<SetPaneAccentColorRequest>,
+) -> impl IntoResponse {
+    let label = label_of(&q);
+    let color = body.value.as_deref().and_then(resolve_tmux_color);
+    let live = live_session_ids(&state);
+    let tuic_session_id = {
+        let Some(mut topology) = state.tmux_servers.get_mut(&label) else {
+            return not_found("pane").into_response();
+        };
+        reconcile(&mut topology, &live);
+        let Some(pane) = topology.find_pane_mut(&pane_id) else {
+            return not_found("pane").into_response();
+        };
+        pane.accent_color = color.clone();
+        pane.tuic_session_id.clone()
+    };
+    if let Some(tuic_id) = tuic_session_id {
+        state.set_pty_accent_color(&tuic_id, color);
+    }
+    (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
+}
+
 pub(crate) async fn kill_pane(
     State(state): State<Arc<AppState>>,
     Path(pane_id): Path<String>,
@@ -566,6 +681,60 @@ pub(crate) async fn kill_pane(
     (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
 }
 
+/// `POST /tmux/windows/{id}/layout` — the real half of the tmux
+/// compatibility shim's `select-layout tiled`/`main-vertical` dispatch
+/// (`tuic-cli/src/tmux/exec.rs`). The app is authoritative for topology, so
+/// this resolves the window's *materialized* panes itself rather than
+/// trusting a pane list from the caller — a still-virtual pane (no TUIC
+/// session yet) is simply omitted, not represented as a gap, matching
+/// `materialize`'s own "nothing to arrange yet" precedent for other
+/// virtual-pane cases. The frontend owns actually arranging the split view
+/// (`paneLayoutStore`) — this only announces the request.
+pub(crate) async fn request_window_layout(
+    State(state): State<Arc<AppState>>,
+    Path(window_id): Path<String>,
+    Json(body): Json<RequestWindowLayoutRequest>,
+) -> impl IntoResponse {
+    let label = resolve_label(body.label);
+    let live = live_session_ids(&state);
+    let session_ids: Vec<String> = {
+        let Some(mut topology) = state.tmux_servers.get_mut(&label) else {
+            return not_found("window").into_response();
+        };
+        reconcile(&mut topology, &live);
+        let Some(window) = topology.find_window_mut(&window_id) else {
+            return not_found("window").into_response();
+        };
+        window
+            .panes
+            .iter()
+            .filter_map(|p| p.tuic_session_id.clone())
+            .collect()
+    };
+    if session_ids.is_empty() {
+        // Nothing materialized yet — nothing to arrange. Not an error: this
+        // is the normal state right after `new-session`/`new-window`
+        // creates a still-virtual initial pane.
+        return (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response();
+    }
+    state.emit_pty_event(crate::state::AppEvent::TmuxWindowLayoutRequested {
+        session_ids: session_ids.clone(),
+        layout: body.layout.clone(),
+    });
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        use tauri::Emitter;
+        let _ = app.emit(
+            "tmux-window-layout-requested",
+            serde_json::json!({
+                "session_ids": session_ids,
+                "layout": body.layout,
+            }),
+        );
+    }
+    (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,6 +761,7 @@ mod tests {
                         title: None,
                         cwd: None,
                         tuic_session_id: Some("uuid-live".to_string()),
+                        accent_color: None,
                     },
                     TmuxPane {
                         id: pid2,
@@ -599,6 +769,7 @@ mod tests {
                         title: None,
                         cwd: None,
                         tuic_session_id: Some("uuid-dead".to_string()),
+                        accent_color: None,
                     },
                 ],
             }],
@@ -964,5 +1135,428 @@ mod tests {
                 "no SessionRenamed without a prior select-pane -T, got {event:?}"
             );
         }
+    }
+
+    #[test]
+    fn resolve_tmux_color_passes_through_real_ansi_names() {
+        for name in ["red", "green", "yellow", "blue", "magenta", "cyan"] {
+            let value = format!("bg=default,fg={name}");
+            assert_eq!(resolve_tmux_color(&value), Some(name.to_string()));
+        }
+    }
+
+    #[test]
+    fn resolve_tmux_color_resolves_the_two_256_color_indices_claude_code_uses() {
+        // "orange" and "pink" in Claude Code's own color→tmux mapping.
+        assert_eq!(
+            resolve_tmux_color("fg=colour208"),
+            Some("#ff8700".to_string())
+        );
+        assert_eq!(
+            resolve_tmux_color("fg=colour205"),
+            Some("#ff5faf".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_tmux_color_accepts_a_bare_fg_with_no_bg() {
+        assert_eq!(
+            resolve_tmux_color("fg=blue"),
+            Some("blue".to_string()),
+            "pane-border-style/pane-active-border-style never carry a bg="
+        );
+    }
+
+    #[test]
+    fn resolve_tmux_color_passes_through_a_literal_hex() {
+        assert_eq!(
+            resolve_tmux_color("fg=#123456"),
+            Some("#123456".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_tmux_color_clears_on_default_or_missing_fg() {
+        assert_eq!(resolve_tmux_color("bg=default,fg=default"), None);
+        assert_eq!(resolve_tmux_color("bg=default"), None, "no fg= at all");
+        assert_eq!(resolve_tmux_color(""), None);
+    }
+
+    #[test]
+    fn resolve_tmux_color_rejects_garbage_without_panicking() {
+        assert_eq!(resolve_tmux_color("fg=colourNotANumber"), None);
+        assert_eq!(resolve_tmux_color("fg=colour999"), None, "out of u8 range");
+    }
+
+    #[test]
+    fn resolve_tmux_color_is_case_insensitive_for_the_colour_color_prefix() {
+        // Real tmux treats color names case-insensitively; the ANSI-name and
+        // default/none handling already was — the colour/color prefix match
+        // wasn't, until this test (a general `tuic alias` user typing
+        // `COLOUR208` got silently dropped instead of resolving).
+        assert_eq!(
+            resolve_tmux_color("fg=COLOUR208"),
+            resolve_tmux_color("fg=colour208")
+        );
+        assert_eq!(
+            resolve_tmux_color("fg=Color205"),
+            resolve_tmux_color("fg=colour205")
+        );
+    }
+
+    #[test]
+    fn resolve_tmux_color_rejects_a_malformed_hex_value() {
+        // Real tmux's hex form is #rrggbb; CSS also allows #rgb/#rgba/#rrggbbaa.
+        // Anything else must not be passed through verbatim as a "valid" color.
+        assert_eq!(resolve_tmux_color("fg=#zzzzzz"), None, "non-hex digits");
+        assert_eq!(resolve_tmux_color("fg=#12345"), None, "invalid length (5)");
+        assert_eq!(resolve_tmux_color("fg=#"), None, "empty after the hash");
+    }
+
+    #[test]
+    fn resolve_tmux_color_accepts_every_valid_css_hex_length() {
+        for hex in ["#abc", "#abcd", "#aabbcc", "#aabbccdd"] {
+            assert_eq!(
+                resolve_tmux_color(&format!("fg={hex}")),
+                Some(hex.to_string())
+            );
+        }
+    }
+
+    /// Mirrors `rename_pane_is_idempotent_and_only_emits_on_real_change`:
+    /// this is the real, live-observed order (split-window materializes
+    /// eagerly, so every color `set-option` the swarm path ever sends
+    /// targets an already-live pane).
+    #[tokio::test]
+    async fn set_pane_accent_color_404s_for_an_unknown_pane() {
+        let state = super::super::tests::test_state();
+        let resp = set_pane_accent_color(
+            State(state.clone()),
+            Path("%99".to_string()),
+            label_query("test-accent-color-404"),
+            Json(SetPaneAccentColorRequest {
+                value: Some("fg=blue".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn request_window_layout_404s_for_an_unknown_window() {
+        let state = super::super::tests::test_state();
+        let resp = request_window_layout(
+            State(state.clone()),
+            Path("@99".to_string()),
+            Json(RequestWindowLayoutRequest {
+                label: Some("test-window-layout-404".to_string()),
+                layout: "tiled".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn set_pane_accent_color_resolves_and_applies_when_already_materialized() {
+        let state = super::super::tests::test_state();
+        let label = "test-accent-color-materialized";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let mut rx = state.event_bus.subscribe();
+        let resp = set_pane_accent_color(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(SetPaneAccentColorRequest {
+                value: Some("bg=default,fg=blue".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::SessionAccentColorChanged { session_id, color }) => {
+                assert_eq!(session_id, tuic_session_id);
+                assert_eq!(color, Some("blue".to_string()));
+            }
+            other => panic!("expected SessionAccentColorChanged, got {other:?}"),
+        }
+
+        // window-style/pane-border-style/pane-active-border-style are always
+        // sent together and resolve to the SAME color — the second and
+        // third calls must not re-emit (same unchanged-value guard as
+        // rename, protecting against the identical class of bug).
+        let _ = set_pane_accent_color(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(SetPaneAccentColorRequest {
+                value: Some("fg=blue".to_string()),
+            }),
+        )
+        .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "the same resolved color from a sibling set-option call must not re-emit"
+        );
+    }
+
+    /// Mirrors `materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`
+    /// — defensive/forward-compat coverage: the live swarm flow never colors
+    /// a still-virtual pane in practice (split-window always materializes
+    /// eagerly before any set-option lands), but `TmuxPane::accent_color`
+    /// makes the same "recorded while virtual, applied on materialize"
+    /// promise as `title` and must be tested the same way.
+    #[tokio::test]
+    async fn materialize_applies_an_accent_color_recorded_while_the_pane_was_still_virtual() {
+        let state = super::super::tests::test_state();
+        let label = "test-deferred-accent-color-on-materialize";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        let _ = set_pane_accent_color(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(SetPaneAccentColorRequest {
+                value: Some("fg=green".to_string()),
+            }),
+        )
+        .await;
+        {
+            let topology = state.tmux_servers.get(label).unwrap();
+            let pane = topology.find_pane(&pane_id).unwrap();
+            assert_eq!(pane.accent_color.as_deref(), Some("green"));
+            assert!(
+                pane.tuic_session_id.is_none(),
+                "pane must still be virtual at this point"
+            );
+        }
+
+        let mut rx = state.event_bus.subscribe();
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"].as_str().unwrap();
+
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionAccentColorChanged { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionAccentColorChanged { session_id, color }) => {
+                assert_eq!(session_id, tuic_session_id);
+                assert_eq!(color, Some("green".to_string()));
+            }
+            other => panic!(
+                "expected SessionAccentColorChanged the moment the previously-virtual pane materialized, got {other:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_window_layout_emits_only_materialized_session_ids_in_pane_order() {
+        let state = super::super::tests::test_state();
+        let label = "test-window-layout-materialized-only";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let window_id = created["window_id"].as_str().unwrap().to_string();
+        let first_pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        // Materialize the first (initial) pane.
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(first_pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let first_tuic_id =
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["tuic_session_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+
+        // split-window materializes eagerly, adding a second real pane.
+        let split = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some(label.to_string()),
+                window_id: window_id.clone(),
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(split.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let second_tuic_id =
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["tuic_session_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+
+        // A third pane, allocated but never materialized — must be
+        // reflected as an omission, not a gap/null in the emitted list.
+        let mut topology = state.tmux_servers.get_mut(label).unwrap();
+        let virtual_pane_id = topology.alloc_pane();
+        topology
+            .find_window_mut(&window_id)
+            .unwrap()
+            .panes
+            .push(TmuxPane {
+                id: virtual_pane_id,
+                index: 2,
+                title: None,
+                cwd: None,
+                tuic_session_id: None,
+                accent_color: None,
+            });
+        drop(topology);
+
+        let mut rx = state.event_bus.subscribe();
+        let resp = request_window_layout(
+            State(state.clone()),
+            Path(window_id),
+            Json(RequestWindowLayoutRequest {
+                label: Some(label.to_string()),
+                layout: "tiled".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::TmuxWindowLayoutRequested {
+                session_ids,
+                layout,
+            }) => {
+                assert_eq!(session_ids, vec![first_tuic_id, second_tuic_id]);
+                assert_eq!(layout, "tiled");
+            }
+            other => panic!("expected TmuxWindowLayoutRequested, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn request_window_layout_is_a_silent_noop_when_nothing_is_materialized() {
+        let state = super::super::tests::test_state();
+        let label = "test-window-layout-nothing-materialized";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let window_id = created["window_id"].as_str().unwrap().to_string();
+
+        let mut rx = state.event_bus.subscribe();
+        let resp = request_window_layout(
+            State(state.clone()),
+            Path(window_id),
+            Json(RequestWindowLayoutRequest {
+                label: Some(label.to_string()),
+                layout: "tiled".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            rx.try_recv().is_err(),
+            "new-session's still-virtual initial pane means nothing to arrange yet"
+        );
     }
 }

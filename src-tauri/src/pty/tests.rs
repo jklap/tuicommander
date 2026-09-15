@@ -14774,6 +14774,10 @@ fn cleanup_session_clears_transient_session_maps() {
     state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
     state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
     state.session_maps.turn_error_flags.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .pty_accent_colors
+        .insert(sid.to_string(), "blue".to_string());
 
     cleanup_session(sid, &state);
 
@@ -14796,6 +14800,37 @@ fn cleanup_session_clears_transient_session_maps() {
         !state.session_maps.turn_error_flags.contains_key(sid),
         "must not leak a pending failure flag past session teardown"
     );
+    assert!(
+        !state.session_maps.pty_accent_colors.contains_key(sid),
+        "must not leak a permanent accent-color entry per session UUID — the tmux \
+         shim's set-option dispatch is the only writer, but every session that ever \
+         gets one must still have it reaped on close"
+    );
+}
+
+// ── list_active_sessions ────────────────────────────────────────
+
+/// `list_active_sessions` (the desktop IPC twin of
+/// `mcp_http::session::list_sessions`) had no test at all — testing the
+/// `#[tauri::command]` wrapper directly isn't possible without a real
+/// running app (no test anywhere in this codebase constructs a
+/// `tauri::State` outside one), so this exercises the extracted
+/// `list_active_sessions_impl` instead. The one thing worth proving:
+/// `pty_accent_colors` (a side-map, not a `PtySession` field) surfaces
+/// per-session, same as the HTTP twin's own
+/// `list_sessions_reports_each_sessions_own_accent_color` test.
+#[test]
+fn list_active_sessions_impl_reports_each_sessions_own_accent_color() {
+    let state = crate::state::tests_support::make_test_app_state();
+    crate::state::tests_support::insert_dummy_session(&state, "colored");
+    crate::state::tests_support::insert_dummy_session(&state, "plain");
+    state.set_pty_accent_color("colored", Some("blue".to_string()));
+
+    let sessions = list_active_sessions_impl(&state);
+    let colored = sessions.iter().find(|s| s.session_id == "colored").unwrap();
+    let plain = sessions.iter().find(|s| s.session_id == "plain").unwrap();
+    assert_eq!(colored.accent_color.as_deref(), Some("blue"));
+    assert_eq!(plain.accent_color, None);
 }
 
 /// Populate the per-session maps that no teardown phase used to own, plus the

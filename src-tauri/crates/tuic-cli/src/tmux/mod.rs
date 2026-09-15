@@ -215,6 +215,10 @@ mod tests {
         /// never leaks into the legacy `tuic alias` path, which must stay
         /// byte-identical for pre-existing non-swarm users.
         legacy_new_repo: RefCell<Vec<Option<String>>>,
+        /// Every `set_pane_accent_color` call, in order: `(pane_id, raw value)`.
+        accent_color_calls: RefCell<Vec<(String, String)>>,
+        /// Every `request_window_layout` call, in order: `(window_id, layout)`.
+        layout_requests: RefCell<Vec<(String, String)>>,
     }
 
     impl FakeBackend {
@@ -424,6 +428,54 @@ mod tests {
             self.topology.borrow_mut().insert(label.to_string(), topo);
             Ok(())
         }
+        fn set_pane_accent_color(
+            &self,
+            label: &str,
+            pane_id: &str,
+            value: &str,
+        ) -> Result<(), String> {
+            let topo = self.topology_for(label);
+            let exists = topo["sessions"].as_array().unwrap().iter().any(|s| {
+                s["windows"].as_array().unwrap().iter().any(|w| {
+                    w["panes"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|p| p["id"].as_str() == Some(pane_id))
+                })
+            });
+            if !exists {
+                return Err("no such pane".to_string());
+            }
+            self.accent_color_calls
+                .borrow_mut()
+                .push((pane_id.to_string(), value.to_string()));
+            Ok(())
+        }
+
+        fn request_window_layout(
+            &self,
+            label: &str,
+            window_id: &str,
+            layout: &str,
+        ) -> Result<(), String> {
+            let topo = self.topology_for(label);
+            let exists = topo["sessions"].as_array().unwrap().iter().any(|s| {
+                s["windows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|w| w["id"].as_str() == Some(window_id))
+            });
+            if !exists {
+                return Err("no such window".to_string());
+            }
+            self.layout_requests
+                .borrow_mut()
+                .push((window_id.to_string(), layout.to_string()));
+            Ok(())
+        }
+
         fn dispatch_legacy(&self, cmd: crate::Command) -> Result<(), String> {
             let tag = match &cmd {
                 crate::Command::New { .. } => "New",
@@ -596,16 +648,182 @@ mod tests {
     }
 
     #[test]
-    fn set_option_and_friends_are_explicit_noops() {
+    fn switch_client_and_rename_window_are_unconditional_noops() {
+        // These two never gain real dispatch — see args.rs's `TmuxOp::Noop`
+        // doc comment. Run against a completely empty backend/topology: a
+        // real no-op must succeed regardless, with no backend call at all.
         let backend = FakeBackend::default();
         for argv in [
-            s(&["set-option", "-p", "-t", "%3", "window-style", "bg=red"]),
-            s(&["select-layout", "-t", "claude-swarm:swarm-view", "tiled"]),
+            s(&["switch-client", "-t", "claude-swarm"]),
+            s(&["rename-window", "-t", "@1", "new-name"]),
         ] {
             let o = run(&argv, &backend);
             assert_eq!(o.exit, 0);
             assert!(o.stdout.is_empty());
         }
+    }
+
+    #[test]
+    fn set_option_with_an_unrecognized_name_is_a_silent_noop_needing_no_backend_call() {
+        // Against a target that doesn't exist anywhere in an empty backend
+        // — if this reached the backend at all, it would fail with "no pane
+        // found". It must not even try, for any option name other than the
+        // three color ones.
+        let backend = FakeBackend::default();
+        for argv in [
+            s(&["set-option", "-p", "-t", "%99", "remain-on-exit", "failed"]),
+            s(&[
+                "set-window-option",
+                "-w",
+                "-t",
+                "@99",
+                "pane-border-status",
+                "top",
+            ]),
+            s(&[
+                "set-option",
+                "-p",
+                "-t",
+                "%99",
+                "pane-border-format",
+                "#[fg=blue,bold] #{pane_title} #[default]",
+            ]),
+        ] {
+            let o = run(&argv, &backend);
+            assert_eq!(o.exit, 0);
+            assert!(o.stdout.is_empty());
+        }
+        assert!(backend.accent_color_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn select_layout_with_an_unrecognized_layout_name_is_a_silent_noop() {
+        let backend = FakeBackend::default();
+        let o = run(
+            &s(&[
+                "select-layout",
+                "-t",
+                "claude-swarm:swarm-view",
+                "even-horizontal",
+            ]),
+            &backend,
+        );
+        assert_eq!(o.exit, 0);
+        assert!(o.stdout.is_empty());
+        assert!(backend.layout_requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn set_option_dispatches_the_three_color_options_for_real() {
+        let backend = FakeBackend::default();
+        const LABEL: &str = "claude-swarm-color";
+
+        let o = run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "claude-swarm",
+                    "-n",
+                    "swarm-view",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        let pane = o.stdout[0].clone();
+
+        for (name, value) in [
+            ("window-style", "bg=default,fg=blue"),
+            ("pane-border-style", "fg=blue"),
+            ("pane-active-border-style", "fg=blue"),
+        ] {
+            let o = run(
+                &under_label(LABEL, &["set-option", "-p", "-t", &pane, name, value]),
+                &backend,
+            );
+            assert_eq!(o.exit, 0, "set-option {name} must succeed");
+        }
+        assert_eq!(
+            *backend.accent_color_calls.borrow(),
+            vec![
+                (pane.clone(), "bg=default,fg=blue".to_string()),
+                (pane.clone(), "fg=blue".to_string()),
+                (pane, "fg=blue".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn set_option_on_an_unresolvable_target_is_an_honest_failure_for_a_real_color_option() {
+        // Unlike an unrecognized option name, a color option with a target
+        // that genuinely doesn't resolve should fail honestly, matching
+        // `select-pane`/`kill-pane`'s existing target-resolution behavior —
+        // it isn't the "harmless, never-touches-the-backend" case.
+        let backend = FakeBackend::default();
+        let o = run(
+            &s(&[
+                "set-option",
+                "-p",
+                "-t",
+                "%99",
+                "pane-border-style",
+                "fg=red",
+            ]),
+            &backend,
+        );
+        assert_eq!(o.exit, 1);
+    }
+
+    #[test]
+    fn select_layout_tiled_dispatches_for_real_against_a_real_window() {
+        let backend = FakeBackend::default();
+        const LABEL: &str = "claude-swarm-layout";
+
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "claude-swarm",
+                    "-n",
+                    "swarm-view",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        let o = run(
+            &under_label(
+                LABEL,
+                &["select-layout", "-t", "claude-swarm:swarm-view", "tiled"],
+            ),
+            &backend,
+        );
+        assert_eq!(o.exit, 0);
+        assert_eq!(
+            *backend.layout_requests.borrow(),
+            vec![("@0".to_string(), "tiled".to_string())]
+        );
+    }
+
+    #[test]
+    fn select_layout_on_an_unresolvable_window_is_an_honest_failure() {
+        let backend = FakeBackend::default();
+        let o = run(&s(&["select-layout", "-t", "@99", "tiled"]), &backend);
+        assert_eq!(o.exit, 1);
     }
 
     #[test]

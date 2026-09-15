@@ -16,6 +16,7 @@ import {
 	leafDepthFromRoot,
 	MAX_SPLIT_DEPTH,
 	MIN_PANE_RATIO,
+	mainVertical,
 	nodeDepth,
 	normalizeRatios,
 	type PaneBranch,
@@ -24,6 +25,7 @@ import {
 	removeLeaf,
 	setHandleRatio,
 	splitLeaf,
+	tileLeaves,
 } from "../../stores/paneLayout";
 import { testInScope } from "../helpers/store";
 
@@ -459,6 +461,72 @@ describe("paneLayout tree utilities", () => {
 			expect(findAdjacentLeaf(tree, "g3", "up")).toBe("g2");
 		});
 	});
+
+	describe("tileLeaves", () => {
+		it("returns null for an empty list", () => {
+			expect(tileLeaves([])).toBeNull();
+		});
+
+		it("returns a bare leaf for a single id (no branch node)", () => {
+			expect(tileLeaves(["g1"])).toEqual({ type: "leaf", id: "g1" });
+		});
+
+		it("arranges two ids as a single row", () => {
+			const tree = tileLeaves(["g1", "g2"]) as PaneBranch;
+			expect(tree.type).toBe("branch");
+			expect(tree.direction).toBe("horizontal");
+			expect(allLeafIds(tree)).toEqual(["g1", "g2"]);
+		});
+
+		it("arranges four ids as a balanced 2x2 grid", () => {
+			const tree = tileLeaves(["g1", "g2", "g3", "g4"]) as PaneBranch;
+			expect(tree.type).toBe("branch");
+			expect(tree.direction).toBe("horizontal");
+			expect(tree.children).toHaveLength(2);
+			for (const column of tree.children) {
+				expect(column.type).toBe("branch");
+				if (column.type === "branch") {
+					expect(column.direction).toBe("vertical");
+					expect(column.children).toHaveLength(2);
+				}
+			}
+			// Every id present exactly once, none lost or duplicated.
+			expect(allLeafIds(tree).sort()).toEqual(["g1", "g2", "g3", "g4"]);
+		});
+
+		it("every branch's ratios sum to 1 regardless of pane count", () => {
+			for (const count of [2, 3, 5, 7]) {
+				const ids = Array.from({ length: count }, (_, i) => `g${i}`);
+				const tree = tileLeaves(ids)!;
+				const walk = (node: PaneNode): void => {
+					if (node.type === "leaf") return;
+					expect(node.ratios.reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+					node.children.forEach(walk);
+				};
+				walk(tree);
+				expect(allLeafIds(tree)).toHaveLength(count);
+			}
+		});
+	});
+
+	describe("mainVertical", () => {
+		it("returns null for an empty list", () => {
+			expect(mainVertical([])).toBeNull();
+		});
+
+		it("returns a bare leaf for a single id", () => {
+			expect(mainVertical(["g1"])).toEqual({ type: "leaf", id: "g1" });
+		});
+
+		it("gives the leader (first id) a fixed 30% column, the rest stacked", () => {
+			const tree = mainVertical(["leader", "g2", "g3"]) as PaneBranch;
+			expect(tree.type).toBe("branch");
+			expect(tree.direction).toBe("horizontal");
+			expect(tree.ratios).toEqual([0.3, 0.7]);
+			expect(tree.children[0]).toEqual({ type: "leaf", id: "leader" });
+			expect(allLeafIds(tree.children[1])).toEqual(["g2", "g3"]);
+		});
+	});
 });
 
 describe("paneLayoutStore", () => {
@@ -639,6 +707,137 @@ describe("paneLayoutStore", () => {
 				expect(store.state.groups[g1].tabs).toHaveLength(1);
 				expect(store.state.groups[g2].tabs).toHaveLength(1);
 				expect(store.state.groups[g2].activeTabId).toBe("md-1");
+			});
+		});
+	});
+
+	describe("arrangeSessionsAsLayout", () => {
+		it("builds a fresh split from sessions that aren't in any group yet", () => {
+			testInScope(() => {
+				store.arrangeSessionsAsLayout(["term-1", "term-2"], "tiled");
+				expect(store.getRoot()?.type).toBe("branch");
+				expect(allLeafIds(store.getRoot()!).length).toBe(2);
+
+				const g1 = store.getGroupForTab("term-1");
+				const g2 = store.getGroupForTab("term-2");
+				expect(g1).not.toBeNull();
+				expect(g2).not.toBeNull();
+				expect(store.state.groups[g1!].tabs).toEqual([{ id: "term-1", type: "terminal" }]);
+				expect(store.state.groups[g2!].tabs).toEqual([{ id: "term-2", type: "terminal" }]);
+			});
+		});
+
+		it("reuses a group that's already the sole tab of that session, rather than duplicating it", () => {
+			testInScope(() => {
+				const solo = store.createGroup();
+				store.addTab(solo, { id: "term-1", type: "terminal" });
+				store.setRoot({ type: "leaf", id: solo });
+
+				store.arrangeSessionsAsLayout(["term-1", "term-2"], "tiled");
+
+				// The pre-existing solo group is reused verbatim, not replaced —
+				// this is the "pane tab identity" invariant: a group object a
+				// component already mounted against must not be torn down and
+				// recreated just to relocate it in the tree.
+				expect(store.getGroupForTab("term-1")).toBe(solo);
+				expect(Object.keys(store.state.groups)).toHaveLength(2);
+			});
+		});
+
+		it("moves a session out of a shared group into its own dedicated one", () => {
+			testInScope(() => {
+				const shared = store.createGroup();
+				store.addTab(shared, { id: "term-1", type: "terminal" });
+				store.addTab(shared, { id: "md-1", type: "markdown" });
+				store.setRoot({ type: "leaf", id: shared });
+
+				store.arrangeSessionsAsLayout(["term-1"], "tiled");
+
+				const newGroupId = store.getGroupForTab("term-1");
+				expect(newGroupId).not.toBe(shared);
+				expect(store.state.groups[shared].tabs).toEqual([{ id: "md-1", type: "markdown" }]);
+				expect(store.state.groups[newGroupId!].tabs).toEqual([{ id: "term-1", type: "terminal" }]);
+			});
+		});
+
+		it("re-tiling on a second call discards the prior arrangement and cleans up emptied groups", () => {
+			testInScope(() => {
+				store.arrangeSessionsAsLayout(["term-1", "term-2"], "tiled");
+				const groupCountAfterFirst = Object.keys(store.state.groups).length;
+				expect(groupCountAfterFirst).toBe(2);
+
+				store.arrangeSessionsAsLayout(["term-1", "term-2", "term-3"], "tiled");
+				// Each session is still the sole tab of its (reused) group, so no
+				// new groups should have been created for term-1/term-2 — only
+				// one more, for term-3.
+				expect(Object.keys(store.state.groups)).toHaveLength(3);
+				expect(allLeafIds(store.getRoot()!).length).toBe(3);
+			});
+		});
+
+		it("uses main-vertical's leader+stack shape when requested", () => {
+			testInScope(() => {
+				store.arrangeSessionsAsLayout(["leader", "term-2", "term-3"], "main-vertical");
+				const root = store.getRoot() as PaneBranch;
+				expect(root.ratios).toEqual([0.3, 0.7]);
+			});
+		});
+
+		it("is a no-op for an empty session list", () => {
+			testInScope(() => {
+				store.arrangeSessionsAsLayout([], "tiled");
+				expect(store.getRoot()).toBeNull();
+			});
+		});
+
+		it("never destroys an unrelated manual split it doesn't own (code-review regression)", () => {
+			testInScope(() => {
+				// The user has their own two-way split of unrelated terminals open.
+				const g1 = store.createGroup();
+				store.addTab(g1, { id: "unrelated-1", type: "terminal" });
+				const g2 = store.createGroup();
+				store.addTab(g2, { id: "unrelated-2", type: "terminal" });
+				const manualRoot = {
+					type: "branch" as const,
+					direction: "horizontal" as const,
+					children: [
+						{ type: "leaf" as const, id: g1 },
+						{ type: "leaf" as const, id: g2 },
+					],
+					ratios: [0.5, 0.5],
+				};
+				store.setRoot(manualRoot);
+				store.setActiveGroup(g2);
+
+				// A swarm's own layout request must not touch any of this.
+				store.arrangeSessionsAsLayout(["swarm-term-1", "swarm-term-2"], "tiled");
+
+				expect(store.getRoot()).toEqual(manualRoot);
+				expect(store.state.activeGroupId).toBe(g2);
+				expect(Object.keys(store.state.groups)).toEqual([g1, g2]);
+				expect(store.getGroupForTab("swarm-term-1")).toBeNull();
+			});
+		});
+
+		it("preserves the current active group when it's already part of the arrangement", () => {
+			testInScope(() => {
+				store.arrangeSessionsAsLayout(["term-1", "term-2"], "tiled");
+				const term2Group = store.getGroupForTab("term-2")!;
+				store.setActiveGroup(term2Group);
+
+				// A third teammate joining re-tiles [1,2,3] — must not yank focus
+				// back to term-1's group just because it's first in the list.
+				store.arrangeSessionsAsLayout(["term-1", "term-2", "term-3"], "tiled");
+
+				expect(store.state.activeGroupId).toBe(term2Group);
+			});
+		});
+
+		it("falls back to the first arranged group only when there's no active group to preserve", () => {
+			testInScope(() => {
+				expect(store.state.activeGroupId).toBeNull();
+				store.arrangeSessionsAsLayout(["term-1", "term-2"], "tiled");
+				expect(store.state.activeGroupId).toBe(store.getGroupForTab("term-1"));
 			});
 		});
 	});

@@ -142,6 +142,11 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 		const path = repositoriesStore.getRepoPathForTerminal(props.id);
 		return path ? getRepoColor(path) : undefined;
 	};
+	// Set by the tmux compatibility shim's `set-option ... *-border-style`
+	// (Claude Code's per-teammate `--agent-color`) — see `terminals.ts`'s
+	// `accentColor` field. Always shown regardless of split/workspace state,
+	// unlike `repoColor` above (which is Global-Workspace-only).
+	const accentColor = () => terminal()?.accentColor ?? undefined;
 
 	const select = () => {
 		if (isDetached()) props.onFocusDetached?.(props.id);
@@ -166,7 +171,14 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					...dragClasses(props),
 				)}
 				data-tab-id={props.id}
-				style={repoColor() ? ({ "--repo-color": repoColor() } as Record<string, string>) : undefined}
+				style={
+					repoColor() || accentColor()
+						? ({
+								...(repoColor() ? { "--repo-color": repoColor() } : {}),
+								...(accentColor() ? { "--accent-color": accentColor() } : {}),
+							} as Record<string, string>)
+						: undefined
+				}
 				onClick={select}
 				onAuxClick={(event) => {
 					if (event.button === 1) {
