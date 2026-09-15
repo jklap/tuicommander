@@ -252,7 +252,7 @@ available, `~/.claude/file-history/` backups. Rust: new `session_review.rs`
 `unified_diff` feature). Frontend: `src/components/SessionDiffTab/` tree,
 `diffTabsStore`/`useRepository`/`transport.ts` extensions. Transcript
 parsing, base-resolution tiers, revert mechanisms, and the frontend
-orchestration are all unit-tested (42 Rust tests, ~50 vitest tests across
+orchestration are all unit-tested (44 Rust tests, ~50 vitest tests across
 `buildRows`/`SessionPicker`/`SessionDiffTab`/`StepCard`/the extracted DiffTab
 helpers) — `DiffViewer`/`SessionDiffList`'s own rendering is stubbed in those
 tests since `@git-diff-view/solid` needs a real Canvas and
@@ -274,8 +274,19 @@ collapsed file back to expanded. All have regression tests; see
 Gotchas" section for the two replay/cache gotchas in case they recur
 elsewhere.
 
-**Known gaps from the same review, deliberately not fixed in this pass**
-(none rise to data-corruption-in-the-common-case the way the fixed ones did):
+**Fixed in a follow-up pass (2026-09-14):** `revert_step_via_substitution`'s
+Edit arm now delegates to `apply_reverse` instead of re-deriving the same
+find/replace-backward logic, so a future correctness fix only needs to land
+in one place; `list_review_sessions(include_counts: true)` now fans its
+per-session transcript scans out across `std::thread::scope` threads instead
+of running them one after another, so picker load time no longer scales
+linearly with session count. Both covered by new/extended tests
+(`revert_out_of_repo_replace_all_step_reverses_every_occurrence`,
+`include_counts_true_reports_each_of_several_sessions_correctly`).
+
+**Known gaps from the same review, still deliberately not fixed**
+(neither rises to data-corruption-in-the-common-case the way the fixed ones
+did):
 
 - Binary detection (`is_binary_str`/`is_binary_bytes`) only checks for a NUL
   byte in the first 8000 bytes (git's own heuristic) — a non-UTF-8 text file
@@ -283,18 +294,14 @@ elsewhere.
   lossily converted via `String::from_utf8_lossy`, and that lossy text can be
   written back to disk on a whole-file revert. Narrow edge case; would need a
   real encoding-detection pass to fix properly.
-- `apply_forward`/`apply_reverse`/`revert_step_via_substitution` locate a
-  substitution via the *first* occurrence of the old/new text (`str::find`,
-  not `rfind` or hunk-anchored) — if a file has duplicated text (e.g. a
-  repeated license header) and the real edit targeted a later occurrence,
-  replay can silently touch the wrong one. Needs hunk/line-context anchoring
-  to fix correctly, which is a bigger change than this pass's scope.
-- `revert_step_via_substitution`'s Edit-arm logic is a second, independently
-  maintained copy of `apply_reverse`'s Edit arm — a future correctness fix to
-  one can be missed in the other. Maintainability only, not a live bug.
-- `list_review_sessions(include_counts: true)` scans each session's full
-  transcript sequentially rather than in parallel — picker load time scales
-  linearly with session count. Performance only.
+- `apply_forward`/`apply_reverse` (and, transitively now,
+  `revert_step_via_substitution`) locate a substitution via the *first*
+  occurrence of the old/new text (`str::find`, not `rfind` or
+  hunk-anchored) — if a file has duplicated text (e.g. a repeated license
+  header) and the real edit targeted a later occurrence, replay can silently
+  touch the wrong one. Needs hunk/line-context anchoring to fix correctly,
+  which is a bigger change than this pass's scope — but now only needs
+  fixing in one function instead of two, thanks to the delegation above.
 
 What's NOT machine-verifiable:
 
