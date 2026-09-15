@@ -1164,11 +1164,18 @@ the active terminal's cwd, for BOTH variable resolution and — since `executeHe
 shell/headless prompt runs in. `ChangesTab.tsx` now passes its own `props.repoPath`
 (already the correct worktree-aware filesystem path — `GitPanel.tsx`'s `gitPath()`, not
 its `storeRepoPath`). Omitting `targetPath` (every other existing caller) is
-byte-for-byte the old behavior — nothing else needed to change. If you add a new caller
-that is itself bound to a specific repo/worktree independent of terminal focus (the same
-shape recurs in `SmartButtonStrip.tsx`, which also takes a `repoPath` prop it doesn't yet
-forward — not fixed here, flagged for a follow-up), pass its own path through
-`targetPath` rather than trusting the active-terminal fallback.
+byte-for-byte the old behavior — nothing else needed to change.
+
+**The identical shape recurred one component over: `SmartButtonStrip.tsx` also takes a
+`repoPath` prop, used by five different callers (`GitHubPanel.tsx`, `PrSection.tsx`,
+`PrDetailPopover.tsx`, `BranchesTab.tsx`, and `ChangesTab.tsx`'s own commit-button strip,
+distinct from its direct `executeSmartPrompt` call above), and wasn't forwarding it
+either — fixed the same way, in the one shared component, so all five callers got the fix
+in a single change rather than five. If you add a sixth caller (or any new caller of
+`executeSmartPrompt` that is itself bound to a specific repo/worktree independent of
+terminal focus), pass its own path through `targetPath` rather than trusting the
+active-terminal fallback — grep for existing `repoPath`-prop components that call
+`executeSmartPrompt` before assuming this pattern is now fully closed out.
 
 **The setup-script/run-script ordering fix threads a real wait, not just documentation.**
 `createWorktreeCreationCoordinator.ts`'s `setupNewWorktree` used to `await
