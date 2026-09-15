@@ -37,23 +37,29 @@ fn main() {
 
     #[cfg(feature = "desktop")]
     {
-        tauri_build::build();
+        // One Windows manifest for every artifact we link, ours instead of the
+        // tauri one. tauri_build embeds its copy through
+        // `cargo:rustc-link-arg-bins`, which reaches binaries and not the unit
+        // tests of the lib. Those test binaries then bind comctl32 5.82 from
+        // System32, which does not export TaskDialogIndirect, and the loader
+        // kills them with STATUS_ENTRYPOINT_NOT_FOUND before a test runs.
+        //
+        // Only `cargo:rustc-link-arg` without a suffix reaches the lib test
+        // binary: `-tests` covers the `tests/` targets alone (measured). That
+        // directive also reaches the binaries, and a second RT_MANIFEST there
+        // is a duplicate resource the linker rejects, so the tauri manifest has
+        // to go. Its content is this file, so the binaries keep what they had.
+        let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+        let attributes = tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+        tauri_build::try_build(attributes).expect("failed to run tauri-build");
 
-        // tauri_build embeds the Windows application manifest through
-        // `cargo:rustc-link-arg-bins`, which reaches binaries and not test
-        // targets. A test binary therefore binds comctl32 5.82 from System32,
-        // which exports none of the four version-6 symbols tao and the dialog
-        // plugin import, and the loader kills it with STATUS_ENTRYPOINT_NOT_FOUND
-        // before any test runs. Give the test binaries the same manifest.
-        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-            let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("windows-tests.manifest");
+        if windows {
+            let manifest =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("windows-app.manifest");
             println!("cargo:rerun-if-changed={}", manifest.display());
-            println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
-            println!(
-                "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
-                manifest.display()
-            );
+            println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+            println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
         }
     }
 }
