@@ -586,25 +586,38 @@ async fn run_worktree_file_sync(
     Some(summary)
 }
 
-/// Marks a still-`pending` warm `failed` if the chain that owns it is dropped
-/// (task panic, runtime shutdown) before it publishes the real status, so a
-/// workspace can never read `pending` forever. `finish_warm` is token-checked,
-/// so firing after a removal cleared the token is a harmless no-op.
-struct ChainPendingWarmGuard {
-    destination: PathBuf,
-    token: u64,
+/// Settles a chain that is dropped (task aborted or panicked, runtime shutting
+/// down) before it published its outcome: a still-`pending` warm is marked
+/// `failed` and the pollable setup status reports the stop, so neither can
+/// read "in progress" forever. `finish_warm` is token-checked, so firing after
+/// a removal cleared the token is a harmless no-op.
+struct ChainStopGuard {
+    state: Arc<AppState>,
+    status_key: (String, String),
+    warm: Option<(PathBuf, u64)>,
     armed: bool,
 }
 
-impl Drop for ChainPendingWarmGuard {
+impl Drop for ChainStopGuard {
     fn drop(&mut self) {
-        if self.armed {
+        if !self.armed {
+            return;
+        }
+        const REASON: &str = "worktree setup chain stopped before it finished";
+        if let Some((destination, token)) = &self.warm {
             finish_warm(
-                &self.destination,
-                self.token,
-                serde_json::json!({"status": "failed", "reason": "worktree setup chain stopped before it finished"}),
+                destination,
+                *token,
+                serde_json::json!({"status": "failed", "reason": REASON}),
             );
         }
+        self.state.worktree_setup_status.insert(
+            self.status_key.clone(),
+            Arc::new(crate::state::WorktreeSetupStatus::Completed {
+                exit_code: None,
+                error: Some(REASON.to_string()),
+            }),
+        );
     }
 }
 
@@ -642,6 +655,16 @@ impl Drop for ChainPendingWarmGuard {
 /// unattended daemon path (`create_daemon_workflow_worktree`) awaits it so a
 /// workflow/automation agent never starts in a half-set-up worktree.
 ///
+/// The event alone left MCP clients (no SSE/event stream to listen on) with
+/// no way to ever learn the outcome — the chain also writes a
+/// [`crate::state::WorktreeSetupStatus`] snapshot into
+/// `AppState::worktree_setup_status`, keyed by `(repo_path, branch)`:
+/// `Running` synchronously before this returns, then `NotConfigured` or
+/// `Completed` once the chain finishes (the entry is dropped — reads as
+/// `unknown` — when a removal stopped the chain). Pollable via
+/// [`get_worktree_setup_status`] / `repo action=worktree_setup_status` /
+/// `GET /worktrees/setup-status`.
+///
 /// `recycled` is true when `allocate_workspace` handed back a recycled
 /// checkout (#1705): it keeps the files it was created with, so the chain
 /// neither CoW-warms (the warm step reports an empty `done`) nor file-syncs
@@ -655,6 +678,10 @@ pub(crate) fn spawn_worktree_setup_chain(
     recycled: bool,
 ) -> tokio::task::JoinHandle<Option<String>> {
     let state = Arc::clone(state);
+    state.worktree_setup_status.insert(
+        (base_repo.clone(), branch.clone()),
+        Arc::new(crate::state::WorktreeSetupStatus::Running),
+    );
     let warm = warm_token.map(|token| {
         (token, move |source: &Path, destination: &Path| {
             if recycled {
@@ -709,11 +736,21 @@ async fn run_worktree_setup_chain_with<W>(
 where
     W: FnOnce(&Path, &Path) -> tuic_git::cow::WarmingReport + Send + 'static,
 {
-    let mut guard = warm.as_ref().map(|(token, _)| ChainPendingWarmGuard {
-        destination: worktree_path.clone(),
-        token: *token,
+    let status_key = (base_repo.clone(), branch.clone());
+    let mut guard = ChainStopGuard {
+        state: Arc::clone(&state),
+        status_key: status_key.clone(),
+        warm: warm
+            .as_ref()
+            .map(|(token, _)| (worktree_path.clone(), *token)),
         armed: true,
-    });
+    };
+    // A removal won: nothing more may be written into the checkout, and
+    // there is no outcome to report for a workspace that no longer exists.
+    let stop_removed = |guard: &mut ChainStopGuard| {
+        guard.armed = false;
+        state.worktree_setup_status.invalidate(&status_key);
+    };
 
     // 1. CoW warm (awaited; its status is held back until the end).
     let mut warm_result: Option<(u64, serde_json::Value)> = None;
@@ -729,9 +766,7 @@ where
             // Removed before the copy could start: nothing may be written
             // into this checkout any more.
             Ok(None) => {
-                if let Some(guard) = guard.as_mut() {
-                    guard.armed = false;
-                }
+                stop_removed(&mut guard);
                 return None;
             }
             Err(error) => {
@@ -753,7 +788,11 @@ where
 
     // 3. Setup Script, only after the sync.
     let mut setup_failure = None;
-    if still_current(token) {
+    if !still_current(token) {
+        stop_removed(&mut guard);
+        return None;
+    }
+    {
         let repo_for_script = base_repo.clone();
         let script = tokio::task::spawn_blocking(move || {
             crate::config::resolve_effective_setup_script(&repo_for_script)
@@ -798,6 +837,13 @@ where
                     })
                 }
             };
+            state.worktree_setup_status.insert(
+                status_key.clone(),
+                Arc::new(crate::state::WorktreeSetupStatus::Completed {
+                    exit_code,
+                    error: error.clone(),
+                }),
+            );
             emit_worktree_setup_script_completed(
                 &state,
                 &base_repo,
@@ -806,6 +852,11 @@ where
                 exit_code,
                 error,
             );
+        } else {
+            state.worktree_setup_status.insert(
+                status_key.clone(),
+                Arc::new(crate::state::WorktreeSetupStatus::NotConfigured),
+            );
         }
     }
 
@@ -813,10 +864,30 @@ where
     if let Some((token, status)) = warm_result {
         finish_warm(&worktree_path, token, status);
     }
-    if let Some(guard) = guard.as_mut() {
-        guard.armed = false;
-    }
+    guard.armed = false;
     setup_failure
+}
+
+/// Poll the current status of a worktree's background setup chain, keyed by
+/// `(repo_path, branch)` — the same pair `spawn_worktree_setup_chain` tracks
+/// and the `worktree-setup-script-completed` event carries. Returns `None`
+/// when nothing is tracked for this pair: no worktree creation ever started a
+/// chain for it, the entry aged out (30 minute TTL — see
+/// `build_worktree_setup_status_cache`), or the app restarted since. A caller
+/// that gets `None` right after creating a worktree should treat it as "still
+/// starting," not "definitely no script" — the entry is inserted synchronously
+/// by `spawn_worktree_setup_chain` before it returns, so a `None` for a
+/// worktree just created moments ago most likely means the key doesn't match
+/// (wrong repo_path/branch), not a real race.
+pub(crate) fn get_worktree_setup_status(
+    state: &AppState,
+    repo_path: &str,
+    branch: &str,
+) -> Option<crate::state::WorktreeSetupStatus> {
+    state
+        .worktree_setup_status
+        .get(&(repo_path.to_string(), branch.to_string()))
+        .map(|arc| (*arc).clone())
 }
 
 fn emit_worktree_sync_started(state: &Arc<AppState>, repo_path: &str, branch: &str) {
