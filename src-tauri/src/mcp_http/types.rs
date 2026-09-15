@@ -67,6 +67,13 @@ pub(super) struct WritePartsRequest {
     pub parts: Vec<String>,
 }
 
+/// Body of `POST /ui/action`. See `session::UI_ACTION_ALLOWLIST` — the
+/// allowlist restricting which names this can actually trigger.
+#[derive(Deserialize)]
+pub(super) struct UiActionRequest {
+    pub name: String,
+}
+
 #[derive(Deserialize)]
 pub(super) struct SetNameRequest {
     pub name: Option<String>,

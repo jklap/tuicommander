@@ -103,6 +103,19 @@ pub(super) async fn put_config(
             "remote-access configuration changed over HTTP",
         );
     }
+    // Parity with the IPC `save_config` — see its own comment. `tuic-remote`
+    // (no `desktop` feature) has no `state.streamdock` field at all, since
+    // `tuic_streamdock` is a desktop-only optional dependency.
+    #[cfg(feature = "desktop")]
+    if effects.streamdock_changed {
+        let streamdock_state = state.clone();
+        tokio::spawn(async move {
+            streamdock_state
+                .streamdock
+                .apply_config(&streamdock_state)
+                .await;
+        });
+    }
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 

@@ -723,3 +723,19 @@ local Finder menu item is meaningless for a browser/remote client). See
 
 Non-macOS builds: `get_finder_service_status` reports `installed: false`; `install_finder_service`
 returns an error; `uninstall_finder_service`/`dismiss_finder_service_prompt` are no-ops.
+
+## StreamDock M18 Macropad (`streamdock/`, `pty.rs`)
+
+A 15-key LCD macropad mirroring live session state — see `src-tauri/crates/tuic-streamdock/`
+for the device/render/policy layers and `src-tauri/src/streamdock/` for the in-app supervisor.
+Config lives at `AppConfig.streamdock` (see [config.md](../backend/config.md)). `focus_session`
+and `run_ui_action` are general-purpose (not macropad-specific) but were added by this
+integration — see the "Tauri events emitted by backend" table in `docs/sync-matrix.md` for the
+`session-focus-requested`/`ui-action-requested` events they dual-emit.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `focus_session` | `session_id: String` | `Result<(), String>` | Ask the UI to focus a session's tab. Did not exist before this integration — window/panel focus was previously frontend-only state with nothing to call. Browser parity: `POST /sessions/:id/focus` |
+| `run_ui_action` | `name: String` | `Result<(), String>` | Run a frontend-only action by its `actionRegistry` name, gated by a Rust-side allowlist (`UI_ACTION_ALLOWLIST` in `mcp_http/session.rs`; currently `jump-waiting-terminal`, `activity-dashboard`). Browser parity: `POST /ui/action` |
+| `streamdock_status` | -- | `StreamDockStatus` (`{ enabled, running, device: string \| null, last_error: string \| null, restarts }`) | Current supervisor state — polled by the Settings UI every 2s. Browser parity: `GET /streamdock/status` |
+| `streamdock_list_devices` | -- | `Vec<StreamDockDeviceInfo>` (`{ product_name, serial_number, vendor_id, product_id }`) | Enumerate currently-connected StreamDock-family devices, independent of whether the integration is enabled. Browser parity: `GET /streamdock/devices` |

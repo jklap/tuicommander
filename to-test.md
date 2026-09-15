@@ -5905,3 +5905,20 @@ section. All of the below needs a rebuilt build to check.
   - In the Settings UI, try adding a relative path (e.g. `notes`) and confirm the new inline validation
     error appears and the entry is NOT added — then add a real `~/...` or absolute path and confirm it
     IS added and persists across a settings reload.
+- [ ] StreamDock M18 macropad integration (`src-tauri/crates/tuic-streamdock/`,
+  `src-tauri/src/streamdock/`, Settings > StreamDock tab): device connection, live session-tile
+  rendering, gesture dispatch, and config lifecycle, code-complete through Phase 6 and gated by
+  `check-gate.sh` (all Rust/frontend tests pass), but the in-process wiring (`AppStateSource`/
+  `AppStateSink`, `StreamDockManager::apply_config` reconcile, the new `SessionFocusRequested`/
+  `UiActionRequested` `AppEvent`s) has never run against a live `make dev` process — **requires a
+  restart to load** (Rust change, no hot-reload). After restarting with the real VSD M18 attached
+  and `Settings > StreamDock` enabled: confirm the device connects (status strip shows `running`
+  with the right serial), starting/finishing a real session moves the corresponding key within
+  ~300ms, closing a session blanks its slot without reindexing neighbors, a tap on a session tile
+  focuses that tab (and answers a pending choice prompt if one is showing), a hold sends interrupt
+  (`\x03`), the bottom-row verb keys (`Approve`/`Reject`/`Interrupt`/`JumpWaiting`/`Overflow`) and
+  the 3 plain buttons work, and both brightness sliders move the backlight live with no restart.
+  Also verify hot-plug: unplug and replug the device and confirm it reattaches within ~2s. If no
+  hardware is available, the focus/action event path itself can be proven without a device via
+  `curl -X POST :9877/sessions/{id}/focus` and `curl -X POST :9877/ui/action` against the worktree
+  build.
