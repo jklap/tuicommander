@@ -1192,38 +1192,72 @@ pub(crate) async fn list_review_sessions(
             .collect();
         files.sort_by_key(|(_, m)| std::cmp::Reverse(m.modified().ok()));
 
-        let mut out = Vec::new();
-        for (path, meta) in files.into_iter().take(limit) {
-            let Some(session_id) = path.file_stem().and_then(|s| s.to_str()).map(String::from)
-            else {
-                continue;
-            };
-            let head = read_session_head(&path);
-            let tail = read_session_tail(&path);
-            let has_subagents = project_dir.join(&session_id).join("subagents").is_dir();
-            let (edit_count, file_count) = if include_counts {
-                let subs = subagent_transcripts(&project_dir, &session_id);
-                let (e, f) = count_edits_and_files(&path, &subs);
-                (Some(e), Some(f))
-            } else {
-                (None, None)
-            };
-            out.push(SessionSummary {
-                session_id,
-                transcript_path: path.to_string_lossy().to_string(),
-                cwd: head.cwd,
-                git_branch: head.git_branch,
-                started_at: head.started_at,
-                ended_at: tail.ended_at,
-                title: tail.title,
-                last_prompt: tail.last_prompt,
-                size_bytes: meta.len(),
-                edit_count,
-                file_count,
-                has_subagents,
-            });
-        }
-        out
+        // (path, metadata, session_id) for the entries we'll actually return
+        // — an invalid-stem file (shouldn't happen for a real
+        // `<uuid>.jsonl`, but guarded the same way the prior sequential loop
+        // was) is dropped up front, before the parallel count scan below,
+        // so that scan only ever runs for entries we'll actually emit.
+        let selected: Vec<(PathBuf, std::fs::Metadata, String)> = files
+            .into_iter()
+            .take(limit)
+            .filter_map(|(path, meta)| {
+                let session_id = path.file_stem()?.to_str()?.to_string();
+                Some((path, meta, session_id))
+            })
+            .collect();
+
+        // Each session's edit/file counts require a full line-by-line scan
+        // of its transcript (plus every subagent transcript) — for up to
+        // `limit` (capped at 50) sessions, running this one after another
+        // inside this single blocking call made the picker's load/refresh
+        // time scale linearly with session count. Fan the scans out across
+        // real OS threads instead (sound here: this closure already runs on
+        // a dedicated blocking-pool thread, off the async reactor) and join
+        // before assembling the summaries below.
+        let counts: Vec<Option<(u32, u32)>> = if include_counts {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = selected
+                    .iter()
+                    .map(|(path, _, session_id)| {
+                        scope.spawn(|| {
+                            let subs = subagent_transcripts(&project_dir, session_id);
+                            count_edits_and_files(path, &subs)
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(|h| h.join().ok()).collect()
+            })
+        } else {
+            vec![None; selected.len()]
+        };
+
+        selected
+            .into_iter()
+            .zip(counts)
+            .map(|((path, meta, session_id), count)| {
+                let head = read_session_head(&path);
+                let tail = read_session_tail(&path);
+                let has_subagents = project_dir.join(&session_id).join("subagents").is_dir();
+                let (edit_count, file_count) = match count {
+                    Some((e, f)) => (Some(e), Some(f)),
+                    None => (None, None),
+                };
+                SessionSummary {
+                    session_id,
+                    transcript_path: path.to_string_lossy().to_string(),
+                    cwd: head.cwd,
+                    git_branch: head.git_branch,
+                    started_at: head.started_at,
+                    ended_at: tail.ended_at,
+                    title: tail.title,
+                    last_prompt: tail.last_prompt,
+                    size_bytes: meta.len(),
+                    edit_count,
+                    file_count,
+                    has_subagents,
+                }
+            })
+            .collect()
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))
@@ -1372,25 +1406,19 @@ fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertR
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
 
     match edit.kind {
+        // Delegates to `apply_reverse` rather than re-deriving the
+        // find/replace-backward logic here — this used to be a second,
+        // independently maintained copy of that function's Edit arm, so a
+        // future correctness fix (e.g. anchoring on more than the first
+        // occurrence of duplicated text) could land in one copy and not the
+        // other. `apply_reverse`'s only failure mode for `StepKind::Edit` is
+        // "substitution text not found", which this path treats as a soft
+        // no-match rather than a hard error — the file may have already
+        // been reverted, or a later edit may have overwritten the region.
         StepKind::Edit => {
-            let old = edit.old_string.as_deref().unwrap_or("");
-            let new = edit.new_string.as_deref().unwrap_or("");
-            let new_content = if edit.replace_all {
-                if !current.contains(new) {
-                    return Ok(no_match_result(&edit.file_path));
-                }
-                current.replace(new, old)
-            } else {
-                match find_single_occurrence(&current, new) {
-                    Some(idx) => {
-                        let mut s = String::with_capacity(current.len());
-                        s.push_str(&current[..idx]);
-                        s.push_str(old);
-                        s.push_str(&current[idx + new.len()..]);
-                        s
-                    }
-                    None => return Ok(no_match_result(&edit.file_path)),
-                }
+            let new_content = match apply_reverse(&current, edit) {
+                Ok(c) => c,
+                Err(_) => return Ok(no_match_result(&edit.file_path)),
             };
             if !dry_run {
                 std::fs::write(&path, &new_content)
@@ -2356,6 +2384,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn include_counts_true_reports_each_of_several_sessions_correctly() {
+        // Regression guard for the parallel (std::thread::scope) count scan:
+        // each session's (edit_count, file_count) must land back on the
+        // right SessionSummary, not get shuffled or cross-contaminated
+        // across threads. Three sessions with distinct, easily-confused
+        // counts (1, 2, 3 edits across 1, 1, 2 files respectively).
+        let (_dir, repo) = fixture_repo();
+        let cwd = repo.to_string_lossy().to_string();
+        let a = repo.join("a.txt").to_string_lossy().to_string();
+        let b = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&a, "a1\n").unwrap();
+        std::fs::write(&b, "b1\n").unwrap();
+
+        // The first session's build() also creates the shared CLAUDE_CONFIG_DIR
+        // this test reuses for the other two — list_review_sessions only sees
+        // sessions living under the same project dir.
+        let (cfg, _) = TranscriptBuilder::new(&cwd)
+            .custom_title("one edit")
+            .edit(&a, "a1\n", "a1x\n", false)
+            .build();
+        let cfg_path = cfg.path().to_string_lossy().to_string();
+        let project_dir =
+            crate::agent_session::claude_project_dir(cwd.clone(), Some(cfg_path.clone()))
+                .map(PathBuf::from)
+                .unwrap();
+
+        // Each of the other two sessions is built in its OWN throwaway temp
+        // config dir (TranscriptBuilder always creates a fresh one), then its
+        // transcript file alone is copied into the shared project dir above —
+        // simpler than teaching the builder to target an existing config dir.
+        for (title, edits) in [
+            (
+                "two edits, one file",
+                vec![("a1\n", "a1x\n"), ("a1x\n", "a1y\n")],
+            ),
+            (
+                "three edits, two files",
+                vec![("a1\n", "a1x\n"), ("a1x\n", "a1y\n"), ("b1\n", "b1x\n")],
+            ),
+        ] {
+            let mut tb = TranscriptBuilder::new(&cwd).custom_title(title);
+            for (old, new) in edits {
+                let file = if old.starts_with('b') { &b } else { &a };
+                tb = tb.edit(file, old, new, false);
+            }
+            let (_transcript_dir, transcript_path) = tb.build();
+            let dest = project_dir.join(transcript_path.file_name().unwrap());
+            std::fs::copy(&transcript_path, &dest).unwrap();
+        }
+
+        let sessions = list_review_sessions(cwd, None, Some(true), Some(cfg_path))
+            .await
+            .unwrap();
+        assert_eq!(sessions.len(), 3);
+        let by_title = |t: &str| {
+            sessions
+                .iter()
+                .find(|s| s.title.as_deref() == Some(t))
+                .unwrap()
+        };
+        assert_eq!(by_title("one edit").edit_count, Some(1));
+        assert_eq!(by_title("one edit").file_count, Some(1));
+        assert_eq!(by_title("two edits, one file").edit_count, Some(2));
+        assert_eq!(by_title("two edits, one file").file_count, Some(1));
+        assert_eq!(by_title("three edits, two files").edit_count, Some(3));
+        assert_eq!(by_title("three edits, two files").file_count, Some(2));
+    }
+
+    #[tokio::test]
     async fn include_counts_false_leaves_counts_none() {
         let (_dir, repo) = fixture_repo();
         let cwd = repo.to_string_lossy().to_string();
@@ -2648,6 +2745,48 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&abs).unwrap(),
             "line one\nline two\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn revert_out_of_repo_replace_all_step_reverses_every_occurrence() {
+        // `revert_step_via_substitution`'s Edit arm now delegates entirely to
+        // `apply_reverse` (rather than re-deriving its own find/replace
+        // logic) — this locks in that the replace_all branch still works
+        // for the out-of-repo path after that refactor.
+        let (_dir, repo) = fixture_repo();
+        let outside_dir = tempfile::tempdir().unwrap();
+        let abs = outside_dir
+            .path()
+            .join("notes.md")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&abs, "NEW here, NEW there, NEW everywhere\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let tb = TranscriptBuilder::new(&repo_str);
+        let tb = tb.edit(&abs, "old", "NEW", true);
+        let step_id = tb.last_tool_use_id();
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let result = revert_session_step(
+            repo_str,
+            session_id,
+            step_id,
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(result.applied, "revert failed: {:?}", result.message);
+        assert_eq!(
+            std::fs::read_to_string(&abs).unwrap(),
+            "old here, old there, old everywhere\n"
         );
     }
 
