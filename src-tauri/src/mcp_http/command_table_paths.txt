@@ -292,6 +292,7 @@
 /sessions/agent
 /sessions/worktree
 /sessions/x
+/sessions/x/accent-color
 /sessions/x/chat-view
 /sessions/x/foreground
 /sessions/x/has-foreground
