@@ -4,6 +4,7 @@ members = [
     "crates/tuic-bridge",
     "crates/tuic-cli",
     "crates/tuic-hook",
+    "crates/tuic-streamdock",
     "patches/alacritty_terminal",
     "patches/bm25",
     "patches/vte",
