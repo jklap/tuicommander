@@ -82,9 +82,14 @@ pub(crate) struct ScriptContext {
 
 impl ScriptContext {
     /// Derive context from `cwd` — the directory the script will actually
-    /// run in (a worktree path, the main checkout, or a plain non-repo dir).
+    /// run in (a worktree path, the main checkout, a subdirectory of either,
+    /// or a plain non-repo dir). A subdirectory cwd (e.g. a Finder-service
+    /// tab opened inside a worktree subfolder) is walked up to its owning
+    /// worktree/repo root via `git::find_repo_root` first — `TUIC_*`
+    /// describes that root, not the subdirectory, matching what `git
+    /// rev-parse --show-toplevel` would report from the same cwd.
     pub(crate) fn derive(kind: ScriptKind, cwd: &Path) -> Self {
-        if crate::git::resolve_git_dir(cwd).is_none() {
+        let Some(repo_root) = crate::git::find_repo_root(cwd) else {
             let path = cwd.to_path_buf();
             return Self {
                 kind,
@@ -95,12 +100,14 @@ impl ScriptContext {
                 base_ref: None,
                 base_branch: None,
             };
-        }
+        };
 
-        let worktree_path = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-        let main_repo_path = crate::git::canonical_repo_root(cwd);
+        let worktree_path = repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| repo_root.clone());
+        let main_repo_path = crate::git::canonical_repo_root(&repo_root);
         let main_repo_str = main_repo_path.to_string_lossy().to_string();
-        let branch = crate::git::read_branch_from_head(cwd);
+        let branch = crate::git::read_branch_from_head(&repo_root);
         let base_ref = branch
             .as_deref()
             .and_then(|b| crate::worktree::get_branch_base(&main_repo_str, b));
@@ -270,6 +277,34 @@ mod tests {
         assert_eq!(
             map.get("TUIC_IS_WORKTREE").map(String::as_str),
             Some("false")
+        );
+        assert_eq!(map.get("TUIC_BRANCH").map(String::as_str), Some("main"));
+    }
+
+    #[test]
+    fn derive_from_a_subdirectory_reports_the_repo_root_not_the_subdirectory() {
+        // Reachable in practice via the Finder Service ("New TUICommander Tab
+        // Here" on a subfolder) or any terminal `cd`'d into a subdirectory
+        // before a Run Script command executes — cwd need not be the repo
+        // root. `git::resolve_git_dir` only ever checks the exact path given,
+        // so without walking up (`git::find_repo_root`) this would silently
+        // fall into the non-repo branch and emit zero TUIC_* context vars.
+        let repo = setup_test_repo();
+        let sub = repo.path().join("src").join("components");
+        std::fs::create_dir_all(&sub).expect("mkdir nested subdirectory");
+
+        let ctx = ScriptContext::derive(ScriptKind::Setup, &sub);
+        let map = ctx.as_map();
+
+        let canonical_root = repo.path().canonicalize().unwrap();
+        assert_eq!(
+            map.get("TUIC_WORKTREE_PATH").map(PathBuf::from),
+            Some(canonical_root.clone()),
+            "TUIC_WORKTREE_PATH must be the repo root, not the subdirectory cwd"
+        );
+        assert_eq!(
+            map.get("TUIC_MAIN_REPO_PATH").map(PathBuf::from),
+            Some(canonical_root)
         );
         assert_eq!(map.get("TUIC_BRANCH").map(String::as_str), Some("main"));
     }
