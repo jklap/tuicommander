@@ -109,6 +109,8 @@ pub(crate) mod state;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
 pub(crate) mod terminal_grid;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod text_rank;
 pub(crate) mod themes;
 pub(crate) mod tool_search;

@@ -192,6 +192,7 @@ pub(crate) async fn execute_shell_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{host_shell, normalize_newlines, print_var_script, sleep_script};
 
     /// These tests drive real child processes, so they need a directory that
     /// exists and commands that resolve on the host. `/tmp` and the POSIX
@@ -205,47 +206,14 @@ mod tests {
         std::env::temp_dir().to_string_lossy().into_owned()
     }
 
-    /// The shell and the run-a-script flag, the same pair
-    /// [`execute_shell_script`] picks.
-    fn host_shell() -> (String, String) {
-        if cfg!(windows) {
-            ("cmd".to_string(), "/C".to_string())
-        } else {
-            ("sh".to_string(), "-c".to_string())
-        }
-    }
-
     /// `execute_headless_prompt` arguments that run `script` through the host
     /// shell.
     fn shell_argv(script: &str) -> (String, Vec<String>) {
         let (shell, flag) = host_shell();
-        (shell, vec![flag, script.to_string()])
-    }
-
-    /// `cmd` ends every line with CRLF, `sh` with LF. Neither is the subject of
-    /// any test here.
-    fn lines(output: &str) -> String {
-        output.replace("\r\n", "\n")
-    }
-
-    /// A script that sleeps long enough to outlive a 100 ms timeout. `cmd` has
-    /// no `sleep`, and its `timeout` command refuses to run with stdin
-    /// redirected, so the ping idiom is the portable stand-in.
-    fn sleep_script() -> &'static str {
-        if cfg!(windows) {
-            "ping -n 11 127.0.0.1 >nul"
-        } else {
-            "sleep 10"
-        }
-    }
-
-    /// A script that prints the value of `key`, or nothing when it is unset.
-    fn print_var_script(key: &str) -> String {
-        if cfg!(windows) {
-            format!("if defined {key} (echo %{key}%)")
-        } else {
-            format!("echo \"${key}\"")
-        }
+        (
+            shell.to_string(),
+            vec![flag.to_string(), script.to_string()],
+        )
     }
 
     #[tokio::test]
@@ -356,7 +324,7 @@ mod tests {
             "echo line1\necho line2"
         };
         let result = execute_shell_script(script.to_string(), 5000, tmp_cwd()).await;
-        assert_eq!(lines(&result.unwrap()), "line1\nline2");
+        assert_eq!(normalize_newlines(&result.unwrap()), "line1\nline2");
     }
 
     #[tokio::test]

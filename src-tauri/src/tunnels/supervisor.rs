@@ -451,12 +451,28 @@ mod tests {
     /// `name` must be unique per behavior — it is the cache key. The content is
     /// compared on every call, so editing a behavior rewrites (and re-warms) the
     /// script instead of silently reusing the old one.
-    fn fake_ssh_script(name: &str, behavior: &str) -> PathBuf {
+    ///
+    /// The behavior is spelled once per shell. Windows cannot exec a `#!`
+    /// script at all — it answers "%1 is not a valid Win32 application" — and a
+    /// batch file shares no syntax with `sh` beyond `echo`, so there is nothing
+    /// here to translate automatically. `Command` runs a `.cmd` through
+    /// `cmd.exe` for us.
+    fn fake_ssh_script(name: &str, posix: &str, windows: &str) -> PathBuf {
         // Under `target/`, so it is gitignored and survives between runs.
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-ssh");
         std::fs::create_dir_all(&dir).expect("create fake-ssh dir");
-        let path = dir.join(format!("{name}.sh"));
-        let desired = format!("#!/bin/sh\n[ -n \"${WARMUP_VAR}\" ] && exit 0\n{behavior}\n");
+        let (extension, desired) = if cfg!(windows) {
+            (
+                "cmd",
+                format!("@echo off\r\nif defined {WARMUP_VAR} exit /b 0\r\n{windows}\r\n"),
+            )
+        } else {
+            (
+                "sh",
+                format!("#!/bin/sh\n[ -n \"${WARMUP_VAR}\" ] && exit 0\n{posix}\n"),
+            )
+        };
+        let path = dir.join(format!("{name}.{extension}"));
 
         if std::fs::read_to_string(&path).is_ok_and(|found| found == desired) {
             return path;
@@ -464,7 +480,7 @@ mod tests {
 
         // Write beside the target and rename over it, so a second run of this
         // test never execs a half-written script.
-        let staging = dir.join(format!("{name}.sh.{}", std::process::id()));
+        let staging = dir.join(format!("{name}.{extension}.{}", std::process::id()));
         std::fs::write(&staging, &desired).expect("write fake ssh script");
         #[cfg(unix)]
         {
@@ -534,7 +550,11 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_clean_exit() {
-        let script = fake_ssh_script("spawn_clean_exit", "sleep 0.2; exit 0");
+        let script = fake_ssh_script(
+            "spawn_clean_exit",
+            "sleep 0.2; exit 0",
+            "ping -n 2 127.0.0.1 >nul & exit /b 0",
+        );
         let (cb, statuses) = status_collector();
 
         let mut sup =
@@ -566,6 +586,7 @@ mod tests {
         let script = fake_ssh_script(
             "auth_failure_no_retry",
             r#"echo "Permission denied (publickey)." >&2; exit 255"#,
+            "echo Permission denied ^(publickey^). 1>&2 & exit /b 255",
         );
         let (cb, statuses) = status_collector();
 
@@ -608,6 +629,7 @@ mod tests {
         let script = fake_ssh_script(
             "network_error_retries",
             r#"echo "ssh: connect to host example.com port 22: Connection refused" >&2; exit 255"#,
+            "echo ssh: connect to host example.com port 22: Connection refused 1>&2 & exit /b 255",
         );
         let (cb, statuses) = status_collector();
 
@@ -665,7 +687,11 @@ mod tests {
     #[tokio::test]
     async fn graceful_shutdown() {
         // Script that sleeps forever.
-        let script = fake_ssh_script("graceful_shutdown", "sleep 3600");
+        let script = fake_ssh_script(
+            "graceful_shutdown",
+            "sleep 3600",
+            "ping -n 3601 127.0.0.1 >nul",
+        );
         let (cb, _statuses) = status_collector();
 
         let mut sup =
@@ -709,7 +735,7 @@ mod tests {
             remote_port: 80,
         }];
 
-        let script = fake_ssh_script("port_in_use_error_before_spawn", "exit 0");
+        let script = fake_ssh_script("port_in_use_error_before_spawn", "exit 0", "exit /b 0");
         let (cb, _statuses) = status_collector();
 
         let sup = TunnelSupervisor::start_with_binary(profile, script.to_path_buf(), cb).await;
@@ -738,6 +764,9 @@ mod tests {
         let script = fake_ssh_script(
             "chatty_stderr_does_not_stall",
             "yes x | head -c 100000 1>&2; exit 0",
+            // 1000 lines of 100 characters: past the 64KB pipe buffer, and a
+            // loop `cmd` gets through in well under a second.
+            "for /L %%i in (1,1,1000) do @echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 1>&2\r\nexit /b 0",
         );
         let (cb, _statuses) = status_collector();
 

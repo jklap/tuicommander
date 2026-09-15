@@ -444,15 +444,7 @@ mod tests {
     #[test]
     fn validate_cwd_rejects_outside_home() {
         let home = dirs::home_dir().unwrap();
-        // `/tmp` is neither absolute nor outside home on Windows, where the
-        // temp directory sits under the user profile.
-        let outside = if cfg!(windows) {
-            std::path::PathBuf::from(
-                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()),
-            )
-        } else {
-            std::path::PathBuf::from("/tmp")
-        };
+        let outside = crate::test_support::dir_outside_home();
         if !outside.starts_with(&home) {
             assert!(validate_cwd(&outside.to_string_lossy()).is_err());
         }

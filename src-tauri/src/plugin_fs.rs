@@ -1755,6 +1755,7 @@ async fn trim_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::dir_outside_home;
     use std::path::Path;
 
     /// `ArtifactEntry::path` is a String, and Windows builds it with `\`, so a
@@ -1762,18 +1763,6 @@ mod tests {
     /// there. Normalise instead of spelling every expectation twice.
     fn slashed(path: &str) -> String {
         path.replace('\\', "/")
-    }
-
-    /// A directory that exists and is outside the home directory. `/tmp` is
-    /// neither absolute nor outside home on Windows, where the temp directory
-    /// lives under the user profile, so the tests that need "somewhere the
-    /// plugin must not reach" cannot spell it as a literal.
-    fn dir_outside_home() -> PathBuf {
-        if cfg!(windows) {
-            PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()))
-        } else {
-            PathBuf::from("/tmp")
-        }
     }
 
     #[test]
