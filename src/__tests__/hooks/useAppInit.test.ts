@@ -1834,6 +1834,45 @@ describe("initApp", () => {
 		});
 	});
 
+	describe("worktree-setup-script-completed event", () => {
+		/** Capture the handler `useAppInit` registers for `eventName`, whatever
+		 *  else it also registers `listen()` for. */
+		function captureListener<T>(eventName: string) {
+			const listenMock = vi.mocked(listen);
+			let callback: ((event: { payload: T }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === eventName) {
+					callback = handler as unknown as (event: { payload: T }) => void;
+				}
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return { getCallback: () => callback };
+		}
+
+		it("dispatches the event payload to handleWorktreeSetupScriptCompleted", async () => {
+			const { getCallback } = captureListener<{
+				repoPath: string;
+				branch: string;
+				worktreePath: string;
+				exitCode: number | null;
+				error: string | null;
+			}>("worktree-setup-script-completed");
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const payload = {
+				repoPath: "/repo",
+				branch: "feat-x",
+				worktreePath: "/repo/wt/feat-x",
+				exitCode: 1,
+				error: null,
+			};
+			getCallback()!({ payload });
+
+			expect(deps.handleWorktreeSetupScriptCompleted).toHaveBeenCalledWith(payload);
+		});
+	});
+
 	describe("session-created event (agent tab activation)", () => {
 		type SessionCreatedPayload = {
 			session_id: string;
