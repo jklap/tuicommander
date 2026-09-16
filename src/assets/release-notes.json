@@ -217,5 +217,18 @@
       "Worktrees created by an agent now offer a Switch toast that waits in the bell instead of a blocking modal."
     ],
     "date": "2026-09-02"
+  },
+  "1.7.7": {
+    "highlights": [
+      "Project Progress records what agents actually accomplished, in a per-project panel you can read after being away.",
+      "Progress exports a deterministic progress.md, previewed before it is written and never overwriting a hand edit.",
+      "Workspace creation is now linked Git worktrees only, still arriving warm through copy-on-write of ignored directories.",
+      "Claude and Codex status signals are launch-scoped and on by default, leaving your global configuration untouched.",
+      "Plan Tracker and Stories Ticker ship as ordinary plugins, so both can be updated or removed independently.",
+      "An AI stream now reaches a detached panel instead of rendering nowhere once the docked terminal unmounts.",
+      "The MCP session and peer payloads dropped the fields that restated each other, and is_caller marks the caller's own tab.",
+      "The TLS stack takes rustls 0.23.45 for RUSTSEC-2026-0285, covering remote access, the relay and tunnel HTTPS calls."
+    ],
+    "date": "2026-09-16"
   }
 }

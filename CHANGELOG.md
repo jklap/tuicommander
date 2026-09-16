@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.7] - 2026-09-16
+
 ### Added
 
 - **Project Progress answers "what changed since I last looked?"** Agents
@@ -593,6 +595,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`is_caller` marks the tab the caller runs in, not the one it is bound to.**
   It compares the caller's identity against the PTY that identity owns, so an
   orchestrator no longer risks closing itself.
+
+### Security
+
+- **TLS stack patched for RUSTSEC-2026-0285.** `rustls` moves to 0.23.45,
+  which no longer accepts TLS 1.3 handshake messages across encryption level
+  boundaries; `rustls-webpki` and `aws-lc-sys` follow. Remote access, the
+  relay and SSH tunnel HTTPS calls all sit on this stack.
 
 ## [1.7.6] - 2026-09-02
 

@@ -5,9 +5,9 @@
 >
 > This document intentionally serves two audiences: users need a searchable overview of what exists, while LLMs and contributors need stable names, shortcuts, settings, and implementation anchors. It is an inventory, not a replacement for the chronological [CHANGELOG](../CHANGELOG.md).
 
-**Current version:** 1.7.0  
-**Last verified:** 2026-07-31  
-**Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.0](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#170---2026-07-31) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
+**Current version:** 1.7.7  
+**Last verified:** 2026-09-16  
+**Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
 ## How to use this reference
 
