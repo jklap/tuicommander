@@ -308,12 +308,9 @@ fn takeover_rejection_report(tuic_session: &str, mcp_sid: &str) -> Option<u64> {
     }
 }
 
-/// Cap for a peer message typed into a terminal. Longer messages become a
-/// pointer to the inbox rather than flooding the recipient's screen.
-const INJECT_MAX_BYTES: usize = 2048;
-
-/// One-shot guard for a deferred initial prompt. No success event is emitted;
-/// only a prompt still pending after this interval notifies the parent.
+/// How long a deferred initial prompt may sit undelivered before the parent is
+/// told. The prompt is not dropped at this point — it stays queued for the
+/// child's next ready window — so this is a "not yet" warning, not a deadline.
 const INITIAL_PROMPT_DELIVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Placeholder stored in `session_parent` when a caller spawns before binding
@@ -397,20 +394,6 @@ fn link_pending_children_to_parent(
     }
 
     children.len()
-}
-
-/// Frame a peer message as a single line to type into the recipient's terminal.
-/// Newlines are collapsed to spaces (a multi-line paste into a TUI is fragile);
-/// oversized bodies become a pointer to the inbox. The full, untouched content
-/// always remains available via `agent action=inbox`.
-fn frame_peer_message(sender_name: &str, content: &str) -> String {
-    let one_line = content.replace(['\n', '\r'], " ");
-    let framed = format!("[TUIC message from {sender_name}] {one_line}");
-    if framed.len() > INJECT_MAX_BYTES {
-        format!("[TUIC] new message from {sender_name} — read it with: agent action=inbox")
-    } else {
-        framed
-    }
 }
 
 /// HTTP header the bridge asserts to declare which PTY session it belongs to.
@@ -1115,7 +1098,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: project filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Mail stays mail: the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers stay wait/inbox-only.\n- list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: project filter. Absent fields are omitted.\n- send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
@@ -2131,6 +2114,7 @@ fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> Begi
         crate::pty::AgentSubmissionWrite::Rejected {
             reason,
             composer_state,
+            pending,
         } => BeginSubmission::Response(serde_json::json!({
             "status": "rejected",
             "submission_id": submission_id,
@@ -2141,6 +2125,11 @@ fn begin_session_submit(state: &Arc<AppState>, args: &serde_json::Value) -> Begi
             "reason": reason,
             "turn_epoch": submission_turn_epoch(state, &session_id),
             "composer_state": composer_state,
+            // What is actually parked ahead of this submission, by id and kind.
+            // Delete an entry with the queued-commands endpoint to unblock the
+            // composer; a bare `queued_commands_pending` against an empty
+            // Compose list left a caller retrying with nothing to act on.
+            "pending": pending,
         })),
         crate::pty::AgentSubmissionWrite::Failed(detail) => {
             BeginSubmission::Response(serde_json::json!({
@@ -2396,8 +2385,12 @@ fn dispatch_waiter_handoff_blocking(state: &AppState, recipient: &str, message_i
         {
             continue;
         }
-        let framed = frame_peer_message(&message.from_name, &message.content);
-        let outcome = crate::pty::deliver_message_to_managed_pty(state, recipient, &framed);
+        // The payload stays in the inbox; the terminal only gets the pointer.
+        let outcome = crate::pty::deliver_notice_to_managed_pty(
+            state,
+            recipient,
+            crate::pty::PEER_MAIL_WAKE,
+        );
         crate::pty::settle_terminal_delivery(state, recipient, &message.id, outcome);
     }
 }
@@ -3552,6 +3545,7 @@ fn spawn_response(
     spawn_ts: u64,
     caller_tuic: Option<&str>,
     codex_wrapper_warning: Option<&str>,
+    prompt_deferred: bool,
 ) -> serde_json::Value {
     let mut response = serde_json::json!({
         "session_id": session_id,
@@ -3568,6 +3562,18 @@ fn spawn_response(
         "status_with": format!("session(action=status, session_id={session_id})"),
         "wait_with": format!("session(action=wait, session_id={session_id}, until=idle) — blocks instead of polling"),
     });
+    // Only the exceptional case is reported, so the common response stays the
+    // size it was. A prompt passed on argv is delivered by definition; a prompt
+    // the server must type into a prefill-only TUI is not delivered yet, and a
+    // bare success read as "the child has the work" in both cases — which is how
+    // a spawn whose prompt was swallowed by a startup dialog looked identical to
+    // one that had started working.
+    if prompt_deferred && let Some(obj) = response.as_object_mut() {
+        obj.insert(
+            "prompt_delivery".to_string(),
+            serde_json::json!("queued — the child must reach its ready prompt first; a prompt_delivery_failed notice follows if it does not, and carries the prompt for re-delivery"),
+        );
+    }
     if let Some(warning) = codex_wrapper_warning
         && let Some(obj) = response.as_object_mut()
     {
@@ -3933,15 +3939,19 @@ fn handle_agent_with_parent_cwd(
             // TUI reaches its ready prompt. Queued AFTER session_states is inserted:
             // flush_pending_injections requires agent_type to treat this session as
             // an injectable agent. Same delivery path as peer messages (story 091).
+            let prompt_deferred = deferred_initial_prompt.is_some();
             if let Some(initial_prompt) = deferred_initial_prompt {
-                state
-                    .pending_initial_prompts
-                    .insert(session_id.clone(), initial_prompt.clone());
+                state.pending_initial_prompts.insert(
+                    session_id.clone(),
+                    crate::state::PendingInitialPrompt::new(initial_prompt.clone()),
+                );
                 state
                     .pending_injections
                     .entry(session_id.clone())
                     .or_default()
-                    .push_back(crate::state::PendingInjection::peer_message(initial_prompt));
+                    .push_back(crate::state::PendingInjection::initial_prompt(
+                        initial_prompt,
+                    ));
             }
             // Buffers, alias, metrics, grid watch and the session-created
             // broadcast, sharing one helper with session::spawn_pty_session so the
@@ -4055,6 +4065,7 @@ fn handle_agent_with_parent_cwd(
                 spawn_ts,
                 caller_tuic.as_deref(),
                 codex_wrapper_warning.as_deref(),
+                prompt_deferred,
             )
         }
         "stats" => {
@@ -4701,19 +4712,21 @@ fn handle_messaging(
             {
                 tracing::debug!(session = %pty_session, error = %e, "Wake on message delivery failed");
             }
-            // Event-driven wake: type the message into an idle recipient's terminal
-            // so it acts without polling. Skip when already pushed over the SSE
-            // channel (Claude Code consumes that notification itself, so PTY
-            // injection would double-deliver). The inbox always holds the
-            // authoritative copy.
-            let terminal_outcome =
-                live_pty
-                    .as_ref()
-                    .filter(|_| terminal_owned && !pushed)
-                    .map(|pty_session| {
-                        let framed = frame_peer_message(&sender_name, message);
-                        crate::pty::deliver_message_to_managed_pty(state, pty_session, &framed)
-                    });
+            // Event-driven wake: tell an idle recipient it has mail so it acts
+            // without polling. The line typed is `PEER_MAIL_WAKE` — a pointer,
+            // never the payload. Skip when already pushed over the SSE channel
+            // (Claude Code consumes that notification itself, so a PTY wake
+            // would be redundant). The inbox always holds the message itself.
+            let terminal_outcome = live_pty
+                .as_ref()
+                .filter(|_| terminal_owned && !pushed)
+                .map(|pty_session| {
+                    crate::pty::deliver_notice_to_managed_pty(
+                        state,
+                        pty_session,
+                        crate::pty::PEER_MAIL_WAKE,
+                    )
+                });
             if let Some(outcome) = terminal_outcome {
                 crate::pty::settle_terminal_delivery(state, to, &msg_id, outcome);
                 // Only a session that cannot take the message at all falls back to
@@ -4756,7 +4769,10 @@ fn handle_messaging(
                 } else if inbox_only {
                     "inbox_only"
                 } else {
-                    "terminal_or_queued_and_inbox"
+                    // Same name the orchestrator route uses, because it is now
+                    // the same thing: a payload-free notice pointing at the
+                    // inbox, typed now or on the recipient's next idle window.
+                    "wake_notification_and_inbox"
                 },
             });
             if inbox_only {
@@ -9931,8 +9947,8 @@ mod tests {
         );
         assert_eq!(sent["delivered"], true, "delivery must succeed: {sent}");
         assert_eq!(
-            sent["delivery_path"], "terminal_or_queued_and_inbox",
-            "the message must go to the terminal, not sit in the inbox: {sent}"
+            sent["delivery_path"], "wake_notification_and_inbox",
+            "the terminal must be woken, not left with the message sitting unread in the inbox: {sent}"
         );
         assert_eq!(
             sent["recipient_state"]["shell_state"], "idle",
@@ -9941,18 +9957,12 @@ mod tests {
     }
 
     #[test]
-    fn frame_peer_message_single_line_and_pointer() {
-        // Normal message → framed one-liner with sender.
-        let f = frame_peer_message("lead", "please rebase");
-        assert_eq!(f, "[TUIC message from lead] please rebase");
-        // Newlines collapse to spaces (no multi-line paste into a TUI).
-        let f = frame_peer_message("lead", "line1\nline2");
-        assert_eq!(f, "[TUIC message from lead] line1 line2");
-        // Oversized body → pointer to the inbox instead of a screen flood.
-        let big = "x".repeat(INJECT_MAX_BYTES + 100);
-        let f = frame_peer_message("lead", &big);
-        assert!(f.contains("agent action=inbox"));
-        assert!(f.len() < INJECT_MAX_BYTES);
+    fn the_only_line_a_peer_send_may_type_is_a_pointer() {
+        // Framing a peer payload for the composer is gone: there is exactly one
+        // line a `send` is allowed to put on a recipient's screen, it carries no
+        // payload, and it names the call that fetches the real message.
+        assert!(crate::pty::PEER_MAIL_WAKE.contains("agent action=inbox"));
+        assert!(!crate::pty::PEER_MAIL_WAKE.contains('\n'));
     }
 
     // ── blocking wait tests (Step 3) ────────────────────────────────
@@ -11183,7 +11193,7 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
+        assert_eq!(result["delivery_path"], "wake_notification_and_inbox");
         assert!(
             matches!(
                 receiver.try_recv(),
@@ -11195,8 +11205,12 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("probe exits only after the separately written Enter submits the line");
         assert!(
-            output.contains("SUBMITTED:[TUIC message from sender] start the next task"),
+            output.contains(&format!("SUBMITTED:{}", crate::pty::PEER_MAIL_WAKE)),
             "the completed Claude PTY must observe a complete submitted line: {output:?}"
+        );
+        assert!(
+            !output.contains("start the next task"),
+            "the payload belongs in the inbox, not in the composer: {output:?}"
         );
         let message_id = result["message_id"].as_str().unwrap();
         assert_eq!(
@@ -11215,6 +11229,51 @@ mod tests {
         assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
         assert!(snapshot.suggested_actions.is_none());
         assert_eq!(snapshot.turn_epoch, 1);
+    }
+
+    /// The regression, as captured live on 2026-09-15: peer mail sent to an
+    /// ordinary managed child (not an orchestrator) was typed into that child's
+    /// composer. One agent rendered it as literal prompt text; another was left
+    /// with the text unsubmitted in its input line, so a later `submit` was
+    /// rejected `partial_composer`. Mail stays mail: the composer gets a pointer,
+    /// the inbox keeps the message.
+    #[cfg(unix)]
+    #[test]
+    fn peer_mail_to_a_plain_managed_child_never_reaches_the_composer() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "br-1", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "br-2", "mcp-recipient");
+        // Deliberately NOT an orchestrator: the payload-free route used to be
+        // reserved for orchestrator_peers, which is exactly how an ordinary
+        // child ended up being typed into.
+        assert!(!state.orchestrator_peers.contains(TEST_UUID_B));
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "grok");
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "Amendment to the draft you are reviewing: drop section 3.",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(result["delivery_path"], "wake_notification_and_inbox");
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("the wake should submit a new turn");
+        assert!(
+            !output.contains("Amendment to the draft"),
+            "peer payload must never be typed into a recipient's composer: {output:?}"
+        );
+        assert!(output.contains("agent action=inbox"), "{output:?}");
+        assert_eq!(
+            state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
+            "Amendment to the draft you are reviewing: drop section 3.",
+            "the untouched message stays in the inbox"
+        );
     }
 
     #[cfg(unix)]
@@ -11519,7 +11578,7 @@ mod tests {
         );
 
         assert!(result.get("error").is_none(), "send must succeed: {result}");
-        assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
+        assert_eq!(result["delivery_path"], "wake_notification_and_inbox");
         assert!(
             matches!(
                 channel_receiver.try_recv(),
@@ -11531,8 +11590,12 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("probe exits only after the separately written Enter submits the line");
         assert!(
-            output.contains("SUBMITTED:[TUIC message from sender] start the next task"),
+            output.contains(&format!("SUBMITTED:{}", crate::pty::PEER_MAIL_WAKE)),
             "the managed Codex PTY must observe a complete submitted line: {output:?}"
+        );
+        assert!(
+            !output.contains("start the next task"),
+            "Codex rendered peer payloads as literal prompt text — the composer gets a pointer only: {output:?}"
         );
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
         assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
@@ -12049,12 +12112,12 @@ mod tests {
         );
         assert!(desc.contains("wait"), "must mention the wait primitive");
         assert!(
-            desc.contains("Ordinary managed agents keep direct delivery"),
-            "must preserve ordinary managed-agent delivery"
+            desc.contains("the payload is never typed into the recipient's composer"),
+            "must state the mail-stays-mail invariant: a send is never keystrokes"
         );
         assert!(
             desc.contains("generic `agent action=inbox` wake"),
-            "must explain payload-free orchestrator wake delivery"
+            "must explain payload-free wake delivery"
         );
         assert!(
             desc.contains("do NOT poll"),
@@ -13245,6 +13308,7 @@ mod tests {
                 1_700_000_000_000,
                 Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
                 None,
+                false,
             ))
             .unwrap(),
         );

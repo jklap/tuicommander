@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposePanel } from "../../components/ComposePanel/ComposePanel";
+import type { QueuedCommand } from "../../hooks/usePty";
 
 afterEach(async () => {
 	cleanup();
@@ -34,10 +35,12 @@ function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}
 		canEnqueue: () => true,
 		queuedCount: queued,
 		onClearQueue: vi.fn(),
-		onLoadQueue: vi.fn(async () => [
-			{ id: 1, text: "run the tests" },
-			{ id: 2, text: "then push" },
-		]),
+		onLoadQueue: vi.fn(
+			async (): Promise<QueuedCommand[]> => [
+				{ id: 1, text: "run the tests", kind: "user_command" },
+				{ id: 2, text: "then push", kind: "user_command" },
+			],
+		),
 		onRemoveQueued: vi.fn(),
 		...overrides,
 	};
@@ -94,6 +97,30 @@ describe("ComposePanel", () => {
 		fireEvent.click(getByText(/2 queued/));
 		await waitFor(() => expect(getByText("run the tests")).toBeTruthy());
 		expect(getByText("then push")).toBeTruthy();
+	});
+
+	it("shows server-parked entries and lets them be removed", async () => {
+		// The regression: a TUIC notice parked in the same FIFO blocked `submit`
+		// with `queued_commands_pending` while this list showed nothing, so an
+		// operator staring at an empty composer had nothing to act on.
+		const { container, props, setQueued, getByText, getAllByTitle } = renderPanel({
+			onLoadQueue: vi.fn(
+				async (): Promise<QueuedCommand[]> => [
+					{ id: 7, text: "[TUIC] message available", kind: "notice" },
+					{ id: 8, text: "run the tests", kind: "user_command" },
+				],
+			),
+		});
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		setQueued(2);
+		await waitFor(() => expect(getByText(/2 queued/)).toBeTruthy());
+		fireEvent.click(getByText(/2 queued/));
+
+		await waitFor(() => expect(container.textContent).toContain("TUIC notice"));
+		expect(container.textContent).toContain("[TUIC] message available");
+
+		fireEvent.click(getAllByTitle("Remove from queue")[0]);
+		expect(props.onRemoveQueued).toHaveBeenCalledWith(7);
 	});
 
 	it("removes a single queued command by id", async () => {

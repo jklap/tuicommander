@@ -54,6 +54,14 @@ export interface QueuedCommand {
 	/** Stable across drains — deleting by list position would race the FIFO. */
 	id: number;
 	text: string;
+	/**
+	 * Who parked it. `user_command` is the operator's own Compose entry;
+	 * `notice` is a server wake pointing at the agent's inbox; `initial_prompt`
+	 * is a spawned child's task still waiting for its TUI to be ready. All three
+	 * block the composer identically, so all three are listed and deletable —
+	 * hiding the server ones is what made a stuck queue undiagnosable.
+	 */
+	kind: "user_command" | "notice" | "initial_prompt";
 }
 
 /** Active session info returned by list_active_sessions */
