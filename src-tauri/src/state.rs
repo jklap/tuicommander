@@ -2671,6 +2671,29 @@ impl AppState {
             })
     }
 
+    /// Grant the outstanding wake group a fresh attempt budget because the
+    /// recipient reached a new idle edge.
+    ///
+    /// A `NotStarted` attempt burns the whole budget on purpose: repeating it
+    /// against an unchanged lifecycle writes no byte and costs a reclaim each
+    /// time. But `agent_state` reading idle is not the same fact as
+    /// `should_inject_now`, so the first attempt can fail on a composer draft,
+    /// an open question or an unconfirmed idle — and the burn then outlives its
+    /// cause. Without this, `reevaluate_orchestrator_mail_wake` is a no-op for
+    /// the rest of the session and the mail is never announced at all, which is
+    /// the one thing the idle-edge retry exists to prevent.
+    ///
+    /// A reservation in flight is never disturbed: a notice being typed still
+    /// owns its attempt.
+    pub(crate) fn rearm_orchestrator_wake_budget(&self, tuic_session: &str) {
+        if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
+            let mut gate = gate.lock();
+            if gate.orchestrator_wake_pending_through.is_none() {
+                gate.orchestrator_wake_attempts_in_group = 0;
+            }
+        }
+    }
+
     pub(crate) fn clear_orchestrator_delivery(&self, tuic_session: &str) {
         if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
             let mut gate = gate.lock();
@@ -5591,6 +5614,87 @@ mod tests {
             OrchestratorDeliveryAssignment::WakeSubmitted
         );
         assert_eq!(wakes.get(), 1);
+    }
+
+    /// A wake that could not start must not silence the idle-edge retry.
+    ///
+    /// `wake_allowed` is decided from the canonical lifecycle, which reads idle
+    /// while the composer still refuses an injection. Burning the group budget
+    /// on that failure is right for the unchanged lifecycle and wrong forever
+    /// after: nothing else announces the mail.
+    #[test]
+    fn a_wake_that_never_started_is_retried_at_the_next_idle_edge() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        state.push_agent_inbox(recipient, make_msg("stranded"));
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "stranded",
+                1,
+                true,
+                |_group| OrchestratorWakeAttemptOutcome::NotStarted
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "stranded",
+                1,
+                true,
+                |_group| panic!("an unchanged lifecycle must not be reclaimed")
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+
+        state.rearm_orchestrator_wake_budget(recipient);
+        let wakes = std::cell::Cell::new(0);
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "stranded",
+                1,
+                true,
+                |_group| {
+                    wakes.set(wakes.get() + 1);
+                    OrchestratorWakeAttemptOutcome::Submitted
+                }
+            ),
+            OrchestratorDeliveryAssignment::WakeSubmitted,
+            "a new idle edge must be able to announce mail a failed attempt left stranded"
+        );
+        assert_eq!(wakes.get(), 1);
+    }
+
+    /// The re-arm may not steal a reservation from the notice being typed.
+    #[test]
+    fn rearming_never_disturbs_a_wake_in_flight() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        state.push_agent_inbox(recipient, make_msg("in-flight"));
+        let assignment = state.assign_orchestrator_delivery_with_wake_outcome(
+            recipient,
+            "in-flight",
+            1,
+            true,
+            |_group| {
+                // Mid-write: a concurrent idle edge lands here.
+                state.rearm_orchestrator_wake_budget(recipient);
+                OrchestratorWakeAttemptOutcome::NotStarted
+            },
+        );
+        assert_eq!(assignment, OrchestratorDeliveryAssignment::InboxOnly);
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "in-flight",
+                1,
+                true,
+                |_group| panic!("the in-flight attempt still owns the budget")
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
     }
 
     #[test]
