@@ -57,6 +57,21 @@ export interface ComposePanelProps {
 	onTextChange?: (text: string) => void;
 }
 
+/** Who parked a queue entry, for the entries that are not the operator's own. */
+const QUEUE_KIND_LABEL: Record<QueuedCommand["kind"], string> = {
+	user_command: "",
+	notice: "TUIC notice",
+	initial_prompt: "child's initial prompt",
+};
+
+const queueItemLabel = (item: QueuedCommand) =>
+	item.kind === "user_command" ? item.text : `${QUEUE_KIND_LABEL[item.kind]} — ${item.text}`;
+
+const queueItemTitle = (item: QueuedCommand) =>
+	item.kind === "user_command"
+		? item.text
+		: `${QUEUE_KIND_LABEL[item.kind]} (parked by TUICommander; removing it only skips the notice)\n\n${item.text}`;
+
 export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	const { ref, editorView, createExtension } = createCodeMirror({
 		onValueChange: (value) => props.onTextChange?.(value),
@@ -194,8 +209,8 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 					<For each={queueItems()}>
 						{(item) => (
 							<div class={s.queueItem}>
-								<span class={s.queueItemText} title={item.text}>
-									{item.text}
+								<span class={s.queueItemText} title={queueItemTitle(item)}>
+									{queueItemLabel(item)}
 								</span>
 								<button
 									class={s.queueItemRemove}

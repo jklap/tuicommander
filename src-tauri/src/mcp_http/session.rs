@@ -2317,7 +2317,7 @@ mod tests {
             .pending_injections
             .entry(session_id.to_string())
             .or_default()
-            .push_back(crate::state::PendingInjection::peer_message(
+            .push_back(crate::state::PendingInjection::notice(
                 "queued message",
             ));
 
