@@ -7930,12 +7930,12 @@ pub(crate) fn route_registered_orchestrator_mail(
     // set, and nothing else would surface it: the idle/completed transition that
     // normally drives `reevaluate_orchestrator_mail_wake` has already happened.
     // Chase it here instead. Bounded: each pass spends one of
-    // ORCHESTRATOR_WAKE_ATTEMPT_LIMIT attempts, and the budget is not reset while
-    // a need is outstanding, so the recursion stops at the limit.
+    // ORCHESTRATOR_WAKE_ATTEMPT_LIMIT attempts, and no budget is granted inside
+    // one delivery, so the recursion stops at the limit.
     if assignment == crate::state::OrchestratorDeliveryAssignment::WakeSummarySubmitted
-        && let Some(pty_session) = pty_session.as_deref()
+        && pty_session.is_some()
     {
-        reevaluate_orchestrator_mail_wake(state, pty_session);
+        chase_orchestrator_mail_wake(state, recipient);
     }
     Some(assignment)
 }
@@ -7958,12 +7958,23 @@ fn reevaluate_orchestrator_mail_wake(state: &AppState, pty_session: &str) {
     let Some(recipient) = orchestrator_recipient_for_pty(state, pty_session) else {
         return;
     };
-    let Some(needed_through) = state.orchestrator_wake_needed_through(&recipient) else {
+    // An idle edge is new evidence, not a repeat of the attempt that failed to
+    // start: re-arm before chasing, or a single unclaimable composer silences
+    // every later retry for the rest of the session.
+    state.rearm_orchestrator_wake_budget(&recipient);
+    chase_orchestrator_mail_wake(state, &recipient);
+}
+
+/// Re-offer an outstanding wake on the budget the recipient already has. Unlike
+/// [`reevaluate_orchestrator_mail_wake`] this grants nothing, so it is what a
+/// caller inside one delivery uses to chase its own leftovers.
+fn chase_orchestrator_mail_wake(state: &AppState, recipient: &str) {
+    let Some(needed_through) = state.orchestrator_wake_needed_through(recipient) else {
         return;
     };
     let _ = route_registered_orchestrator_mail(
         state,
-        &recipient,
+        recipient,
         "tuic-orchestrator-mail-notice",
         needed_through,
     );

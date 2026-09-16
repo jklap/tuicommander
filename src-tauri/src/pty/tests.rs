@@ -8336,6 +8336,76 @@ fn background_probe_settlement_retries_pending_orchestrator_mail_wake() {
     );
 }
 
+/// The canonical lifecycle can say idle while the composer still refuses an
+/// injection — a draft, an open question, an unconfirmed idle. That first
+/// attempt starts no write and burns the wake budget, and before the idle-edge
+/// re-arm nothing ever announced the mail again: the notice was owed forever
+/// and never typed.
+#[cfg(unix)]
+#[test]
+fn a_composer_that_refused_the_first_wake_still_gets_one_at_the_next_idle() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let parent_id = "parent-refused-first-wake";
+    agent_session(&state, parent_id, SHELL_IDLE);
+    let bytes = insert_recording_session(&state, parent_id);
+    state.orchestrator_peers.insert(parent_id.to_string());
+    state.agent_inbox.insert(
+        parent_id.to_string(),
+        std::collections::VecDeque::from([crate::state::AgentMessage {
+            id: "peer-result".to_string(),
+            from_tuic_session: "child".to_string(),
+            from_name: "worker".to_string(),
+            content: "secret child result".to_string(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        }]),
+    );
+
+    let mut buffer = InputLineBuffer::new();
+    buffer.feed("Boss draft");
+    state
+        .session_maps
+        .input_buffers
+        .insert(parent_id.to_string(), parking_lot::Mutex::new(buffer));
+
+    assert_eq!(
+        route_registered_orchestrator_mail(&state, parent_id, "peer-result", 1),
+        Some(crate::state::OrchestratorDeliveryAssignment::InboxOnly),
+        "a draft in the composer must not be spliced into"
+    );
+    assert!(
+        bytes.lock().unwrap().is_empty(),
+        "a refused claim must write nothing"
+    );
+    assert_eq!(state.orchestrator_wake_needed_through(parent_id), Some(1));
+
+    // The draft is gone and the turn settles — a real idle edge, not a repeat of
+    // the lifecycle that refused the claim.
+    state.session_maps.input_buffers.remove(parent_id);
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut(parent_id)
+            .expect("parent session state");
+        session.background_probe_turn_epoch = Some(0);
+        session.background_probe_after_generation = Some(0);
+    }
+    assert!(set_background_work_for_epoch(
+        &state, parent_id, 0, 1, false
+    ));
+
+    let written = String::from_utf8(bytes.lock().unwrap().clone()).expect("UTF-8 wake");
+    assert!(
+        written.contains("agent action=inbox"),
+        "the idle edge owed the parent a wake: {written:?}"
+    );
+    assert!(
+        !written.contains("secret child result"),
+        "the child payload escaped the inbox: {written:?}"
+    );
+}
+
 #[test]
 fn cursor_prefix_completion_preserves_background_epoch_release() {
     let state = crate::state::tests_support::make_test_app_state();

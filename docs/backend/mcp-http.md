@@ -1108,7 +1108,13 @@ uncertain result exhausts that unread-mail group's wake budget: later expiry or
 idle/completed reevaluations, including newly coalesced mail, remain inbox-only
 until a successful inbox or wait observation acknowledges the group. An attempt
 that writes no bytes remains `NotStarted` and does not enter an automatic retry
-loop.
+loop: it exhausts the budget for that lifecycle, so nothing reclaims a composer
+that just refused the claim. A *new* BUSY→IDLE edge re-arms the budget before it
+chases the outstanding notice, because the lifecycle that refused is not the one
+being retried — without that, one draft in the composer, one open question or one
+unconfirmed idle would silence the wake for the rest of the session and the mail
+would never be announced. A notice already in flight keeps its attempt; the
+re-arm cannot take it.
 
 `register` also returns `mail_wake`. Its only current non-`none`
 value is `managed_pty_lifecycle`, derived from a live TUIC-managed PTY rather than

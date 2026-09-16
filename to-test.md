@@ -1960,3 +1960,22 @@ app keeps the old logging until restart.
 - [ ] After such a close, typing into that tab (or the agent resuming on its
       own) must turn it BUSY again. A tab stuck IDLE while the agent works is
       the regression this rank change could cause.
+
+## A wake that could not start is retried at the next idle edge — needs a `make dev` restart
+
+A `NotStarted` wake attempt burns the orchestrator wake budget for the whole
+group, and only an inbox read restored it. So one draft in the composer, one
+open question or one unconfirmed idle at the moment mail arrived silenced the
+"you have mail" notice for the rest of the session: the mail sat in the inbox
+and the master terminal was never told. A new BUSY→IDLE edge now re-arms the
+budget before chasing the notice. Rust-only — the running app keeps the old
+behaviour until restart.
+
+- [ ] Type a draft into the orchestrator's composer (do not submit), have a peer
+      `agent action=send` to it, then clear the draft and let the turn settle.
+      Within a few seconds the orchestrator must be handed the
+      `agent action=inbox` line. Before the fix nothing ever arrived.
+- [ ] The payload must never appear on the orchestrator's screen — only the
+      pointer to the inbox.
+- [ ] A notice already being typed must not be duplicated by a concurrent idle
+      edge: one wake per group, not two.
