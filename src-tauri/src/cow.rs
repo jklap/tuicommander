@@ -504,11 +504,24 @@ mod tests {
     /// instead of hanging for the real 280.
     #[test]
     fn a_copy_that_floods_stderr_still_reports_its_own_failure() {
-        let mut command = Command::new("sh");
-        command.args([
-            "-c",
-            "i=0; while [ $i -lt 4000 ]; do echo 'cp: cannot read file' >&2; i=$((i+1)); done; exit 1",
-        ]);
+        // The flood has to be spelled for the host shell. `sh` is not a Windows
+        // program: this test spawned it anyway and only passed on GitHub's
+        // runner, whose image carries `C:\Program Files\Git\usr\bin` on `PATH`.
+        let (shell, flag) = crate::test_support::host_shell();
+        let script = if cfg!(windows) {
+            // What has to exceed the pipe buffer is a byte count, not a line
+            // count, and `cmd`'s `for /L` costs about 14ms an iteration on a
+            // small machine: measured 2026-09-16, 4000 short lines took 58s
+            // and blew the 20s deadline below, while 200 long ones take 3s.
+            // 200 lines of 342 bytes is 68,400 — past 64 KiB with room.
+            let line = format!("cp: cannot read file{}", "x".repeat(320));
+            format!("(for /L %i in (1,1,200) do @echo {line}) 1>&2 & exit /b 1")
+        } else {
+            "i=0; while [ $i -lt 4000 ]; do echo 'cp: cannot read file' >&2; i=$((i+1)); done; exit 1"
+                .to_string()
+        };
+        let mut command = Command::new(shell);
+        command.arg(flag).arg(script);
 
         let (status, stderr) =
             run_copy_command(&mut command, std::time::Duration::from_secs(20)).unwrap();

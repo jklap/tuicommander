@@ -4641,6 +4641,10 @@ branch refs/heads/feat
     /// Returns pids rather than a count so a caller can diff two samples: a
     /// count would report "2 before, 2 after" as unchanged even if one child
     /// had been reaped and a different one leaked in the same window.
+    ///
+    /// Unix-only, like its caller: `ps` and the zombie state are both POSIX,
+    /// and without the gate this is dead code the Windows job warns about.
+    #[cfg(unix)]
     fn own_zombie_pids() -> Vec<u32> {
         let ps = Command::new("ps")
             .args(["-o", "pid=,ppid=,stat=", "-ax"])

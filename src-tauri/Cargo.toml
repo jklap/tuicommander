@@ -139,6 +139,14 @@ path = "tests/fixtures/acp_fixture_agent.rs"
 test = false
 bench = false
 
+# The deterministic MCP server the stdio-client tests drive, for the same
+# reason and under the same rule as the ACP fixture above.
+[[bin]]
+name = "tuic-mcp-fixture-server"
+path = "tests/fixtures/mcp_fixture_server.rs"
+test = false
+bench = false
+
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
 

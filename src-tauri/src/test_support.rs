@@ -58,14 +58,33 @@ pub(crate) fn home_var() -> &'static str {
     if cfg!(windows) { "USERPROFILE" } else { "HOME" }
 }
 
-/// Sleep long enough to outlive any timeout a test sets. `cmd` has no `sleep`,
-/// and its `timeout` command refuses to run with stdin redirected, so the ping
-/// idiom is the portable stand-in.
-pub(crate) fn sleep_script() -> String {
+/// The program and arguments that sleep longer than any timeout a test sets.
+/// `cmd` has no `sleep`, and its `timeout` command refuses to run with stdin
+/// redirected, so the ping idiom is the portable stand-in.
+///
+/// A test that spawns the sleeper itself wants this rather than
+/// [`sleep_script`]: a shell wrapper does not take its child with it when it
+/// is killed, so `cmd /C ping` leaves the ping behind and nextest reports the
+/// test as leaky.
+pub(crate) fn sleep_argv() -> (String, Vec<String>) {
     if cfg!(windows) {
-        format!("{} -n 61 127.0.0.1 >nul", crate::fs::system32_exe("ping.exe"))
+        (
+            crate::fs::system32_exe("ping.exe"),
+            vec!["-n".to_string(), "61".to_string(), "127.0.0.1".to_string()],
+        )
     } else {
-        "sleep 60".to_string()
+        ("sleep".to_string(), vec!["60".to_string()])
+    }
+}
+
+/// The same sleep, spelled for the host shell.
+pub(crate) fn sleep_script() -> String {
+    let (program, args) = sleep_argv();
+    let call = format!("{program} {}", args.join(" "));
+    if cfg!(windows) {
+        format!("{call} >nul")
+    } else {
+        call
     }
 }
 

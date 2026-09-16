@@ -739,6 +739,25 @@ mod tests {
         (dir, path)
     }
 
+    /// A child that outlives any deadline these tests set.
+    ///
+    /// `sleep` is not a Windows program. The tests below spawned it anyway and
+    /// passed on GitHub's runner, which carries `C:\Program Files\Git\usr\bin`
+    /// on `PATH` and so has a POSIX `sleep`; on a Windows machine without it
+    /// the spawn fails and the test proves nothing about the timeout it names.
+    ///
+    /// Spawned directly, never under a shell: what these tests check is that
+    /// the deadline kills the child, and killing a `cmd /C` wrapper leaves the
+    /// real sleeper running — nextest saw exactly that and reported both tests
+    /// as leaky while they passed.
+    fn sleeping_command(cwd: &Path) -> Command {
+        let (program, args) = crate::test_support::sleep_argv();
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        cmd.current_dir(cwd);
+        cmd
+    }
+
     /// A linked worktree of `main`, whose `.git` is a **file** holding
     /// `gitdir: <path>` rather than a directory — the shape that made the sweep
     /// inert. `git worktree add` needs a commit to branch from, so one is made.
@@ -1307,9 +1326,7 @@ DU src/deleted.rs
     #[test]
     fn run_kills_a_command_that_outlives_its_timeout() {
         let (_dir, path) = setup_test_repo();
-        let mut cmd = Command::new("sleep");
-        cmd.current_dir(&path);
-        cmd.arg("30");
+        let cmd = sleeping_command(&path);
         let gc = GitCmd {
             cmd,
             cwd: path.clone(),
@@ -1335,9 +1352,7 @@ DU src/deleted.rs
     #[test]
     fn run_silent_returns_none_on_timeout() {
         let (_dir, path) = setup_test_repo();
-        let mut cmd = Command::new("sleep");
-        cmd.current_dir(&path);
-        cmd.arg("30");
+        let cmd = sleeping_command(&path);
         let gc = GitCmd {
             cmd,
             cwd: path.clone(),
