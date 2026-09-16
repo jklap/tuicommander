@@ -165,7 +165,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Tests
         working-directory: src-tauri
@@ -378,7 +378,7 @@ jobs:
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       # Windows runs the suite too. It used to be skipped, which is why Windows
       # regressions only ever surfaced in a user's build.
