@@ -801,94 +801,73 @@ impl Drop for StdioMcpClient {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
-    /// Create a test config that runs a simple echo-style MCP server
-    /// implemented as a shell script.
+    /// The fixture MCP server, beside the test binary that is asking for it.
     ///
-    /// The config launches `sh <script>`, never the script itself, so the exec
-    /// is of `/bin/sh` — a warm system binary — and the script is only *read*.
-    /// That is why a fresh `$TMPDIR` file is safe here: macOS scans a
-    /// never-before-seen executable on its first exec, and this path never
-    /// triggers it. Measured 2026-09-06 at 0.013s against 0.31s for the same
-    /// file exec'd directly — and the direct cost is not a fixed number, it
-    /// runs to minutes under a scanner backlog. See `shared_post_checkout_hook`
-    /// in worktree.rs for the measurements and for what is still unsettled.
-    ///
-    /// The `0o755` below is therefore decorative. Keep `command: "sh"`; making
-    /// the script the executable would import that scan into every test.
-    fn make_config_for_echo_server(script: &str) -> StdioConfig {
-        // Write the script to a temp file
-        let mut tmp = std::env::temp_dir();
-        tmp.push(format!("tuic-mcp-test-{}.sh", uuid::Uuid::new_v4()));
-        std::fs::write(&tmp, script).unwrap();
-        // Make it executable
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+    /// `CARGO_BIN_EXE_*` exists for integration tests, and these are unit tests
+    /// inside the lib, so the path is derived: a unit-test binary lives in
+    /// `<target>/<profile>/deps/` and the package's binaries one level up.
+    fn fixture_server() -> PathBuf {
+        let mut dir = std::env::current_exe().expect("the test binary's own path");
+        dir.pop();
+        if dir.file_name().is_some_and(|name| name == "deps") {
+            dir.pop();
         }
+        let exe = dir.join(format!(
+            "tuic-mcp-fixture-server{}",
+            std::env::consts::EXE_SUFFIX
+        ));
+        if !exe.exists() {
+            // Cargo builds a package's binaries only when an integration test
+            // or a bench is selected, so `cargo test --lib` leaves this one
+            // unbuilt. Build it rather than fail on the caller's flag.
+            build_fixture_server();
+        }
+        assert!(
+            exe.exists(),
+            "{} was not built; it is a [[bin]] of this package",
+            exe.display(),
+        );
+        exe
+    }
+
+    fn build_fixture_server() {
+        static BUILT: std::sync::Once = std::sync::Once::new();
+        BUILT.call_once(|| {
+            let status = std::process::Command::new(env!("CARGO"))
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .args(["build", "--bin", "tuic-mcp-fixture-server"])
+                .status()
+                .expect("run cargo to build the fixture server");
+            assert!(status.success(), "building the fixture server failed");
+        });
+    }
+
+    /// A config that runs the fixture MCP server in one of its named scenarios.
+    ///
+    /// This used to write a `#!/bin/sh` script to `$TMPDIR` and run
+    /// `sh <script>` — deliberately, so the exec was of a warm system binary
+    /// and the never-before-seen file was only *read*, macOS scanning a fresh
+    /// executable on its first exec at a measured 0.31s against 0.013s. The
+    /// fixture server keeps that property for a different reason: it is one
+    /// binary, built once by cargo and exec'd by every test, so only the first
+    /// exec in a suite can pay a scan at all. See `shared_post_checkout_hook`
+    /// in worktree.rs for the measurements.
+    fn make_config_for_scenario(scenario: &str) -> StdioConfig {
         StdioConfig {
             name: "test".to_string(),
-            command: "sh".to_string(),
-            args: vec![tmp.to_str().unwrap().to_string()],
+            command: fixture_server().to_string_lossy().into_owned(),
+            args: vec![scenario.to_string()],
             env: HashMap::new(),
             cwd: None,
             timeout: Duration::from_secs(30),
         }
     }
 
-    /// A minimal MCP server script (shell) that responds correctly to the handshake.
-    fn minimal_mcp_script() -> String {
-        r#"#!/bin/sh
-while IFS= read -r line; do
-    method=$(echo "$line" | sed 's/.*"method":"\([^"]*\)".*/\1/')
-    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-    case "$method" in
-        initialize)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-            ;;
-        notifications/initialized)
-            # No response for notifications
-            ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","description":"Echo tool","inputSchema":{"type":"object"}}]}}\n' "$id"
-            ;;
-        tools/call)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"echoed"}],"isError":false}}\n' "$id"
-            ;;
-        *)
-            printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id"
-            ;;
-    esac
-done
-"#.to_string()
-    }
-
-    fn protocol_offer_probe_script() -> String {
-        r#"#!/bin/sh
-offered=wrong
-while IFS= read -r line; do
-    method=$(echo "$line" | sed 's/.*"method":"\([^\"]*\)".*/\1/')
-    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-    case "$method" in
-        initialize)
-            if echo "$line" | grep -q '"protocolVersion":"2025-11-25"'; then
-                offered=legacy
-            fi
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-            ;;
-        notifications/initialized) ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"%s","description":"Protocol offer probe","inputSchema":{"type":"object"}}]}}\n' "$id" "$offered"
-            ;;
-    esac
-done
-"#.to_string()
-    }
-
     #[test]
     fn initialize_offers_legacy_protocol_revision_over_stdio() {
-        let config = make_config_for_echo_server(&protocol_offer_probe_script());
+        let config = make_config_for_scenario("protocol-offer-probe");
         let mut client = StdioMcpClient::new(config);
 
         let tools = client.spawn_and_initialize().unwrap();
@@ -898,7 +877,7 @@ done
 
     #[test]
     fn spawn_and_initialize_returns_tools() {
-        let config = make_config_for_echo_server(&minimal_mcp_script());
+        let config = make_config_for_scenario("minimal");
         let mut client = StdioMcpClient::new(config);
 
         let tools = client.spawn_and_initialize().unwrap();
@@ -913,7 +892,7 @@ done
 
     #[test]
     fn call_tool_returns_result() {
-        let config = make_config_for_echo_server(&minimal_mcp_script());
+        let config = make_config_for_scenario("minimal");
         let mut client = StdioMcpClient::new(config);
         client.spawn_and_initialize().unwrap();
 
@@ -940,18 +919,8 @@ done
 
     #[test]
     fn is_alive_returns_false_after_process_exits() {
-        // A script that exits immediately after the handshake
-        let script = r#"#!/bin/sh
-IFS= read -r line
-id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-IFS= read -r _notif
-IFS= read -r line2
-id2=$(echo "$line2" | sed 's/.*"id":\([0-9]*\).*/\1/')
-printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}\n' "$id2"
-exit 0
-"#;
-        let config = make_config_for_echo_server(script);
+        // A server that exits immediately after the handshake.
+        let config = make_config_for_scenario("exit-after-handshake");
         let mut client = StdioMcpClient::new(config);
         client.spawn_and_initialize().unwrap();
 
@@ -1004,7 +973,7 @@ exit 0
 
     #[test]
     fn shutdown_is_idempotent() {
-        let config = make_config_for_echo_server(&minimal_mcp_script());
+        let config = make_config_for_scenario("minimal");
         let mut client = StdioMcpClient::new(config);
         client.spawn_and_initialize().unwrap();
 
@@ -1015,47 +984,19 @@ exit 0
 
     #[test]
     fn env_vars_are_passed_to_child() {
-        // Script that reads an env var and outputs it in the tool list
-        let script = r#"#!/bin/sh
-TEST_VAR_VALUE="$TUIC_TEST_ENV_VAR"
-while IFS= read -r line; do
-    method=$(echo "$line" | sed 's/.*"method":"\([^"]*\)".*/\1/')
-    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-    case "$method" in
-        initialize)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-            ;;
-        notifications/initialized) ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"%s","description":"d","inputSchema":{"type":"object"}}]}}\n' "$id" "$TEST_VAR_VALUE"
-            ;;
-    esac
-done
-"#;
+        // The `env-tool-name` scenario reads `TUIC_TEST_ENV_VAR` and names its
+        // one tool after it, so the tool list is the child's view of its own
+        // environment.
         let mut env = HashMap::new();
         env.insert(
             "TUIC_TEST_ENV_VAR".to_string(),
             "hello-from-env".to_string(),
         );
 
-        // Safe for the same reason as `make_config_for_echo_server`: the config
-        // below runs `sh <script>`, so this fresh file is read, never exec'd.
-        let mut tmp = std::env::temp_dir();
-        tmp.push(format!("tuic-mcp-env-test-{}.sh", uuid::Uuid::new_v4()));
-        std::fs::write(&tmp, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
         let config = StdioConfig {
             name: "env-test".to_string(),
-            command: "sh".to_string(),
-            args: vec![tmp.to_str().unwrap().to_string()],
             env,
-            cwd: None,
-            timeout: Duration::from_secs(30),
+            ..make_config_for_scenario("env-tool-name")
         };
 
         let mut client = StdioMcpClient::new(config);
@@ -1089,28 +1030,7 @@ done
     fn rpc_skips_interleaved_notifications() {
         // Server sends a notification after initialized and before the
         // tools/list response — rpc() must skip it and return the correct response.
-        let script = r#"#!/bin/sh
-while IFS= read -r line; do
-    method=$(echo "$line" | sed 's/.*"method":"\([^"]*\)".*/\1/')
-    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-    case "$method" in
-        initialize)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-            ;;
-        notifications/initialized)
-            # Emit a server notification (no id) — this used to cause "0 tools"
-            printf '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n'
-            ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"alpha","description":"A","inputSchema":{"type":"object"}},{"name":"beta","description":"B","inputSchema":{"type":"object"}}]}}\n' "$id"
-            ;;
-        tools/call)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}],"isError":false}}\n' "$id"
-            ;;
-    esac
-done
-"#;
-        let config = make_config_for_echo_server(script);
+        let config = make_config_for_scenario("notify-once");
         let mut client = StdioMcpClient::new(config);
         let tools = client.spawn_and_initialize().unwrap();
 
@@ -1127,24 +1047,7 @@ done
     #[test]
     fn call_tool_gives_up_on_a_mute_upstream() {
         // Handshake answers; `tools/call` is read and deliberately left unanswered.
-        let script = r#"#!/bin/sh
-while IFS= read -r line; do
-    method=$(echo "$line" | sed 's/.*"method":"\([^"]*\)".*/\1/')
-    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-    case "$method" in
-        initialize)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-            ;;
-        notifications/initialized) ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"hang","description":"H","inputSchema":{"type":"object"}}]}}\n' "$id"
-            ;;
-        tools/call)
-            # Silence. The upstream is alive but will never answer.
-            ;;
-    esac
-done
-"#;
+        //
         // Three bounds, and only the middle one is what this test is about.
         //
         // `handshake` has to *succeed*: it is setup, not subject. It used to share
@@ -1161,7 +1064,7 @@ done
         let give_up = Duration::from_millis(300);
         let harness = Duration::from_secs(30);
 
-        let mut config = make_config_for_echo_server(script);
+        let mut config = make_config_for_scenario("mute-tool-call");
         config.timeout = handshake;
 
         // Drive the call off-thread so a client with no deadline fails the test
@@ -1195,28 +1098,7 @@ done
     /// read already had, so the number of skipped messages does not matter.
     #[test]
     fn a_chatty_upstream_still_delivers_its_reply() {
-        let script = r#"#!/bin/sh
-while IFS= read -r line; do
-    method=$(echo "$line" | sed 's/.*"method":"\([^"]*\)".*/\1/')
-    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-    case "$method" in
-        initialize)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-            ;;
-        notifications/initialized)
-            i=0
-            while [ $i -lt 500 ]; do
-                printf '{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","n":%s}}\n' "$i"
-                i=$((i+1))
-            done
-            ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"delta","description":"D","inputSchema":{"type":"object"}}]}}\n' "$id"
-            ;;
-    esac
-done
-"#;
-        let config = make_config_for_echo_server(script);
+        let config = make_config_for_scenario("chatty");
         let mut client = StdioMcpClient::new(config);
         let tools = client
             .spawn_and_initialize()
@@ -1460,29 +1342,7 @@ done
     #[test]
     fn rpc_skips_multiple_notifications() {
         // Server sends 3 notifications before the tools/list response.
-        let script = r#"#!/bin/sh
-while IFS= read -r line; do
-    method=$(echo "$line" | sed 's/.*"method":"\([^"]*\)".*/\1/')
-    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
-    case "$method" in
-        initialize)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
-            ;;
-        notifications/initialized)
-            printf '{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n'
-            printf '{"jsonrpc":"2.0","method":"notifications/progress","params":{"token":"abc"}}\n'
-            printf '{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"starting"}}\n'
-            ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"gamma","description":"G","inputSchema":{"type":"object"}}]}}\n' "$id"
-            ;;
-        tools/call)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}],"isError":false}}\n' "$id"
-            ;;
-    esac
-done
-"#;
-        let config = make_config_for_echo_server(script);
+        let config = make_config_for_scenario("notify-thrice");
         let mut client = StdioMcpClient::new(config);
         let tools = client.spawn_and_initialize().unwrap();
 

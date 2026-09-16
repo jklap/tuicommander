@@ -149,6 +149,10 @@ fn augment_args_when(
 mod tests {
     use super::*;
 
+    /// Gated with its only caller, which is unix-only because the hooks it
+    /// builds are POSIX shell. Without the gate this is dead code on Windows,
+    /// and the Windows job warns about it where nothing reads the warning.
+    #[cfg(unix)]
     fn hook_commands(document: &Value, event: &str) -> Vec<String> {
         document["hooks"][event]
             .as_array()

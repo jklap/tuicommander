@@ -340,7 +340,33 @@ fn close_descriptor(descriptor: std::os::fd::RawFd) {
     drop(unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) });
 }
 
-#[cfg(not(unix))]
+/// Windows has no descriptor table to close by number: the pipe end the parent
+/// waits on lives behind a `HANDLE`, which is what the standard streams wrap,
+/// so the number selects the stream and the handle is what gets dropped.
+///
+/// Until this existed the `not(unix)` arm panicked, and a panic is not EOF: the
+/// process died, and `stdout-closed-alive` — the one scenario whose whole point
+/// is a live agent behind a closed pipe — settled as a transport failure with
+/// "ACP process ended before initialization completed". It passed on GitHub's
+/// runner for the same reason every other Windows gap did: nothing there runs
+/// this scenario differently, it simply never ran green and was never read.
+#[cfg(windows)]
+fn close_descriptor(descriptor: i32) {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+
+    let handle = match descriptor {
+        0 => io::stdin().as_raw_handle(),
+        1 => io::stdout().as_raw_handle(),
+        2 => io::stderr().as_raw_handle(),
+        other => panic!("{other} is not a standard descriptor"),
+    };
+    // SAFETY: as on unix, the handle is one of the three the process was
+    // started with and the scenario step exists to close exactly it. Nothing
+    // else in this fixture holds an owned handle to it.
+    drop(unsafe { OwnedHandle::from_raw_handle(handle) });
+}
+
+#[cfg(not(any(unix, windows)))]
 fn close_descriptor(_descriptor: i32) {
-    panic!("closing a standard descriptor is only implemented for unix");
+    panic!("closing a standard descriptor is only implemented for unix and windows");
 }
