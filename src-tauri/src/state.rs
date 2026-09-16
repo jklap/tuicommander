@@ -14,43 +14,106 @@ use tauri::{AppHandle, Emitter};
 
 /// A submission waiting for the agent's next safe idle window.
 ///
-/// Peer messages and user-composed commands share one FIFO so acceptance order
-/// is preserved across producers. The variant is an ownership boundary: Compose
-/// count/clear operations must never consume the peer wake path.
+/// Server-authored notices, a child's own initial prompt and user-composed
+/// commands share one FIFO so acceptance order is preserved across producers.
+///
+/// What is NOT in here is the point: peer `send` payloads never enter this
+/// queue. They are agent-authored text of arbitrary content, and typing them
+/// into a recipient's composer turns mail into keystrokes — the recipient's TUI
+/// renders it as something the user typed, and an unsubmitted remainder leaves
+/// the composer partial. Peer mail lives in the inbox; the only thing this
+/// queue may carry on its behalf is the payload-free `PEER_MAIL_WAKE` notice.
+///
+/// Every variant carries an id. Non-user entries used to be invisible to the
+/// Compose count/list, which is how a single parked entry blocked `submit` with
+/// `queued_commands_pending` for minutes against an empty composer and no
+/// visible pending work. Everything parked here is now listable and removable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PendingInjection {
-    PeerMessage(String),
+    /// Server-authored one-liner: the payload-free mail wake, or a child
+    /// lifecycle summary. Never carries peer `send` content.
+    Notice { id: u64, text: String },
+    /// A spawned child's own task prompt, withheld from argv for prefill-only
+    /// TUIs (codex) and typed once the child's TUI reaches its ready prompt.
+    InitialPrompt { id: u64, text: String },
     /// The id is what the Compose panel deletes by: a queue position would shift
     /// under the caller as the FIFO drains on the next idle window.
-    UserCommand {
-        id: u64,
-        text: String,
-    },
+    UserCommand { id: u64, text: String },
 }
 
 /// Ids are unique per process, not per session — a Compose delete carries both.
-static NEXT_USER_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_INJECTION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_injection_id() -> u64 {
+    NEXT_INJECTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 impl PendingInjection {
-    pub(crate) fn peer_message(text: impl Into<String>) -> Self {
-        Self::PeerMessage(text.into())
+    pub(crate) fn notice(text: impl Into<String>) -> Self {
+        Self::Notice {
+            id: next_injection_id(),
+            text: text.into(),
+        }
+    }
+
+    pub(crate) fn initial_prompt(text: impl Into<String>) -> Self {
+        Self::InitialPrompt {
+            id: next_injection_id(),
+            text: text.into(),
+        }
     }
 
     pub(crate) fn user_command(text: impl Into<String>) -> Self {
         Self::UserCommand {
-            id: NEXT_USER_COMMAND_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            id: next_injection_id(),
             text: text.into(),
+        }
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        match self {
+            Self::Notice { id, .. }
+            | Self::InitialPrompt { id, .. }
+            | Self::UserCommand { id, .. } => *id,
         }
     }
 
     pub(crate) fn text(&self) -> &str {
         match self {
-            Self::PeerMessage(text) | Self::UserCommand { text, .. } => text,
+            Self::Notice { text, .. }
+            | Self::InitialPrompt { text, .. }
+            | Self::UserCommand { text, .. } => text,
         }
     }
 
-    pub(crate) fn is_user_command(&self) -> bool {
-        matches!(self, Self::UserCommand { .. })
+    /// Stable wire label. The submit rejection and the Compose list both report
+    /// it, so an operator can tell whose work is blocking the composer.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::Notice { .. } => "notice",
+            Self::InitialPrompt { .. } => "initial_prompt",
+            Self::UserCommand { .. } => "user_command",
+        }
+    }
+}
+
+/// A spawned child's initial prompt that has not reached its composer yet.
+///
+/// `notified` makes the delivery watchdog idempotent without dropping the
+/// prompt: the parent is told once that delivery has not happened, and the
+/// prompt stays queued so the child's next ready window still types it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingInitialPrompt {
+    pub(crate) prompt: String,
+    pub(crate) notified: bool,
+}
+
+impl PendingInitialPrompt {
+    pub(crate) fn new(prompt: impl Into<String>) -> Self {
+        Self {
+            prompt: prompt.into(),
+            notified: false,
+        }
     }
 }
 
@@ -1911,15 +1974,16 @@ pub struct AppState {
     /// the position instead: an omitted `since` resumes from here, an explicit one
     /// overrides it, and `since=0` stays the deliberate replay escape hatch.
     pub(crate) agent_read_cursor: DashMap<String, u64>,
-    /// Peer messages and Compose commands waiting for a recipient's next safe
-    /// idle window. Entries share one typed FIFO so delivery order is global,
-    /// while Compose count/clear operations can select only `UserCommand`.
-    /// The inbox remains the authoritative copy of every peer message.
+    /// Server notices, initial prompts and Compose commands waiting for a
+    /// recipient's next safe idle window. Entries share one typed FIFO so
+    /// delivery order is global. Peer `send` payloads are never in here — see
+    /// `PendingInjection`. The inbox is the authoritative copy of every message.
     pub(crate) pending_injections: DashMap<String, VecDeque<PendingInjection>>,
-    /// Initial prompts awaiting successful PTY submission. Used only by the
-    /// one-shot delivery watchdog; successful delivery removes the marker and
-    /// emits nothing, while timeout emits one parent notification.
-    pub(crate) pending_initial_prompts: DashMap<String, String>,
+    /// Initial prompts awaiting successful PTY submission. Successful delivery
+    /// removes the marker; the delivery watchdog notifies the parent once and
+    /// leaves the prompt in place so a child that was blocked on a startup
+    /// dialog still receives it when it becomes ready.
+    pub(crate) pending_initial_prompts: DashMap<String, PendingInitialPrompt>,
     /// Per-peer atomic handoff between blocking waiters and terminal delivery.
     /// Each message has exactly one wake-up owner while remaining visible in
     /// the authoritative inbox for backward-compatible reads.
@@ -7890,9 +7954,7 @@ mod tests {
         );
         apply(&state, &q);
         let mut pending = VecDeque::new();
-        pending.push_back(PendingInjection::peer_message(
-            "[TUIC message from peer] wake",
-        ));
+        pending.push_back(PendingInjection::notice(crate::pty::PEER_MAIL_WAKE));
         state.pending_injections.insert("s1".to_string(), pending);
 
         let ui = make_parsed("user-input", serde_json::json!({ "content": "yes" }));
