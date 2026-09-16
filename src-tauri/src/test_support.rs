@@ -111,7 +111,11 @@ pub(crate) fn replay_file_command(path: &std::path::Path) -> portable_pty::Comma
              give the test a temp directory without one",
             path.display(),
         );
-        path.display().to_string()
+        // Backslashes too: `Path::join` keeps whatever separator the literal
+        // used, so a path built from a `"src/fixtures/…"` literal reaches
+        // `cmd` half-and-half, and `cmd` reads `/fixtures` as a switch — "The
+        // syntax of the command is incorrect."
+        path.display().to_string().replace('/', "\\")
     } else {
         format!("\"{}\"", path.display())
     };
