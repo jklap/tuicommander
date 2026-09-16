@@ -1900,15 +1900,36 @@ impl SilenceState {
     /// Drop any parked suggest on user input. Parallels `reset_tool_error_memory`:
     /// the user is engaging again, so stale suggestions from the previous turn
     /// must not fire after a new input cycle starts.
+    ///
+    /// Deliberately does NOT touch `declared_background_work` — see
+    /// `reset_declared_background_work`'s doc comment for why that's a
+    /// separate method, not folded in here. This method is also called from
+    /// `apply_working_evidence`'s "reopen a stale completed/idle turn on
+    /// renewed screen evidence" path, which is not a real new turn boundary.
     pub(crate) fn reset_suggest_memory(&mut self) {
         self.pending_suggest_items = None;
         self.pending_suggest_turn_epoch = 0;
         self.pending_suggest_at = None;
         self.completion_declared = false;
         self.completion_turn_epoch = 0;
-        // A new turn invalidates any prior declaration — belt-and-suspenders
-        // on top of the epoch check in `declared_background_work_for_epoch`,
-        // matching `completion_declared`'s own reset here.
+    }
+
+    /// Clear a `bgtasks`-declared background-work claim. Call this ONLY at a
+    /// genuine new-turn boundary (a real line/interrupt submitted to the
+    /// agent) — never from `apply_working_evidence`'s reopening path.
+    ///
+    /// This used to be folded into `reset_suggest_memory` on the assumption
+    /// that "a new turn invalidates any prior declaration" — true, but
+    /// `reset_suggest_memory` is ALSO called when renewed screen evidence
+    /// reopens a stale completed/idle Claude turn (`apply_working_evidence`),
+    /// which is not a new turn at all: for an agent orchestrating background
+    /// teammates, waking up to poll them is expected and doesn't mean the
+    /// teammates finished. Folding the two together meant every such poll
+    /// silently erased a still-accurate `declared_background_work=true` the
+    /// moment the parent's own screen showed renewed activity, until the
+    /// next `Stop` hook happened to re-assert it — see the `ai-usage`
+    /// Agent-Teams incident (2026-09-16) this split was extracted from.
+    pub(crate) fn reset_declared_background_work(&mut self) {
         self.declared_background_work = false;
         self.declared_background_work_turn_epoch = 0;
     }
@@ -1932,7 +1953,7 @@ impl SilenceState {
 
     /// Mirrors `completion_declared_for_epoch`: only true for the CURRENT
     /// turn — a new turn silently invalidates a stale declaration even
-    /// without an explicit clear (see `reset_suggest_memory`).
+    /// without an explicit clear (see `reset_declared_background_work`).
     pub(crate) fn declared_background_work_for_epoch(&self, turn_epoch: u64) -> bool {
         self.declared_background_work && self.declared_background_work_turn_epoch == turn_epoch
     }
@@ -3477,6 +3498,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
             let mut silence = sl.lock();
             silence.note_user_submission(false);
             silence.reset_suggest_memory();
+            silence.reset_declared_background_work();
         }
         return;
     };
@@ -3500,6 +3522,7 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         after_epoch();
         silence.note_user_submission(has_ready_screen_adapter(Some(&agent_type)));
         silence.reset_suggest_memory();
+        silence.reset_declared_background_work();
         stamp_last_output_now(state, session_id, now_epoch_ms());
         let prev = state
             .shell_states
@@ -10137,6 +10160,7 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
         let mut sl = ss.lock();
         sl.reset_tool_error_memory();
         sl.reset_suggest_memory();
+        sl.reset_declared_background_work();
     }
 
     // Track slash command mode: true when the input buffer starts with /
@@ -15296,6 +15320,76 @@ mod tests {
         assert!(!lifecycle.completion_declared_for_epoch(0));
         assert!(!lifecycle.explicit_idle);
         assert!(!lifecycle.idle_confirmed);
+    }
+
+    #[test]
+    fn test_claude_reopening_a_premature_stop_hook_preserves_declared_background_work() {
+        // Regression for the `ai-usage` Agent-Teams incident (2026-09-16): a
+        // Claude session that dispatched teammates and ended its own turn
+        // (Stop hook: state=idle + bgtasks=running) later wakes up to poll
+        // them, producing renewed screen activity. That poll must NOT erase
+        // the still-accurate `declared_background_work` claim — the
+        // teammates haven't necessarily finished just because the parent's
+        // own foreground turn reopened. Only a genuine new user-submitted
+        // turn (see `note_submitted_input_with_hook`) or the next real
+        // `Stop` hook's own `bgtasks` report may change it.
+        use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "claude-agent-teams-poll";
+        state.session_states.insert(
+            session_id.into(),
+            crate::state::SessionState {
+                agent_type: Some("claude".into()),
+                ..Default::default()
+            },
+        );
+        state
+            .shell_states
+            .insert(session_id.into(), AtomicU8::new(SHELL_IDLE));
+        state
+            .last_output_ms
+            .insert(session_id.into(), AtomicU64::new(1));
+        let mut lifecycle = SilenceState::new();
+        // Mirrors the real sequence: a Stop hook set state=idle (explicit_idle)
+        // and, via the `bgtasks` OSC verb, declared background work for the
+        // current turn epoch (0).
+        lifecycle.note_explicit_state(SHELL_IDLE, true);
+        lifecycle.set_declared_background_work(true, 0);
+        let lifecycle = Arc::new(Mutex::new(lifecycle));
+        state
+            .silence_states
+            .insert(session_id.into(), lifecycle.clone());
+
+        let screen = vec![
+            "✻ Simmering… (5m 48s · ↓ 20.7k tokens)".to_string(),
+            "❯".to_string(),
+        ];
+        let activity = detect_agent_screen_activity(Some("claude"), &screen);
+        assert_eq!(activity, AgentScreenActivity::Working);
+
+        apply_working_evidence(
+            &state,
+            &lifecycle,
+            session_id,
+            now_epoch_ms(),
+            "working-screen",
+        );
+
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY,
+            "renewed screen evidence must still reopen the turn"
+        );
+        assert!(
+            lifecycle.lock().declared_background_work_for_epoch(0),
+            "reopening a stale idle/completed turn must not clear an unrelated \
+             declared_background_work claim about still-running teammates"
+        );
     }
 
     #[test]
@@ -20792,6 +20886,73 @@ mod tests {
     }
 
     #[test]
+    fn a_genuine_new_turn_clears_declared_background_work() {
+        // Complements `test_claude_reopening_a_premature_stop_hook_preserves_declared_background_work`:
+        // a real new turn (a line actually submitted to the agent) is the one
+        // thing that SHOULD invalidate a stale `bgtasks` declaration from the
+        // previous turn.
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "new-turn-clears-bgwork";
+        agent_session(&state, child_id, SHELL_IDLE);
+        state
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .lock()
+            .set_declared_background_work(true, 0);
+        assert!(
+            state
+                .silence_states
+                .get(child_id)
+                .unwrap()
+                .lock()
+                .declared_background_work_for_epoch(0)
+        );
+
+        note_submitted_input(&state, child_id);
+
+        assert_eq!(state.session_states.get(child_id).unwrap().turn_epoch, 1);
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        assert!(
+            !silence.lock().declared_background_work_for_epoch(0),
+            "a genuine new turn must clear a stale declared_background_work claim"
+        );
+        assert!(!silence.lock().declared_background_work_for_epoch(1));
+    }
+
+    #[test]
+    fn submitted_input_with_no_detected_agent_type_still_clears_declared_background_work() {
+        // Covers `note_submitted_input_with_hook`'s OTHER branch — a session
+        // with no `agent_type` detected yet (e.g. very early in a session's
+        // life, before the first foreground-process poll). This branch never
+        // touches `turn_epoch` (unlike the known-agent branch covered by
+        // `a_genuine_new_turn_clears_declared_background_work`), so the
+        // declaration must clear for the SAME epoch it was set at.
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "unknown-agent-submits-input";
+        state
+            .session_states
+            .insert(session_id.into(), crate::state::SessionState::default());
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        silence.lock().set_declared_background_work(true, 0);
+        state
+            .silence_states
+            .insert(session_id.into(), silence.clone());
+
+        note_submitted_input(&state, session_id);
+
+        assert_eq!(
+            state.session_states.get(session_id).unwrap().turn_epoch,
+            0,
+            "this branch must not touch turn_epoch"
+        );
+        assert!(
+            !silence.lock().declared_background_work_for_epoch(0),
+            "a real submission must clear a stale declaration even with no detected agent_type"
+        );
+    }
+
+    #[test]
     fn cursor_prefix_rejects_stale_suffix_then_emits_real_completion_once() {
         for (index, bullet) in ["●", "⏺", "•", "◦"].into_iter().enumerate() {
             let state = crate::state::tests_support::make_test_app_state();
@@ -24744,6 +24905,72 @@ mod tests {
     }
 
     #[test]
+    fn end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll() {
+        // Full-pipeline regression for the `ai-usage` Agent-Teams incident:
+        // replays the real byte sequence through `ChunkProcessor::process_chunk`
+        // (not a direct call into `apply_working_evidence`) — a real `Stop`
+        // hook's `state=idle` + `bgtasks=running` OSC pair (this exact order
+        // confirmed empirically against the installed `tuic-hook` binary),
+        // followed by the orchestrator's screen showing renewed spinner
+        // activity as it polls its teammates (no new user input submitted).
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "e2e-agent-teams-poll";
+        agent_session(&state, session_id, SHELL_IDLE);
+        state.vt_log_buffers.insert(
+            session_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        let silence = state.silence_states.get(session_id).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+
+        // A prompt row so `detect_claude_screen_activity` has a prompt anchor
+        // once the spinner appears above it.
+        processor.process_chunk("❯", &silence, session_id, &state);
+
+        // The real Stop hook's OSC pair, in the order `tuic-hook` emits it.
+        processor.process_chunk(
+            "\x1b]7770;bgtasks=running\x07\x1b]7770;state=idle\x07",
+            &silence,
+            session_id,
+            &state,
+        );
+        assert!(
+            silence.lock().declared_background_work_for_epoch(0),
+            "the Stop hook's own bgtasks report must declare background work"
+        );
+
+        // The orchestrator wakes up to poll its teammates: a real spinner row
+        // repaints above the prompt. No new turn was submitted — turn_epoch
+        // stays 0 — this is exactly the renewed-screen-evidence reopen path,
+        // not a genuine new turn.
+        processor.process_chunk(
+            "\r\n✻ Simmering… (5m 48s · ↓ 20.7k tokens)\r\n❯",
+            &silence,
+            session_id,
+            &state,
+        );
+
+        assert_eq!(
+            state.session_states.get(session_id).unwrap().turn_epoch,
+            0,
+            "no real turn was submitted"
+        );
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Acquire),
+            SHELL_BUSY,
+            "renewed screen evidence must still reopen the turn"
+        );
+        assert!(
+            silence.lock().declared_background_work_for_epoch(0),
+            "the poll must not have erased the still-accurate declared_background_work claim"
+        );
+    }
+
+    #[test]
     fn tuic_osc_bgtasks_clears_on_zero_running_statuses() {
         let state = crate::state::tests_support::make_test_app_state();
         let session_id = "test-bgtasks-clear";
@@ -24838,15 +25065,28 @@ mod tests {
     }
 
     #[test]
-    fn reset_suggest_memory_also_clears_declared_background_work() {
+    fn reset_suggest_memory_no_longer_touches_declared_background_work() {
+        // `reset_suggest_memory` is also called from `apply_working_evidence`'s
+        // reopen path, which is not a real new-turn boundary (see
+        // `reset_declared_background_work`'s doc comment) — a still-accurate
+        // background-task declaration must survive it.
         let mut silence = SilenceState::new();
         silence.set_declared_background_work(true, 3);
         assert!(silence.declared_background_work_for_epoch(3));
         silence.reset_suggest_memory();
         assert!(
-            !silence.declared_background_work_for_epoch(3),
-            "reset_suggest_memory must clear a declaration the same way it clears completion_declared"
+            silence.declared_background_work_for_epoch(3),
+            "reset_suggest_memory must NOT clear a declared_background_work claim — only reset_declared_background_work does"
         );
+    }
+
+    #[test]
+    fn reset_declared_background_work_clears_the_declaration() {
+        let mut silence = SilenceState::new();
+        silence.set_declared_background_work(true, 3);
+        assert!(silence.declared_background_work_for_epoch(3));
+        silence.reset_declared_background_work();
+        assert!(!silence.declared_background_work_for_epoch(3));
     }
 
     #[test]
