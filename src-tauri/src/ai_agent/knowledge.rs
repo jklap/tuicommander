@@ -914,9 +914,8 @@ mod persist_tests {
     /// What removes that class is writing while the session lock is held: no
     /// outcome can be recorded into a state a flush is already writing from, so
     /// there is no such thing as a flush carrying a stale snapshot. That is what
-    /// this asserts — a `record_outcome` issued mid-write cannot return before the
-    /// write finishes. The record is at `MAX_COMMANDS` with full snippets so the
-    /// write takes tens of milliseconds, far more than the delay before the record.
+    /// this asserts, from both sides: while the session's entry is held, neither
+    /// a flush nor a record can run to completion.
     #[test]
     fn an_outcome_cannot_be_recorded_into_a_session_a_flush_is_writing() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -931,44 +930,49 @@ mod persist_tests {
             state.record_outcome("s-slow", o);
         }
 
-        let first = {
+        // Hold the entry both paths must take, and watch neither of them make
+        // progress. Timing cannot prove this: an earlier version started the
+        // flush, slept 2ms and measured how long a record took, which says
+        // nothing when the flushing thread has not reached the lock yet — it
+        // failed on a loaded CI runner while the ordering it exists to protect
+        // was intact. A held lock has no such window.
+        let held = state.knowledge_entry("s-slow");
+
+        let (done, finished) = std::sync::mpsc::channel::<&'static str>();
+        let flusher = {
             let s = state.clone();
+            let done = done.clone();
             std::thread::spawn(move || {
-                let started = std::time::Instant::now();
                 flush_dirty(&s);
-                started.elapsed()
+                let _ = done.send("the flush");
+            })
+        };
+        let recorder = {
+            let s = state.clone();
+            let mut newer = sample_outcome();
+            newer.timestamp = 99_999;
+            newer.command = "the outcome that must survive".into();
+            std::thread::spawn(move || {
+                s.record_outcome("s-slow", newer);
+                let _ = done.send("the record");
             })
         };
 
-        // Land inside the write, then record.
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let mut newer = sample_outcome();
-        newer.timestamp = 99_999;
-        newer.command = "the outcome that must survive".into();
-        let recording = std::time::Instant::now();
-        state.record_outcome("s-slow", newer);
-        let recorded_in = recording.elapsed();
+        // Long enough that a path not taking the lock would have finished many
+        // times over. This bound can only pass wrongly — a thread slow to
+        // start still reports nothing — never fail wrongly.
+        if let Ok(who) = finished.recv_timeout(std::time::Duration::from_millis(250)) {
+            drop(held);
+            panic!(
+                "{who} ran to completion while the session lock was held, so a \
+                 record can land inside a write and the flush writes from a \
+                 snapshot that can go stale"
+            );
+        }
 
-        // How long the record took is the only externally visible trace of the
-        // lock. A flag stored by the flushing thread cannot prove the ordering:
-        // that store necessarily lands *after* the lock is released, so the
-        // thread waiting on it may wake and return first, and reading the flag
-        // there is a race rather than a measurement. That race is what made
-        // this test fail on the Windows CI leg while the ordering it exists to
-        // protect was intact.
-        let write_took = first.join().unwrap();
-        assert!(
-            write_took > std::time::Duration::from_millis(10),
-            "setup: the write finished in {write_took:?}, too fast for a record \
-             issued 2ms in to land inside it — MAX_COMMANDS records of \
-             SNIPPET_MAX_LEN are supposed to make it take far longer"
-        );
-        assert!(
-            recorded_in >= std::time::Duration::from_millis(1),
-            "record_outcome returned in {recorded_in:?} while a {write_took:?} \
-             write of that session was still running, so the flush is writing \
-             from a snapshot that can go stale"
-        );
+        drop(held);
+        flusher.join().unwrap();
+        recorder.join().unwrap();
 
         // And the outcome recorded after that write still reaches disk.
         flush_dirty(&state);
