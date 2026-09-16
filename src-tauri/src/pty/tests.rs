@@ -8126,10 +8126,13 @@ fn prompt_delivery_failure_reads_the_same_in_both_paths() {
         "reason": "timeout",
         "session_id": SUMMARY_CHILD,
     });
-    assert_eq!(
-        describe_lifecycle_payload(SUMMARY_CHILD, &payload),
-        "child agent 8c261794 initial prompt delivery timed out"
+    let line = describe_lifecycle_payload(SUMMARY_CHILD, &payload);
+    assert!(line.starts_with("child agent 8c261794 "), "{line}");
+    assert!(
+        line.contains("queued"),
+        "the notice must not read as a final failure when the prompt is still pending: {line}"
     );
+    assert!(!line.contains('\n'), "the line is typed into a composer");
 }
 
 #[test]
@@ -8948,9 +8951,10 @@ fn pending_initial_prompt_timeout_notifies_parent_once() {
         .session_parent
         .insert(child_id.to_string(), parent_id.to_string());
     state.agent_inbox.entry(parent_id.to_string()).or_default();
-    state
-        .pending_initial_prompts
-        .insert(child_id.to_string(), "do the task".to_string());
+    state.pending_initial_prompts.insert(
+        child_id.to_string(),
+        crate::state::PendingInitialPrompt::new("do the task"),
+    );
 
     assert!(notify_initial_prompt_timeout_if_pending(&state, child_id));
     assert!(!notify_initial_prompt_timeout_if_pending(&state, child_id));
@@ -8961,7 +8965,100 @@ fn pending_initial_prompt_timeout_notifies_parent_once() {
     assert_eq!(content["type"], "prompt_delivery_failed");
     assert_eq!(content["reason"], "timeout");
     assert_eq!(content["session_id"], child_id);
-    assert!(!state.pending_initial_prompts.contains_key(child_id));
+    // The regression: the watchdog used to report the failure AND drop the
+    // prompt, so nothing retried and the child sat idle as if spawned with no
+    // work. The prompt is preserved, and it rides along for re-delivery.
+    assert_eq!(content["prompt"], "do the task");
+    assert_eq!(content["retrying"], true);
+    assert_eq!(
+        state
+            .pending_initial_prompts
+            .get(child_id)
+            .map(|pending| pending.prompt.clone()),
+        Some("do the task".to_string()),
+        "a reported timeout must not discard the child's task"
+    );
+}
+
+/// Dialog detection, which the fixed 30s timeout had none of: a child parked on
+/// "Do you trust the contents of this directory?" is not a child whose task is
+/// void, and the parent is told which of the two it is.
+#[test]
+fn pending_initial_prompt_names_a_startup_dialog_as_the_cause() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let child_id = "child-prompt-dialog";
+    let parent_id = "parent-prompt-dialog";
+    state
+        .session_maps
+        .session_parent
+        .insert(child_id.to_string(), parent_id.to_string());
+    state.agent_inbox.entry(parent_id.to_string()).or_default();
+    state.session_maps.session_states.insert(
+        child_id.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("codex".to_string()),
+            question_confident: true,
+            ..Default::default()
+        },
+    );
+    state.pending_initial_prompts.insert(
+        child_id.to_string(),
+        crate::state::PendingInitialPrompt::new("review the draft"),
+    );
+
+    assert!(notify_initial_prompt_timeout_if_pending(&state, child_id));
+
+    let inbox = state.agent_inbox.get(parent_id).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    assert_eq!(content["reason"], "startup_dialog");
+    assert!(
+        describe_lifecycle_payload(child_id, &content).contains("startup dialog"),
+        "the typed one-liner must say what the parent is waiting on"
+    );
+}
+
+/// The retry half: once the dialog is answered the child reaches a ready prompt,
+/// the queued entry is typed, and the parent that was warned is told so.
+#[cfg(unix)]
+#[test]
+fn a_prompt_that_lands_after_the_warning_closes_the_loop() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let child_id = "child-prompt-late";
+    let parent_id = "parent-prompt-late";
+    agent_session(&state, child_id, SHELL_IDLE);
+    insert_recording_session(&state, child_id);
+    state
+        .session_maps
+        .session_parent
+        .insert(child_id.to_string(), parent_id.to_string());
+    state.agent_inbox.entry(parent_id.to_string()).or_default();
+    state.pending_initial_prompts.insert(
+        child_id.to_string(),
+        crate::state::PendingInitialPrompt {
+            prompt: "review the draft".to_string(),
+            notified: true,
+        },
+    );
+    state
+        .pending_injections
+        .entry(child_id.to_string())
+        .or_default()
+        .push_back(crate::state::PendingInjection::initial_prompt(
+            "review the draft",
+        ));
+
+    flush_pending_injections_blocking(&state, child_id);
+
+    assert!(
+        !state.pending_initial_prompts.contains_key(child_id),
+        "delivery must clear the marker"
+    );
+    let inbox = state.agent_inbox.get(parent_id).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    assert_eq!(
+        content["type"], "prompt_delivered",
+        "a parent told the prompt failed must not be left believing it"
+    );
 }
 
 #[test]
@@ -9168,7 +9265,7 @@ fn submitted_input_lifecycle_peer_injection_starts_new_turn_and_clears_completio
     completed_agent_session(&state, "completed");
     state.pending_injections.insert(
         "completed".to_string(),
-        std::collections::VecDeque::from([crate::state::PendingInjection::peer_message(
+        std::collections::VecDeque::from([crate::state::PendingInjection::notice(
             "follow up",
         )]),
     );
@@ -9588,7 +9685,7 @@ fn submitted_input_lifecycle_ready_before_status_line_is_not_stale_completed() {
     completed_agent_session(&state, "quick-turn");
     state.pending_injections.insert(
         "quick-turn".to_string(),
-        std::collections::VecDeque::from([crate::state::PendingInjection::peer_message(
+        std::collections::VecDeque::from([crate::state::PendingInjection::notice(
             "quick follow up",
         )]),
     );
@@ -9730,6 +9827,7 @@ fn agent_submission_rejects_partial_composer_without_writing() {
         AgentSubmissionWrite::Rejected {
             reason: "partial_composer",
             composer_state: "partial",
+            pending: Vec::new(),
         }
     );
     assert!(bytes.lock().unwrap().is_empty());
@@ -9756,25 +9854,106 @@ fn agent_submission_does_not_overtake_existing_queue() {
         .pending_injections
         .entry("submit-queued".to_string())
         .or_default()
-        .push_back(crate::state::PendingInjection::peer_message("older peer"));
+        .push_back(crate::state::PendingInjection::notice("older notice"));
 
-    assert_eq!(
-        write_agent_submission_to_pty(&state, "submit-queued", "new command"),
-        AgentSubmissionWrite::Rejected {
-            reason: "queued_commands_pending",
-            composer_state: "empty",
-        }
+    // FIFO still holds: the submission does not jump the queue.
+    let rejection = write_agent_submission_to_pty(&state, "submit-queued", "new command");
+    assert!(
+        matches!(&rejection, AgentSubmissionWrite::Rejected { .. }),
+        "{rejection:?}"
     );
-    assert!(bytes.lock().unwrap().is_empty());
-    assert_eq!(
+    let written = String::from_utf8_lossy(&bytes.lock().unwrap().clone()).to_string();
+    assert!(
+        !written.contains("new command"),
+        "the submission must not overtake the parked entry: {written:?}"
+    );
+    // ...but the queue drains instead of standing still. A ready agent that is
+    // already idle never sees another BUSY→IDLE edge, so the only thing that
+    // could move this queue is the submit itself.
+    assert!(
+        written.contains("older notice"),
+        "the parked entry must be typed, not left to block the composer forever: {written:?}"
+    );
+    assert!(
         state
             .pending_injections
             .get("submit-queued")
-            .unwrap()
-            .front()
-            .map(crate::state::PendingInjection::text),
-        Some("older peer")
+            .is_none_or(|queue| queue.is_empty()),
+        "the queue must be empty once its entry reached the composer"
     );
+}
+
+/// The regression: `queued_commands_pending` was reported for a session that
+/// could never drain, so the caller retried submit for minutes against a queue
+/// that by construction could not move — and the reason named the symptom
+/// rather than the cause.
+#[cfg(unix)]
+#[test]
+fn a_queue_that_cannot_drain_reports_the_agent_not_the_queue() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "submit-unready", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "submit-unready");
+    // Unconfirmed idle: exactly what a ready-screen agent looks like before its
+    // adapter has proof. `flush_pending_injections` is gated on the same
+    // predicate, so this queue cannot move until that changes.
+    state
+        .session_maps
+        .silence_states
+        .insert("submit-unready".to_string(), Arc::new(Mutex::new(SilenceState::new())));
+    state
+        .pending_injections
+        .entry("submit-unready".to_string())
+        .or_default()
+        .push_back(crate::state::PendingInjection::notice(PEER_MAIL_WAKE));
+
+    let rejection = write_agent_submission_to_pty(&state, "submit-unready", "new command");
+    assert_eq!(
+        rejection,
+        AgentSubmissionWrite::Rejected {
+            reason: "agent_not_ready",
+            composer_state: "empty",
+            pending: vec![crate::pty::PendingInjectionSummary {
+                id: state.pending_injections.get("submit-unready").unwrap()[0].id(),
+                kind: "notice",
+                preview: PEER_MAIL_WAKE.to_string(),
+            }],
+        },
+        "the blocker must name itself: which entry, of what kind"
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+}
+
+/// Whatever is parked is listable, countable and deletable — of every kind.
+/// A server entry that no surface reported is what made the stuck queue
+/// undiagnosable: an empty composer, an empty Compose list, and submit
+/// rejected anyway.
+#[test]
+fn every_parked_entry_is_observable_and_drainable() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "queue-visible", SHELL_BUSY);
+    {
+        let mut queue = state
+            .pending_injections
+            .entry("queue-visible".to_string())
+            .or_default();
+        queue.push_back(crate::state::PendingInjection::notice(PEER_MAIL_WAKE));
+        queue.push_back(crate::state::PendingInjection::initial_prompt("do the task"));
+        queue.push_back(crate::state::PendingInjection::user_command("git status"));
+    }
+
+    let listed = list_queued_commands(&state, "queue-visible");
+    assert_eq!(
+        listed.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
+        vec!["notice", "initial_prompt", "user_command"]
+    );
+    assert_eq!(queued_command_count(&state, "queue-visible"), 3);
+
+    // Every kind deletes by id, not just the user's own.
+    assert!(remove_queued_command(&state, "queue-visible", listed[0].id));
+    assert!(remove_queued_command(&state, "queue-visible", listed[1].id));
+    assert_eq!(queued_command_count(&state, "queue-visible"), 1);
+    assert_eq!(clear_queued_commands(&state, "queue-visible"), 1);
+    assert_eq!(queued_command_count(&state, "queue-visible"), 0);
 }
 
 #[cfg(unix)]
@@ -9794,7 +9973,7 @@ fn agent_submission_claim_prevents_concurrent_peer_splicing() {
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    let peer = deliver_message_to_pty(&state, "submit-race", "peer command");
+    let peer = deliver_notice_to_pty(&state, "submit-race", "peer command");
     let submitted = submit.join().unwrap();
 
     assert!(matches!(submitted, AgentSubmissionWrite::Complete { .. }));
@@ -9865,7 +10044,7 @@ fn flush_hands_the_enter_gap_to_the_injection_worker_not_the_caller() {
     agent_session(&state, "detached-flush", SHELL_IDLE);
     let bytes = insert_recording_session(&state, "detached-flush");
     let mut queue = VecDeque::new();
-    queue.push_back(crate::state::PendingInjection::peer_message("wake up"));
+    queue.push_back(crate::state::PendingInjection::notice("wake up"));
     state
         .pending_injections
         .insert("detached-flush".to_string(), queue);
@@ -9999,7 +10178,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
 fn deliver_queues_pending_for_busy_agent() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "busy", SHELL_BUSY);
-    let outcome = deliver_message_to_pty(&state, "busy", "[TUIC message from lead] go");
+    let outcome = deliver_notice_to_pty(&state, "busy", "[TUIC message from lead] go");
     assert_eq!(
         outcome,
         PtyDelivery::Queued,
@@ -10049,7 +10228,7 @@ fn enqueue_parks_command_while_agent_is_busy() {
         vec!["run the tests", "then push"],
         "queued in the order the user composed them"
     );
-    assert!(queue.iter().all(|entry| entry.is_user_command()));
+    assert!(queue.iter().all(|entry| entry.kind() == "user_command"));
     assert_eq!(
         state
             .session_state_with_shell("busy")
@@ -10107,26 +10286,25 @@ fn clear_queued_commands_preserves_peer_deliveries() {
     insert_recording_session(&state, "busy");
     enqueue_user_command(&state, "busy", "one").expect("enqueued");
     state.pending_injections.get_mut("busy").unwrap().push_back(
-        crate::state::PendingInjection::peer_message("[TUIC message from lead] first peer"),
+        crate::state::PendingInjection::notice("[TUIC message from lead] first peer"),
     );
     enqueue_user_command(&state, "busy", "two").expect("enqueued");
     state.pending_injections.get_mut("busy").unwrap().push_back(
-        crate::state::PendingInjection::peer_message("[TUIC message from worker] second peer"),
+        crate::state::PendingInjection::notice("[TUIC message from worker] second peer"),
     );
 
-    assert_eq!(queued_command_count(&state, "busy"), 2);
-    assert_eq!(clear_queued_commands(&state, "busy"), 2);
+    // Clear empties the queue, server notices included. Leaving them behind is
+    // what let "Clear" empty the visible list while the composer stayed blocked
+    // on what was left — and a dropped wake costs nothing: the mail it points at
+    // never left the inbox.
+    assert_eq!(queued_command_count(&state, "busy"), 4);
+    assert_eq!(clear_queued_commands(&state, "busy"), 4);
     assert_eq!(queued_command_count(&state, "busy"), 0);
-    assert_eq!(
-        state.pending_injections.get("busy").map(|queue| queue
-            .iter()
-            .map(|entry| entry.text().to_string())
-            .collect::<Vec<_>>()),
-        Some(vec![
-            "[TUIC message from lead] first peer".to_string(),
-            "[TUIC message from worker] second peer".to_string(),
-        ]),
-        "Compose clear must retain peer delivery ownership and order"
+    assert!(
+        state
+            .pending_injections
+            .get("busy")
+            .is_none_or(|queue| queue.is_empty())
     );
     assert_eq!(
         clear_queued_commands(&state, "busy"),
@@ -10135,45 +10313,74 @@ fn clear_queued_commands_preserves_peer_deliveries() {
     );
 }
 
-/// The Compose panel lists what waits and deletes one entry: peer wake
-/// messages stay invisible and untouchable, exactly as for count and clear.
+/// A recipient that cannot be woken must not accumulate one parked wake per
+/// sender: the pointer covers the whole inbox, and every extra copy is another
+/// idle window in which `submit` is rejected `queued_commands_pending`.
 #[cfg(unix)]
 #[test]
-fn list_and_remove_expose_only_user_commands() {
+fn repeated_mail_to_a_busy_recipient_parks_a_single_wake() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "busy-mail", SHELL_BUSY);
+    insert_recording_session(&state, "busy-mail");
+
+    for _ in 0..3 {
+        assert_eq!(
+            deliver_notice_to_pty(&state, "busy-mail", PEER_MAIL_WAKE),
+            PtyDelivery::Queued
+        );
+    }
+
+    assert_eq!(
+        state
+            .pending_injections
+            .get("busy-mail")
+            .map(|queue| queue.len()),
+        Some(1),
+        "one pointer covers the whole inbox"
+    );
+}
+
+/// The Compose panel lists what waits and deletes one entry — of every kind,
+/// in delivery order. Server entries used to be invisible and untouchable here,
+/// which is precisely why a single parked one could block `submit` with nothing
+/// on screen to explain it.
+#[cfg(unix)]
+#[test]
+fn list_and_remove_expose_every_parked_entry() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "busy", SHELL_BUSY);
     insert_recording_session(&state, "busy");
     enqueue_user_command(&state, "busy", "one").expect("enqueued");
-    state.pending_injections.get_mut("busy").unwrap().push_back(
-        crate::state::PendingInjection::peer_message("[TUIC message from lead] peer"),
-    );
+    state
+        .pending_injections
+        .get_mut("busy")
+        .unwrap()
+        .push_back(crate::state::PendingInjection::notice(PEER_MAIL_WAKE));
     enqueue_user_command(&state, "busy", "two").expect("enqueued");
 
     let listed = list_queued_commands(&state, "busy");
     assert_eq!(
         listed.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
-        vec!["one", "two"],
-        "listed in delivery order, peer message excluded"
+        vec!["one", PEER_MAIL_WAKE, "two"],
+        "listed in delivery order, nothing hidden"
+    );
+    assert_eq!(
+        listed.iter().map(|c| c.kind).collect::<Vec<_>>(),
+        vec!["user_command", "notice", "user_command"],
+        "kind is what tells a server entry from the user's own"
     );
 
-    assert!(remove_queued_command(&state, "busy", listed[0].id));
+    assert!(remove_queued_command(&state, "busy", listed[1].id));
     assert_eq!(
         list_queued_commands(&state, "busy")
             .iter()
             .map(|c| c.text.as_str())
             .collect::<Vec<_>>(),
-        vec!["two"],
-    );
-    assert_eq!(
-        state
-            .pending_injections
-            .get("busy")
-            .map(|queue| queue.len()),
-        Some(2),
-        "the peer message survives a Compose delete"
+        vec!["one", "two"],
+        "the blocking entry is deletable, and the rest keep their order"
     );
     assert!(
-        !remove_queued_command(&state, "busy", listed[0].id),
+        !remove_queued_command(&state, "busy", listed[1].id),
         "removing an id that already drained is a no-op, not an error"
     );
 }
@@ -10209,7 +10416,7 @@ fn enqueue_never_overtakes_a_command_already_waiting() {
         .pending_injections
         .entry("fifo".to_string())
         .or_default()
-        .push_back(crate::state::PendingInjection::peer_message("first"));
+        .push_back(crate::state::PendingInjection::notice("first"));
 
     let outcome = enqueue_user_command(&state, "fifo", "second").expect("enqueued");
     assert_eq!((outcome.typed, outcome.queued), (false, 1));
@@ -10229,7 +10436,7 @@ fn enqueue_never_overtakes_a_command_already_waiting() {
     );
 }
 
-/// The defect this pair pins: `deliver_message_to_managed_pty` used to return
+/// The defect this pair pins: `deliver_notice_to_managed_pty` used to return
 /// `state.session_maps.sessions.contains_key(session_id)` — "the session exists", not "the
 /// message was typed". Every call site read that as delivery and marked the
 /// message `TerminalDispatched`, and the waiter filter hides Terminal-owned
@@ -10245,7 +10452,7 @@ fn queued_message_is_not_claimed_as_dispatched() {
         crate::state::AgentDeliveryAssignment::Terminal
     );
 
-    let outcome = deliver_message_to_pty(&state, "busy-peer", "[TUIC message from lead] go");
+    let outcome = deliver_notice_to_pty(&state, "busy-peer", "[TUIC message from lead] go");
     settle_terminal_delivery(&state, "busy-peer", msg, outcome);
 
     assert_eq!(outcome, PtyDelivery::Queued);
@@ -10300,7 +10507,7 @@ fn dead_session_reports_unavailable_and_releases_ownership() {
     );
 
     // No PTY was ever registered for this id.
-    let outcome = deliver_message_to_managed_pty(&state, "ghost-peer", "[TUIC] hi");
+    let outcome = deliver_notice_to_managed_pty(&state, "ghost-peer", "[TUIC] hi");
     settle_terminal_delivery(&state, "ghost-peer", msg, outcome);
 
     assert_eq!(outcome, PtyDelivery::Unavailable);
@@ -10318,8 +10525,8 @@ fn idle_flush_submits_only_one_queued_message_per_turn() {
     state.pending_injections.insert(
         "idle".to_string(),
         std::collections::VecDeque::from([
-            crate::state::PendingInjection::peer_message("first"),
-            crate::state::PendingInjection::peer_message("second"),
+            crate::state::PendingInjection::notice("first"),
+            crate::state::PendingInjection::notice("second"),
         ]),
     );
 
@@ -10350,7 +10557,7 @@ fn deliver_queues_for_idle_agent_with_partial_user_input() {
         !should_inject_now(&state, "typing"),
         "partial composer input must block terminal injection"
     );
-    deliver_message_to_pty(&state, "typing", "[TUIC message from child] done");
+    deliver_notice_to_pty(&state, "typing", "[TUIC message from child] done");
     let pending = state.pending_injections.get("typing").unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(
@@ -10392,7 +10599,7 @@ fn delivery_gate_assigns_waiter_without_touching_terminal_queue() {
 fn deliver_noop_for_non_agent() {
     let state = crate::state::tests_support::make_test_app_state();
     // No session_states entry → not an agent.
-    deliver_message_to_pty(&state, "ghost", "hi");
+    deliver_notice_to_pty(&state, "ghost", "hi");
     assert!(
         !state.pending_injections.contains_key("ghost"),
         "non-agent must never queue"
@@ -10405,7 +10612,7 @@ fn managed_delivery_rejects_stale_agent_state_without_pty() {
     agent_session(&state, "vanished", SHELL_BUSY);
 
     assert_eq!(
-        deliver_message_to_managed_pty(&state, "vanished", "message"),
+        deliver_notice_to_managed_pty(&state, "vanished", "message"),
         PtyDelivery::Unavailable
     );
     assert!(!state.pending_injections.contains_key("vanished"));
@@ -10418,7 +10625,7 @@ fn failed_not_started_injection_rolls_back_claim_and_requeues() {
     // message kept pending instead of leaving a false BUSY state.
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "idle", SHELL_IDLE);
-    deliver_message_to_pty(&state, "idle", "now");
+    deliver_notice_to_pty(&state, "idle", "now");
     assert!(
         state
             .session_maps
@@ -10776,7 +10983,7 @@ fn deliver_reenqueue_recovers_message_when_idle_races_enqueue() {
         let (s1, b1) = (Arc::clone(&state), Arc::clone(&barrier));
         let sender = std::thread::spawn(move || {
             b1.wait();
-            deliver_message_to_pty(&s1, "race", "[TUIC message from lead] go");
+            deliver_notice_to_pty(&s1, "race", "[TUIC message from lead] go");
         });
         let (s2, b2) = (Arc::clone(&state), Arc::clone(&barrier));
         let timer = std::thread::spawn(move || {
@@ -10994,8 +11201,8 @@ fn idle_transition_emits_before_submitting_one_pending_message() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "sess", SHELL_BUSY);
     let mut q = VecDeque::new();
-    q.push_back(crate::state::PendingInjection::peer_message("msg-1"));
-    q.push_back(crate::state::PendingInjection::peer_message("msg-2"));
+    q.push_back(crate::state::PendingInjection::notice("msg-1"));
+    q.push_back(crate::state::PendingInjection::notice("msg-2"));
     state.pending_injections.insert("sess".to_string(), q);
 
     // The transition is driven by verified ready-screen/Stop evidence in
@@ -11055,7 +11262,7 @@ fn flush_keeps_pending_while_question_confident() {
         },
     );
     let mut q = VecDeque::new();
-    q.push_back(crate::state::PendingInjection::peer_message("later"));
+    q.push_back(crate::state::PendingInjection::notice("later"));
     state.pending_injections.insert("sess".to_string(), q);
 
     state.session_maps.silence_states.insert(
@@ -11122,7 +11329,7 @@ fn flush_noop_while_busy() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     agent_session(&state, "busy", SHELL_BUSY);
     let mut q = VecDeque::new();
-    q.push_back(crate::state::PendingInjection::peer_message("later"));
+    q.push_back(crate::state::PendingInjection::notice("later"));
     state.pending_injections.insert("busy".to_string(), q);
 
     flush_pending_injections(&state, "busy");
@@ -11159,7 +11366,7 @@ fn ready_prompt_delivery_attempts_and_requeues_when_pty_is_missing() {
         .session_maps
         .silence_states
         .insert("codex".to_string(), Arc::new(Mutex::new(silence)));
-    deliver_message_to_pty(&state, "codex", "[TUIC message from lead] go");
+    deliver_notice_to_pty(&state, "codex", "[TUIC message from lead] go");
     assert_eq!(
         state
             .pending_injections

@@ -2192,7 +2192,7 @@ impl SilenceState {
 /// BEFORE any post-transition work for the same reason:
 /// `flush_pending_injections_blocking` re-reads `shell_states` through
 /// `should_inject_now` on this very thread. (`push_state_change_to_parent` reaches
-/// the same read via `deliver_message_to_pty`, but hands it to the injection
+/// the same read via `deliver_notice_to_pty`, but hands it to the injection
 /// worker, so it is no longer this thread's re-entrancy to manage.)
 fn try_shell_transition(
     state: &crate::state::AppState,
@@ -6945,8 +6945,18 @@ type VtProcessResult = (
 /// line — a multi-line paste submits itself halfway through.
 fn describe_lifecycle_payload(child_session: &str, payload: &serde_json::Value) -> String {
     let child = short_session(child_session);
+    if payload.get("type").and_then(|t| t.as_str()) == Some("prompt_delivered") {
+        return format!("child agent {child} has taken its initial prompt after all");
+    }
     if payload.get("type").and_then(|t| t.as_str()) == Some("prompt_delivery_failed") {
-        return format!("child agent {child} initial prompt delivery timed out");
+        return match payload.get("reason").and_then(|r| r.as_str()) {
+            Some("startup_dialog") => format!(
+                "child agent {child} is stalled on a startup dialog; its prompt is queued and will be typed once it is answered"
+            ),
+            _ => format!(
+                "child agent {child} has not taken its initial prompt yet; it stays queued for the child's next ready window"
+            ),
+        };
     }
     let state_desc = payload
         .get("state")
@@ -7051,7 +7061,7 @@ fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch
     {
         return;
     }
-    let outcome = deliver_message_to_managed_pty(state, &dispatch.parent_id, &dispatch.framed);
+    let outcome = deliver_notice_to_managed_pty(state, &dispatch.parent_id, &dispatch.framed);
     settle_terminal_delivery(state, &dispatch.parent_id, &dispatch.message_id, outcome);
 }
 
@@ -7073,16 +7083,33 @@ pub(crate) fn push_state_change_to_parent(
     }
 }
 
-/// Emit the single exceptional-path notification for an initial prompt that
-/// never completed PTY submission. Removing the marker first makes the
-/// operation idempotent: a watchdog can fire at most once per spawned child.
+/// Emit the single exceptional-path notification for an initial prompt that has
+/// not reached the child's composer yet.
+///
+/// The prompt is deliberately NOT dropped. A child that stalls on a startup
+/// dialog ("Do you trust the contents of this directory?") is not a child whose
+/// task is void — once the dialog is answered it reaches a ready prompt and the
+/// queued entry is typed. Removing the marker here (as this used to) reported
+/// the failure *and* silently discarded the work, so nothing retried and the
+/// child sat idle as if it had been spawned with nothing to do.
+///
+/// `notified` keeps the watchdog one-shot without that loss, and the payload
+/// carries both the detected cause and the prompt itself so a parent that
+/// prefers to re-deliver by hand has the text.
 pub(crate) fn notify_initial_prompt_timeout_if_pending(
     state: &Arc<AppState>,
     session_id: &str,
 ) -> bool {
-    if state.pending_initial_prompts.remove(session_id).is_none() {
-        return false;
-    }
+    let prompt = {
+        let Some(mut pending) = state.pending_initial_prompts.get_mut(session_id) else {
+            return false;
+        };
+        if pending.notified {
+            return false;
+        }
+        pending.notified = true;
+        pending.prompt.clone()
+    };
     let Some(parent_id) = state
         .session_maps
         .session_parent
@@ -7093,10 +7120,22 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(
         return false;
     };
     let now_ms = now_epoch_ms();
+    // Dialog detection, rather than reporting every stall as a bare timeout: a
+    // confident question is the one cause the server can name, and it is the
+    // one that resolves by itself the moment a human answers it.
+    let reason = if blocked_on_confident_question(state, session_id) {
+        "startup_dialog"
+    } else {
+        "timeout"
+    };
     let payload = serde_json::json!({
         "type": "prompt_delivery_failed",
-        "reason": "timeout",
+        "reason": reason,
         "session_id": session_id,
+        // The prompt is still queued for the child's next ready window; a parent
+        // that wants to re-deliver it itself does not have to have kept a copy.
+        "retrying": true,
+        "prompt": prompt,
     });
     let message_id = format!("tuic-auto-prompt-{session_id}-{now_ms}");
     let message_timestamp = state.push_agent_inbox(
@@ -7130,10 +7169,29 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(
     );
     let state = Arc::clone(state);
     spawn_injection_job(move || {
-        let outcome = deliver_message_to_managed_pty(&state, &parent_id, &framed);
+        let outcome = deliver_notice_to_managed_pty(&state, &parent_id, &framed);
         settle_terminal_delivery(&state, &parent_id, &message_id, outcome);
     });
     true
+}
+
+/// Tell the parent that a prompt it was warned about has now been typed.
+///
+/// Only emitted after a `prompt_delivery_failed` notice for the same child: an
+/// orchestrator that was told the task never landed must not be left believing
+/// that. Silence would be the worse of the two lies, because the only recovery
+/// it leaves is re-delivering a prompt that is already running.
+fn notify_initial_prompt_delivered(state: &AppState, session_id: &str) {
+    if let Some(dispatch) = enqueue_state_change_to_parent(
+        state,
+        session_id,
+        serde_json::json!({
+            "type": "prompt_delivered",
+            "session_id": session_id,
+        }),
+    ) {
+        dispatch_parent_lifecycle(state, dispatch);
+    }
 }
 
 /// First 8 chars of a session UUID, for compact human-facing labels.
@@ -7183,6 +7241,19 @@ fn session_is_agent(state: &AppState, session_id: &str) -> bool {
         .session_states
         .get(session_id)
         .map(|s| s.agent_type.is_some())
+        .unwrap_or(false)
+}
+
+/// Whether a confident user-facing question currently owns this composer — the
+/// startup trust dialog, an approval prompt, an Ink footer choice. Named
+/// separately from `should_inject_now` because the prompt-delivery watchdog
+/// reports it as a cause, not merely as a reason to wait.
+pub(crate) fn blocked_on_confident_question(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .map(|s| s.question_confident)
         .unwrap_or(false)
 }
 
@@ -7298,9 +7369,56 @@ pub(crate) enum AgentSubmissionWrite {
     Rejected {
         reason: &'static str,
         composer_state: &'static str,
+        /// What is parked ahead of this submission, for `queued_commands_pending`.
+        /// Empty for every other reason.
+        pending: Vec<PendingInjectionSummary>,
     },
     Failed(String),
     Uncertain(String),
+}
+
+/// One parked entry, as a rejected submission reports it.
+///
+/// `queued_commands_pending` used to be a bare string against a `queued_commands`
+/// count that deliberately excluded server entries, so a caller looking at an
+/// empty composer and an empty Compose queue had nothing to act on. The blocker
+/// now names itself.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct PendingInjectionSummary {
+    pub id: u64,
+    pub kind: &'static str,
+    /// First line, truncated. Enough to recognise the entry; the full text is on
+    /// the Compose queue listing.
+    pub preview: String,
+}
+
+const PENDING_PREVIEW_MAX_CHARS: usize = 80;
+
+fn summarize_pending_injections(state: &AppState, session_id: &str) -> Vec<PendingInjectionSummary> {
+    state
+        .pending_injections
+        .get(session_id)
+        .map(|queue| {
+            queue
+                .iter()
+                .map(|entry| PendingInjectionSummary {
+                    id: entry.id(),
+                    kind: entry.kind(),
+                    preview: truncate_chars(
+                        entry.text().lines().next().unwrap_or_default(),
+                        PENDING_PREVIEW_MAX_CHARS,
+                    ),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    format!("{}…", text.chars().take(max).collect::<String>())
 }
 
 fn agent_submission_rejection(
@@ -7317,13 +7435,6 @@ fn agent_submission_rejection(
         return Some(("partial_composer", "partial"));
     }
     if state
-        .pending_injections
-        .get(session_id)
-        .is_some_and(|queue| !queue.is_empty())
-    {
-        return Some(("queued_commands_pending", "empty"));
-    }
-    if state
         .session_maps
         .session_states
         .get(session_id)
@@ -7331,6 +7442,35 @@ fn agent_submission_rejection(
     {
         return Some(("awaiting_input", "empty"));
     }
+    // Readiness is checked BEFORE the queue, and the order is the fix. An agent
+    // whose idle is unconfirmed can never drain its queue — `flush_pending_injections`
+    // is gated on the same predicate — so reporting `queued_commands_pending`
+    // named the symptom and hid the cause, and the caller retried submit for
+    // minutes against a queue that by construction could not move.
+    // `agent_not_ready` is the truth, and it is the state that actually changes.
+    if !should_inject_now(state, session_id) {
+        return Some(("agent_not_ready", "empty"));
+    }
+    // The agent IS ready, so anything still parked can be typed right now.
+    // Level-triggered: the BUSY→IDLE edge that normally drains this queue may
+    // already have passed, and nothing else would fire it. Draining here is the
+    // same write the transition would have made, one item per idle window.
+    if state
+        .pending_injections
+        .get(session_id)
+        .is_some_and(|queue| !queue.is_empty())
+    {
+        flush_pending_injections_blocking(state, session_id);
+    }
+    if state
+        .pending_injections
+        .get(session_id)
+        .is_some_and(|queue| !queue.is_empty())
+    {
+        return Some(("queued_commands_pending", "empty"));
+    }
+    // Re-read: a flush that emptied the queue typed one entry and left the
+    // session BUSY, so the caller is now waiting on that turn, not on a queue.
     if !should_inject_now(state, session_id) {
         return Some(("agent_not_ready", "empty"));
     }
@@ -7352,6 +7492,7 @@ pub(crate) fn write_agent_submission_to_pty(
         return AgentSubmissionWrite::Rejected {
             reason,
             composer_state,
+            pending: summarize_pending_injections(state, session_id),
         };
     }
     let Some(claim) = claim_idle_for_injection(state, session_id) else {
@@ -7360,6 +7501,7 @@ pub(crate) fn write_agent_submission_to_pty(
         return AgentSubmissionWrite::Rejected {
             reason,
             composer_state,
+            pending: summarize_pending_injections(state, session_id),
         };
     };
 
@@ -7617,7 +7759,7 @@ fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionCl
 /// Retrying a peer message risks typing it twice; an orchestrator notice is
 /// either payload-free or a re-derivable state summary, so it is idempotent
 /// enough to retry. This used to be inferred by comparing the text against
-/// `ORCHESTRATOR_MAIL_WAKE` — which silently stopped covering the notice once
+/// `PEER_MAIL_WAKE` — which silently stopped covering the notice once
 /// it could also be a lifecycle summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaimedInjectionKind {
@@ -7636,7 +7778,16 @@ fn run_claimed_injection(
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome, kind)
 }
 
-const ORCHESTRATOR_MAIL_WAKE: &str = "[TUIC] message available — read it with: agent action=inbox";
+/// The only thing a peer `send` is ever allowed to put on a recipient's screen.
+///
+/// It is a pointer, not the message. Typing the payload itself was the whole
+/// defect: a recipient's TUI cannot tell an injected line from something its
+/// user typed, so mail arrived as keystrokes in the composer — rendered as
+/// literal prompt text by one agent, and left sitting unsubmitted (composer
+/// "partial") by another. The inbox is where mail lives; this line only tells
+/// the recipient to go read it.
+pub(crate) const PEER_MAIL_WAKE: &str =
+    "[TUIC] message available — read it with: agent action=inbox";
 
 /// Longest self-acknowledging summary we are willing to type into a composer.
 /// Past this the notice stops being a cheap one-liner, so we fall back to the
@@ -7722,7 +7873,7 @@ fn submit_orchestrator_mail_wake(
         return OrchestratorWakeAttemptOutcome::NotStarted;
     };
     let summary = summarize_lifecycle_group(state, recipient, group);
-    let text = summary.as_deref().unwrap_or(ORCHESTRATOR_MAIL_WAKE);
+    let text = summary.as_deref().unwrap_or(PEER_MAIL_WAKE);
     match run_claimed_injection(
         state,
         session_id,
@@ -7742,8 +7893,13 @@ fn submit_orchestrator_mail_wake(
 }
 
 /// Route mail for a peer that has authoritatively acted as an orchestrator by
-/// spawning a managed child. Returns `None` for ordinary managed agents so their
-/// existing direct payload/channel delivery remains unchanged.
+/// spawning a managed child: coalesced wakes, a self-acknowledging lifecycle
+/// summary where the window allows one, and a strict no-queue policy.
+///
+/// Returns `None` for ordinary managed agents, which take the simpler
+/// SSE-channel-or-`PEER_MAIL_WAKE` route. Both keep the same invariant — the
+/// payload never reaches a composer — so what differs is only how the wake is
+/// batched, not what a recipient may be shown.
 pub(crate) fn route_registered_orchestrator_mail(
     state: &AppState,
     recipient: &str,
@@ -7827,9 +7983,18 @@ fn apply_claimed_injection_outcome(
             if state
                 .pending_initial_prompts
                 .get(session_id)
-                .is_some_and(|prompt| prompt.as_str() == text)
+                .is_some_and(|pending| pending.prompt == text)
             {
-                state.pending_initial_prompts.remove(session_id);
+                // Delivery finally happened. If the watchdog already told the
+                // parent it had not, close that loop rather than leaving the
+                // parent holding a failure notice for work that is now running.
+                let notified = state
+                    .pending_initial_prompts
+                    .remove(session_id)
+                    .is_some_and(|(_, pending)| pending.notified);
+                if notified {
+                    notify_initial_prompt_delivered(state, session_id);
+                }
             }
         }
         InjectionOutcome::NotStarted(error) => {
@@ -7880,11 +8045,15 @@ pub(crate) enum PtyDelivery {
     Unavailable,
 }
 
-/// Deliver a framed peer message into a recipient's terminal, waking it. Injects
+/// Type a server-authored notice into a recipient's terminal, waking it. Injects
 /// immediately when the recipient is an idle agent; otherwise queues it to flush
 /// on the recipient's next BUSY→IDLE transition. No-op for non-agent sessions.
 /// The caller has already buffered the authoritative copy in the inbox.
-pub(crate) fn deliver_message_to_pty(
+///
+/// `framed` is a notice, never a peer payload: the payload-free `PEER_MAIL_WAKE`
+/// or a child lifecycle summary. Peer `send` content stays in the inbox — see
+/// `PendingInjection`.
+pub(crate) fn deliver_notice_to_pty(
     state: &AppState,
     session_id: &str,
     framed: &str,
@@ -7907,7 +8076,7 @@ pub(crate) fn deliver_message_to_pty(
             requeue_injection_front(
                 state,
                 session_id,
-                crate::state::PendingInjection::peer_message(framed),
+                crate::state::PendingInjection::notice(framed),
             );
             return PtyDelivery::Queued;
         }
@@ -7915,11 +8084,22 @@ pub(crate) fn deliver_message_to_pty(
         // terminal keeps ownership either way.
         PtyDelivery::Typed
     } else {
-        state
-            .pending_injections
-            .entry(session_id.to_string())
-            .or_default()
-            .push_back(crate::state::PendingInjection::peer_message(framed));
+        // One parked mail wake covers the whole inbox: the recipient answers it
+        // by reading every message. Pushing one per sender would type the same
+        // pointer N times and, worse, keep the queue non-empty for N idle
+        // windows — the state that blocks `submit`.
+        let already_parked = framed == PEER_MAIL_WAKE
+            && state
+                .pending_injections
+                .get(session_id)
+                .is_some_and(|queue| queue.iter().any(|entry| entry.text() == PEER_MAIL_WAKE));
+        if !already_parked {
+            state
+                .pending_injections
+                .entry(session_id.to_string())
+                .or_default()
+                .push_back(crate::state::PendingInjection::notice(framed));
+        }
         // CONC-A (story 101-20e3): the should_inject_now read above and this push are
         // not atomic vs a concurrent BUSY→IDLE flush. If the silence timer transitions
         // the session to idle and drains the (still-empty) queue in the window between
@@ -7973,7 +8153,7 @@ pub(crate) fn settle_terminal_delivery(
 /// ownership only for a message that truly reached the composer. `Unavailable`
 /// means teardown won the race and the authoritative inbox copy must stay
 /// available to `agent wait`.
-pub(crate) fn deliver_message_to_managed_pty(
+pub(crate) fn deliver_notice_to_managed_pty(
     state: &AppState,
     session_id: &str,
     framed: &str,
@@ -7987,7 +8167,7 @@ pub(crate) fn deliver_message_to_managed_pty(
     if !available {
         return PtyDelivery::Unavailable;
     }
-    let outcome = deliver_message_to_pty(state, session_id, framed);
+    let outcome = deliver_notice_to_pty(state, session_id, framed);
     // Teardown can still win between the check above and the write.
     if state.session_maps.sessions.contains_key(session_id) {
         outcome
@@ -8003,7 +8183,7 @@ pub(crate) fn deliver_message_to_managed_pty(
 /// The flush itself sleeps `INJECT_ENTER_GAP` under the session writer mutex,
 /// so waiting for it here would park a worker for 50ms per queued message.
 ///
-/// Callers that must observe the result before returning — `deliver_message_to_pty`
+/// Callers that must observe the result before returning — `deliver_notice_to_pty`
 /// reads the queue to tell `Typed` from `Queued`, and the OSC handler already
 /// runs on the session's own reader thread — call the blocking form directly.
 pub(crate) fn flush_pending_injections(state: &Arc<AppState>, session_id: &str) {
@@ -8050,26 +8230,31 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
     }
 }
 
-/// User-composed commands still parked for a session. Peer wake entries share
-/// the FIFO but are deliberately excluded from this Compose-facing count.
+/// Everything still parked for a session, of any kind.
+///
+/// Counting only `UserCommand` here is what made a stuck queue undiagnosable: a
+/// single server entry blocked `submit` with `queued_commands_pending` while the
+/// Compose badge read 0 and the listing was empty, so there was nothing to see
+/// and nothing to delete. Every parked entry is now counted, listed and
+/// removable; `kind` is what tells them apart.
 pub(crate) fn queued_command_count(state: &AppState, session_id: &str) -> usize {
     state
         .pending_injections
         .get(session_id)
-        .map(|queue| queue.iter().filter(|entry| entry.is_user_command()).count())
+        .map(|queue| queue.len())
         .unwrap_or(0)
 }
 
-/// One user-composed command still parked, as the Compose panel lists it.
-/// Peer wake entries are excluded for the same reason they are excluded from
-/// the count: they are not the user's to read or delete.
+/// One parked entry, as the Compose panel lists it.
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct QueuedCommand {
     pub id: u64,
     pub text: String,
+    /// `user_command`, `notice` or `initial_prompt` — see `PendingInjection`.
+    pub kind: &'static str,
 }
 
-/// User-composed commands still parked, in delivery order.
+/// Everything still parked, in delivery order.
 pub(crate) fn list_queued_commands(state: &AppState, session_id: &str) -> Vec<QueuedCommand> {
     state
         .pending_injections
@@ -8077,21 +8262,17 @@ pub(crate) fn list_queued_commands(state: &AppState, session_id: &str) -> Vec<Qu
         .map(|queue| {
             queue
                 .iter()
-                .filter_map(|entry| match entry {
-                    crate::state::PendingInjection::UserCommand { id, text } => {
-                        Some(QueuedCommand {
-                            id: *id,
-                            text: text.clone(),
-                        })
-                    }
-                    crate::state::PendingInjection::PeerMessage(_) => None,
+                .map(|entry| QueuedCommand {
+                    id: entry.id(),
+                    text: entry.text().to_string(),
+                    kind: entry.kind(),
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-/// Drop a single queued user command. Returns false when the id is unknown —
+/// Drop a single parked entry by id. Returns false when the id is unknown —
 /// the entry may have been typed already, which is not an error for the caller.
 pub(crate) fn remove_queued_command(state: &AppState, session_id: &str, id: u64) -> bool {
     state
@@ -8099,7 +8280,7 @@ pub(crate) fn remove_queued_command(state: &AppState, session_id: &str, id: u64)
         .get_mut(session_id)
         .map(|mut queue| {
             let before = queue.len();
-            queue.retain(|entry| !matches!(entry, crate::state::PendingInjection::UserCommand { id: entry_id, .. } if *entry_id == id));
+            queue.retain(|entry| entry.id() != id);
             before != queue.len()
         })
         .unwrap_or(false)
@@ -8120,7 +8301,7 @@ pub(crate) struct EnqueuedCommand {
 /// action — the user wants the text delivered *without* steering a running turn.
 ///
 /// The command is always appended before the flush, never handed straight to
-/// `deliver_message_to_pty`: injecting ahead of any accepted peer message or
+/// `deliver_notice_to_pty`: injecting ahead of any accepted peer message or
 /// Compose command would reorder delivery. `flush_pending_injections_blocking` pops one
 /// typed entry and leaves the session BUSY, so the shared queue drains one item
 /// per idle transition and stays FIFO across both producers.
@@ -8156,16 +8337,21 @@ pub(crate) fn enqueue_user_command(
     })
 }
 
-/// Drop only user-composed commands still waiting for this session. Peer wake
-/// entries remain in the same relative order. Returns the user-command count removed.
+/// Drop everything still waiting for this session. Returns the count removed.
+///
+/// This is the drain a stuck queue needs: leaving server entries behind meant
+/// "Clear" emptied the visible list while the composer stayed blocked on what
+/// was left. Nothing here is load-bearing — a dropped mail wake costs at most
+/// one `agent action=inbox` (the mail itself never left the inbox), and a
+/// dropped initial prompt is still on record in `pending_initial_prompts`.
 pub(crate) fn clear_queued_commands(state: &AppState, session_id: &str) -> usize {
     state
         .pending_injections
         .get_mut(session_id)
         .map(|mut queue| {
             let before = queue.len();
-            queue.retain(|entry| !entry.is_user_command());
-            before - queue.len()
+            queue.clear();
+            before
         })
         .unwrap_or(0)
 }
