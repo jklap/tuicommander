@@ -62,8 +62,10 @@ vi.mock("../../stores/ui", () => ({
 		state: {
 			settingsNavWidth: 180,
 			tasksViewPreferences: {},
+			lastSettingsTab: null,
 		},
 		setSettingsNavWidth: vi.fn(),
+		setLastSettingsTab: vi.fn(),
 	},
 }));
 

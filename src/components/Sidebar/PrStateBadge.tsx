@@ -4,14 +4,19 @@ import { PR_READINESS_LABELS, prReadiness } from "../../utils/prReadiness";
 import s from "./Sidebar.module.css";
 
 const PR_BADGE_CLASSES: Record<string, string> = {
-	"unresolved-comments": s.prReviewRequired,
+	// Own class (same default look as prReviewRequired) so the registry's
+	// pr.unresolved-comments color override applies to the pill too.
+	"unresolved-comments": s.prUnresolvedComments,
 	ready: s.prReady,
 	open: s.prOpen,
 	merged: s.prMerged,
 	closed: s.prClosed,
 	draft: s.prDraft,
 	conflict: s.prConflict,
-	checking: s.prCiPending,
+	// Was s.prCiPending (shared with "ci-pending") — split so each is
+	// independently customizable (indicators/registry.ts pr.checking vs
+	// pr.ci-pending). Same default appearance either way.
+	checking: s.prChecking,
 	"ci-failed": s.prCiFailed,
 	"changes-requested": s.prChangesRequested,
 	"review-required": s.prReviewRequired,
@@ -27,17 +32,20 @@ export const PR_STATE_LABELS: Record<string, string> = Object.fromEntries(
 );
 
 /** Compact form: the state is carried by the marker's color (and, for a
- *  conflict, its shape) instead of a filled pill. */
+ *  conflict, its shape) instead of a filled pill. States that share a look
+ *  share a shape class and add a per-state modifier, which points the color
+ *  (and animation) at that state's own `--ind-pr-*` var — so a Settings >
+ *  Appearance override of one state never recolors its look-alike. */
 const PR_MARK_CLASSES: Record<string, string> = {
-	"unresolved-comments": s.prMarkReview,
-	ready: s.prMarkOpen,
+	"unresolved-comments": cx(s.prMarkReview, s.prMarkComments),
+	ready: cx(s.prMarkOpen, s.prMarkReady),
 	open: s.prMarkOpen,
 	merged: s.prMarkMerged,
 	closed: s.prMarkClosed,
 	draft: s.prMarkDraft,
 	conflict: s.prMarkConflict,
-	checking: s.prMarkPending,
-	"ci-failed": s.prMarkClosed,
+	checking: cx(s.prMarkPending, s.prMarkChecking),
+	"ci-failed": cx(s.prMarkClosed, s.prMarkCiFailed),
 	"changes-requested": s.prMarkChanges,
 	"review-required": s.prMarkReview,
 	"ci-pending": s.prMarkPending,

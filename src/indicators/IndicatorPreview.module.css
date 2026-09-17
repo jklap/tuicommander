@@ -1,0 +1,44 @@
+/* Generic dot/pill preview swatch — used when the entry has no icon of its
+ * own (e.g. sidebar.idle, a merged/remote badge). Animation is set inline
+ * per entry (var(--ind-anim-*)), not a class — every animated preview here
+ * now uses the exact same keyframe as the real component (global.css's
+ * tuic-* set), so it can no longer visually disagree with what it's
+ * previewing. */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+/* IndicatorIcon preview — the real SVG shape the app renders, colored and
+ * animated inline per entry. Replaces the old hardcoded "✱"/"⎇"/"?" text
+ * glyphs, which the sidebar stopped rendering a while ago. */
+.previewIcon {
+  width: 14px;
+  flex-shrink: 0;
+}
+
+.symbol {
+  width: 18px;
+  text-align: center;
+  font-size: var(--font-base);
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.colorBar {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.badge {
+  display: inline-block;
+  width: 18px;
+  height: 12px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}

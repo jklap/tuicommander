@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
+import type { GitOpKind } from "../stores/repositories";
 import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { RepoInfo } from "../types";
 import type { OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
@@ -382,15 +383,15 @@ export function useRepository() {
 		detached_worktrees: DetachedWorktree[];
 		worktree_diagnostics?: WorktreeDiagnostic[];
 		merged_branches: string[];
-		/** Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect in progress. */
-		in_progress_worktrees: string[];
+		/** Worktrees with a rebase/merge/cherry-pick/revert/bisect in progress, and which one. */
+		in_progress_ops: Array<{ path: string; kind: GitOpKind }>;
 	}> {
 		try {
 			return await invoke("get_repo_structure", { repoPath });
 		} catch (err) {
 			checkTccError(err, repoPath);
 			appLogger.warn("git", `Failed to get repo structure for ${repoPath}`, err);
-			return { worktree_paths: {}, detached_worktrees: [], merged_branches: [], in_progress_worktrees: [] };
+			return { worktree_paths: {}, detached_worktrees: [], merged_branches: [], in_progress_ops: [] };
 		}
 	}
 

@@ -17,11 +17,16 @@ vi.mock("../../../stores/settings", () => ({
 
 vi.mock("../../../stores/ui", async () => {
 	const { createStore } = await import("solid-js/store");
-	const [state, setState] = createStore({ settingsNavWidth: 180, settingsExpertMode: false });
+	const [state, setState] = createStore({
+		settingsNavWidth: 180,
+		settingsExpertMode: false,
+		lastSettingsTab: null as string | null,
+	});
 	return {
 		uiStore: {
 			state,
 			setSettingsNavWidth: vi.fn(),
+			setLastSettingsTab: vi.fn(),
 			persistUIPrefs: vi.fn(),
 			setSettingsExpertMode: vi.fn((enabled: boolean) => setState("settingsExpertMode", enabled)),
 		},

@@ -192,6 +192,33 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("lastSettingsTab", () => {
+		it("defaults to null", () => {
+			testInScope(() => {
+				expect(store.state.lastSettingsTab).toBeNull();
+			});
+		});
+
+		it("setLastSettingsTab stores the given tab key", () => {
+			testInScope(() => {
+				store.setLastSettingsTab("agents");
+				expect(store.state.lastSettingsTab).toBe("agents");
+				store.setLastSettingsTab("repo:/repo/alpha");
+				expect(store.state.lastSettingsTab).toBe("repo:/repo/alpha");
+			});
+		});
+
+		it("does not persist lastSettingsTab to backend (session-only)", () => {
+			testInScope(() => {
+				mockInvoke.mockClear();
+				store.setLastSettingsTab("agents");
+				flushPersist();
+				const calls = mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_prefs");
+				expect(calls).toHaveLength(0);
+			});
+		});
+	});
+
 	describe("fileBrowserExternalRoot", () => {
 		it("defaults to null", () => {
 			testInScope(() => {
@@ -526,6 +553,31 @@ describe("uiStore", () => {
 						sidebar_width: 300,
 						settings_nav_width: 232,
 					}),
+				});
+			});
+		});
+
+		describe("resetLayout()", () => {
+			it("restores sidebar and settings-nav width to their defaults", () => {
+				testInScope(() => {
+					store.setSidebarWidth(450);
+					store.setSettingsNavWidth(220);
+					store.resetLayout();
+					expect(store.state.sidebarWidth).toBe(300);
+					expect(store.state.settingsNavWidth).toBe(232);
+				});
+			});
+
+			it("persists the reset widths", () => {
+				testInScope(() => {
+					store.setSidebarWidth(450);
+					mockInvoke.mockClear();
+					store.resetLayout();
+					flushPersist();
+					expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+						base: expect.anything(),
+						config: expect.objectContaining({ sidebar_width: 300, settings_nav_width: 232 }),
+					});
 				});
 			});
 		});
