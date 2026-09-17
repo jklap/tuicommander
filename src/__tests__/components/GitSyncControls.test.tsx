@@ -26,6 +26,7 @@ it("catches sync primitive adoption losing operation payload, pending disable or
 				staged: [],
 				unstaged: [],
 				untracked: [],
+				conflicted: [],
 			}}
 		/>
 	));

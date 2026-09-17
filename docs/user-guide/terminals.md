@@ -363,7 +363,7 @@ Customize the rule list, or the plain word-boundary characters double-click fall
 
 ## Terminal Bell
 
-The bell behavior when receiving BEL character (\x07) is set by `bell_style` in `config.json` (Settings has no control for it):
+The bell behavior when receiving BEL character (\x07) is set in **Settings → Appearance → Bell** (`bell_style` in `config.json`):
 - **none** — silent
 - **visual** — brief screen flash
 - **sound** — plays notification sound
