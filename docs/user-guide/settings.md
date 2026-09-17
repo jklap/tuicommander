@@ -175,8 +175,7 @@ Controls double/quad-click word and smart selection in the terminal — see [Sma
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| **Enable smart selection** | On | Try the rule list below before falling back to plain word-boundary selection. Word-boundary customization still applies when this is off. |
-| **Double-click performs** | Smart | **Word** expands to the character-class boundary below. **Smart** tries the rule list first, falling back to word selection when nothing matches. Quad-click (4 rapid clicks) always tries smart selection, regardless of this setting. |
+| **Double-click performs** | Smart | **Word** expands to the character-class boundary below. **Smart** tries the rule list first, falling back to word selection when nothing matches. There is no master on/off switch — quad-click (4 rapid clicks) and the right-click smart-selection menu always try the rule list, regardless of this setting. |
 | **Word boundaries** | Character list | **Character list**: a literal set of characters that break a word. **Regular expression**: `\|`-joined alternates — the longest match at each position joins onto the adjacent word, e.g. adding `https://` lets a double-click on a URL's host include the scheme. |
 | **Word separators** | `` " \"'`(){}[]<>\|;:,.!?@#$%^&*~=+/\\" `` | (Character-list mode) Characters that break a word for double-click selection. Whitespace and control characters are always separators regardless of this list. A "Restore default separators" button resets it. |
 | **Word pattern** | empty | (Regex mode) `\|`-joined alternates. Plain letters/digits/underscore are always word characters; alternates here join punctuation-containing spans onto them. Invalid alternates are flagged inline and skipped. |
