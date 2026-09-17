@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
@@ -165,19 +165,46 @@ function buildNavItems(): SettingsShellTab[] {
 
 export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const ctx = () => props.context ?? { kind: "global" as const };
-	const [activeTab, setActiveTab] = createSignal(initialTabFor(props.initialTab, ctx()));
+	// Memoized: buildNavItems() rebuilds the whole repo list (colors, display
+	// names) and is read from both resolveInitialTab() and the JSX below —
+	// without this it reran twice per reactive pass for no reason.
+	const navItems = createMemo(buildNavItems);
+
+	// Pane to open on: an explicit deep link wins, then an explicit repo context
+	// (e.g. the git panel's "Repo Settings" action) jumps to that repo's tab,
+	// otherwise fall back to the pane the user last selected this session —
+	// provided it's still a real nav entry (a remembered repo tab whose repo
+	// was removed, or "ai-chat"/"dictation" while unavailable, must not stick).
+	const resolveInitialTab = (): string => {
+		// A retired key (old deep links) still maps to its successor page.
+		if (props.initialTab) return initialTabFor(props.initialTab, ctx());
+		if (ctx().kind === "repo") return defaultTab(ctx());
+		const remembered = uiStore.state.lastSettingsTab;
+		if (remembered && navItems().some((item) => item.key === remembered)) {
+			return remembered;
+		}
+		return defaultTab(ctx());
+	};
+
+	const [activeTab, setActiveTab] = createSignal(resolveInitialTab());
 
 	const [query, setQuery] = createSignal("");
 
 	// Reset active tab when context changes or panel opens
 	createEffect(() => {
 		if (props.visible) {
-			setActiveTab(initialTabFor(props.initialTab, ctx()));
+			setActiveTab(resolveInitialTab());
 			// A stale query would hide the tab the caller asked for behind results
 			setQuery("");
 			void settingsExpertStore.open();
 		}
 	});
+
+	/** Nav click handler: switches the pane and remembers it for next time. */
+	const handleTabChange = (tab: string) => {
+		setActiveTab(tab);
+		uiStore.setLastSettingsTab(tab);
+	};
 
 	// Setting a search result asked for, consumed by the scroll effect below
 	const [pendingTarget, setPendingTarget] = createSignal<{ section: string; label?: string } | null>(null);
@@ -277,9 +304,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			visible={props.visible}
 			onClose={props.onClose}
 			title={t("settings.title", "Settings")}
-			tabs={buildNavItems()}
+			tabs={navItems()}
 			activeTab={activeTab()}
-			onTabChange={setActiveTab}
+			onTabChange={handleTabChange}
 			navWidth={uiStore.state.settingsNavWidth}
 			onNavWidthChange={uiStore.setSettingsNavWidth}
 			onNavWidthPersist={uiStore.persistUIPrefs}
