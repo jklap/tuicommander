@@ -333,12 +333,17 @@ export async function initApp(deps: AppInitDeps) {
 		repoSettingsStore.loadLocalConfig(repoPath).catch(() => {});
 	}
 
-	// Authoritative reads recover state; only the live event presents a toast,
-	// so refresh and reconnect can never replay historical notifications.
-	void progressStore.refreshAll();
+	// Only the live event presents a toast, so a reconnect can never replay
+	// historical notifications. Boot reads nothing: the journal is queried when
+	// the dialog opens, for the one project it shows.
 	subscribeEvents(
 		{ "progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload) },
-		{ onResync: () => void progressStore.refreshAll(progressStore.panelVisible()) },
+		{
+			onResync: () => {
+				const project = progressStore.requestedProject();
+				if (progressStore.dialogVisible() && project) void progressStore.refreshProject(project);
+			},
+		},
 	).catch((err) => appLogger.error("app", "Failed to register progress-recorded listener", err));
 
 	// Recover log entries from Rust backend (survives webview reloads)

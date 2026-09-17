@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Project Progress is one journal, one database and a dialog.** The feature
+  shipped in 1.7.7 asked agents to classify outcomes into five kinds, kept a
+  SQLite store inside every project, and spread the result over a sidebar panel
+  with five views. Across 39 repositories it recorded nothing. It now records
+  two things an agent can report — `done` and `blocked` — plus the `intent:`
+  marker TUICommander already parses and used to discard, so a three-hour
+  session that never called the tool still answers "where did it get to?".
+  History lives in a single append-only database in the configuration
+  directory, so a deleted workspace or a temporary clone cannot take it away,
+  and the reporting duty is stated in the connection instructions instead of
+  being left to a tool description nobody reads. The panel is now a dialog
+  showing one project's list newest-first, with a line marking where the last
+  visit ended that stays put while you read. Collection has an off switch,
+  globally and per agent.
+
+### Removed
+
+- **The `progress.md` export, and eight of the nine `repo progress_*` actions.**
+  Export, status, pause, resume, clear, correct, acknowledge and read-cursor
+  control are gone; `progress_list` remains. Existing per-project
+  `.tuic/progress.sqlite3` databases are not migrated — the old history was
+  effectively empty, and nothing reads those files any more. Delete them at
+  leisure.
+
+### Fixed
+
+- **`make dev` no longer starts on the isolated test configuration.** The
+  default that points `make test` at its own `instances/tuic-test/` namespace
+  was written as a bare `TUIC_APP_INSTANCE?=tuic-test`, which is a *global*
+  make variable however far down the file it sits, so `make dev` expanded it
+  too and the daily driver came up against an empty configuration directory:
+  every repository appeared to have vanished. No data was lost — the production
+  `config.json` and `repositories.json` were never opened — but the fix had
+  already been written once and lost, and the fright arrived a second time.
+  The assignment is now scoped to the `test` target, both documented override
+  forms still win, and `make dev` prints the configuration directory it is
+  starting on, because an inherited `TUIC_APP_INSTANCE` still beats the
+  Makefile and no check can see a developer's shell.
+
+  A guard in `make check` asks make what it actually expands rather than
+  trusting how the line reads, and `pre-commit` runs it whenever the `Makefile`
+  is staged — `make check` is the once-per-batch target, and this repository
+  pushes straight to `main`, so a bad edit used to land before anything looked
+  at it. The guard reports a distinguishable failure when `make -n` errors or
+  when a recipe stops printing the variable at all; previously both cases
+  produced the empty string, which is also the correct answer for `make dev`,
+  so a broken `Makefile` passed the check and printed its tick.
+
 ## [1.7.7] - 2026-09-16
 
 ### Added
@@ -579,6 +629,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   automation goal, a terminal context action — rendered nowhere at all. The
   detached window now receives a projection of it, re-checking the chat id at
   the receiving end so another terminal's stream stays on another screen.
+
+- **Windows works, and the suite now runs there to keep it that way.** The
+  build shipped a Windows installer that nothing had executed: the first real
+  run on the platform reported defects no unix machine could see, and they were
+  production code, not test plumbing. `~` reached the OS literally in repository
+  paths, working directories and agent commands, because tilde expansion read
+  `$HOME`, which Windows does not set. Plugin ZIP installs extracted nothing and
+  reported success over an empty directory — the archive spells its entry names
+  with `/` and the path they were stripped from is spelled with `\`. Reading
+  another process's environment always answered "not set", one oversized read
+  running off the end of the mapping and failing the whole call, so nothing that
+  depended on an agent's own environment worked. The allowlist of variables a
+  child inherits was written by analogy with POSIX and omitted `PATHEXT` — half
+  of what `PATH` means on Windows, where `claude` and `npm` are `.cmd` shims —
+  along with `APPDATA`, `LOCALAPPDATA` and `PROGRAMDATA`, where such a tool keeps
+  its configuration. The progress store refused to open while a `-shm` file was
+  locked, which there is every moment a second connection is live. Terminating a
+  process left its grandchildren running. CI now builds and tests on Windows on
+  every pull request, so the next one of these is caught before it ships rather
+  than after.
 
 ### Changed
 

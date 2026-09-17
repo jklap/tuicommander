@@ -53,6 +53,7 @@ interface RustAppConfig {
 	};
 	disabled_agents: string[];
 	intent_tab_title: boolean;
+	progress_tracking: boolean;
 	suggest_followups: boolean;
 	copy_on_select: boolean;
 	osc52_clipboard: boolean;
@@ -289,6 +290,7 @@ interface SettingsStoreState {
 	updateChannel: UpdateChannel;
 	disabledAgents: string[];
 	intentTabTitle: boolean;
+	progressTracking: boolean;
 	suggestFollowups: boolean;
 	copyOnSelect: boolean;
 	osc52Clipboard: boolean;
@@ -341,6 +343,7 @@ function createSettingsStore() {
 		updateChannel: "stable" as UpdateChannel,
 		disabledAgents: [],
 		intentTabTitle: true,
+		progressTracking: true,
 		suggestFollowups: true,
 		copyOnSelect: true,
 		osc52Clipboard: true,
@@ -410,6 +413,7 @@ function createSettingsStore() {
 		config.update_channel = state.updateChannel;
 		config.disabled_agents = [...state.disabledAgents];
 		config.intent_tab_title = state.intentTabTitle;
+		config.progress_tracking = state.progressTracking;
 		config.suggest_followups = state.suggestFollowups;
 		config.copy_on_select = state.copyOnSelect;
 		config.osc52_clipboard = state.osc52Clipboard;
@@ -513,6 +517,7 @@ function createSettingsStore() {
 				setState("updateChannel", channel === "nightly" ? channel : "stable");
 				setState("disabledAgents", config.disabled_agents ?? []);
 				setState("intentTabTitle", config.intent_tab_title ?? true);
+				setState("progressTracking", config.progress_tracking ?? true);
 				setState("copyOnSelect", config.copy_on_select ?? true);
 				setState("osc52Clipboard", config.osc52_clipboard ?? true);
 				setState("showLastPrompt", config.show_last_prompt ?? false);
@@ -701,6 +706,12 @@ function createSettingsStore() {
 			save();
 		},
 
+		/** Turn Progress collection on or off for every agent. */
+		setProgressTracking(enabled: boolean): void {
+			setState("progressTracking", enabled);
+			save();
+		},
+
 		/** Set suggest-followups preference */
 		setSuggestFollowups(enabled: boolean): void {
 			setState("suggestFollowups", enabled);
@@ -770,7 +781,6 @@ function createSettingsStore() {
 			setState("aiWatchersEnabled", enabled);
 			save();
 		},
-
 
 		setScrollbackReflow(enabled: boolean): void {
 			setState("scrollbackReflow", enabled);
@@ -852,7 +862,6 @@ function createSettingsStore() {
 		isAiWatchersEnabled(): boolean {
 			return state.experimentalFeaturesEnabled && state.aiWatchersEnabled;
 		},
-
 	};
 
 	return {
@@ -889,6 +898,7 @@ registerDebugSnapshot("settings", () => {
 		bellStyle: s.bellStyle,
 		updateChannel: s.updateChannel,
 		intentTabTitle: s.intentTabTitle,
+		progressTracking: s.progressTracking,
 		suggestFollowups: s.suggestFollowups,
 		copyOnSelect: s.copyOnSelect,
 		autoUpdateEnabled: s.autoUpdateEnabled,

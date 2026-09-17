@@ -395,6 +395,24 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("setProgressTracking()", () => {
+		it("defaults to on, and persists the flag through load-modify-save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.state.progressTracking).toBe(true);
+
+				store.setProgressTracking(false);
+				expect(store.state.progressTracking).toBe(false);
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ progress_tracking: false }),
+				});
+			});
+		});
+	});
+
 	describe("setTheme()", () => {
 		it("sets theme and persists via debounced save", async () => {
 			await testInScopeAsync(async () => {

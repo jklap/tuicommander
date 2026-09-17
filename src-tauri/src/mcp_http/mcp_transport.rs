@@ -948,6 +948,7 @@ fn build_mcp_instructions_for_mode(
         client_name,
         collapse_tools,
         resolve_marker_flags(state, client_name),
+        crate::progress::progress_tracking_enabled(state, resolve_agent_type(client_name)),
         &instruction_context(state),
     )
 }
@@ -965,6 +966,7 @@ fn render_mcp_instructions(
     client_name: Option<&str>,
     collapse_tools: bool,
     markers: (bool, bool),
+    progress_tracking: bool,
     ctx: &InstructionContext,
 ) -> String {
     let ver = env!("CARGO_PKG_VERSION");
@@ -1009,6 +1011,22 @@ fn render_mcp_instructions(
         out.push_str("Each tool's own description carries its actions and rules; read it there rather than expecting a catalogue here.\n\n");
         out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
         out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+    }
+
+    // ── Progress — an obligation, not a capability ───────────────────
+    // This is the one place the reporting duty is stated as a duty. The tool
+    // description says what the tool does if you call it; nothing there says
+    // you must. The shipped version had only the description, and 39
+    // repositories recorded zero events. Rendered only when the flag is on, so
+    // a listed tool without an obligation and an obligation naming an unlisted
+    // tool are both unreachable.
+    if progress_tracking {
+        out.push_str("## Progress — mandatory\n\n");
+        out.push_str(
+            "Call `progress`: the ONLY way the user learns what happened while away. \
+             `type=done` when an `intent:`'s work is finished, `type=blocked` when you \
+             cannot proceed without them.\n\n",
+        );
     }
 
     // ── Multi-agent work — what the tool descriptions cannot say ─────
@@ -1061,7 +1079,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export";
+const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
@@ -1133,9 +1151,9 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories are warmed with copy-on-write copies when supported. Read the returned instructions.warm_artifacts.warmed_directories to see what arrived warm.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n\nProject progress. Every progress_* action requires path — a destructive one never infers the active project — and carries its payload in the typed `input` object, which rejects unknown fields. Record a NEW outcome with the `progress` tool, not here.\n- progress_status: Collection state, unread count, workstreams and open blockers.\n- progress_list: Page of recorded entries. input: beforeSequence, limit, workstreamId, kind, unreadOnly, blockerOnly, createdAfterMs, createdBeforeMs (all optional).\n- progress_pause: Stop collecting for this project.\n- progress_resume: Resume collecting for this project.\n- progress_delete: Remove entries. input.eventIds (required).\n- progress_clear: Remove every entry for the project. input.expectedRevision (required) — a stale revision is rejected instead of clearing.\n- progress_update: Apply corrections. input.expectedRevision + input.corrections, each tagged by `operation`: edit_summary, move_event, rename_workstream, merge_workstreams, merge_events, resolve_blocker, set_workstream_state.\n- progress_read: Acknowledge everything up to input.snapshotCursor (required — take it from a progress_list or progress_status response) as read. Returns a revision receipt, not entries.\n- progress_export: Deterministic Markdown snapshot. input.operation=preview renders it and writes nothing; operation=write persists progress.md and needs snapshotId, snapshotTimeMs, replace, expectedContent.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories are warmed with copy-on-write copies when supported. Read the returned instructions.warm_artifacts.warmed_directories to see what arrived warm.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export" },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
                 "workspace_id": { "type": "string", "description": "Workspace id from action=worktree_list (required for action=worktree_remove)." },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
@@ -1144,17 +1162,17 @@ fn native_tool_definitions() -> serde_json::Value {
                 "branch": { "type": "string", "description": "Branch name (action=worktree_create optional)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
-                "input": { "type": "object", "description": "Typed action payload for progress_list/delete/clear/update/read/export. Unknown fields are rejected." }
+                "input": { "type": "object", "description": "Typed action payload for progress_list. Unknown fields are rejected." }
             }, "required": ["action"] }
         },
         {
             "name": "progress",
-            "description": "Record meaningful project outcomes, decisions, discoveries, or blockers. Started/done apply to objectives, not agent tasks. Persists and shows a toast.",
+            "description": "Record what happened, for the user who walked away. Mandatory: type=done when the work an `intent:` announced is finished, type=blocked when you cannot proceed without the user.",
             "inputSchema": { "type": "object", "properties": {
-                "type": { "type": "string", "enum": ["started", "milestone", "blocked", "done"] },
-                "summary": { "type": "string", "maxLength": 500, "description": "Outcome, not implementation." },
-                "workstream": { "type": "string", "maxLength": 80 }
-            }, "required": ["type", "summary"] }
+                "type": { "type": "string", "enum": ["done", "blocked"] },
+                "text": { "type": "string", "maxLength": 500, "description": "Outcome, not implementation." },
+                "step": { "type": "string", "maxLength": 80, "description": "Optional free label — a crumb the human reads. Nothing is keyed on it." }
+            }, "required": ["type", "text"] }
         },
         {
             "name": "ui",
@@ -1330,11 +1348,11 @@ fn resolve_allowed_upstreams(
 /// every listing/search path uses the same rules — adding a future config
 /// flag means editing one place instead of chasing duplicated closures.
 fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let (disabled, ai_terminal_mcp_enabled) = {
+    let (disabled, ai_terminal_mcp_enabled, progress_tracking) = {
         let cfg = state.config.read();
         let disabled: std::collections::HashSet<String> =
             cfg.disabled_native_tools.iter().cloned().collect();
-        (disabled, cfg.ai_terminal_mcp_enabled)
+        (disabled, cfg.ai_terminal_mcp_enabled, cfg.progress_tracking)
     };
     native_tool_definitions()
         .as_array()
@@ -1344,6 +1362,16 @@ fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
         .filter(|t| {
             let name = t["name"].as_str().unwrap_or("");
             if !ai_terminal_mcp_enabled && super::ai_terminal::is_ai_terminal_tool(name) {
+                return false;
+            }
+            // The global half of `progress_tracking`. It is deliberately the
+            // global one and not the effective per-agent value: this list also
+            // feeds `searchable_tool_definitions`, which builds ONE cached index
+            // for every session, so a per-agent answer here would be whichever
+            // agent happened to trigger the last rebuild. The per-agent escape
+            // hatch is enforced where a report is recorded, which answers
+            // `progress_tracking_disabled` instead of hiding the tool.
+            if !progress_tracking && name == "progress" {
                 return false;
             }
             !disabled.contains(name)
@@ -2386,11 +2414,8 @@ fn dispatch_waiter_handoff_blocking(state: &AppState, recipient: &str, message_i
             continue;
         }
         // The payload stays in the inbox; the terminal only gets the pointer.
-        let outcome = crate::pty::deliver_notice_to_managed_pty(
-            state,
-            recipient,
-            crate::pty::PEER_MAIL_WAKE,
-        );
+        let outcome =
+            crate::pty::deliver_notice_to_managed_pty(state, recipient, crate::pty::PEER_MAIL_WAKE);
         crate::pty::settle_terminal_delivery(state, recipient, &message.id, outcome);
     }
 }
@@ -4717,16 +4742,17 @@ fn handle_messaging(
             // never the payload. Skip when already pushed over the SSE channel
             // (Claude Code consumes that notification itself, so a PTY wake
             // would be redundant). The inbox always holds the message itself.
-            let terminal_outcome = live_pty
-                .as_ref()
-                .filter(|_| terminal_owned && !pushed)
-                .map(|pty_session| {
-                    crate::pty::deliver_notice_to_managed_pty(
-                        state,
-                        pty_session,
-                        crate::pty::PEER_MAIL_WAKE,
-                    )
-                });
+            let terminal_outcome =
+                live_pty
+                    .as_ref()
+                    .filter(|_| terminal_owned && !pushed)
+                    .map(|pty_session| {
+                        crate::pty::deliver_notice_to_managed_pty(
+                            state,
+                            pty_session,
+                            crate::pty::PEER_MAIL_WAKE,
+                        )
+                    });
             if let Some(outcome) = terminal_outcome {
                 crate::pty::settle_terminal_delivery(state, to, &msg_id, outcome);
                 // Only a session that cannot take the message at all falls back to
@@ -5303,18 +5329,35 @@ fn parse_progress_report_input(
         .as_str()
         .ok_or_else(|| serde_json::json!({"error": "progress requires 'type'"}))
         .and_then(|value| {
-            crate::progress::ProgressKind::parse(value)
+            crate::progress::ProgressKind::parse_reportable(value)
                 .map_err(|error| serde_json::json!({"error": error}))
         })?;
-    let summary = args["summary"]
+    let text = args["text"]
         .as_str()
-        .ok_or_else(|| serde_json::json!({"error": "progress requires 'summary'"}))?
+        .ok_or_else(|| serde_json::json!({"error": "progress requires 'text'"}))?
         .to_string();
     Ok(crate::progress::ProgressReportInput {
         kind,
-        summary,
-        workstream: args["workstream"].as_str().map(str::to_string),
+        text,
+        step: args["step"].as_str().map(str::to_string),
     })
+}
+
+/// The agent type of the peer that is reporting, for the per-agent half of
+/// `progress_tracking`. It comes from the peer's live PTY session, which is the
+/// only place an agent type is recorded — the MCP session knows a client name,
+/// and a client name is not an agent.
+fn resolve_mcp_origin_agent_type(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+) -> Option<String> {
+    let peer = resolve_mcp_origin_session(state, mcp_session_id)?;
+    let pty = state.live_pty_for_peer(&peer)?;
+    state
+        .session_maps
+        .session_states
+        .get(&pty)
+        .and_then(|entry| entry.agent_type.clone())
 }
 
 async fn handle_progress(
@@ -5326,23 +5369,19 @@ async fn handle_progress(
         Ok(input) => input,
         Err(error) => return error,
     };
-    let reporter_id = resolve_mcp_origin_session(state, mcp_session_id);
-    let reporter_name = reporter_id
-        .as_ref()
-        .and_then(|id| state.peer_agents.get(id).map(|peer| peer.name.clone()));
-    let session_id = reporter_id
-        .as_ref()
-        .and_then(|id| state.live_pty_for_peer(id));
+    let agent_name = resolve_mcp_origin_session(state, mcp_session_id)
+        .and_then(|id| state.peer_agents.get(&id).map(|peer| peer.name.clone()));
+    let agent_type = resolve_mcp_origin_agent_type(state, mcp_session_id);
     let workspace_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
-    let provenance = crate::progress::ProgressProvenance {
-        reporter_id,
-        reporter_name,
-        session_id,
-        workspace_path: workspace_path.clone(),
-    };
     let state = state.clone();
     run_blocking_handler(move || {
-        match report_progress(&state, workspace_path.as_deref(), input, provenance) {
+        match report_progress(
+            &state,
+            workspace_path.as_deref(),
+            input,
+            agent_name,
+            agent_type.as_deref(),
+        ) {
             Ok(receipt) => to_json_or_error(receipt),
             Err(error) => serde_json::json!({"error": error}),
         }
@@ -5350,35 +5389,48 @@ async fn handle_progress(
     .await
 }
 
+/// Persist, then push. A toast that claims a record which does not exist is
+/// worse than silence, so nothing is emitted until the entry is committed; a
+/// frontend that missed the push recovers by querying.
 pub(crate) fn report_progress(
     state: &Arc<AppState>,
     workspace_path: Option<&str>,
     input: crate::progress::ProgressReportInput,
-    provenance: crate::progress::ProgressProvenance,
+    agent_name: Option<String>,
+    agent_type: Option<&str>,
 ) -> Result<crate::progress::ProgressReceipt, String> {
-    let submitted = crate::progress::submit_progress_report(workspace_path, input, provenance)?;
-    if submitted.receipt.status == crate::progress::ProgressReceiptStatus::Recorded {
-        let event = submitted
-            .event
-            .as_ref()
-            .expect("a recorded progress receipt always carries its committed event");
-        let payload = serde_json::json!({
-            "receipt": &submitted.receipt,
-            "event": event,
-        });
-        let repo_path = submitted.project_root.to_string_lossy().to_string();
-        #[cfg(feature = "desktop")]
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "progress-recorded",
-                serde_json::json!({"repo_path": &repo_path, "payload": &payload}),
-            );
-        }
-        let _ = state
-            .event_bus
-            .send(crate::state::AppEvent::ProgressRecorded { repo_path, payload });
+    let submitted = crate::progress::submit_progress_report(
+        state.as_ref(),
+        workspace_path,
+        input,
+        agent_name,
+        agent_type,
+    )?;
+    Ok(emit_progress_entry(state, submitted))
+}
+
+/// Announce a committed entry on both transports and hand back its receipt.
+/// Shared by the reporting tool and `intent:` capture: one entry, one push,
+/// whichever half of the journal wrote it.
+pub(crate) fn emit_progress_entry(
+    state: &AppState,
+    entry: crate::progress::ProgressEntry,
+) -> crate::progress::ProgressReceipt {
+    let receipt = crate::progress::ProgressReceipt { id: entry.id };
+    let payload = serde_json::json!({ "entry": &entry });
+    let repo_path = entry.project.clone();
+    // There is no bus→window forwarder: producers dual-emit (AGENTS.md).
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit(
+            "progress-recorded",
+            serde_json::json!({"repo_path": &repo_path, "payload": &payload}),
+        );
     }
-    Ok(submitted.receipt)
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::ProgressRecorded { repo_path, payload });
+    receipt
 }
 
 /// How many HTML tab ids one TUIC session may keep registered for auto-close.
@@ -5747,12 +5799,21 @@ fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
 /// not match `/foo/bar-other`). Falls back to the original path when no repo
 /// matches. (#1373-6e2f)
 fn resolve_repo_for_path(path: &str, known: &[String]) -> String {
+    registered_repo_for_path(path, known).unwrap_or_else(|| path.to_string())
+}
+
+/// The registered repository a path belongs to, or `None` when no registered
+/// repository contains it.
+///
+/// [`resolve_repo_for_path`] falls back to the path itself, which is right for
+/// scoping tool access and wrong for ownership: a journal entry filed under an
+/// unregistered directory belongs to no project anybody can open.
+pub(crate) fn registered_repo_for_path(path: &str, known: &[String]) -> Option<String> {
     known
         .iter()
         .filter(|repo| path == repo.as_str() || path.starts_with(&format!("{repo}/")))
         .max_by_key(|repo| repo.len())
         .cloned()
-        .unwrap_or_else(|| path.to_string())
 }
 
 /// POST /mcp — Handle all MCP JSON-RPC requests via Streamable HTTP
@@ -6312,9 +6373,7 @@ async fn handle_repo(
         "worktree_list" | "worktree_create" | "worktree_remove" => {
             handle_worktree(state, args, is_claude_code).await
         }
-        "progress_status" | "progress_list" | "progress_pause" | "progress_resume"
-        | "progress_delete" | "progress_clear" | "progress_update" | "progress_read"
-        | "progress_export" => {
+        "progress_list" => {
             let path = match require_path(args, action) {
                 Ok(path) => path,
                 Err(error) => return error,
@@ -6326,41 +6385,11 @@ async fn handle_repo(
                 .get("input")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
-            let action = action.to_string();
             run_blocking_handler(move || {
-                let result: Result<serde_json::Value, String> = match action.as_str() {
-                    "progress_status" => crate::progress::progress_status(&path)
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_list" => serde_json::from_value(input)
-                        .map_err(|e| format!("progress_invalid_request: {e}"))
-                        .and_then(|v| crate::progress::progress_list(&path, v))
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_pause" => crate::progress::progress_pause(&path)
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_resume" => crate::progress::progress_resume(&path)
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_delete" => serde_json::from_value(input)
-                        .map_err(|e| format!("progress_invalid_request: {e}"))
-                        .and_then(|v| crate::progress::progress_delete(&path, v))
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_clear" => serde_json::from_value(input)
-                        .map_err(|e| format!("progress_invalid_request: {e}"))
-                        .and_then(|v| crate::progress::progress_clear(&path, v))
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_update" => serde_json::from_value(input)
-                        .map_err(|e| format!("progress_invalid_request: {e}"))
-                        .and_then(|v| crate::progress::progress_update(&path, v))
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_read" => serde_json::from_value(input)
-                        .map_err(|e| format!("progress_invalid_request: {e}"))
-                        .and_then(|v| crate::progress::progress_read(&path, v))
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    "progress_export" => serde_json::from_value(input)
-                        .map_err(|e| format!("progress_invalid_request: {e}"))
-                        .and_then(|v| crate::progress::progress_export(&path, v))
-                        .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string())),
-                    _ => unreachable!(),
-                };
+                let result: Result<serde_json::Value, String> = serde_json::from_value(input)
+                    .map_err(|e| format!("progress_invalid_request: {e}"))
+                    .and_then(|v| crate::progress::progress_list(&path, v))
+                    .and_then(|v| serde_json::to_value(v).map_err(|e| e.to_string()));
                 result.unwrap_or_else(|error| serde_json::json!({"error": error}))
             })
             .await
@@ -11897,85 +11926,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn progress_persists_before_emitting_and_exact_retry_emits_nothing() {
+    async fn progress_persists_before_emitting_and_each_report_is_its_own_entry() {
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir().unwrap();
         let state = test_state();
         let mut events = state.event_bus.subscribe();
         let input = crate::progress::ProgressReportInput {
-            kind: crate::progress::ProgressKind::Milestone,
-            summary: "Transport parity is verified.".to_string(),
-            workstream: Some("Progress".to_string()),
-        };
-        let provenance = crate::progress::ProgressProvenance {
-            reporter_id: Some("peer-1".to_string()),
-            reporter_name: Some("worker".to_string()),
-            session_id: Some("pty-1".to_string()),
-            workspace_path: Some(project.path().to_string_lossy().to_string()),
+            kind: crate::progress::ProgressKind::Done,
+            text: "Transport parity is verified.".to_string(),
+            step: Some("Progress".to_string()),
         };
 
         let first = report_progress(
             &state,
             Some(&project.path().to_string_lossy()),
             input.clone(),
-            provenance.clone(),
+            Some("worker".to_string()),
+            None,
         )
         .unwrap();
-        assert_eq!(
-            first.status,
-            crate::progress::ProgressReceiptStatus::Recorded
-        );
-        assert!(first.event_id.is_some());
 
-        let stored = crate::progress::ProgressStore::open(project.path())
+        let owner = project.path().canonicalize().unwrap();
+        let owner = owner.to_string_lossy().to_string();
+        let stored = crate::progress::ProgressStore::open()
             .unwrap()
-            .list(None, Some(10))
+            .list(&owner, &Default::default())
             .unwrap();
         assert_eq!(
-            stored.events.len(),
+            stored.entries.len(),
             1,
-            "the event must be durable before push"
+            "the entry must be durable before push"
         );
-        assert_eq!(stored.events[0].id, first.event_id.as_deref().unwrap());
-        assert_eq!(stored.events[0].provenance, provenance);
+        assert_eq!(stored.entries[0].id, first.id);
+        assert_eq!(stored.entries[0].agent_name.as_deref(), Some("worker"));
 
-        let emitted = events.try_recv().expect("recorded report must emit");
+        let emitted = events.try_recv().expect("a recorded report must emit");
         match emitted {
             crate::state::AppEvent::ProgressRecorded { repo_path, payload } => {
-                assert_eq!(
-                    repo_path,
-                    project.path().canonicalize().unwrap().to_string_lossy()
-                );
-                assert_eq!(payload["receipt"]["eventId"], first.event_id.unwrap());
-                assert_eq!(payload["event"]["summary"], "Transport parity is verified.");
+                assert_eq!(repo_path, owner);
+                assert_eq!(payload["entry"]["id"], first.id);
+                assert_eq!(payload["entry"]["text"], "Transport parity is verified.");
             }
             other => panic!("expected ProgressRecorded, got {other:?}"),
         }
 
-        let retry = report_progress(
+        // The journal is append-only and holds no dedup: the same agent
+        // reporting the same step twice did the work twice, and the reader
+        // decides what that means.
+        let second = report_progress(
             &state,
             Some(&project.path().to_string_lossy()),
             input,
-            provenance,
+            Some("worker".to_string()),
+            None,
         )
         .unwrap();
-        assert_eq!(
-            retry.status,
-            crate::progress::ProgressReceiptStatus::Duplicate
-        );
-        assert_eq!(retry.event_id, Some(stored.events[0].id.clone()));
+        assert_ne!(second.id, first.id);
         assert!(
             matches!(
                 events.try_recv(),
-                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+                Ok(crate::state::AppEvent::ProgressRecorded { .. })
             ),
-            "a duplicate receipt must not emit a second notification"
+            "the second entry emits in its own right"
         );
     }
 
     #[tokio::test]
-    async fn progress_mcp_derives_registered_provenance_without_inventing_a_pty() {
+    async fn progress_mcp_attributes_the_registered_peer_and_its_project() {
         use crate::state::PeerAgent;
 
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir().unwrap();
         let state = test_state();
         let mcp_sid = "progress-mcp".to_string();
@@ -11994,30 +12016,38 @@ mod tests {
 
         let receipt = handle_progress(
             &state,
-            &serde_json::json!({"type":"started", "summary":"Delivery started."}),
+            &serde_json::json!({"type":"done", "text":"Delivery is complete."}),
             Some(&mcp_sid),
         )
         .await;
-        assert_eq!(receipt["status"], "recorded");
-        let stored = crate::progress::ProgressStore::open(project.path())
+        assert!(receipt["id"].is_i64(), "unexpected receipt {receipt}");
+        let owner = project.path().canonicalize().unwrap();
+        let stored = crate::progress::ProgressStore::open()
             .unwrap()
-            .list(None, Some(10))
+            .list(&owner.to_string_lossy(), &Default::default())
             .unwrap();
         assert_eq!(
-            stored.events[0].provenance.reporter_id.as_deref(),
-            Some(tuic.as_str())
-        );
-        assert_eq!(
-            stored.events[0].provenance.reporter_name.as_deref(),
+            stored.entries[0].agent_name.as_deref(),
             Some("progress-worker")
         );
-        assert_eq!(
-            stored.events[0].provenance.workspace_path.as_deref(),
-            Some(project.path().to_string_lossy().as_ref())
-        );
-        assert_eq!(
-            stored.events[0].provenance.session_id, None,
-            "no PTY identity may be fabricated"
+        assert_eq!(stored.entries[0].project, owner.to_string_lossy());
+    }
+
+    /// The only reportable kinds are `done` and `blocked`. `intent` belongs to
+    /// the host: an agent that claims one is refused rather than believed.
+    #[tokio::test]
+    async fn an_agent_cannot_report_an_intent() {
+        let state = test_state();
+        let receipt = handle_progress(
+            &state,
+            &serde_json::json!({"type":"intent", "text":"I will pretend to plan."}),
+            None,
+        )
+        .await;
+        let error = receipt["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("'done' or 'blocked'") && error.contains("intent:"),
+            "the refusal must name both the allowed kinds and who writes intent: {receipt}"
         );
     }
 
@@ -12026,7 +12056,7 @@ mod tests {
         let state = test_state();
         state.config.write().disabled_native_tools = vec!["progress".to_string()];
         rebuild_tool_search_index(&state);
-        let args = serde_json::json!({"type":"milestone", "summary":"Must not persist."});
+        let args = serde_json::json!({"type":"done", "text":"Must not persist."});
 
         let direct = handle_mcp_tool_call(&state, loopback_addr(), "progress", &args, None).await;
         assert!(direct["error"].as_str().unwrap().contains("disabled"));
@@ -12398,6 +12428,45 @@ mod tests {
             tool_names(&merged),
             vec!["search_tools", "get_tool_schema", "call_tool"]
         );
+    }
+
+    /// The obligation and the tool are one switch, not two. A listed tool with
+    /// no stated duty is the shipped defect (39 repositories, zero entries); a
+    /// duty naming a tool the client cannot see is worse, because the agent
+    /// keeps trying. Both directions are asserted here so neither can drift.
+    #[test]
+    fn the_progress_obligation_and_the_progress_tool_appear_and_vanish_together() {
+        let ctx = InstructionContext {
+            repos: Vec::new(),
+            sessions: Vec::new(),
+            peer_count: 0,
+        };
+        let markers = (true, true);
+
+        let on = render_mcp_instructions(None, false, markers, true, &ctx);
+        let off = render_mcp_instructions(None, false, markers, false, &ctx);
+        assert!(on.contains("## Progress — mandatory"));
+        assert!(on.contains("Call `progress`"));
+        // The word itself still occurs — the `intent:` marker is described as
+        // "the work currently in progress" — so the assertion is on the
+        // obligation and on naming the tool, not on the substring.
+        assert!(!off.contains("## Progress — mandatory"));
+        assert!(
+            !off.contains("`progress`"),
+            "an obligation must never name a tool the client was not listed"
+        );
+
+        let state = test_state();
+        let listed = |state: &Arc<AppState>| {
+            tool_names(&serde_json::Value::Array(filtered_native_tools(state)))
+                .contains(&"progress".to_string())
+        };
+
+        state.config.write().progress_tracking = true;
+        assert!(listed(&state));
+
+        state.config.write().progress_tracking = false;
+        assert!(!listed(&state));
     }
 
     // ── Meta-tool handler tests (story 1079) ───────────────────────────
@@ -13263,19 +13332,19 @@ mod tests {
         let markers = (true, true);
         let instructions_classic_empty = record(
             "instructions.classic.empty",
-            render_mcp_instructions(None, false, markers, &empty),
+            render_mcp_instructions(None, false, markers, true, &empty),
         );
         let instructions_classic_loaded = record(
             "instructions.classic.loaded",
-            render_mcp_instructions(None, false, markers, &loaded),
+            render_mcp_instructions(None, false, markers, true, &loaded),
         );
         let instructions_collapsed_empty = record(
             "instructions.collapsed.empty",
-            render_mcp_instructions(None, true, markers, &empty),
+            render_mcp_instructions(None, true, markers, true, &empty),
         );
         record(
             "instructions.collapsed.loaded",
-            render_mcp_instructions(None, true, markers, &loaded),
+            render_mcp_instructions(None, true, markers, true, &loaded),
         );
 
         // Discovered schemas: what `get_tool_schema` hands back, per tool.
@@ -13355,12 +13424,19 @@ mod tests {
 
         // Budgets are regression guards on the surfaces this story shrank, not
         // targets. Each is the measured value rounded up to the next 64 bytes.
+        //
+        // The collapsed budget moved 1600 -> 1664 when Progress gained its
+        // reporting obligation. That section is the point of the feature — the
+        // shipped build had only a tool description, and 39 repositories
+        // recorded zero entries — and it is paid for elsewhere: `repo` lost
+        // eight progress actions in the same change. Raising a budget for prose
+        // that carries no obligation is not the same trade.
         assert!(
             instructions_classic_empty <= 1600,
             "classic instructions grew past their budget — {measured}"
         );
         assert!(
-            instructions_collapsed_empty <= 1600,
+            instructions_collapsed_empty <= 1664,
             "collapsed instructions grew past their budget — {measured}"
         );
         assert!(

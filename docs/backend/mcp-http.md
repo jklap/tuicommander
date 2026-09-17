@@ -4,16 +4,21 @@
 
 The compact `progress` native tool is available directly in classic and
 collapsed/Grok discovery, and through the meta-tool index, unless disabled by
-`disabled_native_tools`. It
-derives project and provenance from the caller, commits to the owning project's
-store before dual-emitting `progress-recorded`, and suppresses notifications for
-paused collection and exact 60-second retry duplicates.
+`disabled_native_tools` or by the global `progress_tracking` flag. It takes
+`{ type, text, step? }` with `type` restricted to `done` or `blocked`, derives
+the project and the reporting agent from the caller, appends to the shared
+journal, and then dual-emits `progress-recorded`. A per-agent
+`progress_tracking: false` answers `progress_tracking_disabled` instead of
+hiding the tool — the tool index is global and has no session context.
 
-The `repo` tool exposes `progress_status`, `progress_list`, `progress_pause`,
-`progress_resume`, `progress_delete`, `progress_clear`, `progress_update`, and
-`progress_read`, plus `progress_export` for snapshot preview/write. Every action requires `path`; action-specific data is carried
-in the typed `input` object. Destructive actions never infer the active project.
-HTTP and Tauri call the same blocking storage functions.
+The journal's third kind, `intent`, is written by TUIC from the agent's
+`intent:` marker in `pty.rs`. An agent that reports one is refused: the point of
+the kind is that it is observed rather than claimed.
+
+The `repo` tool exposes exactly one progress action, `progress_list`. Reading
+back is occasionally useful to an agent; pausing, clearing, correcting and
+exporting are the reader's business and cost instruction budget in every
+`initialize`.
 
 **Module:** `src-tauri/src/mcp_http/mod.rs`
 
@@ -546,8 +551,8 @@ Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by de
 | `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
-| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export | Enabled |
-| `progress` | *(no actions — records one outcome)* | Enabled |
+| `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list | Enabled |
+| `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |

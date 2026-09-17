@@ -234,33 +234,30 @@ describe("transport", () => {
 		});
 
 		it("maps typed project progress controls", () => {
-			expect(mapCommandToHttp("progress_status", { project: "/repo a" })).toEqual({
-				method: "GET",
-				path: "/progress/status?path=%2Frepo%20a",
-			});
-			for (const command of [
-				"progress_list",
-				"progress_delete",
-				"progress_clear",
-				"progress_update",
-				"progress_read",
-				"progress_export",
-			]) {
+			// The whole Progress surface: record, list, delete, and the divider.
+			// Every control the rejected design added — status, pause, resume,
+			// clear, update, read, export — is gone from both transports.
+			for (const command of ["progress_list", "progress_delete"]) {
 				const input = { marker: command };
 				expect(mapCommandToHttp(command, { project: "/repo a", input })).toEqual({
 					method: "POST",
-					path: `/progress/${command.slice(9).replace("_", "-")}?path=%2Frepo%20a`,
+					path: `/progress/${command.slice(9)}?path=%2Frepo%20a`,
 					body: input,
 				});
 			}
-			expect(mapCommandToHttp("progress_pause", { project: "/repo a" })).toEqual({
+			expect(mapCommandToHttp("progress_mark_viewed", { project: "/repo a" })).toEqual({
 				method: "POST",
-				path: "/progress/pause?path=%2Frepo%20a",
+				path: "/progress/viewed?path=%2Frepo%20a",
 			});
-			expect(mapCommandToHttp("progress_resume", { project: "/repo a" })).toEqual({
+			const report = { type: "done", text: "Shipped." };
+			expect(mapCommandToHttp("report_progress_event", { project: "/repo a", report })).toEqual({
 				method: "POST",
-				path: "/progress/resume?path=%2Frepo%20a",
+				path: "/progress/report?path=%2Frepo%20a",
+				body: report,
 			});
+			for (const gone of ["progress_status", "progress_pause", "progress_clear", "progress_export"]) {
+				expect(() => mapCommandToHttp(gone, { project: "/repo a" })).toThrow(/No HTTP mapping/);
+			}
 		});
 
 		it("maps create_pty to POST /sessions", () => {

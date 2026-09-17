@@ -1,136 +1,101 @@
 use serde::{Deserialize, Serialize};
 
-pub const MAX_SUMMARY_CHARS: usize = 500;
-pub const MAX_WORKSTREAM_CHARS: usize = 80;
-pub const DEFAULT_PAGE_LIMIT: usize = 100;
-pub const MAX_PAGE_LIMIT: usize = 250;
+pub const MAX_TEXT_CHARS: usize = 500;
+pub const MAX_STEP_CHARS: usize = 80;
 
+/// Newest entries returned by one `list`. There is no cursor and no paging: a
+/// multi-hour session yields tens of entries, so the cap exists to bound a
+/// pathological history, not to be paged through.
+pub const LIST_LIMIT: usize = 500;
+
+/// What a journal entry is.
+///
+/// Two kinds are reported by an agent and one is written by the host. The
+/// distinction is not cosmetic: `Intent` is derived from the `intent:` marker
+/// the agent already emits, so accepting it from the reporting tool would file
+/// one announced task twice.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressKind {
-    Started,
-    Milestone,
-    Blocked,
     Done,
+    Blocked,
+    Intent,
 }
 
 impl ProgressKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Started => "started",
-            Self::Milestone => "milestone",
-            Self::Blocked => "blocked",
             Self::Done => "done",
+            Self::Blocked => "blocked",
+            Self::Intent => "intent",
         }
     }
 
+    /// Parse a kind read back from the database. Accepts `intent`, which the
+    /// host writes; use [`ProgressKind::parse_reportable`] for caller input.
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
         match value {
-            "started" => Ok(Self::Started),
-            "milestone" => Ok(Self::Milestone),
-            "blocked" => Ok(Self::Blocked),
             "done" => Ok(Self::Done),
-            other => Err(format!("unknown progress event type '{other}'")),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkstreamState {
-    Started,
-    Progressing,
-    Blocked,
-    Done,
-}
-
-impl WorkstreamState {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Started => "started",
-            Self::Progressing => "progressing",
-            Self::Blocked => "blocked",
-            Self::Done => "done",
-        }
-    }
-
-    pub(crate) fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "started" => Ok(Self::Started),
-            "progressing" => Ok(Self::Progressing),
             "blocked" => Ok(Self::Blocked),
-            "done" => Ok(Self::Done),
-            other => Err(format!("unknown workstream state '{other}'")),
+            "intent" => Ok(Self::Intent),
+            other => Err(format!("unknown progress type '{other}'")),
+        }
+    }
+
+    /// Parse a kind an agent may report. `intent` is refused here rather than
+    /// in the store, so the agent reads why instead of seeing its entry
+    /// silently filed under a kind it did not ask for.
+    pub(crate) fn parse_reportable(value: &str) -> Result<Self, String> {
+        match Self::parse(value)? {
+            Self::Intent => Err(INTENT_IS_NOT_REPORTABLE.to_string()),
+            reportable => Ok(reportable),
         }
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProgressProvenance {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reporter_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reporter_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_path: Option<String>,
-}
+pub(crate) const INTENT_IS_NOT_REPORTABLE: &str =
+    "type must be 'done' or 'blocked' — 'intent' is recorded by TUIC from the intent: marker";
 
-impl ProgressProvenance {
-    /// A local caller — the desktop IPC command or `POST /progress/report` —
-    /// identifies no reporter and no session. The only thing it knows about
-    /// itself is the workspace it named in the request.
-    ///
-    /// This exists as a constructor because both entry points built the same
-    /// literal by hand and neither was tested: mutating the field away
-    /// survived the whole suite in both places (measured 2026-09-14). One
-    /// construction site is one place to test.
-    pub fn for_workspace(workspace_path: &str) -> Self {
-        Self {
-            workspace_path: Some(workspace_path.to_string()),
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct NewProgressEvent {
-    #[serde(rename = "type")]
+/// An entry on its way into the store. `project` and `created_at_ms` are added
+/// by the store; nothing else is inferred.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewProgressEntry {
     pub kind: ProgressKind,
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workstream: Option<String>,
-    #[serde(default)]
-    pub provenance: ProgressProvenance,
+    pub text: String,
+    pub step: Option<String>,
+    pub agent_name: Option<String>,
 }
 
-impl NewProgressEvent {
+impl NewProgressEntry {
     pub fn validate(&self) -> Result<(), String> {
-        validate_text("summary", &self.summary, MAX_SUMMARY_CHARS)?;
-        if let Some(workstream) = &self.workstream {
-            validate_text("workstream", workstream, MAX_WORKSTREAM_CHARS)?;
+        validate_text("text", &self.text, MAX_TEXT_CHARS)?;
+        if let Some(step) = &self.step {
+            validate_text("step", step, MAX_STEP_CHARS)?;
         }
         Ok(())
     }
 
-    pub(crate) fn trimmed_summary(&self) -> String {
-        self.summary.trim().to_string()
+    pub(crate) fn trimmed_text(&self) -> String {
+        self.text.trim().to_string()
     }
 
-    pub(crate) fn trimmed_workstream(&self) -> Option<String> {
-        self.workstream
+    /// An all-whitespace step is no step. Trimming it away here keeps the
+    /// column's only contract — a crumb a human reads — out of the renderer.
+    pub(crate) fn trimmed_step(&self) -> Option<String> {
+        self.step
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     }
-}
 
-pub(crate) fn validate_workstream_name(value: &str) -> Result<(), String> {
-    validate_text("workstream", value, MAX_WORKSTREAM_CHARS)
+    pub(crate) fn trimmed_agent_name(&self) -> Option<String> {
+        self.agent_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    }
 }
 
 pub(crate) fn validate_text(field: &str, value: &str, max: usize) -> Result<(), String> {
@@ -147,268 +112,96 @@ pub(crate) fn validate_text(field: &str, value: &str, max: usize) -> Result<(), 
     Ok(())
 }
 
-pub(crate) fn normalize_workstream(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
+/// A stored entry. The rowid is identity and order in one.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ProgressEvent {
-    pub id: String,
-    pub sequence: u64,
-    pub revision: u64,
+pub struct ProgressEntry {
+    pub id: i64,
+    pub project: String,
     pub created_at_ms: u64,
     #[serde(rename = "type")]
     pub kind: ProgressKind,
-    pub summary: String,
+    pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub workstream_id: Option<String>,
+    pub step: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub workstream: Option<String>,
-    #[serde(flatten)]
-    pub provenance: ProgressProvenance,
+    pub agent_name: Option<String>,
 }
 
+/// Everything the dialog renders in one response: the list and the divider.
+///
+/// `last_viewed_ms` travels with the entries rather than in a second call
+/// because the divider is drawn across this exact list; two calls could only
+/// disagree about where the line goes.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct WorkstreamSnapshot {
-    pub id: String,
-    pub name: String,
-    pub state: WorkstreamState,
-    pub active_blockers: u64,
-    pub updated_sequence: u64,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectSnapshot {
-    pub project_root: String,
-    pub revision: u64,
-    pub collection_enabled: bool,
-    pub workstreams: Vec<WorkstreamSnapshot>,
-    pub project_blockers: Vec<ProgressEvent>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProgressPage {
-    pub revision: u64,
-    pub snapshot_cursor: u64,
-    pub events: Vec<ProgressEvent>,
+pub struct ProgressList {
+    pub project: String,
+    pub entries: Vec<ProgressEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_before_sequence: Option<u64>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProgressStatus {
-    pub project_root: String,
-    pub revision: u64,
-    pub snapshot_cursor: u64,
-    pub read_cursor: u64,
-    pub unread_count: u64,
-    pub collection_enabled: bool,
-    pub workstreams: Vec<WorkstreamSnapshot>,
-    pub project_blockers: Vec<ProgressEvent>,
+    pub last_viewed_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProgressListInput {
-    pub before_sequence: Option<u64>,
-    pub limit: Option<usize>,
-    pub workstream_id: Option<String>,
-    pub kind: Option<ProgressKind>,
-    pub unread_only: Option<bool>,
-    pub blocker_only: Option<bool>,
-    pub created_after_ms: Option<u64>,
-    pub created_before_ms: Option<u64>,
+    /// The dialog's single filter.
+    #[serde(default)]
+    pub blocked_only: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProgressDeleteInput {
-    pub event_ids: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProgressClearInput {
-    pub expected_revision: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProgressReadInput {
-    pub snapshot_cursor: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(
-    tag = "operation",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ProgressCorrection {
-    EditSummary {
-        event_id: String,
-        summary: String,
-    },
-    MoveEvent {
-        event_id: String,
-        workstream_id: Option<String>,
-    },
-    RenameWorkstream {
-        workstream_id: String,
-        name: String,
-    },
-    MergeWorkstreams {
-        source_workstream_ids: Vec<String>,
-        target_workstream_id: String,
-    },
-    MergeEvents {
-        source_event_ids: Vec<String>,
-        target_event_id: String,
-    },
-    ResolveBlocker {
-        event_id: String,
-    },
-    SetWorkstreamState {
-        workstream_id: String,
-        state: WorkstreamState,
-    },
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProgressUpdateInput {
-    pub expected_revision: u64,
-    pub corrections: Vec<ProgressCorrection>,
+    pub ids: Vec<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ProgressMutationReceipt {
-    pub revision: u64,
-    pub affected: usize,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProgressExportOptions {
-    #[serde(default)]
-    pub include_provenance: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(
-    tag = "operation",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ProgressExportInput {
-    Preview {
-        #[serde(default)]
-        options: ProgressExportOptions,
-    },
-    Write {
-        options: ProgressExportOptions,
-        snapshot_id: String,
-        snapshot_time_ms: u64,
-        replace: bool,
-        expected_content: Option<String>,
-    },
+pub struct ProgressDeleteReceipt {
+    pub deleted: usize,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ProgressExportReceipt {
-    pub project_root: String,
-    pub path: String,
-    pub snapshot_id: String,
-    pub snapshot_revision: u64,
-    pub snapshot_time_ms: u64,
-    pub markdown: String,
-    pub file_exists: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub existing_content: Option<String>,
-    pub written: bool,
+pub struct ProgressViewedReceipt {
+    pub last_viewed_ms: u64,
 }
 
-/// Caller-supplied report fields. Provenance is derived by the transport.
+/// Caller-supplied report fields. The host adds the timestamp, the project and
+/// the agent name.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProgressReportInput {
     #[serde(rename = "type")]
     pub kind: ProgressKind,
-    pub summary: String,
+    pub text: String,
     #[serde(default)]
-    pub workstream: Option<String>,
+    pub step: Option<String>,
 }
 
 impl ProgressReportInput {
-    pub fn into_event(self, provenance: ProgressProvenance) -> NewProgressEvent {
-        NewProgressEvent {
-            kind: self.kind,
-            summary: self.summary,
-            workstream: self.workstream,
-            provenance,
+    /// Refuse `intent` on the way in, wherever the input came from. The MCP
+    /// path rejects it while parsing the string; a typed transport (HTTP, IPC)
+    /// deserialises the enum first and lands here, and both must answer with
+    /// the same sentence.
+    pub fn into_entry(self, agent_name: Option<String>) -> Result<NewProgressEntry, String> {
+        if self.kind == ProgressKind::Intent {
+            return Err(INTENT_IS_NOT_REPORTABLE.to_string());
         }
+        Ok(NewProgressEntry {
+            kind: self.kind,
+            text: self.text,
+            step: self.step,
+            agent_name,
+        })
     }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProgressReceiptStatus {
-    Recorded,
-    Duplicate,
-    Paused,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressReceipt {
-    pub status: ProgressReceiptStatus,
-    pub revision: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_id: Option<String>,
-}
-
-impl ProgressReceipt {
-    pub(crate) fn recorded(event: &ProgressEvent) -> Self {
-        Self {
-            status: ProgressReceiptStatus::Recorded,
-            revision: event.revision,
-            event_id: Some(event.id.clone()),
-        }
-    }
-
-    pub(crate) fn duplicate(event: &ProgressEvent) -> Self {
-        Self {
-            status: ProgressReceiptStatus::Duplicate,
-            revision: event.revision,
-            event_id: Some(event.id.clone()),
-        }
-    }
-
-    pub(crate) fn paused(revision: u64) -> Self {
-        Self {
-            status: ProgressReceiptStatus::Paused,
-            revision,
-            event_id: None,
-        }
-    }
-}
-
-pub(crate) struct ProgressReportOutcome {
-    pub receipt: ProgressReceipt,
-    pub event: Option<ProgressEvent>,
+    pub id: i64,
 }
 
 #[cfg(test)]
@@ -443,51 +236,75 @@ mod tests {
         }};
     }
 
-    /// Every progress input type carries `serde(deny_unknown_fields)`, so a
-    /// caller that misspells a field is refused instead of silently getting a
-    /// default. Nothing else in the tree asserts that: delete an attribute and
-    /// the valid bodies still parse, the routes still answer, and the whole
-    /// suite stays green.
-    ///
-    /// This lives at the serde layer rather than in an HTTP test on purpose.
-    /// Over HTTP a rejected body answers 422 from the axum extractor — the
-    /// same 422 a caller gets when an auth guard is missing and the body never
-    /// reaches it, which is the confusion
-    /// `every_progress_route_runs_its_handler_for_a_loopback_caller` is built
-    /// to avoid. Keep the two apart.
     #[test]
     fn every_progress_input_type_refuses_an_unknown_field() {
-        assert_rejects_unknown_field!(ProgressListInput, {"beforeSequence": 4, "limit": 50});
-        assert_rejects_unknown_field!(ProgressDeleteInput, {"eventIds": ["event-1"]});
-        assert_rejects_unknown_field!(ProgressClearInput, {"expectedRevision": 2});
-        assert_rejects_unknown_field!(ProgressReadInput, {"snapshotCursor": 7});
-        assert_rejects_unknown_field!(ProgressCorrection, {
-            "operation": "edit_summary",
-            "eventId": "event-1",
-            "summary": "a corrected summary"
-        });
-        assert_rejects_unknown_field!(ProgressUpdateInput, {
-            "expectedRevision": 2,
-            "corrections": []
-        });
-        assert_rejects_unknown_field!(ProgressExportOptions, {"includeProvenance": true});
-        assert_rejects_unknown_field!(ProgressExportInput, {"operation": "preview"});
+        assert_rejects_unknown_field!(ProgressListInput, {"blockedOnly": true});
+        assert_rejects_unknown_field!(ProgressDeleteInput, {"ids": [1, 2]});
+        assert_rejects_unknown_field!(ProgressReportInput, {"type": "done", "text": "shipped"});
     }
 
-    /// The workspace path is what an export with `includeProvenance` prints as
-    /// the source of an event, so losing it costs the reader the only clue to
-    /// where a report came from. Both local entry points used to build this by
-    /// hand and a mutation that deleted the field survived in both.
     #[test]
-    fn a_local_report_is_attributed_to_the_workspace_it_named() {
-        let provenance = ProgressProvenance::for_workspace("/Users/me/project");
+    fn the_wire_names_the_kind_field_type() {
+        let input: ProgressReportInput =
+            serde_json::from_value(serde_json::json!({"type": "blocked", "text": "needs a key"}))
+                .unwrap();
+        assert_eq!(input.kind, ProgressKind::Blocked);
+        assert_eq!(input.step, None);
+    }
+
+    #[test]
+    fn intent_is_refused_from_both_input_paths() {
         assert_eq!(
-            provenance.workspace_path.as_deref(),
-            Some("/Users/me/project")
+            ProgressKind::parse_reportable("intent").unwrap_err(),
+            INTENT_IS_NOT_REPORTABLE
         );
-        // A local caller is anonymous: it is not an MCP peer and not a PTY.
-        assert_eq!(provenance.reporter_id, None);
-        assert_eq!(provenance.reporter_name, None);
-        assert_eq!(provenance.session_id, None);
+        let typed = ProgressReportInput {
+            kind: ProgressKind::Intent,
+            text: "wiring auth middleware".to_string(),
+            step: None,
+        };
+        assert_eq!(
+            typed.into_entry(None).unwrap_err(),
+            INTENT_IS_NOT_REPORTABLE
+        );
+    }
+
+    #[test]
+    fn text_and_step_are_capped_and_never_empty() {
+        let entry = |text: &str, step: Option<&str>| NewProgressEntry {
+            kind: ProgressKind::Done,
+            text: text.to_string(),
+            step: step.map(str::to_string),
+            agent_name: None,
+        };
+        assert!(entry("   ", None).validate().unwrap_err().contains("text"));
+        assert!(
+            entry(&"x".repeat(MAX_TEXT_CHARS + 1), None)
+                .validate()
+                .unwrap_err()
+                .contains("at most 500")
+        );
+        assert!(
+            entry("ok", Some(&"s".repeat(MAX_STEP_CHARS + 1)))
+                .validate()
+                .unwrap_err()
+                .contains("at most 80")
+        );
+        assert!(entry("ok", Some("Step 3")).validate().is_ok());
+    }
+
+    /// A step that is only whitespace is not a step. It reaches the store as
+    /// `None`, so the dialog never renders an empty crumb beside an entry.
+    #[test]
+    fn a_blank_step_and_a_blank_agent_name_become_absent() {
+        let entry = NewProgressEntry {
+            kind: ProgressKind::Done,
+            text: "  shipped the parser  ".to_string(),
+            step: Some("   ".to_string()),
+            agent_name: Some("  ".to_string()),
+        };
+        assert_eq!(entry.trimmed_text(), "shipped the parser");
+        assert_eq!(entry.trimmed_step(), None);
+        assert_eq!(entry.trimmed_agent_name(), None);
     }
 }

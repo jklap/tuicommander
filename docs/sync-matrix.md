@@ -325,29 +325,31 @@ its Git-exclude/watcher interaction:
 |------|----------------|
 | `src-tauri/src/progress/store.rs` | Schema, migrations, recovery, and SQLite locking behavior |
 | `src-tauri/src/progress/ownership.rs` | Registered and nested workspace ownership resolution |
-| `src-tauri/src/progress/model.rs` | Event/workstream types and validation limits |
-| `src-tauri/src/progress/export.rs` | Markdown rendering, snapshot identity, and target-safety rules |
-| `src-tauri/src/repo_watcher.rs` | Progress paths must continue to classify as noise; the export lock is one of them |
+| `src-tauri/src/progress/model.rs` | Entry kinds, which of them are reportable, and validation limits |
+| `src-tauri/src/progress/service.rs` | The `progress_tracking` gate and the shared record/list/delete core |
+| `src-tauri/src/pty.rs` | `intent:` capture — the host's half of the journal |
+| `src-tauri/src/repo_watcher.rs` | The journal must stay outside every repository; the test asserts the tree is byte-identical after a write |
 | `docs/backend/config.md` | Progress Storage section |
-| `docs/api/http-api.md` | Project Progress section, including the export request shapes |
+| `docs/api/http-api.md` | Project Progress section |
 | `docs/api/tauri-commands.md` | Progress command table rows |
-| `docs/user-guide/project-progress.md` | Controls, export, and storage section |
+| `docs/user-guide/project-progress.md` | The whole document |
 
-### Project Progress (panel)
+### Project Progress (dialog)
 
-When modifying the Progress panel, its store, or the surfaces that open it:
+When modifying the Progress dialog, its store, or the surfaces that open it:
 
 | File | What to update |
 |------|----------------|
-| `src/components/ProgressPanel/` | Views, controls, empty/paused/unavailable rendering, `embedded` mobile mode |
-| `src/stores/progress.ts` | Fetch, dedup, frozen watermark, live presentation |
+| `src/components/ProgressDialog/` | The list, the frozen divider, the blocked filter, `embedded` mobile mode |
+| `src/stores/progress.ts` | The one-project query, the frozen divider, live presentation |
 | `src/actions/actionRegistry.ts` | The `progress` action, and the browser allowlist in `CommandPalette.tsx` |
 | `src/components/Toolbar/Toolbar.tsx` | The aggregate unread bell row |
 | `src/mobile/MobileApp.tsx` | The lazy Progress tab |
-| `docs/frontend/components.md` | ProgressPanel entry |
+| `docs/frontend/components.md` | ProgressDialog entry |
 | `docs/frontend/stores.md` | progressStore entry |
 | `docs/user-guide/command-palette.md` | Project Progress action |
-| `docs/user-guide/project-progress.md` | The Progress panel section |
+| `docs/user-guide/project-progress.md` | The whole guide — it describes the dialog |
+| `docs/user-guide/settings.md` | The two `progress_tracking` toggles in the Agents table |
 | `docs/FEATURES.md` | Project history row |
 
 ### Git & Worktree Integration
@@ -437,6 +439,17 @@ When changing how `make mutants` selects, builds or runs mutants:
 | `Makefile` | The `mutants` target and its `RANGE` default |
 | `AGENTS.md` | "Tests" section bullet (per-change rule, who runs it, surviving-mutant policy) |
 | `CONTRIBUTING.md` | The install line and the one-paragraph mention |
+
+### Config-instance scoping (`TUIC_APP_INSTANCE`)
+When changing which make target launches against which configuration directory:
+
+| File | What to update |
+|------|----------------|
+| `Makefile` | The `dev` and `test` recipes. A `TUIC_APP_INSTANCE` default MUST be target-specific (`test: TUIC_APP_INSTANCE?=…`) — a line-start assignment is global whatever target follows it, and sends `make dev` to an empty instance |
+| `scripts/check-make-instance-scope.sh` | The expected value per target, and the structural check. It asks `make -n` what it expands rather than reading the line |
+| `scripts/hooks/pre-commit` | Gate 1 runs that script when `Makefile` is staged. Gate 2 is the agent-state fixture gate; `TUIC_SKIP_FIXTURE_GATE=1` deliberately skips only gate 2 |
+| `docs/backend/config.md` | The override forms and what each target defaults to |
+| `CHANGELOG.md` | Only when the behaviour a user sees changes |
 
 When adding, renaming or moving a docs page:
 

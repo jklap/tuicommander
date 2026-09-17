@@ -4,15 +4,14 @@
 
 | Command | Parameters | Result | Description |
 |---|---|---|---|
-| `report_progress_event` | `project, report` | `{status, revision, eventId?}` | Records a project outcome through the same durable core as MCP and HTTP. |
-| `progress_status` | `project` | `ProgressStatus` | Reads collection, revision, snapshot/read cursors, unread count, workstreams and blockers. |
-| `progress_list` | `project, input` | `ProgressPage` | Reads a bounded typed page and its snapshot cursor. |
-| `progress_pause` / `progress_resume` | `project` | `ProgressMutationReceipt` | Changes collection state without stopping agents or backfill. |
-| `progress_delete` | `project, input.eventIds` | `ProgressMutationReceipt` | Deletes explicit event IDs from one project. |
-| `progress_clear` | `project, input.expectedRevision` | `ProgressMutationReceipt` | Atomically clears one project and pauses collection. |
-| `progress_update` | `project, input` | `ProgressMutationReceipt` | Applies revision-guarded typed corrections atomically. |
-| `progress_read` | `project, input.snapshotCursor` | `ProgressMutationReceipt` | Acknowledges exactly the viewed snapshot watermark. |
-| `progress_export` | `project, input` | `ProgressExportReceipt` | Previews or writes the identified project snapshot to owning-root `progress.md`; replacement requires the previewed file content. |
+| `report_progress_event` | `project, report` | `{id}` | Appends one `done` or `blocked` entry through the same core as MCP and HTTP. |
+| `progress_list` | `project, input.blockedOnly` | `ProgressList` | The project's newest 500 entries, newest first, with the stored last-visit mark. |
+| `progress_delete` | `project, input.ids` | `{deleted}` | Deletes entries by id, scoped to the project — one project cannot delete another's. |
+| `progress_mark_viewed` | `project` | `{lastViewedMs}` | Moves the last-visit mark to now. Deliberately not an MCP action: it is the reader's, not the agent's. |
+
+The journal is append-only. There is no pause, clear, correction or export
+command: an entry is written once and either kept or deleted. `intent` entries
+are written by TUIC from the agent's `intent:` marker and cannot be reported.
 
 All commands are invoked from the frontend via `invoke(command, args)`. In browser mode, these map to HTTP endpoints (see [HTTP API](http-api.md)).
 

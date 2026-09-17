@@ -773,6 +773,11 @@ pub(crate) struct AppConfig {
     /// Show suggested follow-up actions from agents (from `suggest: A | B | C` tokens)
     #[serde(default = "default_true")]
     pub(crate) suggest_followups: bool,
+    /// Collect the Progress journal: the `progress` tool, its `initialize`
+    /// obligation, and `intent:` capture. One flag governs all of them, which
+    /// is why pause/resume of collection does not exist.
+    #[serde(default = "default_true")]
+    pub(crate) progress_tracking: bool,
     /// Auto-copy terminal selection to clipboard
     #[serde(default = "default_true")]
     pub(crate) copy_on_select: bool,
@@ -990,6 +995,7 @@ impl Default for AppConfig {
             disabled_native_tools: vec!["config".to_string(), "debug".to_string()],
             intent_tab_title: true,
             suggest_followups: true,
+            progress_tracking: true,
             copy_on_select: true,
             osc52_clipboard: true,
             show_last_prompt: true,
@@ -1498,6 +1504,9 @@ pub(crate) struct AgentSettings {
     /// Per-agent override for suggested follow-ups. None = use global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) suggest_followups: Option<bool>,
+    /// Per-agent override for the Progress journal. None = use global default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) progress_tracking: Option<bool>,
     /// Opt-in: drive busy/idle/awaiting from the agent's native hooks instead of
     /// output heuristics. Enabling installs hooks into the agent's settings file;
     /// disabling removes only TUIC's entries. None/false = heuristics (default).
@@ -4107,6 +4116,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let cfg = AppConfig {
             shell: Some("/bin/zsh".to_string()),
+            progress_tracking: false,
             font_family: "Fira Code".to_string(),
             font_size: 16,
             font_weight: 200,
@@ -5102,6 +5112,7 @@ mod tests {
                 suggest_followups: None,
                 hook_instrumentation: None,
                 native_status_signals: None,
+                progress_tracking: Some(false),
             },
         );
         let loaded: AgentsConfig = round_trip_in_dir(dir.path(), "agents.json", &agents);
@@ -5122,6 +5133,7 @@ mod tests {
         assert!(!claude.run_configs[1].is_default);
         assert_eq!(claude.intent_tab_title, Some(false));
         assert_eq!(claude.suggest_followups, None);
+        assert_eq!(claude.progress_tracking, Some(false));
     }
 
     #[test]

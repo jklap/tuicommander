@@ -1,5 +1,15 @@
 # Progress reporting evaluation
 
+> **Historical.** This measurement was taken against the first Progress design —
+> four event kinds, workstreams, pause/resume and `repo`'s nine `progress_*`
+> actions. The 2026-09-14 revision of `plans/project-progress.md` replaced all of
+> that with one append-only journal, so the conditions below no longer describe
+> any shipped surface. The finding that survived the rewrite and shaped it is the
+> one about *where* the instruction lives: a tool description says what a tool
+> does, never that you must call it, and 39 repositories recorded zero entries
+> under the description-only condition. The obligation now sits in `initialize`
+> and is imperative. The numbers are kept as a record, not as a spec.
+
 This page records a measured comparison of the two ways to instrument an agent
 for [Project Progress](../user-guide/project-progress.md):
 

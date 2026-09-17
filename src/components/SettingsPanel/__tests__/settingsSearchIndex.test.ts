@@ -38,8 +38,9 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	providers: { dynamic: 3, orphans: 0 },
 	// 8th: the per-agent "Native status signals" toggle, which sits in the same
 	// runtime-rendered card as "Install hooks globally" and so cannot have a
-	// static scroll target either.
-	agents: { dynamic: 8, orphans: 1 },
+	// static scroll target either. 9th: the per-agent "Collect progress"
+	// override, in that same card.
+	agents: { dynamic: 9, orphans: 1 },
 	"ai-chat": { dynamic: 2, orphans: 0 },
 };
 

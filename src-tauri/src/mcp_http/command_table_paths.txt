@@ -171,16 +171,10 @@
 /metrics
 /plugins/list
 /process/stats
-/progress/clear
 /progress/delete
-/progress/export
 /progress/list
-/progress/pause
-/progress/read
 /progress/report
-/progress/resume
-/progress/status
-/progress/update
+/progress/viewed
 /prompt/execute-api
 /prompt/execute-headless
 /prompt/extract-variables

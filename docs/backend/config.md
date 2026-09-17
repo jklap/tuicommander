@@ -35,6 +35,19 @@ nothing but discipline preventing a throwaway test repo from being persisted the
 (#763-d219). An invalid or already-selected id fails the process at startup rather
 than silently falling back to the default instance.
 
+Which target defaults to what is deliberate and guarded. `make test` is the
+throwaway verification launch and defaults to `instances/tuic-test/`; `make dev`
+is Boss's daily driver and carries **no** instance, because switching it looks
+exactly like every repository having vanished. That default is written
+`test: TUIC_APP_INSTANCE?=tuic-test` — target-specific. A line-start
+`TUIC_APP_INSTANCE?=…` is a *global* make variable however far down the file it
+appears, reads identically, and has sent `make dev` to the empty test instance
+twice; `scripts/check-make-instance-scope.sh` asks `make -n` what each target
+actually expands, and runs from both `make check` and `pre-commit`. An
+environment assignment still beats a target-specific `?=`, so
+`TUIC_APP_INSTANCE=<id> make dev` keeps working and `make dev` announces the
+configuration directory it starts on — no check can see a developer's shell.
+
 The credential namespace follows the same immutable selection. The default
 vault remains keyring service `tuicommander`, user `vault`; a named instance
 uses service `tuicommander-instance-<id>`, user `vault`. Named instances never
@@ -879,57 +892,44 @@ A `.tuic.json` file in the repository root provides team-shareable settings. It 
 
 **Command:** `load_repo_local_config(repo_path)` — returns `RepoLocalConfig` or `null` if file is missing or malformed.
 
-## Progress Storage (`.tuic/progress.sqlite3`)
+## Progress Storage (`progress.sqlite3`)
 
 **Module:** `src-tauri/src/progress/` (`store.rs`, `ownership.rs`, `model.rs`,
-`export.rs`)
+`service.rs`)
 
-Project-owned Rust history stores reported `started`, `milestone`, `blocked`,
-and `done` outcomes plus derived workstream state independently of sessions and
-workspaces. The MCP `repo` actions, Tauri commands, and HTTP routes share one
-service layer (`service.rs`), which resolves the owning project before it opens
-the store.
+One append-only journal in one database, `<config dir>/progress.sqlite3`, with
+`project` as a column. Nothing is written inside a repository — no `.tuic`
+directory, no `.git/info/exclude` registration, no export lock, and so nothing
+for the repository watcher or the content index to ignore.
+`repo_watcher.rs` asserts that: it snapshots the repository tree byte-for-byte
+around a record/delete/mark-viewed cycle and requires it unchanged.
 
-The database lives at `<owning-project-root>/.tuic/progress.sqlite3` with its
-SQLite sidecars. Ownership resolution starts from an authoritative registered
-project and follows recorded linked and nested workspace parent records;
-it never uses the focused UI repository or a bare CWD. Unbound callers fail
-with `project_required`.
+Three entry kinds. `done` and `blocked` are reported by agents through the MCP
+`progress` tool, the HTTP routes or the Tauri commands. `intent` is written by
+TUIC from the agent's `intent:` marker and is refused on every reporting path —
+it is observed, not claimed.
 
-Schema version 2 stores project revision, persistent collection/read-cursor
-state, workstreams and rename aliases, events with monotonic sequence numbers
-and UUIDv7 ids, independently active blockers, and preserved source snapshots
-for merged events. Sequence and revision values are not reused after deletion
-or clear.
+Ownership resolution starts from an authoritative registered project and follows
+recorded linked and nested workspace parent records, so a worktree's entries land
+in its parent project's journal. It never uses the focused UI repository or a
+bare CWD; unbound callers fail with `project_required`.
+
+The schema is one `entries` table (rowid identity, ordering and cursor in one,
+`AUTOINCREMENT` so a deleted id is never handed out again) plus a `project_views`
+table holding the per-project last-visit timestamp. There is no revision, no
+sequence, no collection state and no correction history: an entry is appended
+once and either kept or deleted. `list` returns the newest 500 entries for one
+project, newest first.
+
 Each operation opens a fresh SQLite connection in WAL mode with a five-second
 busy timeout, leaving SQLite locking as the cross-thread and cross-process
 serialization boundary.
 
-Failures are explicit: `progress_store_unavailable`, `progress_store_busy`,
-`progress_store_incompatible`, `progress_store_corrupt`,
-`progress_store_recovered`, or `progress_store_recovery_failed`. Recovery is
-serialized by `progress.sqlite3.recovery.lock`; it preserves the database and
-any WAL/SHM files byte-for-byte under unique `.corrupt-<uuid>` names, creates a
-validated empty replacement, and still returns an error so the caller must
-retry rather than mistake the replacement for the original history.
-
-On first open, the store adds its database, sidecars, recovery lock, corrupt
-backup pattern, and the Markdown export lock (`.tuic/progress-export.lock`) to
-the repository-local `.git/info/exclude`, never tracked `.gitignore`. Both the
-repository watcher and content index honor that exclude, so Progress persistence
-does not emit repository changes or trigger indexing. The exported
-`progress.md` is deliberately outside that contract: it is the user's artifact
-and must reach the working tree.
-
-The Markdown export (`export.rs`) reads one committed database snapshot and
-identifies it as `sha256:<digest>` over revision, snapshot time, options, and
-the rendered Markdown. Preview returns that identity with the rendered text and
-any existing target content; write repeats the snapshot, refuses a changed
-identity or a changed/removed target, refuses symlink and non-regular targets,
-and replaces the file atomically through a same-directory temporary file. The
-export never writes to the database, and it never stages, commits, or pushes:
-the only Git interaction it inherits is the exclude registration every store
-open performs.
+Collection is gated by `progress_tracking`: the global `AppConfig` flag ANDed
+with the per-agent `AgentSettings` override, which defaults to on. Global off
+also removes the `progress` tool from every agent's tool list; a per-agent off
+answers `progress_tracking_disabled` instead, because the tool index is built
+once and has no session context.
 
 ## Additional Commands
 

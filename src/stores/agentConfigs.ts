@@ -23,6 +23,7 @@ interface AgentConfigsState {
 			headless_template?: string;
 			env_flags?: Record<string, string>;
 			intent_tab_title?: boolean;
+			progress_tracking?: boolean;
 			suggest_followups?: boolean;
 			hook_instrumentation?: boolean;
 			native_status_signals?: boolean;
@@ -259,6 +260,28 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 						s.agents[type] = { run_configs: [] };
 					}
 					s.agents[type].intent_tab_title = value;
+				}),
+			);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				// saveToDisk already logged the error
+			}
+		},
+
+		/** Get per-agent progress_tracking override (undefined = follow the global flag) */
+		getProgressTracking(type: AgentType): boolean | undefined {
+			return state.agents[type]?.progress_tracking;
+		},
+
+		/** Set per-agent progress_tracking override. Pass undefined to follow the global flag. */
+		async setProgressTracking(type: AgentType, value: boolean | undefined): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) {
+						s.agents[type] = { run_configs: [] };
+					}
+					s.agents[type].progress_tracking = value;
 				}),
 			);
 			try {

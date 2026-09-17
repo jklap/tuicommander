@@ -2,35 +2,27 @@
 
 ## Project Progress
 
-`POST /progress/report?path=<absolute-project-path>` accepts `{ type, summary,
-workstream? }`. `type` is `started`, `milestone`, `blocked`, or `done`. The
-response is a bounded `{ status, revision, eventId? }` receipt. Recorded
-events are published as `progress-recorded` on `/events`; duplicate and paused
-reports emit nothing.
+Four routes, all `POST`, all requiring an explicit `path` query naming a
+registered project and normal route authentication.
 
-Project controls require the same explicit `path` query and normal route
-authentication. They are `GET /progress/status` and `POST` routes
-`/progress/list`, `/progress/pause`, `/progress/resume`, `/progress/delete`,
-`/progress/clear`, `/progress/update`, and `/progress/read`. Bodies match their
-Tauri `input` objects: typed list filters, `{eventIds}`,
-`{expectedRevision}`, `{expectedRevision, corrections}`, or
-`{snapshotCursor}`. Unknown fields are rejected. Clear/update reject stale
-revisions; read acknowledges the supplied viewed cursor rather than the latest
-sequence. No route has an implicit all-project destructive target.
+| Route | Body | Response |
+|---|---|---|
+| `/progress/report` | `{ type, text, step? }`, `type` is `done` or `blocked` | `{ id }` |
+| `/progress/list` | `{ blockedOnly }` | `{ project, entries, lastViewedMs? }` |
+| `/progress/delete` | `{ ids }` | `{ deleted }` |
+| `/progress/viewed` | none | `{ lastViewedMs }` |
 
-`POST /progress/export?path=<absolute-project-path>` accepts either
-`{operation:"preview", options:{includeProvenance}}` or
-`{operation:"write", options, snapshotId, snapshotTimeMs, replace,
-expectedContent}`. Preview returns the rendered Markdown, snapshot identity,
-revision/time, resolved owning-project path, target path, and any existing file
-content required as the write precondition. Write re-reads one database snapshot,
-rejects a changed snapshot or target, and atomically writes only `progress.md` at
-the owning root. Symlink and directory targets are refused. Failures are
-explicit and name the target: `progress_export_snapshot_changed`,
-`progress_export_exists`, `progress_export_content_changed`,
-`progress_export_invalid_request`, `progress_export_unsafe_target`,
-`progress_export_unavailable`, and `progress_export_write_failed` — the last one
-also covers a read-only project root, and leaves any existing file unchanged.
+Unknown fields are rejected. `text` is capped at 500 characters and `step` at 80.
+`intent` is a valid entry *kind* but not a reportable one — TUIC writes those
+itself from the agent's `intent:` marker, and `/progress/report` refuses one.
+
+The list is newest-first and capped at 500 entries. There is no paging, no
+cursor and no revision: the journal is append-only, so an entry is written once
+and either kept or deleted. `delete` is scoped to the project in the query, so
+one project cannot delete another project's row by id.
+
+Recorded entries are published as `progress-recorded` on `/events` with
+`{ entry }` as the payload.
 
 REST API served by the Axum HTTP server when MCP server is enabled. All Tauri commands are accessible as HTTP endpoints.
 

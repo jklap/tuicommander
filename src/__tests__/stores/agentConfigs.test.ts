@@ -271,4 +271,36 @@ describe("agentConfigsStore", () => {
 			});
 		});
 	});
+
+	describe("per-agent progress_tracking", () => {
+		it("has no opinion until one is set, which is how the agent follows the global flag", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				expect(store.getProgressTracking("claude")).toBeUndefined();
+			});
+		});
+
+		it("persists the override and can hand the decision back to the global flag", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateWith(configWithClaude());
+				mockInvoke.mockClear();
+
+				await store.setProgressTracking("claude", false);
+				expect(store.getProgressTracking("claude")).toBe(false);
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_agents_config",
+					expect.objectContaining({
+						config: expect.objectContaining({
+							agents: expect.objectContaining({
+								claude: expect.objectContaining({ progress_tracking: false }),
+							}),
+						}),
+					}),
+				);
+
+				await store.setProgressTracking("claude", undefined);
+				expect(store.getProgressTracking("claude")).toBeUndefined();
+			});
+		});
+	});
 });
