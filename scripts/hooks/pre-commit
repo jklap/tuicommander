@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 #
-# pre-commit — the agent-state fixture gate (AGENTS.md → "Agent state detection
+# pre-commit — two gates, independent of each other:
+#   1. Makefile `TUIC_APP_INSTANCE` scope (see below; no bypass but --no-verify)
+#   2. the agent-state fixture gate (bypass: TUIC_SKIP_FIXTURE_GATE=1)
+#
+# Both stand down during merge / cherry-pick / revert conflict resolution — you
+# did not author those lines — and neither blocks on a verification failure.
+#
+# ---------------------------------------------------------------------------
+# Gate 2 — the agent-state fixture gate (AGENTS.md → "Agent state detection
 # — capture before you theorise").
 #
 # That section already states the rule in prose: "A reproduced failure becomes a
@@ -22,19 +30,40 @@
 # every `fix(agent-state):` among them. If it starts firing on everything, the
 # symbol list has drifted; tighten it rather than teaching people to bypass.
 #
-# Never blocks on a verification failure, and stands down during merge /
-# cherry-pick / revert conflict resolution — you did not author those lines.
-#
 # Escape hatch for a rename or refactor that genuinely needs no capture:
 #   TUIC_SKIP_FIXTURE_GATE=1 git commit ...   (or git commit --no-verify)
 set -euo pipefail
-
-[ "${TUIC_SKIP_FIXTURE_GATE:-}" = "1" ] && exit 0
 
 git_dir="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
 for in_progress in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
   [ -e "$git_dir/$in_progress" ] && exit 0
 done
+
+# --------------------------------------------------------------------------
+# Gate 1 — Makefile TUIC_APP_INSTANCE scope.
+#
+# A bare `TUIC_APP_INSTANCE?=tuic-test` is a *global* make variable, so `make
+# dev` launches the daily driver against an empty config instance and every
+# repository looks gone. It reads identically to the correct target-specific
+# form, and it has shipped twice. `make check` runs the same script, but that
+# is the once-per-batch heavyweight target and this repo pushes straight to
+# main — the bad edit lands first. Here it is a `make -n` dry run: seconds.
+#
+# It reads the working tree, not the index, so a partially staged Makefile is
+# judged by what is on disk. Cheap and right in every case but that one.
+if git diff --cached --name-only --diff-filter=ACMR | grep -qx 'Makefile'; then
+  if ! bash scripts/check-make-instance-scope.sh; then
+    printf '\n\033[1;31m✗ pre-commit blocked:\033[0m Makefile TUIC_APP_INSTANCE scope\n\n' >&2
+    printf '  Only `make test` may default to an isolated config instance, and only\n' >&2
+    printf '  as `test: TUIC_APP_INSTANCE?=…`. A column-0 assignment is global and\n' >&2
+    printf '  sends `make dev` to an empty `instances/<id>/`.\n' >&2
+    exit 1
+  fi
+fi
+
+# --------------------------------------------------------------------------
+# Gate 2 — the agent-state fixture gate.
+[ "${TUIC_SKIP_FIXTURE_GATE:-}" = "1" ] && exit 0
 
 fixtures_dir='src-tauri/src/fixtures/agent_prompts'
 

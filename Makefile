@@ -41,7 +41,8 @@ DIST_DIR=dist-release
 all: build sign
 
 # Install tracked git hooks. Idempotent.
-#   pre-commit — agent-state fixture gate (bypass: TUIC_SKIP_FIXTURE_GATE=1)
+#   pre-commit — Makefile TUIC_APP_INSTANCE scope (bypass: --no-verify) +
+#                agent-state fixture gate (bypass: TUIC_SKIP_FIXTURE_GATE=1)
 #   pre-push   — GitHub-issue closing-keyword guard (bypass: TUIC_SKIP_ISSUE_CHECK=1)
 hooks:
 	@bash scripts/hooks/install-hooks.sh
@@ -52,9 +53,16 @@ hooks:
 # (or its `.rs.tmp.*` scratch files) will NOT rebuild/restart the Rust backend.
 # Vite HMR still reloads the UI (it runs as a separate `beforeDevCommand` process).
 # Rust changes require a manual `make dev` restart — see AGENTS.md "Dev Hot Reload".
+# An inherited `TUIC_APP_INSTANCE` (a dotfile, direnv, or one copy-pasted
+# `TUIC_APP_INSTANCE=<id> make dev` still exported in the shell) beats the
+# Makefile the same way the old global assignment did, and the guard in
+# `scripts/check-make-instance-scope.sh` deliberately cannot see it. Say which
+# config directory this is starting on, so the wrong one is the first line of
+# output instead of something inferred from an empty repository list.
 dev: hooks
 	@pnpm build:sidecar
 	@pnpm exec vite build
+	@echo "Starting Tauri dev on $(if $(TUIC_APP_INSTANCE),the ISOLATED config instance '$(TUIC_APP_INSTANCE)' (instances/$(TUIC_APP_INSTANCE)) — not the shared one,the shared default config directory)"
 	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
 
 # Build frontend + launch Tauri dev (for quick manual testing).
@@ -69,7 +77,16 @@ dev: hooks
 # needs, without ever touching production `repositories.json`. Override with
 # `make test TUIC_APP_INSTANCE=some-other-id`, or `TUIC_APP_INSTANCE= make
 # test` to opt back into the shared default instance for one run.
-TUIC_APP_INSTANCE?=tuic-test
+#
+# Scoped to the `test` target on purpose (2026-09-17). Written as a bare
+# `TUIC_APP_INSTANCE?=tuic-test` this is a *global* make variable — position in
+# the file buys nothing — so `make dev` expanded it too and launched the daily
+# driver against an empty `instances/tuic-test/`, which is precisely the "every
+# repository had vanished" failure the paragraph above warns about. It cost no
+# data (production `repositories.json` was never opened) and a real scare.
+# Command-line and environment assignments still win over a target-specific
+# `?=`, so both overrides documented above keep working.
+test: TUIC_APP_INSTANCE?=tuic-test
 test:
 	@echo "Building Vite frontend..."
 	@pnpm exec vite build
@@ -98,6 +115,7 @@ check:
 	@$(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
 	@$(RTK) pnpm architecture:cycles && $(RTK) pnpm architecture:cycles:test && echo "  architecture cycles ✓"
 	@bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
+	@bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
 	@cd src-tauri && $(RTK) cargo fmt --check && echo "  rustfmt ✓"
 	@cd src-tauri && $(RTK) cargo clippy --release -- -D warnings && echo "  clippy ✓"
 	@cd src-tauri && ulimit -n 10240 && $(RTK) cargo nextest run --workspace && $(RTK) cargo test --doc -q && echo "  rust tests ✓"
