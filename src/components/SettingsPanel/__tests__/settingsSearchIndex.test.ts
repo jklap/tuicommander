@@ -61,7 +61,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// daemon alive" labels, whose text sits in a nested `<span>`.
 	"remote-machines": { dynamic: 3, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
-	"smart-prompts": { dynamic: 4, orphans: 11 },
+	"smart-prompts": { dynamic: 3, orphans: 11 },
 	// The per-agent "Native status signals", "Prevent alternate screen", and
 	// "Accept workspace trust for managed spawns" toggles sit in runtime-rendered
 	// cards and have no static scroll target. Workspace trust appears only in the
