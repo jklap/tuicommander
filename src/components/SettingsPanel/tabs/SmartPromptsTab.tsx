@@ -1,9 +1,8 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
-import { AGENT_TYPES, AGENTS, type AgentType, toHeadlessAgentChoice } from "../../../agents";
+import { AGENT_TYPES, AGENTS, type AgentType } from "../../../agents";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
 import { useAgentDetection } from "../../../hooks/useAgentDetection";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
-import { agentConfigsStore } from "../../../stores/agentConfigs";
 import { promptLibraryStore, type SavedPrompt, type SmartPlacement } from "../../../stores/promptLibrary";
 import { toastsStore } from "../../../stores/toasts";
 import { onClickKeyDown } from "../../../utils/a11y";
@@ -19,6 +18,7 @@ import {
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { PromptImportDialog } from "../../PromptImportDialog/PromptImportDialog";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
+import { HeadlessAgentSelect } from "../HeadlessAgentSelect";
 import s from "../Settings.module.css";
 import sp from "./SmartPromptsTab.module.css";
 
@@ -783,33 +783,7 @@ export const SmartPromptsTab: Component = () => {
 
 			<div class={s.group}>
 				<label>Headless Agent</label>
-				<select
-					value={agentConfigsStore.getHeadlessAgent() ?? ""}
-					onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
-				>
-					<option value="">— Not configured —</option>
-					<For each={headlessAgents()}>
-						{(type) => {
-							const configs = () => agentConfigsStore.getRunConfigs(type);
-							return (
-								<Show when={configs().length > 0} fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}>
-									<optgroup label={AGENTS[type]?.name ?? type}>
-										<option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
-										<For each={configs()}>
-											{(cfg) => (
-												<option value={`${type}:${cfg.name}`}>
-													{cfg.name}
-													{cfg.is_default ? " (default)" : ""}
-												</option>
-											)}
-										</For>
-									</optgroup>
-								</Show>
-							);
-						}}
-					</For>
-					<option value="api">API (via ego)</option>
-				</select>
+				<HeadlessAgentSelect agentTypes={headlessAgents()} />
 				<p class={s.hint}>
 					Default agent for headless prompts. Individual prompts can override this in their settings.
 					{detection.loading() ? " Detecting..." : ""}
