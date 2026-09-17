@@ -57,6 +57,13 @@ const TABS = [
 		// there is no longer a master on/off switch), dropping this from 5 to 4.
 		minControls: 4,
 	},
+	{
+		name: "Appearance",
+		heading: "\n### Appearance\n",
+		path: "src/components/SettingsPanel/tabs/AppearanceTab.tsx",
+		// Main moved the terminal theme select to the Terminal tab, leaving 6 here.
+		minControls: 6,
+	},
 ];
 
 describe.each(TABS)("settings.md $name section reference", ({ heading, path, minControls }) => {

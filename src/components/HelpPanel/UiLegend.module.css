@@ -30,18 +30,21 @@
   min-height: 24px;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 9999px;
+/* Wraps IndicatorPreview in editable mode — the entire preview becomes the
+ * click target that opens IndicatorEditorDialog for this row. Unstyled
+ * button reset so the preview's own shape/color is all that shows. */
+.previewBtn {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
   flex-shrink: 0;
 }
 
-.dotPulsing {
-  composes: dot;
-  animation: pulse-opacity 1.5s ease-in-out infinite;
-}
-
+/* Real-component previews (sidebar BranchIcon, unmerged marker) and the
+ * toolbar's literal ↑N/↓N glyphs sit in this fixed-width cell. */
 .symbol {
   width: 18px;
   text-align: center;
@@ -65,14 +68,38 @@
   color: var(--fg-muted);
 }
 
-.colorBar {
+/* Editable-mode control (Settings → Appearance) — HelpPanel's reference
+ * view never passes editable, so this never renders there. */
+.resetSwatch {
   width: 18px;
-  height: 4px;
-  border-radius: 2px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--font-md);
+  line-height: 1;
+  cursor: pointer;
   flex-shrink: 0;
+  margin-left: auto;
+  padding: 0;
 }
 
-@keyframes pulse-opacity {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+.resetSwatch:hover {
+  color: var(--fg-primary);
+}
+
+.resetAllBtn {
+  align-self: flex-start;
+  padding: 6px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.resetAllBtn:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
 }
