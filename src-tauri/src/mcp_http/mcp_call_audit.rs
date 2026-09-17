@@ -16,7 +16,7 @@ const CAPACITY: usize = 1024;
 const PROJECTION_LIMIT: usize = 100;
 
 static OPERATIONS: LazyLock<HashMap<String, Vec<String>>> = LazyLock::new(|| {
-    super::mcp_transport_catalogue::native_tool_definitions()
+    super::mcp_transport_catalogue::native_tool_definitions(true, true)
         .as_array()
         .expect("native catalogue is an array")
         .iter()

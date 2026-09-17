@@ -455,7 +455,7 @@ async fn native_repo_identity_uses_path_and_branch_without_old_parameter_aliases
         &serde_json::json!([{"required": ["branch"]}, {"required": ["worktree_path"]}])
     );
 
-    let definitions = native_tool_definitions();
+    let definitions = native_tool_definitions(true, true);
     let agent = definitions
         .as_array()
         .unwrap()
@@ -705,6 +705,7 @@ fn initialize_tells_a_reconnect_apart_from_a_first_contact() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
 
@@ -1242,6 +1243,7 @@ fn initialize_identity_reclaims_stale_owner_and_retires_old_routing() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
 
@@ -1521,6 +1523,7 @@ fn refresh_mcp_session_repairs_lost_peer_binding() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
 
@@ -1884,6 +1887,7 @@ fn register_renames_auto_bound_caller_without_hijack_rejection() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let r = handle_messaging(
@@ -2871,6 +2875,7 @@ fn mcp_regression_reconnect_reclaims_ttl_entry_and_retires_old_routing() {
             has_sse_stream: true, // historical flag alone is not live ownership
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
 
@@ -3101,6 +3106,7 @@ fn mcp_delivery_regression_completed_claude_sse_submits_through_pty() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
@@ -3176,6 +3182,7 @@ fn mcp_send_wakes_ready_claude_with_background_work_instead_of_sse() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
@@ -3233,6 +3240,7 @@ fn mcp_send_wakes_idle_claude_instead_of_sse() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
@@ -3303,6 +3311,7 @@ fn mcp_send_does_not_type_into_partial_claude_composer_with_background_work() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
@@ -3792,6 +3801,7 @@ fn working_orchestrator_is_inbox_only_even_with_claude_channel() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
@@ -3861,6 +3871,7 @@ fn mcp_delivery_regression_working_claude_queues_wake_without_steering_turn() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
@@ -4229,6 +4240,7 @@ async fn external_channel_mail_remains_available_to_wait_before_cursor_advances(
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
@@ -4531,6 +4543,7 @@ fn mcp_delivery_regression_codex_live_sse_submits_through_pty_before_working() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, mut channel_receiver) = tokio::sync::broadcast::channel(4);
@@ -4849,7 +4862,7 @@ fn messaging_inbox_limit_cannot_exceed_retention_bound() {
             },
         );
     }
-    let schema = native_tool_definitions();
+    let schema = native_tool_definitions(true, true);
     let agent = schema
         .as_array()
         .unwrap()

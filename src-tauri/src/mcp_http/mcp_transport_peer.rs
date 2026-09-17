@@ -769,8 +769,12 @@ pub(super) fn call_session_context(
     if state.live_pty_for_peer(peer).is_none() && state.acp.peer_root(peer).is_none() {
         return None;
     }
-    Some(format!("managed-call:{peer}"))
+    Some(format!("{MANAGED_CALL_PREFIX}{peer}"))
 }
+
+/// Prefix of the internal routing key `call_session_context` gives a modern
+/// call from a live host-owned peer; the rest is that peer's identity.
+pub(super) const MANAGED_CALL_PREFIX: &str = "managed-call:";
 
 /// Missing identity is not an argument typo. Repeating unchanged inbox/register
 /// calls cannot repair host context; callers must stop until that context changes.
@@ -816,6 +820,7 @@ pub(super) fn refresh_mcp_session(
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
         }
@@ -1595,7 +1600,7 @@ fn handle_messaging_with_message_id(
                     "send": "agent action=send to=<orchestrator | peer tuic_session | its registered name | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB> [urgency=normal|urgent|interrupt]. Normal is the default and keeps peer payloads in the inbox. urgency=urgent (interrupt is an alias) forces the shared steer flow: send Esc to a safe working Claude Code, Codex or ego, waits up to 5 seconds for confirmed idle, then submits the full message as one new input (including for an orchestrator). An already idle recipient needs no Esc. A dialog/approval or draft blocks both Esc and payload. Unsupported agents, no PTY and idle timeout stay inbox-only; no busy Enter or ordinary queue fallback. The result adds interrupt_delivered and interrupt_fallback_reason; delivery_path=interrupt_payload_and_inbox means the full input was written, not that the model acted. Interrupted tools can leave partial work; child processes may continue. An active waiter owns delivery and needs no interrupt. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external without a subscribed ACP inbox, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
                     "list_peers": "agent action=list_peers path=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
-                    "script_callback": "Write a script that ends with `tuic notify <your tuic_session> -` (text on stdin; exit 0 only when delivered), hand it to the user to run, and its result reaches you as mail; an idle agent is woken. Example: #!/bin/sh; make check > /tmp/check.log 2>&1; code=$?; { echo \"make check exit $code\"; tail -20 /tmp/check.log; } | tuic notify <your tuic_session> -",
+                    "script_callback": "Write a script that ends with `tuic notify <your tuic_session> -` (text on stdin; exit 0 only when delivered), hand it to the user to run, and its result reaches you as mail; an idle agent is woken. Example: #!/bin/sh; make check > $TMPDIR/check.log 2>&1; code=$?; { echo \"make check exit $code\"; tail -20 $TMPDIR/check.log; } | tuic notify <your tuic_session> -",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
                 }
             });
