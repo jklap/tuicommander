@@ -1669,6 +1669,7 @@ fn ui_tab_falls_back_to_mcp_session_repo_path() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: Some("/Gits/personal/gamma".to_string()),
+            agent_type: None,
         },
     );
 
@@ -2599,7 +2600,7 @@ async fn workflow_denials_preserve_members_and_leave_automations_independent() {
             result["error"], "Tool 'workflow' is disabled by configuration",
             "{member}: {result}"
         );
-        let tools = filtered_native_tools(&state);
+        let tools = filtered_native_tools(&state, true, true);
         let workflow = tools
             .iter()
             .find(|tool| tool["name"] == "workflow")
@@ -2613,7 +2614,7 @@ async fn workflow_denials_preserve_members_and_leave_automations_independent() {
         );
     }
     state.config.write().mcp_capabilities.denied = vec!["workflow".into()];
-    let tools = filtered_native_tools(&state);
+    let tools = filtered_native_tools(&state, true, true);
     assert!(!tools.iter().any(|tool| tool["name"] == "workflow"));
     assert!(tools.iter().any(|tool| tool["name"] == "automations"));
     let listed = handle_mcp_tool_call(

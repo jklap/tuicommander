@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use super::mcp_transport::client_requires_meta_tools;
 use super::mcp_transport::detect_claude_code_client;
-use super::mcp_transport::handle_mcp_tool_call_with_context;
+use super::mcp_transport::handle_mcp_tool_call_for_client;
 use super::mcp_transport::mark_upstream_tool_result;
+use super::mcp_transport::prefer_tuic_flags_for_agent;
 use super::mcp_transport::resolve_agent_type;
 use super::mcp_transport::resolve_marker_flags;
 
@@ -123,7 +124,7 @@ fn instruction_context(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> I
         })
         .collect();
 
-    let native_tools = filtered_native_tools(state)
+    let native_tools = filtered_native_tools(state, true, true)
         .iter()
         .filter_map(|t| t["name"].as_str().map(str::to_string))
         .collect();
@@ -169,12 +170,27 @@ pub(super) fn build_mcp_instructions_for_session(
     collapse_tools: bool,
     mcp_session_id: Option<&str>,
 ) -> String {
+    let (prefer_spawning, prefer_messaging) =
+        prefer_tuic_flags_for_agent(resolve_agent_type(client_name));
+    let gates = ToolGates {
+        // Same availability gate dispatch and discovery use (`mcp_capabilities`
+        // plus owner configuration), restricted to the tools the rendered prose
+        // names.
+        disabled_native: GATED_INSTRUCTION_TOOLS
+            .iter()
+            .filter(|name| native_tool_unavailability(state, name).is_some())
+            .map(|name| name.to_string())
+            .collect(),
+        prefer_spawning,
+        prefer_messaging,
+    };
     render_mcp_instructions(
         client_name,
         collapse_tools,
         resolve_marker_flags(state, client_name),
         crate::progress::progress_tracking_enabled(state, resolve_agent_type(client_name)),
         &instruction_context(state, mcp_session_id),
+        &gates,
     )
 }
 
@@ -187,12 +203,24 @@ pub(super) fn build_mcp_instructions_for_session(
 /// and `instructions_do_not_repeat_what_tool_descriptions_already_say`. What is
 /// left is what belongs to no single tool: the wire protocol markers, the rules
 /// that forbid a *non-TUIC* tool, and the live state below.
+/// Per-tool gates for the rendered instructions: which native tools are
+/// unavailable (`mcp_capabilities` plus owner configuration; the old
+/// `disabled_native_tools` key is only a config alias now) and the connecting agent's Prefer
+/// TUICommander spawning/messaging flags. Gathered by the caller so this
+/// renderer stays pure (see `InstructionContext`'s doc comment).
+pub(super) struct ToolGates {
+    pub(super) disabled_native: std::collections::HashSet<String>,
+    pub(super) prefer_spawning: bool,
+    pub(super) prefer_messaging: bool,
+}
+
 pub(super) fn render_mcp_instructions(
     client_name: Option<&str>,
     collapse_tools: bool,
     markers: (bool, bool),
     progress_tracking: bool,
     ctx: &InstructionContext,
+    gates: &ToolGates,
 ) -> String {
     let ver = env!("CARGO_PKG_VERSION");
     let mut out = String::with_capacity(2048);
@@ -260,6 +288,26 @@ pub(super) fn render_mcp_instructions(
         detect_claude_code_client(client_name),
     ));
 
+    // ── Per-tool enablement ────────────────────────────────────────────
+    // An unavailable tool (`mcp_capabilities`) must not be prescribed
+    // anywhere below — telling an agent to call a tool it can't reach just
+    // produces a confusing tool-not-found error instead of a clean gate.
+    let session_enabled = !gates.disabled_native.contains("session");
+    let agent_enabled = !gates.disabled_native.contains("agent");
+    let repo_enabled = !gates.disabled_native.contains("repo");
+    // Two independent preferences layered on top of `agent_enabled` — the
+    // `agent` tool does both spawning and messaging, and an agent type can
+    // prefer TUIC for either, both, or neither, in any combination, while
+    // still relying on its own native tooling for the other. Neither implies
+    // the other. Both collapse to false when the tool itself is disabled —
+    // there's nothing to prefer when the tool can't be reached at all.
+    // Read from a single `prefer_tuic_flags_for_agent` call (one
+    // `load_agents_config()` snapshot) rather than the two individual
+    // resolvers, so this one instructions response can't straddle two
+    // different reads of `agents.json` if a Settings save races it.
+    let spawn_preferred = agent_enabled && gates.prefer_spawning;
+    let messaging_preferred = agent_enabled && gates.prefer_messaging;
+
     // ── Cross-tool rules ─────────────────────────────────────────────
     // NOT a tool catalogue: `tools/list` already carries every name, action and
     // schema in the same turn, and restating it here bought a second copy for
@@ -273,15 +321,23 @@ pub(super) fn render_mcp_instructions(
     if !launch_channel {
         if collapse_tools {
             out.push_str("Discover/invoke via `search_tools` / `get_tool_schema` / `call_tool`; read their descriptions.\n\n");
-            out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
+            if repo_enabled {
+                out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
+            }
             // Kept verbatim in both modes. It is not a restatement of the `session`
             // description: agents split the text and the Enter into two calls, or
             // polled after submitting, until this line existed.
-            out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+            if session_enabled {
+                out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+            }
         } else {
             out.push_str("Read each tool's description for actions and rules.\n\n");
-            out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
-            out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+            if repo_enabled {
+                out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
+            }
+            if session_enabled {
+                out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+            }
         }
 
         // ── Progress — an obligation, not a capability ───────────────────
@@ -307,19 +363,83 @@ pub(super) fn render_mcp_instructions(
     // three things are left here: how many peers are live (state, not prose),
     // the worktree entry point, and the Claude-Code-only delegation hint, which
     // is conditioned on the connecting client and so cannot sit in a static
-    // description at all.
+    // description at all. Every line is gated on the connecting agent type's
+    // Prefer TUICommander spawning/messaging flags; with both off the section
+    // is omitted and the agent's own native tooling is left unsteered.
     let is_claude_code = detect_claude_code_client(client_name);
-    out.push_str("## Multi-Agent Work\n\n");
-    if ctx.peer_count > 0 {
-        out.push_str(&format!(
-            "**{}** peer agent(s) connected. Orchestrate them with the `agent` tool; read its description first.\n",
-            ctx.peer_count
-        ));
-    }
-    out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
-    out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
-    if is_claude_code {
-        out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
+    if spawn_preferred || messaging_preferred {
+        out.push_str("## Multi-Agent Work\n\n");
+        let tools_desc = if session_enabled {
+            "`agent` and `session` MCP tools"
+        } else {
+            "`agent` MCP tool"
+        };
+        if ctx.peer_count > 0 {
+            let peer_count = ctx.peer_count;
+            out.push_str(&format!(
+                "**{peer_count}** peer agent(s) connected. There is no separate `swarm` action; use TUICommander's {tools_desc} below — NOT your host's own built-in agent/subagent/Task tool, which is a different, unrelated tool that happens to share a similar name.\n\n"
+            ));
+        } else {
+            out.push_str(&format!(
+                "There is no separate `swarm` action; multi-agent orchestration uses TUICommander's {tools_desc} — NOT your host's own built-in agent/subagent/Task tool, which is a different, unrelated tool that happens to share a similar name.\n\n"
+            ));
+        }
+        // "Same repo" bullet: the spawn clause and the messaging clause are
+        // each independently optional (the section render condition above
+        // guarantees at least one is present).
+        let mut same_repo_clauses: Vec<String> = Vec::new();
+        if spawn_preferred {
+            same_repo_clauses.push("TUIC `agent action=spawn` peers".to_string());
+        }
+        if messaging_preferred {
+            same_repo_clauses
+                .push("wait with `agent action=wait`, then read `agent action=inbox`".to_string());
+        }
+        let mut same_repo = format!("- **Same repo:** {}", same_repo_clauses.join("; "));
+        if messaging_preferred {
+            same_repo.push_str(
+                ". Lifecycle notifications carry state only; workers must report results with `agent action=send`",
+            );
+            if spawn_preferred && session_enabled {
+                same_repo.push_str(
+                    ". Use `session output` only as an anomaly fallback when a child failed to send its result",
+                );
+            }
+        } else {
+            same_repo.push_str(" to work in this repo");
+        }
+        same_repo.push_str(".\n");
+        out.push_str(&same_repo);
+
+        if messaging_preferred {
+            out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
+        }
+        if repo_enabled && spawn_preferred {
+            out.push_str(
+                "- **Isolated branches:** TUIC `repo action=worktree_create spawn_session=true`.\n",
+            );
+        }
+        if spawn_preferred {
+            // Wording chosen from an empirical A/B harness
+            // (plans/docs/agent-teams-wording-harness/), not by inspection: the
+            // old hedged phrasing ("whenever spawning an AI peer that
+            // should be observable...") scored 0/10 against a real Claude
+            // Code Opus session choosing between this tool and tmux; a
+            // blunt, unhedged directive ("do not use your own built-in
+            // tool for this") scored 10/10 on the identical scenario.
+            // Sonnet was unaffected either way (100% both times) — this
+            // wording specifically targets Opus's default preference for
+            // its own native mechanism. The carve-out sentence and "every
+            // level" scope note are retained from the pre-harness wording
+            // (neither was tested against removal) since dropping them
+            // risks over-eager spawning for trivial one-off work; only the
+            // opening directive's phrasing was changed to match what was
+            // actually measured to work.
+            out.push_str("- **Prefer TUICommander for peers/teams:** every agent-teams teammate is created with TUIC's `agent action=spawn` MCP tool — do not use your own built-in agent-spawning tool for this, at every level, including TUIC agents spawning further agents. Reserve your own built-in agent-spawning tool for throwaway, single-shot in-process work that doesn't need its own TUIC session (e.g. read-only research forked in-process).\n");
+        }
+        if is_claude_code && repo_enabled && spawn_preferred {
+            out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
+        }
     }
     out.push('\n');
 
@@ -503,13 +623,169 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 ];
 
 /// Full MCP tool definitions — the one native tool family.
+
+/// Build the `agent` tool's MCP definition. The strategic framing text (the
+/// opening paragraph and the numbered orchestration walkthrough) is the part
+/// that steers a model toward calling `spawn`/`register`/`list_peers`/`send`/
+/// `inbox` — so it, and only it, is gated on `prefer_spawning`/
+/// `prefer_messaging`, mirroring the same two flags' effect on
+/// `render_mcp_instructions`. The `inputSchema` and the per-action bullets
+/// under "Actions:" stay identical in every combination: "prefer" means
+/// "don't recommend", not "disable" — an agent type with the preference off can
+/// still explicitly invoke every action, it just isn't steered toward doing so
+/// as the default multi-agent path.
+pub(super) fn agent_tool_definition(
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> serde_json::Value {
+    let header = match (prefer_spawning, prefer_messaging) {
+        (true, true) => {
+            "AI agent orchestration. There is no separate swarm action: use these \
+            agent/session primitives to spawn and coordinate managed peers. For a host with its \
+            own native multi-agent/teammate feature (e.g. Claude Code's agent-teams), a peer \
+            spawned here IS that host's teammate — not a different, unrelated kind of thing — \
+            just running as its own TUICommander-managed PTY instead of in-process. Use this — \
+            not your own built-in agent-spawning tool — whenever the peer should be observable, \
+            messageable, and visible as a tab in TUICommander; reserve your own native subagent \
+            tool for throwaway, single-shot in-process work that doesn't need its own TUIC \
+            session."
+        }
+        (true, false) => {
+            "AI agent orchestration (spawning only). There is no separate swarm \
+            action. This host has its own native cross-agent messaging — prefer that over \
+            `register`/`list_peers`/`send`/`inbox` here. Use `spawn` to launch a peer as its own \
+            independently observable TUICommander pane — for a host with its own native \
+            teammate feature (e.g. Claude Code's agent-teams), this peer IS that host's \
+            teammate, not a separate concept. Use this — not your own built-in agent-spawning \
+            tool — whenever the peer should be observable and visible as a tab in \
+            TUICommander; reserve your own native subagent tool for throwaway, single-shot \
+            in-process work that doesn't need its own TUIC session."
+        }
+        (false, true) => {
+            "AI agent messaging + peer administration. There is no separate swarm \
+            action. This host has its own native subagent/team spawning — prefer that over \
+            `spawn` here. Use these primitives to message and coordinate peers once they exist, \
+            or to spawn one only when it specifically needs its own independently observable \
+            TUICommander pane."
+        }
+        (false, false) => {
+            "AI agent peer administration. There is no separate swarm action. \
+            This host has its own native subagent/team spawning and cross-agent messaging — \
+            prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here. Use this \
+            tool's spawn/messaging actions only when a peer specifically needs its own \
+            independently observable, messageable TUICommander pane, not as the default \
+            multi-agent path."
+        }
+    };
+
+    let mut steps: Vec<String> = Vec::new();
+    if prefer_messaging {
+        steps.push(AGENT_STEP_REGISTER.to_string());
+    }
+    if prefer_spawning {
+        steps.push(format!(
+            "{AGENT_STEP_SPAWN} This is how you create a teammate on a host with its own native teammate feature — the same concept, just backed by a real TUICommander pane instead of an in-process one."
+        ));
+    }
+    if prefer_messaging {
+        steps.push(AGENT_STEP_WAIT.to_string());
+        steps.push(AGENT_STEP_SEND.to_string());
+        steps.push(AGENT_STEP_LIFECYCLE.to_string());
+    }
+
+    let walkthrough = if steps.is_empty() {
+        String::new()
+    } else {
+        let plural = if steps.len() == 1 { "" } else { "s" };
+        let numbered = steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("{}. {s}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "\n\nOrchestration in {} line{plural}:\n{numbered}",
+            steps.len()
+        )
+    };
+
+    let description = format!("{header}{walkthrough}\n\nActions:\n{AGENT_ACTIONS_DESCRIPTION}");
+
+    serde_json::json!({
+        "name": "agent",
+        "description": description,
+        "inputSchema": { "type": "object", "properties": {
+            "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
+            "compact": { "type": "boolean", "description": "Inventory only: identity, state, activity_age_ms and explicit omitted_fields." },
+            "byte_budget": { "type": "integer", "minimum":1024, "maximum":65536, "description": "Opt into byte-bounded JSON-text chunks (inbox/output). Bound includes compact JSON page envelope, excludes MCP framing. Default on continuation: 4096." },
+            "continuation": { "type": "string", "description": "Opaque token from a byte-budget page; repeat with same action and target. Concatenate chunk values then parse JSON. Expires after 300s or cache eviction." },
+            "action": { "type": "string", "description": "One of: launch, spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel" },
+            "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256, "description": "launch: stable retry key scoped to parent; do not change after a lost reply." },
+            "launch_id": { "type": "string", "description": "launch: read only a durable receipt by handle; omit all creation fields." },
+            "task_id": { "type": "string", "description": "Task handle returned by agent spawn (required for task_get/task_cancel)." },
+            "parent_session_id": { "type": "string", "description": "launch: registered parent peer identity." },
+            "workspace": { "type": "object", "description": "launch: exactly {existing_path} or {repo_path,branch,base_ref?}. Never falls back to another checkout." },
+            "spawn": { "type": "object", "description": "launch: existing spawn options including prompt, agent_type, binary_path, args, model and env. cwd/name/keep_open belong to the transaction and are rejected here." },
+            "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
+            "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
+            "pty_description": { "type": ["string", "null"], "description": "Short description of the PTY task shown above the terminal (action=spawn)" },
+            "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
+            "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
+            "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Child environment overrides. Applied after run-config env and before protected TUIC_SESSION/TUIC_PARENT (action=spawn)" },
+            "print_mode": { "type": "boolean", "description": "false (default): visible TUI tab, observable via agent(inbox). true: headless, no tab. (action=spawn)" },
+            "output_format": { "type": "string", "description": "Output format, e.g. 'json' (action=spawn)" },
+            "agent_type": { "type": "string", "description": "Agent type OR run config name. Resolved as: (1) run config name match across enabled agents, (2) agent binary name (claude, codex, goose, gemini, ...). Case-insensitive. (action=spawn)" },
+            "binary_path": { "type": "string", "description": "Override agent binary path (action=spawn)" },
+            "args": { "type": "array", "items": { "type": "string" }, "description": "Additional CLI args; composed with structured flags and agent defaults. Native scrollback is controlled by the per-agent prevent_alt_screen setting (action=spawn)." },
+            "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
+            "cols": { "type": "integer", "description": "Terminal cols (action=spawn)" },
+            "tuic_session": { "type": "string", "description": "Optional explicit stable UUID (action=register). Managed PTYs normally auto-bind; a headerless caller may omit this to receive an MCP-scoped UUID." },
+            "replaces": { "type": "string", "description": "Prior tuic_session this registration supersedes (action=register). Required to inherit the old identity's inbox when reconnecting under a new UUID — there is no implicit link across protocol sessions, and identity is never guessed. Ignored when that identity still owns a live PTY; the response then reports mail_stranded." },
+            "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
+            "path": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
+            "orchestrator": { "type": "boolean", "description": "Explicitly enable or remove orchestrator inbox-only routing (action=register). Omission preserves the current role; spawning a child never infers it." },
+            "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, PTY id, alias, unique short PTY-id prefix, or unique display name" },
+            "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
+            "urgency": { "type": "string", "enum": ["normal", "urgent", "interrupt"], "description": "action=send: normal (default) and urgent keep payloads in the inbox; urgent also sends a safe busy inbox notice without interrupting. interrupt explicitly requests Esc, up to 10 seconds for confirmed idle, then full message submission for Claude/Codex/ego. Dialogs/drafts block input; unsupported or timed-out sessions use urgent fallback. Inspect interrupt_delivered, interrupt_fallback_reason and delivery_path. Interrupted tools may leave partial work." },
+            "keep_open": { "type": "boolean", "description": "action=launch: required explicit child lifetime; action=spawn: keep this managed child open; action=send: set or clear the recipient managed child's keep-open flag." },
+            "limit": { "type": "integer", "minimum": 1, "maximum": crate::state::AGENT_INBOX_CAPACITY, "description": "Maximum inbox entries to return (action=inbox; default 100, maximum 100). Read again while has_more is true." },
+            "subscription_id": { "type":"string", "minLength":1, "maxLength":64, "pattern":"^[A-Za-z0-9_-]+$", "description":"Independent durable reader (subscribe, inbox, wait, ack, unsubscribe). Reuse the same peer identity and id on reconnect." },
+            "filter": { "type":"string", "enum":["actionable","all","exit","failure"], "description":"Immutable subscription filter; default actionable. Exit includes failed exits; failure includes nonzero exits and delivery failures." },
+            "cursor": { "type":"integer", "minimum":0, "description":"Returned subscription batch cursor to acknowledge (ack only); not a legacy since timestamp." },
+            "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
+        }, "required": ["action"] }
+    })
+}
+
+// The orchestration walkthrough steps and per-action bullets of the `agent`
+// reference description (main's text); only the walkthrough is gated on the
+// Prefer TUICommander flags (see [`agent_tool_definition`]).
+const AGENT_STEP_REGISTER: &str = "Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.";
+const AGENT_STEP_SPAWN: &str = "Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.";
+const AGENT_STEP_WAIT: &str = "Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with agent action=task_get instead — the outcome is recorded even with nobody waiting.";
+const AGENT_STEP_SEND: &str = "Talk to it: send to=<peer> message=<text> [urgency=normal|urgent|interrupt]. Normal is the default; use urgent when the recipient must change course before its next step. For normal and urgent mail, the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex/ego composer for the next tool boundary.";
+const AGENT_STEP_LIFECYCLE: &str = "Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.";
+
+/// The per-action bullets of the `agent` description, identical for every
+/// Prefer TUICommander combination (see [`agent_tool_definition`]).
+const AGENT_ACTIONS_DESCRIPTION: &str = "- launch: One durable idempotent managed launch (localhost only). Requires idempotency_key, parent_session_id (registered peer), stable name, keep_open, workspace={existing_path} or {repo_path,branch,base_ref?}, and spawn={prompt,...spawn options}. Read a receipt with launch_id alone, or retry the identical request after a lost reply: the same launch_id/session_id returns, never another checkout or PTY. Conflicting key reuse errors explicitly. Receipt status=created|prompt_delivered|ready|blocked, prompt_delivery=queued|delivered|unknown and warm_artifacts are separate. Delivered proves argv handoff or PTY submission, not model acceptance; ready also requires native Ready-screen evidence. Interrupted uncertain creation blocks rather than spawning again; retain the handle and inspect the named resources. Model/account/brief policy remains caller-owned. Also POST /agents/launch and managed_agent_launch IPC, with identical validation.\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- task_get: Read a task_id owned by the spawning caller. Returns {task_id, status, status_message?, result?, error_detail?, poll_interval_ms}; optional fields are omitted. Status is working|input_required|completed|failed|cancelled; the last three are immutable. Poll no faster than poll_interval_ms. Outcomes survive client reconnects for up to 24h within this server process.\n- task_cancel: Mark an owned task_id cancelled (localhost only). Does NOT kill the PTY; use session action=kill for that. Already-final tasks return their unchanged status with cancelled=false.\n- wait: Block until new inbox mail. Not byte-bounded: byte_budget/continuation are rejected before mail consumption; use inbox for bounded payloads. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: Optional to scopes a recipient through the same resolver as send; compact=true returns identity, state (unknown if absent), activity_age_ms (null if absent), and omitted_fields. List peers across the desktop mail hub and connected daemons. address is connection/peer_id (local/peer_id on the hub); connection_id selects one daemon. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message any local or remote peer (requires to, message). Use to=connection/peer_id or connection_id with a daemon-local address. The owning daemon performs inbox delivery and wake; replies return through the desktop hub. `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex/ego composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY. Opt-in urgency=interrupt sends Esc to a safe working Claude Code, Codex or ego, waits up to 10 seconds for confirmed idle, then submits the full message as one new input (including for an orchestrator). An already idle recipient needs no Esc. A dialog/approval or draft blocks both Esc and payload. Unsupported agents, no PTY and idle timeout use the existing urgent notice/inbox fallback. The result adds interrupt_delivered and interrupt_fallback_reason; delivery_path=interrupt_payload_and_inbox means the full input was written, not that the model acted. Interrupted tools can leave partial work; child processes may continue. An active waiter owns delivery and needs no interrupt.\n- inbox: Optional byte_budget=1024..65536 returns JSON-text chunks; the budget includes the compact page envelope, not MCP framing. Concatenate chunk values then parse JSON; continue with the opaque continuation and same action. Snapshots expire after 300s or cache eviction; errors require a fresh read. The server cursor advances only on the final chunk. Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.\n- subscribe: Create or resume a durable independent reader with subscription_id (1..64 ASCII letters/digits/_/-) and filter=actionable (default), all, exit or failure. Actionable excludes routine system lifecycle/idle traffic, not peer mail. A subscription does not consume legacy inbox or another reader.\n- inbox/wait with subscription_id: Return up to limit (1..100) matching journal messages, cursor, acknowledged_cursor, missed_count and has_more. No byte_budget/continuation; ACK then read has_more batches. Reads do not acknowledge. An unacknowledged batch is replayed unchanged while retained. wait returns only for matching mail or matching retention loss; routine traffic stays inside the server. For continuous event-driven delivery use GET /agent/subscriptions/{id}/events with your Mcp-Session-Id header, or over ACP subscribe to resource tuic://inbox/subscriptions/{id}.\n- ack: Acknowledge a processed subscription batch with subscription_id and its cursor. Acknowledged results never replay on reconnect under the same peer identity and subscription_id. Lost replies before ack can replay: deduplicate side effects by message id. Journal retains the newest 1000 messages per peer across restarts; missed_count counts matching unacknowledged evictions, not routine filtered events. since is legacy-only.\n- unsubscribe: Delete one subscription cursor; retained mail and other readers are unchanged.";
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
 /// route through [`filtered_native_tools`] to honour `mcp_capabilities`
 /// and `progress_tracking`. Leaking the raw list to external clients exposes
 /// tool metadata for gated tools.
-pub(super) fn native_tool_definitions() -> serde_json::Value {
-    let mut tools = native_validation_tool_definitions();
+///
+/// `prefer_spawning`/`prefer_messaging` are the connecting client's Prefer
+/// TUICommander spawning/messaging flags and shape only the `agent` tool's own
+/// description (see [`agent_tool_definition`]) — distinct from, and in
+/// addition to, the gating in `render_mcp_instructions`. Callers with no
+/// per-connection context (the settings catalogue, the global search index,
+/// tests unrelated to this gating) pass `(true, true)`, the fully-permissive text.
+pub(super) fn native_tool_definitions(
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> serde_json::Value {
+    let mut tools = native_validation_tool_definitions(prefer_spawning, prefer_messaging);
     for tool in tools.as_array_mut().expect("native tool array") {
         super::mcp_input_contract::advertise_schema(tool);
     }
@@ -517,12 +793,20 @@ pub(super) fn native_tool_definitions() -> serde_json::Value {
 }
 
 /// Complete private contracts, including conditions unsupported by tool clients.
-pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
-    let mut tools = native_reference_tool_definitions();
+pub(super) fn native_validation_tool_definitions(
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> serde_json::Value {
+    let mut tools = native_reference_tool_definitions(prefer_spawning, prefer_messaging);
     for tool in tools.as_array_mut().expect("native tool array") {
         let name = tool["name"].as_str().expect("native name");
+        let is_agent = name == "agent";
         if let Some(description) = compact_native_description(name) {
-            tool["description"] = serde_json::json!(description);
+            tool["description"] = serde_json::json!(if is_agent {
+                compact_agent_description(description, prefer_spawning, prefer_messaging)
+            } else {
+                description.to_string()
+            });
             let action = &mut tool["inputSchema"]["properties"]["action"];
             let actions = action["enum"].as_array_mut().expect("native actions");
             if !actions.iter().any(|action| action == "help") {
@@ -542,7 +826,10 @@ pub(super) fn native_validation_tool_definitions() -> serde_json::Value {
 }
 
 /// Full guidance stays on demand; Settings retains its existing tooltip copy.
-fn native_reference_tool_definitions() -> serde_json::Value {
+fn native_reference_tool_definitions(
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> serde_json::Value {
     let mut defs = serde_json::json!([
         crate::automations::mcp::tool_definition(),
         crate::secrets::tool_definition(),
@@ -577,50 +864,7 @@ fn native_reference_tool_definitions() -> serde_json::Value {
                 "since_cursor": { "type": "integer", "description": "Cursor from a previous output response (raw: source bytes; text: scrollback rows). Returns a bounded forward page; follow next_cursor while has_more. Omit for snapshot (action=output)" }
             }, "required": ["action"] }
         },
-        {
-            "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with agent action=task_get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text> [urgency=normal|urgent|interrupt]. Normal is the default; use urgent when the recipient must change course before its next step. For normal and urgent mail, the payload is never typed into the recipient's composer. It waits in the recipient's inbox, and an idle/completed recipient may be sent a payload-free generic `agent action=inbox` wake. Urgent sends a payload-free inbox notice to a safe busy Claude/Codex/ego composer for the next tool boundary.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- launch: One durable idempotent managed launch (localhost only). Requires idempotency_key, parent_session_id (registered peer), stable name, keep_open, workspace={existing_path} or {repo_path,branch,base_ref?}, and spawn={prompt,...spawn options}. Read a receipt with launch_id alone, or retry the identical request after a lost reply: the same launch_id/session_id returns, never another checkout or PTY. Conflicting key reuse errors explicitly. Receipt status=created|prompt_delivered|ready|blocked, prompt_delivery=queued|delivered|unknown and warm_artifacts are separate. Delivered proves argv handoff or PTY submission, not model acceptance; ready also requires native Ready-screen evidence. Interrupted uncertain creation blocks rather than spawning again; retain the handle and inspect the named resources. Model/account/brief policy remains caller-owned. Also POST /agents/launch and managed_agent_launch IPC, with identical validation.\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, server_ts, parent_session_id?}.\n- task_get: Read a task_id owned by the spawning caller. Returns {task_id, status, status_message?, result?, error_detail?, poll_interval_ms}; optional fields are omitted. Status is working|input_required|completed|failed|cancelled; the last three are immutable. Poll no faster than poll_interval_ms. Outcomes survive client reconnects for up to 24h within this server process.\n- task_cancel: Mark an owned task_id cancelled (localhost only). Does NOT kill the PTY; use session action=kill for that. Already-final tasks return their unchanged status with cancelled=false.\n- wait: Block until new inbox mail. Not byte-bounded: byte_budget/continuation are rejected before mail consumption; use inbox for bounded payloads. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- register: Bind an external/headerless caller, or rename/set the repository path of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means no PTY notice can be typed into you; a subscribed ACP inbox can still notify you or wake idle ego. Otherwise consume mail with wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with false; spawning a child never infers it, and omitting the field preserves the current role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; external/headerless peers without a subscribed ACP inbox stay wait/inbox-only.\n- list_peers: Optional to scopes a recipient through the same resolver as send; compact=true returns identity, state (unknown if absent), activity_age_ms (null if absent), and omitted_fields. List peers across the desktop mail hub and connected daemons. address is connection/peer_id (local/peer_id on the hub); connection_id selects one daemon. Returns tuic_session, name, orchestrator, plus alias and session_id for a peer that owns a live terminal. Optional: path filter. Absent fields are omitted.\n- send: Message any local or remote peer (requires to, message). Use to=connection/peer_id or connection_id with a daemon-local address. The owning daemon performs inbox delivery and wake; replies return through the desktop hub. `to` accepts the peer's tuic_session, PTY id, or terminal alias. `urgency` is normal (default) or urgent; use urgent when the recipient must change course before its next step. Urgent keeps the body in the inbox and writes only a notice to a safe busy Claude/Codex/ego composer. `urgent_delivered` reports a PTY notice, subscribed ACP inbox update, inbox read, or waiter; false adds `urgent_fallback_reason` for queued mail. It does not prove model action or interrupt a tool. `delivered` and `delivery_path` describe the routing path; `recipient_state` appears only for a managed PTY. Opt-in urgency=interrupt sends Esc to a safe working Claude Code, Codex or ego, waits up to 10 seconds for confirmed idle, then submits the full message as one new input (including for an orchestrator). An already idle recipient needs no Esc. A dialog/approval or draft blocks both Esc and payload. Unsupported agents, no PTY and idle timeout use the existing urgent notice/inbox fallback. The result adds interrupt_delivered and interrupt_fallback_reason; delivery_path=interrupt_payload_and_inbox means the full input was written, not that the model acted. Interrupted tools can leave partial work; child processes may continue. An active waiter owns delivery and needs no interrupt.\n- inbox: Optional byte_budget=1024..65536 returns JSON-text chunks; the budget includes the compact page envelope, not MCP framing. Concatenate chunk values then parse JSON; continue with the opaque continuation and same action. Snapshots expire after 300s or cache eviction; errors require a fresh read. The server cursor advances only on the final chunk. Read up to 100 retained messages in FIFO order. Returns next_since and has_more; repeat while has_more is true. Optional: limit (default 100, max 100), since (omit to resume from the server-side cursor). On FIFO eviction, missed_count reports unread messages lost since the last inbox read.\n- subscribe: Create or resume a durable independent reader with subscription_id (1..64 ASCII letters/digits/_/-) and filter=actionable (default), all, exit or failure. Actionable excludes routine system lifecycle/idle traffic, not peer mail. A subscription does not consume legacy inbox or another reader.\n- inbox/wait with subscription_id: Return up to limit (1..100) matching journal messages, cursor, acknowledged_cursor, missed_count and has_more. No byte_budget/continuation; ACK then read has_more batches. Reads do not acknowledge. An unacknowledged batch is replayed unchanged while retained. wait returns only for matching mail or matching retention loss; routine traffic stays inside the server. For continuous event-driven delivery use GET /agent/subscriptions/{id}/events with your Mcp-Session-Id header, or over ACP subscribe to resource tuic://inbox/subscriptions/{id}.\n- ack: Acknowledge a processed subscription batch with subscription_id and its cursor. Acknowledged results never replay on reconnect under the same peer identity and subscription_id. Lost replies before ack can replay: deduplicate side effects by message id. Journal retains the newest 1000 messages per peer across restarts; missed_count counts matching unacknowledged evictions, not routine filtered events. since is legacy-only.\n- unsubscribe: Delete one subscription cursor; retained mail and other readers are unchanged.",
-            "inputSchema": { "type": "object", "properties": {
-                "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
-                "compact": { "type": "boolean", "description": "Inventory only: identity, state, activity_age_ms and explicit omitted_fields." },
-                "byte_budget": { "type": "integer", "minimum":1024, "maximum":65536, "description": "Opt into byte-bounded JSON-text chunks (inbox/output). Bound includes compact JSON page envelope, excludes MCP framing. Default on continuation: 4096." },
-                "continuation": { "type": "string", "description": "Opaque token from a byte-budget page; repeat with same action and target. Concatenate chunk values then parse JSON. Expires after 300s or cache eviction." },
-                "action": { "type": "string", "description": "One of: launch, spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel" },
-                "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256, "description": "launch: stable retry key scoped to parent; do not change after a lost reply." },
-                "launch_id": { "type": "string", "description": "launch: read only a durable receipt by handle; omit all creation fields." },
-                "task_id": { "type": "string", "description": "Task handle returned by agent spawn (required for task_get/task_cancel)." },
-                "parent_session_id": { "type": "string", "description": "launch: registered parent peer identity." },
-                "workspace": { "type": "object", "description": "launch: exactly {existing_path} or {repo_path,branch,base_ref?}. Never falls back to another checkout." },
-                "spawn": { "type": "object", "description": "launch: existing spawn options including prompt, agent_type, binary_path, args, model and env. cwd/name/keep_open belong to the transaction and are rejected here." },
-                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
-                "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
-                "pty_description": { "type": ["string", "null"], "description": "Short description of the PTY task shown above the terminal (action=spawn)" },
-                "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
-                "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
-                "env": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Child environment overrides. Applied after run-config env and before protected TUIC_SESSION/TUIC_PARENT (action=spawn)" },
-                "print_mode": { "type": "boolean", "description": "false (default): visible TUI tab, observable via agent(inbox). true: headless, no tab. (action=spawn)" },
-                "output_format": { "type": "string", "description": "Output format, e.g. 'json' (action=spawn)" },
-                "agent_type": { "type": "string", "description": "Agent type OR run config name. Resolved as: (1) run config name match across enabled agents, (2) agent binary name (claude, codex, goose, gemini, ...). Case-insensitive. (action=spawn)" },
-                "binary_path": { "type": "string", "description": "Override agent binary path (action=spawn)" },
-                "args": { "type": "array", "items": { "type": "string" }, "description": "Additional CLI args; composed with structured flags and agent defaults. Native scrollback is controlled by the per-agent prevent_alt_screen setting (action=spawn)." },
-                "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
-                "cols": { "type": "integer", "description": "Terminal cols (action=spawn)" },
-                "tuic_session": { "type": "string", "description": "Optional explicit stable UUID (action=register). Managed PTYs normally auto-bind; a headerless caller may omit this to receive an MCP-scoped UUID." },
-                "replaces": { "type": "string", "description": "Prior tuic_session this registration supersedes (action=register). Required to inherit the old identity's inbox when reconnecting under a new UUID — there is no implicit link across protocol sessions, and identity is never guessed. Ignored when that identity still owns a live PTY; the response then reports mail_stranded." },
-                "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
-                "path": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
-                "orchestrator": { "type": "boolean", "description": "Explicitly enable or remove orchestrator inbox-only routing (action=register). Omission preserves the current role; spawning a child never infers it." },
-                "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, PTY id, alias, unique short PTY-id prefix, or unique display name" },
-                "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
-                "urgency": { "type": "string", "enum": ["normal", "urgent", "interrupt"], "description": "action=send: normal (default) and urgent keep payloads in the inbox; urgent also sends a safe busy inbox notice without interrupting. interrupt explicitly requests Esc, up to 10 seconds for confirmed idle, then full message submission for Claude/Codex/ego. Dialogs/drafts block input; unsupported or timed-out sessions use urgent fallback. Inspect interrupt_delivered, interrupt_fallback_reason and delivery_path. Interrupted tools may leave partial work." },
-                "keep_open": { "type": "boolean", "description": "action=launch: required explicit child lifetime; action=spawn: keep this managed child open; action=send: set or clear the recipient managed child's keep-open flag." },
-                "limit": { "type": "integer", "minimum": 1, "maximum": crate::state::AGENT_INBOX_CAPACITY, "description": "Maximum inbox entries to return (action=inbox; default 100, maximum 100). Read again while has_more is true." },
-                "subscription_id": { "type":"string", "minLength":1, "maxLength":64, "pattern":"^[A-Za-z0-9_-]+$", "description":"Independent durable reader (subscribe, inbox, wait, ack, unsubscribe). Reuse the same peer identity and id on reconnect." },
-                "filter": { "type":"string", "enum":["actionable","all","exit","failure"], "description":"Immutable subscription filter; default actionable. Exit includes failed exits; failure includes nonzero exits and delivery failures." },
-                "cursor": { "type":"integer", "minimum":0, "description":"Returned subscription batch cursor to acknowledge (ack only); not a legacy since timestamp." },
-                "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
-            }, "required": ["action"] }
-        },
+        agent_tool_definition(prefer_spawning, prefer_messaging),
 
         {
             "name": "remote",
@@ -755,9 +999,22 @@ fn native_reference_tool_definitions() -> serde_json::Value {
 }
 
 /// Return the complete displaced guidance, never a synthesized subset.
+/// Reference tests have no caller; they get the fully-permissive text.
+#[cfg(test)]
 pub(super) fn native_tool_help(name: &str) -> Option<serde_json::Value> {
+    native_tool_help_for(name, true, true)
+}
+
+/// Same, rendered with the caller's `prefer_tuic_*` flags, so `action=help`
+/// never re-teaches what that caller's instructions and `agent` description
+/// withheld.
+pub(super) fn native_tool_help_for(
+    name: &str,
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> Option<serde_json::Value> {
     compact_native_description(name)?;
-    native_reference_tool_definitions()
+    native_reference_tool_definitions(prefer_spawning, prefer_messaging)
         .as_array()?
         .iter()
         .find(|tool| tool["name"] == name)
@@ -791,6 +1048,43 @@ fn compact_native_description(name: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+/// The compact `agent` listing description, with the connecting agent type's
+/// Prefer TUICommander flags applied. Both on (the default) leaves main's text
+/// untouched; otherwise a redirect to the host's own native mechanism follows
+/// the "no separate swarm action" sentence. As in [`agent_tool_definition`],
+/// "prefer" means "don't recommend", never "disable": every action stays listed.
+fn compact_agent_description(
+    compact: &str,
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> String {
+    let note = match (prefer_spawning, prefer_messaging) {
+        (true, true) => return compact.to_string(),
+        (true, false) => {
+            "This host has its own native cross-agent messaging — prefer that over `register`/`list_peers`/`send`/`inbox` here."
+        }
+        (false, true) => {
+            "This host has its own native subagent/team spawning — prefer that over `spawn` here; spawn only when a peer needs its own observable TUICommander pane."
+        }
+        (false, false) => {
+            "This host has its own native subagent/team spawning and cross-agent messaging — prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here; use them only when a peer needs its own observable, messageable TUICommander pane."
+        }
+    };
+    const SWARM: &str = "There is no separate swarm action.";
+    match compact.find(SWARM) {
+        Some(at) => {
+            let end = at + SWARM.len();
+            format!("{} {note}{}", &compact[..end], &compact[end..])
+        }
+        None => format!("{note} {compact}"),
+    }
+}
+
+/// Native tools whose prescriptions the rendered instructions gate on
+/// availability (see `ToolGates`). Only these three are prescribed by name in
+/// the rendered prose; add a tool here when the renderer starts naming it.
+const GATED_INSTRUCTION_TOOLS: [&str; 3] = ["session", "agent", "repo"];
 
 /// The three meta-tool names used when `collapse_tools: true`.
 /// Exposed for handler dispatch and tests.
@@ -896,7 +1190,7 @@ pub(super) fn resolve_allowed_upstreams(
 /// This is app metadata, not an MCP discovery surface. Every native tool can
 /// be disabled; progress additionally requires global progress_tracking.
 pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
-    native_reference_tool_definitions()
+    native_reference_tool_definitions(true, true)
         .as_array()
         .into_iter()
         .flatten()
@@ -974,13 +1268,76 @@ fn voice_configured() -> bool {
         .is_some_and(|config| config.enabled && config.hands_free_spoken_replies)
 }
 
+/// Resolve `prefer_tuic_spawning`/`prefer_tuic_messaging` for the agent type
+/// cached on this MCP connection at `initialize` time (`McpSessionMeta::agent_type`,
+/// set from `resolve_agent_type(client_name)`). Falls back to `(true, true)`
+/// — the fully-permissive default — when there is no session (a test, or a
+/// caller with no per-connection context) or no cached agent type, exactly
+/// like `prefer_tuic_flags_for_agent(None)` already does.
+fn resolve_prefer_tuic_flags_for_session(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+) -> (bool, bool) {
+    let agent_type = mcp_session_id.and_then(|sid| {
+        match sid.strip_prefix(super::mcp_transport_peer::MANAGED_CALL_PREFIX) {
+            Some(peer) => managed_call_agent_type(state, peer),
+            None => state
+                .mcp
+                .sessions
+                .get(sid)
+                .and_then(|meta| meta.agent_type.clone()),
+        }
+    });
+    prefer_tuic_flags_for_agent(agent_type.as_deref())
+}
+
+/// A modern call keyed `managed-call:{peer}` has no `mcp.sessions` entry; its
+/// agent is the one detected in the peer's live terminal, or ego for an ACP
+/// peer, the same two kinds `call_session_context` accepts.
+fn managed_call_agent_type(state: &AppState, peer: &str) -> Option<String> {
+    if let Some(pty) = state.live_pty_for_peer(peer) {
+        return state
+            .session_maps
+            .session_states
+            .get(&pty)
+            .and_then(|session| session.agent_type.clone());
+    }
+    state.acp.peer_root(peer).map(|_| "ego".to_string())
+}
+
+/// The flags for one request: a client name in the request `_meta` wins over
+/// the session, the same precedence `merged_tool_definitions` uses, because
+/// `tuic-bridge` opens the session under its own name and proxies ego's
+/// requests through it. Every surface that renders the `agent` description
+/// (tools/list, search_tools, get_tool_schema, action=help) resolves here, so
+/// a connection never sees two answers.
+pub(super) fn resolve_prefer_tuic_flags_for_caller(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+    stateless_client_name: Option<&str>,
+) -> (bool, bool) {
+    match stateless_client_name {
+        Some(name) => prefer_tuic_flags_for_agent(resolve_agent_type(Some(name))),
+        None => resolve_prefer_tuic_flags_for_session(state, mcp_session_id),
+    }
+}
+
 /// Apply the same native availability gate used at dispatch to every catalogue.
-pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
+///
+/// `prefer_spawning`/`prefer_messaging` shape the `agent` tool's own
+/// description (see `agent_tool_definition`) — pass the resolved values for
+/// the connecting client, or `(true, true)` when there is no per-connection
+/// context to resolve (the global search index).
+pub(super) fn filtered_native_tools(
+    state: &Arc<AppState>,
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> Vec<serde_json::Value> {
     let (progress_tracking, settings_enabled) = {
         let cfg = state.config.read();
         (cfg.progress_tracking, cfg.settings_mcp_enabled)
     };
-    native_validation_tool_definitions()
+    native_validation_tool_definitions(prefer_spawning, prefer_messaging)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -1053,12 +1410,27 @@ pub(super) fn merged_tool_definitions(
             .and_then(|sid| state.mcp.sessions.get(sid))
             .is_some_and(|meta| meta.requires_meta_tools),
     };
-    merged_tool_definitions_for_mode(state, mcp_session_id, force_meta_tools)
+    merged_tool_definitions_for_caller(
+        state,
+        mcp_session_id,
+        stateless_client_name,
+        force_meta_tools,
+    )
 }
 
+#[cfg(test)]
 pub(super) fn merged_tool_definitions_for_mode(
     state: &Arc<AppState>,
     mcp_session_id: Option<&str>,
+    force_meta_tools: bool,
+) -> serde_json::Value {
+    merged_tool_definitions_for_caller(state, mcp_session_id, None, force_meta_tools)
+}
+
+pub(super) fn merged_tool_definitions_for_caller(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+    stateless_client_name: Option<&str>,
     force_meta_tools: bool,
 ) -> serde_json::Value {
     if force_meta_tools || state.config.read().collapse_tools {
@@ -1066,7 +1438,7 @@ pub(super) fn merged_tool_definitions_for_mode(
             .as_array()
             .cloned()
             .unwrap_or_default();
-        if let Some(progress) = filtered_native_tools(state)
+        if let Some(progress) = filtered_native_tools(state, true, true)
             .into_iter()
             .find(|tool| tool["name"] == "progress")
         {
@@ -1075,7 +1447,9 @@ pub(super) fn merged_tool_definitions_for_mode(
         return serde_json::Value::Array(tools);
     }
 
-    let mut tools = filtered_native_tools(state);
+    let (prefer_spawning, prefer_messaging) =
+        resolve_prefer_tuic_flags_for_caller(state, mcp_session_id, stateless_client_name);
+    let mut tools = filtered_native_tools(state, prefer_spawning, prefer_messaging);
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
         .mcp
@@ -1095,7 +1469,14 @@ pub(super) fn merged_tool_definitions_for_mode(
 ///
 /// Upstream allow/deny filters are applied inside `aggregated_tools()`.
 pub(super) fn searchable_tool_definitions(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let mut tools = filtered_native_tools(state);
+    // No per-connection context here: this one index is shared by every
+    // meta-tool caller (grok and ego through `client_requires_meta_tools`, and
+    // any client once `collapse_tools` is on), so it holds the
+    // fully-permissive text. It only ranks and names tools: `search_tools`'
+    // `top_schema` and `get_tool_schema` answer a native tool from
+    // `filtered_native_tools` with the caller's own `prefer_tuic_*` flags,
+    // never from this index.
+    let mut tools = filtered_native_tools(state, true, true);
     tools.extend(state.mcp.upstream_registry.aggregated_tools());
     tools
 }
@@ -1144,13 +1525,14 @@ pub(super) fn handle_search_tools(
     state: &Arc<AppState>,
     args: &serde_json::Value,
 ) -> serde_json::Value {
-    handle_search_tools_for_session(state, args, None)
+    handle_search_tools_for_session(state, args, None, None)
 }
 
 pub(super) fn handle_search_tools_for_session(
     state: &Arc<AppState>,
     args: &serde_json::Value,
-    _mcp_session_id: Option<&str>,
+    mcp_session_id: Option<&str>,
+    stateless_client_name: Option<&str>,
 ) -> serde_json::Value {
     let query = match args["query"].as_str() {
         Some(q) if !q.trim().is_empty() => q,
@@ -1163,9 +1545,12 @@ pub(super) fn handle_search_tools_for_session(
     let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 100) as usize;
 
     let index = state.mcp.tool_search_index.read();
-    // Re-read current native policy even before the asynchronous index refresh.
-    let native = filtered_native_tools(state);
-    let registered = native_tool_definitions();
+    // Re-read current native policy even before the asynchronous index refresh,
+    // rendered for this caller (see `searchable_tool_definitions`).
+    let (prefer_spawning, prefer_messaging) =
+        resolve_prefer_tuic_flags_for_caller(state, mcp_session_id, stateless_client_name);
+    let native = filtered_native_tools(state, prefer_spawning, prefer_messaging);
+    let registered = native_tool_definitions(true, true);
     let available = |name: &str| {
         !registered
             .as_array()
@@ -1213,13 +1598,14 @@ pub(super) fn handle_get_tool_schema(
     state: &Arc<AppState>,
     args: &serde_json::Value,
 ) -> serde_json::Value {
-    handle_get_tool_schema_for_session(state, args, None)
+    handle_get_tool_schema_for_session(state, args, None, None)
 }
 
 pub(super) fn handle_get_tool_schema_for_session(
     state: &Arc<AppState>,
     args: &serde_json::Value,
-    _mcp_session_id: Option<&str>,
+    mcp_session_id: Option<&str>,
+    stateless_client_name: Option<&str>,
 ) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n,
@@ -1230,13 +1616,15 @@ pub(super) fn handle_get_tool_schema_for_session(
         }
     };
 
-    if native_tool_definitions()
+    if native_tool_definitions(true, true)
         .as_array()
         .unwrap()
         .iter()
         .any(|tool| tool["name"] == tool_name)
     {
-        return filtered_native_tools(state).into_iter().find(|tool| tool["name"] == tool_name)
+        let (prefer_spawning, prefer_messaging) =
+            resolve_prefer_tuic_flags_for_caller(state, mcp_session_id, stateless_client_name);
+        return filtered_native_tools(state, prefer_spawning, prefer_messaging).into_iter().find(|tool| tool["name"] == tool_name)
             .unwrap_or_else(|| serde_json::json!({"error": format!("Tool '{tool_name}' not found. Use search_tools to discover available tools.")}));
     }
     let index = state.mcp.tool_search_index.read();
@@ -1255,12 +1643,24 @@ pub(super) fn handle_get_tool_schema_for_session(
 /// Handle `call_tool` meta-tool — dispatch a named tool call to either
 /// the native handler or the upstream proxy, preserving `addr` for
 /// localhost-only restrictions (settings mutation, notify confirm).
+#[cfg(test)]
 pub(super) async fn handle_call_tool(
     state: &Arc<AppState>,
     addr: SocketAddr,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
+) -> serde_json::Value {
+    handle_call_tool_for_client(state, addr, args, mcp_session_id, managed_parent_cwd, None).await
+}
+
+pub(super) async fn handle_call_tool_for_client(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
+    stateless_client_name: Option<&str>,
 ) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n.to_string(),
@@ -1301,14 +1701,24 @@ pub(super) async fn handle_call_tool(
         }
     } else {
         // Recursive async dispatch requires Box::pin. Meta names are blocked above.
-        Box::pin(handle_mcp_tool_call_with_context(
+        Box::pin(handle_mcp_tool_call_for_client(
             state,
             addr,
             &tool_name,
             &tool_args,
             mcp_session_id,
             managed_parent_cwd,
+            stateless_client_name,
         ))
         .await
+    }
+}
+
+#[cfg(test)]
+pub(super) fn default_tool_gates() -> ToolGates {
+    ToolGates {
+        disabled_native: std::collections::HashSet::new(),
+        prefer_spawning: true,
+        prefer_messaging: true,
     }
 }

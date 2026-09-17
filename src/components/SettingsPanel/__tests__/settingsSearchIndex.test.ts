@@ -75,11 +75,13 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// The machine selector is indexed under the page header. The
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
-	// a stable search target.
+	// a stable search target. The per-agent "Prefer TUICommander agent
+	// spawning" and "Prefer TUICommander messaging" toggles sit in that same
+	// collapsed card.
 	// Named run editors add six persistent field labels, but search cannot open their runtime forms.
 	// The per-agent "Launch instructions for <agent>" editor names its agent at
 	// runtime, inside a collapsed card; the global editor is indexed.
-	agents: { dynamic: 2, orphans: 18 },
+	agents: { dynamic: 2, orphans: 20 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -191,6 +193,8 @@ describe("settings search index — drift guard", () => {
 			"Track agent intent",
 			"Collect progress",
 			"Show suggested follow-ups",
+			"Prefer TUICommander agent spawning",
+			"Prefer TUICommander messaging",
 		]);
 		expect(SETTINGS_SEARCH_INDEX).toContainEqual({
 			tab: "agents",

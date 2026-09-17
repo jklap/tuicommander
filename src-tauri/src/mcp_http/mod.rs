@@ -5850,6 +5850,7 @@ mod tests {
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
         }
@@ -6914,6 +6915,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         let app = build_router(state.clone(), false, true);
@@ -7013,6 +7015,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         let app = build_router(state.clone(), false, true);
@@ -9740,6 +9743,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
 
@@ -9780,6 +9784,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         let app = build_router(state, false, true);
@@ -10650,6 +10655,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         register_reaper_peer(&state, TUIC, SID);
@@ -10722,6 +10728,7 @@ mod tests {
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
             state
@@ -10786,6 +10793,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         register_reaper_peer(&state, TUIC, SID);
@@ -10841,6 +10849,7 @@ mod tests {
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
             state
