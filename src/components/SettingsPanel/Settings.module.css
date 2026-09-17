@@ -1380,6 +1380,10 @@
   margin-bottom: 0;
 }
 
+.ruleName {
+  width: 100%;
+}
+
 .ruleRegex {
   width: 100%;
   font-family: var(--font-mono);

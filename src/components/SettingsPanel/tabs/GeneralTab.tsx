@@ -6,7 +6,7 @@ import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/set
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
-import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
+import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface CliStatus {

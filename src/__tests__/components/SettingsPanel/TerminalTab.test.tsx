@@ -16,6 +16,7 @@ const {
 	mockSetOsc52Clipboard,
 	mockSetShowLastPrompt,
 	mockSetLinkActivation,
+	mockSetShell,
 } = vi.hoisted(() => ({
 	mockSetShowBlockTimestamps: vi.fn(),
 	mockSetShowBlockMarks: vi.fn(),
@@ -29,6 +30,7 @@ const {
 	mockSetOsc52Clipboard: vi.fn(),
 	mockSetShowLastPrompt: vi.fn(),
 	mockSetLinkActivation: vi.fn(),
+	mockSetShell: vi.fn(),
 }));
 
 vi.mock("../../../stores/settings", () => ({
@@ -47,7 +49,9 @@ vi.mock("../../../stores/settings", () => ({
 			showBlockMarks: true,
 			showPromptMarks: false,
 			blockFoldingEnabled: true,
+			shell: "",
 		},
+		setShell: mockSetShell,
 		setFont: mockSetFont,
 		setDefaultFontSize: mockSetDefaultFontSize,
 		setFontWeight: mockSetFontWeight,
@@ -71,10 +75,17 @@ describe("TerminalTab", () => {
 		vi.clearAllMocks();
 	});
 
-	it("renders the Rendering, Behavior, and Blocks headings in order", () => {
+	it("renders the Shell, Rendering, Behavior, and Blocks headings in order", () => {
 		const { container } = render(() => <TerminalTab />);
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Rendering", "Behavior", "Blocks"]);
+		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks"]);
+	});
+
+	it("calls setShell when the Shell field changes", () => {
+		const { getByPlaceholderText } = render(() => <TerminalTab />);
+		const shellInput = getByPlaceholderText("Default shell") as HTMLInputElement;
+		fireEvent.input(shellInput, { target: { value: "/bin/zsh" } });
+		expect(mockSetShell).toHaveBeenCalledWith("/bin/zsh");
 	});
 
 	it("shows all seven toggles with the correct checked state", () => {
