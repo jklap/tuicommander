@@ -1147,12 +1147,6 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates terminal link activation for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("enum" = ["click","modifier","never"]))]
     pub(crate) terminal_link_activation: String,
-    /// Master toggle for smart selection (regex-rule-driven double/quad-click
-    /// expansion + rule actions). Word-boundary customization (below) applies
-    /// regardless of this flag — only the rule engine is gated.
-    #[serde(default = "default_true")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates smart selection enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    pub(crate) smart_selection_enabled: bool,
     /// What a plain double-click selects: "word" (today's character-class
     /// expansion) or "smart" (try the rule engine first, fall back to word).
     /// Quad-click always runs the rule engine regardless of this setting.
@@ -1503,7 +1497,6 @@ impl Default for AppConfig {
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
             terminal_link_activation: default_link_activation(),
-            smart_selection_enabled: true,
             double_click_action: default_double_click_action(),
             word_selection_mode: default_word_selection_mode(),
             word_separators: default_word_separators(),
@@ -5727,7 +5720,6 @@ mod tests {
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
             terminal_link_activation: "modifier".to_string(),
-            smart_selection_enabled: false,
             double_click_action: "word".to_string(),
             word_selection_mode: "regex".to_string(),
             word_separators: "-_".to_string(),
@@ -5817,7 +5809,6 @@ mod tests {
         assert!(!loaded.show_prompt_marks);
         assert!(!loaded.block_folding_enabled);
         assert_eq!(loaded.terminal_link_activation, "modifier");
-        assert!(!loaded.smart_selection_enabled);
         assert_eq!(loaded.double_click_action, "word");
         assert_eq!(loaded.word_selection_mode, "regex");
         assert_eq!(loaded.word_separators, "-_");
@@ -6030,7 +6021,6 @@ mod tests {
         assert!(loaded.show_prompt_marks); // defaults to true
         assert!(loaded.block_folding_enabled);
         assert_eq!(loaded.terminal_link_activation, "click"); // defaults to "click"
-        assert!(loaded.smart_selection_enabled); // defaults to true
         assert_eq!(loaded.double_click_action, "smart"); // defaults to "smart"
         assert_eq!(loaded.word_selection_mode, "characters"); // defaults to "characters"
         assert_eq!(loaded.word_separators, " \"'`(){}[]<>|;:,.!?@#$%^&*~=+/\\");

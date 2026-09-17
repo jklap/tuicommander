@@ -579,7 +579,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "selection", section: "Word Boundaries", label: "Word boundaries" },
 	{ tab: "selection", section: "Word Boundaries", label: "Word separators" },
 	{ tab: "selection", section: "Word Boundaries", label: "Word pattern" },
-	{ tab: "selection", section: "Word Boundaries", label: "Enable smart selection" },
 	{ tab: "github", section: "Git & GitHub" },
 	{ tab: "github", section: "GitHub Authentication" },
 	{ tab: "github", section: "Pull Requests" },
