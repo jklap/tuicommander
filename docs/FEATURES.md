@@ -343,7 +343,7 @@ filed under a stale workspace survive and are re-homed. See [MCP backend](backen
 - Action name: `refresh-terminal`
 
 ### 1.16 Terminal Bell
-- **Terminal Bell** — Configurable bell behavior when the terminal receives a BEL character (`\x07`). Four modes: `none` (silent), `visual` (screen flash animation), `sound` (plays the Info notification sound), `both` (flash + sound). Set `bell_style` in `config.json`; Settings has no control for it.
+- **Terminal Bell** — Configurable bell behavior when the terminal receives a BEL character (`\x07`). Four modes: `none` (silent), `visual` (screen flash animation), `sound` (plays the Info notification sound), `both` (flash + sound). Set in **Settings → Appearance → Bell** (`bell_style` in `config.json`).
 
 ### 1.17 Alternate-Screen Scrollback
 - Fullscreen apps (`gh run watch`, `less`, `man`, TUIs) run on the terminal's alternate screen, which per XTerm semantics has no scrollback — output past the bottom of the window is normally lost and no scrollbar is shown
