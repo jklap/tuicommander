@@ -232,35 +232,74 @@ clippy --release --workspace -- -D warnings` (clean), `cargo fmt --check` (clean
 instance — the whole feature only really proves itself against a running `make dev` build talking
 to real Claude Code swarm invocations.
 
-- [ ] **End-to-end swarm flow against a live dev instance** (the `make dev` test instance on
-  `:9877`, per AGENTS.md's "Test instance vs orchestrator instance" — never Boss's orchestrator).
-  Point `TUIC_SOCKET` at the dev instance's socket (its `GET /health` reports the actual bound
-  path, which falls back to `mcp-{pid}.sock` when `mcp.sock` is already held), then replay Claude
-  Code's real external-mode
-  call order under one `-L claude-swarm-test`: `has-session -t claude-swarm` (expect exit 1) →
-  `new-session -d -s claude-swarm -n swarm-view -P -F '#{pane_id}' -- cat` → `list-windows` →
-  `list-panes -t claude-swarm:swarm-view -F '#{pane_id}'` → `split-window -d -t %<pane> -P -F
-  '#{pane_id}' -- cat` → `select-pane -t %N -T teammate-1` → `respawn-pane -k -t %N -- 'echo hi'`
-  → `kill-pane -t %N` → `kill-session -t claude-swarm`. Confirm every `-P`/`-F` call's stdout is
-  exactly the rendered id (nothing else on the line — a stray character breaks Claude Code's
-  pane-id capture), and that no orphan tabs remain after teardown.
-- [ ] **`tmux -V` unblocks real Claude Code teammate spawning at all.** This is the actual point of
-  the whole feature — with a real Claude Code instance pointed at the `tuic alias`'d shim (do this
-  in a scratch `$PATH`, not by repointing the machine's real `tmux` alias mid-development), confirm
-  a teammate spawn actually produces a visible TUIC tab, and capture whatever it calls via
-  `GET /logs?source=tmux-shim` / `<config dir>/logs/tmux-shim.log` — including any subcommand this
-  work didn't anticipate. This is also the mechanism for answering §5.0.
-- [ ] **`select-pane -T` visibly renames the tab.** Confirm the `session-renamed` event fix
-  (`mcp_http/session.rs`'s `set_session_name`, `pty.rs`'s Tauri-command twin, and the new
-  `useAppInit.ts` listener) actually updates a live tab's title with no restart needed — this was
-  previously silently broken (the route mutated `display_name` with no emit at all).
+- [x] **End-to-end swarm flow against a live instance.** _(verified: against the orchestrator
+  instance directly, not a separate `make dev` build — the user explicitly authorized this for this
+  session, overriding AGENTS.md's normal orchestrator/test-instance separation.)_ Replayed real
+  Claude Code agent-teams spawns (two teammates, `-L claude-swarm-<pid>`) end to end twice on
+  2026-09-03: the first run surfaced the respawn-pane materialization race documented below and in
+  `tmux-shim.html#race` (main checkout's `plans/` directory); after the fix, a repeat of the identical spawn produced zero errors, and
+  both teammates launched, ran, and reported real file listings back over MCP. Every `-P`/`-F`
+  call's stdout was exactly the rendered id, and `kill-pane` on teardown left no orphan tabs.
+- [x] **`tmux -V` unblocks real Claude Code teammate spawning at all — §5.0 answered.**
+  _(verified live, 2026-09-03)_ With the `agent` MCP tool disabled, a real Claude Code session's
+  agent-teams request falls through to genuine `tmux` calls via this shim — confirmed via
+  `GET /logs?source=tmux-shim` showing the full real call sequence, now written up in
+  `tmux-shim.html` (main checkout's `plans/` directory — gitignored, not in this worktree). Model willingness to actually reach for the native mechanism from a plain
+  request is non-deterministic across runs (see that doc's "When This Runs At All" section) — not
+  a shim gap, just worth knowing before assuming a silent tmux-shim log means the shim is broken
+  rather than the model just not trying it that turn.
+- [x] **`select-pane -T` against a still-virtual pane no longer drops the rename.**
+  _(fixed 2026-09-03.)_ `materialize()` (`tmux_routes.rs`) now applies a pane's already-recorded
+  `title` — set by an earlier `select-pane -T` while the pane was still virtual — the moment it
+  spawns the real session, via the same `set_session_name` call `rename_pane` uses. Covers exactly
+  the live-found gap: `new-session`'s initial pane (every swarm's first teammate, always virtual
+  until `respawn-pane` first materializes it) previously kept its default tab name forever, while a
+  `split-window` pane (eagerly materialized, so already real by the time its own `select-pane -T`
+  ran) always renamed correctly. Two new regression tests
+  (`materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`,
+  `materialize_without_a_prior_rename_emits_nothing`) plus the pre-existing
+  `rename_pane_is_idempotent_and_only_emits_on_real_change`, all green. **Live-verified 2026-09-03**
+  after a full app rebuild+restart: a real two-teammate swarm spawn showed BOTH tabs with correct
+  names in `session action=list` — including `src-lister`, the `new-session` initial-pane case that
+  previously showed `"general-purpose"`.
+- [x] **`select-pane -T` visibly renames the tab when the pane is already materialized.**
+  _(verified live, 2026-09-03.)_ Confirmed the `session-renamed` event fix (`mcp_http/session.rs`'s
+  `set_session_name`, `pty.rs`'s Tauri-command twin, and the `useAppInit.ts` listener) actually
+  updates a live tab's title with no restart needed, for a pane that was already real when the
+  rename call ran.
 - [ ] **A pane's TUIC tab actually docks into the visible split layout.** `split-window`'s pane
   comes from a plain `POST /sessions` equivalent (via `spawn_pty_session`, no `agent_type`), and
   `session-created`'s `assignTabToActiveGroup` call is gated on `agent_type` being set
-  (`useAppInit.ts`) — confirm empirically that a teammate pane is actually visible in split mode,
-  not just present in `GET /sessions`.
+  (`useAppInit.ts`) — confirmed the sessions exist and are addressable (`session action=list`), but
+  did not visually confirm split-layout docking specifically; still needs a screenshot pass.
 - [ ] **Windows**: `argv0 == "tmux.exe"` dispatch and the `tuic alias` Windows copy-based install
   path have no CI and were not tested on this machine (macOS only) — needs a real Windows pass.
+- [x] **[NOT A BUG]** `session action=output` returning an apparently-stale snapshot while
+  `status`/`list` reported `busy`/`awaiting_input` for minutes. _(root-caused 2026-09-03.)_
+  Root-caused by deliberate live reproduction, not code inspection: `session action=output` was
+  never actually stale — confirmed by typing a unique probe string via `session action=input` and
+  watching it appear correctly on the very next read. What looked stuck was a low-confidence
+  `awaiting_input` latch carrying `question_text = "Claude is waiting for your input"` — a phrase a
+  2026-08-11 `pty.rs` regression comment attributes to Claude's own ~60s idle timer. **Not
+  independently verified as an actual OSC 777 escape sequence this session** (no raw byte capture —
+  see `feedback_osc_777_vs_7770_confusion` memory, which warns against that exact claim without
+  one; it could equally be the silence timer's own screen-text heuristic match on the same
+  phrase). Either way, TUICommander already auto-retracts this low-confidence latch after
+  `SILENCE_QUESTION_THRESHOLD` (10s) of true silence —
+  `spawn_silence_timer`/`emit_question_cleared_if_stale` in `pty.rs`, shipped and regression-tested
+  since 2026-08-11 (`osc777_notify_retraction_follows_the_wording`, though that test constructs the
+  scenario via `parse_osc777_notify` specifically — if the real signal doesn't arrive that way in
+  current Claude Code, a screen-heuristic-driven sibling case may be missing coverage; not
+  investigated further). The 10s window depends on
+  `last_output_at`, which any `session action=input` call legitimately resets (it's real PTY
+  traffic) — so repeatedly polling a session with raw `input` calls to check "is it still stuck"
+  perpetually re-arms the very grace period the auto-heal needs, creating the illusion of a
+  permanently stuck session. Confirmed definitively: reproduced the same-looking stuck state, then
+  left the session completely untouched (an `until`-loop wait, zero calls to that session) for 90s
+  — it self-cleared correctly with no intervention. Takeaway for future sessions: when checking
+  whether an awaiting/busy state will resolve on its own, use read-only `status`/`output` calls (or
+  wait passively) — not `input`, which is itself capable of causing the exact stuck-looking
+  symptom being diagnosed.
 
 ## Per-tool MCP-instructions gating + "Prefer TUICommander messaging/spawning" settings (2026-09-02, uncommitted)
 
@@ -4359,6 +4398,60 @@ and are not repeated here. What's left needs a human pass:
   (only changes when the agent's title/status genuinely changes), and check
   `GET /diagnostics` (enable diagnostic mode first) for CPU staying idle
   between real activity instead of pinned high.
+- [ ] **Swarm teammate panes landed under the wrong repo's tab group (needs
+  `make dev` restart, then live rebuild + reinstall to real `~/bin/tmux` per
+  AGENTS.md).** _(found + fixed 2026-09-04, live report from Boss.)_ A
+  4-teammate `agent-teams` swarm spawned from an `ai-usage` session rooted
+  in `commerce-journal` had all 4 teammate panes appear under an unrelated
+  repo, `databricks-sql-cli` — the repo Boss happened to be actively working
+  in at that moment. Root-caused: Claude Code's real swarm calls never pass
+  `-c <cwd>` on `new-session`/`split-window` (confirmed empirically, both in
+  this session's earlier live captures and the synthetic wording harness);
+  `tuic-cli`'s arg parser only ever reads `-c` and left `cwd: None`
+  otherwise, so `spawn_pty_session` (`session.rs`) never called `cmd.cwd()`
+  and the child PTY just inherited whatever directory the TUICommander app
+  process itself happened to be running in — matching no registered repo.
+  The frontend's `assignSessionToRepoBranch` (`useAppInit.ts`) correctly
+  falls back to "park it in the sidebar's currently *active* repo" when a
+  session's cwd owns no registered repo — which is exactly, and only,
+  because the cwd it received was wrong in the first place. Fixed with a
+  `resolve_cwd()` helper in `tuic-cli/src/tmux/exec.rs`, applied at all
+  three creation call sites (`new-session`, `new-window`, `split-window`):
+  falls back, in priority order, to (1) an existing pane's already-resolved
+  cwd elsewhere in the same session/window, then (2)
+  `std::env::current_dir()` (the tmux CLI subprocess's own cwd, inherited
+  from Claude Code's real process) whenever `-c` is absent — matching real
+  tmux's own default behavior, not TUICommander's own fabricated default.
+  A `/code-review` pass (scoped to just this fix) found the topology-inheritance
+  step was missing initially — each `tmux` subcommand is its own OS
+  subprocess, so relying on a fresh `current_dir()` read alone for every
+  pane could in principle disagree with an earlier pane's if the calling
+  process's own cwd ever changed between separate invocations; closed off
+  by preferring an already-resolved sibling pane's cwd first. That same
+  review flagged two more issues, accepted as-is (documented in
+  `tuic-cli/AGENTS.md`): `current_dir()`'s symlink-resolving semantics
+  could still mismatch a repo registered via a symlinked path (pre-existing,
+  general gap, not introduced or worsened by this fix), and this crate now
+  has multiple independent inline `current_dir()`-stringify implementations
+  instead of one shared helper (real duplication, deferred as a separate
+  cleanup rather than scope-creeping this fix). New regression tests
+  (`new_session_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `split_window_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `new_window_without_dash_c_falls_back_to_the_real_cwd_not_none`,
+  `new_session_with_dash_c_still_honors_the_explicit_value`,
+  `legacy_new_session_without_dash_c_never_gets_resolve_cwds_fallback`,
+  plus a `resolve_cwd`/topology-helper unit test group), all 125 `tuic-cli`
+  tests green, full workspace (`cargo nextest run --workspace`, 5477 tests)
+  green, fmt/clippy clean. **Not yet live-verified** — this is a `tuic-cli` crate
+  change; per AGENTS.md's "Fresh Worktree Setup" point 4 and "Dev Hot
+  Reload," the real `~/bin/tmux` alias execs whichever `tuic` binary its
+  owning `TUICommander.app` bundle ships, not `target/debug/tuic` — testing
+  this live needs a real rebuild (`make build` or `pnpm build:sidecar
+  --force`) that actually replaces that bundle's binary, not just `cargo
+  build`. After that: reproduce the exact repro (spawn a swarm from a
+  session in one repo while a different repo's tab is focused/active) and
+  confirm the new teammate panes land under the *originating* repo, not the
+  focused one.
 - [ ] **Reworded the "Prefer TUICommander for peers/teams" connect-time bullet
   (needs `make dev` restart to take effect).** _(changed 2026-09-04, based on
   an n=10-confirmed A/B harness result — see
