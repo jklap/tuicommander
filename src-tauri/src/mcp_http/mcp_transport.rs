@@ -81,12 +81,18 @@ use super::mcp_transport_catalogue::SESSION_ACTIONS;
 use super::mcp_transport_catalogue::UI_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::VOICE_ACTIONS;
+#[cfg(test)]
+use super::mcp_transport_catalogue::agent_tool_definition;
 use super::mcp_transport_catalogue::build_mcp_instructions;
 use super::mcp_transport_catalogue::build_mcp_instructions_for_mode;
 use super::mcp_transport_catalogue::build_mcp_instructions_for_session;
 #[cfg(test)]
+use super::mcp_transport_catalogue::default_tool_gates;
+#[cfg(test)]
 use super::mcp_transport_catalogue::filtered_native_tools;
+#[cfg(test)]
 use super::mcp_transport_catalogue::handle_call_tool;
+use super::mcp_transport_catalogue::handle_call_tool_for_client;
 use super::mcp_transport_catalogue::handle_get_tool_schema_for_session;
 use super::mcp_transport_catalogue::handle_search_tools_for_session;
 use super::mcp_transport_catalogue::merged_tool_definitions;
@@ -388,6 +394,55 @@ pub(crate) fn marker_flags_for_agent(state: &AppState, agent_type: Option<&str>)
     crate::launch_instructions::marker_flags(&state.config.read(), &agents_cfg, agent_type)
 }
 
+/// Resolve both `prefer_tuic_spawning` and `prefer_tuic_messaging` for an
+/// agent type from a single `load_agents_config()` read (mirrors
+/// `marker_flags_for_agent`'s shape). Both default ON. Turning either off
+/// does not disable the underlying spawn/messaging tool or API — it only
+/// removes that half's guidance from the MCP `initialize` instructions, so
+/// an agent type that has its own native subagent/Task tool and/or its own
+/// cross-agent messaging (e.g. Claude Code's SendMessage) isn't steered
+/// toward TUIC's in preference to it. The two are independent: an agent type
+/// can prefer TUIC for one and its own native tooling for the other, in
+/// either direction.
+///
+/// A single shared read matters, not just to avoid the duplicate disk I/O:
+/// `build_mcp_instructions` uses both values to render ONE instructions
+/// response, and `resolve_prefer_tuic_spawning`/`resolve_prefer_tuic_messaging`
+/// previously each ran their own independent `load_agents_config()` call —
+/// two reads a Settings save could land between, producing one response
+/// whose spawn- and messaging-gated sections reflect two different disk
+/// snapshots of `agents.json`.
+pub(super) fn prefer_tuic_flags_for_agent(agent_type: Option<&str>) -> (bool, bool) {
+    let agents_cfg = crate::config::load_agents_config();
+    let agent_settings = agent_type.and_then(|t| agents_cfg.agents.get(t));
+
+    let prefer_spawning = agent_settings
+        .and_then(|s| s.prefer_tuic_spawning)
+        .unwrap_or(true);
+    let prefer_messaging = agent_settings
+        .and_then(|s| s.prefer_tuic_messaging)
+        .unwrap_or(true);
+
+    (prefer_spawning, prefer_messaging)
+}
+
+/// Same rule as [`prefer_tuic_flags_for_agent`], keyed by client name.
+/// Test-only: production code that needs both flags calls
+/// `prefer_tuic_flags_for_agent` directly so they come from a single
+/// `load_agents_config()` snapshot; these thin per-flag wrappers exist only
+/// so tests that care about one flag at a time don't need the tuple.
+#[cfg(test)]
+fn resolve_prefer_tuic_messaging(client_name: Option<&str>) -> bool {
+    prefer_tuic_flags_for_agent(resolve_agent_type(client_name)).1
+}
+
+/// Same rule as [`prefer_tuic_flags_for_agent`], keyed by client name. See
+/// [`resolve_prefer_tuic_messaging`]'s doc comment.
+#[cfg(test)]
+fn resolve_prefer_tuic_spawning(client_name: Option<&str>) -> bool {
+    prefer_tuic_flags_for_agent(resolve_agent_type(client_name)).0
+}
+
 /// SIMP-1: Drain registered HTML tabs for a closing/killed/exited session and
 /// emit `close-html-tabs` to the frontend. SIL-3: log a warning if the emit
 /// fails (don't drop silently — orphan tabs in UI hint at a missing app handle
@@ -495,6 +550,31 @@ pub(super) async fn handle_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
+    handle_mcp_tool_call_for_client(
+        state,
+        addr,
+        name,
+        args,
+        mcp_session_id,
+        managed_parent_cwd,
+        None,
+    )
+    .await
+}
+
+/// Same, for a request that names its client in `_meta` (the stateless
+/// lifecycle, and ego proxied through `tuic-bridge`'s session). That name
+/// picks the `prefer_tuic_*` flags the `agent` description is rendered with,
+/// ahead of the session, exactly as `merged_tool_definitions` does.
+pub(super) async fn handle_mcp_tool_call_for_client(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    name: &str,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
+    stateless_client_name: Option<&str>,
+) -> serde_json::Value {
     Box::pin(guard_secret_inspection(
         state,
         name,
@@ -506,6 +586,7 @@ pub(super) async fn handle_mcp_tool_call_with_context(
             args,
             mcp_session_id,
             managed_parent_cwd,
+            stateless_client_name,
         ),
     ))
     .await
@@ -557,6 +638,7 @@ async fn dispatch_mcp_tool_call_with_context(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
+    stateless_client_name: Option<&str>,
 ) -> serde_json::Value {
     if let Some(error) = super::mcp_transport_catalogue::native_action_unavailability(
         state,
@@ -576,10 +658,20 @@ async fn dispatch_mcp_tool_call_with_context(
     if let Some(error) = super::mcp_input_contract::validate(name, args) {
         return error;
     }
-    if args["action"] == "help"
-        && let Some(help) = super::mcp_transport_catalogue::native_tool_help(name)
-    {
-        return help;
+    if args["action"] == "help" {
+        let (prefer_spawning, prefer_messaging) =
+            super::mcp_transport_catalogue::resolve_prefer_tuic_flags_for_caller(
+                state,
+                mcp_session_id,
+                stateless_client_name,
+            );
+        if let Some(help) = super::mcp_transport_catalogue::native_tool_help_for(
+            name,
+            prefer_spawning,
+            prefer_messaging,
+        ) {
+            return help;
+        }
     }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
@@ -796,10 +888,22 @@ async fn dispatch_mcp_tool_call_with_context(
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_voice(&state, &args, sid.as_deref())).await
         }
-        "search_tools" => handle_search_tools_for_session(state, args, mcp_session_id),
-        "get_tool_schema" => handle_get_tool_schema_for_session(state, args, mcp_session_id),
+        "search_tools" => {
+            handle_search_tools_for_session(state, args, mcp_session_id, stateless_client_name)
+        }
+        "get_tool_schema" => {
+            handle_get_tool_schema_for_session(state, args, mcp_session_id, stateless_client_name)
+        }
         "call_tool" => {
-            handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
+            handle_call_tool_for_client(
+                state,
+                addr,
+                args,
+                mcp_session_id,
+                managed_parent_cwd,
+                stateless_client_name,
+            )
+            .await
         }
         _ => serde_json::json!({"error": format!(
             "Unknown tool '{}'", name
@@ -937,6 +1041,7 @@ pub(super) async fn mcp_post(
             let client_name = body["params"]["clientInfo"]["name"].as_str();
             let is_claude_code = detect_claude_code_client(client_name);
             let requires_meta_tools = client_requires_meta_tools(client_name);
+            let agent_type = resolve_agent_type(client_name).map(str::to_string);
 
             // Extract repo_path from MCP initialize roots[0].uri (file:// URI)
             let repo_path = body["params"]["roots"]
@@ -958,6 +1063,7 @@ pub(super) async fn mcp_post(
                 meta.last_activity = now;
                 meta.is_claude_code = is_claude_code;
                 meta.requires_meta_tools = requires_meta_tools;
+                meta.agent_type = agent_type.clone();
                 if repo_path.is_some() {
                     meta.repo_path = repo_path;
                 }
@@ -972,6 +1078,7 @@ pub(super) async fn mcp_post(
                         has_sse_stream: false,
                         sse_generation: 0,
                         repo_path,
+                        agent_type: agent_type.clone(),
                     },
                 );
             }
@@ -1254,13 +1361,14 @@ pub(super) async fn mcp_post(
                 let is_error = tool_result_is_error(&result);
                 (result, is_error)
             } else {
-                let result = Box::pin(handle_mcp_tool_call_with_context(
+                let result = Box::pin(handle_mcp_tool_call_for_client(
                     &state,
                     addr,
                     &tool_name,
                     &args,
                     session_id_str.as_deref(),
                     managed_parent_cwd.as_deref(),
+                    request_meta_client_name(&body),
                 ))
                 .await;
                 let is_error = tool_result_is_error(&result);
@@ -1398,6 +1506,7 @@ pub(super) async fn mcp_get(
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
     }
@@ -1572,7 +1681,7 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
 // Re-export for tests — these need to be public enough for sibling test module
 #[cfg(test)]
 pub(crate) fn test_mcp_tool_definitions() -> serde_json::Value {
-    native_tool_definitions()
+    native_tool_definitions(true, true)
 }
 #[cfg(test)]
 pub(crate) fn test_translate_special_key(key: &str) -> Option<&'static str> {
@@ -1594,7 +1703,7 @@ mod critic_story_tool_text {
     /// missing from the tool text, so an agent never learns it may call it.
     #[test]
     fn story_tool_text_names_every_published_action() {
-        let definition = native_tool_definitions()
+        let definition = native_tool_definitions(true, true)
             .as_array()
             .expect("definitions")
             .iter()
@@ -1636,7 +1745,7 @@ mod critic_story_tool_text {
     /// a Done dependency without a receipt also demotes in a workflow-owned plan.
     #[test]
     fn story_tool_text_mentions_the_receipt_condition_for_dependencies() {
-        let definition = native_tool_definitions()
+        let definition = native_tool_definitions(true, true)
             .as_array()
             .expect("definitions")
             .iter()
@@ -1919,7 +2028,7 @@ mod session_placement_tests {
     // Catches: an implemented declaration omitted from the discoverable request schema.
     #[test]
     fn declare_worktree_schema_documents_caller_binding_and_http_transport() {
-        let definitions = native_tool_definitions();
+        let definitions = native_tool_definitions(true, true);
         let session = definitions
             .as_array()
             .unwrap()

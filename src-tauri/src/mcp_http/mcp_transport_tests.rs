@@ -8,6 +8,7 @@ use portable_pty::CommandBuilder;
 use portable_pty::PtySize;
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
+use tempfile::TempDir;
 include!("mcp_transport_transport_tests.rs");
 #[cfg(unix)]
 #[path = "mcp_transport_reconnect_fixture_tests.rs"]

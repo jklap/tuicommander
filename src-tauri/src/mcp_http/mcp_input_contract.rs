@@ -295,7 +295,7 @@ struct Contract {
 }
 
 static CONTRACTS: LazyLock<HashMap<String, Contract>> = LazyLock::new(|| {
-    native_validation_tool_definitions()
+    native_validation_tool_definitions(true, true)
         .as_array()
         .expect("native tool array")
         .iter()
