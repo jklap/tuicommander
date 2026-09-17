@@ -79,10 +79,13 @@ describe("CanvasTerminal smart-selection gestures (Phase 4/5)", () => {
 
 	it("quad-click falls back to whole-line selection when no rule matches", async () => {
 		const mounted = await mountCanvasTerminal({ sessionId: "q2", terminalId: "tq2" });
-		// A row of only symbols no default rule's regex matches at the click
-		// offset (the `\S+` word rule still would — disable smart selection
-		// entirely to prove the "no match" line-select fallback works).
-		settingsStore.setSmartSelectionEnabled(false);
+		// There is no master on/off switch for smart selection — the built-in
+		// `\S+` word rule would otherwise always match. Supply an explicit user
+		// rule set with nothing that can match "foo bar baz" at any offset, to
+		// exercise the "no match" line-select fallback.
+		settingsStore.setSmartSelectionRules([
+			{ id: "never-matches", name: "never", regex: "ZZZNEVERMATCHES", precision: "normal", enabled: true, actions: [] },
+		]);
 		fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 80));
 
 		const point = cellPoint(5, 0);
@@ -93,7 +96,7 @@ describe("CanvasTerminal smart-selection gestures (Phase 4/5)", () => {
 		fireEvent.mouseUp(mounted.canvas, { button: 0, ...point });
 
 		await selectionText(mounted.ref, "foo bar baz");
-		settingsStore.setSmartSelectionEnabled(true);
+		settingsStore.setSmartSelectionRules([]);
 		await mounted.dispose();
 	});
 

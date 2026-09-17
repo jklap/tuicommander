@@ -24,7 +24,6 @@ Two limits are deliberate:
 | **Language** | UI language. The list offers the locales that ship with a message catalog, each named in its own language, and the pick applies immediately — no reload. A locale without a catalog is never offered, because it would render English while claiming to be translated. English is the only catalog shipped today, so the list currently holds one entry. |
 | **Default IDE** | IDE for "Open in..." actions. Only installed apps are offered, grouped by category: Code Editors (VS Code, Cursor, Zed, Windsurf, Neovim, Xcode, `$EDITOR`), JetBrains (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet), Terminals (Ghostty, WezTerm, Alacritty, Kitty, Warp, iTerm2), Git Tools (Sourcetree, GitHub Desktop, Fork, GitKraken, Sublime Merge, Tower), System (Terminal, Finder) |
 | **Custom Launchers** | Define your own tools for the "Open in" menu. Each launcher has a name, an executable (bare name resolved on `PATH`, or absolute path), and arguments (one per line). Arguments may use placeholders, expanded at launch: `{path}`/`{file}` (focused file, else repo root), `{fileDir}` (directory of the focused file), `{repo}` (repo/worktree root), `{cwd}` (focused terminal's working directory), `{home}` (your home directory), `{line}`/`{column}` (1-based editor cursor position). Args are passed verbatim (no shell parsing), so paths with spaces are safe. |
-| **Shell** | Custom shell path (e.g., `/bin/zsh`, `/usr/local/bin/fish`). Leave empty for system default. |
 | **Confirm before quitting** | Show dialog when closing app with active terminals |
 | **Confirm before closing tab** | Ask before closing terminal tab |
 | **Prevent sleep when busy** | Keep machine awake while agents are working |
@@ -47,6 +46,12 @@ Two limits are deliberate:
 | **Bell Style** | `none/visual/sound/both` | `visual` | Terminal bell behavior |
 
 ## Terminal Tab
+
+### Shell
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Shell** | — | — | Custom shell path (e.g., `/bin/zsh`, `/usr/local/bin/fish`). Leave empty for system default. |
 
 ### Rendering
 
@@ -87,8 +92,7 @@ Controls double/quad-click word and smart selection in the terminal — see [Sma
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| **Enable smart selection** | `boolean` | `true` | Try the rule list below before falling back to plain word-boundary selection. Word-boundary customization still applies when this is off. |
-| **Double-click performs** | `word/smart` | `smart` | `Word` expands to the character-class boundary below. `Smart` tries the rule list first, falling back to word selection when nothing matches. Quad-click (4 rapid clicks) always tries smart selection, regardless of this setting. |
+| **Double-click performs** | `word/smart` | `smart` | `Word` expands to the character-class boundary below. `Smart` tries the rule list first, falling back to word selection when nothing matches. There is no master on/off switch — quad-click (4 rapid clicks) and the right-click smart-selection menu always try the rule list, regardless of this setting. |
 
 ### Word Boundaries
 

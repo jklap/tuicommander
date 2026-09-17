@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
 const {
-	mockSetSmartSelectionEnabled,
 	mockSetDoubleClickAction,
 	mockSetWordSelectionMode,
 	mockSetWordSeparators,
@@ -11,7 +10,6 @@ const {
 	mockSetSmartSelectionRules,
 	DEFAULT_SEPARATORS,
 } = vi.hoisted(() => ({
-	mockSetSmartSelectionEnabled: vi.fn(),
 	mockSetDoubleClickAction: vi.fn(),
 	mockSetWordSelectionMode: vi.fn(),
 	mockSetWordSeparators: vi.fn(),
@@ -21,7 +19,6 @@ const {
 }));
 
 let mockState = {
-	smartSelectionEnabled: true,
 	doubleClickAction: "smart" as "smart" | "word",
 	wordSelectionMode: "characters" as "characters" | "regex",
 	wordSeparators: DEFAULT_SEPARATORS,
@@ -34,7 +31,6 @@ vi.mock("../../../stores/settings", () => ({
 	get settingsStore() {
 		return {
 			state: mockState,
-			setSmartSelectionEnabled: mockSetSmartSelectionEnabled,
 			setDoubleClickAction: mockSetDoubleClickAction,
 			setWordSelectionMode: mockSetWordSelectionMode,
 			setWordSeparators: mockSetWordSeparators,
@@ -56,7 +52,6 @@ describe("SelectionTab", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockState = {
-			smartSelectionEnabled: true,
 			doubleClickAction: "smart",
 			wordSelectionMode: "characters",
 			wordSeparators: DEFAULT_SEPARATORS,
@@ -73,13 +68,6 @@ describe("SelectionTab", () => {
 		const { container } = render(() => <SelectionTab />);
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
 		expect(headings).toEqual(["Behavior", "Word Boundaries", "Smart Selection Rules"]);
-	});
-
-	it("calls setSmartSelectionEnabled when its toggle changes", () => {
-		const { container } = render(() => <SelectionTab />);
-		const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement;
-		fireEvent.change(checkbox, { target: { checked: false } });
-		expect(mockSetSmartSelectionEnabled).toHaveBeenCalledWith(false);
 	});
 
 	it("calls setDoubleClickAction when the select changes", () => {
