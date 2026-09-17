@@ -2105,7 +2105,7 @@ fn session_output_pages_do_not_leak_private_key_crossing_history_screen() {
 // Catches: reusing the absolute window's total cursor skips all later pages.
 #[test]
 fn session_output_pages_clean_history_without_skipping_or_repeating_lines() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = defs
         .as_array()
         .unwrap()
@@ -3260,6 +3260,7 @@ async fn parent_registration_after_spawn_links_existing_child() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let registered = handle_messaging(

@@ -79,6 +79,8 @@ use super::mcp_transport_catalogue::TASK_ACTIONS;
 use super::mcp_transport_catalogue::UI_ACTIONS;
 #[cfg(test)]
 use super::mcp_transport_catalogue::VOICE_ACTIONS;
+#[cfg(test)]
+use super::mcp_transport_catalogue::agent_tool_definition;
 use super::mcp_transport_catalogue::build_mcp_instructions;
 use super::mcp_transport_catalogue::build_mcp_instructions_for_mode;
 #[cfg(test)]
@@ -933,6 +935,7 @@ pub(super) async fn mcp_post(
             let client_name = body["params"]["clientInfo"]["name"].as_str();
             let is_claude_code = detect_claude_code_client(client_name);
             let requires_meta_tools = client_requires_meta_tools(client_name);
+            let agent_type = resolve_agent_type(client_name).map(str::to_string);
 
             // Extract repo_path from MCP initialize roots[0].uri (file:// URI)
             let repo_path = body["params"]["roots"]
@@ -954,6 +957,7 @@ pub(super) async fn mcp_post(
                 meta.last_activity = now;
                 meta.is_claude_code = is_claude_code;
                 meta.requires_meta_tools = requires_meta_tools;
+                meta.agent_type = agent_type.clone();
                 if repo_path.is_some() {
                     meta.repo_path = repo_path;
                 }
@@ -968,6 +972,7 @@ pub(super) async fn mcp_post(
                         has_sse_stream: false,
                         sse_generation: 0,
                         repo_path,
+                        agent_type: agent_type.clone(),
                     },
                 );
             }
@@ -1369,6 +1374,7 @@ pub(super) async fn mcp_get(
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
     }
@@ -1541,7 +1547,7 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
 // Re-export for tests — these need to be public enough for sibling test module
 #[cfg(test)]
 pub(crate) fn test_mcp_tool_definitions() -> serde_json::Value {
-    native_tool_definitions()
+    native_tool_definitions(true, true)
 }
 #[cfg(test)]
 pub(crate) fn test_translate_special_key(key: &str) -> Option<&'static str> {
@@ -1563,7 +1569,7 @@ mod critic_story_tool_text {
     /// missing from the tool text, so an agent never learns it may call it.
     #[test]
     fn story_tool_text_names_every_published_action() {
-        let definition = native_tool_definitions()
+        let definition = native_tool_definitions(true, true)
             .as_array()
             .expect("definitions")
             .iter()
@@ -1595,7 +1601,7 @@ mod critic_story_tool_text {
     /// a Done dependency without a receipt also demotes in a workflow-owned plan.
     #[test]
     fn story_tool_text_mentions_the_receipt_condition_for_dependencies() {
-        let definition = native_tool_definitions()
+        let definition = native_tool_definitions(true, true)
             .as_array()
             .expect("definitions")
             .iter()
@@ -1837,7 +1843,7 @@ mod session_placement_tests {
     // Catches: an implemented declaration omitted from the discoverable request schema.
     #[test]
     fn declare_worktree_schema_documents_caller_binding_and_http_transport() {
-        let definitions = native_tool_definitions();
+        let definitions = native_tool_definitions(true, true);
         let session = definitions
             .as_array()
             .unwrap()

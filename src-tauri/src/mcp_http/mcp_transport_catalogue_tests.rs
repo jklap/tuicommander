@@ -1,7 +1,7 @@
 // Catches: Settings rows reuse long MCP paragraphs or omit newly registered tools.
 #[test]
 fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
-    let definitions = native_tool_definitions();
+    let definitions = native_tool_definitions(true, true);
     let tools = definitions.as_array().unwrap();
     let catalog = native_tool_catalog();
     assert!(!tools.is_empty());
@@ -141,7 +141,7 @@ fn marker_flags_for_agent_and_rule_cannot_be_widened_by_either_side() {
 // --- the voice tool (817-f67c) ---
 
 fn native_tool_named(name: &str) -> serde_json::Value {
-    native_tool_definitions()
+    native_tool_definitions(true, true)
         .as_array()
         .expect("the definitions are an array")
         .iter()
@@ -327,7 +327,7 @@ async fn native_tool_definitions_are_the_one_surviving_family() {
 /// protocol makes mandatory, and every always-loaded schema costs tokens.
 #[test]
 fn progress_is_the_only_tool_claude_code_must_not_defer() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let always_loaded: Vec<&str> = defs
         .as_array()
         .unwrap()
@@ -395,7 +395,7 @@ async fn disabled_progress_is_rejected_by_direct_and_collapsed_dispatch() {
 
 #[test]
 fn session_description_mentions_tmux_pane_semantics() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = defs
         .as_array()
         .unwrap()
@@ -419,7 +419,7 @@ fn session_description_mentions_tmux_pane_semantics() {
 
 #[test]
 fn agent_tool_includes_messaging_actions() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let agent = defs
         .as_array()
         .unwrap()
@@ -454,7 +454,7 @@ fn agent_tool_description_carries_orchestration_crash_course() {
     // Initial model visibility of descriptions and initialize instructions
     // depends on the harness (see docs/backend/mcp-http.md). The primer
     // and wait/send delivery semantics must live here.
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let agent = defs
         .as_array()
         .unwrap()
@@ -487,9 +487,252 @@ fn agent_tool_description_carries_orchestration_crash_course() {
     assert!(desc.contains("must report task output"));
 }
 
+// ---- agent tool schema gating on prefer_tuic_spawning/messaging ---------
+//
+// build_mcp_instructions's prose recommendation ("Prefer TUICommander for
+// peers/teams") was already gated on these two flags. The `agent` tool's
+// own baked-in schema description — what a client actually reads via
+// `tools/list`, independently of the connect-time instructions — was not,
+// and a live Claude Code teammate-spawn request confirmed that gap: it
+// still called `agent action=spawn` with both preferences persisted as
+// `false`, because this description told it to regardless. These tests
+// cover the fix (`agent_tool_definition`) and the plumbing that resolves
+// it per MCP connection (`resolve_prefer_tuic_flags_for_session`).
+
+#[test]
+fn agent_tool_definition_omits_spawn_recommendation_when_spawning_not_preferred() {
+    let agent = agent_tool_definition(false, true);
+    let desc = agent["description"].as_str().unwrap();
+    assert!(
+        !desc.contains("Spawn a named peer: spawn name=worker"),
+        "must not steer toward spawn when spawning is not preferred"
+    );
+    assert!(
+        desc.contains("prefer that over `spawn` here"),
+        "must explicitly redirect to the host's own native spawning"
+    );
+    // Messaging guidance is untouched by the spawning flag alone.
+    assert!(desc.contains("Managed PTYs auto-bind"));
+    assert!(desc.contains("Talk to it: send to=<peer>"));
+    // The action itself remains callable — "prefer" is not "disable".
+    let action_enum = agent["inputSchema"]["properties"]["action"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(action_enum.contains("spawn"));
+    assert!(
+        desc.contains("- spawn: Launch agent in new PTY"),
+        "the spawn action bullet itself must stay documented"
+    );
+}
+
+#[test]
+fn agent_tool_definition_omits_messaging_recommendation_when_messaging_not_preferred() {
+    let agent = agent_tool_definition(true, false);
+    let desc = agent["description"].as_str().unwrap();
+    assert!(
+        !desc.contains("Managed PTYs auto-bind"),
+        "must not steer toward register when messaging is not preferred"
+    );
+    assert!(
+        !desc.contains("Talk to it: send to=<peer>"),
+        "must not steer toward send when messaging is not preferred"
+    );
+    assert!(
+        !desc.contains("Lifecycle notifications carry state only"),
+        "the messaging-only lifecycle-reporting step must be dropped"
+    );
+    assert!(
+        desc.contains("prefer that over `register`/`list_peers`/`send`/`inbox` here"),
+        "must explicitly redirect to the host's own native messaging"
+    );
+    // Spawning guidance is untouched by the messaging flag alone.
+    assert!(desc.contains("Spawn a named peer: spawn name=worker"));
+    // The messaging actions remain callable.
+    for action in &["register", "list_peers", "send", "inbox"] {
+        assert!(
+            desc.contains(&format!("- {action}:")),
+            "action bullet for '{action}' must stay documented"
+        );
+    }
+}
+
+#[test]
+fn agent_tool_definition_drops_the_whole_walkthrough_when_neither_preferred() {
+    let agent = agent_tool_definition(false, false);
+    let desc = agent["description"].as_str().unwrap();
+    assert!(
+        !desc.contains("Orchestration in"),
+        "no orchestration walkthrough survives when nothing is TUIC-preferred"
+    );
+    // detect/stats/metrics moved to HTTP (`removed_native_action_replacement`),
+    // so the header no longer advertises them.
+    assert!(desc.starts_with("AI agent peer administration."));
+    assert!(
+        desc.contains("prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here")
+    );
+    // Every action bullet — and the schema itself — is still fully intact.
+    for action in &[
+        "spawn",
+        "wait",
+        "register",
+        "list_peers",
+        "send",
+        "inbox",
+    ] {
+        assert!(
+            desc.contains(&format!("- {action}:")),
+            "action bullet for '{action}' must survive even with both preferences off"
+        );
+    }
+    let action_enum = agent["inputSchema"]["properties"]["action"]["description"]
+        .as_str()
+        .unwrap();
+    for action in &["spawn", "register", "list_peers", "send", "inbox"] {
+        assert!(action_enum.contains(action));
+    }
+}
+
+/// Regression, found live 2026-09-03: a live Claude Code session, even
+/// with `spawn` recommended, reasoned that `agent action=spawn` was "a
+/// different thing entirely — those are terminal sessions running an
+/// agent binary, not Claude Code teammates" and passed it over. The
+/// description never used the word "teammate" anywhere — only
+/// "peer"/"worker" — so nothing told the model these are the same
+/// concept, just a different backend. Fixed by explicitly saying so
+/// wherever spawning is actually recommended.
+#[test]
+fn agent_tool_definition_calls_a_spawned_peer_a_teammate_wherever_spawn_is_recommended() {
+    for (prefer_spawning, prefer_messaging) in [(true, true), (true, false)] {
+        let agent = agent_tool_definition(prefer_spawning, prefer_messaging);
+        let desc = agent["description"].as_str().unwrap();
+        assert!(
+            desc.contains("teammate"),
+            "({prefer_spawning}, {prefer_messaging}): spawn is recommended here, so the \
+            description must connect it to the word a host's own agent-teams feature uses \
+            — got: {desc:?}"
+        );
+    }
+    // Never claim the peer/teammate equivalence when spawning is NOT
+    // being recommended — that would contradict "prefer your own native
+    // teammate feature instead" in the same breath.
+    for (prefer_spawning, prefer_messaging) in [(false, true), (false, false)] {
+        let agent = agent_tool_definition(prefer_spawning, prefer_messaging);
+        let desc = agent["description"].as_str().unwrap();
+        assert!(
+            !desc.contains("teammate"),
+            "({prefer_spawning}, {prefer_messaging}): spawn is NOT recommended here — must \
+            not simultaneously claim it's equivalent to the host's own teammate feature"
+        );
+    }
+}
+
+/// The connect-time `build_mcp_instructions` prose already said "use TUIC's `agent
+/// action=spawn` MCP tool (not your host's native subagent/Task/team tool)" — but that's
+/// shown once, at `initialize`, and never re-read. The `agent` tool's own schema
+/// description (re-read every time the model considers calling it) never carried the same
+/// explicit "use this instead of your own" directive. Added 2026-09-03 at the user's
+/// request, directly targeting the exact reasoning trap the teammate-wording fix alone
+/// didn't close.
+#[test]
+fn agent_tool_definition_says_to_use_it_instead_of_the_hosts_own_spawning_tool_when_recommended()
+ {
+    for (prefer_spawning, prefer_messaging) in [(true, true), (true, false)] {
+        let agent = agent_tool_definition(prefer_spawning, prefer_messaging);
+        let desc = agent["description"].as_str().unwrap();
+        assert!(
+            desc.contains("not your own built-in agent-spawning tool"),
+            "({prefer_spawning}, {prefer_messaging}): spawn is recommended here — the \
+            description must explicitly say to use this instead of the host's own tool, \
+            not just that they're equivalent concepts — got: {desc:?}"
+        );
+    }
+    // Never tell the model to prefer TUIC's spawn over its own tool when spawning is NOT
+    // being recommended — that's the opposite of what the surrounding text says.
+    for (prefer_spawning, prefer_messaging) in [(false, true), (false, false)] {
+        let agent = agent_tool_definition(prefer_spawning, prefer_messaging);
+        let desc = agent["description"].as_str().unwrap();
+        assert!(
+            !desc.contains("not your own built-in agent-spawning tool"),
+            "({prefer_spawning}, {prefer_messaging}): spawn is NOT recommended here — must \
+            not simultaneously tell the model to prefer it over its own tool"
+        );
+    }
+}
+
+#[test]
+fn merged_tool_definitions_agent_description_reflects_the_calling_sessions_prefer_flags() {
+    // End-to-end regression test for the live bug: a connection whose
+    // resolved agent type has both preferences off must see a
+    // non-recommending `agent` tool description from `tools/list` — not
+    // just from `build_mcp_instructions`'s prose.
+    let dir = TempDir::new().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+    let mut agents_cfg = crate::config::AgentsConfig::default();
+    agents_cfg.agents.insert(
+        "claude".to_string(),
+        crate::config::AgentSettings {
+            prefer_tuic_spawning: Some(false),
+            prefer_tuic_messaging: Some(false),
+            ..Default::default()
+        },
+    );
+    crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+
+    let state = test_state();
+    let mcp_sid = "mcp-agent-tool-gating-test";
+    state.mcp.sessions.insert(
+        mcp_sid.to_string(),
+        crate::state::McpSessionMeta {
+            last_activity: std::time::Instant::now(),
+            is_claude_code: true,
+            requires_meta_tools: false,
+            has_sse_stream: false,
+            sse_generation: 0,
+            repo_path: None,
+            agent_type: Some("claude".to_string()),
+            prompt_instructions: None,
+        },
+    );
+
+    let tools = merged_tool_definitions(&state, Some(mcp_sid), None);
+    let agent = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "agent")
+        .unwrap();
+    let desc = agent["description"].as_str().unwrap();
+    assert!(
+        !desc.contains("Spawn a named peer: spawn name=worker"),
+        "tools/list must not recommend spawn for a connection with prefer_tuic_spawning=false"
+    );
+    assert!(
+        !desc.contains("Talk to it: send to=<peer>"),
+        "tools/list must not recommend messaging for a connection with prefer_tuic_messaging=false"
+    );
+}
+
+#[test]
+fn merged_tool_definitions_without_session_context_stays_fully_permissive() {
+    // No mcp_session_id (or an unknown one) must fall back to the
+    // pre-existing, fully-permissive description — never fail closed.
+    let state = test_state();
+    let tools = merged_tool_definitions(&state, None, None);
+    let agent = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "agent")
+        .unwrap();
+    let desc = agent["description"].as_str().unwrap();
+    assert!(desc.contains("Spawn a named peer: spawn name=worker"));
+    assert!(desc.contains("Talk to it: send to=<peer>"));
+}
+
 #[test]
 fn session_tool_description_includes_wait() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = defs
         .as_array()
         .unwrap()
@@ -508,7 +751,7 @@ fn session_tool_description_includes_wait() {
 
 #[test]
 fn repo_tool_lists_retained_worktree_actions_and_branch_parameter() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let repo = defs
         .as_array()
         .unwrap()
@@ -545,7 +788,7 @@ fn repo_tool_lists_retained_worktree_actions_and_branch_parameter() {
 
 #[test]
 fn repo_progress_schema_advertises_paging_and_filters() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let repo = defs
         .as_array()
         .unwrap()
@@ -565,7 +808,7 @@ fn repo_progress_schema_advertises_paging_and_filters() {
 
 #[test]
 fn ui_tool_includes_notify_actions() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let ui = defs
         .as_array()
         .unwrap()
@@ -585,7 +828,7 @@ fn ui_tool_includes_notify_actions() {
 
 #[test]
 fn debug_tool_includes_sessions_action() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let debug = defs
         .as_array()
         .unwrap()
@@ -609,7 +852,7 @@ fn merged_tools_collapse_false_returns_all_native_tools() {
     let merged = merged_tool_definitions(&state, None, None);
     let names = tool_names(&merged);
 
-    let native = tool_names(&native_tool_definitions());
+    let native = tool_names(&native_tool_definitions(true, true));
     assert_eq!(
         names, native,
         "collapse_tools=false should return all native tools"
@@ -649,6 +892,7 @@ fn grok_session_uses_meta_tools_without_mutating_global_config() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
 
@@ -732,7 +976,7 @@ fn the_progress_obligation_and_the_progress_tool_appear_and_vanish_together() {
 
     let state = test_state();
     let listed = |state: &Arc<AppState>| {
-        tool_names(&serde_json::Value::Array(filtered_native_tools(state)))
+        tool_names(&serde_json::Value::Array(filtered_native_tools(state, true, true)))
             .contains(&"progress".to_string())
     };
 
@@ -1360,6 +1604,33 @@ fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
     assert!(!out.contains("anomaly fallback"));
 }
 
+/// Regression coverage for the 2026-09-04 wording change (see
+/// plans/docs/agent-teams-wording-investigation.md, main checkout): an A/B
+/// harness found the old hedged phrasing ("use TUIC's `agent
+/// action=spawn` MCP tool (not your host's native subagent/Task/team
+/// tool) whenever spawning an AI peer that should be observable...")
+/// never worked against a real Opus session (0/10), while a direct,
+/// unhedged directive worked every time (10/10). Asserts the new
+/// directive text is present and the old hedged phrasing is gone, so a
+/// future edit can't silently revert to the measured-ineffective
+/// wording.
+#[test]
+fn instructions_prefer_tuicommander_bullet_uses_the_unhedged_directive() {
+    let state = test_state();
+    let out = build_mcp_instructions(&state, Some("claude-code"));
+
+    assert!(
+        out.contains(
+            "every agent-teams teammate is created with TUIC's `agent action=spawn` MCP tool — do not use your own built-in agent-spawning tool for this"
+        ),
+        "expected the unhedged directive wording, got: {out}"
+    );
+    // The label must survive unchanged — other tests grep for it.
+    assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
+    // The old hedged phrasing must not reappear.
+    assert!(!out.contains("whenever spawning an AI peer that should be observable"));
+}
+
 #[test]
 #[serial_test::serial]
 fn instructions_omit_multi_agent_work_when_neither_spawning_nor_messaging_preferred() {
@@ -1441,7 +1712,7 @@ fn instructions_disabled_agent_tool_wins_over_an_explicit_prefer_true_override()
 fn instructions_do_not_repeat_what_tool_descriptions_already_say() {
     let state = test_state();
     let classic = build_mcp_instructions_for_mode(&state, None, false);
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
 
     // 1. The tool catalogue is `tools/list` restated in prose.
     for bullet in [
@@ -1479,7 +1750,7 @@ fn instructions_do_not_repeat_what_tool_descriptions_already_say() {
 /// learn that `register` is how it gets an identity at all).
 #[test]
 fn agent_description_owns_the_orchestrator_role_and_wake_contract() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let agent = tool_description(&defs, "agent");
     assert!(
         agent.contains("orchestrator=true"),
@@ -1512,7 +1783,7 @@ fn agent_description_owns_the_orchestrator_role_and_wake_contract() {
 
 #[test]
 fn agent_send_schema_and_description_explain_urgent_mail_without_exposing_payload() {
-    let definitions = native_tool_definitions();
+    let definitions = native_tool_definitions(true, true);
     let agent = definitions
         .as_array()
         .unwrap()
@@ -1536,7 +1807,7 @@ fn agent_send_schema_and_description_explain_urgent_mail_without_exposing_payloa
 /// The `ui` description is where a caller reaching for a toast finds out.
 #[test]
 fn ui_description_routes_semantic_outcomes_to_the_progress_tool() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let ui = tool_description(&defs, "ui");
     assert!(
         ui.contains("`progress` tool"),
@@ -1654,7 +1925,7 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
     );
 
     // Discovered schemas: what `get_tool_schema` hands back, per tool.
-    for tool in native_tool_definitions().as_array().unwrap() {
+    for tool in native_tool_definitions(true, true).as_array().unwrap() {
         let name = tool["name"].as_str().unwrap().to_string();
         record(
             &format!("schema.{name}"),
@@ -1771,7 +2042,7 @@ fn mcp_instruction_surface_bytes_stay_within_budget() {
 
 #[test]
 fn session_description_includes_status_action() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = defs
         .as_array()
         .unwrap()
@@ -1794,7 +2065,7 @@ fn session_description_includes_status_action() {
 
 #[test]
 fn session_submit_schema_pins_receipt_and_raw_input_semantics() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = defs
         .as_array()
         .unwrap()
@@ -1829,7 +2100,7 @@ fn session_submit_schema_pins_receipt_and_raw_input_semantics() {
 
 #[test]
 fn session_keep_open_schema_explains_the_managed_child_toggle() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = defs
         .as_array()
         .unwrap()
@@ -1855,7 +2126,7 @@ fn session_keep_open_schema_explains_the_managed_child_toggle() {
 
 #[test]
 fn session_description_requires_list_for_global_overview() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = defs
         .as_array()
         .unwrap()
@@ -1869,7 +2140,7 @@ fn session_description_requires_list_for_global_overview() {
 
 #[test]
 fn print_mode_description_clarifies_visible_vs_headless() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let agent = defs
         .as_array()
         .unwrap()
@@ -1906,7 +2177,7 @@ fn monitoring_guidance_lives_in_the_tool_descriptions() {
         "instructions must send the reader to the descriptions"
     );
 
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
     let session = tool_description(&defs, "session");
     let agent = tool_description(&defs, "agent");
     assert!(
@@ -1934,7 +2205,7 @@ fn monitoring_guidance_lives_in_the_tool_descriptions() {
 /// by the `repo` schema enum while the description body named none of them.
 #[test]
 fn every_documented_action_constant_matches_schema_and_description() {
-    let defs = native_tool_definitions();
+    let defs = native_tool_definitions(true, true);
 
     // (tool, action constant, description documents each action)
     // `debug` is the one exemption: its description points at `action=help`,
@@ -1990,13 +2261,16 @@ fn every_documented_action_constant_matches_schema_and_description() {
 }
 
 /// After `rebuild_tool_search_index`, the cache contains every native
-/// tool from `native_tool_definitions()`.
+/// tool from `native_tool_definitions(true, true)`.
 #[test]
 fn rebuild_tool_search_index_populates_all_native_tools() {
     let state = test_state();
     rebuild_tool_search_index(&state);
     let idx = state.mcp.tool_search_index.read();
-    let native_count = native_tool_definitions().as_array().unwrap().len();
+    let native_count = native_tool_definitions(true, true)
+        .as_array()
+        .unwrap()
+        .len();
     assert_eq!(idx.len(), native_count);
     // Spot-check a few well-known native tools by name.
     assert!(idx.get_schema("session").is_some());
