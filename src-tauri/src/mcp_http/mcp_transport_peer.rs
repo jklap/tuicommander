@@ -766,8 +766,12 @@ pub(super) fn call_session_context(
     if state.live_pty_for_peer(peer).is_none() && state.acp.peer_root(peer).is_none() {
         return None;
     }
-    Some(format!("managed-call:{peer}"))
+    Some(format!("{MANAGED_CALL_PREFIX}{peer}"))
 }
+
+/// Prefix of the internal routing key `call_session_context` gives a modern
+/// call from a live host-owned peer; the rest is that peer's identity.
+pub(super) const MANAGED_CALL_PREFIX: &str = "managed-call:";
 
 /// Missing identity is not an argument typo. Repeating unchanged inbox/register
 /// calls cannot repair host context; callers must stop until that context changes.
@@ -813,6 +817,7 @@ pub(super) fn refresh_mcp_session(
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
         }

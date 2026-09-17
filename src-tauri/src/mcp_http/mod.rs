@@ -5864,6 +5864,7 @@ mod tests {
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
         }
@@ -6927,6 +6928,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         let app = build_router(state.clone(), false, true);
@@ -7026,6 +7028,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         let app = build_router(state.clone(), false, true);
@@ -8922,6 +8925,13 @@ mod tests {
                 .contains("absolute paths"),
             "hint prompt should mention absolute paths"
         );
+        assert!(
+            hint["suggested_prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Do not emit TUICommander `intent:` / `suggest:` / ack markers"),
+            "delegated subagent prompt must tell the subagent to stay quiet on markers"
+        );
         // Cleanup
         let wt_path = result["worktree_path"].as_str().unwrap();
         let _ = std::process::Command::new("git")
@@ -9949,6 +9959,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
 
@@ -9989,6 +10000,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         let app = build_router(state, false, true);
@@ -10859,6 +10871,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         register_reaper_peer(&state, TUIC, SID);
@@ -10931,6 +10944,7 @@ mod tests {
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
             state
@@ -10995,6 +11009,7 @@ mod tests {
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
         register_reaper_peer(&state, TUIC, SID);
@@ -11050,6 +11065,7 @@ mod tests {
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
             state
