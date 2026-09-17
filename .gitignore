@@ -56,6 +56,8 @@ scripts/*
 !scripts/check-frontend-cycles.mjs
 !scripts/mutants.sh
 !scripts/install-launch-shells.sh
+!scripts/check-no-nul-bytes.mjs
+!scripts/run-plugin-tests.mjs
 !scripts/hooks/
 !scripts/perf/
 scripts/perf/results/

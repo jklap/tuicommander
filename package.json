@@ -11,12 +11,14 @@
     "bundle:report": "node scripts/report-frontend-bundles.mjs",
     "architecture:cycles": "node scripts/check-frontend-cycles.mjs",
     "architecture:cycles:test": "node scripts/check-frontend-cycles.mjs --self-test",
+    "check:no-nul-bytes": "node scripts/check-no-nul-bytes.mjs",
+    "check:no-nul-bytes:test": "node scripts/check-no-nul-bytes.mjs --self-test",
     "build:watch": "vite build --watch",
     "preview": "vite preview",
     "tauri": "tauri",
     "build:sidecar": "node src-tauri/build-sidecar.mjs",
     "test": "vitest",
-    "test:plugins": "node --test \"plugins/**/*.test.js\"",
+    "test:plugins": "node scripts/run-plugin-tests.mjs",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
