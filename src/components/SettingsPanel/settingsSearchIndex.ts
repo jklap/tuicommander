@@ -462,7 +462,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "selection", section: "Word Boundaries", label: "Word boundaries" },
 	{ tab: "selection", section: "Word Boundaries", label: "Word separators" },
 	{ tab: "selection", section: "Word Boundaries", label: "Word pattern" },
-	{ tab: "selection", section: "Word Boundaries", label: "Enable smart selection" },
 	{ tab: "keyboard-shortcuts", section: "Keyboard Shortcuts", sectionKey: "settings.keyboardShortcuts" },
 	{
 		tab: "keyboard-shortcuts",
