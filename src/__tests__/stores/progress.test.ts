@@ -2,53 +2,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.fn();
 const toastAdd = vi.fn();
-const terminalSetActive = vi.fn();
-const repoSetActive = vi.fn();
-const workspaceSetActive = vi.fn();
 
 vi.mock("../../invoke", () => ({ invoke: invokeMock }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: toastAdd } }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn() } }));
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: {
-		getPaths: () => ["/repo"],
+		state: { activeRepoPath: "/repo" },
+		getPaths: () => ["/repo", "/other", "/third"],
 		get: (path: string) => (path === "/repo" ? { displayName: "Repo" } : undefined),
-		findOwnerForTerminal: () => ({ repoPath: "/repo", workspaceId: "main" }),
-		setActive: repoSetActive,
-		setActiveWorkspace: workspaceSetActive,
-	},
-}));
-vi.mock("../../stores/terminals", () => ({
-	terminalsStore: {
-		getTerminalForSession: (id: string) => (id === "live" ? "term-1" : null),
-		setActive: terminalSetActive,
 	},
 }));
 
-function status(snapshotCursor = 4, readCursor = 1) {
-	return {
-		projectRoot: "/repo",
-		revision: snapshotCursor,
-		snapshotCursor,
-		readCursor,
-		unreadCount: snapshotCursor - readCursor,
-		collectionEnabled: true,
-		workstreams: [],
-		projectBlockers: [],
-	};
+type Kind = "done" | "blocked" | "intent";
+
+function entry(id: number, createdAtMs: number, type: Kind = "done") {
+	return { id, project: "/repo", createdAtMs, type, text: `entry ${id}`, step: "Delivery" };
 }
 
-function event(id = "event-1", sessionId = "live") {
-	return {
-		id,
-		sequence: 4,
-		revision: 4,
-		createdAtMs: 1,
-		type: "milestone" as const,
-		summary: "Shipped safely",
-		workstream: "Delivery",
-		sessionId,
-	};
+function list(entries: ReturnType<typeof entry>[], lastViewedMs?: number) {
+	return { project: "/repo", entries, lastViewedMs };
 }
 
 describe("progressStore", () => {
@@ -57,92 +30,107 @@ describe("progressStore", () => {
 		vi.resetModules();
 	});
 
-	it("freezes the opened watermark while a later refresh updates authoritative unread state", async () => {
+	/// The list is redrawn whenever an entry arrives. If the divider followed the
+	/// stored timestamp it would jump to the top under the reader's cursor and
+	/// the "what is new" question would become unanswerable mid-read.
+	it("freezes the divider while the dialog is open and moves it on close", async () => {
 		invokeMock.mockImplementation((command: string) =>
-			Promise.resolve(command === "progress_status" ? status() : { revision: 4, snapshotCursor: 4, events: [event()] }),
+			command === "progress_list" ? Promise.resolve(list([entry(2, 200), entry(1, 100)], 150)) : Promise.resolve({}),
 		);
 		const { createProgressStore } = await import("../../stores/progress");
 		const store = createProgressStore();
+
+		store.open("/repo");
+		await vi.waitFor(() => expect(store.state.projects["/repo"].entries).toHaveLength(2));
+		expect(store.state.projects["/repo"].dividerMs).toBe(150);
+
+		// A later entry arrives and the backend has already moved its own mark —
+		// the frozen one must not follow.
+		invokeMock.mockImplementation((command: string) =>
+			command === "progress_list"
+				? Promise.resolve(list([entry(3, 300), entry(2, 200), entry(1, 100)], 300))
+				: Promise.resolve({}),
+		);
 		await store.refreshProject("/repo");
-		expect(store.state.projects["/repo"].status?.snapshotCursor).toBe(4);
+		expect(store.state.projects["/repo"].dividerMs).toBe(150);
 
-		invokeMock.mockImplementation((command: string) =>
-			Promise.resolve(
-				command === "progress_status" ? status(7, 1) : { revision: 7, snapshotCursor: 7, events: [event("later")] },
-			),
-		);
-		await store.refreshProject("/repo", true);
-		expect(store.state.projects["/repo"].status).toMatchObject({ snapshotCursor: 4, unreadCount: 6 });
+		await store.close();
+		expect(invokeMock).toHaveBeenCalledWith("progress_mark_viewed", { project: "/repo" });
+		expect(store.state.projects["/repo"].dividerMs).toBeUndefined();
 	});
 
-	it("presents one live toast by durable event id and opts out of MESSAGES mirroring", async () => {
-		invokeMock.mockResolvedValue({
-			projectRoot: "/repo",
-			revision: 0,
-			snapshotCursor: 0,
-			readCursor: 0,
-			unreadCount: 0,
-			collectionEnabled: true,
-			workstreams: [],
-			projectBlockers: [],
-		});
+	/// The old panel fanned out over every registered repository on open. The
+	/// dialog shows one project, so it asks one question.
+	it("queries once for the project it shows, never once per registered repository", async () => {
+		invokeMock.mockResolvedValue(list([entry(1, 100)]));
 		const { createProgressStore } = await import("../../stores/progress");
 		const store = createProgressStore();
-		const payload = {
-			repo_path: "/repo",
-			payload: { receipt: { status: "recorded", revision: 4, eventId: "event-1" }, event: event() },
-		};
-		store.presentLive(payload);
-		store.presentLive(payload);
-		expect(toastAdd).toHaveBeenCalledTimes(1);
-		expect(toastAdd.mock.calls[0][8]).toBe(false);
-	});
 
-	it("never navigates a closed provenance source to another terminal", async () => {
-		const { createProgressStore } = await import("../../stores/progress");
-		const store = createProgressStore();
-		expect(store.openSource(event("closed", "gone"))).toBe(false);
-		expect(terminalSetActive).not.toHaveBeenCalled();
-		expect(store.openSource(event())).toBe(true);
-		expect(terminalSetActive).toHaveBeenCalledWith("term-1");
-	});
-
-	it("pages backwards from the carried cursor, keeps the filter, and stops at the end of the list", async () => {
-		invokeMock.mockImplementation((command: string) =>
-			Promise.resolve(
-				command === "progress_status"
-					? status()
-					: { revision: 4, snapshotCursor: 4, events: [event()], nextBeforeSequence: 4 },
-			),
-		);
-		const { createProgressStore } = await import("../../stores/progress");
-		const store = createProgressStore();
-		await store.refreshProject("/repo", false, { blockerOnly: true });
-
-		invokeMock.mockClear();
-		invokeMock.mockResolvedValue({ revision: 4, snapshotCursor: 4, events: [event("older")] });
-		await store.loadMore("/repo");
-
-		// The page request carries the cursor AND the active filter. Dropping either
-		// silently shows the first page again, or shows unfiltered rows below filtered ones.
+		store.open();
+		await vi.waitFor(() => expect(store.state.projects["/repo"].entries).toHaveLength(1));
 		expect(invokeMock).toHaveBeenCalledTimes(1);
 		expect(invokeMock).toHaveBeenCalledWith("progress_list", {
 			project: "/repo",
-			input: { blockerOnly: true, beforeSequence: 4, limit: 50 },
+			input: { blockedOnly: false },
 		});
-		expect(store.state.projects["/repo"].events.map((e) => e.id)).toEqual(["event-1", "older"]);
-
-		// A page with no further cursor is the end: the next call must not ask again.
-		invokeMock.mockClear();
-		await store.loadMore("/repo");
-		expect(invokeMock).not.toHaveBeenCalled();
 	});
 
-	it("keeps command errors visible", async () => {
-		invokeMock.mockRejectedValue(new Error("revision conflict"));
+	it("carries the blocked-only filter into the query", async () => {
+		invokeMock.mockResolvedValue(list([]));
 		const { createProgressStore } = await import("../../stores/progress");
 		const store = createProgressStore();
-		expect(await store.clear("/repo", 3)).toBe(false);
-		expect(store.state.projects["/repo"].error).toBe("revision conflict");
+
+		store.open("/repo");
+		await vi.waitFor(() => expect(invokeMock).toHaveBeenCalled());
+		invokeMock.mockClear();
+		store.setBlockedOnly(true);
+		await vi.waitFor(() =>
+			expect(invokeMock).toHaveBeenCalledWith("progress_list", {
+				project: "/repo",
+				input: { blockedOnly: true },
+			}),
+		);
+	});
+
+	it("toasts a reported entry silently and stays quiet for a host-written intent", async () => {
+		invokeMock.mockResolvedValue(list([]));
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(1, 100, "blocked") } });
+		expect(toastAdd).toHaveBeenCalledTimes(1);
+		// `sound` is the 4th argument and `mirrorToMessages` the 9th: a progress
+		// entry is never an interruption and never leaves the app.
+		expect(toastAdd.mock.calls[0][3]).toBe(false);
+		expect(toastAdd.mock.calls[0][8]).toBe(false);
+
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(2, 200, "intent") } });
+		expect(toastAdd).toHaveBeenCalledTimes(1);
+	});
+
+	it("counts what arrived while the dialog was closed and clears it on open", async () => {
+		invokeMock.mockResolvedValue(list([]));
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(1, 100) } });
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(2, 200, "intent") } });
+		expect(store.unreadCount).toBe(2);
+
+		store.open("/repo");
+		expect(store.unreadCount).toBe(0);
+
+		// Open on the same project, the list refreshes instead of counting.
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(3, 300) } });
+		expect(store.unreadCount).toBe(0);
+	});
+
+	it("keeps a failed command visible as one line", async () => {
+		invokeMock.mockRejectedValue(new Error("database is locked"));
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+
+		expect(await store.deleteEntries("/repo", [1])).toBe(false);
+		expect(store.state.projects["/repo"].error).toBe("database is locked");
 	});
 });

@@ -383,78 +383,37 @@ fn report_progress_event(
     project: String,
     report: crate::progress::ProgressReportInput,
 ) -> Result<crate::progress::ProgressReceipt, String> {
-    let provenance = crate::progress::ProgressProvenance::for_workspace(&project);
+    // A local caller is not an agent: it has no name to attribute and no
+    // per-agent override to apply.
     crate::mcp_http::mcp_transport::report_progress(
         state.inner(),
         Some(&project),
         report,
-        provenance,
+        None,
+        None,
     )
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn progress_status(project: String) -> Result<progress::ProgressStatus, String> {
-    progress::progress_status(&project)
-}
-#[cfg(feature = "desktop")]
-#[tauri::command]
 fn progress_list(
     project: String,
     input: progress::ProgressListInput,
-) -> Result<progress::ProgressPage, String> {
+) -> Result<progress::ProgressList, String> {
     progress::progress_list(&project, input)
-}
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn progress_pause(project: String) -> Result<progress::ProgressMutationReceipt, String> {
-    progress::progress_pause(&project)
-}
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn progress_resume(project: String) -> Result<progress::ProgressMutationReceipt, String> {
-    progress::progress_resume(&project)
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
 fn progress_delete(
     project: String,
     input: progress::ProgressDeleteInput,
-) -> Result<progress::ProgressMutationReceipt, String> {
+) -> Result<progress::ProgressDeleteReceipt, String> {
     progress::progress_delete(&project, input)
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn progress_clear(
-    project: String,
-    input: progress::ProgressClearInput,
-) -> Result<progress::ProgressMutationReceipt, String> {
-    progress::progress_clear(&project, input)
-}
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn progress_update(
-    project: String,
-    input: progress::ProgressUpdateInput,
-) -> Result<progress::ProgressMutationReceipt, String> {
-    progress::progress_update(&project, input)
-}
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn progress_read(
-    project: String,
-    input: progress::ProgressReadInput,
-) -> Result<progress::ProgressMutationReceipt, String> {
-    progress::progress_read(&project, input)
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-fn progress_export(
-    project: String,
-    input: progress::ProgressExportInput,
-) -> Result<progress::ProgressExportReceipt, String> {
-    progress::progress_export(&project, input)
+fn progress_mark_viewed(project: String) -> Result<progress::ProgressViewedReceipt, String> {
+    progress::progress_mark_viewed(&project)
 }
 
 /// Receive a screenshot response from the frontend (captured iframe content).
@@ -1924,15 +1883,9 @@ pub fn run() {
             clear_caches,
             clear_repo_caches,
             report_progress_event,
-            progress_status,
             progress_list,
-            progress_pause,
-            progress_resume,
             progress_delete,
-            progress_clear,
-            progress_update,
-            progress_read,
-            progress_export,
+            progress_mark_viewed,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

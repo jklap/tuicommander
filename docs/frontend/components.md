@@ -244,22 +244,27 @@ Ideas/notes panel with per-repo filtering and terminal integration.
 - Count badge in panel header and in the StatusBar toggle button
 - Used notes shown with a checkmark and dimmed styling
 
-### ProgressPanel (`ProgressPanel/`)
+### ProgressDialog (`ProgressDialog/`)
 
-Responsive project-history panel shared by the desktop/browser shell and mobile
-PWA. It renders backend-owned project and workstream projections, bounded history
-pages, frozen read watermarks, explicit unavailable-project errors, and live or
-closed provenance. Its controls call the typed Progress commands; the component
-does not derive semantic state. The toolbar bell exposes one aggregate unread row,
-and `progress` in the command palette opens the same panel.
+The whole Progress UI: one newest-first list of the active project's journal
+entries, a divider marking where the last visit ended, and a blocked-only
+checkbox. Blocked entries are red, host-written `intent` entries are muted, and
+each row can be deleted. There are no pages, no tabs, no workstream projections
+and no export — Progress is a thing you glance at, so it is a dialog and not a
+panel that competes with the terminal for width.
 
-`embedded` drops the side-panel chrome (resize handle, fixed width, left border)
-so the mobile tab can host the same component full-bleed. Docked, the panel sits
-inside `#terminal-container` like every other side panel, so its
-`max-width: 720px` rule fills the terminal area rather than the whole window —
-below that width the minimum width is released and the scope and export rows
-wrap. A window narrow enough to squeeze the terminal area itself is the mobile
-interface's job, not this rule's.
+Opening asks the shared journal once, for the project it shows. The old panel
+fanned out across every registered repository and answered with one red
+unavailable block per repository that no longer existed; the dialog shows one
+project and one failure line.
+
+The divider is frozen while the dialog is open. The stored mark moves on close —
+redrawing the line under the reader's cursor while they are still reading is the
+one thing it must not do.
+
+`embedded` drops the overlay and the floating box so the mobile PWA's Progress
+tab can host the same component full-bleed; a whole bottom tab is already the
+modal surface a dialog would create.
 
 ### ConfirmDialog (`ConfirmDialog/`)
 

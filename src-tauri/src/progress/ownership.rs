@@ -138,23 +138,11 @@ mod tests {
             }
         });
 
-        // The store canonicalizes its root, so the export reports the resolved
-        // path — on macOS `/var/…` is a symlink to `/private/var/…`.
+        // Ownership canonicalizes, so the owner is the resolved path — on macOS
+        // `/var/…` is a symlink to `/private/var/…`.
         let canonical_root = root.path().canonicalize().unwrap();
         let owner = resolve_owning_project_in(&leaf.path().to_string_lossy(), &doc).unwrap();
         assert_eq!(owner, canonical_root);
-        let preview = super::super::export::progress_export(
-            owner,
-            crate::progress::ProgressExportInput::Preview {
-                options: Default::default(),
-            },
-        )
-        .unwrap();
-        assert_eq!(preview.project_root, canonical_root.to_string_lossy());
-        assert_eq!(
-            preview.path,
-            canonical_root.join("progress.md").to_string_lossy()
-        );
     }
 
     #[test]
@@ -179,32 +167,22 @@ mod tests {
         );
     }
 
+    /// A COW workspace's journal belongs to the parent project, and reading it
+    /// back through the workspace path finds the parent's entries — one journal,
+    /// reached from either address.
+    ///
+    /// The database this used to guard against — a `.tuic/progress.sqlite3`
+    /// copied into the workspace by the COW clone — cannot exist any more: the
+    /// store writes one file in the config directory and nothing inside a
+    /// repository. What is still worth proving is the resolution itself.
     #[test]
-    fn inherited_cow_database_is_not_used_as_a_second_authority() {
-        use crate::progress::{NewProgressEvent, ProgressKind, ProgressProvenance, ProgressStore};
+    fn a_cow_workspace_reads_and_writes_the_parent_journal() {
+        use crate::progress::{NewProgressEntry, ProgressKind, ProgressStore};
 
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let root = tempfile::tempdir().unwrap();
-        crate::git_cli::git_cmd(root.path())
-            .args(["init"])
-            .run()
-            .unwrap();
         let workspace = tempfile::tempdir().unwrap();
-        let source = ProgressStore::open(root.path()).unwrap();
-        let original = source
-            .record(&NewProgressEvent {
-                kind: ProgressKind::Milestone,
-                summary: "The owning project retains its history.".to_string(),
-                workstream: None,
-                provenance: ProgressProvenance::default(),
-            })
-            .unwrap();
-        let copied_store_dir = workspace.path().join(".tuic");
-        std::fs::create_dir(&copied_store_dir).unwrap();
-        std::fs::copy(
-            source.database_path(),
-            copied_store_dir.join("progress.sqlite3"),
-        )
-        .unwrap();
         let doc = json!({
             "repos": {
                 root.path().to_string_lossy(): {
@@ -221,25 +199,27 @@ mod tests {
 
         let owner = resolve_owning_project_in(&workspace.path().to_string_lossy(), &doc).unwrap();
         assert_eq!(owner, root.path().canonicalize().unwrap());
-        let events = ProgressStore::open(owner)
-            .unwrap()
-            .list(None, Some(10))
-            .unwrap()
-            .events;
-        assert_eq!(events, vec![original]);
-        let preview = super::super::export::progress_export(
-            root.path().canonicalize().unwrap(),
-            crate::progress::ProgressExportInput::Preview {
-                options: Default::default(),
-            },
-        )
-        .unwrap();
+
+        let store = ProgressStore::open().unwrap();
+        let recorded = store
+            .record(
+                &owner.to_string_lossy(),
+                &NewProgressEntry {
+                    kind: ProgressKind::Done,
+                    text: "The owning project retains its history.".to_string(),
+                    step: None,
+                    agent_name: None,
+                },
+            )
+            .unwrap();
+        let listed = store
+            .list(&owner.to_string_lossy(), &Default::default())
+            .unwrap();
+        assert_eq!(listed.entries, vec![recorded]);
         assert!(
-            preview
-                .markdown
-                .contains("The owning project retains its history.")
+            !workspace.path().join(".tuic").exists(),
+            "nothing is written inside the workspace"
         );
-        assert!(!workspace.path().join("progress.md").exists());
     }
 
     #[test]

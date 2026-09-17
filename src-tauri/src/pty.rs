@@ -4372,7 +4372,9 @@ fn try_timer_idle_transition(
             // `force_idle`, like the two screen adapters: the `else if` chain
             // above already decided this transition is allowed, so the generic
             // busy-rank gate in `record_idle` must not re-reject it.
-            silence.evidence.force_idle(EvidenceRank::Process, "process");
+            silence
+                .evidence
+                .force_idle(EvidenceRank::Process, "process");
         }
         if !screen_confirms_idle {
             // Silence-timeout evidence, forced in regardless of rank: the
@@ -5042,6 +5044,64 @@ fn unterminated_osc_tail(data: &str) -> String {
 /// Cap for [`unterminated_osc_tail`]. Comfortably above any OSC we parse: the
 /// longest observed notify body is under 60 bytes.
 const MAX_RAW_CARRY: usize = 512;
+
+/// Record an `intent:` marker as a Progress journal entry.
+///
+/// Silent on every skip. Three of them are ordinary and none is the user's
+/// problem: collection is off, the session is not inside a registered project,
+/// or the text does not survive validation. A missing project is deliberately
+/// NOT resolved to the focused UI repository — that files one agent's work
+/// under whatever the human happened to be looking at.
+///
+/// The write is synchronous. This runs on the PTY reader thread, which is not
+/// the async executor, and an intent arrives a few times a minute against a
+/// sub-millisecond WAL insert.
+fn record_intent_in_journal(state: &AppState, session_id: &str, text: &str) {
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    if !crate::progress::progress_tracking_enabled(state, agent_type.as_deref()) {
+        return;
+    }
+    let (cwd, agent_name) = match state.session_maps.sessions.get(session_id) {
+        Some(session) => {
+            let session = session.lock();
+            (session.cwd.clone(), session.display_name.clone())
+        }
+        None => return,
+    };
+    let Some(cwd) = cwd else {
+        return;
+    };
+    let known: Vec<String> = state
+        .repo_watchers
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
+    let Some(project) = crate::mcp_http::mcp_transport::registered_repo_for_path(&cwd, &known)
+    else {
+        return;
+    };
+    match crate::progress::record_intent(
+        state,
+        Some(&project),
+        text,
+        agent_name,
+        agent_type.as_deref(),
+    ) {
+        Ok(entry) => {
+            crate::mcp_http::mcp_transport::emit_progress_entry(state, entry);
+        }
+        Err(error) => tracing::debug!(
+            source = "progress",
+            session_id = %session_id,
+            error = %error,
+            "intent: not recorded in the Progress journal"
+        ),
+    }
+}
 
 /// Whether a heuristic `Question` event should be suppressed for this session.
 /// Hook-instrumented agents report awaiting via OSC 7770 (`state=awaiting`), so
@@ -6179,8 +6239,13 @@ impl ChunkProcessor {
             // suggest parked for a turn that ends early is still a marker the
             // agent produced (#4421).
             match event {
-                ParsedEvent::Intent { .. } => {
-                    state.note_marker(session_id, crate::state::MarkerKind::Intent)
+                ParsedEvent::Intent { text, .. } => {
+                    state.note_marker(session_id, crate::state::MarkerKind::Intent);
+                    // The host's half of the Progress journal. The reporting
+                    // obligation is hours back in an `initialize` blob by the
+                    // time anything worth recording happens; this trigger fires
+                    // on every task, which is why it is the reliability floor.
+                    record_intent_in_journal(state, session_id, text);
                 }
                 ParsedEvent::Suggest { .. } => {
                     state.note_marker(session_id, crate::state::MarkerKind::Suggest)
@@ -7394,7 +7459,10 @@ pub(crate) struct PendingInjectionSummary {
 
 const PENDING_PREVIEW_MAX_CHARS: usize = 80;
 
-fn summarize_pending_injections(state: &AppState, session_id: &str) -> Vec<PendingInjectionSummary> {
+fn summarize_pending_injections(
+    state: &AppState,
+    session_id: &str,
+) -> Vec<PendingInjectionSummary> {
     state
         .pending_injections
         .get(session_id)

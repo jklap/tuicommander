@@ -1653,92 +1653,83 @@ mod tests {
         );
     }
 
-    /// The Progress store (`src-tauri/src/progress/`) writes its SQLite database
-    /// and WAL/SHM sidecars under `.tuic/` at the project root and registers them
-    /// in `.git/info/exclude` before its first write (see
-    /// `progress::store::ensure_local_git_excludes`). This is the integration
-    /// point that keeps every Progress report from also triggering a
-    /// `repo-changed` emit and a content-index rebuild: prove the two modules
-    /// actually agree, rather than trusting that the exclude patterns and the
-    /// watcher's ignore sources happen to line up.
+    /// Every path under `root`, with its bytes, as one comparable snapshot.
+    /// Small trees only — this is a test fixture, not a scanner.
+    #[cfg(test)]
+    fn tree_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    out.push((path.clone(), Vec::new()));
+                    walk(&path, out);
+                } else {
+                    out.push((path.clone(), std::fs::read(&path).unwrap_or_default()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, &mut out);
+        out.sort();
+        out
+    }
+
+    /// Nothing Progress writes belongs in the user's source tree.
+    ///
+    /// The previous design wrote `.tuic/progress.sqlite3` plus WAL/SHM sidecars
+    /// at the project root and had to register them in `.git/info/exclude` so
+    /// the watcher would not read its own runtime state as a working-tree
+    /// change. Merely opening the panel created that directory in all 39
+    /// registered repositories. The store now writes one file in the config
+    /// directory, so the exclude contract is not tightened — it is gone, and
+    /// this asserts the stronger property that replaced it: a report leaves the
+    /// project directory byte-identical.
     #[test]
-    fn progress_store_writes_are_classified_as_noise() {
+    fn progress_store_writes_never_touch_the_repository() {
         use std::process::Command;
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().to_path_buf();
-        let git = |args: &[&str]| {
-            let out = Command::new("git")
-                .args(args)
-                .current_dir(&repo)
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "git {args:?}: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        git(&["init", "-b", "main"]);
-
-        let store = crate::progress::ProgressStore::open(&repo).unwrap();
-        store
-            .record(&crate::progress::NewProgressEvent {
-                kind: crate::progress::ProgressKind::Milestone,
-                summary: "Watcher-storm regression coverage recorded.".to_string(),
-                workstream: None,
-                provenance: crate::progress::ProgressProvenance::default(),
-            })
+        let out = Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&repo)
+            .output()
             .unwrap();
-
-        let db_path = store.database_path();
-        assert!(db_path.exists(), "database must exist after a write");
-        // `ProgressStore` never retains a connection (see `store.rs`), so SQLite
-        // auto-checkpoints and removes the WAL/SHM sidecars once `record` returns.
-        // Classification is purely path-based, so this test names the paths the
-        // sidecars occupy while a writer holds them open, without needing a
-        // lingering connection to keep them on disk.
-        let wal_path = Path::new(&format!("{}-wal", db_path.display())).to_path_buf();
-        let shm_path = Path::new(&format!("{}-shm", db_path.display())).to_path_buf();
-
-        let git_dir = repo.join(".git");
-        let gi = build_ignore(&repo, &git_dir);
-        // The Markdown export coordinates concurrent writes with a lock file in
-        // the same directory, so it belongs to the same exclude contract.
-        let export_lock = repo.join(crate::progress::EXPORT_LOCK);
-        for path in [
-            &db_path.to_path_buf(),
-            &wal_path,
-            &shm_path,
-            &export_lock,
-        ] {
-            assert_eq!(
-                classify_path(path, &repo, &git_dir, &[], &gi),
-                EventCategory::Noise,
-                "{} must be excluded so Progress writes never emit repo-changed \
-                 or trigger a content-index rebuild",
-                path.display()
-            );
-        }
-
-        // A corruption-recovery backup uses the same directory under a
-        // `.corrupt-<uuid>` suffix and must be covered by the same pattern.
-        let corrupt_backup = db_path.with_file_name(format!(
-            "{}.corrupt-{}",
-            db_path.file_name().unwrap().to_string_lossy(),
-            uuid::Uuid::new_v4()
-        ));
-        assert_eq!(
-            classify_path(&corrupt_backup, &repo, &git_dir, &[], &gi),
-            EventCategory::Noise,
-            "preserved corrupt database backups must also stay noise"
+        assert!(
+            out.status.success(),
+            "git init: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
 
-        // The exported Markdown is the opposite case: it is the user's own
-        // versionable artifact, so writing it must reach the working tree.
+        let before = tree_snapshot(&repo);
+        let store = crate::progress::ProgressStore::open().unwrap();
+        let project = repo.to_string_lossy().to_string();
+        store
+            .record(
+                &project,
+                &crate::progress::NewProgressEntry {
+                    kind: crate::progress::ProgressKind::Done,
+                    text: "Watcher-storm regression coverage recorded.".to_string(),
+                    step: None,
+                    agent_name: None,
+                },
+            )
+            .unwrap();
+        store.delete(&project, &[1]).unwrap();
+        store.mark_viewed(&project).unwrap();
+
         assert_eq!(
-            classify_path(&repo.join("progress.md"), &repo, &git_dir, &[], &gi),
-            EventCategory::WorkingTree,
-            "the Markdown export is a user artifact, not runtime state"
+            tree_snapshot(&repo),
+            before,
+            "a Progress write left something inside the repository"
+        );
+        assert!(
+            store.database_path().starts_with(config.path()),
+            "the journal must live in the config directory, not under any repo"
         );
     }
 

@@ -306,6 +306,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "agents", section: "Agents" },
 	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
 	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
+	{ tab: "agents", section: "Agents", label: "Collect project progress" },
 	// tabs/AiChatTab.tsx
 	{ tab: "ai-chat", section: "Parameters" },
 	{ tab: "ai-chat", section: "Scheduled Tasks" },

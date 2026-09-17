@@ -387,12 +387,14 @@ async fn post_progress_report(
     if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    let provenance = crate::progress::ProgressProvenance::for_workspace(&q.path);
+    // A local HTTP caller is not an agent: nothing to attribute, no per-agent
+    // override to apply. The same shape the desktop IPC command sends.
     json_result(mcp_transport::report_progress(
         &state,
         Some(&q.path),
         input,
-        provenance,
+        None,
+        None,
     ))
 }
 
@@ -407,16 +409,6 @@ fn progress_auth(addr: &SocketAddr, authenticated: bool) -> Option<Response> {
         .map(IntoResponse::into_response)
 }
 
-async fn get_progress_status(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<guards::Authenticated>>,
-    Query(q): Query<types::PathQuery>,
-) -> Response {
-    if let Some(r) = progress_auth(&addr, auth.is_some()) {
-        return r;
-    }
-    json_result(crate::progress::progress_status(&q.path))
-}
 async fn post_progress_list(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
@@ -427,26 +419,6 @@ async fn post_progress_list(
         return r;
     }
     json_result(crate::progress::progress_list(&q.path, input))
-}
-async fn post_progress_pause(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<guards::Authenticated>>,
-    Query(q): Query<types::PathQuery>,
-) -> Response {
-    if let Some(r) = progress_auth(&addr, auth.is_some()) {
-        return r;
-    }
-    json_result(crate::progress::progress_pause(&q.path))
-}
-async fn post_progress_resume(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<guards::Authenticated>>,
-    Query(q): Query<types::PathQuery>,
-) -> Response {
-    if let Some(r) = progress_auth(&addr, auth.is_some()) {
-        return r;
-    }
-    json_result(crate::progress::progress_resume(&q.path))
 }
 async fn post_progress_delete(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -459,49 +431,15 @@ async fn post_progress_delete(
     }
     json_result(crate::progress::progress_delete(&q.path, input))
 }
-async fn post_progress_clear(
+async fn post_progress_viewed(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
-    Json(input): Json<crate::progress::ProgressClearInput>,
 ) -> Response {
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
-    json_result(crate::progress::progress_clear(&q.path, input))
-}
-async fn post_progress_update(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<guards::Authenticated>>,
-    Query(q): Query<types::PathQuery>,
-    Json(input): Json<crate::progress::ProgressUpdateInput>,
-) -> Response {
-    if let Some(r) = progress_auth(&addr, auth.is_some()) {
-        return r;
-    }
-    json_result(crate::progress::progress_update(&q.path, input))
-}
-async fn post_progress_read(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<guards::Authenticated>>,
-    Query(q): Query<types::PathQuery>,
-    Json(input): Json<crate::progress::ProgressReadInput>,
-) -> Response {
-    if let Some(r) = progress_auth(&addr, auth.is_some()) {
-        return r;
-    }
-    json_result(crate::progress::progress_read(&q.path, input))
-}
-async fn post_progress_export(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<guards::Authenticated>>,
-    Query(q): Query<types::PathQuery>,
-    Json(input): Json<crate::progress::ProgressExportInput>,
-) -> Response {
-    if let Some(r) = progress_auth(&addr, auth.is_some()) {
-        return r;
-    }
-    json_result(crate::progress::progress_export(&q.path, input))
+    json_result(crate::progress::progress_mark_viewed(&q.path))
 }
 
 /// Serve plugin data files over HTTP.
@@ -771,24 +709,18 @@ fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
-        // Progress. Shared, not desktop-only: the store is a SQLite file under
-        // the project root and every handler calls `crate::progress::*`, which
-        // needs no WebView and no Tauri. These lived in `build_router` only,
-        // so a remote/PWA client reaching a `tuic-remote` daemon got 404 on the
-        // whole feature — not an auth failure, no route at all. Each handler
-        // still guards with `require_local_or_auth`: loopback passes on the
-        // address, a remote caller passes because `basic_auth_middleware`
+        // Progress. Shared, not desktop-only: the store is a SQLite file in the
+        // app config directory and every handler calls `crate::progress::*`,
+        // which needs no WebView and no Tauri. These lived in `build_router`
+        // only, so a remote/PWA client reaching a `tuic-remote` daemon got 404
+        // on the whole feature — not an auth failure, no route at all. Each
+        // handler still guards with `require_local_or_auth`: loopback passes on
+        // the address, a remote caller passes because `basic_auth_middleware`
         // inserts `Authenticated` before the handler runs.
         .route("/progress/report", post(post_progress_report))
-        .route("/progress/status", get(get_progress_status))
         .route("/progress/list", post(post_progress_list))
-        .route("/progress/pause", post(post_progress_pause))
-        .route("/progress/resume", post(post_progress_resume))
         .route("/progress/delete", post(post_progress_delete))
-        .route("/progress/clear", post(post_progress_clear))
-        .route("/progress/update", post(post_progress_update))
-        .route("/progress/read", post(post_progress_read))
-        .route("/progress/export", post(post_progress_export))
+        .route("/progress/viewed", post(post_progress_viewed))
         // Session lifecycle
         .route(
             "/sessions",
@@ -2549,34 +2481,18 @@ mod tests {
     /// pass against both and prove nothing.
     fn progress_routes() -> Vec<(&'static str, &'static str, serde_json::Value)> {
         vec![
-            ("GET", "/progress/status", serde_json::Value::Null),
-            ("POST", "/progress/pause", serde_json::Value::Null),
-            ("POST", "/progress/resume", serde_json::Value::Null),
             (
                 "POST",
-                "/progress/delete",
-                serde_json::json!({"eventIds": []}),
+                "/progress/report",
+                serde_json::json!({"type": "done", "text": "routing only"}),
             ),
             (
                 "POST",
-                "/progress/clear",
-                serde_json::json!({"expectedRevision": 0}),
+                "/progress/list",
+                serde_json::json!({"blockedOnly": false}),
             ),
-            (
-                "POST",
-                "/progress/update",
-                serde_json::json!({"expectedRevision": 0, "corrections": []}),
-            ),
-            (
-                "POST",
-                "/progress/read",
-                serde_json::json!({"snapshotCursor": 0}),
-            ),
-            (
-                "POST",
-                "/progress/export",
-                serde_json::json!({"operation": "preview"}),
-            ),
+            ("POST", "/progress/delete", serde_json::json!({"ids": []})),
+            ("POST", "/progress/viewed", serde_json::Value::Null),
         ]
     }
 
@@ -2660,13 +2576,17 @@ mod tests {
 
     #[tokio::test]
     async fn progress_http_returns_the_shared_durable_receipt_contract() {
+        let config = tempfile::tempdir().unwrap();
+        // The journal is one file in the config directory, so an un-overridden
+        // run of this test would append to Boss's real history.
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir().unwrap();
         let state = test_state();
         let app = build_router(state.clone(), false, true);
         let body = serde_json::json!({
-            "type": "milestone",
-            "summary": "HTTP transport is equivalent.",
-            "workstream": "Progress"
+            "type": "done",
+            "text": "HTTP transport is equivalent.",
+            "step": "Progress"
         });
         let mut url = url::Url::parse("http://localhost/progress/report").unwrap();
         url.query_pairs_mut()
@@ -2686,17 +2606,20 @@ mod tests {
             .await
             .unwrap();
         let receipt: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(receipt["status"], "recorded");
-        assert_eq!(receipt["revision"], 1);
-        assert!(receipt["eventId"].is_string());
-        assert!(receipt.get("event").is_none(), "receipts stay bounded");
+        assert!(receipt["id"].is_i64());
+        assert!(
+            receipt.get("entry").is_none() && receipt.get("text").is_none(),
+            "a receipt carries the identity and nothing else"
+        );
 
-        let stored = crate::progress::ProgressStore::open(project.path())
+        let owner = project.path().canonicalize().unwrap();
+        let stored = crate::progress::ProgressStore::open()
             .unwrap()
-            .list(None, Some(10))
+            .list(&owner.to_string_lossy(), &Default::default())
             .unwrap();
-        assert_eq!(stored.events.len(), 1);
-        assert_eq!(stored.events[0].id, receipt["eventId"]);
+        assert_eq!(stored.entries.len(), 1);
+        assert_eq!(stored.entries[0].id, receipt["id"].as_i64().unwrap());
+        assert_eq!(stored.entries[0].text, "HTTP transport is equivalent.");
     }
 
     #[tokio::test]
@@ -2768,15 +2691,9 @@ mod tests {
             // A feature absent from both lists is not "undecided", it is
             // unguarded — so pin every route, not a representative one.
             "/progress/report",
-            "/progress/status",
             "/progress/list",
-            "/progress/pause",
-            "/progress/resume",
             "/progress/delete",
-            "/progress/clear",
-            "/progress/update",
-            "/progress/read",
-            "/progress/export",
+            "/progress/viewed",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific

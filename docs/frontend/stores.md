@@ -524,15 +524,24 @@ Dynamic context menu action registration.
 
 ### progressStore (`progress.ts`)
 
-Transport-neutral presentation state for Project Progress. It fetches bounded
-backend pages and authoritative status projections per registered project, retains
-the watermark captured when a panel scope opens, and refreshes from
-`repositoriesStore.getRevision()` plus `progress-recorded` push/resync signals.
-Live presentation is deduplicated by durable event ID. A Progress toast opts out
-of the generic MESSAGES mirror because the bell has its own aggregate Progress row.
-Mutation failures remain on the affected project instead of being rendered as an
-empty feed. Provenance navigation succeeds only while its exact session ID still
-maps to a terminal.
+Transport-neutral presentation state for Project Progress. It holds one flat
+entry list per project and the divider timestamp frozen when the dialog opened;
+the stored mark moves on close, so the line never jumps under the reader.
+
+It queries on open, for the one project the dialog shows — not once per
+registered repository, which is what made the old panel fire a request per repo
+and answer with a red block for each one that no longer existed. Boot reads
+nothing at all.
+
+The unread count is the number of `progress-recorded` pushes that arrived while
+the dialog was closed, reset on open. It is deliberately not a query: the
+persistent record of where the reader stopped is the divider.
+
+A Progress toast opts out of the generic MESSAGES mirror because the bell has its
+own aggregate row, and it is silent — a blocked entry is not automatically a
+demand for attention. An `intent` entry toasts nothing: it is what an agent set
+out to do, not a result. Failures stay on the affected project as one line
+instead of being rendered as an empty feed.
 
 ### errorLog (`errorLog.ts`)
 Error ring buffer and error panel state.

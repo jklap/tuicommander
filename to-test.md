@@ -1979,3 +1979,49 @@ behaviour until restart.
       pointer to the inbox.
 - [ ] A notice already being typed must not be duplicated by a concurrent idle
       edge: one wake per group, not two.
+
+## Progress rewritten to one journal, one database and a dialog — needs a `make dev` restart
+
+The whole Progress feature was re-implemented against the 2026-09-14 revision of
+`plans/project-progress.md`: one append-only journal in a single database at
+`<config dir>/progress.sqlite3`, two reportable kinds plus a host-written
+`intent`, a dialog replacing the sidebar panel, eight `repo progress_*` actions
+cut, and no Markdown export. Rust and frontend both changed, so the running
+build has the old behaviour until restart.
+
+- [ ] After restart, `progress.sqlite3` must exist in the config directory, and
+      no *new* `.tuic/` directory may appear in any repository. The 42 existing
+      ones are stale leftovers of the old design — see the cleanup item below.
+- [ ] Ask an agent to report: the entry must appear in the dialog with its agent
+      name, and an `intent:` marker from any agent tab must appear as a muted
+      `intent` entry in the same list.
+- [ ] An agent calling `progress` with `type=intent` must be refused, naming
+      `done` or `blocked`.
+- [ ] Open the dialog on a project with history, note the divider, let a new
+      entry arrive: the divider must NOT move while the dialog is open. Close
+      and reopen: it must now sit above the entries just read.
+- [ ] Settings → Agents → **Collect project progress** off: the `progress` tool
+      must disappear from a newly-connected agent's tool list, and `intent:`
+      markers must stop being recorded. Per-agent **Collect progress** off must
+      instead answer `progress_tracking_disabled` on a report.
+- [ ] `repo action=progress_list` must still work; `progress_status`,
+      `progress_pause`, `progress_clear` and `progress_export` must be gone.
+- [ ] The mobile PWA's Progress tab must render the same list full-bleed.
+- [ ] **[HUMAN]** Screenshot check against `docs/frontend/STYLE_GUIDE.md`:
+      blocked entries red, `intent` muted and italic, the divider legible, the
+      delete button appearing on row hover.
+- [ ] **[HUMAN]** Narrow the window to ~480px with a long entry on screen: the
+      dialog must stay readable — it is `min(680px, 100vw - 48px)` wide and the
+      text wraps with `overflow-wrap: anywhere` — and the header must keep the
+      blocked-only toggle and the close button on one row (778-a9a6 criterion 8).
+- [ ] After the restart has proved the new store works, delete the stale
+      per-repo databases — 42 `.tuic/` directories holding 17 rows in total,
+      9 of them in `~/Gits/.tmp` fixtures. They are not migrated by design:
+      `find ~/Gits -maxdepth 4 -name .tuic -type d -exec rm -rf {} +`
+- [ ] Run diff-scoped mutation testing once on the final HEAD of this batch:
+      `make mutants RANGE=<commit before the Progress rewrite>`. It is an
+      overnight-class job (~5 min per viable mutant), so it is deliberately not
+      run during the day — 780-e99a criterion 4.
+- [ ] Bring the worktree build up on `:9877` and exercise Progress through its
+      own HTTP instance — creating a throwaway session, reporting, listing and
+      deleting — rather than against the orchestrator on `:9876`.

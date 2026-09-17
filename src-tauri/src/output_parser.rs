@@ -200,6 +200,15 @@ pub struct OutputParser {
     api_error_patterns: &'static [ApiErrorPattern],
     /// Dedup: last emitted suggest items to suppress re-emission on scroll.
     last_suggest_items: Option<Vec<String>>,
+    /// Dedup: last emitted intent, for the same reason and with the same rule.
+    ///
+    /// It matters more here than it does for the tab title, which is idempotent:
+    /// every intent is also a journal entry, and a repaint of a row that has not
+    /// changed is not a second announcement. Two identical intents separated by
+    /// other output DO both record — the second parse sees a different last
+    /// value in between only when the text actually differs, so the pair that
+    /// collapses is exactly the pair that arrived back to back.
+    last_intent: Option<(String, Option<String>)>,
     /// Input-turn epoch whose real working evidence reopened suggest dedup.
     /// A submission alone is insufficient because the previous suggest row can
     /// repaint while it is still visible; fresh work proves a new response has
@@ -247,6 +256,7 @@ impl OutputParser {
             rate_limit_patterns: &RATE_LIMIT_PATTERNS,
             api_error_patterns: &API_ERROR_PATTERNS,
             last_suggest_items: None,
+            last_intent: None,
             suggest_working_turn_epoch: None,
             last_api_error_match: None,
             session_conflict_fired: false,
@@ -421,8 +431,28 @@ impl OutputParser {
         // Plain-prefix tokens (`intent:`, `suggest:` at column 0) are only parsed
         // when an agent is detected — this prevents false positives from regular
         // CLI tools that might output text starting with these keywords.
-        if let Some(evt) = parse_intent(&joined, agent_active) {
-            events.push(evt);
+        // An intent is now a journal row, not just a tab title, so a repaint
+        // that re-delivers the same line must not write a second one. Dedup is
+        // against the last intent *value*, and it is deliberately never cleared:
+        // an Ink full-frame repaint marks every row changed, so the intent line
+        // reappears long after the chunks in between carried none. Clearing on
+        // "this chunk had no intent" would therefore re-record on every full
+        // repaint that follows a partial one — hundreds of identical rows. The
+        // cost of the choice is that an agent re-declaring a byte-identical
+        // intent later in the session records once; that loses one line, while
+        // the alternative floods the journal. `last_suggest_items` next door
+        // has the same shape for the same reason (see `reset_input_dedup`).
+        if let Some(evt) = parse_intent(&joined, agent_active)
+            && let ParsedEvent::Intent {
+                ref text,
+                ref title,
+            } = evt
+        {
+            let seen = (text.clone(), title.clone());
+            if self.last_intent.as_ref() != Some(&seen) {
+                self.last_intent = Some(seen);
+                events.push(evt);
+            }
         }
         // Suggest follow-up actions: `suggest: [ A | B | C ]` on one bounded
         // logical line. The token is fully self-contained (bounded by `[ … ]`),
@@ -5008,6 +5038,36 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             .any(|e| matches!(e, ParsedEvent::StatusLine { .. }));
         assert!(has_intent, "expected Intent event, got: {:?}", events);
         assert!(has_status, "expected StatusLine event, got: {:?}", events);
+    }
+
+    /// An Ink agent repaints its whole frame on every tick, so the same
+    /// `intent:` line reaches the parser again and again while it stays on
+    /// screen. Each one used to be an event; each event is now a journal row, so
+    /// an undeduplicated intent writes the same sentence hundreds of times.
+    #[test]
+    fn a_repainted_intent_is_emitted_once_and_a_changed_one_emits_again() {
+        let mut parser = OutputParser::new();
+        let first = vec![row(0, "intent: Rewriting the store (Store)")];
+        let intents = |events: Vec<ParsedEvent>| {
+            events
+                .iter()
+                .filter(|e| matches!(e, ParsedEvent::Intent { .. }))
+                .count()
+        };
+
+        assert_eq!(intents(parser.parse_clean_lines(&first, true)), 1);
+        assert_eq!(
+            intents(parser.parse_clean_lines(&first, true)),
+            0,
+            "the same intent repainted is the same intent"
+        );
+
+        let second = vec![row(0, "intent: Building the dialog (Dialog)")];
+        assert_eq!(
+            intents(parser.parse_clean_lines(&second, true)),
+            1,
+            "a new phase must still be reported"
+        );
     }
 
     // --- parse_slash_menu tests ---

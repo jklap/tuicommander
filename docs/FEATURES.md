@@ -2159,15 +2159,14 @@ connect rather than failing later inside a spawn.
 
 ## 27. Project Progress
 
-- Outcome history modelled as Project → Workstream → Milestone; agent task lifecycle is deliberately not an outcome
-- Compact MCP `progress` tool (`type`, `summary`, optional `workstream`) that persists the event and causes its toast in one call, and stays directly callable in collapsed tool mode
-- Durable receipt of `recorded`, `duplicate`, or `paused`; a 60-second retry window absorbs identical repeats without a second event or toast
-- Exact workstream grouping on the whitespace-collapsed, lower-cased label, with persisted rename aliases; no approximate or model-based grouping
-- Project-owned SQLite store at `<owning-project-root>/.tuic/progress.sqlite3`, excluded through `.git/info/exclude`, with corrupt-database preservation under `.corrupt-<uuid>` and a validated empty replacement that never masquerades as the original history
-- Dedicated global or per-project panel in desktop, browser, and mobile PWA
-- Since-last-visit, Today, Blockers, Completed, current workstream, and chronological views
-- Backend projections, bounded pagination, frozen per-project read watermarks, and visible unavailable-project errors
-- Aggregate notification-bell unread count plus exactly one live toast; Progress events are not duplicated into MESSAGES
-- Pause/resume, selected delete, clear-and-pause, event/workstream corrections and merges, blocker resolution, explicit state changes, and mark-viewed controls
-- Provenance keeps closed sources readable and opens a terminal only when the exact recorded session remains live
-- Manual deterministic `progress.md` preview/export at the owning project root, with optional provenance, snapshot and existing-content preconditions, symlink/directory refusal, and atomic replacement
+- One append-only journal per project: entries are written once, then kept or deleted. No pause, clear, correction, revision, deduplication or Markdown export
+- Three kinds. Agents report `done` and `blocked`; TUICommander writes `intent` from the agent's own `intent:` marker, so an agent that never calls the tool still leaves a trail
+- Compact MCP `progress` tool (`type`, `text`, optional `step`) that appends and toasts in one call, stays directly callable in collapsed tool mode, and refuses `intent` — that kind is observed, not claimed
+- An imperative reporting obligation in `initialize` rather than only a tool description: the descriptive version recorded zero entries across 39 repositories
+- One SQLite database in the configuration directory with the project as a column. Nothing is written inside a repository, so Progress produces no repository-change event, no Git-exclude entry and no indexing pass
+- Managed workspaces resolve to their parent project, so a worktree and its repository share one history; a directory belonging to no registered project is not recorded at all
+- A dialog, not a panel: one newest-first list for the active project, queried once on open rather than once per registered repository
+- A last-visit divider frozen while the dialog is open, so it never moves under the line being read
+- Blocked entries in red, `intent` entries muted, one blocked-only filter, per-entry deletion scoped to the project
+- Aggregate notification-bell count plus exactly one live toast, silent by default; Progress entries are not duplicated into MESSAGES
+- `progress_tracking` gate: a global setting ANDed with a per-agent override. Global off removes the tool from every agent's tool list

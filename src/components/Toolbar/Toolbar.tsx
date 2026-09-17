@@ -572,8 +572,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 									<div class={s.activityItemBody}>
 										<span class={s.activityItemTitle}>Project Progress</span>
 										<span class={s.activityItemSubtitle}>
-											{progressStore.unreadCount} unread change{progressStore.unreadCount === 1 ? "" : "s"} across
-											projects
+											{progressStore.unreadCount} new update{progressStore.unreadCount === 1 ? "" : "s"}
 										</span>
 									</div>
 								</div>

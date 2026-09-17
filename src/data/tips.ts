@@ -106,8 +106,9 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
-		feature: "Progress Export",
-		description: "The Progress panel previews a progress.md for one project before it writes — your edits to that file are never overwritten.",
+		feature: "Project Progress",
+		description:
+			"The Progress dialog draws a line where your last visit ended, so you can see what agents did while you were away without reading it all again.",
 		shortcut: null,
 	},
 	{

@@ -863,6 +863,25 @@ const AgentRow: Component<{
 							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
 								<input
 									type="checkbox"
+									disabled={!settingsStore.state.progressTracking}
+									checked={
+										settingsStore.state.progressTracking && (configStore.getProgressTracking(props.agentType) ?? true)
+									}
+									onChange={(e) => configStore.setProgressTracking(props.agentType, e.currentTarget.checked)}
+								/>
+								<span>Collect progress</span>
+							</label>
+							<p class={s.hint}>
+								Let {agent().name} report <code>done</code> and <code>blocked</code> entries into the project journal,
+								and record its <code>intent:</code> markers there. Off here keeps the journal clear of this agent even
+								while collection is on everywhere else; off globally wins over both.
+							</p>
+						</div>
+
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<input
+									type="checkbox"
 									checked={configStore.getSuggestFollowups(props.agentType) ?? settingsStore.state.suggestFollowups}
 									onChange={(e) => configStore.setSuggestFollowups(props.agentType, e.currentTarget.checked)}
 								/>
@@ -1180,6 +1199,13 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 					onChange={(v) => settingsStore.setSuggestFollowups(v)}
 					label="Show suggested follow-up actions"
 					hint="Display actionable suggestions from agents after completing a task"
+				/>
+
+				<SettingToggle
+					checked={settingsStore.state.progressTracking}
+					onChange={(v) => settingsStore.setProgressTracking(v)}
+					label="Collect project progress"
+					hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
 				/>
 
 				<div class={a.agentList}>

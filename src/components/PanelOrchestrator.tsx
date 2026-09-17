@@ -1,6 +1,7 @@
 import { type Component, Show } from "solid-js";
 import { diffTabsStore } from "../stores/diffTabs";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
+import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { uiStore } from "../stores/ui";
 import { sendTextToActiveTerminal } from "../utils/sendToActiveTerminal";
@@ -11,7 +12,7 @@ import { GitPanel } from "./GitPanel/GitPanel";
 import { MarkdownPanel } from "./MarkdownPanel";
 import { NotesPanel } from "./NotesPanel";
 import { OutlinePanel } from "./OutlinePanel";
-import { ProgressPanel } from "./ProgressPanel";
+import { ProgressDialog } from "./ProgressDialog";
 import { ReferencesPanel } from "./ReferencesPanel";
 
 export interface PanelOrchestratorProps {
@@ -79,7 +80,9 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 				<AiTriagePanel visible={true} repoPath={props.repoPath} onClose={() => uiStore.toggleAiTriagePanel()} />
 			</Show>
 
-			<ProgressPanel />
+			<Show when={progressStore.dialogVisible()}>
+				<ProgressDialog />
+			</Show>
 		</>
 	);
 };

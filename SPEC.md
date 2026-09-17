@@ -344,36 +344,46 @@ confirmation cannot authorize changed state.
 
 ## Project Progress
 
-Progress records meaningful project changes as Project → Workstream → Milestone.
-Events are `started`, `milestone`, `blocked`, and `done`; they describe outcomes,
-decisions, discoveries, and objective state rather than agent task lifecycle.
-The small MCP `progress` reporting tool persists an event and causes its toast in
-one call. Management operations on `repo` pause/resume collection, delete/clear,
-correct state, mark read, and export. Runtime guidance stays compact; the optional
-full prompt is in [Project Progress](docs/user-guide/project-progress.md).
+Progress is one append-only journal per project, read from a dialog. It answers
+"what happened while I was not watching?" and nothing else.
 
-Structured state belongs to the owning project at `.tuic/progress.sqlite3`.
-Managed workspaces resolve to that project's store. Sessions and notifications
-are provenance and presentation, never storage owners. A dedicated Progress panel
-provides cross-project changes, current state, blockers, and timeline; the bell
-provides an aggregate entry point. Reading and toast dismissal preserve history.
-Clear is project-scoped and pauses collection. `progress.md` is a manual export,
-not a second source of truth. V1 has no inference jobs or background LLM costs.
-If SQLite reports corruption, the backend preserves the database and WAL data,
-retains existing SHM state under unique names, creates a validated empty
-replacement, and fails the triggering operation with the preserved paths. The
-caller must retry explicitly; recovery must never make an empty history look like
-the original operation succeeded without data loss.
+Three entry kinds. Agents report `done` and `blocked` through the compact MCP
+`progress` tool, whose `initialize` obligation is imperative rather than
+descriptive — the shipped descriptive version produced zero entries across 39
+repositories. TUICommander itself writes `intent` from the agent's `intent:`
+marker; that trigger fires on every task, so it is the reliability floor under an
+obligation the agent read hours earlier. An agent cannot report an `intent`: the
+kind exists because it is observed rather than claimed.
 
-The implementation contract and story sequence are maintained in
-`plans/project-progress.md`. Storage, reporting, management, presentation, unread
-state, and safe manual Markdown export are implemented. The reporting-quality
-evaluation of the short default against the optional prompt is recorded in
-[Progress reporting evaluation](docs/evaluations/progress-reporting.md);
-MCP instruction-cost work remains tracked separately.
+The journal is append-only. There is no pause, clear, correction, revision,
+deduplication or Markdown export — an entry is written once and either kept or
+deleted. Agents keep exactly one read action on `repo`, `progress_list`;
+everything else a reader might want costs instruction budget in every
+`initialize` and belongs to the reader instead.
 
-Periodic inference, approximate workstream discovery, generated summaries,
-issue-tracker and remote-synchronization integrations, scheduled exports, and
+Storage is one SQLite database in the configuration directory with the project as
+a column. Nothing is written inside a repository, so Progress cannot produce a
+repository change event, a Git-exclude entry or an indexing pass. Managed
+workspaces resolve to their parent project, so a worktree and its repository
+share one history. A directory belonging to no registered project is not
+recorded against the focused repository; it is not recorded at all.
+
+Collection is gated by `progress_tracking`: a global setting ANDed with an
+optional per-agent override. Global off also removes the tool from every agent's
+tool list.
+
+The UI is a dialog, not a panel: one newest-first list for the active project, a
+last-visit divider frozen while the dialog is open, blocked entries in red,
+`intent` entries muted, one blocked-only filter and per-entry deletion. No pages,
+no tabs, no per-repository fan-out. The toolbar bell carries one aggregate entry
+that opens it.
+
+The implementation contract is maintained in `plans/project-progress.md`. The
+reporting-quality evaluation of the short default against the optional prompt is
+recorded in [Progress reporting evaluation](docs/evaluations/progress-reporting.md).
+
+Periodic inference, workstream modelling, generated summaries, issue-tracker and
+remote-synchronization integrations, scheduled or manual Markdown export, and
 Markdown import stay outside this version by decision, not by omission.
 
 ## Persistence
