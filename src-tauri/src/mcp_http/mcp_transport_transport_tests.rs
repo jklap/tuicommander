@@ -1088,6 +1088,7 @@ fn busy_claude_mail_probe(
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, receiver) = tokio::sync::broadcast::channel(4);
@@ -1678,6 +1679,7 @@ async fn proxied_initialize_reuses_eager_live_session_and_keeps_spawn_ready() {
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     assert!(apply_initialize_identity(
@@ -2581,6 +2583,7 @@ fn live_mcp_session(state: &Arc<AppState>, sid: &str) {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
 }
@@ -2759,6 +2762,7 @@ fn external_claude_channel_probe(
             has_sse_stream: true,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let (channel, receiver) = tokio::sync::broadcast::channel(4);
@@ -4879,6 +4883,7 @@ fn insert_sse_session(state: &Arc<AppState>) -> String {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     sid
@@ -5117,6 +5122,7 @@ fn a_native_tool_call_does_not_read_repo_settings() {
             requires_meta_tools: false,
             // A repo_path is what makes the allowlist lookup reach the disk.
             repo_path: Some("/test/repo".to_string()),
+            agent_type: None,
             has_sse_stream: false,
             sse_generation: 0,
         },

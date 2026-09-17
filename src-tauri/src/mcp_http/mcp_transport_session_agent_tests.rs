@@ -3426,6 +3426,7 @@ async fn parent_registration_after_spawn_links_existing_child() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
     let registered = handle_messaging(

@@ -609,6 +609,103 @@ fn agent_tool_description_carries_orchestration_crash_course() {
     assert!(desc.contains("must report task output"));
 }
 
+// ---- agent tool schema gating on prefer_tuic_spawning/messaging ---------
+//
+// The `agent` tool's own description — what a client reads via `tools/list`,
+// independently of the connect-time instructions — must stop steering a
+// connection toward TUIC spawning/messaging when its agent type prefers its
+// own native tooling (a live Claude Code teammate-spawn request still called
+// `agent action=spawn` with both preferences `false`). main's compact
+// description stays the base text; a per-connection note is prepended
+// (`apply_agent_tool_preferences`), resolved per MCP connection
+// (`resolve_prefer_tuic_flags_for_session`).
+
+#[test]
+fn agent_tool_preference_note_is_absent_only_when_both_are_preferred() {
+    assert_eq!(agent_tool_preference_note(true, true), None);
+    let messaging_off = agent_tool_preference_note(true, false).unwrap();
+    assert!(messaging_off.contains("native cross-agent messaging"));
+    assert!(!messaging_off.contains("native subagent/team spawning"));
+    let spawning_off = agent_tool_preference_note(false, true).unwrap();
+    assert!(spawning_off.contains("native subagent/team spawning"));
+    assert!(!spawning_off.contains("cross-agent messaging: prefer"));
+    let neither = agent_tool_preference_note(false, false).unwrap();
+    assert!(neither.contains("not as the default multi-agent path"));
+}
+
+#[test]
+fn apply_agent_tool_preferences_changes_only_the_agent_description() {
+    let mut tools = native_tool_definitions().as_array().unwrap().clone();
+    let before = tools.clone();
+    apply_agent_tool_preferences(&mut tools, false, false);
+    for (old, new) in before.iter().zip(&tools) {
+        assert_eq!(old["inputSchema"], new["inputSchema"], "{}", old["name"]);
+        if old["name"] == "agent" {
+            let desc = new["description"].as_str().unwrap();
+            assert!(desc.starts_with(agent_tool_preference_note(false, false).unwrap()));
+            assert!(desc.ends_with(old["description"].as_str().unwrap()));
+        } else {
+            assert_eq!(old["description"], new["description"]);
+        }
+    }
+    let mut untouched = before.clone();
+    apply_agent_tool_preferences(&mut untouched, true, true);
+    assert_eq!(untouched, before);
+}
+
+#[test]
+fn merged_tool_definitions_agent_description_reflects_the_calling_sessions_prefer_flags() {
+    let dir = TempDir::new().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+    let mut agents_cfg = crate::config::AgentsConfig::default();
+    agents_cfg.agents.insert(
+        "claude".to_string(),
+        crate::config::AgentSettings {
+            prefer_tuic_spawning: Some(false),
+            prefer_tuic_messaging: Some(false),
+            ..Default::default()
+        },
+    );
+    crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+
+    let state = test_state();
+    let mcp_sid = "mcp-agent-tool-gating-test";
+    state.mcp.sessions.insert(
+        mcp_sid.to_string(),
+        crate::state::McpSessionMeta {
+            last_activity: std::time::Instant::now(),
+            is_claude_code: true,
+            requires_meta_tools: false,
+            has_sse_stream: false,
+            sse_generation: 0,
+            repo_path: None,
+            agent_type: Some("claude".to_string()),
+            prompt_instructions: None,
+        },
+    );
+    let note = agent_tool_preference_note(false, false).unwrap();
+    let agent_desc = |tools: serde_json::Value| {
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agent")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(
+        agent_desc(merged_tool_definitions(&state, Some(mcp_sid), None)).starts_with(note),
+        "tools/list must stop recommending TUIC spawning/messaging for this connection"
+    );
+    // No session context (or an unknown one) falls back to the fully
+    // permissive description — never fail closed.
+    assert!(!agent_desc(merged_tool_definitions(&state, None, None)).contains(note));
+    assert!(!agent_desc(merged_tool_definitions(&state, Some("unknown-sid"), None)).contains(note));
+}
+
 #[test]
 fn session_tool_description_includes_wait() {
     let defs = native_tool_definitions();
@@ -789,6 +886,7 @@ fn grok_session_uses_meta_tools_without_mutating_global_config() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: None,
+            agent_type: None,
         },
     );
 
@@ -1489,6 +1587,33 @@ fn instructions_spawning_disabled_keeps_messaging_but_omits_spawn_guidance() {
     // send its result" presumes TUIC did the spawning) — must not leak
     // into the messaging-only Same-repo bullet.
     assert!(!out.contains("anomaly fallback"));
+}
+
+/// Regression coverage for the 2026-09-04 wording change (see
+/// plans/docs/agent-teams-wording-investigation.md, main checkout): an A/B
+/// harness found the old hedged phrasing ("use TUIC's `agent
+/// action=spawn` MCP tool (not your host's native subagent/Task/team
+/// tool) whenever spawning an AI peer that should be observable...")
+/// never worked against a real Opus session (0/10), while a direct,
+/// unhedged directive worked every time (10/10). Asserts the new
+/// directive text is present and the old hedged phrasing is gone, so a
+/// future edit can't silently revert to the measured-ineffective
+/// wording.
+#[test]
+fn instructions_prefer_tuicommander_bullet_uses_the_unhedged_directive() {
+    let state = test_state();
+    let out = build_mcp_instructions(&state, Some("claude-code"));
+
+    assert!(
+        out.contains(
+            "every agent-teams teammate is created with TUIC's `agent action=spawn` MCP tool — do not use your own built-in agent-spawning tool for this"
+        ),
+        "expected the unhedged directive wording, got: {out}"
+    );
+    // The label must survive unchanged — other tests grep for it.
+    assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
+    // The old hedged phrasing must not reappear.
+    assert!(!out.contains("whenever spawning an AI peer that should be observable"));
 }
 
 #[test]
@@ -2623,8 +2748,10 @@ fn instructions_make_no_claim_about_the_user_or_the_platform() {
     for collapse in [false, true] {
         for client in [None, Some("claude-code")] {
             let out = render_mcp_instructions(client, collapse, (true, true), true, &ctx, &default_tool_gates());
+            // Whole words: wip's measured agent-teams wording says "throwaway".
+            let words: Vec<&str> = out.split(|c: char| !c.is_alphanumeric()).collect();
             for banned in ["away", "Mac"] {
-                assert!(!out.contains(banned), "{banned:?} in: {out}");
+                assert!(!words.contains(&banned), "{banned:?} in: {out}");
             }
         }
     }

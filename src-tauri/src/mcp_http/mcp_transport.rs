@@ -113,6 +113,8 @@ use super::mcp_transport_catalogue::tag_repo_connection;
 #[cfg(test)]
 use super::mcp_transport_catalogue::validate_mcp_repo_path;
 #[cfg(test)]
+use super::mcp_transport_catalogue::{agent_tool_preference_note, apply_agent_tool_preferences};
+#[cfg(test)]
 use super::mcp_transport_catalogue::{handle_get_tool_schema, handle_search_tools};
 #[cfg(test)]
 pub(super) use super::mcp_transport_peer::CLIENT_PID_HEADER;
@@ -984,6 +986,7 @@ pub(super) async fn mcp_post(
             let client_name = body["params"]["clientInfo"]["name"].as_str();
             let is_claude_code = detect_claude_code_client(client_name);
             let requires_meta_tools = client_requires_meta_tools(client_name);
+            let agent_type = resolve_agent_type(client_name).map(str::to_string);
 
             // Extract repo_path from MCP initialize roots[0].uri (file:// URI)
             let repo_path = body["params"]["roots"]
@@ -1005,6 +1008,7 @@ pub(super) async fn mcp_post(
                 meta.last_activity = now;
                 meta.is_claude_code = is_claude_code;
                 meta.requires_meta_tools = requires_meta_tools;
+                meta.agent_type = agent_type.clone();
                 if repo_path.is_some() {
                     meta.repo_path = repo_path;
                 }
@@ -1019,6 +1023,7 @@ pub(super) async fn mcp_post(
                         has_sse_stream: false,
                         sse_generation: 0,
                         repo_path,
+                        agent_type: agent_type.clone(),
                     },
                 );
             }
@@ -1441,6 +1446,7 @@ pub(super) async fn mcp_get(
                 has_sse_stream: false,
                 sse_generation: 0,
                 repo_path: None,
+                agent_type: None,
             },
         );
     }

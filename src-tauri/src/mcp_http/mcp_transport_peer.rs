@@ -813,6 +813,7 @@ pub(super) fn refresh_mcp_session(
                     has_sse_stream: false,
                     sse_generation: 0,
                     repo_path: None,
+                    agent_type: None,
                 },
             );
         }

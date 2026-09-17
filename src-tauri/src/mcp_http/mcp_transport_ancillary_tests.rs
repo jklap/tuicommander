@@ -1605,6 +1605,7 @@ fn ui_tab_falls_back_to_mcp_session_repo_path() {
             has_sse_stream: false,
             sse_generation: 0,
             repo_path: Some("/Gits/personal/gamma".to_string()),
+            agent_type: None,
         },
     );
 

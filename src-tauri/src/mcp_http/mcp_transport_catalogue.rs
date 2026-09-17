@@ -356,27 +356,83 @@ pub(super) fn render_mcp_instructions(
     // three things are left here: how many peers are live (state, not prose),
     // the worktree entry point, and the Claude-Code-only delegation hint, which
     // is conditioned on the connecting client and so cannot sit in a static
-    // description at all.
+    // description at all. Every line is gated on the connecting agent type's
+    // Prefer TUICommander spawning/messaging flags; with both off the section
+    // is omitted and the agent's own native tooling is left unsteered.
     let is_claude_code = detect_claude_code_client(client_name);
-    if agent_enabled || repo_enabled {
+    if spawn_preferred || messaging_preferred {
         out.push_str("## Multi-Agent Work\n\n");
-    }
-    if agent_enabled && ctx.peer_count > 0 {
-        out.push_str(&format!(
-            "**{}** peer agent(s) connected. Orchestrate them with the `agent` tool; read its description first.\n",
-            ctx.peer_count
-        ));
-    }
-    if repo_enabled {
-        out.push_str(
-            "- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n",
-        );
-    }
-    if agent_enabled {
-        out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
-    }
-    if repo_enabled && is_claude_code {
-        out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
+        let tools_desc = if session_enabled {
+            "`agent` and `session` MCP tools"
+        } else {
+            "`agent` MCP tool"
+        };
+        if ctx.peer_count > 0 {
+            let peer_count = ctx.peer_count;
+            out.push_str(&format!(
+                "**{peer_count}** peer agent(s) connected. There is no separate `swarm` action; use TUICommander's {tools_desc} below — NOT your host's own built-in agent/subagent/Task tool, which is a different, unrelated tool that happens to share a similar name.\n\n"
+            ));
+        } else {
+            out.push_str(&format!(
+                "There is no separate `swarm` action; multi-agent orchestration uses TUICommander's {tools_desc} — NOT your host's own built-in agent/subagent/Task tool, which is a different, unrelated tool that happens to share a similar name.\n\n"
+            ));
+        }
+        // "Same repo" bullet: the spawn clause and the messaging clause are
+        // each independently optional (the section render condition above
+        // guarantees at least one is present).
+        let mut same_repo_clauses: Vec<String> = Vec::new();
+        if spawn_preferred {
+            same_repo_clauses.push("TUIC `agent action=spawn` peers".to_string());
+        }
+        if messaging_preferred {
+            same_repo_clauses
+                .push("wait with `agent action=wait`, then read `agent action=inbox`".to_string());
+        }
+        let mut same_repo = format!("- **Same repo:** {}", same_repo_clauses.join("; "));
+        if messaging_preferred {
+            same_repo.push_str(
+                ". Lifecycle notifications carry state only; workers must report results with `agent action=send`",
+            );
+            if spawn_preferred && session_enabled {
+                same_repo.push_str(
+                    ". Use `session output` only as an anomaly fallback when a child failed to send its result",
+                );
+            }
+        } else {
+            same_repo.push_str(" to work in this repo");
+        }
+        same_repo.push_str(".\n");
+        out.push_str(&same_repo);
+
+        if messaging_preferred {
+            out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
+        }
+        if repo_enabled && spawn_preferred {
+            out.push_str(
+                "- **Isolated branches:** TUIC `repo action=worktree_create spawn_session=true`.\n",
+            );
+        }
+        if spawn_preferred {
+            // Wording chosen from an empirical A/B harness
+            // (plans/docs/agent-teams-wording-harness/), not by inspection: the
+            // old hedged phrasing ("whenever spawning an AI peer that
+            // should be observable...") scored 0/10 against a real Claude
+            // Code Opus session choosing between this tool and tmux; a
+            // blunt, unhedged directive ("do not use your own built-in
+            // tool for this") scored 10/10 on the identical scenario.
+            // Sonnet was unaffected either way (100% both times) — this
+            // wording specifically targets Opus's default preference for
+            // its own native mechanism. The carve-out sentence and "every
+            // level" scope note are retained from the pre-harness wording
+            // (neither was tested against removal) since dropping them
+            // risks over-eager spawning for trivial one-off work; only the
+            // opening directive's phrasing was changed to match what was
+            // actually measured to work.
+            out.push_str("- **Prefer TUICommander for peers/teams:** every agent-teams teammate is created with TUIC's `agent action=spawn` MCP tool — do not use your own built-in agent-spawning tool for this, at every level, including TUIC agents spawning further agents. Reserve your own built-in agent-spawning tool for throwaway, single-shot in-process work that doesn't need its own TUIC session (e.g. read-only research forked in-process).\n");
+        }
+        if is_claude_code && repo_enabled && spawn_preferred {
+            out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
+        }
     }
     out.push('\n');
 
@@ -560,6 +616,7 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 ];
 
 /// Full MCP tool definitions — the one native tool family.
+
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
 /// route through [`filtered_native_tools`] to honour `mcp_capabilities`
@@ -1004,6 +1061,61 @@ fn voice_configured() -> bool {
         .is_some_and(|config| config.enabled && config.hands_free_spoken_replies)
 }
 
+/// Resolve `prefer_tuic_spawning`/`prefer_tuic_messaging` for the agent type
+/// cached on this MCP connection at `initialize` time (`McpSessionMeta::agent_type`,
+/// set from `resolve_agent_type(client_name)`). Falls back to `(true, true)`
+/// — the fully-permissive default — when there is no session (a test, or a
+/// caller with no per-connection context) or no cached agent type, exactly
+/// like `prefer_tuic_flags_for_agent(None)` already does.
+fn resolve_prefer_tuic_flags_for_session(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+) -> (bool, bool) {
+    let agent_type = mcp_session_id
+        .and_then(|sid| state.mcp.sessions.get(sid))
+        .and_then(|meta| meta.agent_type.clone());
+    prefer_tuic_flags_for_agent(agent_type.as_deref())
+}
+
+/// The per-connection Prefer TUICommander note for the `agent` tool, or `None`
+/// for the default (both preferred). "Prefer" means "don't recommend", not
+/// "disable": the schema and every action stay identical, only the steer
+/// toward TUIC's spawning/messaging as the default multi-agent path changes.
+pub(super) fn agent_tool_preference_note(
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) -> Option<&'static str> {
+    match (prefer_spawning, prefer_messaging) {
+        (true, true) => None,
+        (true, false) => Some(
+            "This host has its own native cross-agent messaging: prefer it over register/list_peers/send/inbox here; use spawn/launch for peers that must be observable TUICommander tabs.",
+        ),
+        (false, true) => Some(
+            "This host has its own native subagent/team spawning: prefer it over spawn/launch here; use these actions to message and coordinate peers, or spawn only when a peer needs its own observable TUICommander pane.",
+        ),
+        (false, false) => Some(
+            "This host has its own native subagent spawning and cross-agent messaging: prefer those; use this tool only when a peer needs its own observable, messageable TUICommander pane, not as the default multi-agent path.",
+        ),
+    }
+}
+
+/// Prepend [`agent_tool_preference_note`] to the `agent` tool's description in
+/// a per-connection listing. Shared catalogues (search index, settings, audit)
+/// keep main's compact text unchanged.
+pub(super) fn apply_agent_tool_preferences(
+    tools: &mut [serde_json::Value],
+    prefer_spawning: bool,
+    prefer_messaging: bool,
+) {
+    let Some(note) = agent_tool_preference_note(prefer_spawning, prefer_messaging) else {
+        return;
+    };
+    for tool in tools.iter_mut().filter(|tool| tool["name"] == "agent") {
+        let description = tool["description"].as_str().unwrap_or_default();
+        tool["description"] = serde_json::json!(format!("{note}\n{description}"));
+    }
+}
+
 /// Apply the same native availability gate used at dispatch to every catalogue.
 pub(super) fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
     let (progress_tracking, settings_enabled) = {
@@ -1105,7 +1217,10 @@ pub(super) fn merged_tool_definitions_for_mode(
         return serde_json::Value::Array(tools);
     }
 
+    let (prefer_spawning, prefer_messaging) =
+        resolve_prefer_tuic_flags_for_session(state, mcp_session_id);
     let mut tools = filtered_native_tools(state);
+    apply_agent_tool_preferences(&mut tools, prefer_spawning, prefer_messaging);
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
     let upstream_tools = state
         .mcp
@@ -1125,6 +1240,13 @@ pub(super) fn merged_tool_definitions_for_mode(
 ///
 /// Upstream allow/deny filters are applied inside `aggregated_tools()`.
 pub(super) fn searchable_tool_definitions(state: &Arc<AppState>) -> Vec<serde_json::Value> {
+    // No per-connection context here — this backs the shared meta-tool search
+    // index (`search_tools`/`get_tool_schema`/`call_tool`), not a specific
+    // client's `tools/list`. Grok is the only client that reaches this path
+    // (`client_requires_meta_tools`); Claude Code never does. Pass the
+    // fully-permissive defaults — per-connection `prefer_tuic_*` gating of
+    // the `agent` tool's description is therefore not applied for meta-tool
+    // clients today. Known, deliberate scope limit, not an oversight.
     let mut tools = filtered_native_tools(state);
     tools.extend(state.mcp.upstream_registry.aggregated_tools());
     tools
