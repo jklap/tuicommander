@@ -82,4 +82,71 @@ describe("SelectionTab against the real settingsStore (reactivity regression)", 
 
 		expect(getByPlaceholderText("Regular expression")).toBeTruthy();
 	});
+
+	it("keeps focus in the Menu label input across a keystroke", async () => {
+		// Regression: `updateAction` spread-copies the edited action on every
+		// keystroke (`{ ...a, ...patch }`), and a reference-keyed `<For>` would
+		// dispose and recreate this exact <input> in response — moving focus
+		// away mid-type. `<Index>` keeps the DOM node and just updates its value.
+		settingsStore.setSmartSelectionRules([
+			{
+				id: "r1",
+				name: "Custom",
+				regex: "x",
+				precision: "normal",
+				enabled: true,
+				actions: [{ kind: "copy", title: "Copy", parameter: "\\0", isDefault: true }],
+			},
+		]);
+		const { container } = render(() => <SelectionTab />);
+		expandRule(container, 0);
+
+		const menuLabelInput = container.querySelector('input[placeholder="Menu label"]') as HTMLInputElement;
+		menuLabelInput.focus();
+		expect(document.activeElement).toBe(menuLabelInput);
+
+		fireEvent.input(menuLabelInput, { target: { value: "Copy text" } });
+		await waitFor(() => expect(settingsStore.state.smartSelectionRules[0].actions[0].title).toBe("Copy text"));
+
+		expect(document.activeElement).toBe(menuLabelInput);
+	});
+
+	it("keeps focus in the Menu label input when the first edit materializes built-in defaults", async () => {
+		// The empty→materialized transition swaps every rule's object reference
+		// at once (built-in module objects → store proxies), which a
+		// reference-keyed `<For>` would see as every row changing identity
+		// simultaneously — remounting the entire list, including whatever the
+		// user was mid-keystroke into. `<Index>` compares old vs. new by
+		// position, so a same-length swap is a value update, not a remount.
+		settingsStore.setSmartSelectionRules([]);
+		const { container } = render(() => <SelectionTab />);
+		expandRule(container, 0);
+
+		const menuLabelInput = container.querySelector('input[placeholder="Menu label"]') as HTMLInputElement;
+		menuLabelInput.focus();
+		expect(document.activeElement).toBe(menuLabelInput);
+
+		fireEvent.input(menuLabelInput, { target: { value: "Renamed action" } });
+		await waitFor(() => expect(settingsStore.state.smartSelectionRules.length).toBeGreaterThan(0));
+		expect(settingsStore.state.smartSelectionRules[0].actions[0].title).toBe("Renamed action");
+
+		expect(document.activeElement).toBe(menuLabelInput);
+	});
+
+	it("keeps focus in the Name input across a keystroke (same remount hazard as Menu label)", async () => {
+		settingsStore.setSmartSelectionRules([
+			{ id: "r1", name: "Custom", regex: "x", precision: "normal", enabled: true, actions: [] },
+		]);
+		const { container, getByPlaceholderText } = render(() => <SelectionTab />);
+		expandRule(container, 0);
+
+		const nameInput = getByPlaceholderText("Name") as HTMLInputElement;
+		nameInput.focus();
+		expect(document.activeElement).toBe(nameInput);
+
+		fireEvent.input(nameInput, { target: { value: "Renamed rule" } });
+		await waitFor(() => expect(settingsStore.state.smartSelectionRules[0].name).toBe("Renamed rule"));
+
+		expect(document.activeElement).toBe(nameInput);
+	});
 });
