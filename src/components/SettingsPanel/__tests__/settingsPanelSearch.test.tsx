@@ -73,6 +73,7 @@ vi.mock("../../../stores/repoSettings", () => ({
 
 import { appLogger } from "../../../stores/appLogger";
 import { settingsStore } from "../../../stores/settings";
+import { settingsExpertStore } from "../../../stores/settingsExpert";
 import { SettingsPanel } from "../SettingsPanel";
 
 const open = () => render(() => <SettingsPanel visible={true} onClose={() => {}} />);
@@ -215,6 +216,37 @@ describe("SettingsPanel search", () => {
 		expect(resultRows(container)).toHaveLength(0);
 		expect(container.querySelector("nav button[class*='active']")?.textContent).toBe("Notifications");
 		expect(container.textContent).toContain("Notification Settings");
+	});
+
+	it("scrolls to and flashes a deep-linked control (a palette Settings action)", async () => {
+		const { container } = render(() => (
+			<SettingsPanel
+				visible={true}
+				onClose={() => {}}
+				initialTab="notifications"
+				initialTarget={{ section: "Notification Settings", label: "Master Volume" }}
+			/>
+		));
+		const setting = [...container.querySelectorAll("label")].find((el) => el.textContent === "Master Volume");
+		expect(setting).toBeDefined();
+		const onSetting = vi.fn();
+		if (setting) setting.scrollIntoView = onSetting;
+		await waitFor(() => expect(onSetting).toHaveBeenCalled());
+		expect(setting?.classList.contains("searchHighlight")).toBe(true);
+	});
+
+	it("reveals a deep-linked expert control, since opening Settings forgets every reveal", () => {
+		const reveal = vi.spyOn(settingsExpertStore, "reveal");
+		render(() => (
+			<SettingsPanel
+				visible={true}
+				onClose={() => {}}
+				initialTab="terminal"
+				initialTarget={{ section: "Terminal", label: "Shell", configKey: "app.shell" }}
+			/>
+		));
+		expect(reveal).toHaveBeenCalledWith("app.shell");
+		reveal.mockRestore();
 	});
 
 	it("restores the tab list when the query is cleared", () => {
