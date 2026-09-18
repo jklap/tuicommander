@@ -23,7 +23,7 @@ import qd from "../QuitDialog/QuitDialog.module.css";
 import { RemoteRepoPicker } from "../RemoteRepoPicker";
 import { RenameBranchDialog } from "../RenameBranchDialog";
 import { RunCommandDialog } from "../RunCommandDialog";
-import type { SettingsContext } from "../SettingsPanel";
+import type { SettingsContext, SettingsSearchTarget } from "../SettingsPanel";
 import { UpdateProgressDialog } from "../UpdateProgressDialog";
 import { WhatsNewDialog } from "../WhatsNewDialog/WhatsNewDialog";
 
@@ -49,6 +49,7 @@ interface PanelOverlaysContract {
 	closeSettings: () => void;
 	settingsInitialTab: Accessor<string | undefined>;
 	settingsInitialSection: Accessor<string | undefined>;
+	settingsInitialTarget: Accessor<SettingsSearchTarget | undefined>;
 	settingsContext: Accessor<SettingsContext>;
 	taskQueueVisible: Accessor<boolean>;
 	closeTaskQueue: () => void;
@@ -293,6 +294,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 					onClose={props.panels.closeSettings}
 					initialTab={props.panels.settingsInitialTab()}
 					initialSection={props.panels.settingsInitialSection()}
+					initialTarget={props.panels.settingsInitialTarget()}
 					context={props.panels.settingsContext()}
 				/>
 			</Suspense>

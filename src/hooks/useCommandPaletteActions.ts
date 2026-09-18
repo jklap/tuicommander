@@ -1,5 +1,13 @@
 import { type Accessor, createMemo, onCleanup } from "solid-js";
 import { type ActionEntry, getActionEntries, SMART_PROMPTS_CATEGORY } from "../actions/actionRegistry";
+import {
+	entryLabel,
+	entrySection,
+	SETTINGS_SEARCH_CATEGORY,
+	SETTINGS_SEARCH_INDEX,
+	type SettingsSearchTarget,
+} from "../components/SettingsPanel/settingsSearchIndex";
+import { getGlobalTabs } from "../components/SettingsPanel/settingsTabs";
 import { t } from "../i18n";
 import { appLogger } from "../stores/appLogger";
 import { commandPaletteStore } from "../stores/commandPalette";
@@ -10,6 +18,7 @@ import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
 import { updaterStore } from "../stores/updater";
+import { isTauri } from "../transport";
 import type { useGitOperations } from "./useGitOperations";
 import type { ShortcutHandlers } from "./useKeyboardShortcuts";
 import type { useSplitPanes } from "./useSplitPanes";
@@ -19,6 +28,8 @@ interface CommandPaletteActionOptions {
 	gitOps: ReturnType<typeof useGitOperations>;
 	splitPanes: ReturnType<typeof useSplitPanes>;
 	executeSmartPrompt: (prompt: SavedPrompt) => Promise<unknown>;
+	/** Opens Settings, optionally deep-linked to a tab and a specific control. */
+	openSettings: (tab?: string, section?: string, target?: SettingsSearchTarget) => void;
 }
 
 /** Builds the command palette's static registry plus reactive repository, plugin, terminal, and prompt actions. */
@@ -190,6 +201,35 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 					action.action({ sessionId: terminal?.sessionId ?? null, repoPath: null });
 				},
 			});
+		}
+
+		// Individual settings (settingsSearchIndex.ts) — searchable from anywhere
+		// via the palette, not just inside an already-open Settings panel.
+		// Selecting one opens Settings deep-linked to that control. Restricted to
+		// tabs this build offers, so an AI Chat setting only appears while its
+		// flag is on and desktop-only tabs stay out of browser mode — and to
+		// controls this client renders (an `isTauri()`-gated entry carries
+		// `platform`), the same filter the Settings search box applies.
+		const client = isTauri() ? "desktop" : "browser";
+		for (const tab of getGlobalTabs()) {
+			for (const entry of SETTINGS_SEARCH_INDEX) {
+				if (entry.tab !== tab.key || entry.label === undefined) continue;
+				if (entry.platform && entry.platform !== client) continue;
+				const section = entrySection(entry);
+				const label = entryLabel(entry) as string;
+				const target: SettingsSearchTarget = {
+					section,
+					label,
+					...(entry.configKey ? { configKey: entry.configKey } : {}),
+				};
+				entries.push({
+					id: `setting:${entry.tab}:${section}:${label}`,
+					label: `${label} (${tab.label} settings)`,
+					category: SETTINGS_SEARCH_CATEGORY,
+					keybinding: "",
+					execute: () => options.openSettings(entry.tab, undefined, target),
+				});
+			}
 		}
 
 		return entries;

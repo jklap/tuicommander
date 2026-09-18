@@ -94,6 +94,7 @@ describe("useCommandPaletteActions", () => {
 				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings: vi.fn(),
 			});
 		});
 		return (id: string) => actions?.().find((entry) => entry.id === id);
@@ -151,6 +152,7 @@ describe("useCommandPaletteActions", () => {
 				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings: vi.fn(),
 			});
 		});
 		actions?.()
@@ -170,6 +172,7 @@ describe("useCommandPaletteActions", () => {
 				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings: vi.fn(),
 			});
 		});
 		actions?.()
@@ -200,6 +203,7 @@ describe("useCommandPaletteActions", () => {
 				gitOps: gitOps as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings: vi.fn(),
 			});
 		});
 
@@ -236,6 +240,7 @@ describe("useCommandPaletteActions", () => {
 				gitOps: gitOps as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt,
+				openSettings: vi.fn(),
 			});
 		});
 
@@ -257,5 +262,33 @@ describe("useCommandPaletteActions", () => {
 		expect(gitOps.moveTerminalToWorktree).toHaveBeenCalledWith("term-1", "/wt");
 		expect(executeSmartPrompt).toHaveBeenCalledWith(mockPrompt);
 		expect(pluginAction).toHaveBeenCalledWith({ sessionId: "session-1", repoPath: null });
+	});
+
+	it("exposes every static setting as a palette action that deep-links into Settings", () => {
+		const openSettings = vi.fn();
+		let actions: ReturnType<typeof useCommandPaletteActions> | undefined;
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			actions = useCommandPaletteActions({
+				shortcutHandlers: {} as never,
+				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
+				splitPanes: { resetLayout: vi.fn() } as never,
+				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings,
+			});
+		});
+
+		// Shell sits in the Terminal page's "Terminal" section inside an
+		// ExpertSetting, so the deep link also carries its configKey to reveal it.
+		const shellAction = actions?.().find((a) => a.id === "setting:terminal:Terminal:Shell");
+		expect(shellAction).toBeTruthy();
+		expect(shellAction?.label).toBe("Shell (Terminal settings)");
+		expect(shellAction?.category).toBe("Settings");
+		shellAction?.execute();
+		expect(openSettings).toHaveBeenCalledWith("terminal", undefined, {
+			section: "Terminal",
+			label: "Shell",
+			configKey: "app.shell",
+		});
 	});
 });
