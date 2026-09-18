@@ -1296,7 +1296,9 @@ main checkout (falls back to the active repo when the cwd belongs to no register
 
 ### 11.0 Search
 - Search box at the top of the tab list; filters every setting across every tab at once
-- Each result shows the setting name and its `Tab › Section` trail; selecting one opens that tab and scrolls to the field
+- Results are BM25-ranked (every query word must match; label/hint/section/tab text all count), so the setting named by the query outranks entries that merely mention it
+- Each result shows the setting name, its `Tab › Section` trail, and the setting's hint text when it has one; selecting one opens that tab, scrolls to the field, and briefly flashes it
+- The same settings appear in the Command Palette (`Cmd+P`) under the "Settings" category, so one can be jumped to without opening the Settings panel first
 - Repository tabs are not indexed — a global box cannot know which repository a query means
 - Settings the current build does not render (Dictation in browser mode, for example) report no match instead of opening an empty tab
 - The index is committed, not scanned from the DOM: only one tab mounts at a time, and mounting the rest would fire CLI status, mdkb status, GitHub and audio probes on every keystroke. A drift test re-derives it from the sources, so a setting added without indexing fails CI

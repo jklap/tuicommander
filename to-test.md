@@ -5594,3 +5594,15 @@ section. All of the below needs a rebuilt build to check.
   render and drag smoothly, and the pinned-sessions list renders correctly with 0 vs several live
   sessions. Follow `docs/frontend/STYLE_GUIDE.md` and take a screenshot per AGENTS.md's "Visual"
   rule — none exist yet for this tab.
+
+- [ ] **Settings search extras port (BM25 ranking, hints, palette actions, flash) — frontend-only,
+  Vite HMR picks it up** — visual checks that jsdom can't prove: (1) open Settings, type a query —
+  results are ranked sensibly (the setting named by the query first), each row shows its hint text
+  under the `Tab › Section` trail without overflowing the row (hints are ellipsized); (2) pick a
+  result — the target control scrolls into view and briefly flashes with the accent-tinted
+  highlight (`Settings.module.css` `settingsSearchHighlight`), and re-picking the same result
+  restarts the flash; (3) `Cmd+P` — "Settings" category actions exist (e.g. "Shell (Terminal
+  settings)"); selecting one opens Settings on the right tab, scrolled to and flashing that
+  control, including while Settings is already open on another tab; (4) with AI Chat disabled the
+  palette offers no `AI Chat settings` entries, and in browser mode (`:9876`) no Dictation/
+  StreamDock ones, while other setting actions still work there.

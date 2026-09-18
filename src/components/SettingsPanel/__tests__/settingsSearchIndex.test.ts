@@ -62,6 +62,7 @@ function derive(tab: string): SettingsSearchEntry[] {
 			section: setting.section,
 			label: setting.text,
 			...(setting.key ? { labelKey: setting.key } : {}),
+			...(setting.hint ? { hint: setting.hint.text, ...(setting.hint.key ? { hintKey: setting.hint.key } : {}) } : {}),
 		});
 	}
 	return entries;
@@ -139,5 +140,18 @@ describe("searchSettings", () => {
 
 	it("returns nothing for a query that matches no setting", () => {
 		expect(searchSettings("zzzzz no such setting", ALL_TABS)).toEqual([]);
+	});
+
+	it("finds a setting by its hint text, not just its label", () => {
+		// "leave blank for system default" is wording that lives only in the
+		// Shell setting's hint — the label alone would never match it.
+		const hits = searchSettings("leave blank for system default", ALL_TABS);
+		expect(hits.map((e) => e.label)).toContain("Shell");
+	});
+
+	it("ranks the entry named by the query above entries that merely mention it", () => {
+		const hits = searchSettings("shell", ALL_TABS);
+		expect(hits.length).toBeGreaterThan(1);
+		expect(hits[0]).toEqual(expect.objectContaining({ tab: "terminal", section: "Shell" }));
 	});
 });

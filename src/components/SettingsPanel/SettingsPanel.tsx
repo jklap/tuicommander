@@ -18,7 +18,14 @@ import s from "./Settings.module.css";
 import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
 import { SettingsShell } from "./SettingsShell";
-import { entryLabel, entrySection, type SettingsSearchEntry, searchSettings } from "./settingsSearchIndex";
+import {
+	entryLabel,
+	entrySection,
+	type SettingsSearchEntry,
+	type SettingsSearchTarget,
+	searchSettings,
+} from "./settingsSearchIndex";
+import { getGlobalTabs } from "./settingsTabs";
 import {
 	AgentsTab,
 	AiChatTab,
@@ -46,33 +53,10 @@ export interface SettingsPanelProps {
 	initialTab?: string;
 	/** DOM id of a block to scroll to once the panel is open — see sections.ts */
 	initialSection?: string;
+	/** Rendered section/label text to scroll to and flash once the panel is
+	 * open — how a Command Palette "Settings" action lands on its control */
+	initialTarget?: SettingsSearchTarget;
 	context?: SettingsContext;
-}
-
-const BASE_GLOBAL_TABS: SettingsShellTab[] = [
-	{ key: "general", label: t("settings.general", "General") },
-	{ key: "appearance", label: t("settings.appearance", "Appearance") },
-	{ key: "terminal", label: t("settings.terminal", "Terminal") },
-	{ key: "selection", label: t("settings.selection", "Smart Selection") },
-	{ key: "notifications", label: t("settings.notifications", "Notifications") },
-	{ key: "dictation", label: t("settings.dictation", "Dictation") },
-	{ key: "streamdock", label: t("settings.streamdock", "StreamDock") },
-	{ key: "github", label: "Git & GitHub" },
-	{ key: "services", label: t("settings.services", "Services & MCP") },
-	{ key: "plugins", label: t("settings.plugins", "Plugins") },
-	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
-	{ key: "providers", label: "Providers" },
-	{ key: "agents", label: t("settings.agents", "Agents") },
-];
-
-function getGlobalTabs(): SettingsShellTab[] {
-	const tabs = isTauri()
-		? BASE_GLOBAL_TABS
-		: BASE_GLOBAL_TABS.filter((tab) => tab.key !== "dictation" && tab.key !== "streamdock");
-	if (settingsStore.isAiChatEnabled()) {
-		return [...tabs, { key: "ai-chat", label: "AI Chat" }];
-	}
-	return tabs;
 }
 
 function defaultTab(ctx: SettingsContext): string {
@@ -128,12 +112,15 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 	const [query, setQuery] = createSignal("");
 
-	// Reset active tab when context changes or panel opens
+	// Reset active tab when context changes or panel opens. Also re-runs when a
+	// palette settings action fires while the panel is already open (the caller
+	// swaps initialTab/initialTarget), so a second deep link still lands.
 	createEffect(() => {
 		if (props.visible) {
 			setActiveTab(resolveInitialTab());
 			// A stale query would hide the tab the caller asked for behind results
 			setQuery("");
+			if (props.initialTarget) setPendingTarget(props.initialTarget);
 		}
 	});
 
@@ -143,8 +130,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		uiStore.setLastSettingsTab(tab);
 	};
 
-	// Setting a search result asked for, consumed by the scroll effect below
-	const [pendingTarget, setPendingTarget] = createSignal<{ section: string; label?: string } | null>(null);
+	// Target a search result or a deep link asked for, consumed by the scroll
+	// effect below
+	const [pendingTarget, setPendingTarget] = createSignal<SettingsSearchTarget | null>(null);
 
 	// Two callers need the panel scrolled to a block that sits below the fold:
 	// a deep link (the MCP popup's "Manage in Settings", which names a DOM id)

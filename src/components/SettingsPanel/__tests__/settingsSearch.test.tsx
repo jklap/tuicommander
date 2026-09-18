@@ -8,11 +8,12 @@ const TABS: SettingsShellTab[] = [
 	{ key: "general", label: "General" },
 	{ key: "appearance", label: "Appearance" },
 	{ key: "services", label: "Services & MCP" },
+	{ key: "notifications", label: "Notifications" },
 	{ key: "__sep__", label: "─" },
 	{ key: "repo:/tmp/x", label: "x" },
 ];
 
-const availableTabs = new Set(["general", "appearance", "services"]);
+const availableTabs = new Set(["general", "appearance", "services", "notifications"]);
 
 describe("SettingsSearchBox", () => {
 	it("reports every keystroke", () => {
@@ -76,6 +77,13 @@ describe("SettingsSearchResults", () => {
 		expect(onSelect).toHaveBeenCalledWith(
 			expect.objectContaining({ tab: "services", section: "Cloud Relay", label: "Relay Server URL" }),
 		);
+	});
+
+	it("shows the hint under a result that has one", () => {
+		// Master Volume carries a static hint; it renders as the third row line
+		const rows = rowsFor("master volume");
+		expect(rows[0]).toContain("Master Volume");
+		expect(rows[0]).toContain("Overall volume for all notification sounds");
 	});
 
 	it("says so when nothing matches", () => {
@@ -150,6 +158,19 @@ describe("scrollToSetting", () => {
 		const spy = spyOn(root.querySelector("h3") as Element);
 		expect(scrollToSetting(root, "TUIC CLI")).toBe(true);
 		expect(spy).toHaveBeenCalled();
+	});
+
+	it("flashes the element it scrolled to, so it is findable at a glance", () => {
+		const root = mount("<h3>Cloud Relay</h3><label>Relay Server URL</label>");
+		const label = root.querySelector("label") as HTMLElement;
+		spyOn(label);
+		expect(scrollToSetting(root, "Cloud Relay", "Relay Server URL")).toBe(true);
+		expect(label.classList.contains("searchHighlight")).toBe(true);
+		// The section-only fallback flashes the heading instead
+		const heading = root.querySelector("h3") as HTMLElement;
+		spyOn(heading);
+		expect(scrollToSetting(root, "Cloud Relay")).toBe(true);
+		expect(heading.classList.contains("searchHighlight")).toBe(true);
 	});
 
 	it("reports failure instead of scrolling to the wrong place", () => {

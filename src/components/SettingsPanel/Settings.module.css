@@ -1633,6 +1633,32 @@
   color: var(--fg-muted);
 }
 
+.searchResultHint {
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Transient flash on the setting a search result or palette action jumps to. */
+@keyframes settingsSearchHighlight {
+  0%,
+  40% {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 1px transparent;
+  }
+}
+
+.searchHighlight {
+  border-radius: var(--radius-sm);
+  animation: settingsSearchHighlight 1.6s ease-out;
+}
+
 /* ── Provider availability indicator (ProvidersTab) ── */
 .availabilityOk,
 .availabilityBad {

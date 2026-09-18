@@ -8,7 +8,7 @@ import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeClea
 import { PromptDrawer } from "./components/PromptDrawer";
 import { PromptOverlay } from "./components/PromptOverlay";
 import { RepoPickerDialog } from "./components/RepoPickerDialog/RepoPickerDialog";
-import type { SettingsContext } from "./components/SettingsPanel";
+import type { SettingsContext, SettingsSearchTarget } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
@@ -201,13 +201,17 @@ const App: Component = () => {
 	const [settingsPanelVisible, setSettingsPanelVisible] = createSignal(false);
 	const [settingsInitialTab, setSettingsInitialTab] = createSignal<string | undefined>(undefined);
 	const [settingsInitialSection, setSettingsInitialSection] = createSignal<string | undefined>(undefined);
+	const [settingsInitialTarget, setSettingsInitialTarget] = createSignal<SettingsSearchTarget | undefined>(undefined);
 	const [settingsContext, setSettingsContext] = createSignal<SettingsContext>({ kind: "global" });
 
-	/** `section` is the DOM id of a block to scroll to — see SettingsPanel/sections.ts */
-	const openSettings = (tab?: string, section?: string) => {
+	/** `section` is the DOM id of a block to scroll to — see SettingsPanel/sections.ts.
+	 * `target` scrolls by rendered section/label text instead — how a Command
+	 * Palette "Settings" action lands on its control (settingsSearchIndex.ts). */
+	const openSettings = (tab?: string, section?: string, target?: SettingsSearchTarget) => {
 		setSettingsContext({ kind: "global" });
 		setSettingsInitialTab(tab);
 		setSettingsInitialSection(section);
+		setSettingsInitialTarget(target);
 		setSettingsPanelVisible(true);
 	};
 	const [taskQueueVisible, setTaskQueueVisible] = createSignal(false);
@@ -801,6 +805,7 @@ const App: Component = () => {
 		gitOps,
 		splitPanes,
 		executeSmartPrompt: smartPrompts.executeSmartPrompt,
+		openSettings,
 	});
 
 	useShortcutRegistration(shortcutHandlers);
@@ -1105,6 +1110,7 @@ const App: Component = () => {
 					closeSettings: () => setSettingsPanelVisible(false),
 					settingsInitialTab,
 					settingsInitialSection,
+					settingsInitialTarget,
 					settingsContext,
 					taskQueueVisible,
 					closeTaskQueue: () => setTaskQueueVisible(false),

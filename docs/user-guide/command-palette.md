@@ -18,7 +18,7 @@ In the desktop app, open the palette with `Cmd+P` (macOS) / `Ctrl+P` (Windows/Li
 Each row shows:
 
 - **Action label** — What the action does (e.g., "Git panel", "New terminal tab")
-- **Category badge** — The action's category (Terminal, Panels, Git, Navigation, Zoom, Split Panes, File Browser)
+- **Category badge** — The action's category (Terminal, Panels, Git, Navigation, Zoom, Split Panes, File Browser, Settings, …)
 - **Keybinding hint** — The assigned keyboard shortcut, if any
 
 ### Search Behavior
