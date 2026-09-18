@@ -10,7 +10,11 @@
  *   - every `label=` prop and every `<label>` element is a setting inside the
  *     section opened by the nearest preceding `<h3>`,
  *   - text is read from `t("key", "Default")`, from a `{"literal"}` or from a
- *     leading plain-text run; anything else is dynamic and is only counted.
+ *     leading plain-text run; anything else is dynamic and is only counted,
+ *   - a static `hint=` prop in the same open tag as a `label=` prop is that
+ *     setting's hint. A dynamic hint (template literal, conditional) is simply
+ *     absent — hints are search fodder, not settings, so it does not count as
+ *     a dynamic occurrence.
  */
 
 export interface ExtractedText {
@@ -23,7 +27,7 @@ export interface ExtractedText {
 export interface ExtractedTab {
 	sections: ExtractedText[];
 	/** Settings, each tagged with the section heading text it sits under */
-	settings: (ExtractedText & { section: string })[];
+	settings: (ExtractedText & { section: string; hint?: ExtractedText })[];
 	/** Occurrences whose text is computed at runtime and cannot be indexed */
 	dynamic: number;
 }
@@ -80,8 +84,27 @@ function unescapeJsx(s: string): string {
 	return s.replace(/\\"/g, '"').replace(/\\n/g, " ").replace(/\\\\/g, "\\");
 }
 
+/** `hint=` prop value in the open tag carrying the `label=` prop at `labelAt`.
+ *
+ * Scans back to the tag's own `<` and forward to its brace-aware `>` — a prop
+ * order of `hint=` before `label=` must attach just the same. A nearer `<`
+ * belonging to some earlier prop's inline JSX closes before `labelAt`, which
+ * the range check rejects: no hint, never a wrong one. */
+function hintInSameTag(src: string, labelAt: number): string | undefined {
+	const tagStart = src.lastIndexOf("<", labelAt);
+	if (tagStart < 0) return undefined;
+	const tagEnd = endOfOpenTag(src, tagStart);
+	if (tagEnd < labelAt) return undefined;
+	const tag = src.slice(tagStart, tagEnd);
+	const m = tag.match(/\bhint=/);
+	if (m?.index === undefined) return undefined;
+	return tag.slice(m.index + "hint=".length);
+}
+
 /** Element occurrences (`<h3>`, `<label>`) and `label=` props, in source order. */
-function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean }> {
+function* occurrences(
+	src: string,
+): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; hintInner?: string }> {
 	const re = /<(h3|label)\b|\blabel=/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src)) !== null) {
@@ -93,7 +116,12 @@ function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: str
 			yield { kind: m[1] as "h3" | "label", inner: src.slice(open + 1, close), isProp: false };
 			re.lastIndex = open + 1;
 		} else {
-			yield { kind: "label", inner: src.slice(m.index + "label=".length), isProp: true };
+			yield {
+				kind: "label",
+				inner: src.slice(m.index + "label=".length),
+				isProp: true,
+				hintInner: hintInSameTag(src, m.index),
+			};
 		}
 	}
 }
@@ -111,7 +139,8 @@ export function extractTab(src: string): ExtractedTab {
 			section = text.text;
 			out.sections.push(text);
 		} else {
-			out.settings.push({ ...text, section });
+			const hint = occ.hintInner === undefined ? null : staticExpression(occ.hintInner.trim());
+			out.settings.push({ ...text, section, ...(hint ? { hint } : {}) });
 		}
 	}
 	return out;

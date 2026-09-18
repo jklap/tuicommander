@@ -6,8 +6,15 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 
 A search box sits at the top of the tab list. Typing filters every setting across
 every tab at once, so you do not have to know which tab owns the one you want.
-Each result shows the setting name and the `Tab › Section` trail it lives under;
-selecting one opens that tab and scrolls to the field.
+Results are ranked best-match first, and a setting's description text counts too —
+searching words that only appear in a hint still finds it. Each result shows the
+setting name, the `Tab › Section` trail it lives under, and its hint; selecting
+one opens that tab, scrolls to the field, and briefly flashes it so it is easy to
+spot.
+
+Settings also appear in the Command Palette (`Cmd+P`) under the "Settings"
+category, so you can jump straight to one without opening the Settings panel
+first.
 
 Two limits are deliberate:
 

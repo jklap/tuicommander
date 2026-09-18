@@ -122,6 +122,23 @@ describe("SettingsPanel search", () => {
 		expect(onHeading).not.toHaveBeenCalled();
 	});
 
+	it("scrolls to and flashes a deep-linked control (a palette Settings action)", async () => {
+		const { container } = render(() => (
+			<SettingsPanel
+				visible={true}
+				onClose={() => {}}
+				initialTab="notifications"
+				initialTarget={{ section: "Notification Settings", label: "Master Volume" }}
+			/>
+		));
+		const setting = [...container.querySelectorAll("label")].find((el) => el.textContent === "Master Volume");
+		expect(setting).toBeDefined();
+		const onSetting = vi.fn();
+		if (setting) setting.scrollIntoView = onSetting;
+		await waitFor(() => expect(onSetting).toHaveBeenCalled());
+		expect(setting?.classList.contains("searchHighlight")).toBe(true);
+	});
+
 	it("restores the tab list when the query is cleared", () => {
 		const { container } = open();
 		fireEvent.input(searchInput(container), { target: { value: "master volume" } });
