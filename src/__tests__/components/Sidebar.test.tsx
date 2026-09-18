@@ -2688,6 +2688,7 @@ describe("Sidebar", () => {
 							terminals: [],
 							additions: 0,
 							deletions: 0,
+							gitOp: null,
 						},
 					},
 				}),
