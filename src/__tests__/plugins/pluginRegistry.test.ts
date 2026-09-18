@@ -2045,7 +2045,7 @@ describe("PluginHost — openMarkdownFile capability gating and repo routing", (
 
 	it("opens a file inside a registered repo scoped to that repo", async () => {
 		repositoriesStore.add({ path: "/gap-fill/repo", displayName: "repo" });
-		repositoriesStore.setBranch("/gap-fill/repo", "main", { worktreePath: "/gap-fill/repo" });
+		repositoriesStore.setWorkspace("/gap-fill/repo", "main", { worktreePath: "/gap-fill/repo" });
 
 		let host: PluginHost | null = null;
 		await pluginRegistry.register(

@@ -664,15 +664,6 @@ pub(super) struct ExecuteShellScriptRequest {
     pub repo_path: String,
 }
 
-/// Matches `transport.ts`'s `run_setup_script` mapping body — `{script, cwd}`,
-/// already single-word lowercase on both sides, so no `#[serde(rename)]`
-/// needed for parity with the Tauri command's own `(script, cwd)` params.
-#[derive(Deserialize)]
-pub(super) struct RunSetupScriptRequest {
-    pub script: String,
-    pub cwd: String,
-}
-
 #[derive(Deserialize)]
 pub(super) struct WorktreeSetupStatusQuery {
     #[serde(rename = "repoPath")]

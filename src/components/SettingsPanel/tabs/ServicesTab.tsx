@@ -9,7 +9,7 @@ import { writeClipboard } from "../../../utils/clipboard";
 import { isAbsolutePath } from "../../../utils/pathUtils";
 import { randomId } from "../../../utils/randomId";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
-import { SettingInput, SettingSelect, SettingToggle, settingSlugId } from "../SettingFields";
+import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import { RemoteMachinesPanel } from "./services/RemoteMachinesPanel";
 import { UpstreamMcpPanel } from "./services/UpstreamMcpPanel";
@@ -437,10 +437,7 @@ const LocalServicesPanel: Component = () => {
 
 			<h3>{t("services.heading.fileAccess", "File Access")}</h3>
 
-			<div
-				class={s.group}
-				id={settingSlugId(t("services.label.additionalReadableDirs", "Additional Readable Directories"))}
-			>
+			<div class={s.group}>
 				<label>{t("services.label.additionalReadableDirs", "Additional Readable Directories")}</label>
 				<p class={s.hint}>
 					{t(

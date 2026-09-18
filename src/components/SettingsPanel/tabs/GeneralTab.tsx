@@ -594,7 +594,6 @@ export const GeneralTab: Component = () => {
 						"Enable terminal watchers that trigger AI actions on shell events (idle, busy, errors).",
 					)}
 				/>
-
 			</Show>
 		</div>
 	);

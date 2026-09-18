@@ -1,8 +1,8 @@
 import { createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
-import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { GitOpKind } from "../stores/repositories";
+import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { RepoInfo } from "../types";
 import type { RevertResult, SessionReview, SessionSummary } from "../types/sessionDiff";
 
@@ -136,7 +136,6 @@ export function useRepository() {
 			return null;
 		}
 	}
-
 
 	/** Create a linked worktree and warm its ignored build directories. */
 	async function createWorktree(

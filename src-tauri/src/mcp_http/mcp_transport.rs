@@ -989,9 +989,6 @@ fn instruction_context(state: &Arc<AppState>) -> InstructionContext {
     }
 }
 
-
-
-
 fn build_mcp_instructions_for_mode(
     state: &Arc<AppState>,
     client_name: Option<&str>,
@@ -1094,8 +1091,6 @@ fn render_mcp_instructions(
     let session_enabled = !gates.disabled_native.contains("session");
     let agent_enabled = !gates.disabled_native.contains("agent");
     let repo_enabled = !gates.disabled_native.contains("repo");
-    let ui_enabled = !gates.disabled_native.contains("ui");
-    let plugin_dev_guide_enabled = !gates.disabled_native.contains("plugin_dev_guide");
     // Two independent preferences layered on top of `agent_enabled` — the
     // `agent` tool does both spawning and messaging, and an agent type can
     // prefer TUIC for either, both, or neither, in any combination, while
@@ -1124,11 +1119,17 @@ fn render_mcp_instructions(
         // Kept verbatim in both modes. It is not a restatement of the `session`
         // description: agents split the text and the Enter into two calls, or
         // polled after submitting, until this line existed.
-        out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+        if session_enabled {
+            out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+        }
     } else {
         out.push_str("Each tool's own description carries its actions and rules; read it there rather than expecting a catalogue here.\n\n");
-        out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
-        out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        if repo_enabled {
+            out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
+        }
+        if session_enabled {
+            out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        }
     }
 
     // ── Multi-agent work — what the tool descriptions cannot say ─────
@@ -1139,7 +1140,7 @@ fn render_mcp_instructions(
     // is conditioned on the connecting client and so cannot sit in a static
     // description at all.
     let is_claude_code = detect_claude_code_client(client_name);
-    if agent_enabled || repo_enabled {
+    if spawn_preferred || messaging_preferred {
         out.push_str("## Multi-Agent Work\n\n");
         let tools_desc = if session_enabled {
             "`agent` and `session` MCP tools"
@@ -1156,11 +1157,6 @@ fn render_mcp_instructions(
                 "There is no separate `swarm` action; multi-agent orchestration uses TUICommander's {tools_desc} — NOT your host's own built-in agent/subagent/Task tool, which is a different, unrelated tool that happens to share a similar name.\n\n"
             ));
         }
-        if messaging_preferred {
-            out.push_str("- **Identity:** managed PTYs auto-bind from `$TUIC_SESSION`. Headerless external callers use TUIC `agent action=register` without a UUID to receive an MCP-scoped identity; pass `tuic_session` only to reclaim an explicit stable UUID.\n");
-            out.push_str("- **Orchestrator role:** declare it with `agent action=register orchestrator=true`; use `false` to remove it. Spawn never infers the role. `mail_wake=managed_pty_lifecycle` is server-derived; external/headerless peers remain wait/inbox-only.\n");
-        }
-
         // "Same repo" bullet: the spawn clause and the messaging clause are
         // each independently optional (the section render condition above
         // guarantees at least one is present).
@@ -1252,18 +1248,6 @@ const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 
-// Legacy action constants — still referenced by handlers until dispatch refactor (story 1091).
-// Remove these when handle_mcp_tool_call dispatch is updated.
-const LEGACY_AGENT_ACTIONS: &str = "detect, spawn, stats, metrics";
-const LEGACY_GITHUB_ACTIONS: &str = "prs, status, issues, close_issue, reopen_issue";
-const LEGACY_WORKTREE_ACTIONS: &str = "list, create, remove, setup_status";
-const LEGACY_WORKSPACE_ACTIONS: &str = "list, active";
-const LEGACY_UI_ACTIONS: &str = "tab";
-const LEGACY_NOTIFY_ACTIONS: &str = "toast, confirm";
-const LEGACY_MESSAGING_ACTIONS: &str = "register, list_peers, send, inbox";
-const LEGACY_DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js";
-const LEGACY_TASK_ACTIONS: &str = "get, cancel";
-
 /// Build the `agent` tool's MCP definition. The strategic framing text (the
 /// opening line and the numbered orchestration walkthrough) is the part that
 /// actually steers a model toward calling `spawn`/`register`/`list_peers`/
@@ -1338,9 +1322,10 @@ fn agent_tool_definition(prefer_spawning: bool, prefer_messaging: bool) -> serde
             instead — the outcome is recorded even with nobody waiting.",
         );
         steps.push(
-            "Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct \
-            delivery. A registered orchestrator keeps peer payloads in its inbox; only \
-            idle/completed lifecycle may submit a generic `agent action=inbox` wake.",
+            "Talk to it: send to=<peer> message=<text>. Mail stays mail: the payload is never \
+            typed into the recipient's composer. It waits in the recipient's inbox, and an \
+            idle/completed recipient may be sent a payload-free generic `agent action=inbox` \
+            wake.",
         );
         steps.push(
             "Lifecycle notifications carry state only. Every worker must report task output \
@@ -1385,9 +1370,15 @@ fn agent_tool_definition(prefer_spawning: bool, prefer_messaging: bool) -> serde
         mail_stranded + identity_warning when the old identity still owns a live PTY (its mail \
         is left alone). Check `terminal` in the response: false means nothing can be typed \
         into you and no message can wake you — you must consume your own inbox with \
-        wait/inbox.\n\
-        - list_peers: List peers. Optional: project filter. Absent project is omitted.\n\
-        - send: Message a peer (requires to, message). Returns `delivered`: false means no \
+        wait/inbox. Declare the orchestrator role with orchestrator=true and remove it with \
+        false; spawning a child never infers it, and omitting the field preserves the current \
+        role. The response reports mail_wake=managed_pty_lifecycle when a wake can reach you; \
+        external/headerless peers stay wait/inbox-only.\n\
+        - list_peers: List peers. Returns tuic_session, name, orchestrator, plus alias and \
+        session_id for a peer that owns a live terminal. Optional: project filter. Absent \
+        fields are omitted.\n\
+        - send: Message a peer (requires to, message). `to` accepts the peer's tuic_session, \
+        the id of the PTY it runs in, or that terminal's alias. Returns `delivered`: false means no \
         active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the \
         single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse \
         channel, terminal, or inbox-only. Adds recipient_state={{shell_state?,agent_state?}} \
@@ -2764,11 +2755,8 @@ fn dispatch_waiter_handoff_blocking(state: &AppState, recipient: &str, message_i
             continue;
         }
         // The payload stays in the inbox; the terminal only gets the pointer.
-        let outcome = crate::pty::deliver_notice_to_managed_pty(
-            state,
-            recipient,
-            crate::pty::PEER_MAIL_WAKE,
-        );
+        let outcome =
+            crate::pty::deliver_notice_to_managed_pty(state, recipient, crate::pty::PEER_MAIL_WAKE);
         crate::pty::settle_terminal_delivery(state, recipient, &message.id, outcome);
     }
 }
@@ -5132,16 +5120,17 @@ fn handle_messaging(
             // never the payload. Skip when already pushed over the SSE channel
             // (Claude Code consumes that notification itself, so a PTY wake
             // would be redundant). The inbox always holds the message itself.
-            let terminal_outcome = live_pty
-                .as_ref()
-                .filter(|_| terminal_owned && !pushed)
-                .map(|pty_session| {
-                    crate::pty::deliver_notice_to_managed_pty(
-                        state,
-                        pty_session,
-                        crate::pty::PEER_MAIL_WAKE,
-                    )
-                });
+            let terminal_outcome =
+                live_pty
+                    .as_ref()
+                    .filter(|_| terminal_owned && !pushed)
+                    .map(|pty_session| {
+                        crate::pty::deliver_notice_to_managed_pty(
+                            state,
+                            pty_session,
+                            crate::pty::PEER_MAIL_WAKE,
+                        )
+                    });
             if let Some(outcome) = terminal_outcome {
                 crate::pty::settle_terminal_delivery(state, to, &msg_id, outcome);
                 // Only a session that cannot take the message at all falls back to
@@ -7327,6 +7316,7 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 /// pointer to the inbox rather than flooding the recipient's screen.
 const INJECT_MAX_BYTES: usize = 2048;
 
+#[cfg_attr(not(test), allow(dead_code))] // production sites retired by the peer-mail pointer design; kept for its sanitization tests
 fn frame_peer_message(sender_name: &str, content: &str) -> String {
     // Sender names are peer-controlled; strip brackets/newlines so they can't
     // forge the surrounding `[...]` frame or smuggle extra lines.
@@ -7351,6 +7341,7 @@ fn sanitize_branch_for_suggested_prompt(branch_name: &str) -> String {
     branch_name.replace('`', "'").replace('\n', " ")
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // test helper: fully-permissive gates
 fn default_tool_gates() -> ToolGates {
     ToolGates {
         disabled_native: std::collections::HashSet::new(),
@@ -7942,9 +7933,12 @@ mod tests {
             "recursive worktree deletion and git safety checks must not park a Tokio worker"
         );
         assert!(
-            body.contains("let force = args[\"force\"].as_bool().unwrap_or(false)")
-                && body.contains("archive.as_deref(),\n                    force,"),
-            "native MCP removal must default force to false and forward an explicit true"
+            body.contains("crate::worktree::RemovalMode::Safe"),
+            "native MCP removal must stay Safe mode — no force escape hatch on this surface"
+        );
+        assert!(
+            body.contains("Some(&state_for_remove),\n                    false,"),
+            "native MCP removal must never override the live-session busy gate"
         );
     }
 
@@ -7965,7 +7959,7 @@ mod tests {
         let response = handle_worktree(
             &state,
             &serde_json::json!({
-                "action": "create",
+                "action": "worktree_create",
                 "path": repo.path().to_string_lossy(),
                 "branch": "mcp-create-test",
             }),
@@ -8081,7 +8075,7 @@ mod tests {
         let create_response = handle_worktree(
             &state,
             &serde_json::json!({
-                "action": "create",
+                "action": "worktree_create",
                 "path": repo.path().to_string_lossy(),
                 "branch": "mcp-setup-status-test",
             }),
@@ -8157,9 +8151,9 @@ mod tests {
         let response = handle_worktree(
             &state,
             &serde_json::json!({
-                "action": "remove",
+                "action": "worktree_remove",
                 "path": repo.path().to_string_lossy(),
-                "branch": "mcp-remove",
+                "workspace_id": "mcp-remove",
             }),
             false,
         )
@@ -8193,9 +8187,9 @@ mod tests {
         let response = handle_worktree(
             &state,
             &serde_json::json!({
-                "action": "remove",
+                "action": "worktree_remove",
                 "path": repo.path().to_string_lossy(),
-                "branch": "mcp-busy",
+                "workspace_id": "mcp-busy",
             }),
             false,
         )
@@ -14224,8 +14218,12 @@ mod tests {
             !out.contains("`session action=status|output`"),
             "session clause must be omitted from Workflow Observe bullet"
         );
-        // Other tools stay advertised.
-        assert!(out.contains("- `agent` (AI peers"));
+        // The session-specific Submit rule disappears with the tool...
+        assert!(
+            !out.contains("**Submit:**"),
+            "Submit rule must be omitted when the session tool is disabled"
+        );
+        // ...while agent guidance survives.
         assert!(out.contains("## Multi-Agent Work"));
     }
 
@@ -14247,9 +14245,9 @@ mod tests {
             !out.contains("- **Coordinate:**"),
             "agent-only Coordinate bullet must be omitted from Workflow"
         );
-        // session/repo spawn guidance stays.
-        assert!(out.contains("`session action=create` (shell)"));
-        assert!(out.contains("`repo action=worktree_create` (isolated)"));
+        // session/repo guidance stays.
+        assert!(out.contains("**Submit:** `session action=submit"));
+        assert!(out.contains("**Worktrees:** always `repo action=worktree_create`"));
     }
 
     #[test]
@@ -14315,9 +14313,12 @@ mod tests {
             !out.contains("## Workflow"),
             "Workflow header must not render with zero possible bullets"
         );
-        // ui/plugin_dev_guide are unaffected and still listed.
-        assert!(out.contains("- `ui` ("));
-        assert!(out.contains("plugin_dev_guide`: plugin authoring reference"));
+        // The generic Tools rules survive; nothing tool-specific leaks back in.
+        assert!(out.contains("## Tools"));
+        assert!(
+            !out.contains("## Multi-Agent Work"),
+            "Multi-Agent Work needs a spawnable or messageable agent tool"
+        );
     }
 
     #[test]
@@ -14402,20 +14403,16 @@ mod tests {
         let out = build_mcp_instructions(&state, Some("claude-code"));
 
         // Spawn guidance stays.
-        assert!(out.contains("`agent action=spawn` (AI)"));
+        assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
         assert!(
             out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo.")
         );
         assert!(out.contains("- **Isolated branches:**"));
 
         // Messaging guidance is gone.
-        assert!(
-            out.contains("- `agent` (AI peers): spawn, detect, stats, metrics"),
-            "expected trimmed agent bullet without messaging verbs, got: {out}"
-        );
         assert!(!out.contains("agent action=register"));
-        assert!(!out.contains("- **Coordinate:**"));
         assert!(!out.contains("`agent action=inbox`"));
+        assert!(!out.contains("`agent action=send`"));
         assert!(!out.contains("- **Identity:**"));
     }
 
@@ -14475,10 +14472,8 @@ mod tests {
         let out = build_mcp_instructions(&state, Some("claude-code"));
 
         // Messaging guidance stays.
-        assert!(out.contains("- `agent` (AI peers + messaging): wait, detect, stats, metrics, register, list_peers, send, inbox"));
-        assert!(out.contains("- **Identity:**"));
+        assert!(out.contains("wait with `agent action=wait`, then read `agent action=inbox`"));
         assert!(out.contains("`agent action=inbox`"));
-        assert!(out.contains("- **Coordinate:**"));
         assert!(out.contains(
             "- **Same repo:** wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`.\n"
         ));
@@ -14547,7 +14542,10 @@ mod tests {
         );
         // The agent tool is still enabled and still listed, just with neither
         // spawn nor messaging verbs — pure peer-admin only.
-        assert!(out.contains("- `agent` (AI peers): detect, stats, metrics"));
+        assert!(
+            !out.contains("## Multi-Agent Work"),
+            "neither preference set: the whole Multi-Agent Work section is omitted"
+        );
         // Workflow still renders (session/repo/agent-detect content survives).
         assert!(!out.contains("- **Coordinate:**"));
         assert!(!out.contains("`agent action=spawn` (AI)"));
@@ -14587,9 +14585,9 @@ mod tests {
             "agent bullet must still be omitted from Tools"
         );
         assert!(!out.contains("- **Coordinate:**"));
-        // session/repo spawn guidance is unaffected by the agent-only override.
-        assert!(out.contains("`session action=create` (shell)"));
-        assert!(out.contains("`repo action=worktree_create` (isolated)"));
+        // session/repo guidance is unaffected by the agent-only override.
+        assert!(out.contains("**Submit:** `session action=submit"));
+        assert!(out.contains("**Worktrees:** always `repo action=worktree_create`"));
     }
 
     // ---- Instruction de-duplication (#754-affa) ------------------------------
@@ -14884,12 +14882,17 @@ mod tests {
 
         // Budgets are regression guards on the surfaces this story shrank, not
         // targets. Each is the measured value rounded up to the next 64 bytes.
+        // 1600 → 3008 when the marker section's one-line preamble was replaced
+        // by the three-paragraph provenance/scoping wording (agents were
+        // flagging the terse form as prompt injection — see "rewrite marker
+        // instructions and peer-message framing"). Still the measured value
+        // rounded up to the next 64 bytes.
         assert!(
-            instructions_classic_empty <= 1600,
+            instructions_classic_empty <= 3008,
             "classic instructions grew past their budget — {measured}"
         );
         assert!(
-            instructions_collapsed_empty <= 1600,
+            instructions_collapsed_empty <= 3008,
             "collapsed instructions grew past their budget — {measured}"
         );
         assert!(

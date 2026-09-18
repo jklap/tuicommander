@@ -1175,7 +1175,6 @@ pub(super) async fn create_session_with_worktree(
         std::path::PathBuf::from(&worktree_path_str),
     );
 
-
     let rows = body.config.rows.unwrap_or(24);
     let cols = body.config.cols.unwrap_or(80);
     if let Err(msg) = super::validate_terminal_size(rows, cols) {
@@ -2732,7 +2731,12 @@ mod tests {
         }
 
         assert_eq!(
-            state.session_maps.session_states.get(session_id).unwrap().agent_type,
+            state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .agent_type,
             None,
             "the HTTP/remote transport must mutate session_states.agent_type via the \
              same shared impl the desktop IPC command uses, not silently no-op"
@@ -2852,9 +2856,7 @@ mod tests {
             .pending_injections
             .entry(session_id.to_string())
             .or_default()
-            .push_back(crate::state::PendingInjection::notice(
-                "queued message",
-            ));
+            .push_back(crate::state::PendingInjection::notice("queued message"));
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

@@ -346,10 +346,10 @@ describe("useTerminalContextMenus", () => {
 			(settingsStore.isAgentEnabled as ReturnType<typeof vi.fn>).mockImplementation(() => true);
 		});
 
-		it("no-ops when handleAddTerminalToBranch yields no terminal id", async () => {
+		it("no-ops when handleAddTerminalToWorkspace yields no terminal id", async () => {
 			mockAgentConfigs.getRunConfigs.mockReturnValue([]);
 			const options = createOptions([{ type: "claude" }]);
-			options.gitOps.handleAddTerminalToBranch.mockResolvedValue(undefined);
+			options.gitOps.handleAddTerminalToWorkspace.mockResolvedValue(undefined);
 			const menus = useTerminalContextMenus(options as never);
 
 			const item = menus.buildSidebarAgentMenuItems("/repo", "feature")[0];

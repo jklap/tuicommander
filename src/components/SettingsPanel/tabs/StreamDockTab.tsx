@@ -3,7 +3,7 @@ import { appLogger } from "../../../stores/appLogger";
 import { terminalsStore } from "../../../stores/terminals";
 import { rpc } from "../../../transport";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
-import { SettingSlider, SettingToggle, settingSlugId } from "../SettingFields";
+import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface StreamDockConfig {
@@ -136,7 +136,7 @@ export const StreamDockTab: Component = () => {
 				hint="Attaches to the first connected StreamDock M18 (or the selected device below) and starts mirroring session state to its keys."
 			/>
 
-			<div class={s.group} id={settingSlugId("StreamDock status")}>
+			<div class={s.group}>
 				<label>StreamDock status</label>
 				<div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
 					<span
@@ -156,7 +156,7 @@ export const StreamDockTab: Component = () => {
 				</Show>
 			</div>
 
-			<div class={s.group} id={settingSlugId("StreamDock device")}>
+			<div class={s.group}>
 				<label>Device</label>
 				<select
 					value={cfg().device_serial ?? ""}

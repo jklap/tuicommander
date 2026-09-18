@@ -68,7 +68,15 @@ describe("CanvasTerminal clipboard failure handling", () => {
 	});
 
 	it("copySelection surfaces a failure status and logs instead of claiming success", async () => {
-		mockInvoke.mockRejectedValueOnce(new DOMException("Write permission denied.", "NotAllowedError"));
+		mockInvoke.mockImplementation(async (cmd: string) => {
+			// Target only the clipboard write: the component now issues other
+			// mount-time invokes first (e.g. inline-image placement hydration),
+			// so a bare mockRejectedValueOnce would be consumed by one of those.
+			if (cmd === "plugin:clipboard-manager|write_text") {
+				throw new DOMException("Write permission denied.", "NotAllowedError");
+			}
+			return undefined;
+		});
 		const mounted = await mountCanvasTerminal({ sessionId: "clip1", terminalId: "tclip1" });
 		fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 40));
 
@@ -97,7 +105,15 @@ describe("CanvasTerminal clipboard failure handling", () => {
 	});
 
 	it("right-click Copy Link does not throw when the clipboard write is denied", async () => {
-		mockInvoke.mockRejectedValueOnce(new DOMException("Write permission denied.", "NotAllowedError"));
+		mockInvoke.mockImplementation(async (cmd: string) => {
+			// Target only the clipboard write: the component now issues other
+			// mount-time invokes first (e.g. inline-image placement hydration),
+			// so a bare mockRejectedValueOnce would be consumed by one of those.
+			if (cmd === "plugin:clipboard-manager|write_text") {
+				throw new DOMException("Write permission denied.", "NotAllowedError");
+			}
+			return undefined;
+		});
 		const mounted = await mountCanvasTerminal({ sessionId: "clip3", terminalId: "tclip3" });
 		fakeTransport.current!.pushFrame(buildTextFrame(["open https://example.com/a now"], 40));
 

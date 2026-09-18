@@ -1718,12 +1718,7 @@ mod tests {
         // The Markdown export coordinates concurrent writes with a lock file in
         // the same directory, so it belongs to the same exclude contract.
         let export_lock = repo.join(crate::progress::EXPORT_LOCK);
-        for path in [
-            &db_path.to_path_buf(),
-            &wal_path,
-            &shm_path,
-            &export_lock,
-        ] {
+        for path in [&db_path.to_path_buf(), &wal_path, &shm_path, &export_lock] {
             assert_eq!(
                 classify_path(path, &repo, &git_dir, &[], &gi),
                 EventCategory::Noise,

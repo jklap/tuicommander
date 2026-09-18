@@ -1166,9 +1166,10 @@ describe("Sidebar", () => {
 		] as const)("shows a %s badge with the %s class and label", (kind, cls, label) => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							workspaceId: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: [],
@@ -1189,9 +1190,10 @@ describe("Sidebar", () => {
 		it("shows the git-op badge on the MAIN branch too (the !isMain gate was dropped)", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							workspaceId: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: [],
@@ -1468,11 +1470,20 @@ describe("Sidebar", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
-						activeBranch: "main",
-						branches: {
-							main: { name: "main", isMain: true, worktreePath: null, terminals: ["t1"], additions: 0, deletions: 0 },
+						activeWorkspaceId: "main",
+						workspaces: {
+							main: {
+								workspaceId: "main",
+								branchName: "main",
+								isMain: true,
+								worktreePath: null,
+								terminals: ["t1"],
+								additions: 0,
+								deletions: 0,
+							},
 							"feature/x": {
-								name: "feature/x",
+								workspaceId: "feature/x",
+								branchName: "feature/x",
 								isMain: false,
 								worktreePath: "/wt/x",
 								terminals: ["t2", "t3"],
@@ -1678,9 +1689,10 @@ describe("Sidebar", () => {
 			try {
 				setRepos({
 					"/repo1": makeRepo({
-						branches: {
+						workspaces: {
 							main: {
-								name: "main",
+								workspaceId: "main",
+								branchName: "main",
 								isMain: true,
 								worktreePath: "/path/to/repo",
 								terminals: [],
@@ -2494,8 +2506,16 @@ describe("Sidebar", () => {
 		it("shows a Switch Branch submenu on the main worktree row, checkmarking the current branch", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: "/repo1", terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: "/repo1",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
 					},
 				}),
 			});
@@ -2557,10 +2577,19 @@ describe("Sidebar", () => {
 		it("shows Create Worktree for a branchless-worktree branch and calls onCreateWorktreeFromBranch", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: "/repo1", terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: "/repo1",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
 						"feature/y": {
-							name: "feature/y",
+							workspaceId: "feature/y",
+							branchName: "feature/y",
 							isMain: false,
 							worktreePath: null,
 							terminals: [],
@@ -2590,10 +2619,19 @@ describe("Sidebar", () => {
 		it("shows Merge & Archive for a linked-worktree non-main branch and calls onMergeAndArchive", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: "/repo1", terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: "/repo1",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
 						"feature/x": {
-							name: "feature/x",
+							workspaceId: "feature/x",
+							branchName: "feature/x",
 							isMain: false,
 							worktreePath: "/wt/x",
 							terminals: [],
@@ -2688,13 +2726,18 @@ describe("Sidebar", () => {
 		});
 	});
 
-	describe("pending branch states (isPreparing / isRemoving)", () => {
-		it("shows a 'Preparing…' fallback row instead of the interactive branch row", () => {
+	describe("pending branch states (isRemoving)", () => {
+		// `isPreparing` (COW clone creation in progress) no longer exists on
+		// WorkspaceState — COW workspace APIs were removed (#767-3968) and
+		// `isPendingOp` now only checks `isRemoving`. A stray `isPreparing` field
+		// is therefore inert: it must not trip the pending fallback on its own.
+		it("does not show a pending fallback row for a stale isPreparing field (COW support was removed)", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							workspaceId: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: [],
@@ -2707,18 +2750,19 @@ describe("Sidebar", () => {
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const branchItem = container.querySelector(".branchItem")!;
-			expect(branchItem.getAttribute("aria-busy")).toBe("true");
-			expect(branchItem.textContent).toContain("Preparing…");
-			// No context menu / interactive controls in the pending fallback.
-			expect(branchItem.querySelector("button")).toBeNull();
+			expect(branchItem.getAttribute("aria-busy")).not.toBe("true");
+			expect(branchItem.textContent).not.toContain("Preparing…");
+			// The row stays interactive (Add Terminal button still renders).
+			expect(branchItem.querySelector("button")).not.toBeNull();
 		});
 
 		it("shows a 'Removing…' fallback row when the branch itself is mid-removal", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							workspaceId: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: [],
@@ -2744,8 +2788,16 @@ describe("Sidebar", () => {
 			const toggleGitPanelSpy = vi.spyOn(uiStore, "toggleGitPanelOnTab").mockImplementation(() => {});
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 3, deletions: 1 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 3,
+							deletions: 1,
+						},
 					},
 				}),
 			});

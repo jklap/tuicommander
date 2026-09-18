@@ -190,23 +190,14 @@ describe("useConfirmDialog", () => {
 			expect(await promise).toBe(false);
 		});
 
-		it("defaults deleteBranch to true (mentions the local branch) when omitted", async () => {
-			const promise = dialog.confirmRemoveWorktree("feature-x");
-
-			expect(dialog.dialogState()?.message).toBe(
-				"Remove feature-x?\nThis deletes the worktree directory and its local branch.",
+		it("mentions the (safe) local-branch deletion when deleteBranch is true", async () => {
+			const promise = dialog.confirmRemoveWorktree(
+				"feature-x",
+				{ dirty: false, commitStatus: "unmerged", removalSafety: "safe" },
+				true,
 			);
 
-			dialog.handleClose();
-			await promise;
-		});
-
-		it("mentions the local branch when deleteBranch is explicitly true", async () => {
-			const promise = dialog.confirmRemoveWorktree("feature-x", true);
-
-			expect(dialog.dialogState()?.message).toBe(
-				"Remove feature-x?\nThis deletes the worktree directory and its local branch.",
-			);
+			expect(dialog.dialogState()?.message).toContain("Git will safely delete the local branch");
 
 			dialog.handleClose();
 			await promise;
@@ -215,11 +206,15 @@ describe("useConfirmDialog", () => {
 		// Regression: the dialog used to unconditionally claim the local branch
 		// would be deleted, even when the repo's "Delete local branch when
 		// removing worktree" setting was off.
-		it("omits the local-branch mention when deleteBranch is false", async () => {
-			const promise = dialog.confirmRemoveWorktree("feature-x", false);
+		it("says the local branch is kept when deleteBranch is false", async () => {
+			const promise = dialog.confirmRemoveWorktree(
+				"feature-x",
+				{ dirty: false, commitStatus: "unmerged", removalSafety: "safe" },
+				false,
+			);
 
-			expect(dialog.dialogState()?.message).toBe("Remove feature-x?\nThis deletes the worktree directory.");
-			expect(dialog.dialogState()?.message).not.toContain("local branch");
+			expect(dialog.dialogState()?.message).toContain("The local branch will be kept.");
+			expect(dialog.dialogState()?.message).not.toContain("safely delete");
 
 			dialog.handleClose();
 			await promise;

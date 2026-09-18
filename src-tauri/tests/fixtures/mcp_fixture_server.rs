@@ -166,8 +166,13 @@ fn main() {
             // A method the scenario has nothing to say about. The shell scripts
             // ignored these; only `minimal` had a default arm, and it is above.
             (
-                "protocol-offer-probe" | "exit-after-handshake" | "env-tool-name"
-                | "notify-once" | "notify-thrice" | "chatty" | "mute-tool-call",
+                "protocol-offer-probe"
+                | "exit-after-handshake"
+                | "env-tool-name"
+                | "notify-once"
+                | "notify-thrice"
+                | "chatty"
+                | "mute-tool-call",
                 _,
             ) => {}
             (unknown, _) => panic!("unknown scenario {unknown:?}"),

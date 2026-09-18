@@ -136,9 +136,9 @@ export function resolvePromptTreeIn(
 ): PromptTree | null {
 	const owner = resolveRepoOwnerIn(path, repos);
 	if (!owner) return null;
-	const worktreePath = owner.branchName ? repos[owner.repoPath]?.branches[owner.branchName]?.worktreePath : null;
+	const worktreePath = owner.workspaceId ? repos[owner.repoPath]?.workspaces[owner.workspaceId]?.worktreePath : null;
 	const treePath = worktreePath || owner.repoPath;
-	return { repoPath: owner.repoPath, branchName: owner.branchName, treePath };
+	return { repoPath: owner.repoPath, branchName: owner.workspaceId, treePath };
 }
 
 /**

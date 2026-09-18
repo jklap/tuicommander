@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import "./mocks/tauri";
-import { buildTickerText, classifyPollError, formatResetCompact, getTickerPriority } from "../features/claudeUsage";
+import { describeUsageError } from "../features/agentUsage";
+import { buildTickerText, formatResetCompact, getTickerPriority } from "../features/claudeUsage";
 
 const NOW = Date.UTC(2026, 5, 11, 12, 0, 0); // fixed reference instant
 
@@ -257,24 +258,34 @@ describe("getTickerPriority", () => {
 	});
 });
 
-describe("classifyPollError", () => {
+describe("describeUsageError (claude)", () => {
 	// poll() calls String(err) before passing the result here (err may be an Error
 	// thrown locally, or a plain string — Tauri command rejections arrive as strings).
 	it("recognizes a missing OAuth token", () => {
-		expect(classifyPollError(String(new Error("No Claude OAuth token found")))).toBe("no token");
+		expect(describeUsageError(String(new Error("No Claude OAuth token found")), "No Claude OAuth token")).toBe(
+			"no token",
+		);
 	});
 
 	it("recognizes 401/403 as an expired token", () => {
-		expect(classifyPollError(String(new Error("API returned 401: unauthorized")))).toBe("token expired");
-		expect(classifyPollError(String(new Error("API returned 403: forbidden")))).toBe("token expired");
+		expect(describeUsageError(String(new Error("API returned 401: unauthorized")), "No Claude OAuth token")).toBe(
+			"token expired",
+		);
+		expect(describeUsageError(String(new Error("API returned 403: forbidden")), "No Claude OAuth token")).toBe(
+			"token expired",
+		);
 	});
 
 	it("recognizes a parse failure as an API shape change", () => {
-		expect(classifyPollError(String(new Error("Failed to parse API response: unexpected EOF")))).toBe("API changed");
+		expect(
+			describeUsageError(String(new Error("Failed to parse API response: unexpected EOF")), "No Claude OAuth token"),
+		).toBe("API changed");
 	});
 
 	it("falls back to 'offline' for anything else", () => {
-		expect(classifyPollError(String(new Error("API request failed: network error")))).toBe("offline");
-		expect(classifyPollError("Rate limited — waiting for backoff to expire")).toBe("offline");
+		expect(describeUsageError(String(new Error("API request failed: network error")), "No Claude OAuth token")).toBe(
+			"offline",
+		);
+		expect(describeUsageError("Rate limited — waiting for backoff to expire", "No Claude OAuth token")).toBe("offline");
 	});
 });

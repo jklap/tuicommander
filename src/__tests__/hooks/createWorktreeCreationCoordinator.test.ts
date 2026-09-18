@@ -67,9 +67,8 @@ describe("createWorktreeCreationCoordinator", () => {
 			import("../../hooks/git/createWorktreeCreationCoordinator").WorktreeDialogState | null
 		>(null);
 		const statusMessages: string[] = [];
-		const pendingCreations = new Map();
 		const markRecentlyCreated = vi.fn();
-		const handleAddTerminalToBranch = vi.fn().mockResolvedValue(undefined);
+		const handleAddTerminalToWorkspace = vi.fn().mockResolvedValue(undefined);
 
 		const repo = {
 			generateWorktreeName: vi.fn().mockResolvedValue("new-worktree"),
@@ -83,6 +82,7 @@ describe("createWorktreeCreationCoordinator", () => {
 				status: "ok",
 				name: "new-worktree",
 				path: `${REPO}__wt/new-worktree`,
+				workspace_id: "new-worktree",
 				branch: "new-worktree",
 				base_repo: REPO,
 			}),
@@ -104,10 +104,8 @@ describe("createWorktreeCreationCoordinator", () => {
 			setCreatingWorktreeRepos,
 			worktreeDialogState,
 			setWorktreeDialogState,
-			pendingCreations,
-			pendingKey: (repoPath: string, branchName: string) => `${repoPath}:${branchName}`,
 			markRecentlyCreated,
-			handleAddTerminalToBranch,
+			handleAddTerminalToWorkspace,
 		} as never);
 
 		return {
@@ -120,7 +118,7 @@ describe("createWorktreeCreationCoordinator", () => {
 			worktreeDialogState,
 			setWorktreeDialogState,
 			markRecentlyCreated,
-			handleAddTerminalToBranch,
+			handleAddTerminalToWorkspace,
 		};
 	}
 
@@ -352,6 +350,7 @@ describe("createWorktreeCreationCoordinator", () => {
 					status: "ok",
 					name: branchName,
 					path: `${REPO}__wt/${branchName}`,
+					workspace_id: branchName,
 					branch: branchName,
 					base_repo: baseRepo,
 				}),
@@ -365,7 +364,7 @@ describe("createWorktreeCreationCoordinator", () => {
 				const { getCallback } = captureListener<{ repoPath: string; branch: string }>(
 					"worktree-setup-script-completed",
 				);
-				const { coordinator, handleAddTerminalToBranch } = makeCoordinator({ repo: echoBranchRepoOverrides });
+				const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
 
 				await coordinator.handleAddWorktree(REPO);
 				const done = coordinator.confirmCreateWorktree({
@@ -376,12 +375,12 @@ describe("createWorktreeCreationCoordinator", () => {
 
 				await flushMicrotasks();
 				expect(mockListen).toHaveBeenCalledWith("worktree-setup-script-completed", expect.any(Function));
-				expect(handleAddTerminalToBranch).not.toHaveBeenCalled();
+				expect(handleAddTerminalToWorkspace).not.toHaveBeenCalled();
 
 				getCallback()!({ payload: { repoPath: REPO, branch: "feature-x" } });
 				await done;
 
-				expect(handleAddTerminalToBranch).toHaveBeenCalledWith(REPO, "feature-x");
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
 			});
 		});
 
@@ -392,7 +391,7 @@ describe("createWorktreeCreationCoordinator", () => {
 				const { getCallback } = captureListener<{ repoPath: string; branch: string }>(
 					"worktree-setup-script-completed",
 				);
-				const { coordinator, handleAddTerminalToBranch } = makeCoordinator({ repo: echoBranchRepoOverrides });
+				const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
 
 				await coordinator.handleAddWorktree(REPO);
 				const done = coordinator.confirmCreateWorktree({
@@ -404,23 +403,23 @@ describe("createWorktreeCreationCoordinator", () => {
 
 				getCallback()!({ payload: { repoPath: REPO, branch: "some-other-branch" } });
 				await flushMicrotasks();
-				expect(handleAddTerminalToBranch).not.toHaveBeenCalled();
+				expect(handleAddTerminalToWorkspace).not.toHaveBeenCalled();
 
 				getCallback()!({ payload: { repoPath: REPO, branch: "feature-x" } });
 				await done;
-				expect(handleAddTerminalToBranch).toHaveBeenCalledWith(REPO, "feature-x");
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
 			});
 		});
 
 		it("creates the terminal without waiting on any event when no setup script is configured", async () => {
 			await testInScopeAsync(async () => {
-				const { coordinator, handleAddTerminalToBranch } = makeCoordinator({ repo: echoBranchRepoOverrides });
+				const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
 
 				await coordinator.handleAddWorktree(REPO);
 				await coordinator.confirmCreateWorktree({ branchName: "feature-x", createBranch: true, baseRef: "main" });
 
 				expect(mockListen).not.toHaveBeenCalled();
-				expect(handleAddTerminalToBranch).toHaveBeenCalledWith(REPO, "feature-x");
+				expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
 			});
 		});
 
@@ -431,7 +430,7 @@ describe("createWorktreeCreationCoordinator", () => {
 					repoSettingsStore.getOrCreate(REPO, "alpha");
 					repoSettingsStore.update(REPO, { setupScript: "npm install" });
 					captureListener("worktree-setup-script-completed");
-					const { coordinator, handleAddTerminalToBranch } = makeCoordinator({ repo: echoBranchRepoOverrides });
+					const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
 
 					await coordinator.handleAddWorktree(REPO);
 					const done = coordinator.confirmCreateWorktree({
@@ -440,13 +439,13 @@ describe("createWorktreeCreationCoordinator", () => {
 						baseRef: "main",
 					});
 					await flushMicrotasks();
-					expect(handleAddTerminalToBranch).not.toHaveBeenCalled();
+					expect(handleAddTerminalToWorkspace).not.toHaveBeenCalled();
 
 					// Matches SETUP_SCRIPT_WAIT_TIMEOUT_MS in createWorktreeCreationCoordinator.ts.
 					await vi.advanceTimersByTimeAsync(900_000);
 					await done;
 
-					expect(handleAddTerminalToBranch).toHaveBeenCalledWith(REPO, "feature-x");
+					expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
 				});
 			} finally {
 				vi.useRealTimers();
@@ -473,7 +472,7 @@ describe("createWorktreeCreationCoordinator", () => {
 							}),
 					);
 
-					const { coordinator, handleAddTerminalToBranch } = makeCoordinator({ repo: echoBranchRepoOverrides });
+					const { coordinator, handleAddTerminalToWorkspace } = makeCoordinator({ repo: echoBranchRepoOverrides });
 
 					await coordinator.handleAddWorktree(REPO);
 					const done = coordinator.confirmCreateWorktree({
@@ -486,7 +485,7 @@ describe("createWorktreeCreationCoordinator", () => {
 					// Timeout fires with listen()'s registration promise still pending.
 					await vi.advanceTimersByTimeAsync(900_000);
 					await done;
-					expect(handleAddTerminalToBranch).toHaveBeenCalledWith(REPO, "feature-x");
+					expect(handleAddTerminalToWorkspace).toHaveBeenCalledWith(REPO, "feature-x");
 					expect(unlistenFn).not.toHaveBeenCalled();
 
 					// Now the registration finally resolves — must unlisten immediately

@@ -39,7 +39,12 @@ pub(super) struct NotificationSoundRequest {
 pub(super) async fn play_notification_sound_http(
     Json(body): Json<NotificationSoundRequest>,
 ) -> impl IntoResponse {
-    crate::notification_sound::play_notification_sound(body.sound, body.volume, body.device, body.choice);
+    crate::notification_sound::play_notification_sound(
+        body.sound,
+        body.volume,
+        body.device,
+        body.choice,
+    );
     Json(serde_json::Value::Null)
 }
 

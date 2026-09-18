@@ -1017,9 +1017,6 @@ pub(crate) struct AppConfig {
     /// bool into this field; Rust just persists whatever it's given.
     #[serde(default = "default_block_timestamp_mode")]
     pub(crate) block_timestamp_mode: String,
-    /// Draw command-block marks on the terminal scrollbar. Frontend-gated.
-    #[serde(default = "default_true")]
-    pub(crate) show_scrollbar_marks: bool,
     /// Draw command-block boundary tick marks (blue/red) on the terminal scrollbar.
     /// Frontend-gated.
     #[serde(default = "default_true")]
@@ -1325,7 +1322,6 @@ impl Default for AppConfig {
             word_selection_regex: default_word_selection_regex(),
             smart_selection_rules: Vec::new(),
             show_block_timestamps: true,
-            show_scrollbar_marks: true,
             block_timestamp_mode: default_block_timestamp_mode(),
             show_block_marks: true,
             show_prompt_marks: true,
@@ -4733,7 +4729,6 @@ mod tests {
             // All three default to true, so `false` is the only value that can
             // tell a real round trip from serde handing back the default.
             show_block_timestamps: false,
-            show_scrollbar_marks: false,
             block_timestamp_mode: "always".to_string(),
             show_block_marks: false,
             show_prompt_marks: false,
@@ -4810,7 +4805,6 @@ mod tests {
         // them from every `save_config` payload and the UI silently snapped
         // back to the default on the next load.
         assert!(!loaded.show_block_timestamps);
-        assert!(!loaded.show_scrollbar_marks);
         assert_eq!(loaded.block_timestamp_mode, "always");
         assert!(!loaded.show_block_marks);
         assert!(!loaded.show_prompt_marks);
@@ -4902,7 +4896,6 @@ mod tests {
         // the frontend store hydrates each with `?? true` — the two sides must
         // agree or the Settings toggles read one value and the terminal another.
         assert!(loaded.show_block_timestamps);
-        assert!(loaded.show_scrollbar_marks);
         assert_eq!(loaded.block_timestamp_mode, "modifier"); // defaults to "modifier"
         assert!(loaded.show_block_marks); // defaults to true
         assert!(loaded.show_prompt_marks); // defaults to true

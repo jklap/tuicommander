@@ -107,7 +107,9 @@ describe("useGitOperations", () => {
 		getRepoSummary: vi
 			.fn()
 			.mockResolvedValue({ worktree_paths: wtPaths({}), merged_branches: [], diff_stats: {}, last_commit_ts: {} }),
-		getRepoStructure: vi.fn().mockResolvedValue({ worktree_paths: wtPaths({}), merged_branches: [], in_progress_ops: [] }),
+		getRepoStructure: vi
+			.fn()
+			.mockResolvedValue({ worktree_paths: wtPaths({}), merged_branches: [], in_progress_ops: [] }),
 		getRepoDiffStats: vi.fn().mockResolvedValue({ diff_stats: {}, last_commit_ts: {} }),
 		removeWorktree: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn(),
@@ -358,7 +360,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			// Both saved shell tabs restore as fresh terminals in their saved cwd.
 			expect(branch?.terminals.length).toBe(2);
 			expect(branch?.savedTerminals?.length).toBe(0);
@@ -477,7 +479,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleBranchSelect("/repo", "feature");
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			// Both the agent tab and the plain shell tab restore.
 			expect(branch?.terminals.length).toBe(2);
 			const restored = branch!.terminals.map((id) => terminalsStore.get(id));
@@ -1404,13 +1406,13 @@ describe("useGitOperations", () => {
 		// the sidebar to show *why* the row looks the way it does.
 		it("marks a branch's gitOp when its worktree has an operation in progress", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt-feature" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt-feature" });
 			const tid = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo/wt-feature" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", tid);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", tid);
 
 			mockSummary({
-				worktree_paths: { main: "/repo", feature: "/repo/wt-feature" },
+				worktree_paths: wtPaths({ main: "/repo", feature: "/repo/wt-feature" }),
 				merged_branches: [],
 				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
 				last_commit_ts: {},
@@ -1419,24 +1421,32 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["feature"];
 			expect(branch).toBeDefined();
 			expect(branch?.gitOp).toBe("rebase");
 			expect(branch?.terminals).toContain(tid);
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
 		});
 
+		// Regression coverage from the wip/main merge: `setWorkspace` runs its
+		// patch through `definedFields` (repositories.ts), which strips
+		// `undefined`-valued keys before merging, so the coordinator's old
+		// `gitOp: inProgressOps.get(wt.path)` write silently never cleared a
+		// finished operation. Fixed by following the store's own clearable-field
+		// convention (`worktreePath: string | null`): `gitOp` is now
+		// `GitOpKind | null` and the coordinator writes `?? null`, which
+		// `definedFields` lets through.
 		it("clears gitOp once the worktree's operation is no longer in progress", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt-feature",
 				gitOp: "rebase",
 			});
 
 			// Rebase finished — the worktree no longer has an operation in progress.
 			mockSummary({
-				worktree_paths: { main: "/repo", feature: "/repo/wt-feature" },
+				worktree_paths: wtPaths({ main: "/repo", feature: "/repo/wt-feature" }),
 				merged_branches: [],
 				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
 				last_commit_ts: {},
@@ -1445,23 +1455,25 @@ describe("useGitOperations", () => {
 
 			await gitOps.refreshAllBranchStats();
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]?.gitOp).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.gitOp ?? null).toBeNull();
 		});
 
 		// Edge case: `in_progress_ops` is typed as required, but a response that omits it
 		// entirely (rather than sending `[]`) — an older cached payload shape, a hand-rolled
 		// mock elsewhere — must not crash refreshAllBranchStats and must still clear a
 		// previously-set gitOp, the same as an explicit empty array would.
+		// Same KNOWN REGRESSION as above (definedFields strips the clearing
+		// `gitOp: undefined` write) — see the comment on the previous test.
 		it("clears gitOp when the backend response omits `in_progress_ops` entirely", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-			repositoriesStore.setBranch("/repo", "feature", {
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt-feature",
 				gitOp: "rebase",
 			});
 
 			mockRepo.getRepoStructure.mockResolvedValue({
-				worktree_paths: { main: "/repo", feature: "/repo/wt-feature" },
+				worktree_paths: wtPaths({ main: "/repo", feature: "/repo/wt-feature" }),
 				merged_branches: [],
 			});
 			mockRepo.getRepoDiffStats.mockResolvedValue({
@@ -1471,7 +1483,7 @@ describe("useGitOperations", () => {
 
 			await expect(gitOps.refreshAllBranchStats()).resolves.not.toThrow();
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]?.gitOp).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.gitOp ?? null).toBeNull();
 		});
 
 		it("refreshes the active repo first and caps repo fan-out", async () => {
@@ -1999,6 +2011,14 @@ describe("useGitOperations", () => {
 		});
 
 		it("passes force only after confirming destructive state", async () => {
+			// The pre-flight lifecycle check no longer decides `force` up front —
+			// the first attempt always tries Safe mode (see
+			// createWorktreeRemovalCoordinator.ts's "First attempt never overrides
+			// anything" comment; `removalSafety: "requires_force"` only changes the
+			// confirm dialog's wording now). `force` only becomes true once git
+			// itself refuses with `worktree_dirty:` and the user confirms the
+			// follow-up destructive-state dialog — exercised here the same way
+			// "handleRemoveBranch (dirty worktree)"'s retry tests do.
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirty: true,
 				commitStatus: "unmerged",
@@ -2010,10 +2030,16 @@ describe("useGitOperations", () => {
 				kind: "worktree",
 				worktreePath: "/repo/wt",
 			});
+			mockRepo.removeWorktree
+				.mockRejectedValueOnce(new Error("worktree_dirty:fatal: contains modified or untracked files"))
+				.mockResolvedValueOnce(undefined);
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true);
+			expect(mockDialogs.confirmForceRemoveDirtyWorktree).toHaveBeenCalledWith("feature");
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
+			expect(mockRepo.removeWorktree).toHaveBeenNthCalledWith(1, "/repo", "feature", true, false);
+			expect(mockRepo.removeWorktree).toHaveBeenNthCalledWith(2, "/repo", "feature", true, true);
 		});
 
 		it("closes branch terminals before removing", async () => {
@@ -2032,22 +2058,22 @@ describe("useGitOperations", () => {
 			// was unreachable) and leave isRemoving stuck — the loop must catch
 			// per-terminal so one bad PTY doesn't block cleanup of the rest.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			const id1 = terminalsStore.add(makeTerminal({ name: "T1" }));
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", id1);
-			repositoriesStore.addTerminalToBranch("/repo", "feature", id2);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id1);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id2);
 			mockCloseTerminal.mockImplementationOnce(() => Promise.reject(new Error("pty gone")));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockCloseTerminal).toHaveBeenCalledWith(id1, true);
 			expect(mockCloseTerminal).toHaveBeenCalledWith(id2, true);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 			// The lock must not be stuck — a second call must be able to proceed
 			// rather than silently no-op against a leaked `removingBranches` entry.
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
 		});
 
@@ -2086,22 +2112,22 @@ describe("useGitOperations", () => {
 
 		it("warns the locked-worktree dialog that uncommitted work will also be lost when the worktree is dirty", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR));
 			mockRepo.checkWorktreeDirty.mockResolvedValueOnce(true);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true, true);
 		});
 
 		it("treats an unanswered dirty check as possibly dirty, not as clean", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR));
 			mockRepo.checkWorktreeDirty.mockResolvedValueOnce(null);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true, true);
 		});
@@ -2137,19 +2163,19 @@ describe("useGitOperations", () => {
 			// without the catch, a second removal attempt would silently no-op
 			// forever against a `removingBranches` entry nothing ever clears.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR));
 			mockDialogs.confirmRemoveLockedWorktree.mockRejectedValueOnce(new Error("dialog subsystem crashed"));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Failed to confirm force-remove for feature");
 
 			mockDialogs.confirmRemoveLockedWorktree.mockResolvedValue(true);
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR)).mockResolvedValueOnce(undefined);
-			await gitOps.handleRemoveBranch("/repo", "feature");
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("keeps branch in store when force removal also fails", async () => {
@@ -2175,9 +2201,9 @@ describe("useGitOperations", () => {
 
 		it("shows the busy-worktree dialog instead of the plain one, BEFORE closing any terminal", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
 
 			let closeTerminalCalledBeforeBusyDialogResolved = false;
 			mockDialogs.confirmRemoveBusyWorktree.mockImplementationOnce(async () => {
@@ -2185,7 +2211,7 @@ describe("useGitOperations", () => {
 				return true;
 			});
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockDialogs.confirmRemoveBusyWorktree).toHaveBeenCalledWith(
 				"feature",
@@ -2194,86 +2220,90 @@ describe("useGitOperations", () => {
 			expect(mockDialogs.confirmRemoveWorktree).not.toHaveBeenCalled();
 			expect(closeTerminalCalledBeforeBusyDialogResolved).toBe(false);
 			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("shows the plain dialog for a branch with no attached terminals", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", true);
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith(
+				"feature",
+				expect.objectContaining({ removalSafety: "safe" }),
+				true,
+			);
 			expect(mockDialogs.confirmRemoveBusyWorktree).not.toHaveBeenCalled();
 		});
 
 		it("cancelling the busy dialog removes nothing and closes no terminal", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feature", id);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
 			mockDialogs.confirmRemoveBusyWorktree.mockResolvedValue(false);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
 			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 		});
 
 		it("retries with overrideBusy=true when the backend refuses worktree_busy: after terminals were already closed", async () => {
 			// Backend backstop: a session neither the frontend nor the close loop
 			// knew about (e.g. spawned via MCP) is still attached.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error("worktree_busy:1 session(s) attached: /repo/wt"))
 				.mockResolvedValueOnce(undefined);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockDialogs.confirmRemoveBusyWorktree).toHaveBeenCalled();
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
 			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, false, true);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("keeps the branch when the user declines the backend's busy-override retry", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("worktree_busy:1 session(s) attached"));
 			mockDialogs.confirmRemoveBusyWorktree.mockResolvedValue(false);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 		});
 
 		it("releases the lock when confirmRemoveBusyWorktree itself throws", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("worktree_busy:1 session(s) attached"));
 			mockDialogs.confirmRemoveBusyWorktree.mockRejectedValueOnce(new Error("dialog subsystem crashed"));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Failed to confirm busy-override for feature");
 		});
 
 		it("keeps the branch when the override-busy retry itself fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error("worktree_busy:1 session(s) attached"))
 				.mockRejectedValueOnce(new Error("permission denied"));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
-			expect(repositoriesStore.get("/repo")?.branches["feature"]?.isRemoving).toBe(false);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.isRemoving).toBe(false);
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Failed to remove feature"));
 		});
 	});
@@ -2281,54 +2311,54 @@ describe("useGitOperations", () => {
 	describe("handleRemoveBranch (dirty worktree)", () => {
 		it("shows a dirty-worktree confirmation and retries with force=true", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error("worktree_dirty:fatal: contains modified or untracked files"))
 				.mockResolvedValueOnce(undefined);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockDialogs.confirmForceRemoveDirtyWorktree).toHaveBeenCalledWith("feature");
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
 			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
 		it("keeps the branch when the user declines the dirty-worktree confirmation", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("worktree_dirty:fatal: dirty"));
 			mockDialogs.confirmForceRemoveDirtyWorktree.mockResolvedValue(false);
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 		});
 
 		it("releases the lock when confirmForceRemoveDirtyWorktree itself throws", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree.mockRejectedValueOnce(new Error("worktree_dirty:fatal: dirty"));
 			mockDialogs.confirmForceRemoveDirtyWorktree.mockRejectedValueOnce(new Error("dialog subsystem crashed"));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Failed to confirm force-remove for feature");
 		});
 
 		it("keeps the branch when the forced dirty retry itself fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error("worktree_dirty:fatal: dirty"))
 				.mockRejectedValueOnce(new Error("permission denied"));
 
-			await gitOps.handleRemoveBranch("/repo", "feature");
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
-			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Failed to remove feature"));
 		});
 	});
@@ -2501,12 +2531,7 @@ describe("useGitOperations", () => {
 			await noPromptGitOps.handleAddWorktree("/repo");
 
 			// Should use first baseRef option as the base
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith(
-				"/repo",
-				"cool-ripley-007",
-				true,
-				"develop",
-			);
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "cool-ripley-007", true, "develop");
 		});
 
 		it("falls back to HEAD when skipping dialog and no baseRefs are available", async () => {
@@ -2523,13 +2548,14 @@ describe("useGitOperations", () => {
 			});
 
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("cool-ripley-007");
 			mockRepo.listLocalBranches.mockResolvedValue(["main"]);
 			mockRepo.listBaseRefOptions.mockResolvedValue([]);
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "cool-ripley-007",
 				path: "/repo/.worktrees/cool-ripley-007",
+				workspace_id: "cool-ripley-007",
 				branch: "cool-ripley-007",
 				base_repo: "/repo",
 			});
@@ -2550,6 +2576,7 @@ describe("useGitOperations", () => {
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "bold-nexus-042",
 				path: "/repo/.worktrees/bold-nexus-042",
+				workspace_id: "bold-nexus-042",
 				branch: "bold-nexus-042",
 				base_repo: "/repo",
 			});
@@ -2558,7 +2585,7 @@ describe("useGitOperations", () => {
 
 		it("preselects the base ref used successfully last time, for the same repo", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 
 			await gitOps.handleAddWorktree("/repo");
@@ -2571,7 +2598,7 @@ describe("useGitOperations", () => {
 
 		it("does not carry the remembered base ref over to a different repo", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.add({ path: "/other", displayName: "Other" });
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 
@@ -2584,7 +2611,7 @@ describe("useGitOperations", () => {
 
 		it("falls back to baseRefs[0] when the remembered ref no longer exists", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 
 			await gitOps.handleAddWorktree("/repo");
@@ -2598,7 +2625,7 @@ describe("useGitOperations", () => {
 
 		it("does not remember the base ref when creation fails", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 			mockRepo.createWorktree.mockRejectedValueOnce(new Error("boom"));
 
@@ -2613,7 +2640,7 @@ describe("useGitOperations", () => {
 
 		it("does not remember the base ref from the quick-clone (handleCreateWorktreeFromBranch) flow", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "feat-x--clone",
@@ -2630,7 +2657,7 @@ describe("useGitOperations", () => {
 
 		it("does not remember an empty baseRef", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 
 			await gitOps.handleAddWorktree("/repo");
@@ -2699,7 +2726,7 @@ describe("useGitOperations", () => {
 
 		it("forwards a non-default baseRef verbatim to repo.createWorktree", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
 			mockRepo.listLocalBranches.mockResolvedValue(["main", "develop"]);
 			mockRepo.listBaseRefOptions.mockResolvedValue([
@@ -2709,6 +2736,7 @@ describe("useGitOperations", () => {
 			mockRepo.createWorktree.mockResolvedValue({
 				name: "bold-nexus-042",
 				path: "/repo/.worktrees/bold-nexus-042",
+				workspace_id: "bold-nexus-042",
 				branch: "bold-nexus-042",
 				base_repo: "/repo",
 			});
@@ -2934,7 +2962,7 @@ describe("useGitOperations", () => {
 			await done;
 
 			// mockRepo has no runSetupScript field — a lingering call would throw.
-			const branch = repositoriesStore.get("/repo")?.branches["main--wt-42"];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main--wt-42"];
 			expect(branch?.terminals.length).toBeGreaterThan(0);
 		});
 
@@ -2987,7 +3015,6 @@ describe("useGitOperations", () => {
 			const termId = branch!.terminals[0];
 			expect(terminalsStore.get(termId)?.pendingInitCommand).toBeNull();
 		});
-
 	});
 
 	describe("executeRunCommand", () => {

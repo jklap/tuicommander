@@ -242,7 +242,10 @@ mod tests {
             3,
             "all same-event sources must remain loaded"
         );
-        assert!(commands[2].contains("7770;state=busy"));
+        // The TUIC source's command is the `tuic-hook` binary invocation (the
+        // OSC 7770 bytes are emitted by the binary at runtime, not embedded in
+        // the command string the way the old printf-style hooks were).
+        assert!(commands[2].contains("--agent claude"));
 
         for command in commands {
             let status = std::process::Command::new("/bin/sh")

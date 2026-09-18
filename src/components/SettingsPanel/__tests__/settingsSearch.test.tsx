@@ -55,8 +55,11 @@ describe("SettingsSearchResults", () => {
 	});
 
 	it("lists matches from several tabs at once", () => {
+		// "terminal" matches the Terminal tab's own entries and Appearance's
+		// Terminal Theme (the terminal settings moved off the General tab when
+		// the dedicated Terminal tab landed).
 		const rows = rowsFor("terminal");
-		expect(rows.some((r) => r.includes("General"))).toBe(true);
+		expect(rows.some((r) => r.includes("Terminal"))).toBe(true);
 		expect(rows.some((r) => r.includes("Appearance"))).toBe(true);
 	});
 

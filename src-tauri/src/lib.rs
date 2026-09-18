@@ -35,9 +35,9 @@ mod dictation;
 pub(crate) mod diff_triage;
 pub(crate) mod dir_watcher;
 pub(crate) mod error_classification;
-pub(crate) mod frontend_liveness;
 #[cfg(feature = "desktop")]
 mod finder_service;
+pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
 pub(crate) mod git;

@@ -211,6 +211,7 @@
 /repo/create-pr
 /repo/delete-branch
 /repo/delete-local-branch
+/repo/delete-orphan
 /repo/diff
 /repo/diff-stats
 /repo/diff-stats/batch
@@ -250,6 +251,10 @@
 /repo/remote-url
 /repo/remove-orphan
 /repo/run-git
+/repo/session-review
+/repo/session-review/revert-file
+/repo/session-review/revert-step
+/repo/session-review/sessions
 /repo/stage
 /repo/stash
 /repo/stash/apply
@@ -263,10 +268,13 @@
 /repo/update-from-base
 /repo/working-tree-status
 /repo/worktree-dirty
+/scrollback
 /sessions
 /sessions/agent
 /sessions/worktree
 /sessions/x
+/sessions/x/accent-color
+/sessions/x/focus
 /sessions/x/foreground
 /sessions/x/has-foreground
 /sessions/x/input-buffer
@@ -284,6 +292,10 @@
 /sessions/x/terminal/cursor-line
 /sessions/x/terminal/hyperlink
 /sessions/x/terminal/hyperlink-span
+/sessions/x/terminal/image
+/sessions/x/terminal/image-meta
+/sessions/x/terminal/image-placements
+/sessions/x/terminal/image-ref
 /sessions/x/terminal/lines
 /sessions/x/terminal/logical-line
 /sessions/x/terminal/request-frame
@@ -300,6 +312,8 @@
 /sessions/x/write
 /sessions/x/write-parts
 /stats
+/streamdock/devices
+/streamdock/status
 /system/check-update
 /system/local-ip
 /system/local-ips
@@ -315,6 +329,7 @@
 /tunnels/start/x
 /tunnels/status/x
 /tunnels/stop/x
+/ui/action
 /watchers/dir
 /watchers/hot-repos
 /watchers/repo

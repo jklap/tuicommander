@@ -71,10 +71,10 @@ describe("createBranchSelectionCoordinator", () => {
 		try {
 			await testInScope(async () => {
 				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-				repositoriesStore.setBranch("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
-				repositoriesStore.setActiveBranch("/Gits/alpha", "main");
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+				repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
 
-				const id = await makeCoordinator().handleAddTerminalToBranch("/Gits/alpha", "main");
+				const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main");
 
 				expect(id).toBeTruthy();
 				expect(terminalsStore.get(id!)?.tuicSession).toBeTruthy();
@@ -175,7 +175,11 @@ describe("createBranchSelectionCoordinator", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
 
-			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main", "/Gits/alpha/packages/app");
+			const id = await makeCoordinator().handleAddTerminalToWorkspace(
+				"/Gits/alpha",
+				"main",
+				"/Gits/alpha/packages/app",
+			);
 
 			expect(terminalsStore.get(id!)?.cwd).toBe("/Gits/alpha/packages/app");
 		});
@@ -186,7 +190,11 @@ describe("createBranchSelectionCoordinator", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
 
-			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main", "/Gits/alpha/packages/app");
+			const id = await makeCoordinator().handleAddTerminalToWorkspace(
+				"/Gits/alpha",
+				"main",
+				"/Gits/alpha/packages/app",
+			);
 
 			expect(terminalsStore.get(id!)?.repoPath).toBe("/Gits/alpha");
 			expect(repositoriesStore.findOwnerForTerminal(id!)).toEqual({
@@ -240,7 +248,7 @@ describe("createBranchSelectionCoordinator", () => {
 
 		function setupBranch(savedTerminals: unknown[]) {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-			repositoriesStore.setBranch("/Gits/alpha", "main", {
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 				worktreePath: "/Gits/alpha",
 				hadTerminals: true,
 				// biome-ignore lint/suspicious/noExplicitAny: test fixture, shape matches SavedTerminal
@@ -262,7 +270,7 @@ describe("createBranchSelectionCoordinator", () => {
 				expect(term?.agentType).toBe("claude");
 				expect(term?.agentSessionId).toBe("sess-1");
 				expect(term?.tuicSession).toBe("tuic-1");
-				expect(repositoriesStore.get("/Gits/alpha")?.branches.main?.savedTerminals).toEqual([]);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([]);
 			});
 		});
 
@@ -279,7 +287,7 @@ describe("createBranchSelectionCoordinator", () => {
 				expect(term?.cwd).toBe("/Gits/alpha");
 				expect(term?.name).toBe("shell");
 				expect(term?.agentType == null).toBe(true);
-				expect(repositoriesStore.get("/Gits/alpha")?.branches.main?.savedTerminals).toEqual([]);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([]);
 			});
 		});
 
@@ -313,7 +321,7 @@ describe("createBranchSelectionCoordinator", () => {
 				// it gets a fresh sessionId=null tab with no agentType, not the saved name.
 				expect(term?.agentType == null).toBe(true);
 				expect(term?.name).not.toBe("shell");
-				expect(repositoriesStore.get("/Gits/alpha")?.branches.main?.savedTerminals).toEqual([]);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([]);
 			});
 		});
 
@@ -341,7 +349,7 @@ describe("createBranchSelectionCoordinator", () => {
 					cwd: "/Gits/alpha",
 					awaitingInput: null,
 				});
-				repositoriesStore.setBranch("/Gits/alpha", "main", {
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 					worktreePath: "/Gits/alpha",
 					hadTerminals: true,
 					terminals: [id],
@@ -353,14 +361,14 @@ describe("createBranchSelectionCoordinator", () => {
 				await flushRaf();
 
 				expect(terminalsStore.getIds()).toEqual([id]);
-				expect(repositoriesStore.get("/Gits/alpha")?.branches.main?.savedTerminals).toEqual([agentSaved]);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.main?.savedTerminals).toEqual([agentSaved]);
 			});
 		});
 
 		it("auto-spawns a terminal the first time a branch is selected (hadTerminals=false)", async () => {
 			await testInScope(async () => {
 				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-				repositoriesStore.setBranch("/Gits/alpha", "main", {
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 					worktreePath: "/Gits/alpha",
 					hadTerminals: false,
 				});
@@ -375,7 +383,7 @@ describe("createBranchSelectionCoordinator", () => {
 		it("shows empty state when hadTerminals=true and no valid or saved terminals remain", async () => {
 			await testInScope(async () => {
 				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
-				repositoriesStore.setBranch("/Gits/alpha", "main", {
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 					worktreePath: "/Gits/alpha",
 					hadTerminals: true,
 					terminals: ["stale-gone-id"],

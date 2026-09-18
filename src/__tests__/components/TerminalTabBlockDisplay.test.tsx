@@ -15,7 +15,7 @@ vi.mock("../../stores/appLogger", () => ({
 	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { GeneralTab } from "../../components/SettingsPanel/tabs/GeneralTab";
+import { TerminalTab } from "../../components/SettingsPanel/tabs/TerminalTab";
 import { settingsStore } from "../../stores/settings";
 
 /** A `SettingToggle` renders `<div class=toggle><input type=checkbox><span>{label}</span></div>`,
@@ -28,22 +28,28 @@ function toggleFor(container: HTMLElement, label: string): HTMLInputElement {
 	return input as HTMLInputElement;
 }
 
-const TIMESTAMPS = "Show block timestamps";
-const FOLDING = "Block folding";
-const MARKS = "Show scrollbar marks";
+const BLOCK_MARKS = "Show block marks";
+const PROMPT_MARKS = "Show prompt marks";
+const FOLDING = "Enable block folding";
 const REFLOW = "Reflow scrollback on resize";
 
-/** Every Terminal-section display toggle that defaults on, with the config key
+/** Every block/scrollback display toggle that defaults on, with the config key
  * it round-trips through and the store field it drives. Driving the shared cases
- * off one list is what keeps a fourth toggle from being added with only two of
- * the three checks — which is how `show_scrollbar_marks` reached the config, the
- * store and a reader while having no control at all. */
+ * off one list is what keeps a new toggle from being added with only two of
+ * the three checks — which is how a display flag once reached the config, the
+ * store and a reader while having no control at all. (The timestamps control is
+ * a select now — `blockTimestampMode`, covered in TerminalTab.test.tsx.) */
 const DEFAULT_ON = [
-	{ label: TIMESTAMPS, key: "show_block_timestamps", field: "showBlockTimestamps" },
-	{ label: FOLDING, key: "block_folding_enabled", field: "blockFoldingEnabled" },
-	{ label: MARKS, key: "show_scrollbar_marks", field: "showScrollbarMarks" },
-	{ label: REFLOW, key: "scrollback_reflow", field: "scrollbackReflow" },
-] as const satisfies ReadonlyArray<{ label: string; key: string; field: keyof typeof settingsStore.state }>;
+	{ label: BLOCK_MARKS, key: "show_block_marks", field: "showBlockMarks", heading: "Blocks" },
+	{ label: PROMPT_MARKS, key: "show_prompt_marks", field: "showPromptMarks", heading: "Blocks" },
+	{ label: FOLDING, key: "block_folding_enabled", field: "blockFoldingEnabled", heading: "Blocks" },
+	{ label: REFLOW, key: "scrollback_reflow", field: "scrollbackReflow", heading: "Behavior" },
+] as const satisfies ReadonlyArray<{
+	label: string;
+	key: string;
+	field: keyof typeof settingsStore.state;
+	heading: string;
+}>;
 
 /** Resolve every command the tab's onMount may issue so nothing rejects. */
 function invokeImpl(config: Record<string, unknown> = {}) {
@@ -59,7 +65,7 @@ function savedConfigs(): Record<string, unknown>[] {
 		.map(([, args]) => (args as { config: Record<string, unknown> }).config);
 }
 
-describe("GeneralTab block display toggles", () => {
+describe("TerminalTab block display toggles", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockInvoke.mockImplementation(invokeImpl());
@@ -71,36 +77,35 @@ describe("GeneralTab block display toggles", () => {
 		vi.useRealTimers();
 	});
 
-	it("renders every toggle under the Terminal heading", async () => {
+	it("renders every toggle under its own section heading", async () => {
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 
-		const terminalHeading = Array.from(container.querySelectorAll("h3")).find((h) => h.textContent === "Terminal");
-		expect(terminalHeading).toBeDefined();
-
-		for (const { label } of DEFAULT_ON) {
+		for (const { label, heading } of DEFAULT_ON) {
+			const h = Array.from(container.querySelectorAll("h3")).find((el) => el.textContent === heading);
+			expect(h, `no "${heading}" heading`).toBeDefined();
 			const span = Array.from(container.querySelectorAll("span")).find((el) => el.textContent === label);
 			expect(span, `no toggle labelled "${label}"`).toBeDefined();
-			// Under the Terminal heading, not merely somewhere on the tab.
+			// Under its heading, not merely somewhere on the tab.
 			expect(
-				terminalHeading!.compareDocumentPosition(span!) & Node.DOCUMENT_POSITION_FOLLOWING,
-				`"${label}" is not below the Terminal heading`,
+				h!.compareDocumentPosition(span!) & Node.DOCUMENT_POSITION_FOLLOWING,
+				`"${label}" is not below the "${heading}" heading`,
 			).toBeTruthy();
 		}
 	});
 
 	it("shows the values the config was loaded with", async () => {
-		mockInvoke.mockImplementation(invokeImpl({ show_block_timestamps: false, block_folding_enabled: false }));
+		mockInvoke.mockImplementation(invokeImpl({ show_block_marks: false, block_folding_enabled: false }));
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 
-		expect(toggleFor(container, TIMESTAMPS).checked).toBe(false);
+		expect(toggleFor(container, BLOCK_MARKS).checked).toBe(false);
 		expect(toggleFor(container, FOLDING).checked).toBe(false);
 	});
 
 	it("defaults every toggle on when the config carries none of the fields", async () => {
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 
 		for (const { label } of DEFAULT_ON) {
 			expect(toggleFor(container, label).checked, `"${label}" did not default on`).toBe(true);
@@ -112,7 +117,7 @@ describe("GeneralTab block display toggles", () => {
 		mockInvoke.mockImplementation(invokeImpl({ [key]: true }));
 		await settingsStore.hydrate();
 
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 		mockInvoke.mockClear();
 		fireEvent.change(toggleFor(container, label), { target: { checked: false } });
 
@@ -126,22 +131,22 @@ describe("GeneralTab block display toggles", () => {
 	});
 
 	it("re-renders the toggle from a reload that returns the saved value", async () => {
-		// The round trip the story asks for, end to end on the frontend side:
-		// save writes the field, a fresh load_config returns it, the checkbox
-		// comes back off rather than snapping to the `?? true` default.
+		// The round trip, end to end on the frontend side: save writes the field,
+		// a fresh load_config returns it, the checkbox comes back off rather than
+		// snapping to the `?? true` default.
 		vi.useFakeTimers();
-		mockInvoke.mockImplementation(invokeImpl({ show_block_timestamps: true }));
+		mockInvoke.mockImplementation(invokeImpl({ show_block_marks: true }));
 		await settingsStore.hydrate();
 
-		const first = render(() => <GeneralTab />);
-		fireEvent.change(toggleFor(first.container, TIMESTAMPS), { target: { checked: false } });
+		const first = render(() => <TerminalTab />);
+		fireEvent.change(toggleFor(first.container, BLOCK_MARKS), { target: { checked: false } });
 		await vi.advanceTimersByTimeAsync(600);
 		const written = savedConfigs()[0];
 		cleanup();
 
 		mockInvoke.mockImplementation(invokeImpl(written));
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
-		expect(toggleFor(container, TIMESTAMPS).checked).toBe(false);
+		const { container } = render(() => <TerminalTab />);
+		expect(toggleFor(container, BLOCK_MARKS).checked).toBe(false);
 	});
 });

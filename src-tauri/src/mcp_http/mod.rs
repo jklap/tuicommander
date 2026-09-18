@@ -703,11 +703,15 @@ const API_PREFIXES: &[&str] = &[
     "prompt",
     "registry",
     "repo",
+    "scrollback",
     "sessions",
     "stats",
+    "streamdock",
     "system",
     "terminal",
+    "tmux",
     "tunnels",
+    "ui",
     "watchers",
     "worktrees",
 ];
@@ -1061,10 +1065,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/worktrees/lifecycle",
             get(worktree_routes::workspace_lifecycle_http),
-        )
-        .route(
-            "/worktrees/run-script",
-            post(worktree_routes::run_setup_script_http),
         )
         .route(
             "/worktrees/{workspace_id}",

@@ -29,7 +29,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
-import { tabOrderingStore } from "../../stores/tabOrdering";
+import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 
 /**
@@ -57,9 +57,9 @@ describe("TabBar tab-type classes", () => {
 		// (TabBar.tsx visibleDiffIds/visibleMdIds/visibleEditIds) — without an
 		// active repo+branch they render nothing at all, regardless of type.
 		repositoriesStore.add({ path: "/repo", displayName: "repo" });
-		repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
+		repositoriesStore.setWorkspace("/repo", "main", { isMain: true, worktreePath: null });
 		repositoriesStore.setActive("/repo");
-		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActiveWorkspace("/repo", "main");
 	});
 
 	afterEach(() => {
@@ -149,7 +149,7 @@ describe("TabBar tab-type classes", () => {
 			awaitingInput: null,
 			isRemote: true,
 		});
-		repositoriesStore.addTerminalToBranch("/repo", "main", id);
+		repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 		const { container } = renderBar();
 		expect(container.querySelector(`[data-tab-id="${id}"]`)?.classList.contains("remoteTab")).toBe(true);
 	});
@@ -162,7 +162,7 @@ describe("TabBar tab-type classes", () => {
 			cwd: null,
 			awaitingInput: null,
 		});
-		repositoriesStore.addTerminalToBranch("/repo", "main", id);
+		repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
 		const { container } = renderBar();
 		expect(container.querySelector(`[data-tab-id="${id}"]`)?.classList.contains("remoteTab")).toBe(false);
 	});

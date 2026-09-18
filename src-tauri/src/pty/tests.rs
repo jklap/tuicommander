@@ -2133,10 +2133,12 @@ fn osc133_b_is_a_noop() {
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_BUSY),
     );
-    state.session_maps
+    state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
-    state.session_maps
+    state
+        .session_maps
         .has_osc133_integration
         .insert(session_id.to_string(), ());
 
@@ -2964,14 +2966,8 @@ fn the_silence_timer_cannot_idle_a_protocol_held_turn() {
                 Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
         }
 
-        let transition = try_timer_idle_transition(
-            &state,
-            &silence,
-            session_id,
-            screen,
-            Some("codex"),
-            Some(0),
-        );
+        let transition =
+            try_timer_idle_transition(&state, &silence, session_id, screen, Some("codex"), Some(0));
 
         assert!(
             !transition.transitioned,
@@ -9520,9 +9516,18 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
     );
     state.agent_inbox.entry(sid.to_string()).or_default();
     state.agent_inbox_evictions.insert(sid.to_string(), 2);
-    state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
-    state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
-    state.session_maps.turn_error_flags.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(sid.to_string(), ());
 
     tombstone_transient_cleanup(sid, &state);
 
@@ -9554,7 +9559,10 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
         "must not leak a permanent entry per session UUID on normal exit"
     );
     assert!(
-        !state.session_maps.has_tuic_state_integration.contains_key(sid),
+        !state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(sid),
         "must not leak a permanent entry per session UUID on normal exit"
     );
     assert!(
@@ -9642,9 +9650,7 @@ fn submitted_input_lifecycle_peer_injection_starts_new_turn_and_clears_completio
     completed_agent_session(&state, "completed");
     state.pending_injections.insert(
         "completed".to_string(),
-        std::collections::VecDeque::from([crate::state::PendingInjection::notice(
-            "follow up",
-        )]),
+        std::collections::VecDeque::from([crate::state::PendingInjection::notice("follow up")]),
     );
 
     flush_one_pending_as_submitted(&state, "completed");
@@ -10273,10 +10279,10 @@ fn a_queue_that_cannot_drain_reports_the_agent_not_the_queue() {
     // Unconfirmed idle: exactly what a ready-screen agent looks like before its
     // adapter has proof. `flush_pending_injections` is gated on the same
     // predicate, so this queue cannot move until that changes.
-    state
-        .session_maps
-        .silence_states
-        .insert("submit-unready".to_string(), Arc::new(Mutex::new(SilenceState::new())));
+    state.session_maps.silence_states.insert(
+        "submit-unready".to_string(),
+        Arc::new(Mutex::new(SilenceState::new())),
+    );
     state
         .pending_injections
         .entry("submit-unready".to_string())
@@ -10314,7 +10320,9 @@ fn every_parked_entry_is_observable_and_drainable() {
             .entry("queue-visible".to_string())
             .or_default();
         queue.push_back(crate::state::PendingInjection::notice(PEER_MAIL_WAKE));
-        queue.push_back(crate::state::PendingInjection::initial_prompt("do the task"));
+        queue.push_back(crate::state::PendingInjection::initial_prompt(
+            "do the task",
+        ));
         queue.push_back(crate::state::PendingInjection::user_command("git status"));
     }
 
@@ -11112,7 +11120,7 @@ fn dsr_cursor_position_query_is_flushed_by_process_chunk() {
         Box::new(RecordingWriter {
             bytes: Arc::clone(&bytes),
         }),
-        TtyMode::Cooked,
+        TtyMode::Cbreak,
     );
 
     let silence = Arc::new(Mutex::new(SilenceState::new()));
@@ -11167,7 +11175,7 @@ fn setup_dsr_test_session(
         Box::new(RecordingWriter {
             bytes: Arc::clone(&bytes),
         }),
-        TtyMode::Cooked,
+        TtyMode::Cbreak,
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
@@ -11291,7 +11299,7 @@ fn process_chunk_does_not_hold_the_vt_log_lock_while_flushing_a_reply() {
             bytes: Arc::clone(&bytes),
             release_rx,
         }),
-        TtyMode::Cooked,
+        TtyMode::Cbreak,
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     state
@@ -11720,7 +11728,10 @@ fn resize_noop_guard_returns_none_on_matching_dims() {
     // Same dims → no-op returning None WITHOUT touching the (absent) session.
     // Without the guard this would fall through to sessions.get and fail with
     // "Session not found", so Ok(None) proves the guard short-circuited first.
-    assert_eq!(resize_session_core(&state, "s", 24, 80, None, None), Ok(None));
+    assert_eq!(
+        resize_session_core(&state, "s", 24, 80, None, None),
+        Ok(None)
+    );
 }
 
 #[test]
@@ -11731,7 +11742,10 @@ fn resize_seeds_applied_from_grid_and_noops_at_startup_dims() {
     seed_vt_grid(&state, "s", 24, 80);
     // A first resize matching only the startup dims must seed *applied from
     // the live grid and then no-op — no gratuitous SIGWINCH, no session touch.
-    assert_eq!(resize_session_core(&state, "s", 24, 80, None, None), Ok(None));
+    assert_eq!(
+        resize_session_core(&state, "s", 24, 80, None, None),
+        Ok(None)
+    );
     // The seed must have populated resize_locks with the live grid dims.
     assert_eq!(
         *state.session_maps.resize_locks.get("s").unwrap().lock(),
@@ -12246,7 +12260,8 @@ fn setup_idle_session(session_id: &str) -> crate::state::AppState {
         session_id.to_string(),
         std::sync::atomic::AtomicU8::new(SHELL_IDLE),
     );
-    state.session_maps
+    state
+        .session_maps
         .shell_state_since_ms
         .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
     state
@@ -12344,7 +12359,10 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
     let state = setup_idle_session(session_id);
     let proc = ChunkProcessor::new(None, None);
     let _ = proc.handle_tuic_state("busy", session_id, 10, false, &state);
-    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(session_id.to_string(), ());
 
     let (_, block_event) = proc.handle_tuic_state("idle", session_id, 55, false, &state);
     match block_event {
@@ -12358,7 +12376,11 @@ fn handle_tuic_state_idle_edge_reads_and_clears_turn_error_flags() {
         other => panic!("expected AgentBlock end, got {other:?}"),
     }
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_none(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_none(),
         "the flag must be cleared after being read, so it doesn't leak into the next turn"
     );
 
@@ -12400,7 +12422,10 @@ fn handle_tuic_state_busy_edge_clears_a_flag_that_arrived_too_late_for_the_previ
 
     // The delayed silence-timer detection for turn 1's error finally
     // fires, well after turn 1 already closed.
-    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(session_id.to_string(), ());
 
     // Turn 2 starts — its busy edge must discard the stale flag rather
     // than letting it attach to turn 2's own idle transition.
@@ -12504,7 +12529,12 @@ fn heuristic_synthesizes_block_when_no_tuic_state_integration() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk("⏺ Bash(ls)\r\n", &silence, session_id, &state);
@@ -12527,10 +12557,16 @@ fn heuristic_suppressed_once_tuic_state_integration_observed() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    state.session_maps
+    state
+        .session_maps
         .has_tuic_state_integration
         .insert(session_id.to_string(), ());
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk("⏺ Bash(ls)\r\n", &silence, session_id, &state);
@@ -12554,7 +12590,12 @@ fn heuristic_block_open_before_suppression_is_closed_not_orphaned() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     // Open a heuristic block before integration is detected.
@@ -12562,7 +12603,8 @@ fn heuristic_block_open_before_suppression_is_closed_not_orphaned() {
     assert!(processor.last_agent_block_line.is_some());
 
     // Integration is now detected (simulating a hook event arriving late).
-    state.session_maps
+    state
+        .session_maps
         .has_tuic_state_integration
         .insert(session_id.to_string(), ());
 
@@ -12594,14 +12636,23 @@ fn api_error_sets_turn_error_flag() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().startup_settled = true;
     let mut processor = ChunkProcessor::new(None, None);
 
     let input = "API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"},\"request_id\":\"req_1\"}\r\n";
     processor.process_chunk(input, &silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some(),
         "an ApiError event must flag the session's turn as failed"
     );
 }
@@ -12619,7 +12670,11 @@ fn tool_error_sets_turn_error_flag() {
     }
     fire_tool_error_if_ready(&silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some(),
         "a genuinely turn-ending tool error must flag the session's turn as failed"
     );
 }
@@ -12639,7 +12694,11 @@ fn recovered_tool_error_does_not_set_turn_error_flag() {
     }
     fire_tool_error_if_ready(&silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_none(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_none(),
         "a recovered error must not flag the block"
     );
 }
@@ -12653,13 +12712,28 @@ fn tuic_osc_toolfail_sets_turn_error_flag() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
-    assert!(state.session_maps.turn_error_flags.get(session_id).is_none());
+    assert!(
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_none()
+    );
     processor.process_chunk("\x1b]7770;toolfail=1\x07", &silence, session_id, &state);
     assert!(
-        state.session_maps.turn_error_flags.get(session_id).is_some(),
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some(),
         "a toolfail OSC event must flag the session's turn as failed"
     );
 }
@@ -12677,7 +12751,12 @@ fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk(
@@ -12686,7 +12765,13 @@ fn tuic_osc_toolfail_with_non_numeric_payload_still_sets_the_flag() {
         session_id,
         &state,
     );
-    assert!(state.session_maps.turn_error_flags.get(session_id).is_some());
+    assert!(
+        state
+            .session_maps
+            .turn_error_flags
+            .get(session_id)
+            .is_some()
+    );
 }
 
 /// One test per new verb, table-driven: each must reach the event bus as
@@ -12722,7 +12807,12 @@ fn tuic_osc_metadata_verbs_decode_and_emit_agent_metadata() {
             session_id.clone(),
             Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
         );
-        let silence = state.session_maps.silence_states.get(&session_id).unwrap().clone();
+        let silence = state
+            .session_maps
+            .silence_states
+            .get(&session_id)
+            .unwrap()
+            .clone();
         let mut processor = ChunkProcessor::new(None, None);
 
         let mut rx = state.event_bus.subscribe();
@@ -12785,7 +12875,6 @@ fn percent_decode_osc_payload_tolerates_a_trailing_lone_percent() {
 fn percent_decode_osc_payload_tolerates_invalid_hex() {
     assert_eq!(percent_decode_osc_payload("abc%ZZdef"), "abc%ZZdef");
 }
-
 
 #[test]
 fn tuic_state_busy_yields_userinput_clear_with_prompt_line() {
@@ -13404,12 +13493,17 @@ fn codex_notify_turn_complete_emits_the_idle_bytes_the_state_machine_accepts() {
     );
 
     // Pull the printf literal out of the artifact instead of restating it.
-    let start = script.find("printf '").expect("script must printf a marker") + "printf '".len();
+    let start = script
+        .find("printf '")
+        .expect("script must printf a marker")
+        + "printf '".len();
     let end = start
         + script[start..]
             .find('\'')
             .expect("unterminated printf literal");
-    let decoded = script[start..end].replace("\\033", "\x1b").replace("\\\\", "\\");
+    let decoded = script[start..end]
+        .replace("\\033", "\x1b")
+        .replace("\\\\", "\\");
 
     // That exact byte sequence, through the real chunk path, must close a turn
     // a hook-busy is holding — the thing AC6(c) actually asserts.
@@ -13455,7 +13549,10 @@ fn codex_notify_turn_complete_emits_the_idle_bytes_the_state_machine_accepts() {
         "the notify script's own bytes must drive the session idle"
     );
     let silence = silence.lock();
-    assert!(silence.explicit_idle(), "idle must be Protocol rank, not screen");
+    assert!(
+        silence.explicit_idle(),
+        "idle must be Protocol rank, not screen"
+    );
     assert!(!silence.hook_busy());
 }
 
@@ -14536,7 +14633,10 @@ fn retraction_skips_a_session_with_a_live_choice_prompt() {
         dismiss_key: None,
         amend_key: None,
     });
-    state.session_maps.session_states.insert("s1".to_string(), session);
+    state
+        .session_maps
+        .session_states
+        .insert("s1".to_string(), session);
 
     let mut rx = state.event_bus.subscribe();
     emit_question_cleared_if_stale(&state, "s1");
@@ -15324,9 +15424,18 @@ fn cleanup_session_clears_transient_session_maps() {
         .term_aliases
         .insert(sid.to_string(), "alias".to_string());
     state.session_maps.exit_codes.insert(sid.to_string(), 0);
-    state.session_maps.has_osc133_integration.insert(sid.to_string(), ());
-    state.session_maps.has_tuic_state_integration.insert(sid.to_string(), ());
-    state.session_maps.turn_error_flags.insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_osc133_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .insert(sid.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(sid.to_string(), ());
     state
         .session_maps
         .pty_accent_colors
@@ -15346,7 +15455,10 @@ fn cleanup_session_clears_transient_session_maps() {
         "must not leak a permanent entry per session UUID"
     );
     assert!(
-        !state.session_maps.has_tuic_state_integration.contains_key(sid),
+        !state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(sid),
         "must not leak a permanent entry per session UUID"
     );
     assert!(
@@ -16105,8 +16217,12 @@ fn chunk_trace_matches_recorded_baseline() {
                 "[(1, [\"shell-state\"]), (3, [\"shell-state\"]), (115, [\"shell-state\"]), \
                  (118, [\"shell-state\"])] shell=Some(1) q=None sig=None alt=false ring=1902"
             }
+            // `progress` at chunk 0: the fixture carries `ESC]9;4;0;BEL` and
+            // `ESC]9;4;3;BEL` (state with no value digits) — parseable since
+            // OSC 9;4 gained the error/warning/indeterminate states, whose
+            // value is optional. The pre-2026-09 baseline predated that.
             "claude-plan-picker.raw" => {
-                "[(0, [\"status-line\", \"shell-state\"])] \
+                "[(0, [\"progress\", \"status-line\", \"shell-state\"])] \
                  shell=Some(1) q=None sig=None alt=false ring=8196"
             }
             "claude-generic-attention.raw" => "[] shell=Some(0) q=None sig=None alt=false ring=59",
@@ -17447,8 +17563,7 @@ fn insert_idle_shell_session(state: &AppState, session_id: &str) {
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
                 bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
-            })
-                as Box<dyn std::io::Write + Send>)),
+            }) as Box<dyn std::io::Write + Send>)),
             master: pair.master,
             _child: child,
             paused: Arc::new(AtomicBool::new(false)),
@@ -17603,8 +17718,7 @@ fn get_session_foreground_process_keeps_sticky_agent_type_on_unrecognized_non_sh
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
                 bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
-            })
-                as Box<dyn std::io::Write + Send>)),
+            }) as Box<dyn std::io::Write + Send>)),
             master: pair.master,
             _child: child,
             paused: Arc::new(AtomicBool::new(false)),
@@ -17669,8 +17783,7 @@ fn get_session_foreground_process_clears_via_session_shell_when_unlisted() {
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
                 bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
-            })
-                as Box<dyn std::io::Write + Send>)),
+            }) as Box<dyn std::io::Write + Send>)),
             master: pair.master,
             _child: child,
             paused: Arc::new(AtomicBool::new(false)),
@@ -17737,8 +17850,7 @@ fn get_session_foreground_process_debounces_ambiguous_confirmation() {
         Mutex::new(PtySession {
             writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
                 bytes: Arc::new(std::sync::Mutex::new(Vec::new())),
-            })
-                as Box<dyn std::io::Write + Send>)),
+            }) as Box<dyn std::io::Write + Send>)),
             master: pair.master,
             _child: child,
             paused: Arc::new(AtomicBool::new(false)),
@@ -17906,7 +18018,11 @@ fn osc133_idle_clears_agent_type_but_osc7770_idle_does_not() {
         transitioned,
         "BUSY->IDLE must be a real edge given the atomic starts at BUSY"
     );
-    let entry = state.session_maps.session_states.get(osc133_session).unwrap();
+    let entry = state
+        .session_maps
+        .session_states
+        .get(osc133_session)
+        .unwrap();
     assert_eq!(
         entry.agent_type, None,
         "OSC 133 idle (hook_state=false) must clear agent_type immediately"
@@ -17931,7 +18047,11 @@ fn osc133_idle_clears_agent_type_but_osc7770_idle_does_not() {
     let transitioned =
         transition_explicit_shell_state(&state, osc7770_session, SHELL_IDLE, "idle", true);
     assert!(transitioned);
-    let entry = state.session_maps.session_states.get(osc7770_session).unwrap();
+    let entry = state
+        .session_maps
+        .session_states
+        .get(osc7770_session)
+        .unwrap();
     assert_eq!(
         entry.agent_type,
         Some("claude".to_string()),
@@ -18134,7 +18254,10 @@ fn declared_background_work_defers_parent_idle_notification() {
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     silence.lock().set_declared_background_work(true, 0);
-    state.session_maps.silence_states.insert(child_id.to_string(), silence);
+    state
+        .session_maps
+        .silence_states
+        .insert(child_id.to_string(), silence);
 
     assert!(try_shell_transition(
         &state, child_id, SHELL_BUSY, SHELL_IDLE, true
@@ -18183,8 +18306,7 @@ fn declared_background_work_defers_suggest_publication() {
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
-    let content: serde_json::Value =
-        serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "completed");
 }
 
@@ -18243,8 +18365,7 @@ fn pending_background_probe_defers_suggest_publication() {
     assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
     let inbox = state.agent_inbox.get(parent_id).unwrap();
     assert_eq!(inbox.len(), 1);
-    let content: serde_json::Value =
-        serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+    let content: serde_json::Value = serde_json::from_str(&inbox.front().unwrap().content).unwrap();
     assert_eq!(content["state"], "completed");
 }
 
@@ -18276,8 +18397,21 @@ fn a_genuine_new_turn_clears_declared_background_work() {
 
     note_submitted_input(&state, child_id);
 
-    assert_eq!(state.session_maps.session_states.get(child_id).unwrap().turn_epoch, 1);
-    let silence = state.session_maps.silence_states.get(child_id).unwrap().clone();
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(child_id)
+            .unwrap()
+            .turn_epoch,
+        1
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(child_id)
+        .unwrap()
+        .clone();
     assert!(
         !silence.lock().declared_background_work_for_epoch(0),
         "a genuine new turn must clear a stale declared_background_work claim"
@@ -18309,7 +18443,12 @@ fn submitted_input_with_no_detected_agent_type_still_clears_declared_background_
     note_submitted_input(&state, session_id);
 
     assert_eq!(
-        state.session_maps.session_states.get(session_id).unwrap().turn_epoch,
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
         0,
         "this branch must not touch turn_epoch"
     );
@@ -18336,7 +18475,10 @@ fn standby_refuses_session_with_declared_background_work() {
     );
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     silence.lock().set_declared_background_work(true, 0);
-    state.session_maps.silence_states.insert(session_id.to_string(), silence);
+    state
+        .session_maps
+        .silence_states
+        .insert(session_id.to_string(), silence);
 
     assert_eq!(standby_session(&state, session_id), Ok(false));
     assert!(!state.session_maps.standby_sessions.contains_key(session_id));
@@ -18351,7 +18493,12 @@ fn tuic_osc_bgtasks_sets_declared_background_work_for_current_epoch() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     assert!(!silence.lock().declared_background_work_for_epoch(0));
@@ -18383,7 +18530,12 @@ fn end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     // A prompt row so `detect_claude_screen_activity` has a prompt anchor
@@ -18414,7 +18566,12 @@ fn end_to_end_stop_hook_bgtasks_survives_a_subsequent_screen_poll() {
     );
 
     assert_eq!(
-        state.session_maps.session_states.get(session_id).unwrap().turn_epoch,
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .turn_epoch,
         0,
         "no real turn was submitted"
     );
@@ -18443,7 +18600,12 @@ fn tuic_osc_bgtasks_clears_on_zero_running_statuses() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().set_declared_background_work(true, 0);
     let mut processor = ChunkProcessor::new(None, None);
 
@@ -18475,7 +18637,12 @@ fn tuic_osc_bgtasks_unknown_status_is_treated_as_still_running() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     let mut processor = ChunkProcessor::new(None, None);
 
     processor.process_chunk(
@@ -18502,7 +18669,12 @@ fn tuic_osc_bgtasks_empty_payload_clears_declaration() {
         session_id.to_string(),
         Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
     );
-    let silence = state.session_maps.silence_states.get(session_id).unwrap().clone();
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
     silence.lock().set_declared_background_work(true, 0);
     let mut processor = ChunkProcessor::new(None, None);
 

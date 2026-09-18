@@ -403,53 +403,6 @@ export const TerminalTab: Component = () => {
 			/>
 
 			<SettingToggle
-				checked={settingsStore.state.copyOnSelect}
-				onChange={(v) => settingsStore.setCopyOnSelect(v)}
-				label={t("general.toggle.copyOnSelect", "Copy on select")}
-				hint={t("general.hint.copyOnSelect", "Automatically copy selected text to clipboard")}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.osc52Clipboard}
-				onChange={(v) => settingsStore.setOsc52Clipboard(v)}
-				label={t("general.toggle.osc52Clipboard", "Allow OSC 52 clipboard writes")}
-				hint={t(
-					"general.hint.osc52Clipboard",
-					"Let terminal programs set the system clipboard (OSC 52). A notice appears on each write. Disable to ignore clipboard writes from terminal output.",
-				)}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.showBlockTimestamps}
-				onChange={(v) => settingsStore.setShowBlockTimestamps(v)}
-				label={t("general.toggle.showBlockTimestamps", "Show block timestamps")}
-				hint={t(
-					"general.hint.showBlockTimestamps",
-					"While Ctrl+Cmd is held, label each command block with how long ago it started",
-				)}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.blockFoldingEnabled}
-				onChange={(v) => settingsStore.setBlockFoldingEnabled(v)}
-				label={t("general.toggle.blockFolding", "Block folding")}
-				hint={t(
-					"general.hint.blockFolding",
-					"Let the Toggle Block Fold shortcut collapse a command block's output. Already-folded blocks stay collapsed when this is off.",
-				)}
-			/>
-
-			<SettingToggle
-				checked={settingsStore.state.showScrollbarMarks}
-				onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
-				label={t("general.toggle.showScrollbarMarks", "Show scrollbar marks")}
-				hint={t(
-					"general.hint.showScrollbarMarks",
-					"Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began",
-				)}
-			/>
-
-			<SettingToggle
 				checked={settingsStore.state.scrollbackReflow}
 				onChange={(v) => settingsStore.setScrollbackReflow(v)}
 				label={t("general.toggle.scrollbackReflow", "Reflow scrollback on resize")}
@@ -487,8 +440,10 @@ export const TerminalTab: Component = () => {
 				]}
 				hint={t(
 					"terminal.hint.linkActivation",
-					"How links (URLs, file paths) in terminal output open. Click opens on a plain click; " +
-						`${getModifierSymbol()}Click underlines a link only while ${getModifierSymbol() === "⌘" ? "Cmd" : "Ctrl"} is held, and opens it on ${getModifierSymbol()}+click; Never disables click-to-open — right-click still offers Open/Copy link.`,
+					// One template literal on purpose: a quoted prefix would read as a
+					// static fallback to the i18n catalog test, and a cataloged value
+					// would override the platform-dependent modifier wording.
+					`How links (URLs, file paths) in terminal output open. Click opens on a plain click; ${getModifierSymbol()}Click underlines a link only while ${getModifierSymbol() === "⌘" ? "Cmd" : "Ctrl"} is held, and opens it on ${getModifierSymbol()}+click; Never disables click-to-open — right-click still offers Open/Copy link.`,
 				)}
 			/>
 

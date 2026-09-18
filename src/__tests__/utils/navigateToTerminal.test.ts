@@ -8,11 +8,11 @@ const { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStor
 			activeRepoPath: null as string | null,
 			repositories: {} as Record<
 				string,
-				{ activeBranch: string | null; branches: Record<string, { terminals: string[] }> }
+				{ activeWorkspaceId: string | null; workspaces: Record<string, { terminals: string[] }> }
 			>,
 		},
 		setActive: vi.fn(),
-		setActiveBranch: vi.fn(),
+		setActiveWorkspace: vi.fn(),
 	};
 
 	const mockPaneLayoutStore = {
@@ -66,7 +66,7 @@ describe("navigateToTerminal", () => {
 		mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue(null);
 		navigateToTerminal("t1");
 		expect(mockRepositoriesStore.setActive).not.toHaveBeenCalled();
-		expect(mockRepositoriesStore.setActiveBranch).not.toHaveBeenCalled();
+		expect(mockRepositoriesStore.setActiveWorkspace).not.toHaveBeenCalled();
 		expect(mockTerminalsStore.setActive).toHaveBeenCalledWith("t1");
 	});
 
@@ -74,26 +74,26 @@ describe("navigateToTerminal", () => {
 		mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue("/repo/a");
 		mockRepositoriesStore.state.activeRepoPath = "/repo/other";
 		mockRepositoriesStore.state.repositories = {
-			"/repo/a": { activeBranch: "old-branch", branches: { main: { terminals: ["t1"] } } },
+			"/repo/a": { activeWorkspaceId: "old-branch", workspaces: { main: { terminals: ["t1"] } } },
 		};
 
 		navigateToTerminal("t1");
 
 		expect(mockRepositoriesStore.setActive).toHaveBeenCalledWith("/repo/a");
-		expect(mockRepositoriesStore.setActiveBranch).toHaveBeenCalledWith("/repo/a", "main");
+		expect(mockRepositoriesStore.setActiveWorkspace).toHaveBeenCalledWith("/repo/a", "main");
 	});
 
 	it("skips repo/branch writes when already active", () => {
 		mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue("/repo/a");
 		mockRepositoriesStore.state.activeRepoPath = "/repo/a";
 		mockRepositoriesStore.state.repositories = {
-			"/repo/a": { activeBranch: "main", branches: { main: { terminals: ["t1"] } } },
+			"/repo/a": { activeWorkspaceId: "main", workspaces: { main: { terminals: ["t1"] } } },
 		};
 
 		navigateToTerminal("t1");
 
 		expect(mockRepositoriesStore.setActive).not.toHaveBeenCalled();
-		expect(mockRepositoriesStore.setActiveBranch).not.toHaveBeenCalled();
+		expect(mockRepositoriesStore.setActiveWorkspace).not.toHaveBeenCalled();
 	});
 
 	it("sets the active pane group and tab when the layout is split", () => {

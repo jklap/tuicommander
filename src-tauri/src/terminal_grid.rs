@@ -311,9 +311,7 @@ impl EventListener for TermEventCollector {
                 self.events.lock().push(TermEvent::RequestFocus);
             }
             Event::RequestAttention(value) => {
-                self.events
-                    .lock()
-                    .push(TermEvent::RequestAttention(value));
+                self.events.lock().push(TermEvent::RequestAttention(value));
             }
             Event::OpenUrl(url) => {
                 self.events.lock().push(TermEvent::OpenUrl(url));
@@ -329,20 +327,12 @@ impl EventListener for TermEventCollector {
                 self.events.lock().push(TermEvent::PtyWrite(reply));
             }
             Event::ImagePlacement(info) => {
-                self.events
-                    .lock()
-                    .push(TermEvent::ImagePlacement(info));
+                self.events.lock().push(TermEvent::ImagePlacement(info));
             }
             Event::ImagePlacementsCleared => {
-                self.events
-                    .lock()
-                    .push(TermEvent::ImagePlacementsCleared);
+                self.events.lock().push(TermEvent::ImagePlacementsCleared);
             }
-            Event::ClipboardLoad(..)
-            | Event::ColorRequest(..)
-            | Event::Wakeup
-            | Event::Exit
-            | Event::ChildExit(_) => {}
+            Event::ClipboardLoad(..) | Event::Wakeup | Event::Exit | Event::ChildExit(_) => {}
         }
     }
 }

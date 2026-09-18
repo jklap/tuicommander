@@ -230,18 +230,19 @@ describe("useAppShortcutHandlers", () => {
 	});
 
 	describe("block navigation and folding", () => {
-		it("delegates blockPrev/blockNext/blockFoldToggle to the active terminal's ref", () => {
+		it("delegates blockPrev/blockNext to the active terminal's ref", () => {
+			// blockFoldToggle deliberately does NOT delegate to the ref: it picks the
+			// nearest block and routes through terminalsStore.toggleBlockFold (the
+			// central fold gate) — covered by the viewport-centre test above.
 			const ref = { scrollToBlock: vi.fn(), toggleBlockFold: vi.fn(), openSearch: vi.fn() };
 			mockStores.terminals.getActive.mockReturnValue({ ref, commandBlocks: [] });
 			const handlers = useAppShortcutHandlers(createOptions() as never);
 
 			handlers.blockPrev();
 			handlers.blockNext();
-			handlers.blockFoldToggle();
 
 			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(1, "previous");
 			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(2, "next");
-			expect(ref.toggleBlockFold).toHaveBeenCalledOnce();
 		});
 
 		it("opens search and toggles block scope for blockSearchToggle", () => {

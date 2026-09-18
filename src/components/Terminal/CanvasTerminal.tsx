@@ -89,7 +89,7 @@ import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { ImageLayer, type ImagePlacement } from "./imageLayer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
-import { buildScrollbarMarksHtml, shouldShowScrollbar } from "./scrollbarMarks";
+import { buildScrollbarMarksHtml, scrollbarMarksKey, shouldShowScrollbar } from "./scrollbarMarks";
 import { findSmartMatch, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
 import { runSmartSelectionAction, type SmartSelectionActionDeps } from "./smartSelectionActions";
 import { resolveSmartSelectionRules } from "./smartSelectionDefaults";
@@ -1351,13 +1351,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			.map((line) => evictionStableToGridRelative(line, historyBase))
 			.filter((line): line is number => line !== null);
 
-		const marksInput: ScrollbarMarksInput = {
+		// Gated on the two PERSISTED per-category settings, not the transient
+		// Ctrl+Cmd hold (blockTimestampsVisible) — marks stay visible without
+		// holding the modifier. Search hits are drawn regardless of either mark
+		// setting: a Cmd+F that silently draws nothing because of a terminal
+		// display setting is a broken search, not a preference being honoured.
+		// The flags are part of the memo key so a toggle flip always invalidates
+		// the cache rather than leaving the last-painted marks on screen.
+		const marksInput = {
 			showBlockMarks: settingsStore.state.showBlockMarks,
 			showPromptMarks: settingsStore.state.showPromptMarks,
 			blocks,
 			promptLines,
 			totalRows,
-			matches: search.matches,
+			matchRows: search.matches.map((m) => m.row),
 		};
 
 		const key = scrollbarMarksKey(marksInput);
@@ -1370,38 +1377,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				"position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none";
 			scrollbarRef.appendChild(scrollbarMarksContainer);
 		}
-		const term = terminalsStore.get(props.terminalId);
-		if (!term) return;
-		const blocks = term.commandBlocks;
-		const promptLines = term.userPromptLines;
-		const searchCount = search.matches.length;
-		// The mark settings gate the HISTORY markers only — block boundaries and
-		// user-prompt ticks — not the search hits below. Command history is a display
-		// preference; a search hit is the live result of something the user just did,
-		// and a Cmd+F that silently draws nothing because of a terminal display
-		// setting is not a preference being honoured, it is a broken search.
-		//
-		// Gated on the two PERSISTED per-category settings, not the transient
-		// Ctrl+Cmd hold (blockTimestampsVisible) — marks stay visible without
-		// holding the modifier. Folded into the paint inputs rather than returned
-		// on early, which also fixes turning a setting OFF: an early return above
-		// the key computation left the last-painted marks on screen forever,
-		// because the repaint that would clear them never ran. The flags are also
-		// part of the memo key so a toggle flip always invalidates the cache.
-		const showBlockMarks = settingsStore.state.showBlockMarks;
-		const showPromptMarks = settingsStore.state.showPromptMarks;
-		const key = `${showBlockMarks ? 1 : 0}${showPromptMarks ? 1 : 0}:${showBlockMarks ? blocks.length : 0}:${showPromptMarks ? promptLines.length : 0}:${totalRows}:${showBlockMarks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
-		if (key === lastScrollbarMarksKey) return;
-		lastScrollbarMarksKey = key;
 
 		scrollbarMarksContainer.innerHTML = buildScrollbarMarksHtml({
-			blocks,
-			promptLines,
-			matchRows: search.matches.map((m) => m.row),
-			totalRows,
+			...marksInput,
 			trackH: scrollbarTrackHeight,
-			showBlockMarks,
-			showPromptMarks,
 		});
 	}
 
