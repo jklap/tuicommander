@@ -18,8 +18,15 @@ The **AI Chat** page is shown only while **Experimental Features** is on (see
 
 A search box sits at the top of the page list. Typing filters settings across
 every page at once, so you do not have to know which page owns the one you want.
-Each result shows the setting name and the `Page › Section` trail it lives under;
-selecting one opens that page and scrolls to the field.
+Results are ranked best-match first, and a setting's description text counts too —
+searching words that only appear in a hint still finds it. Each result shows the
+setting name, the `Page › Section` trail it lives under, and its hint; selecting
+one opens that page, scrolls to the field, and briefly flashes it so it is easy to
+spot.
+
+Settings also appear in the Command Palette (`Cmd+P`) under the "Settings"
+category, so you can jump straight to one without opening the Settings panel
+first.
 
 Three limits are deliberate:
 

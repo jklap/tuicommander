@@ -1518,7 +1518,9 @@ The navigation groups the global pages by task. Each group is a static label row
 
 ### 11.0 Search
 - Search box at the top of the page list; filters every setting across every page at once
-- Each result shows the setting name and its `Page › Section` trail; selecting one opens that page and scrolls to the field
+- Results are BM25-ranked (every query word must match; label/hint/section/page text all count), so the setting named by the query outranks entries that merely mention it
+- Each result shows the setting name, its `Page › Section` trail, and the setting's hint text when it has one; selecting one opens that page, scrolls to the field, and briefly flashes it
+- The same settings appear in the Command Palette (`Cmd+P`) under the "Settings" category, so one can be jumped to without opening the Settings panel first; an expert setting is revealed on arrival, and the palette offers only the controls this client renders
 - Repository pages are not indexed — a global box cannot know which repository a query means
 - Settings the current build does not render (the AI Chat page while Experimental Features is off, for example) report no match instead of opening an absent page
 - A result inside an expert setting shows an **Expert** badge; opening it reveals that setting (see **11.11**)

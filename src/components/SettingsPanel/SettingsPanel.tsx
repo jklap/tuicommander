@@ -20,7 +20,14 @@ import s from "./Settings.module.css";
 import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
 import { SettingsShell } from "./SettingsShell";
-import { entryLabel, entrySection, type SettingsSearchEntry, searchSettings } from "./settingsSearchIndex";
+import {
+	entryLabel,
+	entrySection,
+	type SettingsSearchEntry,
+	type SettingsSearchTarget,
+	searchSettings,
+} from "./settingsSearchIndex";
+import { GLOBAL_TAB_GROUPS, getGlobalTabs, hiddenTabs } from "./settingsTabs";
 import {
 	AgentsTab,
 	AiChatTab,
@@ -52,75 +59,10 @@ export interface SettingsPanelProps {
 	initialTab?: string;
 	/** DOM id of a block to scroll to once the panel is open — see sections.ts */
 	initialSection?: string;
+	/** Rendered section/label text to scroll to and flash once the panel is
+	 * open — how a Command Palette "Settings" action lands on its control */
+	initialTarget?: SettingsSearchTarget;
 	context?: SettingsContext;
-}
-
-/** Global pages grouped by task; each group renders as a static label row above its pages. */
-const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] }[] = [
-	{
-		key: "application",
-		label: t("settings.group.application", "Application"),
-		tabs: [
-			{ key: "general", label: t("settings.general", "General") },
-			{ key: "appearance", label: t("settings.appearance", "Appearance") },
-			{ key: "notifications", label: t("settings.notifications", "Notifications") },
-		],
-	},
-	{
-		key: "workspace",
-		label: t("settings.group.workspace", "Workspace"),
-		tabs: [
-			{ key: "terminal", label: t("settings.terminal", "Terminal") },
-			{ key: "selection", label: t("settings.selection", "Smart Selection") },
-			{ key: "keyboard-shortcuts", label: t("settings.keyboardShortcuts", "Keyboard Shortcuts") },
-			{ key: "github", label: "Git & GitHub" },
-		],
-	},
-	{
-		key: "ai",
-		label: t("settings.group.ai", "AI"),
-		tabs: [
-			{ key: "agents", label: t("settings.agents", "Agents") },
-			{ key: "ai-chat", label: t("settings.aiChat", "AI Chat") },
-			{ key: "dictation", label: t("settings.voice", "Voice") },
-			{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
-		],
-	},
-	{
-		key: "integrations",
-		label: t("settings.group.integrations", "Integrations"),
-		tabs: [
-			{ key: "mcp", label: t("settings.mcp", "MCP") },
-			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
-			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
-			{ key: "streamdock", label: t("settings.streamdock", "StreamDock") },
-			{ key: "telegram", label: "Telegram" },
-			{ key: "plugins", label: t("settings.plugins", "Plugins") },
-		],
-	},
-];
-
-/** Tabs whose feature is switched off right now, so their nav entry is noise. */
-function hiddenTabs(): Set<string> {
-	const hidden = new Set<string>();
-	// Dictation is no longer desktop-only: a browser holds a hands-free
-	// conversation through its own microphone and speaker over a WS audio
-	// socket (#832-e730). The controls that really are local — the global
-	// hotkey and this machine's input devices — are hidden inside the tab
-	// rather than by hiding the whole tab.
-	// AI Chat configures ego, and ego is reachable only from the AI Chat panel.
-	// While that panel is behind the experimental toggle, this tab would let a
-	// person set a default model for an engine they cannot open.
-	if (!settingsStore.isAiChatEnabled()) hidden.add("ai-chat");
-	// The StreamDock macropad is a USB device on the desktop machine; the
-	// backend supervisor only exists in the desktop build.
-	if (!isTauri()) hidden.add("streamdock");
-	return hidden;
-}
-
-function getGlobalTabs(): SettingsShellTab[] {
-	const hidden = hiddenTabs();
-	return GLOBAL_TAB_GROUPS.flatMap((group) => group.tabs.filter((tab) => !hidden.has(tab.key)));
 }
 
 function defaultTab(ctx: SettingsContext): string {
@@ -197,13 +139,22 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 
 	const [query, setQuery] = createSignal("");
 
-	// Reset active tab when context changes or panel opens
+	// Reset active tab when context changes or panel opens. Also re-runs when a
+	// palette settings action fires while the panel is already open (the caller
+	// swaps initialTab/initialTarget), so a second deep link still lands.
 	createEffect(() => {
 		if (props.visible) {
 			setActiveTab(resolveInitialTab());
 			// A stale query would hide the tab the caller asked for behind results
 			setQuery("");
 			void settingsExpertStore.open();
+			const target = props.initialTarget;
+			if (target) {
+				// open() just forgot every reveal; a deep link to a hidden expert
+				// control has nothing to scroll to until it is revealed again
+				if (target.configKey) settingsExpertStore.reveal(target.configKey);
+				setPendingTarget(target);
+			}
 		}
 	});
 
@@ -213,8 +164,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		uiStore.setLastSettingsTab(tab);
 	};
 
-	// Setting a search result asked for, consumed by the scroll effect below
-	const [pendingTarget, setPendingTarget] = createSignal<{ section: string; label?: string } | null>(null);
+	// Target a search result or a deep link asked for, consumed by the scroll
+	// effect below
+	const [pendingTarget, setPendingTarget] = createSignal<SettingsSearchTarget | null>(null);
 
 	// Two callers need the panel scrolled to a block that sits below the fold:
 	// a deep link (the MCP popup's "Manage in Settings", which names a DOM id)

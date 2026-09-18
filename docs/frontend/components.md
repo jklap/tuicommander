@@ -310,7 +310,8 @@ itself) rather than always closing everything at once.
 ### SettingsPanel (`SettingsPanel/`)
 
 Settings overlay. The nav groups the global pages by task
-(`GLOBAL_TAB_GROUPS` in `SettingsPanel.tsx`); each group renders as a static
+(`GLOBAL_TAB_GROUPS` in `settingsTabs.ts`, shared with the Command Palette's
+per-setting actions); each group renders as a static
 label row above its pages, and the configured repositories follow under
 **Repositories**.
 
