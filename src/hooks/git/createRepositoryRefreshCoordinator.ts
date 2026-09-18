@@ -357,7 +357,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						// Covers both "operation just finished" (clear) and "merge conflict
 						// without a detached HEAD" (set, even though the branch stayed in
 						// worktreePaths the whole time).
-						gitOp: inProgressOps.get(wt.path),
+						gitOp: inProgressOps.get(wt.path) ?? null,
 					};
 					repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 				}

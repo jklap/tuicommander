@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildScrollbarMarksHtml, shouldShowScrollbar, type ScrollbarMarksInput } from "../../../components/Terminal/scrollbarMarks";
+import {
+	buildScrollbarMarksHtml,
+	type ScrollbarMarksInput,
+	shouldShowScrollbar,
+} from "../../../components/Terminal/scrollbarMarks";
 
 /** Colours are the only way to tell the four tick kinds apart in the output. */
 const FAILED = "#f85149";

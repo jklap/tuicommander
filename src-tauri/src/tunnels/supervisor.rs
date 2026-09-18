@@ -568,7 +568,10 @@ mod tests {
         let script = fake_ssh_script(
             "spawn_clean_exit",
             "sleep 0.2; exit 0",
-            &format!("{} -n 2 127.0.0.1 >nul & exit /b 0", system32_exe("ping.exe")),
+            &format!(
+                "{} -n 2 127.0.0.1 >nul & exit /b 0",
+                system32_exe("ping.exe")
+            ),
         );
         let (cb, statuses) = status_collector();
 

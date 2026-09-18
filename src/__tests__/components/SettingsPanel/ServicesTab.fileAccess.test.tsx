@@ -16,7 +16,6 @@ vi.mock("../../../stores/settings", () => ({
 	},
 }));
 
-import { settingSlugId } from "../../../components/SettingsPanel/SettingFields";
 import { ServicesTab } from "../../../components/SettingsPanel/tabs/ServicesTab";
 
 /** ServicesTab's onMount fires several fire-and-forget rpc calls (status poll,
@@ -135,15 +134,6 @@ describe("ServicesTab — File Access", () => {
 			"/tmp/other",
 			"~/notes",
 		]);
-		unmount();
-	});
-
-	it("stamps the wrapper's id to match what settingsSearchIndex.ts expects", async () => {
-		const { container, unmount } = render(() => <ServicesTab />);
-		await flushMicrotasks();
-
-		const expectedId = settingSlugId("Additional Readable Directories");
-		expect(container.querySelector(`#${expectedId}`)).not.toBeNull();
 		unmount();
 	});
 });

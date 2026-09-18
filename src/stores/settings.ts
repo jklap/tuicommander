@@ -987,27 +987,8 @@ function createSettingsStore() {
 			save();
 		},
 
-
 		setScrollbackReflow(enabled: boolean): void {
 			setState("scrollbackReflow", enabled);
-			save();
-		},
-
-		/** Show each command block's elapsed time while Ctrl+Cmd is held */
-		setShowBlockTimestamps(enabled: boolean): void {
-			setState("showBlockTimestamps", enabled);
-			save();
-		},
-
-		/** Allow collapsing a command block's output with the fold shortcut */
-		setBlockFoldingEnabled(enabled: boolean): void {
-			setState("blockFoldingEnabled", enabled);
-			save();
-		},
-
-		/** Mark each command's position on the terminal scrollbar */
-		setShowScrollbarMarks(enabled: boolean): void {
-			setState("showScrollbarMarks", enabled);
 			save();
 		},
 
@@ -1218,7 +1199,6 @@ function createSettingsStore() {
 		isAiWatchersEnabled(): boolean {
 			return state.experimentalFeaturesEnabled && state.aiWatchersEnabled;
 		},
-
 	};
 
 	return {

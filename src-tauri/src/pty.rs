@@ -4838,7 +4838,9 @@ fn try_timer_idle_transition(
             // `force_idle`, like the two screen adapters: the `else if` chain
             // above already decided this transition is allowed, so the generic
             // busy-rank gate in `record_idle` must not re-reject it.
-            silence.evidence.force_idle(EvidenceRank::Process, "process");
+            silence
+                .evidence
+                .force_idle(EvidenceRank::Process, "process");
         }
         if !screen_confirms_idle {
             // Silence-timeout evidence, forced in regardless of rank: the
@@ -4939,7 +4941,10 @@ fn fire_tool_error_if_ready(silence: &Mutex<SilenceState>, session_id: &str, sta
     let Some(text) = silence.lock().check_tool_error() else {
         return;
     };
-    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(session_id.to_string(), ());
     let parsed = ParsedEvent::ToolError { matched_text: text };
     if let Ok(json) = serde_json::to_value(&parsed) {
         #[cfg(feature = "desktop")]
@@ -5291,29 +5296,33 @@ fn spawn_silence_timer(
 /// "not on screen right now" is not proof that it was answered. A live
 /// `choice_prompt` owns its own resolution and is left alone.
 fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
-    let turn_epoch = state.session_maps.session_states.get(session_id).and_then(|s| {
-        // Research note (2026-09-01): this guard is BY DESIGN never allowed to
-        // retract a confident question or one with an open choice_prompt — see the
-        // module-level docs on why (a confident source can still repaint while
-        // genuinely waiting; screen absence alone isn't proof of an answer). If a
-        // session is stuck "awaiting" and this log line below never appears for
-        // it, that's the tell: the badge is confident/choice-prompt-owned, so this
-        // backstop was never going to be the thing that clears it — look at the
-        // hook busy re-affirmation path (`tuic_state_awaiting_event`) or
-        // `resolve_choice_prompt_input`/`choice-cleared` instead.
-        if s.awaiting_input && (s.question_confident || s.choice_prompt.is_some()) {
-            tracing::debug!(
-                session_id = %session_id,
-                confident = s.question_confident,
-                has_choice_prompt = s.choice_prompt.is_some(),
-                "silence_timer: awaiting_input is stale-eligible on screen but the \
-                 confident/choice_prompt guard blocks this backstop from clearing it \
-                 (research: unexpected state transitions)"
-            );
-        }
-        (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
-            .then_some(s.turn_epoch)
-    });
+    let turn_epoch = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| {
+            // Research note (2026-09-01): this guard is BY DESIGN never allowed to
+            // retract a confident question or one with an open choice_prompt — see the
+            // module-level docs on why (a confident source can still repaint while
+            // genuinely waiting; screen absence alone isn't proof of an answer). If a
+            // session is stuck "awaiting" and this log line below never appears for
+            // it, that's the tell: the badge is confident/choice-prompt-owned, so this
+            // backstop was never going to be the thing that clears it — look at the
+            // hook busy re-affirmation path (`tuic_state_awaiting_event`) or
+            // `resolve_choice_prompt_input`/`choice-cleared` instead.
+            if s.awaiting_input && (s.question_confident || s.choice_prompt.is_some()) {
+                tracing::debug!(
+                    session_id = %session_id,
+                    confident = s.question_confident,
+                    has_choice_prompt = s.choice_prompt.is_some(),
+                    "silence_timer: awaiting_input is stale-eligible on screen but the \
+                     confident/choice_prompt guard blocks this backstop from clearing it \
+                     (research: unexpected state transitions)"
+                );
+            }
+            (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+                .then_some(s.turn_epoch)
+        });
     let Some(turn_epoch) = turn_epoch else {
         return;
     };
@@ -5979,7 +5988,11 @@ impl ChunkProcessor {
                 // PostToolUseFailure or StopFailure hook) or the ToolError/ApiError
                 // text-pattern fallback becomes this block's red-tick exit code.
                 // Cleared unconditionally so it never leaks into the next turn.
-                let flagged = state.session_maps.turn_error_flags.remove(session_id).is_some();
+                let flagged = state
+                    .session_maps
+                    .turn_error_flags
+                    .remove(session_id)
+                    .is_some();
                 Some(ParsedEvent::AgentBlock {
                     action: "end".into(),
                     line,
@@ -6748,7 +6761,11 @@ impl ChunkProcessor {
                             // session's life (UserPromptSubmit, every PreToolUse/
                             // PostToolUse, Stop...), so skip the allocation + DashMap
                             // write lock once it's already set.
-                            if !state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+                            if !state
+                                .session_maps
+                                .has_tuic_state_integration
+                                .contains_key(session_id)
+                            {
                                 state
                                     .session_maps
                                     .has_tuic_state_integration
@@ -6888,7 +6905,10 @@ impl ChunkProcessor {
                             // cleared as an arbitrary non-zero sentinel exit code at the
                             // next busy→idle edge in `handle_tuic_state`; the actual
                             // payload value is intentionally never parsed here.
-                            state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+                            state
+                                .session_maps
+                                .turn_error_flags
+                                .insert(session_id.to_string(), ());
                         }
                         "bgtasks" => {
                             // From a Stop/StopFailure hook: `tuic-hook` scraped
@@ -6922,9 +6942,13 @@ impl ChunkProcessor {
                             let running = decoded.split(',').any(|status| {
                                 !status.is_empty() && !KNOWN_TERMINAL_STATUSES.contains(&status)
                             });
-                            if let Some(turn_epoch) =
-                                state.session_maps.session_states.get(session_id).map(|s| s.turn_epoch)
-                                && let Some(silence) = state.session_maps.silence_states.get(session_id)
+                            if let Some(turn_epoch) = state
+                                .session_maps
+                                .session_states
+                                .get(session_id)
+                                .map(|s| s.turn_epoch)
+                                && let Some(silence) =
+                                    state.session_maps.silence_states.get(session_id)
                             {
                                 silence
                                     .lock()
@@ -7165,7 +7189,11 @@ impl ChunkProcessor {
         // idle↔busy-edge turn-level source (handle_tuic_state) is
         // authoritative and this is suppressed so the two can't produce
         // conflicting blocks.
-        if state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+        if state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(session_id)
+        {
             // Suppression can activate mid-turn (e.g. the hook installs a
             // beat after a `⏺` header already opened a heuristic block, since
             // UserPromptSubmit's busy event is the common but not only path
@@ -7405,7 +7433,10 @@ impl ChunkProcessor {
                 // still flags the block, a minor documented over-flagging risk.
                 // Already excluded above during startup grace via `suppress_this`.
                 ParsedEvent::ApiError { .. } => {
-                    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+                    state
+                        .session_maps
+                        .turn_error_flags
+                        .insert(session_id.to_string(), ());
                 }
                 _ => {}
             }
@@ -8109,7 +8140,10 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // UUID otherwise, on both this path and the explicit close/kill path
     // (`cleanup_session`, which composes this function).
     state.session_maps.has_osc133_integration.remove(session_id);
-    state.session_maps.has_tuic_state_integration.remove(session_id);
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .remove(session_id);
     state.session_maps.turn_error_flags.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.session_maps.shell_state_since_ms.remove(session_id);
@@ -8172,7 +8206,10 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
     state.session_maps.marker_stats.remove(session_id);
     state.session_maps.session_visibility.remove(session_id);
     state.ai.ai_suggestions_enabled.remove(session_id);
-    state.session_maps.scrollback_capture_marks.remove(session_id);
+    state
+        .session_maps
+        .scrollback_capture_marks
+        .remove(session_id);
 }
 
 // NOT A DEFERRAL — four session-keyed maps are deliberately NOT reaped by
@@ -8723,7 +8760,10 @@ pub(crate) struct PendingInjectionSummary {
 
 const PENDING_PREVIEW_MAX_CHARS: usize = 80;
 
-fn summarize_pending_injections(state: &AppState, session_id: &str) -> Vec<PendingInjectionSummary> {
+fn summarize_pending_injections(
+    state: &AppState,
+    session_id: &str,
+) -> Vec<PendingInjectionSummary> {
     state
         .pending_injections
         .get(session_id)
@@ -11150,14 +11190,17 @@ fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data
     }
 }
 
-
 /// Shared lookup for `last_prompts`, kept in one place so the IPC-exposed
 /// getter (`get_last_prompt`, `pty/commands.rs`) and the internal consumer
 /// (`ChunkProcessor::handle_tuic_state`'s `AgentBlock.prompt_text`) can't drift
 /// if the lookup semantics ever change (trimming, a different word-count
 /// threshold, etc.).
 pub(crate) fn last_prompt_text(state: &AppState, session_id: &str) -> Option<String> {
-    state.session_maps.last_prompts.get(session_id).map(|v| v.clone())
+    state
+        .session_maps
+        .last_prompts
+        .get(session_id)
+        .map(|v| v.clone())
 }
 /// Shared resize core for the Tauri command and the HTTP route (story 056-7545).
 ///
@@ -11358,12 +11401,18 @@ fn background_activity_blocks_standby_with_silence(
     session_id: &str,
     locked_silence: Option<&SilenceState>,
 ) -> bool {
-    let Some((turn_epoch, base_activity)) = state.session_maps.session_states.get(session_id).map(|session| {
-        (
-            session.turn_epoch,
-            session.background_work || session.has_pending_background_probe(),
-        )
-    }) else {
+    let Some((turn_epoch, base_activity)) =
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .map(|session| {
+                (
+                    session.turn_epoch,
+                    session.background_work || session.has_pending_background_probe(),
+                )
+            })
+    else {
         return false;
     };
     let declared_background_work = match locked_silence {
@@ -12207,12 +12256,6 @@ fn clear_agent_type_on_confirmed_shell(state: &AppState, session_id: &str) {
         entry.agent_seen_running_pending_since_ms = None;
     }
 }
-
-
-
-
-
-
 
 /// Info about an active PTY session for frontend reconnection
 #[derive(Clone, Serialize)]

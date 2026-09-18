@@ -93,8 +93,10 @@ vi.mock("../../stores/ui", () => ({
 	uiStore: {
 		state: {
 			settingsNavWidth: 180,
+			lastSettingsTab: null,
 		},
 		setSettingsNavWidth: vi.fn(),
+		setLastSettingsTab: vi.fn(),
 	},
 }));
 

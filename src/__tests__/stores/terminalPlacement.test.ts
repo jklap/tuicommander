@@ -47,7 +47,7 @@ describe("resolvePlacementForCwd()", () => {
 	it("resolves a cwd inside a linked worktree to its repo+branch, not a guess", () => {
 		testInScope(() => {
 			store.add({ path: "/repo", displayName: "Repo" });
-			store.setBranch("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+			store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
 
 			expect(resolvePlacementForCwd("/repo__wt/feature/src")).toEqual({
 				repoPath: "/repo",
@@ -60,8 +60,8 @@ describe("resolvePlacementForCwd()", () => {
 	it("resolves a cwd at the repo root to the repo's activeBranch, not a guess", () => {
 		testInScope(() => {
 			store.add({ path: "/repo", displayName: "Repo" });
-			store.setBranch("/repo", "main", { worktreePath: "/repo" });
-			store.setActiveBranch("/repo", "main");
+			store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			store.setActiveWorkspace("/repo", "main");
 
 			expect(resolvePlacementForCwd("/repo/src/deep")).toEqual({
 				repoPath: "/repo",
@@ -74,8 +74,8 @@ describe("resolvePlacementForCwd()", () => {
 	it("falls back to the active repo (as a guess) when no registered repo owns the cwd", () => {
 		testInScope(() => {
 			store.add({ path: "/repo", displayName: "Repo" });
-			store.setBranch("/repo", "main", { worktreePath: "/repo" });
-			store.setActiveBranch("/repo", "main");
+			store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			store.setActiveWorkspace("/repo", "main");
 			store.setActive("/repo");
 
 			expect(resolvePlacementForCwd("/somewhere/unrelated")).toEqual({
@@ -105,12 +105,12 @@ describe("resolvePlacementForCwd()", () => {
 	it("does not use the active repo as a fallback owner when the cwd IS owned by a different registered repo", () => {
 		testInScope(() => {
 			store.add({ path: "/repo-a", displayName: "A" });
-			store.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
-			store.setActiveBranch("/repo-a", "main");
+			store.setWorkspace("/repo-a", "main", { worktreePath: "/repo-a" });
+			store.setActiveWorkspace("/repo-a", "main");
 			store.setActive("/repo-a");
 
 			store.add({ path: "/repo-b", displayName: "B" });
-			store.setBranch("/repo-b", "dev", { worktreePath: "/repo-b__wt/dev" });
+			store.setWorkspace("/repo-b", "dev", { worktreePath: "/repo-b__wt/dev" });
 
 			expect(resolvePlacementForCwd("/repo-b__wt/dev/src")).toEqual({
 				repoPath: "/repo-b",
@@ -129,7 +129,7 @@ describe("resolvePlacementForCwd()", () => {
 		it("matches resolvePlacementForCwd's result when given the same cwd's pre-resolved owner", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "Repo" });
-				store.setBranch("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
 
 				const cwd = "/repo__wt/feature/src";
 				const owner = resolveRepoOwner(cwd);
@@ -146,8 +146,8 @@ describe("resolvePlacementForCwd()", () => {
 		it("falls back to the active repo (as a guess) when owner is null", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "Repo" });
-				store.setBranch("/repo", "main", { worktreePath: "/repo" });
-				store.setActiveBranch("/repo", "main");
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+				store.setActiveWorkspace("/repo", "main");
 				store.setActive("/repo");
 
 				expect(resolvePlacementForOwner(null)).toEqual({

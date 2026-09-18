@@ -102,7 +102,7 @@ describe("useRepository", () => {
 			await repo.removeWorktree("/repos/my-repo", "feature-x", true, false, true);
 			expect(mockInvoke).toHaveBeenCalledWith("remove_worktree", {
 				repoPath: "/repos/my-repo",
-				branchName: "feature-x",
+				workspaceId: "feature-x",
 				deleteBranch: true,
 				force: false,
 				overrideBusy: true,

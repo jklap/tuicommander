@@ -216,6 +216,8 @@ needs an app restart is what that costs.
 |-------|------|---------|-------------|
 | `shell` | `Option<String>` | `None` | Shell override (platform default if None) |
 | `font_family` | `String` | `"JetBrains Mono"` | Terminal font family |
+| `cursor_style` | `String` | `"bar"` | Terminal cursor style: `bar` (default), `block`, or `underline` |
+| `terminal_renderer` | `String` | `"webgl"` | Terminal renderer: `webgl` (default, GPU-accelerated) or `canvas` (CPU, no atlas bugs) |
 | `font_size` | `u16` | `14` | Terminal font size |
 | `font_weight` | `u16` | `400` | Terminal font weight (100–900, e.g. 200 = ExtraLight, 400 = Regular) |
 | `theme` | `String` | `"vscode-dark"` | Terminal theme |

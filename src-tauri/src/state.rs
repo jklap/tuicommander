@@ -2430,9 +2430,11 @@ impl AppState {
     /// The event is dual-emitted for desktop Tauri listeners and browser/SSE
     /// clients, and is suppressed when the value did not change.
     pub(crate) fn set_pty_description(&self, session_id: &str, description: Option<String>) {
-        let MirrorUpdate::Changed(description) =
-            set_or_clear_string_mirror(&self.session_maps.pty_descriptions, session_id, description)
-        else {
+        let MirrorUpdate::Changed(description) = set_or_clear_string_mirror(
+            &self.session_maps.pty_descriptions,
+            session_id,
+            description,
+        ) else {
             return;
         };
         self.emit_pty_event(AppEvent::PtyDescriptionChanged {
@@ -3169,7 +3171,8 @@ impl AppState {
     /// Used to capture a session's scrollback under its stable identity right
     /// before `unbind_live_pty` drops the mapping on close.
     pub(crate) fn tuic_session_for_live_pty(&self, session_id: &str) -> Option<String> {
-        self.session_maps.live_pty_by_tuic_session
+        self.session_maps
+            .live_pty_by_tuic_session
             .iter()
             .find(|entry| entry.value() == session_id)
             .map(|entry| entry.key().clone())
@@ -4007,7 +4010,8 @@ impl AppState {
         let target = worktree_path
             .canonicalize()
             .unwrap_or_else(|_| worktree_path.to_path_buf());
-        self.session_maps.sessions
+        self.session_maps
+            .sessions
             .iter()
             .filter_map(|entry| {
                 let session = entry.value().lock();
@@ -4045,11 +4049,14 @@ impl AppState {
     /// site that needs to know about hook-declared background work, so a
     /// future change to how this is stored only needs updating here.
     pub(crate) fn declared_background_work_for(&self, session_id: &str, turn_epoch: u64) -> bool {
-        self.session_maps.silence_states.get(session_id).is_some_and(|silence| {
-            silence
-                .lock()
-                .declared_background_work_for_epoch(turn_epoch)
-        })
+        self.session_maps
+            .silence_states
+            .get(session_id)
+            .is_some_and(|silence| {
+                silence
+                    .lock()
+                    .declared_background_work_for_epoch(turn_epoch)
+            })
     }
 
     /// Get a SessionState snapshot with shell_state from the PTY reader's state machine.
@@ -5761,7 +5768,6 @@ pub(crate) mod tests_support {
             .lock()
             .cwd = Some(cwd.to_string());
     }
-
 
     /// Like [`insert_dummy_session`], but attaches the session to `worktree` —
     /// for tests of the `remove_worktree_by_branch` live-session gate
@@ -11320,8 +11326,13 @@ mod tests {
         let state = tests_support::make_test_app_state();
         let dir = tempfile::tempdir().expect("temp dir");
         tests_support::insert_dummy_session(&state, "s1");
-        state.session_maps.sessions.get("s1").expect("session").lock().cwd =
-            Some(dir.path().to_string_lossy().to_string());
+        state
+            .session_maps
+            .sessions
+            .get("s1")
+            .expect("session")
+            .lock()
+            .cwd = Some(dir.path().to_string_lossy().to_string());
 
         let attached = state.live_sessions_in_worktree(dir.path());
         assert_eq!(attached.len(), 1);

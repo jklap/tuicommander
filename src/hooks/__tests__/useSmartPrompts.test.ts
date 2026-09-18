@@ -705,7 +705,9 @@ describe("resolveFrontendVars (via executeSmartPrompt)", () => {
 	});
 
 	it("resolves pr_* variables only when the active branch has a PR", async () => {
-		mockedRepoGet.mockReturnValue({ activeBranch: "feature-x" } as unknown as ReturnType<typeof repositoriesStore.get>);
+		mockedRepoGet.mockReturnValue({ activeWorkspaceId: "feature-x" } as unknown as ReturnType<
+			typeof repositoriesStore.get
+		>);
 		mockedGetBranchPrData.mockReturnValue({ title: "My PR" } as unknown as ReturnType<
 			typeof githubStore.getBranchPrData
 		>);
@@ -763,9 +765,9 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 		(repositoriesStore.state.repositories as Record<string, unknown>) = {
 			[REPO_ROOT]: {
 				path: REPO_ROOT,
-				activeBranch: "main",
-				branches: {
-					"feat-x": { name: "feat-x", worktreePath: WORKTREE_PATH },
+				activeWorkspaceId: "main",
+				workspaces: {
+					"feat-x": { name: "feat-x", branchName: "feat-x", worktreePath: WORKTREE_PATH },
 				},
 			},
 		};
@@ -894,9 +896,9 @@ describe("executeSmartPrompt — explicit targetPath override (GitPanel/ChangesT
 		(repositoriesStore.state.repositories as Record<string, unknown>) = {
 			[REPO_ROOT]: {
 				path: REPO_ROOT,
-				activeBranch: "main",
-				branches: {
-					"feat-x": { name: "feat-x", worktreePath: WORKTREE_PATH },
+				activeWorkspaceId: "main",
+				workspaces: {
+					"feat-x": { name: "feat-x", branchName: "feat-x", worktreePath: WORKTREE_PATH },
 				},
 			},
 		};

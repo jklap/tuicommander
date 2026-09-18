@@ -3,7 +3,7 @@ import type { RepoChoice } from "./hooks/useRepoPickerDialog";
 import { invoke } from "./invoke";
 import { appLogger } from "./stores/appLogger";
 import { pluginStore } from "./stores/pluginStore";
-import { placementBranchFor, repositoriesStore } from "./stores/repositories";
+import { placementWorkspaceFor, repositoriesStore } from "./stores/repositories";
 import { resolvePlacementForCwd } from "./stores/terminalPlacement";
 import { isTauri } from "./transport";
 
@@ -29,8 +29,8 @@ export interface DeepLinkCallbacks {
 	chooseRepoForPath: (path: string) => Promise<RepoChoice | null>;
 	/** Create+attach a terminal at `repoPath`/`branchName`, with `cwd`
 	 *  overriding the branch's own worktree path. Mirrors
-	 *  `createBranchSelectionCoordinator`'s `handleAddTerminalToBranch`. */
-	handleAddTerminalToBranch: (repoPath: string, branchName: string, cwd?: string) => Promise<string | undefined>;
+	 *  `createBranchSelectionCoordinator`'s `handleAddTerminalToWorkspace`. */
+	handleAddTerminalToWorkspace: (repoPath: string, branchName: string, cwd?: string) => Promise<string | undefined>;
 	/** Open a plain terminal at `cwd` with no repo/branch association. */
 	openUnattachedTerminal: (cwd: string) => Promise<void>;
 	/** Clear a terminal's recorded owner (`repoPath: null`) after it has
@@ -50,7 +50,7 @@ export interface DeepLinkCallbacks {
 async function openTerminalAtPath(path: string, callbacks: DeepLinkCallbacks): Promise<void> {
 	const placement = resolvePlacementForCwd(path);
 	if (placement) {
-		const id = await callbacks.handleAddTerminalToBranch(placement.repoPath, placement.branchName, path);
+		const id = await callbacks.handleAddTerminalToWorkspace(placement.repoPath, placement.branchName, path);
 		// isGuess means nothing actually claims this cwd — the active repo only
 		// lent it a slot to render in. Filing it under that branch is still
 		// correct (it needs to be visible somewhere), but recording repoPath as
@@ -72,9 +72,9 @@ async function openTerminalAtPath(path: string, callbacks: DeepLinkCallbacks): P
 			// branch records the repo root as its worktree). A registered repo with
 			// no resolvable branch at all is a defensive edge case, not an expected
 			// one: every repo-registration path seeds at least one branch.
-			const branchName = placementBranchFor({ repoPath: choice.repoPath, branchName: null });
+			const branchName = placementWorkspaceFor({ repoPath: choice.repoPath, workspaceId: null });
 			if (branchName) {
-				await callbacks.handleAddTerminalToBranch(choice.repoPath, branchName, path);
+				await callbacks.handleAddTerminalToWorkspace(choice.repoPath, branchName, path);
 			} else {
 				await callbacks.openUnattachedTerminal(path);
 			}
@@ -83,7 +83,7 @@ async function openTerminalAtPath(path: string, callbacks: DeepLinkCallbacks): P
 		case "register":
 			// Registers the exact clicked path as a new repo root, which also
 			// auto-spawns its first terminal there (`addRepoByPath`) — no separate
-			// handleAddTerminalToBranch call needed.
+			// handleAddTerminalToWorkspace call needed.
 			await callbacks.openRepoPath(path);
 			break;
 		case "unattached":

@@ -107,7 +107,8 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "Progress Export",
-		description: "The Progress panel previews a progress.md for one project before it writes — your edits to that file are never overwritten.",
+		description:
+			"The Progress panel previews a progress.md for one project before it writes — your edits to that file are never overwritten.",
 		shortcut: null,
 	},
 	{

@@ -45,7 +45,10 @@ export interface WorkspaceState {
 	isShell?: boolean; // true for non-git directory shell entries
 	isRemoving?: boolean;
 	/** Set while the worktree has a rebase/merge/cherry-pick/revert/bisect in progress; which one. */
-	gitOp?: GitOpKind; // true while worktree removal is in progress
+	/** In-progress git operation shown as a sidebar badge. `null` clears an
+	 * existing value through `setWorkspace` — its `definedFields` guard strips
+	 * `undefined`-valued keys, so an optional-field write can never clear. */
+	gitOp?: GitOpKind | null;
 	worktreePath: string | null; // Path to worktree directory (null for main branch)
 	terminals: string[]; // terminal IDs belonging to this workspace
 	hadTerminals: boolean; // true once a terminal has been created — suppresses auto-spawn after close-all

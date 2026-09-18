@@ -8,15 +8,18 @@ import { extractRenderedTabKeys, extractTab } from "./extractSettings";
 const TAB_SOURCES: Record<string, string> = {
 	general: "tabs/GeneralTab.tsx",
 	appearance: "tabs/AppearanceTab.tsx",
+	terminal: "tabs/TerminalTab.tsx",
 	notifications: "tabs/NotificationsTab.tsx",
 	dictation: "DictationSettings.tsx",
 	github: "tabs/GitHubTab.tsx",
 	services: "tabs/ServicesTab.tsx",
 	plugins: "tabs/PluginsTab.tsx",
 	"smart-prompts": "tabs/SmartPromptsTab.tsx",
+	selection: "tabs/SelectionTab.tsx",
 	providers: "tabs/ProvidersTab.tsx",
 	agents: "tabs/AgentsTab.tsx",
 	"ai-chat": "tabs/AiChatTab.tsx",
+	streamdock: "tabs/StreamDockTab.tsx",
 };
 
 /** Occurrences the extraction rule cannot index, pinned so a new one is loud.
@@ -29,18 +32,18 @@ const TAB_SOURCES: Record<string, string> = {
 const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
+	terminal: { dynamic: 0, orphans: 0 },
 	notifications: { dynamic: 0, orphans: 0 },
 	dictation: { dynamic: 0, orphans: 0 },
 	github: { dynamic: 0, orphans: 0 },
 	services: { dynamic: 0, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
-	"smart-prompts": { dynamic: 4, orphans: 11 },
-	providers: { dynamic: 3, orphans: 0 },
-	// 8th: the per-agent "Native status signals" toggle, which sits in the same
-	// runtime-rendered card as "Install hooks globally" and so cannot have a
-	// static scroll target either.
-	agents: { dynamic: 8, orphans: 1 },
+	"smart-prompts": { dynamic: 3, orphans: 11 },
+	selection: { dynamic: 2, orphans: 3 },
+	providers: { dynamic: 2, orphans: 0 },
+	agents: { dynamic: 8, orphans: 3 },
 	"ai-chat": { dynamic: 2, orphans: 0 },
+	streamdock: { dynamic: 1, orphans: 0 },
 };
 
 const readTab = (file: string) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");

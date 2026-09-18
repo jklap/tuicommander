@@ -570,11 +570,11 @@ pub(crate) async fn close_pty(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-    // Safe: closing a tab must never discard uncommitted work. If the worktree
-    // is dirty or another session is still attached elsewhere, this fails and
-    // the worktree (already detached from `state.sessions` by `close_pty_core`)
-    // is simply left in place — same as any other failed cleanup here, which
-    // has always been warn-only.
+        // Safe: closing a tab must never discard uncommitted work. If the worktree
+        // is dirty or another session is still attached elsewhere, this fails and
+        // the worktree (already detached from `state.sessions` by `close_pty_core`)
+        // is simply left in place — same as any other failed cleanup here, which
+        // has always been warn-only.
         if let Some(worktree) = close_pty_core(&state, &session_id, cleanup_worktree)
             && let Err(e) = remove_worktree_internal(&worktree, crate::worktree::RemovalMode::Safe)
         {
@@ -847,7 +847,6 @@ pub(crate) fn remove_queued_agent_command(
 ) -> bool {
     remove_queued_command(&state, &session_id, command_id)
 }
-
 
 #[cfg(feature = "desktop")]
 #[tauri::command]

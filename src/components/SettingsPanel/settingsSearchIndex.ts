@@ -57,15 +57,21 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
 	{ tab: "general", section: "TUIC CLI", sectionKey: "general.heading.cli" },
+	{ tab: "general", section: "Finder Integration", sectionKey: "general.heading.finderService" },
 	{ tab: "general", section: "Code Intelligence", sectionKey: "general.heading.codeIntelligence" },
+	{ tab: "general", section: "Window", sectionKey: "general.heading.window" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
-	{ tab: "general", section: "Terminal", sectionKey: "general.heading.terminal" },
 	{ tab: "general", section: "Power Management", sectionKey: "general.heading.powerManagement" },
 	{ tab: "general", section: "Updates", sectionKey: "general.heading.updates" },
 	{ tab: "general", section: "Custom Launchers", sectionKey: "general.heading.customLaunchers" },
 	{ tab: "general", section: "Experimental Features", sectionKey: "general.heading.experimental" },
 	{ tab: "general", section: "General", label: "Language", labelKey: "general.label.language" },
-	{ tab: "general", section: "General", label: "Shell", labelKey: "general.label.shell" },
+	{
+		tab: "general",
+		section: "Window",
+		label: "Restore window size and position on launch",
+		labelKey: "general.toggle.restoreWindowGeometry",
+	},
 	{
 		tab: "general",
 		section: "Confirmations",
@@ -77,33 +83,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Confirmations",
 		label: "Confirm before closing a tab",
 		labelKey: "general.toggle.confirmBeforeClosingTab",
-	},
-	{ tab: "general", section: "Terminal", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Allow OSC 52 clipboard writes",
-		labelKey: "general.toggle.osc52Clipboard",
-	},
-	{ tab: "general", section: "Terminal", label: "Show agent context bar" },
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Show block timestamps",
-		labelKey: "general.toggle.showBlockTimestamps",
-	},
-	{ tab: "general", section: "Terminal", label: "Block folding", labelKey: "general.toggle.blockFolding" },
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Show scrollbar marks",
-		labelKey: "general.toggle.showScrollbarMarks",
-	},
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Reflow scrollback on resize",
-		labelKey: "general.toggle.scrollbackReflow",
 	},
 	{
 		tab: "general",
@@ -126,21 +105,78 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "Experimental Features", label: "AI Watchers", labelKey: "general.toggle.aiWatchers" },
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Theme", sectionKey: "appearance.heading.theme" },
-	{ tab: "appearance", section: "Terminal", sectionKey: "appearance.heading.terminal" },
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },
 	{ tab: "appearance", section: "Repository Groups", sectionKey: "appearance.heading.groups" },
 	{ tab: "appearance", section: "Layout", sectionKey: "appearance.heading.layout" },
+	{ tab: "appearance", section: "Bell", sectionKey: "appearance.heading.bell" },
 	{ tab: "appearance", section: "UI Legend", sectionKey: "appearance.heading.uiLegend" },
 	{ tab: "appearance", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
-	{ tab: "appearance", section: "Terminal", label: "Terminal Font", labelKey: "appearance.label.terminalFont" },
-	{ tab: "appearance", section: "Terminal", label: "Default Font Size", labelKey: "appearance.label.defaultFontSize" },
-	{ tab: "appearance", section: "Terminal", label: "Font Weight", labelKey: "appearance.label.fontWeight" },
-	{ tab: "appearance", section: "Terminal", label: "Cursor Style", labelKey: "appearance.label.cursorStyle" },
 	{ tab: "appearance", section: "Tabs", label: "Split Tab Mode", labelKey: "appearance.label.splitTabMode" },
 	{ tab: "appearance", section: "Tabs", label: "Tab Ordering", labelKey: "appearance.label.tabOrderingMode" },
 	{ tab: "appearance", section: "Tabs", label: "Cycle All Tab Types", labelKey: "appearance.label.tabCyclingAllTypes" },
 	{ tab: "appearance", section: "Tabs", label: "Nested Terminal Tabs", labelKey: "appearance.label.tabTreeEnabled" },
 	{ tab: "appearance", section: "Tabs", label: "Max Tab Name Length", labelKey: "appearance.label.maxTabNameLength" },
+	{ tab: "appearance", section: "Bell", label: "Bell Style", labelKey: "appearance.label.bellStyle" },
+	// tabs/TerminalTab.tsx
+	{ tab: "terminal", section: "Shell", sectionKey: "terminal.heading.shell" },
+	{ tab: "terminal", section: "Rendering", sectionKey: "terminal.heading.rendering" },
+	{ tab: "terminal", section: "Behavior", sectionKey: "terminal.heading.behavior" },
+	{ tab: "terminal", section: "Blocks", sectionKey: "terminal.heading.blocks" },
+	{ tab: "terminal", section: "Shell Integration", sectionKey: "terminal.heading.shellIntegration" },
+	{ tab: "terminal", section: "Session Restore", sectionKey: "terminal.heading.sessionRestore" },
+	{ tab: "terminal", section: "Shell", label: "Shell", labelKey: "terminal.label.shell" },
+	{ tab: "terminal", section: "Rendering", label: "Terminal Font", labelKey: "appearance.label.terminalFont" },
+	{ tab: "terminal", section: "Rendering", label: "Default Font Size", labelKey: "appearance.label.defaultFontSize" },
+	{ tab: "terminal", section: "Rendering", label: "Font Weight", labelKey: "appearance.label.fontWeight" },
+	{ tab: "terminal", section: "Rendering", label: "Cursor Style", labelKey: "appearance.label.cursorStyle" },
+	{ tab: "terminal", section: "Behavior", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
+	{
+		tab: "terminal",
+		section: "Behavior",
+		label: "Allow OSC 52 clipboard writes",
+		labelKey: "general.toggle.osc52Clipboard",
+	},
+	{
+		tab: "terminal",
+		section: "Behavior",
+		label: "Reflow scrollback on resize",
+		labelKey: "general.toggle.scrollbackReflow",
+	},
+	{
+		tab: "terminal",
+		section: "Behavior",
+		label: "Allow terminal focus/attention requests",
+		labelKey: "general.toggle.osc1337FocusAttention",
+	},
+	{ tab: "terminal", section: "Behavior", label: "Show agent context bar" },
+	{ tab: "terminal", section: "Behavior", label: "Open links on", labelKey: "terminal.label.linkActivation" },
+	{ tab: "terminal", section: "Blocks", label: "Show block timestamps", labelKey: "terminal.label.blockTimestampMode" },
+	{ tab: "terminal", section: "Blocks", label: "Show block marks", labelKey: "terminal.toggle.showBlockMarks" },
+	{ tab: "terminal", section: "Blocks", label: "Show prompt marks", labelKey: "terminal.toggle.showPromptMarks" },
+	{
+		tab: "terminal",
+		section: "Blocks",
+		label: "Enable block folding",
+		labelKey: "terminal.toggle.blockFoldingEnabled",
+	},
+	{
+		tab: "terminal",
+		section: "Session Restore",
+		label: "Restore open terminals on launch",
+		labelKey: "terminal.toggle.restoreShellTerminals",
+	},
+	{
+		tab: "terminal",
+		section: "Session Restore",
+		label: "Save terminal scrollback",
+		labelKey: "terminal.toggle.restoreScrollback",
+	},
+	{
+		tab: "terminal",
+		section: "Session Restore",
+		label: "Scrollback lines to save",
+		labelKey: "terminal.label.restoreScrollbackLines",
+	},
 	// tabs/NotificationsTab.tsx
 	{ tab: "notifications", section: "Notification Settings", sectionKey: "notifications.heading.notificationSettings" },
 	{
@@ -199,46 +235,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Auto-Corrections",
 		labelKey: "dictation.correctionsLabel",
 	},
-
-	// ── StreamDock ── (per-key role grid is a dynamic <For> — excluded, same
-	// reasoning as SmartPromptsTab/ProvidersTab above)
-	{
-		tab: "streamdock",
-		tabLabel: "StreamDock",
-		section: "StreamDock M18",
-		label: "Enable StreamDock integration",
-		hint: "Attach to a connected StreamDock M18 and mirror live session state to its keys.",
-	},
-	{
-		tab: "streamdock",
-		tabLabel: "StreamDock",
-		section: "StreamDock M18",
-		label: "StreamDock status",
-	},
-	{
-		tab: "streamdock",
-		tabLabel: "StreamDock",
-		section: "StreamDock M18",
-		label: "StreamDock device",
-		hint: "Pick which device to use when more than one is connected.",
-	},
-	{
-		tab: "streamdock",
-		tabLabel: "StreamDock",
-		section: "StreamDock M18",
-		label: "Screen brightness",
-	},
-	{
-		tab: "streamdock",
-		tabLabel: "StreamDock",
-		section: "StreamDock M18",
-		label: "LED brightness",
-		hint: "Only applies on firmware that reports RGB support (V3-class M18 units).",
-	},
-	// `VoiceTuning` renders between Microphone and Auto-Corrections, but it is a
-	// sub-component, so `extractSettings` — which reads source order, not the
-	// render tree — sees it wherever it is DEFINED. It is defined at the end of
-	// the file for exactly that reason, and these entries follow it.
 	{ tab: "dictation", section: "Dictation Settings", label: "Voice tuning", labelKey: "dictation.tuningLabel" },
 	{ tab: "dictation", section: "Dictation Settings", label: "Level gate", labelKey: "dictation.rmsLabel" },
 	{
@@ -279,22 +275,22 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "github", section: "Additional GitHub Accounts", label: "Add Enterprise account" },
 	// tabs/ServicesTab.tsx
 	{ tab: "services", section: "HTTP API Server", sectionKey: "services.heading.httpApiServer" },
+	{ tab: "services", section: "File Access", sectionKey: "services.heading.fileAccess" },
 	{ tab: "services", section: "Remote Access", sectionKey: "services.heading.remoteAccess" },
 	{ tab: "services", section: "Tailscale HTTPS" },
+	{ tab: "services", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
 	{ tab: "services", section: "Cloud Relay", sectionKey: "services.heading.cloudRelay" },
 	{ tab: "services", section: "TUIC Tools" },
 	{ tab: "services", section: "HTTP API Server", label: "Server Status", labelKey: "services.label.serverStatus" },
 	{ tab: "services", section: "HTTP API Server", label: "MCP Connection", labelKey: "services.label.mcpConnection" },
 	{
 		tab: "services",
-		tabLabel: "Services & MCP",
 		section: "File Access",
 		label: "Additional Readable Directories",
-		hint: "Directories web and remote clients may read files from, in addition to registered repositories",
+		labelKey: "services.label.additionalReadableDirs",
 	},
 	{
 		tab: "services",
-		tabLabel: "Services & MCP",
 		section: "Remote Access",
 		label: "Enable remote access",
 		labelKey: "services.toggle.enableRemoteAccess",
@@ -336,6 +332,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/SmartPromptsTab.tsx
 	{ tab: "smart-prompts", section: "Smart Prompts" },
 	{ tab: "smart-prompts", section: "Smart Prompts", label: "Headless Agent" },
+	// tabs/SelectionTab.tsx
+	{ tab: "selection", section: "Behavior" },
+	{ tab: "selection", section: "Word Boundaries" },
+	{ tab: "selection", section: "Smart Selection Rules" },
+	{ tab: "selection", section: "Behavior", label: "Double-click performs" },
+	{ tab: "selection", section: "Word Boundaries", label: "Word boundaries" },
+	{ tab: "selection", section: "Word Boundaries", label: "Word separators" },
+	{ tab: "selection", section: "Word Boundaries", label: "Word pattern" },
 	// tabs/ProvidersTab.tsx
 	{ tab: "providers", section: "Add Provider" },
 	{ tab: "providers", section: "Slot Assignments" },
@@ -355,6 +359,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "ai-chat", section: "Scheduled Tasks" },
 	{ tab: "ai-chat", section: "Parameters", label: "Temperature" },
 	{ tab: "ai-chat", section: "Parameters", label: "Extended thinking" },
+	// tabs/StreamDockTab.tsx
+	{ tab: "streamdock", section: "StreamDock M18" },
+	{ tab: "streamdock", section: "Pinned sessions" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Enable StreamDock integration" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "StreamDock status" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Device" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "Screen brightness" },
+	{ tab: "streamdock", section: "StreamDock M18", label: "LED brightness" },
 ];
 
 /** Section heading as rendered, i18n applied. */

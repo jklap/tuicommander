@@ -523,9 +523,7 @@ export const BranchItem: Component<{
 							<Show when={label()}>
 								<span
 									class={`${s.lifecycleBadge} ${
-										status().removalSafety !== "safe"
-											? s.lifecycleRisk
-											: s.lifecycleMerged
+										status().removalSafety !== "safe" ? s.lifecycleRisk : s.lifecycleMerged
 									}`}
 									title={title()}
 								>
@@ -637,11 +635,11 @@ export const BranchItem: Component<{
 						aria-expanded={props.branch.tabsExpanded ?? false}
 						onClick={(e) => {
 							e.stopPropagation();
-							repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.name);
+							repositoriesStore.toggleWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId);
 						}}
 						onKeyDown={onClickKeyDown((e) => {
 							e.stopPropagation();
-							repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.name);
+							repositoriesStore.toggleWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId);
 						})}
 					>
 						›

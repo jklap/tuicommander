@@ -100,7 +100,6 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		// workspace gets a dialog that says so, BEFORE the close-terminal loop
 		// below ever runs. See plans/worktree-removal-incident-2026-08-26.md.
 		const activity = branchActivitySummary(branch.terminals);
-		const deleteBranch = repoSettingsStore.getEffective(repoPath)?.deleteBranchOnRemove ?? true;
 		const confirmed = activity.isBusy
 			? await (deps.dialogs.confirmRemoveBusyWorktree?.(branchName, activity) ??
 					deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch))

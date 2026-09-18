@@ -281,7 +281,7 @@ const App: Component = () => {
 	 *  (see `branchKeyFor`, stores/repositories.ts) instead of invisible.
 	 *
 	 *  Mirrors the two guards every other terminal-creation path applies
-	 *  (`handleAddTerminalToBranch`, `createNewTerminal`): the session-count
+	 *  (`handleAddTerminalToWorkspace`, `createNewTerminal`): the session-count
 	 *  cap, and docking into the active split-pane group when one exists. */
 	const openUnattachedTerminal = async (cwd: string) => {
 		const canSpawn = await pty.canSpawn();
@@ -477,7 +477,6 @@ const App: Component = () => {
 		setCurrentBranch: gitOps.setCurrentBranch,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
-		handleWorktreeCreateFailed: gitOps.handleWorktreeCreateFailed,
 		handleWorktreeSetupScriptCompleted: gitOps.handleWorktreeSetupScriptCompleted,
 		getDefaultFontSize,
 		detectAgents: agentDetection.detectAll,
@@ -487,7 +486,7 @@ const App: Component = () => {
 		openRepoPath: gitOps.addRepoByPath,
 		confirm: (options) => dialogs.confirm(options),
 		chooseRepoForPath: repoPicker.chooseRepoForPath,
-		handleAddTerminalToBranch: gitOps.handleAddTerminalToBranch,
+		handleAddTerminalToWorkspace: gitOps.handleAddTerminalToWorkspace,
 		openUnattachedTerminal,
 		markTerminalPlacementAsGuess: (terminalId) => terminalsStore.setRepoPath(terminalId, null),
 	});

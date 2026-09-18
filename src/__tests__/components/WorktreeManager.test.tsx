@@ -463,10 +463,10 @@ describe("WorktreeManager", () => {
 			// the uncontroversial (no attached terminal) deletions aren't queued
 			// behind the disruptive prompts for busy ones.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-busy", { worktreePath: "/repo/.wt/busy" });
-			repositoriesStore.setBranch("/repo", "feat-safe", { worktreePath: "/repo/.wt/safe" });
+			repositoriesStore.setWorkspace("/repo", "feat-busy", { worktreePath: "/repo/.wt/busy" });
+			repositoriesStore.setWorkspace("/repo", "feat-safe", { worktreePath: "/repo/.wt/safe" });
 			const termId = terminalsStore.add(makeTerminal({ name: "T1" }));
-			repositoriesStore.addTerminalToBranch("/repo", "feat-busy", termId);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feat-busy", termId);
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.toggleSelect("/repo::feat-busy");
@@ -488,11 +488,11 @@ describe("WorktreeManager", () => {
 			// on its own, counted as busy forever. It now excludes ids it can see
 			// have shellState "exited", so a branch like this must bucket safe.
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-			repositoriesStore.setBranch("/repo", "feat-exited", { worktreePath: "/repo/.wt/exited" });
-			repositoriesStore.setBranch("/repo", "feat-safe", { worktreePath: "/repo/.wt/safe" });
+			repositoriesStore.setWorkspace("/repo", "feat-exited", { worktreePath: "/repo/.wt/exited" });
+			repositoriesStore.setWorkspace("/repo", "feat-safe", { worktreePath: "/repo/.wt/safe" });
 			const termId = terminalsStore.add(makeTerminal({ name: "T1" }));
 			terminalsStore.update(termId, { shellState: "exited" });
-			repositoriesStore.addTerminalToBranch("/repo", "feat-exited", termId);
+			repositoriesStore.addTerminalToWorkspace("/repo", "feat-exited", termId);
 
 			worktreeManagerStore.open();
 			worktreeManagerStore.toggleSelect("/repo::feat-exited");

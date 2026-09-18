@@ -1,9 +1,21 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { testInScopeAsync } from "../helpers/store";
 
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
+
+/** What a healthy, mergeable, non-dirty workspace's lifecycle preflight reports.
+ *  Every test that doesn't care about the lifecycle verdict itself gets this by
+ *  default from `makeCoordinator`, so `confirmRemoveWorktree`'s expected
+ *  3-arg call shape (`branchName, status, deleteBranch`) has something concrete
+ *  to assert against. */
+const DEFAULT_LIFECYCLE: WorkspaceLifecycleStatus = {
+	dirty: false,
+	commitStatus: "unmerged",
+	removalSafety: "safe",
+};
 
 describe("createWorktreeRemovalCoordinator", () => {
 	let createWorktreeRemovalCoordinator: typeof import("../../hooks/git/createWorktreeRemovalCoordinator").createWorktreeRemovalCoordinator;
@@ -32,7 +44,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 
 	function setupBranch(overrides: Record<string, unknown> = {}) {
 		repositoriesStore.add({ path: REPO, displayName: "alpha" });
-		repositoriesStore.setBranch(REPO, BRANCH, {
+		repositoriesStore.setWorkspace(REPO, BRANCH, {
 			worktreePath: `${REPO}__wt/${BRANCH}`,
 			terminals: [],
 			...overrides,
@@ -46,6 +58,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 		const [removingBranches, setRemovingBranches] = createSignal<Set<string>>(new Set());
 		const statusMessages: string[] = [];
 		const removeWorktree = vi.fn().mockResolvedValue({});
+		const getWorkspaceLifecycle = vi.fn().mockResolvedValue(DEFAULT_LIFECYCLE);
 		const confirmRemoveWorktree = vi.fn().mockResolvedValue(true);
 		const confirmRemoveLockedWorktree = vi.fn().mockResolvedValue(true);
 		const confirmRemoveBusyWorktree = vi.fn().mockResolvedValue(true);
@@ -61,14 +74,20 @@ describe("createWorktreeRemovalCoordinator", () => {
 			...(depOverrides.dialogs as Record<string, unknown> | undefined),
 		};
 
+		const repo = {
+			removeWorktree,
+			getWorkspaceLifecycle,
+			...(depOverrides.repo as Record<string, unknown> | undefined),
+		};
+
 		const coordinator = createWorktreeRemovalCoordinator({
-			repo: { removeWorktree },
 			checkWorktreeDirty,
 			closeTerminal,
 			setStatusInfo: (m: string) => statusMessages.push(m),
 			removingBranches,
 			setRemovingBranches,
 			...depOverrides,
+			repo,
 			dialogs,
 		} as never);
 
@@ -76,6 +95,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			coordinator,
 			statusMessages,
 			removeWorktree,
+			getWorkspaceLifecycle,
 			confirmRemoveWorktree,
 			confirmRemoveLockedWorktree,
 			confirmRemoveBusyWorktree,
@@ -91,10 +111,10 @@ describe("createWorktreeRemovalCoordinator", () => {
 			setupBranch();
 			const { coordinator, removeWorktree } = makeCoordinator();
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
-			expect(removeWorktree).toHaveBeenCalledWith(REPO, BRANCH, true);
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeUndefined();
+			expect(removeWorktree).toHaveBeenCalledWith(REPO, BRANCH, true, false);
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeUndefined();
 		});
 	});
 
@@ -105,9 +125,9 @@ describe("createWorktreeRemovalCoordinator", () => {
 			repoSettingsStore.update(REPO, { deleteBranchOnRemove: false });
 			const { coordinator, removeWorktree } = makeCoordinator();
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
-			expect(removeWorktree).toHaveBeenCalledWith(REPO, BRANCH, false);
+			expect(removeWorktree).toHaveBeenCalledWith(REPO, BRANCH, false, false);
 		});
 	});
 
@@ -117,10 +137,10 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, removeWorktree, confirmRemoveWorktree } = makeCoordinator();
 			confirmRemoveWorktree.mockResolvedValue(false);
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(removeWorktree).not.toHaveBeenCalled();
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeDefined();
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeDefined();
 		});
 	});
 
@@ -129,7 +149,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			setupBranch({ terminals: ["t1"] });
 			const { coordinator, confirmRemoveWorktree, confirmRemoveBusyWorktree } = makeCoordinator();
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(confirmRemoveBusyWorktree).toHaveBeenCalledWith(BRANCH, expect.any(Object));
 			expect(confirmRemoveWorktree).not.toHaveBeenCalled();
@@ -155,9 +175,9 @@ describe("createWorktreeRemovalCoordinator", () => {
 			setupBranch({ terminals: [termId] });
 			const { coordinator, confirmRemoveWorktree, confirmRemoveBusyWorktree, closeTerminal } = makeCoordinator();
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
-			expect(confirmRemoveWorktree).toHaveBeenCalledWith(BRANCH, true);
+			expect(confirmRemoveWorktree).toHaveBeenCalledWith(BRANCH, DEFAULT_LIFECYCLE, true);
 			expect(confirmRemoveBusyWorktree).not.toHaveBeenCalled();
 			// branch.terminals itself is left untouched by the exited terminal —
 			// only the busy/color read at removal-check time ignores it (see
@@ -175,9 +195,9 @@ describe("createWorktreeRemovalCoordinator", () => {
 				dialogs: { confirmRemoveBusyWorktree: undefined },
 			});
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
-			expect(confirmRemoveWorktree).toHaveBeenCalledWith(BRANCH, true);
+			expect(confirmRemoveWorktree).toHaveBeenCalledWith(BRANCH, DEFAULT_LIFECYCLE, true);
 		});
 	});
 
@@ -191,9 +211,9 @@ describe("createWorktreeRemovalCoordinator", () => {
 			repoSettingsStore.update(REPO, { deleteBranchOnRemove: false });
 			const { coordinator, confirmRemoveWorktree } = makeCoordinator();
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
-			expect(confirmRemoveWorktree).toHaveBeenCalledWith(BRANCH, false);
+			expect(confirmRemoveWorktree).toHaveBeenCalledWith(BRANCH, DEFAULT_LIFECYCLE, false);
 		});
 	});
 
@@ -203,7 +223,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, closeTerminal, removeWorktree } = makeCoordinator();
 			closeTerminal.mockRejectedValueOnce(new Error("pty gone")).mockResolvedValueOnce(undefined);
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(closeTerminal).toHaveBeenCalledWith("t1", true);
 			expect(closeTerminal).toHaveBeenCalledWith("t2", true);
@@ -217,11 +237,11 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, removeWorktree, confirmRemoveBusyWorktree } = makeCoordinator();
 			removeWorktree.mockRejectedValueOnce(new Error("worktree_busy: session attached")).mockResolvedValueOnce({});
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(confirmRemoveBusyWorktree).toHaveBeenCalled();
 			expect(removeWorktree).toHaveBeenNthCalledWith(2, REPO, BRANCH, true, false, true);
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeUndefined();
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeUndefined();
 		});
 	});
 
@@ -232,10 +252,10 @@ describe("createWorktreeRemovalCoordinator", () => {
 			removeWorktree.mockRejectedValueOnce(new Error("worktree_busy: session attached"));
 			confirmRemoveBusyWorktree.mockResolvedValue(false);
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(removeWorktree).toHaveBeenCalledTimes(1);
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeDefined();
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeDefined();
 		});
 	});
 
@@ -245,11 +265,11 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, removeWorktree, confirmForceRemoveDirtyWorktree } = makeCoordinator();
 			removeWorktree.mockRejectedValueOnce(new Error("worktree_dirty: uncommitted changes")).mockResolvedValueOnce({});
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(confirmForceRemoveDirtyWorktree).toHaveBeenCalledWith(BRANCH);
 			expect(removeWorktree).toHaveBeenNthCalledWith(2, REPO, BRANCH, true, true);
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeUndefined();
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeUndefined();
 		});
 	});
 
@@ -260,11 +280,11 @@ describe("createWorktreeRemovalCoordinator", () => {
 			checkWorktreeDirty.mockResolvedValue(true);
 			removeWorktree.mockRejectedValueOnce(new Error("worktree_locked: agent session")).mockResolvedValueOnce({});
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(confirmRemoveLockedWorktree).toHaveBeenCalledWith(BRANCH, true, true);
 			expect(removeWorktree).toHaveBeenNthCalledWith(2, REPO, BRANCH, true, true);
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeUndefined();
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeUndefined();
 		});
 	});
 
@@ -275,7 +295,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			checkWorktreeDirty.mockResolvedValue(null);
 			removeWorktree.mockRejectedValueOnce(new Error("worktree_locked: agent session")).mockResolvedValueOnce({});
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(confirmRemoveLockedWorktree).toHaveBeenCalledWith(BRANCH, true, true);
 		});
@@ -287,10 +307,10 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, removeWorktree, statusMessages } = makeCoordinator();
 			removeWorktree.mockRejectedValueOnce(new Error("worktree_is_main: cannot remove"));
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(statusMessages.some((m) => m.includes("main worktree"))).toBe(true);
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeDefined();
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeDefined();
 		});
 	});
 
@@ -300,10 +320,10 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, removeWorktree, statusMessages } = makeCoordinator();
 			removeWorktree.mockRejectedValueOnce(new Error("some_other_git_failure: disk full"));
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(statusMessages.some((m) => m.includes("Failed to remove"))).toBe(true);
-			expect(repositoriesStore.get(REPO)?.branches[BRANCH]).toBeDefined();
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH]).toBeDefined();
 		});
 	});
 
@@ -314,10 +334,14 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, confirmRemoveWorktree, removeWorktree } = makeCoordinator();
 			confirmRemoveWorktree.mockImplementation(() => new Promise<boolean>((resolve) => (resolveConfirm = resolve)));
 
-			const first = coordinator.handleRemoveBranch(REPO, BRANCH);
-			const second = coordinator.handleRemoveBranch(REPO, BRANCH);
+			const first = coordinator.handleRemoveWorkspace(REPO, BRANCH);
+			const second = coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
-			expect(confirmRemoveWorktree).toHaveBeenCalledTimes(1);
+			// The lock is taken synchronously before either call's first await, so
+			// `second` is already a no-op at this point — but `first` still has to
+			// clear the (now async) lifecycle preflight before it reaches the
+			// confirm dialog, so wait for that rather than asserting immediately.
+			await vi.waitFor(() => expect(confirmRemoveWorktree).toHaveBeenCalledTimes(1));
 			resolveConfirm(true);
 			await Promise.all([first, second]);
 			expect(removeWorktree).toHaveBeenCalledTimes(1);
@@ -327,10 +351,10 @@ describe("createWorktreeRemovalCoordinator", () => {
 	it("reports 'not a worktree' and does nothing when the branch has no worktreePath", async () => {
 		await testInScopeAsync(async () => {
 			repositoriesStore.add({ path: REPO, displayName: "alpha" });
-			repositoriesStore.setBranch(REPO, "main", { worktreePath: null });
+			repositoriesStore.setWorkspace(REPO, "main", { worktreePath: null });
 			const { coordinator, confirmRemoveWorktree, statusMessages } = makeCoordinator();
 
-			await coordinator.handleRemoveBranch(REPO, "main");
+			await coordinator.handleRemoveWorkspace(REPO, "main");
 
 			expect(confirmRemoveWorktree).not.toHaveBeenCalled();
 			expect(statusMessages).toEqual(["Cannot remove main: not a worktree"]);
@@ -345,7 +369,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			const { coordinator, removeWorktree } = makeCoordinator();
 			removeWorktree.mockResolvedValue({ branch_delete_warning: "not fully merged" });
 
-			await coordinator.handleRemoveBranch(REPO, BRANCH);
+			await coordinator.handleRemoveWorkspace(REPO, BRANCH);
 
 			expect(repoSettingsStore.get(REPO)?.branchLabels[BRANCH]).toBe("my label");
 		});

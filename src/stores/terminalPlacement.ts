@@ -47,7 +47,7 @@ export function resolvePlacementForOwner(owner: RepoOwner | null): TerminalPlace
 	}
 
 	const fallbackRepo = repositoriesStore.state.activeRepoPath;
-	const fallbackBranch = fallbackRepo ? repositoriesStore.get(fallbackRepo)?.activeBranch : null;
+	const fallbackBranch = fallbackRepo ? repositoriesStore.get(fallbackRepo)?.activeWorkspaceId : null;
 	if (fallbackRepo && fallbackBranch) {
 		return { repoPath: fallbackRepo, branchName: fallbackBranch, isGuess: true };
 	}

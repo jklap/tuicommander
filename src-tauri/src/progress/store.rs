@@ -2279,8 +2279,10 @@ mod tests {
             .record(&event(ProgressKind::Milestone, "A live WAL.", None))
             .unwrap();
         let held = store.connect().unwrap();
-        held.query_row("SELECT COUNT(*) FROM events", [], |row| row.get::<_, i64>(0))
-            .unwrap();
+        held.query_row("SELECT COUNT(*) FROM events", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap();
 
         let reopened =
             ProgressStore::open(project.path()).expect("a locked SHM is not a broken store");

@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 #[cfg(feature = "desktop")]
 use tauri::State;
 
@@ -3415,6 +3414,7 @@ mod tests {
     use crate::test_support::{fail_with_stderr_script, print_file_script, touch_script};
     use std::fs;
     use std::process::Command;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     /// The post-merge cleanup dialog runs these one after another, and each was
@@ -5883,7 +5883,8 @@ branch refs/heads/feat
         let repo_path = repo.path().to_string_lossy().to_string();
 
         let default_branch = get_remote_default_branch(&repo_path).unwrap();
-        let result = delete_local_branch_impl(&repo_path, &default_branch, &default_branch, false, None);
+        let result =
+            delete_local_branch_impl(&repo_path, &default_branch, &default_branch, false, None);
         assert!(result.is_err());
         assert!(
             result

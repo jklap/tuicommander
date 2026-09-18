@@ -28,6 +28,7 @@ const SEARCH_MATCH = "#e8984c";
 
 export interface ScrollbarMarkBlock {
 	promptLine: number;
+	endLine?: number | null;
 	exitCode: number | null;
 }
 
@@ -80,11 +81,33 @@ export function buildScrollbarMarksHtml(input: ScrollbarMarksInput): string {
 	return html;
 }
 
+/**
+ * Memo key for `buildScrollbarMarksHtml`. Each toggle's contribution collapses to a fixed
+ * placeholder when that category is hidden, so the key doesn't churn on invisible changes —
+ * but the toggle flip itself always changes the count term (real count vs. 0), so re-enabling
+ * always invalidates the memo even if blocks/prompts/totalRows are otherwise unchanged since
+ * it was hidden. (Regression: a previous key collapsed both counts to 0 while EITHER
+ * category was hidden, sharing one `showBlocks` flag, so it could go stale across a
+ * hide/show cycle of either toggle independently.)
+ */
+export function scrollbarMarksKey(input: Omit<ScrollbarMarksInput, "trackH">): string {
+	const { showBlockMarks, showPromptMarks, blocks, promptLines, totalRows, matchRows } = input;
+	const lastBlock = blocks[blocks.length - 1];
+	const lastPrompt = promptLines[promptLines.length - 1];
+	const searchCount = matchRows.length;
+	return (
+		`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
+		`:p${showPromptMarks ? promptLines.length : 0}:${showPromptMarks ? (lastPrompt ?? "") : ""}` +
+		`:t${totalRows}` +
+		`:s${searchCount}:${searchCount > 0 ? matchRows[0] : ""}`
+	);
+}
+
 export interface ScrollbarVisibilityInput {
 	historySize: number;
 	showBlockMarks: boolean;
 	showPromptMarks: boolean;
-	blocks: readonly Pick<MarkBlock, "promptLine">[];
+	blocks: readonly Pick<ScrollbarMarkBlock, "promptLine">[];
 	promptLines: readonly number[];
 }
 

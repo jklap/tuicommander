@@ -51,7 +51,7 @@ export type AppBootstrapOptions = InitOptions & {
 	chooseRepoForPath: DeepLinkCallbacks["chooseRepoForPath"];
 	/** Create+attach a terminal, with an explicit cwd override — same
 	 *  coordinator function the branch-selection UI itself calls. */
-	handleAddTerminalToBranch: DeepLinkCallbacks["handleAddTerminalToBranch"];
+	handleAddTerminalToWorkspace: DeepLinkCallbacks["handleAddTerminalToWorkspace"];
 	/** Open a plain terminal with no repo/branch association. */
 	openUnattachedTerminal: DeepLinkCallbacks["openUnattachedTerminal"];
 	markTerminalPlacementAsGuess: DeepLinkCallbacks["markTerminalPlacementAsGuess"];
@@ -170,7 +170,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 		openRepoPath,
 		confirm,
 		chooseRepoForPath,
-		handleAddTerminalToBranch,
+		handleAddTerminalToWorkspace,
 		openUnattachedTerminal,
 		markTerminalPlacementAsGuess,
 		...initOptions
@@ -216,7 +216,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 		onInstallError: (message) => appLogger.error("plugin", message),
 		openRepoPath,
 		chooseRepoForPath,
-		handleAddTerminalToBranch,
+		handleAddTerminalToWorkspace,
 		openUnattachedTerminal,
 		markTerminalPlacementAsGuess,
 	});
