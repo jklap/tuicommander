@@ -671,7 +671,7 @@ When adding config fields or settings UI:
 | `docs/backend/config.md` | Config files, schema, platform directories |
 | `docs/user-guide/settings.md` | Settings page breakdown, by navigation group |
 | `docs/FEATURES.md` | Section 11 (Settings) |
-| `src/components/SettingsPanel/SettingsPanel.tsx` | `GLOBAL_TAB_GROUPS` — which group and page a new page belongs to |
+| `src/components/SettingsPanel/settingsTabs.ts` | `GLOBAL_TAB_GROUPS` — which group and page a new page belongs to (`hiddenTabs` for availability) |
 | `src/components/SettingsPanel/settingsSearchIndex.ts` | Search index rows for every new label; the drift test re-derives them from the JSX |
 | `src/components/SettingsPanel/ExpertSetting.tsx`, `src/stores/settingsExpert.ts` | Wrap a control in `ExpertSetting` only with a `configKey` that `get_config_defaults` can resolve; update the Expert Mode section of `docs/user-guide/settings.md` if the visibility rule changes |
 

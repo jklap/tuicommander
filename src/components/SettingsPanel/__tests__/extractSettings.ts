@@ -14,7 +14,11 @@
  *   - a setting between `<ExpertSetting configKey="…">` and its closing tag
  *     carries that configKey (the index marks it `expert`),
  *   - a section or setting inside `<Show when={isTauri()…}>` is `desktop`-only,
- *     one inside that Show's `fallback={…}` is `browser`-only.
+ *     one inside that Show's `fallback={…}` is `browser`-only,
+ *   - a static `hint=` prop in the same open tag as a `label=` prop is that
+ *     setting's hint. A dynamic hint (template literal, conditional) is simply
+ *     absent — hints are search fodder, not settings, so it does not count as
+ *     a dynamic occurrence.
  */
 
 /** The client a gated occurrence renders in; absent means every client. */
@@ -30,9 +34,10 @@ export interface ExtractedText {
 
 export interface ExtractedTab {
 	sections: ExtractedText[];
-	/** Settings, each tagged with the section heading text it sits under, and
-	 * with the configKey of the `ExpertSetting` wrapping it, if any */
-	settings: (ExtractedText & { section: string; configKey?: string })[];
+	/** Settings, each tagged with the section heading text it sits under, with
+	 * the configKey of the `ExpertSetting` wrapping it, if any, and with its
+	 * static `hint=` text, if any */
+	settings: (ExtractedText & { section: string; configKey?: string; hint?: ExtractedText })[];
 	/** Occurrences whose text is computed at runtime and cannot be indexed */
 	dynamic: number;
 }
@@ -91,8 +96,27 @@ function unescapeJsx(s: string): string {
 	return s.replace(/\\"/g, '"').replace(/\\n/g, " ").replace(/\\\\/g, "\\");
 }
 
+/** `hint=` prop value in the open tag carrying the `label=` prop at `labelAt`.
+ *
+ * Scans back to the tag's own `<` and forward to its brace-aware `>` — a prop
+ * order of `hint=` before `label=` must attach just the same. A nearer `<`
+ * belonging to some earlier prop's inline JSX closes before `labelAt`, which
+ * the range check rejects: no hint, never a wrong one. */
+function hintInSameTag(src: string, labelAt: number): string | undefined {
+	const tagStart = src.lastIndexOf("<", labelAt);
+	if (tagStart < 0) return undefined;
+	const tagEnd = endOfOpenTag(src, tagStart);
+	if (tagEnd < labelAt) return undefined;
+	const tag = src.slice(tagStart, tagEnd);
+	const m = tag.match(/(?<![\w-])hint=/);
+	if (m?.index === undefined) return undefined;
+	return tag.slice(m.index + "hint=".length);
+}
+
 /** Element occurrences (`<h3>`, `<label>`) and `label=` props, in source order. */
-function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number }> {
+function* occurrences(
+	src: string,
+): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number; hintInner?: string }> {
 	const re = /<(h3|label)\b|(?<![\w-])label=/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src)) !== null) {
@@ -104,7 +128,13 @@ function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: str
 			yield { kind: m[1] as "h3" | "label", inner: src.slice(open + 1, close), isProp: false, at: m.index };
 			re.lastIndex = open + 1;
 		} else {
-			yield { kind: "label", inner: src.slice(m.index + "label=".length), isProp: true, at: m.index };
+			yield {
+				kind: "label",
+				inner: src.slice(m.index + "label=".length),
+				isProp: true,
+				at: m.index,
+				hintInner: hintInSameTag(src, m.index),
+			};
 		}
 	}
 }
@@ -197,7 +227,14 @@ export function extractTab(src: string): ExtractedTab {
 			out.sections.push({ ...text, ...(platform ? { platform } : {}) });
 		} else {
 			const configKey = expertKeyAt(occ.at);
-			out.settings.push({ ...text, section, ...(configKey ? { configKey } : {}), ...(platform ? { platform } : {}) });
+			const hint = occ.hintInner === undefined ? null : staticExpression(occ.hintInner.trim());
+			out.settings.push({
+				...text,
+				section,
+				...(configKey ? { configKey } : {}),
+				...(platform ? { platform } : {}),
+				...(hint ? { hint } : {}),
+			});
 		}
 	}
 	return out;

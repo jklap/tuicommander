@@ -117,6 +117,7 @@ function derive(tab: string): SettingsSearchEntry[] {
 			...(setting.key ? { labelKey: setting.key } : {}),
 			...(setting.configKey ? { expert: true, configKey: setting.configKey } : {}),
 			...(setting.platform ? { platform: setting.platform } : {}),
+			...(setting.hint ? { hint: setting.hint.text, ...(setting.hint.key ? { hintKey: setting.hint.key } : {}) } : {}),
 		});
 	}
 	return entries;
@@ -196,7 +197,9 @@ describe("searchSettings", () => {
 
 	it("matches case-insensitively on any word order", () => {
 		const hits = searchSettings("THEME terminal", ALL_TABS, "desktop");
-		expect(hits).toEqual([expect.objectContaining({ tab: "terminal", section: "Theme", label: "Terminal Theme" })]);
+		// The tab's own label counts as search text, so the Theme heading on the
+		// Terminal page matches too — ranked below the setting both words name.
+		expect(hits[0]).toEqual(expect.objectContaining({ tab: "terminal", section: "Theme", label: "Terminal Theme" }));
 	});
 
 	it("matches a section heading, and the settings inside it", () => {
@@ -247,5 +250,23 @@ describe("searchSettings", () => {
 
 	it("returns nothing for a query that matches no setting", () => {
 		expect(searchSettings("zzzzz no such setting", ALL_TABS, "desktop")).toEqual([]);
+	});
+
+	it("finds a setting by its hint text, not just its label", () => {
+		// "leave blank for system default" is wording that lives only in the
+		// Shell setting's hint — the label alone would never match it.
+		const hits = searchSettings("leave blank for system default", ALL_TABS, "desktop");
+		expect(hits.map((e) => e.label)).toContain("Shell");
+	});
+
+	it("ranks the entry named by the query above entries that merely mention it", () => {
+		const labels = searchSettings("shell", ALL_TABS, "desktop").map((e) => e.label);
+		// "Shell" names the setting; "Restore open terminals on launch" only
+		// mentions plain shell tabs in its hint.
+		const named = labels.indexOf("Shell");
+		const mentioned = labels.indexOf("Restore open terminals on launch");
+		expect(named).toBeGreaterThanOrEqual(0);
+		expect(mentioned).toBeGreaterThanOrEqual(0);
+		expect(named).toBeLessThan(mentioned);
 	});
 });
