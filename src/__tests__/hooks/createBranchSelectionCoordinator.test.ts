@@ -207,7 +207,11 @@ describe("createBranchSelectionCoordinator", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
 
-			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main", "/Gits/alpha/packages/app");
+			const id = await makeCoordinator().handleAddTerminalToWorkspace(
+				"/Gits/alpha",
+				"main",
+				"/Gits/alpha/packages/app",
+			);
 
 			expect(terminalsStore.get(id!)?.cwd).toBe("/Gits/alpha/packages/app");
 		});
@@ -218,7 +222,11 @@ describe("createBranchSelectionCoordinator", () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 			repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
 
-			const id = await makeCoordinator().handleAddTerminalToWorkspace("/Gits/alpha", "main", "/Gits/alpha/packages/app");
+			const id = await makeCoordinator().handleAddTerminalToWorkspace(
+				"/Gits/alpha",
+				"main",
+				"/Gits/alpha/packages/app",
+			);
 
 			expect(terminalsStore.get(id!)?.repoPath).toBe("/Gits/alpha");
 			expect(repositoriesStore.findOwnerForTerminal(id!)).toEqual({

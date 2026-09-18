@@ -69,7 +69,6 @@ describe("createWorktreeCreationCoordinator", () => {
 			import("../../hooks/git/createWorktreeCreationCoordinator").WorktreeDialogState | null
 		>(null);
 		const statusMessages: string[] = [];
-		const pendingCreations = new Map();
 		const markRecentlyCreated = vi.fn();
 		const handleAddTerminalToWorkspace = vi.fn().mockResolvedValue(undefined);
 
@@ -108,8 +107,6 @@ describe("createWorktreeCreationCoordinator", () => {
 			setCreatingWorktreeRepos,
 			worktreeDialogState,
 			setWorktreeDialogState,
-			pendingCreations,
-			pendingKey: (repoPath: string, branchName: string) => `${repoPath}:${branchName}`,
 			markRecentlyCreated,
 			handleAddTerminalToWorkspace,
 		} as never);

@@ -231,18 +231,40 @@ describe("useAppShortcutHandlers", () => {
 	});
 
 	describe("block navigation and folding", () => {
-		it("delegates blockPrev/blockNext/blockFoldToggle to the active terminal's ref", () => {
+		it("delegates blockPrev/blockNext to the active terminal's ref", () => {
+			// blockFoldToggle deliberately does NOT delegate to the ref: it picks the
+			// nearest block and routes through terminalsStore.toggleBlockFold (the
+			// central fold gate) — covered by the viewport-centre test below.
 			const ref = { scrollToBlock: vi.fn(), toggleBlockFold: vi.fn(), openSearch: vi.fn() };
 			mockStores.terminals.getActive.mockReturnValue({ ref, commandBlocks: [] });
 			const handlers = useAppShortcutHandlers(createOptions() as never);
 
 			handlers.blockPrev();
 			handlers.blockNext();
-			handlers.blockFoldToggle();
 
 			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(1, "previous");
 			expect(ref.scrollToBlock).toHaveBeenNthCalledWith(2, "next");
-			expect(ref.toggleBlockFold).toHaveBeenCalledOnce();
+		});
+
+		// This handler picks WHICH block to fold; whether folding is allowed at all
+		// is `blockFoldingEnabled`, enforced inside `toggleBlockFold`.
+		// Catches: eviction leaves the viewport centre relative while stored blocks are absolute.
+		it("folds the block nearest the viewport centre after eviction", async () => {
+			mockStores.terminals.getActive.mockReturnValue({
+				id: "term-1",
+				ref: { getSessionId: () => "session-1" },
+				historyBase: 100,
+				commandBlocks: [{ promptLine: 40 }, { promptLine: 140 }, { promptLine: 190 }],
+			});
+			// [displayOffset, historySize, screenRows] — centres the view on absolute line 190
+			mockInvoke.mockResolvedValue([0, 80, 20]);
+			const handlers = useAppShortcutHandlers(createOptions() as never);
+
+			handlers.blockFoldToggle();
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(mockStores.terminals.toggleBlockFold).toHaveBeenCalledWith("term-1", 190);
 		});
 
 		it("opens search and toggles block scope for blockSearchToggle", () => {

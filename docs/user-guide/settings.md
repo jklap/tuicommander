@@ -66,7 +66,7 @@ never all expert: in basic mode it would show an empty page.
 |------|-----------------|
 | General | Auto-Standby Timeout, Content Indexing, Update Channel |
 | Notifications | Master Volume, Audio Output Device |
-| Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Allow terminal focus/attention requests, Block folding, Show scrollbar marks, Reflow scrollback on resize |
+| Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Allow terminal focus/attention requests, Block folding, Show block marks, Show prompt marks, Reflow scrollback on resize |
 | Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup and safe cleanup countdown, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
 | Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
@@ -206,9 +206,8 @@ playback also uses the selected output device.
 | **Open links on** | Click | How links (URLs, file paths) in terminal output activate. **Click** opens on a plain click. **⌘Click**/**Ctrl+Click** hides the underline until Cmd (macOS) or Ctrl (Windows/Linux) is held, then opens on modifier+click. **Never** disables click-to-open entirely — right-click still offers Open/Copy link. |
 | **Show block timestamps** | Hold Ctrl+Cmd | When each command block is labelled at the right edge with how long ago it started: **Never**, only while **Ctrl+Cmd** is held, or **Always**. |
 | **Block folding** | On | Let the Toggle Block Fold shortcut (Cmd/Ctrl+Shift+.), its command-palette entry and the fold chevron on a block's header row in the gutter collapse a command block's output (clicking elsewhere in the block's gutter selects its output for copying). Blocks already folded stay collapsed when this is off. |
-| **Show scrollbar marks** | On | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. |
-| **Show block marks** | On | Blue/red scrollbar tick for each command block (red when the command failed). Expert setting; needs **Show scrollbar marks**. |
-| **Show prompt marks** | On | Green scrollbar tick for each prompt you sent. Expert setting; needs **Show scrollbar marks**. |
+| **Show block marks** | On | Blue/red scrollbar tick for each command block (red when the command failed). Expert setting. Orange search-match ticks are not affected by this or the next setting: they are the result of a search you just ran, not a display preference. |
+| **Show prompt marks** | On | Green scrollbar tick for each prompt you sent. Expert setting. |
 | **Reflow scrollback on resize** | On | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. A change applies to sessions already open. |
 
 See [Command Blocks](terminals.md#command-blocks) for what the block settings control.

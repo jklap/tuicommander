@@ -232,7 +232,7 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 		showRemoteQr: () => options.setShowRemoteQr(true),
 		blockPrev: () => terminalsStore.getActive()?.ref?.scrollToBlock("previous"),
 		blockNext: () => terminalsStore.getActive()?.ref?.scrollToBlock("next"),
-		blockFoldToggle: () => terminalsStore.getActive()?.ref?.toggleBlockFold(),
+		blockFoldToggle: toggleNearestCommandBlock,
 		blockSearchToggle: () => {
 			const ref = terminalsStore.getActive()?.ref;
 			ref?.openSearch();
@@ -272,4 +272,30 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			return true;
 		},
 	};
+}
+
+function toggleNearestCommandBlock(): void {
+	// No `blockFoldingEnabled` check here on purpose: `toggleBlockFold` enforces
+	// it for every caller, so this path cannot drift from CanvasTerminal's.
+	const terminal = terminalsStore.getActive();
+	if (!terminal?.ref || terminal.commandBlocks.length === 0) return;
+	const sessionId = terminal.ref.getSessionId();
+	if (!sessionId) return;
+	invoke<[number, number, number]>("terminal_scroll_info", { sessionId })
+		.then(([offset, total, screenRows]) => {
+			const viewCenter = terminal.historyBase + total - offset + Math.floor(screenRows / 2);
+			const blocks = terminal.commandBlocks.filter((block) => block.promptLine >= terminal.historyBase);
+			if (blocks.length === 0) return;
+			let nearest = blocks[0];
+			let bestDistance = Math.abs(nearest.promptLine - viewCenter);
+			for (let index = 1; index < blocks.length; index++) {
+				const distance = Math.abs(blocks[index].promptLine - viewCenter);
+				if (distance < bestDistance) {
+					nearest = blocks[index];
+					bestDistance = distance;
+				}
+			}
+			terminalsStore.toggleBlockFold(terminal.id, nearest.promptLine);
+		})
+		.catch(() => {});
 }
