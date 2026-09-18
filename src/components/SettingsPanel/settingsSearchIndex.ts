@@ -249,14 +249,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{
 		tab: "terminal",
 		section: "Terminal",
-		label: "Show scrollbar marks",
-		labelKey: "general.toggle.showScrollbarMarks",
-		expert: true,
-		configKey: "app.show_scrollbar_marks",
-	},
-	{
-		tab: "terminal",
-		section: "Terminal",
 		label: "Show block marks",
 		labelKey: "general.toggle.showBlockMarks",
 		expert: true,

@@ -146,7 +146,12 @@ pub(crate) fn reconcile(topology: &mut TmuxTopology, live: &HashSet<String>) -> 
 }
 
 fn live_session_ids(state: &AppState) -> HashSet<String> {
-    state.session_maps.sessions.iter().map(|e| e.key().clone()).collect()
+    state
+        .session_maps
+        .sessions
+        .iter()
+        .map(|e| e.key().clone())
+        .collect()
 }
 
 /// Resolve a tmux `set-option` style value (e.g. `bg=default,fg=blue`, or a

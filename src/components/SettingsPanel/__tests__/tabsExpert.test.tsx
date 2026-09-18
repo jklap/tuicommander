@@ -60,7 +60,6 @@ const APP_DEFAULTS = {
 	font_weight: 400,
 	osc52_clipboard: true,
 	block_folding_enabled: true,
-	show_scrollbar_marks: true,
 	show_block_marks: true,
 	show_prompt_marks: true,
 	scrollback_reflow: true,
@@ -126,14 +125,6 @@ const CASES: Case[] = [
 		label: "Block folding",
 		domain: "app",
 		field: "block_folding_enabled",
-		modified: false,
-	},
-	{
-		page: "Terminal",
-		tab: TerminalTab,
-		label: "Show scrollbar marks",
-		domain: "app",
-		field: "show_scrollbar_marks",
 		modified: false,
 	},
 	{

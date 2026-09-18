@@ -20946,8 +20946,12 @@ fn chunk_trace_matches_recorded_baseline() {
                 "[(1, [\"shell-state\"]), (3, [\"shell-state\"]), (115, [\"shell-state\"]), \
                  (118, [\"shell-state\"])] shell=Some(1) q=None sig=None alt=false ring=1902"
             }
+            // `progress` at chunk 0: the fixture carries `ESC]9;4;0;BEL` and
+            // `ESC]9;4;3;BEL` (state with no value digits) — parseable since
+            // OSC 9;4 gained the error/warning/indeterminate states, whose
+            // value is optional. The pre-2026-09 baseline predated that.
             "claude-plan-picker.raw" => {
-                "[(0, [\"status-line\", \"shell-state\"])] \
+                "[(0, [\"progress\", \"status-line\", \"shell-state\"])] \
                  shell=Some(1) q=None sig=None alt=false ring=8196"
             }
             "claude-generic-attention.raw" => "[] shell=Some(0) q=None sig=None alt=false ring=59",

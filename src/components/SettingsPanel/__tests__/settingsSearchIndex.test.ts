@@ -73,8 +73,9 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// The machine selector's "Configure agents on" label scopes the page. The
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
-	// a stable search target.
-	agents: { dynamic: 10, orphans: 2 },
+	// a stable search target. The per-agent "Track agent intent" and "Show
+	// suggested follow-ups" tri-state toggles sit in that same collapsed card.
+	agents: { dynamic: 10, orphans: 4 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -162,9 +163,14 @@ describe("settings search index — drift guard", () => {
 		}).toEqual(UNINDEXABLE[tab]);
 	});
 
-	it("classifies only the machine selector and per-agent idle close as Agents orphans", () => {
+	it("classifies only the machine selector and the per-agent card controls as Agents orphans", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
-		expect(orphans.map((setting) => setting.text)).toEqual(["Close idle managed child after", "Configure agents on"]);
+		expect(orphans.map((setting) => setting.text)).toEqual([
+			"Close idle managed child after",
+			"Track agent intent",
+			"Show suggested follow-ups",
+			"Configure agents on",
+		]);
 	});
 
 	it("indexes no tab the panel cannot open", () => {

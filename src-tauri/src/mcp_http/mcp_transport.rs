@@ -1160,8 +1160,6 @@ fn render_mcp_instructions(
     let session_enabled = !gates.disabled_native.contains("session");
     let agent_enabled = !gates.disabled_native.contains("agent");
     let repo_enabled = !gates.disabled_native.contains("repo");
-    let ui_enabled = !gates.disabled_native.contains("ui");
-    let plugin_dev_guide_enabled = !gates.disabled_native.contains("plugin_dev_guide");
     // Two independent preferences layered on top of `agent_enabled` — the
     // `agent` tool does both spawning and messaging, and an agent type can
     // prefer TUIC for either, both, or neither, in any combination, while
@@ -1190,11 +1188,17 @@ fn render_mcp_instructions(
         // Kept verbatim in both modes. It is not a restatement of the `session`
         // description: agents split the text and the Enter into two calls, or
         // polled after submitting, until this line existed.
-        out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+        if session_enabled {
+            out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+        }
     } else {
         out.push_str("Read each tool's description for actions and rules.\n\n");
-        out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
-        out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        if repo_enabled {
+            out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
+        }
+        if session_enabled {
+            out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        }
     }
 
     // ── Progress — an obligation, not a capability ───────────────────
@@ -9270,6 +9274,7 @@ fn sanitize_branch_for_suggested_prompt(branch_name: &str) -> String {
     branch_name.replace('`', "'").replace('\n', " ")
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // test helper: fully-permissive gates
 fn default_tool_gates() -> ToolGates {
     ToolGates {
         disabled_native: std::collections::HashSet::new(),
@@ -21844,8 +21849,12 @@ mod tests {
             !out.contains("`session action=status|output`"),
             "session clause must be omitted from Workflow Observe bullet"
         );
-        // Other tools stay advertised.
-        assert!(out.contains("- `agent` (AI peers"));
+        // The session-specific Submit rule disappears with the tool...
+        assert!(
+            !out.contains("**Submit:**"),
+            "Submit rule must be omitted when the session tool is disabled"
+        );
+        // ...while agent guidance survives.
         assert!(out.contains("## Multi-Agent Work"));
     }
 
@@ -21867,9 +21876,9 @@ mod tests {
             !out.contains("- **Coordinate:**"),
             "agent-only Coordinate bullet must be omitted from Workflow"
         );
-        // session/repo spawn guidance stays.
-        assert!(out.contains("`session action=create` (shell)"));
-        assert!(out.contains("`repo action=worktree_create` (isolated)"));
+        // session/repo guidance stays.
+        assert!(out.contains("**Submit:** `session action=submit"));
+        assert!(out.contains("**Worktrees:** use `repo action=worktree_create`"));
     }
 
     #[test]
@@ -21935,9 +21944,12 @@ mod tests {
             !out.contains("## Workflow"),
             "Workflow header must not render with zero possible bullets"
         );
-        // ui/plugin_dev_guide are unaffected and still listed.
-        assert!(out.contains("- `ui` ("));
-        assert!(out.contains("plugin_dev_guide`: plugin authoring reference"));
+        // The generic Tools rules survive; nothing tool-specific leaks back in.
+        assert!(out.contains("## Tools"));
+        assert!(
+            !out.contains("## Multi-Agent Work"),
+            "Multi-Agent Work needs a spawnable or messageable agent tool"
+        );
     }
 
     #[test]
@@ -22022,20 +22034,16 @@ mod tests {
         let out = build_mcp_instructions(&state, Some("claude-code"));
 
         // Spawn guidance stays.
-        assert!(out.contains("`agent action=spawn` (AI)"));
+        assert!(out.contains("- **Prefer TUICommander for peers/teams:**"));
         assert!(
             out.contains("- **Same repo:** TUIC `agent action=spawn` peers to work in this repo.")
         );
         assert!(out.contains("- **Isolated branches:**"));
 
         // Messaging guidance is gone.
-        assert!(
-            out.contains("- `agent` (AI peers): spawn, detect, stats, metrics"),
-            "expected trimmed agent bullet without messaging verbs, got: {out}"
-        );
         assert!(!out.contains("agent action=register"));
-        assert!(!out.contains("- **Coordinate:**"));
         assert!(!out.contains("`agent action=inbox`"));
+        assert!(!out.contains("`agent action=send`"));
         assert!(!out.contains("- **Identity:**"));
     }
 
@@ -22095,10 +22103,8 @@ mod tests {
         let out = build_mcp_instructions(&state, Some("claude-code"));
 
         // Messaging guidance stays.
-        assert!(out.contains("- `agent` (AI peers + messaging): wait, detect, stats, metrics, register, list_peers, send, inbox"));
-        assert!(out.contains("- **Identity:**"));
+        assert!(out.contains("wait with `agent action=wait`, then read `agent action=inbox`"));
         assert!(out.contains("`agent action=inbox`"));
-        assert!(out.contains("- **Coordinate:**"));
         assert!(out.contains(
             "- **Same repo:** wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`.\n"
         ));
@@ -22167,7 +22173,10 @@ mod tests {
         );
         // The agent tool is still enabled and still listed, just with neither
         // spawn nor messaging verbs — pure peer-admin only.
-        assert!(out.contains("- `agent` (AI peers): detect, stats, metrics"));
+        assert!(
+            !out.contains("## Multi-Agent Work"),
+            "neither preference set: the whole Multi-Agent Work section is omitted"
+        );
         // Workflow still renders (session/repo/agent-detect content survives).
         assert!(!out.contains("- **Coordinate:**"));
         assert!(!out.contains("`agent action=spawn` (AI)"));
@@ -22207,9 +22216,9 @@ mod tests {
             "agent bullet must still be omitted from Tools"
         );
         assert!(!out.contains("- **Coordinate:**"));
-        // session/repo spawn guidance is unaffected by the agent-only override.
-        assert!(out.contains("`session action=create` (shell)"));
-        assert!(out.contains("`repo action=worktree_create` (isolated)"));
+        // session/repo guidance is unaffected by the agent-only override.
+        assert!(out.contains("**Submit:** `session action=submit"));
+        assert!(out.contains("**Worktrees:** use `repo action=worktree_create`"));
     }
 
     // ---- Instruction de-duplication (#754-affa) ------------------------------

@@ -276,8 +276,8 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 
 - **Scrollbar marks** — Color-coded ticks on the scrollbar mark each block boundary; a separate
   green tick marks each line where you submitted a prompt. Both show without holding any key;
-  **Show scrollbar marks** at Settings > Terminal turns both off, and the expert toggles **Show
-  block marks** / **Show prompt marks** turn each off on its own.
+  the expert toggles **Show block marks** / **Show prompt marks** at Settings > Terminal turn
+  each off on its own.
 - **Red ticks** — A block turns red if any tool call in the turn failed, or hit an API error.
   For a hook-instrumented agent (the primary tier, covering every tool type — the `tuic-hook`
   binary extracts this natively, with no external dependency), a failure flags the block even
