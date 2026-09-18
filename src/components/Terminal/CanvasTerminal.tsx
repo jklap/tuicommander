@@ -110,7 +110,7 @@ import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { ImageLayer, type ImagePlacement } from "./imageLayer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
-import { buildScrollbarMarksHtml, shouldShowScrollbar } from "./scrollbarMarks";
+import { buildScrollbarMarksHtml, scrollbarMarksKey, shouldShowScrollbar } from "./scrollbarMarks";
 import { findSmartMatch, SMART_SELECTION_RADIUS, type SmartMatch } from "./smartSelection";
 import { runSmartSelectionAction, type SmartSelectionActionDeps } from "./smartSelectionActions";
 import { resolveSmartSelectionRules } from "./smartSelectionDefaults";
@@ -1204,9 +1204,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const term = terminalsStore.get(props.terminalId);
 		const showScrollbar = shouldShowScrollbar({
 			historySize: frame.historySize,
-			// Same gating as paintScrollbarMarks: `showScrollbarMarks` is the master toggle.
-			showBlockMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showBlockMarks,
-			showPromptMarks: settingsStore.state.showScrollbarMarks && settingsStore.state.showPromptMarks,
+			showBlockMarks: settingsStore.state.showBlockMarks,
+			showPromptMarks: settingsStore.state.showPromptMarks,
 			blocks: term ? rowAnchoredBlocks(term.commandBlocks) : [],
 			promptLines: term?.userPromptLines ?? [],
 		});
@@ -1250,28 +1249,22 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// holding the modifier. Folded into the paint inputs rather than returned
 		// on early, which also fixes turning a setting OFF: an early return above
 		// the key computation left the last-painted marks on screen forever,
-		// because the repaint that would clear them never ran. `showScrollbarMarks`
-		// stays the master toggle main's Terminal settings tab exposes.
-		const marksOn = settingsStore.state.showScrollbarMarks;
-		const showBlockMarks = marksOn && settingsStore.state.showBlockMarks;
-		const showPromptMarks = marksOn && settingsStore.state.showPromptMarks;
-		const blocks = rowAnchoredBlocks(term.commandBlocks);
-		const promptLines = term.userPromptLines;
-		const historyBase = currentFrame?.historyBase ?? 0;
-		const searchCount = search.matches.length;
-		const lastBlock = blocks.at(-1);
-		const lastPrompt = promptLines.at(-1);
+		// because the repaint that would clear them never ran. The flags are also
+		// part of the memo key (`scrollbarMarksKey`) so a toggle flip always
+		// invalidates the cache. Block and prompt rows stay eviction-stable;
+		// `historyBase` converts them to grid rows inside the builder and is part
+		// of the key, so eviction alone repaints.
+		const marksInput = {
+			showBlockMarks: settingsStore.state.showBlockMarks,
+			showPromptMarks: settingsStore.state.showPromptMarks,
+			blocks: rowAnchoredBlocks(term.commandBlocks),
+			promptLines: term.userPromptLines,
+			historyBase: currentFrame?.historyBase ?? 0,
+			matchRows: search.matches.map((m) => m.row),
+			totalRows,
+		};
 
-		// Each toggle's contribution to the key collapses to a fixed placeholder
-		// when that category is hidden, so the key doesn't churn on invisible
-		// changes — but the toggle flip itself always changes the count term
-		// (real count vs. 0), so re-enabling always invalidates the memo even if
-		// blocks/prompts/totalRows are otherwise unchanged since it was hidden.
-		const key =
-			`b${showBlockMarks ? blocks.length : 0}:${showBlockMarks ? (lastBlock?.promptLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.endLine ?? "") : ""}:${showBlockMarks ? (lastBlock?.exitCode ?? "") : ""}` +
-			`:p${showPromptMarks ? promptLines.length : 0}:${showPromptMarks ? (lastPrompt ?? "") : ""}` +
-			`:t${totalRows}:h${historyBase}` +
-			`:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		const key = scrollbarMarksKey(marksInput);
 		if (key === lastScrollbarMarksKey) return;
 		lastScrollbarMarksKey = key;
 
@@ -1283,14 +1276,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		scrollbarMarksContainer.innerHTML = buildScrollbarMarksHtml({
-			blocks,
-			promptLines,
-			historyBase,
-			matchRows: search.matches.map((m) => m.row),
-			totalRows,
+			...marksInput,
 			trackH: scrollbarTrackHeight,
-			showBlockMarks,
-			showPromptMarks,
 		});
 	}
 
@@ -4098,7 +4085,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// tracking here too, alongside its own placeholder branch in
 	// paintScrollbarMarks's memo key below — the two must stay in sync.
 	createEffect(() => {
-		settingsStore.state.showScrollbarMarks;
 		settingsStore.state.showBlockMarks;
 		settingsStore.state.showPromptMarks;
 		if (!alive || !currentFrame) return;

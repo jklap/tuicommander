@@ -29,7 +29,6 @@ function toggleFor(container: HTMLElement, label: string): HTMLInputElement {
 }
 
 const FOLDING = "Block folding";
-const MARKS = "Show scrollbar marks";
 const REFLOW = "Reflow scrollback on resize";
 const BLOCK_MARKS = "Show block marks";
 const PROMPT_MARKS = "Show prompt marks";
@@ -41,7 +40,6 @@ const PROMPT_MARKS = "Show prompt marks";
  * store and a reader while having no control at all. */
 const DEFAULT_ON = [
 	{ label: FOLDING, key: "block_folding_enabled", field: "blockFoldingEnabled" },
-	{ label: MARKS, key: "show_scrollbar_marks", field: "showScrollbarMarks" },
 	{ label: REFLOW, key: "scrollback_reflow", field: "scrollbackReflow" },
 	{ label: BLOCK_MARKS, key: "show_block_marks", field: "showBlockMarks" },
 	{ label: PROMPT_MARKS, key: "show_prompt_marks", field: "showPromptMarks" },
@@ -92,11 +90,11 @@ describe("TerminalTab block display toggles", () => {
 	});
 
 	it("shows the values the config was loaded with", async () => {
-		mockInvoke.mockImplementation(invokeImpl({ show_scrollbar_marks: false, block_folding_enabled: false }));
+		mockInvoke.mockImplementation(invokeImpl({ show_block_marks: false, block_folding_enabled: false }));
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
 
-		expect(toggleFor(container, MARKS).checked).toBe(false);
+		expect(toggleFor(container, BLOCK_MARKS).checked).toBe(false);
 		expect(toggleFor(container, FOLDING).checked).toBe(false);
 	});
 

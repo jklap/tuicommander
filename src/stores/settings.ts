@@ -99,7 +99,6 @@ interface RustAppConfig {
 	 *  saved by an older build still deserializes; no longer written by `save()`. */
 	show_block_timestamps?: boolean;
 	block_timestamp_mode?: string;
-	show_scrollbar_marks?: boolean;
 	show_block_marks?: boolean;
 	show_prompt_marks?: boolean;
 	block_folding_enabled?: boolean;
@@ -415,8 +414,8 @@ interface SettingsStoreState {
 	wordSelectionRegex: string;
 	smartSelectionRules: SmartSelectionRule[];
 	blockTimestampMode: BlockTimestampMode;
-	/** Master toggle for the scrollbar history ticks; the two below pick the categories. */
-	showScrollbarMarks: boolean;
+	/** Scrollbar history ticks, per category (the old `show_scrollbar_marks` master
+	 *  toggle was retired; Rust migrates an old `false` into both on load). */
 	showBlockMarks: boolean;
 	showPromptMarks: boolean;
 	blockFoldingEnabled: boolean;
@@ -494,7 +493,6 @@ function createSettingsStore() {
 		wordSelectionRegex: "",
 		smartSelectionRules: [],
 		blockTimestampMode: "modifier",
-		showScrollbarMarks: true,
 		showBlockMarks: true,
 		showPromptMarks: true,
 		blockFoldingEnabled: true,
@@ -582,7 +580,6 @@ function createSettingsStore() {
 		config.word_selection_regex = state.wordSelectionRegex;
 		config.smart_selection_rules = state.smartSelectionRules.map(ruleToWire);
 		config.block_timestamp_mode = state.blockTimestampMode;
-		config.show_scrollbar_marks = state.showScrollbarMarks;
 		config.show_block_marks = state.showBlockMarks;
 		config.show_prompt_marks = state.showPromptMarks;
 		config.block_folding_enabled = state.blockFoldingEnabled;
@@ -722,7 +719,6 @@ function createSettingsStore() {
 					"blockTimestampMode",
 					resolveBlockTimestampMode(config.block_timestamp_mode ?? null, config.show_block_timestamps),
 				);
-				setState("showScrollbarMarks", config.show_scrollbar_marks ?? true);
 				setState("showBlockMarks", config.show_block_marks ?? true);
 				setState("showPromptMarks", config.show_prompt_marks ?? true);
 				setState("blockFoldingEnabled", config.block_folding_enabled ?? true);
@@ -1015,12 +1011,6 @@ function createSettingsStore() {
 		/** Allow collapsing a command block's output with the fold shortcut */
 		setBlockFoldingEnabled(enabled: boolean): void {
 			setState("blockFoldingEnabled", enabled);
-			save();
-		},
-
-		/** Mark each command's position on the terminal scrollbar */
-		setShowScrollbarMarks(enabled: boolean): void {
-			setState("showScrollbarMarks", enabled);
 			save();
 		},
 

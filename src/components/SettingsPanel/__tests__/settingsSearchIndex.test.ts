@@ -73,8 +73,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// The machine selector's "Configure agents on" label scopes the page. The
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
-	// a stable search target.
-	agents: { dynamic: 0, orphans: 12 },
+	// a stable search target. The per-agent "Prefer TUICommander agent
+	// spawning" and "Prefer TUICommander messaging" toggles sit in that same
+	// collapsed card.
+	agents: { dynamic: 0, orphans: 14 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -176,6 +178,8 @@ describe("settings search index — drift guard", () => {
 			"Track agent intent",
 			"Collect progress",
 			"Show suggested follow-ups",
+			"Prefer TUICommander agent spawning",
+			"Prefer TUICommander messaging",
 			"Configure agents on",
 		]);
 	});

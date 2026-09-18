@@ -183,8 +183,6 @@ pub(super) fn render_mcp_instructions(
     let session_enabled = !gates.disabled_native.contains("session");
     let agent_enabled = !gates.disabled_native.contains("agent");
     let repo_enabled = !gates.disabled_native.contains("repo");
-    let ui_enabled = !gates.disabled_native.contains("ui");
-    let plugin_dev_guide_enabled = !gates.disabled_native.contains("plugin_dev_guide");
     // Two independent preferences layered on top of `agent_enabled` — the
     // `agent` tool does both spawning and messaging, and an agent type can
     // prefer TUIC for either, both, or neither, in any combination, while
@@ -213,11 +211,17 @@ pub(super) fn render_mcp_instructions(
         // Kept verbatim in both modes. It is not a restatement of the `session`
         // description: agents split the text and the Enter into two calls, or
         // polled after submitting, until this line existed.
-        out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+        if session_enabled {
+            out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
+        }
     } else {
         out.push_str("Read each tool's description for actions and rules.\n\n");
-        out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
-        out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        if repo_enabled {
+            out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
+        }
+        if session_enabled {
+            out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
+        }
     }
 
     // ── Progress — an obligation, not a capability ───────────────────
