@@ -1134,8 +1134,16 @@ describe("Sidebar", () => {
 			settingsStore.setShowDiffStats(false);
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 10, deletions: 5 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 10,
+							deletions: 5,
+						},
 					},
 				}),
 			});
@@ -1147,8 +1155,16 @@ describe("Sidebar", () => {
 			settingsStore.setShowPrBadges(false);
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
 					},
 				}),
 			});
@@ -1212,9 +1228,10 @@ describe("Sidebar", () => {
 			settingsStore.setShowGitState(false);
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
+					workspaces: {
 						main: {
-							name: "main",
+							workspaceId: "main",
+							branchName: "main",
 							isMain: true,
 							worktreePath: null,
 							terminals: [],
@@ -1232,8 +1249,17 @@ describe("Sidebar", () => {
 		it("shows no git-op badge when no operation is in progress", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							gitOp: null,
+						},
 					},
 				}),
 			});
@@ -2552,8 +2578,16 @@ describe("Sidebar", () => {
 		it("does not show a Switch Branch submenu when there is nothing to switch to", () => {
 			setRepos({
 				"/repo1": makeRepo({
-					branches: {
-						main: { name: "main", isMain: true, worktreePath: "/repo1", terminals: [], additions: 0, deletions: 0 },
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: "/repo1",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
 					},
 				}),
 			});
