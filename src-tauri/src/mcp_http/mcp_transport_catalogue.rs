@@ -288,8 +288,6 @@ pub(super) fn render_mcp_instructions(
     let session_enabled = !gates.disabled_native.contains("session");
     let agent_enabled = !gates.disabled_native.contains("agent");
     let repo_enabled = !gates.disabled_native.contains("repo");
-    let ui_enabled = !gates.disabled_native.contains("ui");
-    let plugin_dev_guide_enabled = !gates.disabled_native.contains("plugin_dev_guide");
     // Two independent preferences layered on top of `agent_enabled` — the
     // `agent` tool does both spawning and messaging, and an agent type can
     // prefer TUIC for either, both, or neither, in any combination, while

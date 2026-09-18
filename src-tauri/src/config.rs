@@ -1338,10 +1338,6 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block timestamp mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("enum" = ["off","modifier","always"]))]
     pub(crate) block_timestamp_mode: String,
-    /// Draw command-block marks on the terminal scrollbar. Frontend-gated.
-    #[serde(default = "default_true")]
-    #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show scrollbar marks for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    pub(crate) show_scrollbar_marks: bool,
     /// Draw command-block boundary tick marks (blue/red) on the terminal scrollbar.
     /// Frontend-gated.
     #[serde(default = "default_true")]
@@ -1707,7 +1703,6 @@ impl Default for AppConfig {
             word_selection_regex: default_word_selection_regex(),
             smart_selection_rules: Vec::new(),
             show_block_timestamps: true,
-            show_scrollbar_marks: true,
             block_timestamp_mode: default_block_timestamp_mode(),
             show_block_marks: true,
             show_prompt_marks: true,
@@ -2764,6 +2759,24 @@ fn migrate_block_timestamp_mode(val: &mut serde_json::Value) {
     }
 }
 
+/// Carry a retired `show_scrollbar_marks: false` into its two per-category
+/// replacements. The master toggle was retired in favour of `show_block_marks`
+/// and `show_prompt_marks`; serde ignores the old key, so without this a user who
+/// had turned the marks off would silently get them back. An explicit category
+/// value already present wins. The old key is never written again, so this runs
+/// until the next save and then has nothing left to do.
+fn migrate_retired_scrollbar_marks(val: &mut serde_json::Value) {
+    let Some(obj) = val.as_object_mut() else {
+        return;
+    };
+    if obj.get("show_scrollbar_marks") != Some(&serde_json::Value::Bool(false)) {
+        return;
+    }
+    for key in ["show_block_marks", "show_prompt_marks"] {
+        obj.entry(key).or_insert(serde_json::Value::Bool(false));
+    }
+}
+
 /// Migrate flat service fields from pre-ServicesConfig format into nested `services` object.
 fn migrate_flat_services(val: &mut serde_json::Value) {
     let obj = match val.as_object_mut() {
@@ -3739,6 +3752,7 @@ fn read_app_config_unlocked_for_version(
     migrate_flat_services(&mut val);
     migrate_block_timestamp_mode(&mut val);
     let migrated_capabilities = val.get("disabled_native_tools").is_some();
+    migrate_retired_scrollbar_marks(&mut val);
     match serde_json::from_value(val) {
         Ok(mut config) => {
             let migrated_secret = hydrate_app_config_secrets(&mut config);
@@ -6170,7 +6184,6 @@ mod tests {
             // All three default to true, so `false` is the only value that can
             // tell a real round trip from serde handing back the default.
             show_block_timestamps: false,
-            show_scrollbar_marks: false,
             block_timestamp_mode: "always".to_string(),
             show_block_marks: false,
             show_prompt_marks: false,
@@ -6264,7 +6277,6 @@ mod tests {
         // them from every `save_config` payload and the UI silently snapped
         // back to the default on the next load.
         assert!(!loaded.show_block_timestamps);
-        assert!(!loaded.show_scrollbar_marks);
         assert_eq!(loaded.block_timestamp_mode, "always");
         assert!(!loaded.show_block_marks);
         assert!(!loaded.show_prompt_marks);
@@ -6514,7 +6526,6 @@ mod tests {
         // the frontend store hydrates each with `?? true` — the two sides must
         // agree or the Settings toggles read one value and the terminal another.
         assert!(loaded.show_block_timestamps);
-        assert!(loaded.show_scrollbar_marks);
         assert_eq!(loaded.block_timestamp_mode, "modifier"); // defaults to "modifier"
         assert!(loaded.show_block_marks); // defaults to true
         assert!(loaded.show_prompt_marks); // defaults to true
@@ -6601,6 +6612,46 @@ mod tests {
         migrate_block_timestamp_mode(&mut legacy);
         let loaded: AppConfig = serde_json::from_value(legacy).unwrap();
         assert_eq!(loaded.block_timestamp_mode, "off");
+    }
+
+    /// A config.json as an older build wrote it: every current field except the
+    /// two per-category mark toggles, plus `extra` (e.g. the retired master key).
+    fn legacy_marks_config(extra: serde_json::Value) -> serde_json::Value {
+        let mut val = serde_json::to_value(AppConfig::default()).unwrap();
+        let obj = val.as_object_mut().unwrap();
+        obj.remove("show_block_marks");
+        obj.remove("show_prompt_marks");
+        obj.extend(extra.as_object().unwrap().clone());
+        val
+    }
+
+    #[test]
+    fn retired_scrollbar_marks_off_carries_into_both_categories() {
+        let mut val = legacy_marks_config(serde_json::json!({ "show_scrollbar_marks": false }));
+        migrate_retired_scrollbar_marks(&mut val);
+        let config: AppConfig = serde_json::from_value(val).unwrap();
+        assert!(!config.show_block_marks);
+        assert!(!config.show_prompt_marks);
+        // Never written back: the next save drops the retired key for good.
+        let saved = serde_json::to_value(&config).unwrap();
+        assert!(saved.get("show_scrollbar_marks").is_none());
+    }
+
+    #[test]
+    fn retired_scrollbar_marks_keeps_explicit_categories_and_ignores_true() {
+        let mut val = legacy_marks_config(serde_json::json!({
+            "show_scrollbar_marks": false,
+            "show_prompt_marks": true,
+        }));
+        migrate_retired_scrollbar_marks(&mut val);
+        let config: AppConfig = serde_json::from_value(val).unwrap();
+        assert!(!config.show_block_marks);
+        assert!(config.show_prompt_marks, "an explicit category value wins");
+
+        let mut on = legacy_marks_config(serde_json::json!({ "show_scrollbar_marks": true }));
+        migrate_retired_scrollbar_marks(&mut on);
+        let config: AppConfig = serde_json::from_value(on).unwrap();
+        assert!(config.show_block_marks && config.show_prompt_marks);
     }
 
     #[test]

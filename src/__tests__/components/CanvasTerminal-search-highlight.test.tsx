@@ -258,7 +258,8 @@ it.each([false, true])("repaints scrollbar history marks immediately when enable
 		],
 		userPromptLines: [30],
 	});
-	settingsStore.setShowScrollbarMarks(true);
+	settingsStore.setShowBlockMarks(true);
+	settingsStore.setShowPromptMarks(true);
 	const terminal = await open("f", id);
 	try {
 		const historyFrame = frame();
@@ -276,19 +277,22 @@ it.each([false, true])("repaints scrollbar history marks immediately when enable
 			);
 		expect(marks().length).toBeGreaterThan(4);
 		if (enabled) {
-			settingsStore.setShowScrollbarMarks(false);
+			settingsStore.setShowBlockMarks(false);
+			settingsStore.setShowPromptMarks(false);
 			// Establish OFF using a frame, then test ON with no frame.
 			transport.sink?.(historyFrame);
 			await vi.advanceTimersByTimeAsync(32);
 		}
-		settingsStore.setShowScrollbarMarks(enabled);
+		settingsStore.setShowBlockMarks(enabled);
+		settingsStore.setShowPromptMarks(enabled);
 		await vi.advanceTimersByTimeAsync(32);
 		expect(marks()).toHaveLength(enabled ? 6 : 4);
 		expect(marks().filter((e) => ["#e8984c", "rgb(232, 152, 76)"].includes(e.style.background))).toHaveLength(4);
 	} finally {
 		terminal.view.unmount();
 		terminalsStore.remove(id);
-		settingsStore.setShowScrollbarMarks(true);
+		settingsStore.setShowBlockMarks(true);
+		settingsStore.setShowPromptMarks(true);
 		expect(
 			error.mock.calls.every(([source, message]) => source === "config" && String(message).includes("not hydrated")),
 		).toBe(true);

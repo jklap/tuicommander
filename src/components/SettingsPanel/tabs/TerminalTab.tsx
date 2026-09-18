@@ -501,20 +501,6 @@ export const TerminalTab: Component = () => {
 					/>
 				</ExpertSetting>
 
-				<ExpertSetting configKey="app.show_scrollbar_marks" value={settingsStore.state.showScrollbarMarks}>
-					<SettingToggle
-						settingId="app.show_scrollbar_marks"
-						row
-						checked={settingsStore.state.showScrollbarMarks}
-						onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
-						label={t("general.toggle.showScrollbarMarks", "Show scrollbar marks")}
-						hint={t(
-							"general.hint.showScrollbarMarks",
-							"Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began",
-						)}
-					/>
-				</ExpertSetting>
-
 				<ExpertSetting configKey="app.show_block_marks" value={settingsStore.state.showBlockMarks}>
 					<SettingToggle
 						settingId="app.show_block_marks"
@@ -524,7 +510,7 @@ export const TerminalTab: Component = () => {
 						label={t("general.toggle.showBlockMarks", "Show block marks")}
 						hint={t(
 							"general.hint.showBlockMarks",
-							"Tick marks on the scrollbar for each command block — red when the command failed. Needs Show scrollbar marks.",
+							"Tick marks on the scrollbar for each command block — red when the command failed.",
 						)}
 					/>
 				</ExpertSetting>
@@ -538,7 +524,7 @@ export const TerminalTab: Component = () => {
 						label={t("general.toggle.showPromptMarks", "Show prompt marks")}
 						hint={t(
 							"general.hint.showPromptMarks",
-							"A green tick mark on the scrollbar for each prompt you sent. Needs Show scrollbar marks.",
+							"A green tick mark on the scrollbar for each prompt you sent.",
 						)}
 					/>
 				</ExpertSetting>
