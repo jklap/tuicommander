@@ -3,7 +3,7 @@ import { t } from "../../i18n";
 import { Input } from "../ui/Input";
 import s from "./Settings.module.css";
 import type { SettingsShellTab } from "./SettingsShell";
-import { entryLabel, entrySection, type SettingsSearchEntry } from "./settingsSearchIndex";
+import { entryHint, entryLabel, entrySection, type SettingsSearchEntry } from "./settingsSearchIndex";
 
 /** Search box for the Settings nav sidebar. */
 export const SettingsSearchBox: Component<{ value: string; onInput: (value: string) => void }> = (props) => (
@@ -68,6 +68,7 @@ export const SettingsSearchResults: Component<{
 								<span class={s.searchResultTrail}>
 									{tabLabel(entry.tab)} › {entrySection(entry)}
 								</span>
+								<Show when={entryHint(entry)}>{(hint) => <span class={s.searchResultHint}>{hint()}</span>}</Show>
 							</button>
 						)}
 					</For>
@@ -114,7 +115,8 @@ function findLabelInSection(root: ParentNode, heading: HTMLHeadingElement, label
 }
 
 /**
- * Scroll the settings content to a setting, or to the section holding it.
+ * Scroll the settings content to a setting, or to the section holding it, and
+ * flash it so it is findable at a glance.
  *
  * Matching is on rendered text, not on an `id`: the index is derived from that
  * same text (see `settingsSearchIndex.ts`), so the drift test keeps the two in
@@ -128,6 +130,12 @@ export function scrollToSetting(root: ParentNode, section: string, label?: strin
 	const heading = findHeading(root, section);
 	if (!heading) return false;
 	const target = label ? findLabelInSection(root, heading, label) : null;
-	(target ?? heading).scrollIntoView({ block: "start", behavior: "smooth" });
+	const el = target ?? heading;
+	el.scrollIntoView({ block: "start", behavior: "smooth" });
+	el.classList.remove(s.searchHighlight);
+	// Force a reflow so re-adding the class restarts the animation even when
+	// the same control was just jumped to a moment ago.
+	void (el as HTMLElement).offsetWidth;
+	el.classList.add(s.searchHighlight);
 	return true;
 }

@@ -51,6 +51,7 @@ describe("Design Mode in the browser-mode command palette", () => {
 				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
 				splitPanes: { resetLayout: vi.fn() } as never,
 				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+				openSettings: vi.fn(),
 			});
 		});
 		const browserStarts = (actions?.() ?? [])

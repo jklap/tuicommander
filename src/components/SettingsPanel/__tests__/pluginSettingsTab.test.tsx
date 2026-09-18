@@ -124,7 +124,10 @@ it("an empty described catalogue offers no plugin page or search result", async 
 	);
 	expect(view.queryByRole("button", { name: "Fixture integration Plugin" })).toBeNull();
 	fireEvent.input(view.container.querySelector("nav input")!, { target: { value: "Server endpoint" } });
-	expect(view.getByText("No settings match your search.")).toBeVisible();
+	// Hints are searchable too, so a static setting may match these words (the
+	// Cloud Relay token's hint names the relay server's endpoint); what must not
+	// appear is the plugin page the empty catalogue no longer describes.
+	expect(view.queryByText(/Fixture integration/)).toBeNull();
 	expect(view.getByRole("heading", { name: "Settings" })).toBeVisible();
 });
 

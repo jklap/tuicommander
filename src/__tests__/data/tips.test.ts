@@ -4,9 +4,10 @@ import { describe, expect, it } from "vitest";
 import { TIPS } from "../../data/tips";
 
 /** Page labels of the global Settings nav, read from `GLOBAL_TAB_GROUPS` in the
- * panel source so a renamed or removed page fails here, not in front of a user. */
+ * panel's tab list (`settingsTabs.ts`, shared with the Command Palette) so a
+ * renamed or removed page fails here, not in front of a user. */
 function settingsPageLabels(): Set<string> {
-	const src = fs.readFileSync(path.join(__dirname, "../../components/SettingsPanel/SettingsPanel.tsx"), "utf8");
+	const src = fs.readFileSync(path.join(__dirname, "../../components/SettingsPanel/settingsTabs.ts"), "utf8");
 	const start = src.indexOf("const GLOBAL_TAB_GROUPS");
 	const body = src.slice(start, src.indexOf("\n];", start));
 	const labels = new Set<string>();

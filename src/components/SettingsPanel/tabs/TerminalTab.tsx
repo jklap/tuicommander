@@ -522,10 +522,7 @@ export const TerminalTab: Component = () => {
 						checked={settingsStore.state.showPromptMarks}
 						onChange={(v) => settingsStore.setShowPromptMarks(v)}
 						label={t("general.toggle.showPromptMarks", "Show prompt marks")}
-						hint={t(
-							"general.hint.showPromptMarks",
-							"A green tick mark on the scrollbar for each prompt you sent.",
-						)}
+						hint={t("general.hint.showPromptMarks", "A green tick mark on the scrollbar for each prompt you sent.")}
 					/>
 				</ExpertSetting>
 
