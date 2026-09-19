@@ -1583,7 +1583,7 @@ describe("initApp", () => {
 			// silently pruned out of that array meant its tab was never closed and was
 			// left dangling with a now-deleted cwd. The correct fix (activitySnapshot.ts,
 			// RepoSection.tsx) instead makes the busy/color signals ignore exited ids
-			// WITHOUT removing them from branch.terminals — see AGENTS.md's
+			// WITHOUT removing them from branch.terminals — see src/AGENTS.md's
 			// "branch.terminals Membership Must Never Be Pruned On Terminal Exit".
 			const { getCallback } = captureSessionClosed();
 			const deps = createMockDeps();

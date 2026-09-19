@@ -181,7 +181,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			expect(confirmRemoveBusyWorktree).not.toHaveBeenCalled();
 			// branch.terminals itself is left untouched by the exited terminal —
 			// only the busy/color read at removal-check time ignores it (see
-			// AGENTS.md's "branch.terminals Membership Must Never Be Pruned On
+			// src/AGENTS.md's "branch.terminals Membership Must Never Be Pruned On
 			// Terminal Exit"). handleRemoveBranch still closes it as part of
 			// removal, which is why it must stay in the array.
 			expect(closeTerminal).toHaveBeenCalledWith(termId, true);

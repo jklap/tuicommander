@@ -182,7 +182,7 @@ When modifying `cpu_watchdog.rs` or the `/diagnostics` HTTP endpoint:
 |------|----------------|
 | `src-tauri/src/cpu_watchdog.rs` | Watchdog logic, thresholds, snapshot fields |
 | `src-tauri/src/mcp_http/log_routes.rs` | `/diagnostics` GET/POST handlers |
-| `AGENTS.md` | Diagnostics section (usage, known failure patterns) |
+| `src-tauri/AGENTS.md` | Diagnostics section (usage, known failure patterns) |
 | `docs/FEATURES.md` | Section 20.11 (Runtime Diagnostics) |
 
 ### Agent state detection (working / idle / awaiting)
@@ -199,7 +199,7 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 | `src-tauri/src/pty/tests.rs` | A case in the `Awaiting-signal fixtures` block replaying that capture |
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting RETRACTION` block when the failure is a state that never clears — fixtures assert emitted events and cannot express a MISSING one |
 | `scripts/hooks/pre-commit` | The fixture gate's symbol/file lists — a new detection symbol or a new detection-carrying file must be added, or the gate silently stops covering it |
-| `AGENTS.md` | "Agent state detection" section (signal table, capture workflow, retraction) |
+| `src-tauri/AGENTS.md` | "Agent state detection" section (signal table, capture workflow, retraction) |
 | `agent-signal-architecture.html` | The three-origin pipeline diagram, OSC 777-vs-7770 status, and the per-agent signal matrix — update if a signal's origin, confidence, or an agent's coverage changes |
 
 ### Native hook instrumentation (OSC 7770, `tuic-hook`)
@@ -627,7 +627,7 @@ When changing how `make mutants` selects, builds or runs mutants:
 | `src-tauri/.cargo/mutants.toml` | Test tool, cargo test args, excluded globs |
 | `scripts/mutants.sh` | `git archive` export + `--in-place` + `--in-diff` mechanics, the `dist` copy `generate_context!` needs |
 | `Makefile` | The `mutants` target and its `RANGE` default |
-| `AGENTS.md` | "Tests" section bullet (per-change rule, who runs it, surviving-mutant policy) |
+| `src-tauri/AGENTS.md` | "Tests" section bullet (per-change rule, who runs it, surviving-mutant policy) |
 | `CONTRIBUTING.md` | The install line and the one-paragraph mention |
 
 When adding, renaming or moving a docs page:

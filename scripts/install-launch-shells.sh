@@ -5,7 +5,8 @@
 #   scripts/install-launch-shells.sh
 #
 # The matrix lives in src-tauri/src/shell_integration.rs (LAUNCH_SHELLS) and is
-# documented in AGENTS.md under "Validation". bash and zsh are on the runner
+# documented in src-tauri/AGENTS.md under "Cross-Platform" (`test_support`,
+# `host_shell`). bash and zsh are on the runner
 # images; fish is on none of them, which is why its half of the matrix had never
 # executed anywhere.
 #
