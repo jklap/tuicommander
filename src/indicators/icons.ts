@@ -1,7 +1,7 @@
 /**
  * Curated monochrome icon shapes for indicator customization. Every shape
  * renders via `<IndicatorIcon>` (see `IndicatorIcon.tsx`) with
- * `fill="currentColor"` — never emoji, never an icon library (AGENTS.md,
+ * `fill="currentColor"` — never emoji, never an icon library (src/AGENTS.md,
  * docs/frontend/STYLE_GUIDE.md "No icon library").
  *
  * Phase 1 seeded only the shapes already in use as defaults (`dot`, `star`,
