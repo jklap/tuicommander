@@ -172,7 +172,7 @@ describe("createWorktreeRemovalCoordinator", () => {
 			expect(confirmRemoveBusyWorktree).not.toHaveBeenCalled();
 			// The workspace's terminals list itself is left untouched by the exited
 			// terminal — only the busy read at removal-check time ignores it (see
-			// AGENTS.md's "branch.terminals Membership Must Never Be Pruned On
+			// src/AGENTS.md's "branch.terminals Membership Must Never Be Pruned On
 			// Terminal Exit"). handleRemoveWorkspace still closes it as part of
 			// removal, which is why it must stay in the array.
 			expect(closeTerminal).toHaveBeenCalledWith(termId, true);

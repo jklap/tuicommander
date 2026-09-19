@@ -3,7 +3,7 @@
 //!
 //! The PTY flight-recorder ring (`pty_raw_rings`, `PTY_RAW_RING_CAP`) and
 //! `.tcap` captures (`pty_capture.rs`) exist purely so a human/agent can dump
-//! or replay what a session actually saw — see AGENTS.md's "capture before
+//! or replay what a session actually saw — see src-tauri/AGENTS.md's "capture before
 //! you theorise" workflow. A single ~1 MB image transmission's base64
 //! payload would otherwise evict most of a 2 MB ring, or overflow a 512 KB
 //! capture outright, the moment anyone runs an image tool. This module

@@ -230,7 +230,7 @@ There is no hybrid route and no fallback between them.
   `ego` CLI when its PTY integration is enabled. TUICommander allocates a terminal,
   runs the CLI executable, and infers state by parsing the rendered rows into
   `ParsedEvent`. Session state is recovered from the agent's own session files
-  on disk (see AGENTS.md, "Agent Session Management").
+  on disk (see src-tauri/AGENTS.md, "Agent Session Management").
 - **ACP.** AI Chat's `ego`, through the Agent Client Protocol v1 client in
   `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
   adding `--profile <name>` only when a user selected an ego profile, and
