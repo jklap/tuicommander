@@ -84,7 +84,7 @@ just-refreshed stable copy.
   binary's new vocabulary.
 - Any Rust change here needs a `make dev` restart to take effect (this crate is
   `src-tauri/**`, which never hot-reloads) — add a `to-test.md` entry per the
-  root `AGENTS.md`'s "Dev Hot Reload" section; do not open a story for it.
+  `src-tauri/AGENTS.md`'s "Dev Hot Reload" section; do not open a story for it.
 - When fixing a stale doc claim inside this binary's own `--help` text or doc
   comments, add the assertion that would have caught it (see
   `help_text_mentions_every_flag_and_env_var`) — this is the established,

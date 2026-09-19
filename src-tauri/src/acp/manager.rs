@@ -215,8 +215,8 @@ impl AcpClientManager {
     /// The deadline IS the subject for the test that proves a silent agent is
     /// abandoned rather than held forever, and that test needs a bound it can
     /// exceed in milliseconds. A `cfg(test)` constant would leave production
-    /// and the suite exercising different code (AGENTS.md, "Which timing
-    /// assertions are load-bearing").
+    /// and the suite exercising different code (src-tauri/AGENTS.md, "Which
+    /// timing assertions are load-bearing").
     pub async fn connect_within(
         &self,
         config: &EgoAcpConfig,

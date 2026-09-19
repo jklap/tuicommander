@@ -1588,7 +1588,7 @@ pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
 /// `timeout` is a parameter rather than a read of `REQUEST_TIMEOUT` because the
 /// deadline IS the subject here: the test needs a bound it can exceed in
 /// milliseconds, and a `cfg(test)` constant would leave production and test
-/// exercising different code (AGENTS.md, "Which timing assertions are
+/// exercising different code (src-tauri/AGENTS.md, "Which timing assertions are
 /// load-bearing").
 ///
 /// Both layers are safe over SSE and WebSocket. The timeout races its sleep

@@ -8,8 +8,8 @@
 # did not author those lines — and neither blocks on a verification failure.
 #
 # ---------------------------------------------------------------------------
-# Gate 2 — the agent-state fixture gate (AGENTS.md → "Agent state detection
-# — capture before you theorise").
+# Gate 2 — the agent-state fixture gate (src-tauri/AGENTS.md → "Agent state
+# detection — capture before you theorise").
 #
 # That section already states the rule in prose: "A reproduced failure becomes a
 # fixture, always." This hook makes it mechanical. A commit that changes
@@ -153,7 +153,7 @@ printf '\n\033[1;31m✗ pre-commit blocked:\033[0m agent-state detection changed
 printf '%s\n' "${offenders[@]}" | sed 's/^/  /' >&2
 cat >&2 <<EOF
 
-AGENTS.md → "Agent state detection — capture before you theorise":
+src-tauri/AGENTS.md → "Agent state detection — capture before you theorise":
 "A reproduced failure becomes a fixture, always." The output ring holds 2 MB;
 the 8192-byte output page limit is not its retention bound. A busy session can
 still roll past the bytes that prove the fix, so record them before they go.
