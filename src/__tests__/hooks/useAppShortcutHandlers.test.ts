@@ -5,7 +5,7 @@ const { mockDialogs, mockInvoke, mockNavigate, mockStores } = vi.hoisted(() => (
 	mockInvoke: vi.fn(),
 	mockNavigate: vi.fn(),
 	mockStores: {
-		diff: { state: { activeId: null as string | null }, getHandle: vi.fn(), add: vi.fn() },
+		diff: { state: { activeId: null as string | null }, getHandle: vi.fn(), add: vi.fn(), addSessionReview: vi.fn() },
 		editor: { state: { activeId: null as string | null }, getHandle: vi.fn() },
 		markdown: {
 			state: { activeId: null as string | null },
@@ -84,7 +84,7 @@ function createOptions() {
 		gitOps: {
 			handleNewTab: vi.fn(),
 			handleRunCommand: vi.fn(),
-			activeWorktreePath: vi.fn(() => "/worktree"),
+			activeWorktreePath: vi.fn((): string | undefined => "/worktree"),
 		},
 		splitPanes: { toggleZoomPane: vi.fn(), closeActivePane: vi.fn(), handleSplit: vi.fn() },
 		quickSwitcher: { switchToBranchByIndex: vi.fn() },
@@ -106,6 +106,7 @@ function createOptions() {
 
 describe("useAppShortcutHandlers", () => {
 	beforeEach(() => {
+		mockStores.repositories.state.activeRepoPath = "/repo";
 		mockStores.diff.state.activeId = null;
 		mockStores.editor.state.activeId = null;
 		mockStores.markdown.state.activeId = null;
@@ -227,6 +228,76 @@ describe("useAppShortcutHandlers", () => {
 
 		expect(mockStores.prompts.markAsUsed).toHaveBeenCalledWith("prompt-1");
 		expect(options.executeSmartPrompt).toHaveBeenCalledWith(prompt);
+	});
+
+	describe("worktree-scoped tab openers", () => {
+		// Regression coverage: openSessionReview/toggleDiffScroll used to read only
+		// repositoriesStore.state.activeRepoPath (always the main checkout root), so
+		// opening either from a worktree tab silently operated on the wrong repo path
+		// (Session Diff showed "No Claude sessions found" for a worktree that had live
+		// sessions). Both must prefer gitOps.activeWorktreePath(), same as
+		// openFile/openFolder/newFile in this same file.
+		it("opens session review against the active worktree path, not the repo root", () => {
+			const options = createOptions();
+			options.gitOps.activeWorktreePath.mockReturnValue("/repo/.claude/worktrees/session-diff");
+			const handlers = useAppShortcutHandlers(options as never);
+
+			handlers.openSessionReview();
+
+			expect(mockStores.diff.addSessionReview).toHaveBeenCalledWith("/repo/.claude/worktrees/session-diff");
+		});
+
+		it("falls back to the repo root for session review when no worktree is active", () => {
+			const options = createOptions();
+			options.gitOps.activeWorktreePath.mockReturnValue(undefined);
+			const handlers = useAppShortcutHandlers(options as never);
+
+			handlers.openSessionReview();
+
+			expect(mockStores.diff.addSessionReview).toHaveBeenCalledWith("/repo");
+		});
+
+		it("no-ops opening session review when neither a worktree nor a repo is active", () => {
+			const options = createOptions();
+			options.gitOps.activeWorktreePath.mockReturnValue(undefined);
+			mockStores.repositories.state.activeRepoPath = null;
+			const handlers = useAppShortcutHandlers(options as never);
+
+			handlers.openSessionReview();
+
+			expect(mockStores.diff.addSessionReview).not.toHaveBeenCalled();
+		});
+
+		it("toggles diff scroll against the active worktree path, not the repo root", () => {
+			const options = createOptions();
+			options.gitOps.activeWorktreePath.mockReturnValue("/repo/.claude/worktrees/session-diff");
+			const handlers = useAppShortcutHandlers(options as never);
+
+			handlers.toggleDiffScroll();
+
+			expect(mockStores.diff.add).toHaveBeenCalledWith("/repo/.claude/worktrees/session-diff", "", "M");
+		});
+
+		it("falls back to the repo root for diff scroll when no worktree is active", () => {
+			const options = createOptions();
+			options.gitOps.activeWorktreePath.mockReturnValue(undefined);
+			const handlers = useAppShortcutHandlers(options as never);
+
+			handlers.toggleDiffScroll();
+
+			expect(mockStores.diff.add).toHaveBeenCalledWith("/repo", "", "M");
+		});
+
+		it("no-ops toggling diff scroll when neither a worktree nor a repo is active", () => {
+			const options = createOptions();
+			options.gitOps.activeWorktreePath.mockReturnValue(undefined);
+			mockStores.repositories.state.activeRepoPath = null;
+			const handlers = useAppShortcutHandlers(options as never);
+
+			handlers.toggleDiffScroll();
+
+			expect(mockStores.diff.add).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("block navigation and folding", () => {

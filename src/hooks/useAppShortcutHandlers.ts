@@ -148,13 +148,13 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			else globalWorkspaceStore.activate(key);
 		},
 		toggleDiffScroll: () => {
-			const repoPath = repositoriesStore.state.activeRepoPath;
+			const repoPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath;
 			if (!repoPath) return;
 			uiStore.setDiffViewMode("scroll");
 			diffTabsStore.add(repoPath, "", "M");
 		},
 		openSessionReview: () => {
-			const repoPath = repositoriesStore.state.activeRepoPath;
+			const repoPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath;
 			if (!repoPath) return;
 			diffTabsStore.addSessionReview(repoPath);
 		},

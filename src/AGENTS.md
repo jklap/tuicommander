@@ -273,6 +273,33 @@ terminal focus), pass its own path through `targetPath` rather than trusting the
 active-terminal fallback — grep for existing `repoPath`-prop components that call
 `executeSmartPrompt` before assuming this pattern is now fully closed out.
 
+## Tab/Dialog Openers Bound To "The Active Repo" Must Resolve The Worktree First
+
+Any handler that opens a tab, dialog, or file-picker default path for "the current
+repo" and is reachable while a **worktree** tab is focused must resolve
+`gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath` — never
+`repositoriesStore.state.activeRepoPath` alone. `activeRepoPath` is keyed by the main
+repo checkout root (`repositoriesStore` is keyed by repo root, not by worktree), so a
+handler that reads it directly always resolves to the main checkout even when a
+worktree tab has focus.
+
+`useAppShortcutHandlers.ts`'s `openFile`/`openFolder`/`newFile` already get this right.
+`openSessionReview` and `toggleDiffScroll` (same file) didn't — Session Diff opened
+against the worktree's terminal, then queried Claude Code session transcripts for the
+**main repo's** path instead of the worktree's, so it correctly found zero sessions and
+showed "No Claude sessions found" even though the worktree had live sessions the
+sidebar could see fine (the sidebar resolves each terminal's own real `cwd` via a
+different, correct mechanism — `useAgentPolling.ts`). Fixed 2026-09-18 by matching the
+established `activeWorktreePath() || activeRepoPath` pattern; regression-tested in
+`src/__tests__/hooks/useAppShortcutHandlers.test.ts`.
+
+This is the third documented instance of "the active-repo/active-terminal fallback
+resolves to the wrong tree when a worktree is focused" (see also `executeSmartPrompt`'s
+`targetPath` and `SmartButtonStrip`'s `repoPath` forwarding above, a different
+mechanism — `resolvePromptTreeIn`/`repoOwnership.ts` — for a different set of callers).
+Before adding a new handler that opens something scoped to "the current repo," check
+whether it needs `gitOps.activeWorktreePath()` first.
+
 **The setup-script/run-script ordering fix threads a real wait, not just documentation.**
 `createWorktreeCreationCoordinator.ts`'s `setupNewWorktree` used to `await
 runSetupScript(...)` inline before creating the terminal — an implicit ordering guarantee
