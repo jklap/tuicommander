@@ -72,7 +72,7 @@ pub enum Event {
         /// instant `line` was computed — captured here, atomically with
         /// `line` itself, rather than downstream, since alt-screen state can
         /// change more than once within a single PTY chunk (see TUICommander
-        /// AGENTS.md > Command Blocks).
+        /// src-tauri/AGENTS.md > Command Blocks).
         on_alt_screen: bool,
     },
 

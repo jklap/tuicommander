@@ -136,7 +136,7 @@ export function shouldAutoSubmitSuggestion(agentType: string | null | undefined,
  *  `sendCommand` for the ChoicePrompt / numbered-option path.
  *
  *  Intentionally a one-liner over `writeFn` so the call site is centralized
- *  (grep-able, uniform logging) and the AGENTS.md "never raw text+\r" rule
+ *  (grep-able, uniform logging) and the src/AGENTS.md "never raw text+\r" rule
  *  still routes through a named helper even for single-key writes.
  */
 export async function sendPtyKey(writeFn: (data: string) => Promise<void>, key: string): Promise<void> {

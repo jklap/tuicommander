@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# pre-commit — the agent-state fixture gate (AGENTS.md → "Agent state detection
-# — capture before you theorise").
+# pre-commit — the agent-state fixture gate (src-tauri/AGENTS.md → "Agent state
+# detection — capture before you theorise").
 #
 # That section already states the rule in prose: "A reproduced failure becomes a
 # fixture, always." This hook makes it mechanical. A commit that changes

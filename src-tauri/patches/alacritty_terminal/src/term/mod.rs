@@ -3372,7 +3372,7 @@ impl<T: EventListener> Handler for Term<T> {
         // of this event's `line`: Command Blocks, `userPromptLines`) must use the
         // coordinate that never plateaus or aliases once the scrollback cap starts
         // evicting old lines, the same convention `reserve_image_footprint`'s
-        // `abs_row` already uses for image placements. See TUICommander AGENTS.md
+        // `abs_row` already uses for image placements. See src-tauri/AGENTS.md
         // > Command Blocks > "Scrollback-ring eviction" for the aliasing this fixes.
         let line = self.grid.total_scrolled()
             + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
@@ -3380,7 +3380,7 @@ impl<T: EventListener> Handler for Term<T> {
         // toggle more than once within a single PTY chunk, so sampling this
         // downstream (after the whole chunk has been processed) can attach
         // the wrong screen's state to an event from earlier in the same
-        // chunk. See TUICommander AGENTS.md > Command Blocks.
+        // chunk. See src-tauri/AGENTS.md > Command Blocks.
         let on_alt_screen = self.mode().contains(TermMode::ALT_SCREEN);
         self.event_proxy.send_event(Event::Osc133 {
             command,

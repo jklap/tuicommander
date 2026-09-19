@@ -56,7 +56,7 @@ hooks:
 # `--no-watch` disables the Tauri CLI's Rust file watcher: editing `src-tauri/**`
 # (or its `.rs.tmp.*` scratch files) will NOT rebuild/restart the Rust backend.
 # Vite HMR still reloads the UI (it runs as a separate `beforeDevCommand` process).
-# Rust changes require a manual `make dev` restart — see AGENTS.md "Dev Hot Reload".
+# Rust changes require a manual `make dev` restart — see src-tauri/AGENTS.md "Dev Hot Reload".
 dev: hooks
 	@pnpm build:sidecar
 	@pnpm exec vite build
@@ -113,8 +113,8 @@ check:
 
 # Runs `check` the way it needs to be run to actually trust the result:
 # defensively rebuilds tuic-hook first (it can transiently read as 0 bytes
-# even after a prior successful build — see AGENTS.md > Fresh Worktree
-# Setup), warns instead of silently misreporting when the plugins/ submodule
+# even after a prior successful build — see src-tauri/AGENTS.md > Fresh
+# Worktree Setup), warns instead of silently misreporting when the plugins/ submodule
 # is uninitialized, and captures make's real exit code instead of a `tee`
 # pipeline's (almost always 0, masking a real failure). Prefer this over
 # `make check 2>&1 | tee log` directly.

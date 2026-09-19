@@ -353,14 +353,14 @@ fn run_cli(env: &IsolatedEnv, args: &[&str], stdin: Option<String>) -> std::proc
 /// failure — so a lost bind race is never mistaken for a broken CLI.
 const PORT_COLLISION_RETRIES: u32 = 5;
 
-/// Setup bound (AGENTS.md "which timing assertions are load-bearing": setup
+/// Setup bound (src-tauri/AGENTS.md "which timing assertions are load-bearing": setup
 /// reaching a state must not be able to fail, so size it generously or delete
 /// it), not the behaviour under test — how long the freshly spawned CLI gets
 /// to bind its port and authenticate against `/sessions` with its own seeded
 /// token (see `probe_authenticated_session_once`; deliberately not the public
 /// `/health` route, which any process holding the port could answer).
 /// `warm_cli_binary` pays any first-run macOS exec-scan cost outside this
-/// window (see AGENTS.md "a freshly written executable is not a cheap thing
+/// window (see src-tauri/AGENTS.md "a freshly written executable is not a cheap thing
 /// to run"), so this only has to absorb genuine host load. Retries on a fast,
 /// clearly-diagnosed bind collision don't re-spend this budget (see
 /// `wait_for_ready_or_exit`), so even summed with `REAP_AFTER_KILL_TIMEOUT`
@@ -555,7 +555,7 @@ fn spawn_fast_failing_child(env: &IsolatedEnv) -> Child {
 
 /// Execs the freshly built binary once before any timed assertion, so a
 /// first-run macOS `syspolicyd` exec scan (episodic: ~0.25s quiet, tens of
-/// seconds under a backlog — AGENTS.md "a freshly written executable is not a
+/// seconds under a backlog — src-tauri/AGENTS.md "a freshly written executable is not a
 /// cheap thing to run") lands here instead of inside `READY_SETUP_TIMEOUT`.
 fn warm_cli_binary(env: &IsolatedEnv) {
     let mut child = spawn_fast_failing_child(env);
@@ -709,7 +709,7 @@ fn wait_for_ready_or_exit_returns_ready_after_a_successful_probe_and_a_clean_pos
 /// loaded machine can't spuriously trip it (the client side connects with a
 /// 100ms timeout), small enough that a probe bug which never connects at all
 /// still fails the test quickly instead of hanging. This is a setup bound
-/// (AGENTS.md "which timing assertions are load-bearing"): it must not be
+/// (src-tauri/AGENTS.md "which timing assertions are load-bearing"): it must not be
 /// able to fail under normal scheduling, and it is not the thing under test.
 const CAPTURING_LISTENER_TIMEOUT: Duration = Duration::from_secs(2);
 

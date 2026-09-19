@@ -418,7 +418,7 @@ mod tests {
         ///
         /// It is installed as a **symlink to `/bin/echo`**, never as a freshly
         /// written script. On macOS the first exec of a new executable blocks
-        /// on an exec-time code scan — AGENTS.md, "A freshly written executable
+        /// on an exec-time code scan — src-tauri/AGENTS.md, "A freshly written executable
         /// is not a cheap thing to run" — and this matrix execs one per
         /// assertion. A symlink resolves to an inode the OS has already vetted:
         /// measured at ~3ms per exec here against seconds for a new file. Do

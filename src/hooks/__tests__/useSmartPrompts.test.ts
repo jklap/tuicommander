@@ -872,7 +872,7 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 });
 
 describe("executeSmartPrompt — explicit targetPath override (GitPanel/ChangesTab fix)", () => {
-	// Regression coverage for the caller-side bug documented in AGENTS.md:
+	// Regression coverage for the caller-side bug documented in src/AGENTS.md:
 	// GitPanel/ChangesTab.tsx's "Generate commit message" used to call
 	// executeSmartPrompt(prompt) with no override, so it inherited whatever
 	// the active TERMINAL's tree happened to be — which can be a different

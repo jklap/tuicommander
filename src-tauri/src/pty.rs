@@ -4585,7 +4585,7 @@ fn synthesize_transcript_dump_block_events(
 /// `abs_line` — not just risk `end < start` for the block being closed right
 /// now (the `.max(prev + 1)` clamp below still guards that narrower case),
 /// but alias a long-past block's stored row onto a brand new one. See
-/// TUICommander AGENTS.md > Command Blocks > "Scrollback-ring eviction".
+/// src-tauri/AGENTS.md > Command Blocks > "Scrollback-ring eviction".
 ///
 /// `on_alt_screen` reflects whether the alternate screen buffer was active
 /// for this chunk. `total_scrolled`/`row_index` are read from whichever screen
@@ -7101,7 +7101,7 @@ impl ChunkProcessor {
             // Elided for images (color-tools plan, Phase 8) — a `.tcap` capture
             // caps at 512 KB total, and a single image transmission would
             // otherwise blow that cap outright. `.tcap` is a pure debugging
-            // artifact (AGENTS.md's "capture before you theorise"), unlike
+            // artifact (src-tauri/AGENTS.md's "capture before you theorise"), unlike
             // `output_buffers`/`broadcast_to_ws_clients` just above, which is a
             // real client's live stream and reconnect-replay source and must
             // never be touched here.
@@ -7998,7 +7998,7 @@ fn write_terminal_reply(state: &AppState, session_id: &str, response: &[u8], kin
 ///
 /// **Every code path that replays bytes through `Term`/the `Handler` impl
 /// outside the ordinary `process_chunk` path can queue one of these jobs and
-/// must call this itself** — exactly the same invariant AGENTS.md's PtyWrite
+/// must call this itself** — exactly the same invariant src-tauri/AGENTS.md's PtyWrite
 /// drain section already documents for `Event::PtyWrite`, now extended to
 /// this second, separate (non-`TermEvent`) queue. `flush_sync_timeout_if_needed`/
 /// `force_stop_sync_if_buffered` (both call `Processor::stop_sync`, which

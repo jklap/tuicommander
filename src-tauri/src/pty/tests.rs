@@ -2869,7 +2869,7 @@ fn test_declared_completion_turns_stale_working_screen_into_ready_evidence() {
 ///
 /// The counter is a process-wide static, so the delta is only meaningful under
 /// a process-per-test runner. That is nextest, which is what this project runs
-/// (AGENTS.md); the bound is deliberately one-sided so a shared-process runner
+/// (src-tauri/AGENTS.md); the bound is deliberately one-sided so a shared-process runner
 /// cannot make it flaky in the other direction.
 #[test]
 fn the_screen_is_classified_once_per_chunk_not_once_per_reader_and_once_per_timer() {
@@ -13468,7 +13468,7 @@ fn codex_0154_runtime_hook_idle_reaches_the_pty_state_machine() {
 ///
 /// Running the script is deliberately not how this is done. It resolves its own
 /// tty from `$PPID` and writes there, so there is nothing to capture, and a
-/// freshly written executable pays a code-signing scan on macOS (AGENTS.md).
+/// freshly written executable pays a code-signing scan on macOS (src-tauri/AGENTS.md).
 #[test]
 fn codex_notify_turn_complete_emits_the_idle_bytes_the_state_machine_accepts() {
     let dir = tempfile::TempDir::new().unwrap();

@@ -1268,7 +1268,7 @@ The backend names both conditions on its own and recovers the second by itself:
 the diagnostics thread logs `Frontend unresponsive: no heartbeat for Ns` when the
 main thread is blocked, and the `webview-recovery` thread logs
 `Main WebView lost its document` and re-navigates when the frame is on `about:`
-(see AGENTS.md → Diagnostics). Note that `grid frame gate stuck` is **not** either
+(see src-tauri/AGENTS.md → Diagnostics). Note that `grid frame gate stuck` is **not** either
 signal — hidden terminals never ack, so it fires in normal operation.
 
 ### Memory report (diagnostics)
