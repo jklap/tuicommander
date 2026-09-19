@@ -14,7 +14,7 @@ import { getSessionConnection } from "../../transportRuntime";
 import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock, resolveScopedBlock } from "../../utils/blockSearchFilter";
-import { writeClipboard } from "../../utils/clipboard";
+import { writeClipboard, writeClipboardAsync } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
 import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/keyboardViewport";
 import { handleOpenUrl } from "../../utils/openUrl";
@@ -3774,7 +3774,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			stopSelectionScroll();
 			if (selection.selecting && selection.start && selection.end) {
 				if (selection.hasRange()) {
-					copySelection();
+					// "Copy on Select" (Settings > Terminal) gates ONLY
+					// this auto-copy-on-drag path — the selection itself is always made
+					// regardless, and Cmd+C (below) always copies it manually regardless of
+					// this setting.
+					if (settingsStore.state.copyOnSelect) {
+						copySelection();
+					}
 				} else {
 					selection.start = null;
 					selection.end = null;
@@ -4310,41 +4316,56 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			| ((msg: string) => void)
 			| undefined;
 		try {
+			// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
+			// WRAPLINE flag. The snapshot base lets Rust rebase the grid-relative rows
+			// under the same lock that reads them, so eviction cannot alias replacements.
+			const textPromise: Promise<string> = (async () => {
+				const startRow =
+					currentFrame && selection.start ? selectionRowToGridRow(currentFrame, selection.start.row) : null;
+				const endRow = currentFrame && selection.end ? selectionRowToGridRow(currentFrame, selection.end.row) : null;
+				const historyBase = currentFrame?.historyBase;
+				if (
+					invokeRef &&
+					selection.start &&
+					selection.end &&
+					startRow !== null &&
+					endRow !== null &&
+					historyBase !== undefined
+				) {
+					const text = (await invokeRef("terminal_get_selection_text", {
+						sessionId: props.sessionId,
+						startRow,
+						startCol: selection.start.col,
+						endRow,
+						endCol: selection.end.col,
+						historyBase,
+					})) as string;
+					// Legacy/empty response fallback; an eviction rejection throws and is
+					// deliberately handled without a local or cached copy below.
+					return text || getLocalSelectionText();
+				}
+				return selection.cachedText || getLocalSelectionText();
+			})();
+			// writeClipboardAsync must be called synchronously — not awaited first — so the
+			// Clipboard API call itself isn't delayed by the round-trip above: in browser
+			// mode it calls navigator.clipboard.write() immediately (while the user
+			// activation is still live) with textPromise as the deferred data, so an HTTP
+			// round-trip over a slow/remote connection (Tailscale, not just localhost) can
+			// resolve after activation would otherwise have expired. See its doc comment in
+			// utils/clipboard.ts. An expired selection rejects textPromise, so the write
+			// fails and nothing is copied. Its rejection is observed only when the copy
+			// commits (`await writeDone` below) — the no-op handler keeps the expired/empty
+			// outcomes from surfacing as an unhandled rejection.
+			const writeDone = writeClipboardAsync(textPromise);
+			writeDone.catch(() => {});
 			const result = await commitSelectionCopy(
-				async () => {
-					// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
-					// WRAPLINE flag. The snapshot base lets Rust rebase the grid-relative rows
-					// under the same lock that reads them, so eviction cannot alias replacements.
-					const startRow =
-						currentFrame && selection.start ? selectionRowToGridRow(currentFrame, selection.start.row) : null;
-					const endRow = currentFrame && selection.end ? selectionRowToGridRow(currentFrame, selection.end.row) : null;
-					const historyBase = currentFrame?.historyBase;
-					if (
-						invokeRef &&
-						selection.start &&
-						selection.end &&
-						startRow !== null &&
-						endRow !== null &&
-						historyBase !== undefined
-					) {
-						const text = (await invokeRef("terminal_get_selection_text", {
-							sessionId: props.sessionId,
-							startRow,
-							startCol: selection.start.col,
-							endRow,
-							endCol: selection.end.col,
-							historyBase,
-						})) as string;
-						// Legacy/empty response fallback; an eviction rejection throws and is
-						// deliberately handled without a local or cached copy below.
-						return text || getLocalSelectionText();
-					}
-					return selection.cachedText || getLocalSelectionText();
-				},
+				() => textPromise,
 				async (text) => {
+					// Cached as soon as the text is known, independent of whether the
+					// write that is already in flight succeeds.
 					selection.cachedText = text;
 					selection.localSnapshot = getLocalSelectionText();
-					await writeClipboard(text);
+					await writeDone;
 				},
 			);
 			if (result.kind === "copied") {
