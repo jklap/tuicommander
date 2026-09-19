@@ -3345,7 +3345,7 @@ pub(super) fn synthesize_transcript_dump_block_events(
 /// `abs_line` — not just risk `end < start` for the block being closed right
 /// now (the `.max(prev + 1)` clamp below still guards that narrower case),
 /// but alias a long-past block's stored row onto a brand new one. See
-/// TUICommander AGENTS.md > Command Blocks > "Scrollback-ring eviction".
+/// src-tauri/AGENTS.md > Command Blocks > "Scrollback-ring eviction".
 ///
 /// `on_alt_screen` reflects whether the alternate screen buffer was active
 /// for this chunk. `total_scrolled`/`row_index` are read from whichever screen
