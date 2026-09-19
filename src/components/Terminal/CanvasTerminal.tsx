@@ -14,7 +14,7 @@ import { uiStore } from "../../stores/ui";
 import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock, resolveScopedBlock } from "../../utils/blockSearchFilter";
-import { writeClipboard } from "../../utils/clipboard";
+import { writeClipboard, writeClipboardAsync } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
 import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/keyboardViewport";
 import { handleOpenUrl } from "../../utils/openUrl";
@@ -3496,7 +3496,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			stopSelectionScroll();
 			if (selection.selecting && selection.start && selection.end) {
 				if (selection.hasRange()) {
-					copySelection();
+					// "Copy on Select" (Settings > General/Appearance > Terminal) gates ONLY
+					// this auto-copy-on-drag path — the selection itself is always made
+					// regardless, and Cmd+C (below) always copies it manually regardless of
+					// this setting.
+					if (settingsStore.state.copyOnSelect) {
+						copySelection();
+					}
 				} else {
 					selection.start = null;
 					selection.end = null;
@@ -4013,32 +4019,45 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			| ((msg: string) => void)
 			| undefined;
 		try {
-			let text: string;
-			// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
-			// WRAPLINE flag (grid_get_selection_text), so copying a line the terminal merely
-			// wrapped for width doesn't insert a spurious newline. The JS fallback below has
-			// no wrap info (see getLocalSelectionText DEFERRED) and only runs when invoke or
-			// the selection coords are unavailable.
-			if (invokeRef && selection.start && selection.end) {
-				text = (await invokeRef("terminal_get_selection_text", {
-					sessionId: props.sessionId,
-					startRow: selection.start.row,
-					startCol: selection.start.col,
-					endRow: selection.end.row,
-					endCol: selection.end.col,
-				})) as string;
-				// Fall back to the local read if the IPC path yields nothing (transient error,
-				// grid not ready). Loses wrap-unwrapping, but a wrapped copy beats a silent
-				// no-op — the onscreen path could always satisfy a copy before this routing.
-				if (!text) text = getLocalSelectionText();
-			} else {
-				text = getLocalSelectionText();
-			}
-			if (text) {
-				selection.cachedText = text;
-				await writeClipboard(text);
-				setStatus?.("Copied to clipboard");
-			}
+			// Prefer the Rust path: it unwraps soft-wrapped logical lines via the WRAPLINE
+			// flag and strips Claude quote-gutters (grid_get_selection_text —
+			// docs/backend/pty.md), so copying a line the terminal merely wrapped for width
+			// doesn't insert a spurious newline and a multi-line Claude quote pastes clean.
+			// Falls back to a local synchronous read when invoke/coords are unavailable or
+			// the IPC call yields nothing (transient error, grid not ready) — a plain copy
+			// beats a silent no-op.
+			const textPromise: Promise<string> = (async () => {
+				if (invokeRef && selection.start && selection.end) {
+					const remoteText = (await invokeRef("terminal_get_selection_text", {
+						sessionId: props.sessionId,
+						startRow: selection.start.row,
+						startCol: selection.start.col,
+						endRow: selection.end.row,
+						endCol: selection.end.col,
+					})) as string;
+					return remoteText || getLocalSelectionText();
+				}
+				return getLocalSelectionText();
+			})();
+			// writeClipboardAsync must be called synchronously — not awaited first — so the
+			// Clipboard API call itself isn't delayed by the HTTP round-trip above: it calls
+			// into the API immediately (satisfying the browser's user-activation requirement
+			// while it's still live, in browser mode) with textPromise as the deferred data,
+			// so the round-trip can resolve after activation would otherwise have expired
+			// over a slow/remote connection (Tailscale, not just localhost). See its doc
+			// comment in utils/clipboard.ts. Tauri's native clipboard plugin has no such
+			// requirement. Awaiting textPromise itself (not the write) right after is safe —
+			// the write is already in flight by then — and lets cachedText get set the same
+			// way it always did: as soon as the text is known, regardless of whether the
+			// write that follows succeeds.
+			const writeDone = writeClipboardAsync(textPromise);
+			const text = await textPromise;
+			if (!text) return; // nothing selected worth caching or reporting — matches the
+			// pre-existing silent no-op for a coordinate-range selection that resolves to
+			// empty text (e.g. blank cells); the write above still completes harmlessly.
+			selection.cachedText = text;
+			await writeDone;
+			setStatus?.("Copied to clipboard");
 		} catch (e) {
 			appLogger.warn("terminal", "Clipboard write failed", { error: e });
 			setStatus?.("Copy failed — clipboard unavailable");

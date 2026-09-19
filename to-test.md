@@ -5606,3 +5606,35 @@ section. All of the below needs a rebuilt build to check.
   control, including while Settings is already open on another tab; (4) with AI Chat disabled the
   palette offers no `AI Chat settings` entries, and in browser mode (`:9876`) no Dictation/
   StreamDock ones, while other setting actions still work there.
+
+- [ ] **Browser-client terminal copy over a real network (not just localhost)** —
+  `CanvasTerminal.tsx`'s `copySelection()` and `useTerminalContextMenus.ts`'s "Copy Block Output"
+  both used to await an HTTP round-trip (`terminal_get_selection_text` / `getBufferLines`) before
+  writing to the clipboard; over real network latency (Tailscale/remote access, not localhost,
+  where the round-trip is near-instant) this can outlast the browser's user-activation window and
+  silently no-op both `navigator.clipboard.writeText` and the `execCommand('copy')` fallback —
+  reproduced locally via a real headed-Chromium select+Cmd+C against `:9876` landing on the wrong
+  pane/timing. Fixed via a new `writeClipboardAsync()` (`utils/clipboard.ts`) that calls
+  `navigator.clipboard.write()` *synchronously* (satisfying the activation requirement immediately)
+  with a `ClipboardItem` whose data is the still-pending round-trip promise — a spec-sanctioned
+  pattern supported by Chrome/Firefox/Safari — so the Rust-side text (wrap-unwrapped, Claude
+  quote-gutters stripped) is preserved with no quality tradeoff on modern browsers. Falls back to
+  the old (activation-risking) synchronous path only when `ClipboardItem`/`navigator.clipboard.write`
+  aren't available. **Verify on a real remote connection** (Tailscale, not `127.0.0.1`) with actual
+  round-trip latency: drag-select terminal text (including a multi-line Claude quote with the `▎`
+  gutter, and a soft-wrapped long line) and use "Copy Block Output" from the context menu; press
+  Cmd/Ctrl+C or click the menu item, and confirm in both cases (a) the OS clipboard actually
+  updates and (b) the pasted text is fully clean (gutters stripped, wraps joined) — not degraded
+  quality, matching desktop/Tauri behavior exactly.
+  **Separately, found during this investigation and since fixed (2026-09-18):** the "Copy on
+  Select" setting (Settings > General/Appearance > Terminal, `copyOnSelect` in `settingsStore`) was
+  fully unwired to the actual trigger — `CanvasTerminal.tsx`'s `onMouseUp` called `copySelection()`
+  unconditionally on any non-empty selection, with no `settingsStore.state.copyOnSelect` check
+  anywhere in the file, so disabling the toggle had no effect. Fixed by gating only the
+  auto-copy-on-drag branch on the setting — the selection itself is still always made, and Cmd/Ctrl+C
+  still always copies manually regardless of the setting, matching the documented intent
+  (`docs/user-guide/terminals.md`'s "Copy on Select" section). Covered by a new test in
+  `canvasTerminalClipboardFailure.test.ts`. **Manual check still worth doing:** in Settings, turn
+  "Copy on Select" off, drag-select terminal text, confirm nothing is copied and no "Copied to
+  clipboard" status appears, then press Cmd/Ctrl+C and confirm that DOES copy — in both the
+  desktop app and the browser/HTTP client.

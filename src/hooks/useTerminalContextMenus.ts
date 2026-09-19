@@ -12,7 +12,7 @@ import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { rowAnchoredBlocks, terminalsStore } from "../stores/terminals";
 import { buildAgentLaunchCommand } from "../utils/agentSession";
-import { writeClipboard } from "../utils/clipboard";
+import { writeClipboardAsync } from "../utils/clipboard";
 import { keyFor } from "../utils/hotkey";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
 import type { useAgentDetection } from "./useAgentDetection";
@@ -153,7 +153,7 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 		},
 		{
 			label: "Copy Block Output",
-			action: async () => {
+			action: () => {
 				const activeId = terminalsStore.state.activeId;
 				const term = activeId ? terminalsStore.get(activeId) : undefined;
 				// Skip back past any trailing alt-screen-tainted blocks (e.g. a
@@ -162,28 +162,33 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 				const anchoredBlocks = rowAnchoredBlocks(term?.commandBlocks ?? []);
 				const lastBlock = anchoredBlocks[anchoredBlocks.length - 1];
 				if (!term?.ref || !lastBlock || lastBlock.executionLine == null || lastBlock.endLine == null) return;
+				const ref = term.ref;
 				// executionLine/endLine are eviction-stable — convert to getBufferLines'
 				// grid-relative space; a row already evicted from scrollback converts to
 				// null, same as "no valid block" above.
-				const historyBase = term.ref.getHistoryBase();
+				const historyBase = ref.getHistoryBase();
 				const start = evictionStableToGridRelative(lastBlock.executionLine + 1, historyBase);
 				const end = evictionStableToGridRelative(lastBlock.endLine, historyBase);
 				if (start == null || end == null) return;
-				// The menu invokes this without awaiting it, so a rejected buffer read
-				// would surface as an unhandled rejection instead of a failed copy.
-				let lines: string[];
-				try {
-					lines = await term.ref.getBufferLines(start, end);
-				} catch (e) {
-					appLogger.warn("terminal", "Copy Block Output failed to read the buffer", { error: String(e) });
-					return;
-				}
-				const text = lines.join("\n").trimEnd();
-				if (text) {
-					writeClipboard(text).catch((err) =>
-						appLogger.warn("terminal", "Copy Block Output failed to write clipboard", err),
-					);
-				}
+				// getBufferLines is an HTTP round-trip in browser mode; awaiting it before
+				// writing (the old shape here) could outlast the browser's user-activation
+				// window over a slow/remote connection — same bug class as
+				// CanvasTerminal.tsx's copySelection(), fixed the same way: writeClipboardAsync
+				// calls into the Clipboard API synchronously with this promise as the
+				// deferred data instead of awaiting it first. See its doc comment. Wrapped in
+				// an async IIFE (rather than calling getBufferLines directly) so a synchronous
+				// throw from it becomes a rejection here too, not an uncaught exception.
+				// Tradeoff: unlike the old shape, a block with genuinely empty output now
+				// writes an empty string to the clipboard instead of leaving it untouched —
+				// the call into the Clipboard API must happen before this promise resolves,
+				// so there's no way to know it's empty in time to skip the write.
+				const textPromise = (async () => {
+					const lines = await ref.getBufferLines(start, end);
+					return lines.join("\n").trimEnd();
+				})();
+				writeClipboardAsync(textPromise).catch((err) =>
+					appLogger.warn("terminal", "Copy Block Output failed", { error: String(err) }),
+				);
 			},
 			disabled: (() => {
 				const activeId = terminalsStore.state.activeId;

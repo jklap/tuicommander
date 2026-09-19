@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appLogger } from "../../stores/appLogger";
-import { copyPathToClipboard, readClipboard, writeClipboard } from "../../utils/clipboard";
+import { copyPathToClipboard, readClipboard, writeClipboard, writeClipboardAsync } from "../../utils/clipboard";
+import { FakeClipboardItem } from "../mocks/clipboardItem";
 import { mockInvoke } from "../mocks/tauri";
 
 /** setup.ts sets __TAURI_INTERNALS__ globally so every other suite defaults to
@@ -173,6 +174,89 @@ describe("clipboard", () => {
 			expect(document.querySelector("textarea")).toBeNull();
 			expect(document.activeElement).toBe(input);
 			document.body.removeChild(input);
+		});
+	});
+
+	describe("writeClipboardAsync", () => {
+		afterEach(() => setTauriMode(true));
+
+		it("Tauri mode: awaits the promise, then routes through the native plugin (no gesture requirement)", async () => {
+			setTauriMode(true);
+			mockInvoke.mockResolvedValue(undefined);
+
+			await writeClipboardAsync(Promise.resolve("resolved text"));
+
+			expect(mockInvoke).toHaveBeenCalledWith("plugin:clipboard-manager|write_text", {
+				text: "resolved text",
+				label: undefined,
+			});
+		});
+
+		it("browser mode: calls navigator.clipboard.write() with a ClipboardItem carrying the pending promise, never awaiting it first", async () => {
+			setTauriMode(false);
+			const originalClipboardItem = globalThis.ClipboardItem;
+			// biome-ignore lint/suspicious/noExplicitAny: test double for a DOM constructor
+			(globalThis as any).ClipboardItem = FakeClipboardItem;
+			const writeSpy = vi.spyOn(navigator.clipboard, "write").mockResolvedValue(undefined);
+			let resolveText!: (v: string) => void;
+			const pending = new Promise<string>((resolve) => {
+				resolveText = resolve;
+			});
+
+			try {
+				const done = writeClipboardAsync(pending);
+				// Give the synchronous call inside writeClipboardAsync a chance to run
+				// before the round-trip promise ever resolves.
+				await Promise.resolve();
+				expect(writeSpy).toHaveBeenCalledTimes(1);
+				const item = writeSpy.mock.calls[0][0][0] as unknown as FakeClipboardItem;
+				expect(item.types).toEqual(["text/plain"]);
+
+				resolveText("late text");
+				const blob = await item.init["text/plain"];
+				await expect(blob.text()).resolves.toBe("late text");
+				await done;
+			} finally {
+				globalThis.ClipboardItem = originalClipboardItem;
+			}
+		});
+
+		it("browser mode: falls back to writeClipboard(await textPromise) when ClipboardItem is unavailable", async () => {
+			setTauriMode(false);
+			const originalClipboardItem = globalThis.ClipboardItem;
+			// @ts-expect-error simulating a browser without ClipboardItem support
+			delete globalThis.ClipboardItem;
+			const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+
+			try {
+				await writeClipboardAsync(Promise.resolve("fallback text"));
+				expect(writeText).toHaveBeenCalledWith("fallback text");
+			} finally {
+				globalThis.ClipboardItem = originalClipboardItem;
+			}
+		});
+
+		it("browser mode: falls back to writeClipboard when navigator.clipboard.write rejects", async () => {
+			setTauriMode(false);
+			const originalClipboardItem = globalThis.ClipboardItem;
+			// biome-ignore lint/suspicious/noExplicitAny: test double for a DOM constructor
+			(globalThis as any).ClipboardItem = FakeClipboardItem;
+			vi.spyOn(navigator.clipboard, "write").mockRejectedValue(new DOMException("denied", "NotAllowedError"));
+			const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+
+			try {
+				await writeClipboardAsync(Promise.resolve("rejected-write text"));
+				expect(writeText).toHaveBeenCalledWith("rejected-write text");
+			} finally {
+				globalThis.ClipboardItem = originalClipboardItem;
+			}
+		});
+
+		it("propagates a rejected textPromise as a failure", async () => {
+			setTauriMode(true);
+			await expect(writeClipboardAsync(Promise.reject(new Error("selection read failed")))).rejects.toThrow(
+				"selection read failed",
+			);
 		});
 	});
 
