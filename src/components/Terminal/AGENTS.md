@@ -84,3 +84,56 @@ shortcut listener, unless the terminal's keydown handler explicitly bails out fi
 (see `isGlobalShortcutPassthrough`, same file). When adding or rebinding a global
 shortcut that uses Ctrl/Cmd + a printable key, verify the Windows/Linux (Ctrl) form is
 special-cased the same way.
+
+## Clipboard Writes That Need An Async Round-Trip First (browser mode's user-activation window)
+
+Any browser-mode clipboard write that needs to resolve its text via an HTTP round-trip
+first (`terminal_get_selection_text`, `getBufferLines`) is at risk of the browser's
+user-activation window expiring before the write actually happens — `document
+.execCommand('copy')` and `navigator.clipboard.writeText` both need to run within that
+window, and a slow/remote connection (Tailscale, not localhost, where the round-trip is
+near-instant) can make an awaited fetch outlast it, silently no-oping the copy with no
+error surfaced anywhere. Tauri desktop mode never hits this: its native
+`clipboard-manager` plugin has no gesture requirement (see `utils/clipboard.ts`'s
+`writeClipboard` doc comment).
+
+Found 2026-09-18 in both `copySelection()` (this file) and "Copy Block Output"
+(`useTerminalContextMenus.ts`) — both awaited their round-trip before calling into the
+Clipboard API. **The fix is not "resolve the text locally and skip the round-trip"** — an
+early version of this fix did exactly that and was caught mid-review: the Rust-side path
+doesn't just fix line-wrapping, it also strips Claude's `▎` quote-gutter markers
+(`docs/backend/pty.md`'s `get_selection_text` section) so a multi-line Claude message
+pastes clean — a documented, marketed feature (`docs/user-guide/terminals.md`'s "Copy &
+Paste" section). Skipping the round-trip in browser mode would have silently degraded
+every multi-line browser-client copy, not just the rare slow-network case it was meant
+to fix.
+
+The actual fix, `writeClipboardAsync()` (`utils/clipboard.ts`): call
+`navigator.clipboard.write()` **synchronously** (satisfying the activation requirement
+immediately, still inside the same task as the triggering gesture) with a
+`ClipboardItem` whose data is the still-*pending* round-trip promise — per spec, a
+`ClipboardItem`'s data may be a `Promise` that resolves later, which is the standard
+pattern for exactly this "the real data isn't ready yet" situation and is supported by
+Chrome, Firefox, and Safari. This gets both the fixed timing *and* the full Rust-side
+text quality, with no tradeoff, on any browser that supports `ClipboardItem`+`write`.
+Only falls back to the old (activation-risking) synchronous path when that API isn't
+available at all.
+
+If you add a third caller with this shape (resolve text via IPC/HTTP, then write to the
+clipboard), route it through `writeClipboardAsync(textPromise)` rather than
+`await writeClipboard(await textPromise)` — the latter reintroduces this exact bug in
+browser mode. And if you're tempted to "fix" a slow-clipboard-write bug by resolving
+text locally/synchronously instead, check whether the async path you're skipping does
+more than just fetch data (wrap-unwrapping, gutter-stripping, or similar cleanup) before
+assuming that's a safe simplification.
+
+**A related, separate bug found during this same investigation, fixed 2026-09-18:** the
+"Copy on Select" setting (`settingsStore.state.copyOnSelect`) was fully unwired — this
+file's `onMouseUp` called `copySelection()` unconditionally on any non-empty selection,
+with no `copyOnSelect` check anywhere, so disabling the toggle in Settings did nothing.
+Fixed by gating only the auto-copy-on-drag branch in `onMouseUp` on the setting — the
+selection is still always made, and the Cmd/Ctrl+C keydown path (a separate call site,
+same function) still always copies manually regardless of the setting. If you add a
+third call site of `copySelection()`, decide deliberately whether it's a "passive
+auto-copy" trigger (gate it on `copyOnSelect`, like `onMouseUp`) or an "explicit copy
+action" trigger (never gate it, like Cmd+C) — don't assume one shape covers both.

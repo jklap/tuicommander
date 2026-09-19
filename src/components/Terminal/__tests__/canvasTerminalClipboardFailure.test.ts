@@ -6,6 +6,7 @@
 
 import { fireEvent, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FakeClipboardItem } from "../../../__tests__/mocks/clipboardItem";
 import { mockInvoke } from "../../../__tests__/mocks/tauri";
 import { appLogger } from "../../../stores/appLogger";
 import { settingsStore } from "../../../stores/settings";
@@ -63,8 +64,33 @@ describe("CanvasTerminal clipboard failure handling", () => {
 		restoreEnv();
 		settingsStore.setLinkActivation("click");
 		settingsStore.setDoubleClickAction("smart");
+		settingsStore.setCopyOnSelect(true);
 		delete (window as unknown as Record<string, unknown>).__tuic_setStatusInfo;
 		vi.restoreAllMocks();
+	});
+
+	it('does not auto-copy on select when "Copy on Select" is disabled, but Cmd/Ctrl+C still copies manually', async () => {
+		settingsStore.setCopyOnSelect(false);
+		mockInvoke.mockResolvedValue(undefined);
+		const mounted = await mountCanvasTerminal({ sessionId: "clip6", terminalId: "tclip6" });
+		fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 40));
+
+		doubleClick(mounted.canvas, 5, 0); // selects "bar" via mouseup — auto-copy must NOT fire
+		await new Promise((r) => setTimeout(r, 0)); // let any (incorrectly) fired auto-copy settle
+
+		expect(setStatusInfo).not.toHaveBeenCalled();
+
+		// The selection itself is still intact — "Copy on Select" only gates the
+		// auto-copy-on-drag path, never the selection or the manual Cmd+C shortcut.
+		// Keydown is bound to the hidden composition <input> (keyInputRef), not the canvas.
+		const keyInput = mounted.container.querySelector('input[aria-hidden="true"]') as HTMLInputElement;
+		fireEvent.keyDown(keyInput, { key: "c", metaKey: true, ctrlKey: true });
+
+		await waitFor(() => {
+			expect(setStatusInfo).toHaveBeenCalledWith("Copied to clipboard");
+		});
+		expect(mounted.ref.getSelectionText()).toBe("bar");
+		await mounted.dispose();
 	});
 
 	it("copySelection surfaces a failure status and logs instead of claiming success", async () => {
@@ -87,6 +113,10 @@ describe("CanvasTerminal clipboard failure handling", () => {
 		});
 		expect(setStatusInfo).not.toHaveBeenCalledWith("Copied to clipboard");
 		expect(appLogger.warn).toHaveBeenCalledWith("terminal", "Clipboard write failed", expect.anything());
+		// The selected text is still cached even though the write itself failed — the
+		// resolved text and the write outcome are independent (see copySelection's doc
+		// comment): a failed clipboard write must not leave a stale/empty cache behind.
+		expect(mounted.ref.getSelectionText()).toBe("bar");
 		await mounted.dispose();
 	});
 
@@ -126,5 +156,86 @@ describe("CanvasTerminal clipboard failure handling", () => {
 		});
 		expect(() => fireEvent.click(copyLinkItem)).not.toThrow();
 		await mounted.dispose();
+	});
+
+	describe("browser mode", () => {
+		/** setup.ts sets __TAURI_INTERNALS__ globally so every other suite in this
+		 *  file defaults to Tauri mode; these tests flip to browser mode. */
+		function setTauriMode(enabled: boolean) {
+			if (enabled) {
+				(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+			} else {
+				delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+			}
+		}
+
+		beforeEach(() => setTauriMode(false));
+		afterEach(() => setTauriMode(true));
+
+		it("copySelection calls the Clipboard API synchronously, deferring the HTTP round-trip's resolution", async () => {
+			// http-copy: over a real network (Tailscale/remote, not just localhost),
+			// awaiting terminal_get_selection_text before calling into the Clipboard API
+			// can outlast the browser's user-activation window, silently breaking both
+			// navigator.clipboard.writeText and the execCommand('copy') fallback — see
+			// writeClipboardAsync's doc comment in utils/clipboard.ts. The fix: call
+			// navigator.clipboard.write() synchronously with a ClipboardItem whose data
+			// is the still-pending round-trip promise, so nothing awaits between the
+			// triggering gesture and the Clipboard API call itself.
+			const originalClipboardItem = globalThis.ClipboardItem;
+			// biome-ignore lint/suspicious/noExplicitAny: test double for a DOM constructor
+			(globalThis as any).ClipboardItem = FakeClipboardItem;
+			const writeSpy = vi.spyOn(navigator.clipboard, "write").mockResolvedValue(undefined);
+			let resolveInvoke!: (v: string) => void;
+			const pending = new Promise<string>((resolve) => {
+				resolveInvoke = resolve;
+			});
+			fakeTransport.current!.setInvokeHandler("terminal_get_selection_text", () => pending);
+
+			try {
+				const mounted = await mountCanvasTerminal({ sessionId: "clip4", terminalId: "tclip4" });
+				fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 40));
+
+				doubleClick(mounted.canvas, 5, 0); // selects "bar", mouseup fires copySelection()
+
+				// The Clipboard API call happens before the round-trip resolves — proving
+				// it didn't wait for it.
+				await waitFor(() => expect(writeSpy).toHaveBeenCalledTimes(1));
+				const item = writeSpy.mock.calls[0][0][0] as unknown as FakeClipboardItem;
+				expect(item.types).toEqual(["text/plain"]);
+
+				resolveInvoke("bar-from-rust");
+				const blob = await item.init["text/plain"];
+				await expect(blob.text()).resolves.toBe("bar-from-rust");
+
+				await waitFor(() => {
+					expect(setStatusInfo).toHaveBeenCalledWith("Copied to clipboard");
+				});
+				await mounted.dispose();
+			} finally {
+				globalThis.ClipboardItem = originalClipboardItem;
+			}
+		});
+
+		it("copySelection falls back to the synchronous path when ClipboardItem/write is unavailable", async () => {
+			const originalClipboardItem = globalThis.ClipboardItem;
+			// @ts-expect-error simulating a browser without ClipboardItem support
+			delete globalThis.ClipboardItem;
+			const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+
+			try {
+				const mounted = await mountCanvasTerminal({ sessionId: "clip5", terminalId: "tclip5" });
+				fakeTransport.current!.pushFrame(buildTextFrame(["foo bar baz"], 40));
+
+				doubleClick(mounted.canvas, 5, 0); // selects "bar", mouseup fires copySelection()
+
+				await waitFor(() => {
+					expect(setStatusInfo).toHaveBeenCalledWith("Copied to clipboard");
+				});
+				expect(writeText).toHaveBeenCalledWith("bar");
+				await mounted.dispose();
+			} finally {
+				globalThis.ClipboardItem = originalClipboardItem;
+			}
+		});
 	});
 });

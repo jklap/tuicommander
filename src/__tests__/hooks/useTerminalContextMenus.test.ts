@@ -26,7 +26,13 @@ vi.mock("../../stores/terminals", () => ({
 	// rather than re-implementing "filter out onAltScreen" a second time here.
 	rowAnchoredBlocks: (blocks: Array<{ onAltScreen?: boolean }>) => blocks.filter((b) => !b.onAltScreen),
 }));
-vi.mock("../../utils/clipboard", () => ({ writeClipboard: mockWriteClipboard }));
+vi.mock("../../utils/clipboard", () => ({
+	writeClipboard: mockWriteClipboard,
+	// Mirrors writeClipboardAsync's real Tauri-mode behavior (this suite runs
+	// under setup.ts's default __TAURI_INTERNALS__): await the promise, then
+	// route through the same mocked writeClipboard these tests already assert on.
+	writeClipboardAsync: async (textPromise: Promise<string>) => mockWriteClipboard(await textPromise),
+}));
 vi.mock("../../utils/hotkey", () => ({ keyFor: (action: string) => action }));
 vi.mock("../../utils/sendCommand", () => ({
 	getShellFamily: vi.fn().mockResolvedValue("posix"),
@@ -82,9 +88,9 @@ describe("useTerminalContextMenus", () => {
 		});
 		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
 
-		await items.find((item) => item.label === "Copy Block Output")?.action();
+		items.find((item) => item.label === "Copy Block Output")?.action();
 
-		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+		await vi.waitFor(() => expect(mockWriteClipboard).toHaveBeenCalledWith("output"));
 	});
 
 	it("skips a trailing alt-screen-tainted block and copies the last real one instead", async () => {
@@ -100,9 +106,9 @@ describe("useTerminalContextMenus", () => {
 		});
 		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
 
-		await items.find((item) => item.label === "Copy Block Output")?.action();
+		items.find((item) => item.label === "Copy Block Output")?.action();
 
-		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+		await vi.waitFor(() => expect(mockWriteClipboard).toHaveBeenCalledWith("output"));
 	});
 
 	it("converts executionLine/endLine through getHistoryBase before reading the buffer", async () => {
@@ -115,10 +121,10 @@ describe("useTerminalContextMenus", () => {
 		});
 		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
 
-		await items.find((item) => item.label === "Copy Block Output")?.action();
+		items.find((item) => item.label === "Copy Block Output")?.action();
 
 		expect(getBufferLines).toHaveBeenCalledWith(11, 13);
-		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+		await vi.waitFor(() => expect(mockWriteClipboard).toHaveBeenCalledWith("output"));
 	});
 
 	it("disables Copy Block Output when every command block is alt-screen-tainted", () => {
@@ -143,10 +149,35 @@ describe("useTerminalContextMenus", () => {
 		});
 		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
 
-		await items.find((item) => item.label === "Copy Block Output")?.action();
+		items.find((item) => item.label === "Copy Block Output")?.action();
 
 		await vi.waitFor(() => {
-			expect(warnSpy).toHaveBeenCalledWith("terminal", "Copy Block Output failed to write clipboard", err);
+			expect(warnSpy).toHaveBeenCalledWith("terminal", "Copy Block Output failed", {
+				error: expect.stringContaining("NotAllowedError"),
+			});
+		});
+	});
+
+	it("logs instead of throwing when getBufferLines itself throws synchronously", async () => {
+		const warnSpy = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({
+			commandBlocks: [{ executionLine: 10, endLine: 13 }],
+			ref: {
+				getBufferLines: vi.fn().mockImplementation(() => {
+					throw new Error("buffer gone");
+				}),
+				getHistoryBase: () => 0,
+			},
+		});
+		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
+
+		expect(() => items.find((item) => item.label === "Copy Block Output")?.action()).not.toThrow();
+
+		await vi.waitFor(() => {
+			expect(warnSpy).toHaveBeenCalledWith("terminal", "Copy Block Output failed", {
+				error: expect.stringContaining("buffer gone"),
+			});
 		});
 	});
 
