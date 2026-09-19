@@ -38,10 +38,19 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 		paintRow: vi.fn(),
 	}),
 }));
-vi.mock("../../utils/clipboard", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../utils/clipboard")>()),
-	writeClipboard: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../../utils/clipboard", async (importOriginal) => {
+	const writeClipboard = vi.fn().mockResolvedValue(undefined);
+	return {
+		...(await importOriginal<typeof import("../../utils/clipboard")>()),
+		writeClipboard,
+		// copySelection writes through writeClipboardAsync (browser activation window);
+		// route it to the mocked writeClipboard like its awaited (Tauri) path does.
+		writeClipboardAsync: vi.fn(async (text: Promise<string>) => {
+			const resolved = await text;
+			if (resolved) await writeClipboard(resolved);
+		}),
+	};
+});
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
 import { terminalsStore } from "../../stores/terminals";

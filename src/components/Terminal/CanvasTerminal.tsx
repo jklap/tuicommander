@@ -15,7 +15,7 @@ import { getSessionConnection } from "../../transportRuntime";
 import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock, resolveScopedBlock } from "../../utils/blockSearchFilter";
-import { writeClipboard } from "../../utils/clipboard";
+import { writeClipboard, writeClipboardAsync } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
 import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/keyboardViewport";
 import { handleOpenUrl } from "../../utils/openUrl";
@@ -3842,7 +3842,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			stopSelectionScroll();
 			if (selection.selecting && selection.start && selection.end) {
 				if (selection.hasRange()) {
-					copySelection();
+					// "Copy on Select" (Settings > Terminal) gates ONLY
+					// this auto-copy-on-drag path — the selection itself is always made
+					// regardless, and Cmd+C (below) always copies it manually regardless of
+					// this setting.
+					if (settingsStore.state.copyOnSelect) {
+						copySelection();
+					}
 				} else {
 					selection.start = null;
 					selection.end = null;
@@ -4362,72 +4368,84 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			| ((msg: string) => void)
 			| undefined;
 		try {
-			const result = await commitSelectionCopy(
-				async () => {
-					// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
-					// WRAPLINE flag. The snapshot base lets Rust rebase the grid-relative rows
-					// under the same lock that reads them, so eviction cannot alias replacements.
-					const startRow =
-						currentFrame && selection.start ? selectionRowToGridRow(currentFrame, selection.start.row) : null;
-					const endRow = currentFrame && selection.end ? selectionRowToGridRow(currentFrame, selection.end.row) : null;
-					const historyBase = currentFrame?.historyBase;
-					if (
-						invokeRef &&
-						selection.start &&
-						selection.end &&
-						startRow !== null &&
-						endRow !== null &&
-						historyBase !== undefined
-					) {
-						// Read recorded cell rows rather than filtering copied prose: only
-						// the marker projection knows which physical rows are omitted.
-						const start = { ...selection.start };
-						const end = { ...selection.end };
-						const first = Math.min(start.row, end.row);
-						const last = Math.max(start.row, end.row);
-						const viewportTop =
-							historyBase + currentFrame!.historySize - (overlayScrollOffset ?? projectedDisplayOffset);
-						let copyRows = new Map<number, DecodedRow>();
-						for (let index = viewportTop - MARKER_LOOKBACK_ROWS; index < viewportTop; index++) {
-							const row = rowCache.get(index);
-							if (row) copyRows.set(index, row);
-						}
-						for (const [index, row] of rowMap) copyRows.set(viewportTop + index, row);
-						if (first < viewportTop || last >= viewportTop + currentFrame!.screenRows) {
-							const from = Math.max(historyBase, first - MARKER_LOOKBACK_ROWS);
-							const range = await fetchStyledRange(from, last - from + 1 + MARKER_LOOKBACK_ROWS);
-							if (
-								!range ||
-								!range.rows.some(({ abs }) => abs === first) ||
-								!range.rows.some(({ abs }) => abs === last)
-							) {
-								throw new Error("selection rows are no longer retained");
-							}
-							copyRows = new Map(range.rows.map(({ abs, row }) => [abs, row]));
-						}
-						const text = await readProjectedSelectionText(
-							start,
-							end,
-							copyRows,
-							async (start, end) =>
-								(await invokeRef!("terminal_get_selection_text", {
-									sessionId: props.sessionId,
-									startRow: start.row - historyBase,
-									startCol: start.col,
-									endRow: end.row - historyBase,
-									endCol: end.col,
-									historyBase,
-								})) as string,
-						);
-						// An all-hidden range is intentionally empty; never restore raw rows.
-						return text;
+			// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
+			// WRAPLINE flag. The snapshot base lets Rust rebase the grid-relative rows
+			// under the same lock that reads them, so eviction cannot alias replacements.
+			const textPromise: Promise<string> = (async () => {
+				const startRow =
+					currentFrame && selection.start ? selectionRowToGridRow(currentFrame, selection.start.row) : null;
+				const endRow = currentFrame && selection.end ? selectionRowToGridRow(currentFrame, selection.end.row) : null;
+				const historyBase = currentFrame?.historyBase;
+				if (
+					invokeRef &&
+					selection.start &&
+					selection.end &&
+					startRow !== null &&
+					endRow !== null &&
+					historyBase !== undefined
+				) {
+					// Read recorded cell rows rather than filtering copied prose: only
+					// the marker projection knows which physical rows are omitted.
+					const start = { ...selection.start };
+					const end = { ...selection.end };
+					const first = Math.min(start.row, end.row);
+					const last = Math.max(start.row, end.row);
+					const viewportTop = historyBase + currentFrame!.historySize - (overlayScrollOffset ?? projectedDisplayOffset);
+					let copyRows = new Map<number, DecodedRow>();
+					for (let index = viewportTop - MARKER_LOOKBACK_ROWS; index < viewportTop; index++) {
+						const row = rowCache.get(index);
+						if (row) copyRows.set(index, row);
 					}
-					return selection.cachedText || getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
-				},
+					for (const [index, row] of rowMap) copyRows.set(viewportTop + index, row);
+					if (first < viewportTop || last >= viewportTop + currentFrame!.screenRows) {
+						const from = Math.max(historyBase, first - MARKER_LOOKBACK_ROWS);
+						const range = await fetchStyledRange(from, last - from + 1 + MARKER_LOOKBACK_ROWS);
+						if (!range || !range.rows.some(({ abs }) => abs === first) || !range.rows.some(({ abs }) => abs === last)) {
+							throw new Error("selection rows are no longer retained");
+						}
+						copyRows = new Map(range.rows.map(({ abs, row }) => [abs, row]));
+					}
+					const text = await readProjectedSelectionText(
+						start,
+						end,
+						copyRows,
+						async (start, end) =>
+							(await invokeRef!("terminal_get_selection_text", {
+								sessionId: props.sessionId,
+								startRow: start.row - historyBase,
+								startCol: start.col,
+								endRow: end.row - historyBase,
+								endCol: end.col,
+								historyBase,
+							})) as string,
+					);
+					// An all-hidden range is intentionally empty; never restore raw rows.
+					return text;
+				}
+				return selection.cachedText || getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
+			})();
+			// writeClipboardAsync must be called synchronously — not awaited first — so the
+			// Clipboard API call itself isn't delayed by the round-trip above: in browser
+			// mode it calls navigator.clipboard.write() immediately (while the user
+			// activation is still live) with textPromise as the deferred data, so an HTTP
+			// round-trip over a slow/remote connection (Tailscale, not just localhost) can
+			// resolve after activation would otherwise have expired. See its doc comment in
+			// utils/clipboard.ts. An expired selection rejects textPromise, so the write
+			// fails and nothing is copied. Its rejection is observed only when the copy
+			// commits (`await writeDone` below) — the no-op handler keeps the expired/empty
+			// outcomes from surfacing as an unhandled rejection.
+			// Answer markers are stripped from what reaches the clipboard only; the cached
+			// selection text keeps them (getSelectionText strips on read).
+			const writeDone = writeClipboardAsync(textPromise.then(stripAnswerMarkers));
+			writeDone.catch(() => {});
+			const result = await commitSelectionCopy(
+				() => textPromise,
 				async (text) => {
+					// Cached as soon as the text is known, independent of whether the
+					// write that is already in flight succeeds.
 					selection.cachedText = text;
 					selection.localSnapshot = getLocalSelectionText(selection, selectionAbsRowToViewport, rowMap);
-					await writeClipboard(stripAnswerMarkers(text));
+					await writeDone;
 				},
 			);
 			if (result.kind === "copied") {
