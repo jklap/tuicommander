@@ -277,3 +277,32 @@ disconnect) can't hang worktree creation forever — it resolves either way, nev
 Every caller of `createWorktree` arms one (dialog, quick-clone, auto-fix). A worktree the
 backend did NOT create through that chain (conflict assist) passes
 `{ runSetupScriptHere: true }` and still runs the script from the frontend.
+
+## Tab/Dialog Openers Bound To "The Active Repo" Must Resolve The Worktree First
+
+Any handler that opens a tab, dialog, or file-picker default path for "the current
+repo" and is reachable while a **worktree** tab is focused must resolve
+`gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath` — never
+`repositoriesStore.state.activeRepoPath` alone. `activeRepoPath` is keyed by the main
+repo checkout root (`repositoriesStore` is keyed by repo root, not by worktree), so a
+handler that reads it directly always resolves to the main checkout even when a
+worktree tab has focus. `gitOps.activeWorktreePath()` (`useGitOperations.ts`) follows the
+workspace model: the active repo's `activeWorkspaceId` → `workspaces[id].worktreePath`, or
+the repo root for a workspace with no worktree.
+
+`useAppShortcutHandlers.ts`'s `openFile`/`openFolder`/`newFile` already get this right.
+`openSessionReview` and `toggleDiffScroll` (same file) didn't — Session Diff opened
+against the worktree's terminal, then queried Claude Code session transcripts for the
+**main repo's** path instead of the worktree's, so it correctly found zero sessions and
+showed "No Claude sessions found" even though the worktree had live sessions the
+sidebar could see fine (the sidebar resolves each terminal's own real `cwd` via a
+different, correct mechanism — `useAgentPolling.ts`). Fixed 2026-09-18 by matching the
+established `activeWorktreePath() || activeRepoPath` pattern; regression-tested in
+`src/__tests__/hooks/useAppShortcutHandlers.test.ts`.
+
+This is the third documented instance of "the active-repo/active-terminal fallback
+resolves to the wrong tree when a worktree is focused" (see also `executeSmartPrompt`'s
+`targetPath` and `SmartButtonStrip`'s `repoPath` forwarding in the section above, a different
+mechanism — `resolvePromptTreeIn`/`repoOwnership.ts` — for a different set of callers).
+Before adding a new handler that opens something scoped to "the current repo," check
+whether it needs `gitOps.activeWorktreePath()` first.
