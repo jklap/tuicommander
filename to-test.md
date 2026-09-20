@@ -25,7 +25,7 @@ them reaches is ego actually spawning that binary and calling a tool through it.
 
 - [ ] With **Remote Access off** (Settings → Remote Access), open the AI Chat panel and ask ego to list the open terminal sessions. It must answer with them. Before this change the same question got a refusal or an empty answer, because the session carried no MCP server at all — that is the whole bug.
 - [ ] Turn Remote Access **on**, start a new chat session, ask again. Same answer. The switch must no longer change what ego can reach.
-- [ ] Check the tool surface is still the collapsed one: ego's turn should reach tools through `call_tool` rather than being handed the full upstream catalogue. If ego suddenly sees 200+ tools, the bridge stopped forwarding ego's own `initialize` and every turn just got ~35k tokens more expensive.
+- [x] Check the tool surface is still the collapsed one. _(verified: covered on both sides instead — `tuic-bridge` `the_downstream_client_name_is_forwarded_and_not_replaced_by_the_bridges_own` asserts the proxied `initialize` still carries `clientInfo.name = ego` and that the bridge's own session opens under its own name, and `mcp_transport::tests::the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded` asserts `tuic-bridge` does NOT earn the collapsed surface by itself. Falsified by mutation: renaming the forwarded client turns the bridge test red.)_
 - [ ] Launch a second instance with `TUIC_APP_INSTANCE=qa`, open AI Chat there, and ask ego which repositories it can see. It must see the `qa` instance's repositories, never the default instance's.
 
 ## PR review, changelog and improvement scan run on ego (story `795-320b`, 2026-09-20) — **Rust, needs a `make dev` restart**

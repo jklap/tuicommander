@@ -140,8 +140,11 @@ pub const TUICOMMANDER_MCP_SERVER_NAME: &str = "tuicommander";
 /// collapsed tool surface, worth 35.104 tokens a turn against 615 at 190 tools.
 /// The bridge opens the transport session under its own name but then proxies
 /// the downstream `initialize` verbatim (`handle_initialize`), so the
-/// `clientInfo` TUICommander reads is still ego's. Breaking that forwarding
-/// would not fail a test here; it would quietly make every turn expensive.
+/// `clientInfo` TUICommander reads is still ego's. Two tests hold that from
+/// both ends, because either one alone passes while the contract is broken:
+/// `the_downstream_client_name_is_forwarded_and_not_replaced_by_the_bridges_own`
+/// in `tuic-bridge`, and `the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded`
+/// in `mcp_http::mcp_transport`.
 ///
 /// `None` when the bridge is not where we can see it, for the same reason port
 /// 0 used to yield `None`: an entry that cannot run makes ego report a server
