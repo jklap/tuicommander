@@ -85,7 +85,8 @@ pub enum ParsedEvent {
     #[serde(rename = "tool-error")]
     ToolError { matched_text: String },
     /// Agent-declared intent: what the LLM is currently working on.
-    /// Emitted via `intent: <text>` or `intent: <text> (<tab title>)` at column 0.
+    /// Emitted via `intent: <text>` or `intent: <text> (<tab title>)`, at the
+    /// start of a row or right after the ack sentence (see ACK_SENTENCE_PREFIX).
     #[serde(rename = "intent")]
     Intent {
         text: String,
@@ -1527,6 +1528,44 @@ const AGENT_LINE_BULLETS: &str = r"\x{25CF}\x{23FA}\x{2022}\x{25E6}";
 /// Kept in sync by `agent_line_bullet_chars_match_the_regex_class`.
 const AGENT_LINE_BULLET_CHARS: [char; 4] = ['\u{25CF}', '\u{23FA}', '\u{2022}', '\u{25E6}'];
 
+/// The ack sentence (`TUICommander v1.7.7 is connected.`) and its trailing gap,
+/// allowed between the bullet and an `intent:` token. Char-class-free body so
+/// callers wrap it themselves: `(?:{a})?` to skip it, `({a})?` to keep it.
+///
+/// The protocol puts the two markers in the same message by construction: the
+/// ack MUST open the agent's first message and an `intent:` MUST appear in it.
+/// An agent that writes them as one sentence run therefore leaves the token
+/// mid-row, where a column-0-only anchor captures **nothing at all** — not a
+/// truncated intent, no intent. This one sentence is the whole relaxation: any
+/// other leading prose still fails the anchor, so `The intent: of this code`
+/// stays prose. Intent only — a `suggest:` never follows the ack.
+const ACK_SENTENCE_PREFIX: &str = r"TUICommander[\t ]+v[0-9][^\s]*[\t ]+is[\t ]+connected\.[\t ]+";
+
+/// Remove `intent:` / `suggest:` plain-prefix tokens from a rendered row before
+/// it is served to PWA/REST clients — they are wire markers, not agent prose.
+///
+/// Built from the same [`AGENT_LINE_BULLETS`] and [`ACK_SENTENCE_PREFIX`] the
+/// parser anchors on, because the two had already drifted apart: `state.rs`
+/// carried its own copy knowing only the two Ink bullets, so every Codex
+/// `• suggest: [ … ]` was parsed by TUIC and then shown to the user anyway.
+/// What TUIC reads is what TUIC hides; one grammar is the only way that holds.
+///
+/// The ack sentence is KEPT (capture group 1 is the replacement) — it is the
+/// agent's own greeting and the user is meant to read it. Everything from the
+/// keyword rightward goes, as does the bullet and indent of a row that carried
+/// nothing else.
+pub(crate) fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str> {
+    lazy_static::lazy_static! {
+        static ref PLAIN_PREFIX_RE: regex::Regex = regex::Regex::new(&format!(
+            r"(?m)^[\t ]*(?:[{b}][\t ]+)?({a})?(?:intent|suggest):[\t ]+.*$",
+            b = AGENT_LINE_BULLETS,
+            a = ACK_SENTENCE_PREFIX
+        ))
+        .unwrap();
+    }
+    PLAIN_PREFIX_RE.replace_all(text, "$1")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StructuredTokenAnchor {
     Intent,
@@ -1539,16 +1578,17 @@ pub(crate) enum StructuredTokenAnchor {
 pub(crate) fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnchor> {
     lazy_static::lazy_static! {
         static ref STRUCTURED_TOKEN_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
-            r"^[\t ]*(?:[{b}][\t ]+)?(intent|suggest):",
-            b = AGENT_LINE_BULLETS
+            r"^[\t ]*(?:[{b}][\t ]+)?(?:(?:{a})?(intent)|(suggest)):",
+            b = AGENT_LINE_BULLETS,
+            a = ACK_SENTENCE_PREFIX
         ))
         .unwrap();
     }
     let captures = STRUCTURED_TOKEN_ANCHOR_RE.captures(clean)?;
-    match captures.get(1)?.as_str() {
-        "intent" => Some(StructuredTokenAnchor::Intent),
-        "suggest" => Some(StructuredTokenAnchor::Suggest),
-        _ => None,
+    if captures.get(1).is_some() {
+        Some(StructuredTokenAnchor::Intent)
+    } else {
+        captures.get(2).map(|_| StructuredTokenAnchor::Suggest)
     }
 }
 
@@ -1561,29 +1601,131 @@ fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
     }
     lazy_static::lazy_static! {
         // Plain prefix: `intent:` at line start, with optional leading
-        // horizontal whitespace and/or a leading bullet glyph (see
-        // AGENT_LINE_BULLETS). Ink-hosted agents (Claude Code) decorate the
+        // horizontal whitespace, a leading bullet glyph (see
+        // AGENT_LINE_BULLETS) and/or the ack sentence (see
+        // ACK_SENTENCE_PREFIX). Ink-hosted agents (Claude Code) decorate the
         // first line of an assistant message with `● ` and indent every
         // continuation line by the bullet width, so plain-prefix tokens
         // emitted after the first line arrive as `  intent: ...`; Codex
         // decorates the first line with `• ` instead. The leading whitespace
         // must be horizontal only — any non-whitespace character before the
-        // keyword (other than an allowed bullet) is rejected.
+        // keyword (other than an allowed bullet or that one sentence) is
+        // rejected.
         static ref INTENT_PLAIN_RE: regex::Regex = regex::Regex::new(&format!(
-            r"(?m)^[\t ]*(?:[{b}][\t ]+)?intent:[\t ]+(.+)$",
-            b = AGENT_LINE_BULLETS
+            r"(?m)^[\t ]*(?:[{b}][\t ]+)?(?:{a})?intent:[\t ]+(.+)$",
+            b = AGENT_LINE_BULLETS,
+            a = ACK_SENTENCE_PREFIX
         ))
         .unwrap();
-        // Separate regex to split out the optional (title) suffix from the captured text
-        static ref TITLE_RE: regex::Regex =
-            regex::Regex::new(r"^(.*?)\(([^)]+)\)\s*$").unwrap();
     }
 
+    // The token is a single logical line, but the agent that wrote it wraps its
+    // own output: rejoin the continuation rows before the single-row regex runs.
+    let dewrapped = dewrap_intent_continuation(clean);
+
     let raw_match = INTENT_PLAIN_RE
-        .captures(clean)
+        .captures(dewrapped.as_ref())
         .map(|caps| caps[1].trim().to_string());
 
-    build_intent_event(raw_match, &TITLE_RE)
+    build_intent_event(raw_match, &INTENT_TITLE_RE)
+}
+
+lazy_static::lazy_static! {
+    /// Splits the optional `(title)` suffix off a captured intent body. `[^)]+`
+    /// forbids a nested `)`, so the group can only bind the LAST parenthesis of
+    /// the row — a mid-sentence `(aside)` is left inside the text.
+    static ref INTENT_TITLE_RE: regex::Regex =
+        regex::Regex::new(r"^(.*?)\(([^)]+)\)\s*$").unwrap();
+}
+
+/// Rows an `intent:` token may be rejoined from beyond the first. A protocol
+/// intent is one present-tense sentence plus a ≤3-word title, which covers two
+/// continuation rows on a narrow pane. The cap bounds the damage if every stop
+/// condition below misses at once.
+const MAX_INTENT_CONTINUATION_ROWS: usize = 2;
+
+/// Rejoin an `intent:` token that the agent hard-wrapped across physical rows.
+///
+/// `suggest:` is bounded by its closing `]` and gets three dewrap passes;
+/// `intent:` has no terminator at all, so [`INTENT_PLAIN_RE`]'s `$` simply cuts
+/// the token at the wrap. The loss is not cosmetic — the `(title)` rides at the
+/// END of the token, so the wrapped case drops precisely the tab title the
+/// event exists to set.
+///
+/// Ink-hosted agents wrap at a word boundary and indent the continuation by the
+/// bullet width, and they separate paragraphs with a blank row. That makes an
+/// **indented, non-empty, immediately following** row a continuation by
+/// construction, and it is the only shape absorbed: an un-indented row is a new
+/// logical line, a blank row ends the paragraph, and a bullet or prompt glyph
+/// opens new content. A row already carrying a closed `(title)` is a complete
+/// token and absorbs nothing.
+///
+/// Returns `Cow::Borrowed` when there is nothing to rejoin.
+fn dewrap_intent_continuation(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('\n') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    let Some(anchor) = lines
+        .iter()
+        .position(|line| structured_token_anchor(line) == Some(StructuredTokenAnchor::Intent))
+    else {
+        return std::borrow::Cow::Borrowed(text);
+    };
+
+    let mut merged = lines[anchor].trim_end().to_string();
+    if intent_row_is_complete(&merged) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut absorbed = 0;
+    for line in lines.iter().skip(anchor + 1) {
+        if absorbed == MAX_INTENT_CONTINUATION_ROWS || !is_intent_continuation_row(line) {
+            break;
+        }
+        merged.push(' ');
+        merged.push_str(line.trim());
+        absorbed += 1;
+        if intent_row_is_complete(&merged) {
+            break;
+        }
+    }
+    if absorbed == 0 {
+        return std::borrow::Cow::Borrowed(text);
+    }
+
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len() - absorbed);
+    kept.extend_from_slice(&lines[..anchor]);
+    kept.push(merged.as_str());
+    kept.extend_from_slice(&lines[anchor + 1 + absorbed..]);
+    std::borrow::Cow::Owned(kept.join("\n"))
+}
+
+/// True when the row ends in a closed `(title)` — the protocol's only
+/// end-of-token marker, and therefore the signal that nothing wrapped.
+fn intent_row_is_complete(row: &str) -> bool {
+    INTENT_TITLE_RE.is_match(row.trim_end())
+}
+
+/// True when the row is the wrapped tail of the `intent:` row above it.
+fn is_intent_continuation_row(row: &str) -> bool {
+    // The wrap indent is the whole signal: without it the row is a new logical
+    // line rather than the tail of the one above.
+    if !row.starts_with([' ', '\t']) {
+        return false;
+    }
+    let trimmed = row.trim();
+    let Some(first) = trimmed.chars().next() else {
+        // A blank row ends the paragraph, and with it the token.
+        return false;
+    };
+    if structured_token_anchor(row).is_some() || AGENT_LINE_BULLET_CHARS.contains(&first) {
+        return false;
+    }
+    // A prompt glyph or box drawing opens chrome, never agent prose.
+    !matches!(
+        first,
+        '>' | '\u{203A}' | '\u{276F}' | '\u{2500}'..='\u{259F}'
+    )
 }
 
 /// Shared logic for building an Intent event from a raw match string.
@@ -4234,6 +4376,111 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let mut parser = OutputParser::new();
         // Requires space after colon per `^intent:\s+`
         assert!(get_intent(&parser.parse("intent:nospace")).is_none());
+    }
+
+    // ---- The two markers the protocol forces into the same first message ----
+
+    #[test]
+    fn test_intent_after_the_ack_sentence_on_one_row() {
+        // The protocol requires the ack to OPEN the first assistant message and
+        // an `intent:` INSIDE that same message, so an agent that writes both as
+        // one sentence run puts the token mid-row. A column-0-only anchor then
+        // captured nothing at all — not a truncated intent, no intent.
+        let mut parser = OutputParser::new();
+        let events = parser.parse(
+            "\u{2022} TUICommander v1.7.7 is connected. intent: fixing the parser (Parser Fix)",
+        );
+        assert_eq!(get_intent(&events), Some("fixing the parser".to_string()));
+        assert_eq!(get_intent_title(&events), Some("Parser Fix".to_string()));
+    }
+
+    #[test]
+    fn test_ack_prefix_is_the_only_prose_allowed_before_the_token() {
+        // The relaxation above is that one sentence and nothing else: any other
+        // leading prose keeps the token rejected.
+        let mut parser = OutputParser::new();
+        assert!(
+            get_intent(&parser.parse("Ready when you are. intent: reading the config")).is_none()
+        );
+        assert!(get_intent(&parser.parse("The intent: of this code is clear")).is_none());
+    }
+
+    #[test]
+    fn test_intent_dewraps_an_ink_continuation_row() {
+        // Ink-hosted agents hard-wrap their own output and indent every
+        // continuation row by the bullet width. Without a rejoin the regex `$`
+        // cuts the token at the wrap, so the `(title)` — the tab title — is lost.
+        let mut parser = OutputParser::new();
+        let events = parser.parse(
+            "\u{2022} intent: definisco piano, story e worktree isolato prima\n  dell'implementazione (SQLite plugin)",
+        );
+        assert_eq!(
+            get_intent(&events),
+            Some(
+                "definisco piano, story e worktree isolato prima dell'implementazione".to_string()
+            )
+        );
+        assert_eq!(get_intent_title(&events), Some("SQLite plugin".to_string()));
+    }
+
+    #[test]
+    fn test_intent_dewraps_both_defects_at_once() {
+        // The reported shape: the ack sentence, the token mid-row, and the tail
+        // wrapped onto the next row.
+        let mut parser = OutputParser::new();
+        let events = parser.parse(
+            "\u{2022} TUICommander v1.7.7 is connected. intent: definisco piano, story e worktree isolato prima\n  dell'implementazione (SQLite plugin)",
+        );
+        assert_eq!(
+            get_intent(&events),
+            Some(
+                "definisco piano, story e worktree isolato prima dell'implementazione".to_string()
+            )
+        );
+        assert_eq!(get_intent_title(&events), Some("SQLite plugin".to_string()));
+    }
+
+    #[test]
+    fn test_intent_dewrap_stops_at_a_closed_title() {
+        // A row that already carries `(title)` is a complete token. The row
+        // below it is the agent's next paragraph, never a continuation.
+        let mut parser = OutputParser::new();
+        let events =
+            parser.parse("\u{2022} intent: reading the config (Config)\n  and then some prose");
+        assert_eq!(get_intent(&events), Some("reading the config".to_string()));
+        assert_eq!(get_intent_title(&events), Some("Config".to_string()));
+    }
+
+    #[test]
+    fn test_intent_dewrap_needs_the_wrap_indent() {
+        // An un-indented next row is a new logical line, not a wrap.
+        let mut parser = OutputParser::new();
+        let events = parser.parse("\u{2022} intent: reading the config\nunrelated output line");
+        assert_eq!(get_intent(&events), Some("reading the config".to_string()));
+        assert_eq!(get_intent_title(&events), None);
+    }
+
+    #[test]
+    fn test_intent_dewrap_stops_at_a_bulleted_row() {
+        // A bullet opens a new agent message even when Ink indents it.
+        let mut parser = OutputParser::new();
+        let events = parser.parse("\u{2022} intent: reading the config\n  \u{2022} next message");
+        assert_eq!(get_intent(&events), Some("reading the config".to_string()));
+    }
+
+    #[test]
+    fn test_structured_token_anchor_accepts_the_ack_prefixed_intent() {
+        // The grid-side anchor must see the same token the parser does,
+        // otherwise a half-typed ack-prefixed intent is never deferred.
+        assert_eq!(
+            structured_token_anchor("\u{2022} TUICommander v1.7.7 is connected. intent: x"),
+            Some(StructuredTokenAnchor::Intent)
+        );
+        assert_eq!(
+            structured_token_anchor("suggest: [ A | B ]"),
+            Some(StructuredTokenAnchor::Suggest)
+        );
+        assert_eq!(structured_token_anchor("Ready. intent: x"), None);
     }
 
     // ---- False positive regression tests ----

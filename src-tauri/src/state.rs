@@ -4443,18 +4443,13 @@ impl LogLine {
     /// These tokens are parsed by the output parser for state updates but should not
     /// appear in rendered log output (PWA/REST consumers).
     pub fn strip_structural_tokens(&mut self) {
-        lazy_static::lazy_static! {
-            // Match intent:/suggest: with optional leading whitespace and Ink
-            // bullet glyph (● U+25CF / ⏺ U+23FA) — mirrors the output parser
-            // regexes so scrollback lines that the parser detected are also
-            // stripped from the log delivered to PWA/REST consumers.
-            static ref PLAIN_PREFIX_RE: regex::Regex = regex::Regex::new(
-                r"(?m)^[\t ]*(?:[\x{25CF}\x{23FA}][\t ]+)?(?:intent|suggest):[\t ]+.*$"
-            ).unwrap();
-        }
+        // The grammar lives in `output_parser`, next to the regexes that READ
+        // these tokens. A second copy here knew only the two Ink bullets and
+        // drifted: the parser learned Codex's `•`/`◦` and the ack prefix, this
+        // did not, so tokens TUIC had consumed were still shown to the user.
         for span in &mut self.spans {
             if span.text.contains("intent:") || span.text.contains("suggest:") {
-                let replaced = PLAIN_PREFIX_RE.replace_all(&span.text, "");
+                let replaced = crate::output_parser::strip_plain_prefix_tokens(&span.text);
                 span.text = replaced.into_owned();
             }
         }
@@ -9861,6 +9856,48 @@ mod tests {
             line.spans.is_empty(),
             "plain-prefix suggest should be stripped entirely"
         );
+    }
+
+    /// The drift this closed: the local copy of the grammar knew only the two
+    /// Ink bullets, so every Codex-decorated token TUIC parsed was shown to the
+    /// user anyway. One grammar, in `output_parser`, now serves both.
+    #[test]
+    fn test_strip_structural_tokens_knows_the_codex_bullets() {
+        for text in [
+            "\u{2022} suggest: Run tests | Check logs | Push",
+            "\u{25E6} intent: ricostruisco il modello",
+        ] {
+            let mut line = LogLine {
+                spans: vec![LogSpan {
+                    text: text.into(),
+                    ..Default::default()
+                }],
+                cols: 0,
+                chrome: false,
+            };
+            line.strip_structural_tokens();
+            assert!(
+                line.spans.is_empty(),
+                "a Codex-bulleted token must be stripped too: {text:?}"
+            );
+        }
+    }
+
+    /// The ack is the agent's own greeting and the user is meant to read it;
+    /// only the marker riding behind it is a wire token.
+    #[test]
+    fn test_strip_structural_tokens_keeps_the_ack_sentence() {
+        let mut line = LogLine {
+            spans: vec![LogSpan {
+                text: "\u{2022} TUICommander v1.7.7 is connected. intent: fixing the parser (Fix)"
+                    .into(),
+                ..Default::default()
+            }],
+            cols: 0,
+            chrome: false,
+        };
+        line.strip_structural_tokens();
+        assert_eq!(line.spans[0].text, "TUICommander v1.7.7 is connected. ");
     }
 
     #[test]
