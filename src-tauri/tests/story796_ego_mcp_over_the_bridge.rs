@@ -45,31 +45,42 @@ fn the_synthesised_entry_runs_our_own_bridge() {
 
 /// A named instance must reach its own socket, not Boss's.
 ///
-/// The bridge resolves the socket from the config directory, and
-/// `TUIC_APP_INSTANCE` is what moves that directory. ego is our child and the
-/// bridge is ego's child, so the variable would usually be inherited twice
-/// over — but "usually" is the whole risk: an agent that spawns its MCP
-/// servers with a scrubbed environment would silently point a test instance at
-/// the production socket, and every repo-mutating call would land there.
+/// `TUIC_APP_INSTANCE` used to be the variable here, and the bridge never read
+/// it: `tuic-bridge` resolves `TUIC_SOCKET`, then `<config dir>/mcp.sock`, then
+/// any `mcp-*.sock` beside it, while a named instance binds
+/// `$TMPDIR/tuic-mcp-<sha>.sock`. With both instances running, ego drove the
+/// DEFAULT one — a test build steering Boss's repositories. The bound path is
+/// also the only answer that survives a primary socket already held, where this
+/// process binds a `-<pid>` alternative no id could have predicted.
 #[test]
-fn a_named_instance_is_carried_to_the_bridge_rather_than_left_to_inheritance() {
-    let server = tuicommander_mcp_server(Some(PathBuf::from("/opt/tuic/tuic-bridge")), Some("qa"))
-        .expect("a located bridge must yield an entry");
+fn the_bound_socket_is_carried_to_the_bridge_rather_than_left_to_its_own_search() {
+    let server = tuicommander_mcp_server(
+        Some(PathBuf::from("/opt/tuic/tuic-bridge")),
+        Some(std::path::Path::new("/tmp/tuic-mcp-0badc0de.sock")),
+    )
+    .expect("a located bridge must yield an entry");
 
     let value = serde_json::to_value(&server).expect("the entry must serialize");
     assert_eq!(
         value.get("env"),
-        Some(&serde_json::json!([{ "name": "TUIC_APP_INSTANCE", "value": "qa" }])),
-        "the instance id must travel with the entry: {value}"
+        Some(&serde_json::json!([
+            { "name": "TUIC_SOCKET", "value": "/tmp/tuic-mcp-0badc0de.sock" }
+        ])),
+        "the bound socket must travel with the entry: {value}"
+    );
+    let env = value["env"].to_string();
+    assert!(
+        !env.contains("TUIC_APP_INSTANCE"),
+        "the instance id is not what the bridge reads, and sending it says otherwise: {env}"
     );
 }
 
-/// The default instance carries no variable, rather than an empty one.
+/// No socket bound yet means no variable, rather than an empty one.
 ///
-/// `select_app_instance_from_env` treats a blank value as unset, so forwarding
-/// `TUIC_APP_INSTANCE=""` would be a no-op with one more way to be misread.
+/// An empty `TUIC_SOCKET` is not "search as usual" to the bridge — it is a path
+/// it will try and fail to connect to. Absent is the honest answer.
 #[test]
-fn the_default_instance_sets_no_environment_at_all() {
+fn an_unbound_socket_sets_no_environment_at_all() {
     let server = tuicommander_mcp_server(Some(PathBuf::from("/opt/tuic/tuic-bridge")), None)
         .expect("a located bridge must yield an entry");
 
@@ -86,8 +97,12 @@ fn the_default_instance_sets_no_environment_at_all() {
 fn a_missing_bridge_yields_no_entry_rather_than_a_command_that_cannot_run() {
     assert!(tuicommander_mcp_server(None, None).is_none());
     assert!(
-        tuicommander_mcp_server(None, Some("qa")).is_none(),
-        "an instance id is not a substitute for a binary"
+        tuicommander_mcp_server(
+            None,
+            Some(std::path::Path::new("/tmp/tuic-mcp-0badc0de.sock"))
+        )
+        .is_none(),
+        "a bound socket is not a substitute for a binary"
     );
 }
 

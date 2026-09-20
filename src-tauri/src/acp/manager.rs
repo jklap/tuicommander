@@ -80,6 +80,15 @@ pub struct AcpClientManager {
     /// the session wire shape depend on whether the machine running the suite
     /// happened to have a `tuic-bridge` on its `PATH`.
     bridge: Mutex<Option<PathBuf>>,
+    /// The MCP socket this process actually bound, handed to the bridge as
+    /// `TUIC_SOCKET`.
+    ///
+    /// Learned rather than derived: the path a named instance *would* bind is
+    /// computable, but the one it *did* bind is not — a primary socket already
+    /// held makes the binder fall back to a `-<pid>` alternative. `None` until
+    /// the socket is up, and on a platform that binds none at all; the bridge
+    /// then searches as it always did.
+    socket: Mutex<Option<PathBuf>>,
 }
 
 impl Default for AcpClientManager {
@@ -125,7 +134,14 @@ impl AcpClientManager {
             next_generation: AtomicU64::new(INITIAL_GENERATION),
             notices,
             bridge: Mutex::new(crate::agent_mcp::locate_bridge_binary()),
+            socket: Mutex::new(None),
         }
+    }
+
+    /// Record the MCP socket this process bound, so every session granted from
+    /// now on points the bridge at THIS instance.
+    pub fn set_socket_path(&self, socket: Option<PathBuf>) {
+        *self.socket.lock() = socket;
     }
 
     /// Name the bridge binary sessions are given.
@@ -147,12 +163,11 @@ impl AcpClientManager {
     /// layer up; this is the layer that makes a Rust caller unable to do it
     /// either.
     fn granted(&self, mut authority: AcpSessionAuthority) -> AcpSessionAuthority {
-        authority.mcp_servers = tuicommander_mcp_server(
-            self.bridge.lock().clone(),
-            crate::app_instance::current_app_instance().named_id(),
-        )
-        .into_iter()
-        .collect();
+        let socket = self.socket.lock().clone();
+        authority.mcp_servers =
+            tuicommander_mcp_server(self.bridge.lock().clone(), socket.as_deref())
+                .into_iter()
+                .collect();
         authority
     }
 

@@ -8,6 +8,25 @@
 
 # To Test
 
+## Ego reaches this instance and the collapsed tool surface (#802-4c43, 2026-09-21) — **Rust, needs a `make dev` restart**
+
+The ego MCP entry carried `TUIC_APP_INSTANCE`, which `tuic-bridge` never reads,
+so with a named instance running beside the default one ego drove the DEFAULT
+instance. It now carries `TUIC_SOCKET` set to the socket this process bound.
+Separately, `tools/list` preferred the session flag over the per-request `_meta`
+identity, so ego was handed the full catalogue after `server/discover` had
+advertised the collapsed one.
+
+- [ ] Start a named test instance (`TUIC_APP_INSTANCE=tuic-test make dev`) while
+      Boss's install is running. Open the AI Chat panel there and ask ego to list
+      the sessions: it must report the test instance's sessions, not Boss's.
+- [ ] In that same conversation ask ego which tools it has. It must name
+      `search_tools`, `get_tool_schema`, `call_tool` and `progress` — four, not
+      the full catalogue.
+- [ ] Kill nothing and start a second copy so the primary socket is already held:
+      ego in the second copy still reaches the second copy (it binds a `-<pid>`
+      socket, and the entry carries that path).
+
 ## Mirrored remote events stay remote (#801-d34e, 2026-09-21) — **Rust, needs a `make dev` restart**
 
 A mirrored event was indistinguishable from a local one, so a remote daemon's

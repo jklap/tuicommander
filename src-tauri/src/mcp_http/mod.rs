@@ -2045,6 +2045,11 @@ pub(crate) async fn spawn_ipc_listener(state: &Arc<AppState>, mcp_enabled: bool)
             Ok(initial_uds) => {
                 tracing::info!(source = "mcp_http", path = %sock.display(), "Unix socket listening");
                 *state.bound_socket_path.write() = sock.clone();
+                // An ego session's one MCP server is `tuic-bridge` pointed at
+                // THIS socket. Told rather than searched for: the bridge's own
+                // search finds the default instance's socket, which is the wrong
+                // instance whenever this one is named or bound an alternative.
+                state.acp.set_socket_path(Some(sock.clone()));
                 // Watchdog task: if axum::serve() returns unexpectedly, rebind
                 // and restart. No shutdown signal — this task runs until the
                 // process exits.

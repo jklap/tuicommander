@@ -237,7 +237,7 @@ fn a_session_authority_without_servers_is_accepted_and_reaches_nothing_yet() {
 /// A stdio entry serializes to a different set of keys than the HTTP one it
 /// replaced, and this file exists because the Rust enum is the one reader that
 /// never sees them. The behaviour behind the entry — which binary, which
-/// instance, and what a missing bridge does — is story 796's.
+/// socket, and what a missing bridge does — is story 796's.
 #[test]
 fn the_synthesised_entry_names_our_bridge_as_a_command() {
     let server = tuicommander_lib::acp::tuicommander_mcp_server(
@@ -258,7 +258,7 @@ fn the_synthesised_entry_names_our_bridge_as_a_command() {
     assert_eq!(
         value.get("args"),
         Some(&json!([])),
-        "the bridge finds the socket from the config directory, so it takes no \
+        "the socket travels in the environment, so the command takes no \
          arguments: {value}"
     );
 }
