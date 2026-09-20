@@ -1610,10 +1610,10 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - Per-plugin error logging with ring buffer (500 entries)
 - Capability-gated access: `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
 - CLI execution API: sandboxed execution of whitelisted CLI binaries (`mdkb`) with timeout and size limits
-- Filesystem API: sandboxed text read, base64 binary read, write, rename, list, tail-read, and watch operations restricted to `$HOME`
+- Filesystem API: sandboxed text read, base64 binary read, write, rename, list, tail-read, and watch operations restricted to `$HOME`; binary reads keep a 10 MiB default and accept a per-call budget capped at 512 MiB
 - HTTP API: outbound requests scoped to manifest-declared URL patterns (SSRF prevention)
 - Credential API: cross-platform credential reading (macOS Keychain, Linux/Windows JSON file) with user consent
-- Panel API: rich HTML panels in sandboxed iframes (`sandbox="allow-scripts"`) with structured message bridge (`onMessage`/`send`) and automatic CSS theme variable injection
+- Panel API: rich HTML panels in sandboxed iframes (`sandbox="allow-scripts allow-same-origin"`) with structured message bridge (`onMessage`/`send`), transferable buffer ownership, and automatic CSS theme variable injection
 - Shared ticker system: `setTicker`/`clearTicker` API with source labels, priority tiers (low <10, normal 10-99, urgent >=100), counter badge, click-to-cycle, right-click popover
 - Agent-scoped plugins: `agentTypes` manifest field restricts output watchers and structured events to terminals running specific agents (e.g. `["claude"]`)
 - Output watchers match in Rust on the PTY reader thread: the frontend pushes its pattern set (`set_plugin_output_watchers`), Rust assembles and cleans the lines, and the WebView is only woken for a line that matched. Rust is the only line assembler, so a watcher that registers mid-line still sees that line whole. A pattern the Rust `regex` crate cannot express (lookaround, backreferences) is reported back and keeps matching in the WebView, which then receives every line
@@ -1635,6 +1635,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - Install/update via download URL
 - `docx-preview` plugin: previews Word `.docx`/`.dotx` files as clean HTML using Mammoth.js
 - `xlsx-preview` plugin: previews Excel `.xlsx`/`.xlsm`/`.xlsb`/`.xls` and OpenDocument `.ods` spreadsheets as sortable per-sheet tables using SheetJS
+- `sqlite-viewer` plugin: opens `.db`, `.sqlite`, `.sqlite3`, `.db3`, and `.s3db` files in a self-contained sql.js/WebAssembly viewer with schema and index browsing, per-column filters, sorting, native pagination, bounded read-only queries, visual query plans, CSV copy, and explicit atomic inline-edit saves for primary-key tables
 
 ### 17.4 Deep Links (`tuic://`)
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)

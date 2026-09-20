@@ -1413,6 +1413,14 @@ describe("transport", () => {
 			const rfb = mapCommandToHttp("plugin_read_file_base64", { pluginId: "my-plugin", path: "/home/user/f.docx" });
 			expect(rfb.method).toBe("GET");
 			expect(rfb.path).toBe("/api/plugins/my-plugin/fs/read-base64?path=%2Fhome%2Fuser%2Ff.docx");
+			const largeRfb = mapCommandToHttp("plugin_read_file_base64", {
+				pluginId: "my-plugin",
+				path: "/home/user/database.sqlite",
+				maxBytes: 268_435_456,
+			});
+			expect(largeRfb.path).toBe(
+				"/api/plugins/my-plugin/fs/read-base64?path=%2Fhome%2Fuser%2Fdatabase.sqlite&maxBytes=268435456",
+			);
 
 			// plugin_read_file_tail
 			const tail = mapCommandToHttp("plugin_read_file_tail", {
@@ -1445,6 +1453,20 @@ describe("transport", () => {
 			expect(wf.method).toBe("POST");
 			expect(wf.path).toBe("/api/plugins/my-plugin/fs/write");
 			expect(wf.body).toEqual({ path: "/home/user/out.txt", content: "hello" });
+
+			const binaryWrite = mapCommandToHttp("plugin_write_file_base64", {
+				pluginId: "my-plugin",
+				path: "/home/user/database.sqlite",
+				content: "U1FMaXRl",
+				maxBytes: 268435456,
+			});
+			expect(binaryWrite.method).toBe("POST");
+			expect(binaryWrite.path).toBe("/api/plugins/my-plugin/fs/write-base64");
+			expect(binaryWrite.body).toEqual({
+				path: "/home/user/database.sqlite",
+				content: "U1FMaXRl",
+				maxBytes: 268435456,
+			});
 
 			// plugin_rename_path
 			const rn = mapCommandToHttp("plugin_rename_path", {

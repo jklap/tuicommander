@@ -509,7 +509,8 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `plugin_read_file` | `path, plugin_id` | `String` | Read file as UTF-8 (within $HOME, 10 MB limit) |
-| `plugin_read_file_base64` | `path, plugin_id` | `String` | Read file bytes as base64 (within $HOME, 10 MB limit) |
+| `plugin_read_file_base64` | `path, max_bytes?, plugin_id` | `String` | Read file bytes as base64 within `$HOME`; default 10 MiB, positive custom budgets clamped to 512 MiB |
+| `plugin_write_file_base64` | `path, content, max_bytes?, plugin_id` | `()` | Atomically replace a file from base64 bytes within `$HOME`; default 10 MiB, positive custom budgets clamped to 512 MiB |
 | `plugin_read_file_tail` | `path, max_bytes, plugin_id` | `String` | Read last N bytes of file, skip partial first line |
 | `plugin_list_directory` | `path, pattern?, plugin_id` | `Vec<String>` | List filenames in directory (optional glob filter) |
 | `plugin_watch_path` | `path, plugin_id, recursive?, debounce_ms?` | `String` (watch ID) | Start watching path for changes |

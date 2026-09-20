@@ -454,8 +454,8 @@ export interface PanelHandle {
 	isVisible(): boolean;
 	/** Close the panel tab */
 	close(): void;
-	/** Send a message to the iframe via postMessage */
-	send(data: unknown): void;
+	/** Send a message to the iframe via postMessage, optionally transferring ownership. */
+	send(data: unknown, transfer?: Transferable[]): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -697,8 +697,8 @@ export interface PluginHost {
 	 */
 	readFiles(absolutePaths: string[]): Promise<(string | null)[]>;
 
-	/** Read a file as base64-encoded bytes. Path must be absolute and within $HOME. Requires "fs:read". */
-	readFileBase64(absolutePath: string): Promise<string>;
+	/** Read a file as base64 bytes. Defaults to 10 MiB; maxBytes is positive and host-capped at 512 MiB. Requires "fs:read". */
+	readFileBase64(absolutePath: string, options?: { maxBytes?: number }): Promise<string>;
 
 	/**
 	 * Read the last N bytes of a file, skipping partial first line.
@@ -717,6 +717,9 @@ export interface PluginHost {
 
 	/** Write content to a file. Path must be absolute and within $HOME. Requires "fs:write". */
 	writeFile(absolutePath: string, content: string): Promise<void>;
+
+	/** Atomically write Base64 bytes. Defaults to 10 MiB; maxBytes is host-capped at 512 MiB. Requires "fs:write". */
+	writeFileBase64(absolutePath: string, content: string, options?: { maxBytes?: number }): Promise<void>;
 
 	/**
 	 * Rename/move a file. Both paths must be absolute and within $HOME. Requires "fs:rename".

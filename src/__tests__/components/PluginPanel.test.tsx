@@ -135,6 +135,20 @@ describe("PluginPanel", () => {
 		expect(pluginRegistry.registerPanelSendChannel).toHaveBeenCalledWith("tab-1", expect.any(Function));
 	});
 
+	it("forwards transferable ownership through iframe postMessage", () => {
+		const tab = makeTab();
+		const { container } = render(() => <PluginPanel tab={tab} />);
+		const iframe = container.querySelector("iframe");
+		expect(iframe?.contentWindow).toBeTruthy();
+		const postMessage = vi.spyOn(iframe!.contentWindow!, "postMessage").mockImplementation(() => undefined);
+		const send = vi.mocked(pluginRegistry.registerPanelSendChannel).mock.calls.at(-1)?.[1];
+		const buffer = new ArrayBuffer(4);
+
+		send?.({ type: "database", buffer }, [buffer]);
+
+		expect(postMessage).toHaveBeenCalledWith({ type: "database", buffer }, "*", [buffer]);
+	});
+
 	it("unregisters send channel via pluginRegistry on unmount", () => {
 		const tab = makeTab();
 		const { unmount } = render(() => <PluginPanel tab={tab} />);
