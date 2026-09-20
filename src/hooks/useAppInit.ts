@@ -11,6 +11,7 @@ import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
+import { remoteConnectionsStore } from "../stores/remoteConnections";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
@@ -321,6 +322,14 @@ export async function initApp(deps: AppInitDeps) {
 		appLogger.error("app", "Store hydration failed", err);
 		deps.setStatusInfo("Warning: store(s) failed to load");
 	}
+
+	// Remote machines, at startup rather than when the Settings panel opens.
+	// Hydration used to be owned by RemoteMachinesPanel, so until the user walked
+	// into Settings the store was empty and nothing else could tell a live machine
+	// from a dead one — including the repos registered on it, whose every
+	// operation fails while the sidebar still shows them as ordinary.
+	// `hydrate()` is idempotent, so the panel may still call it.
+	void remoteConnectionsStore.hydrate();
 
 	// Load themes from Rust backend, then apply immediately — the createEffect
 	// in App.tsx fires synchronously before this async onMount completes.

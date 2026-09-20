@@ -541,6 +541,17 @@
   white-space: nowrap;
 }
 
+/* A remote repo whose machine is not answering. The repo stays in the sidebar —
+   it is still registered — but every operation on it will fail, and the user has
+   to be able to see that here rather than discover it in Settings. */
+.remoteBadgeError {
+  color: var(--error);
+}
+
+.remoteBadgeConnecting {
+  color: var(--warning, var(--fg-muted));
+}
+
 /* Branch group — wraps a branch row + its collapsible terminal tab list.
    When expanded, hovering anywhere over the block lifts the whole group as a
    unified card (DIA-style), while individual items keep their own stronger hover. */
