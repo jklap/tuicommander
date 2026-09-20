@@ -64,12 +64,34 @@ Rust. The codec is unit-tested on both sides and the framing end to end against 
 mock socket; what no test reaches is a real browser inflating a real socket, and
 a real ssh process.
 
-- [ ] From a **second machine** (or a phone on the LAN), open the web UI against this daemon's IP and attach a terminal. In devtools → Network → the `stream` socket, the URL must carry `compress=deflate`, every message must be **Binary**, and the terminal must paint and stay live. Run something noisy (`yes | head -100000`) and watch the socket's byte counter — it should be a small fraction of what the same run costs locally.
+- [x] From a **second machine** (or a phone on the LAN), open the web UI against this daemon's IP and attach a terminal. In devtools → Network → the `stream` socket, the URL must carry `compress=deflate`, every message must be **Binary**, and the terminal must paint and stay live. Run something noisy (`yes | head -100000`) and watch the socket's byte counter — it should be a small fraction of what the same run costs locally.
+      _(verified 2026-09-20, server side, against a headless `tuic-remote` on mac-mint
+      reached from this Mac — a genuine non-loopback peer. A raw RFC6455 client
+      (`scripts/ws-stream-probe.mjs`) asked for `?compress=deflate` and read the opcodes: every
+      payload arrived as a **Binary** WS frame carrying the tag byte, 2 of 9 tagged
+      `TextDeflate`, and **1849 bytes on the wire inflated to 4832** with 0 decode
+      errors. The same workload with no `compress=` cost 4859 bytes for 4859 bytes of
+      content, so the saving is 62% and the untagged path is untouched. **Still
+      uncovered: a real browser running the app's own decoder** — this proves the
+      server's framing, not the frontend's inflate.)_
 - [ ] Same devtools panel, from a browser on **this** machine at `localhost:9876`: the URL must have **no** `compress=` at all and the messages must still be a mix of Binary and Text. This is the local path, and it must be untouched.
+      _(NOTE 2026-09-20: the server half is proven — a socket that sends no `compress=`
+      gets genuine untagged Text frames, byte for byte the old framing. What is still
+      open here is the **frontend's** choice not to ask on a local connection, which no
+      HTTP probe can see.)_
 - [ ] Resize the remote terminal, scroll it, and let the agent repaint a full screen. No stale rows, no torn frames — a mis-ordered inflate would show as rows from an older screen surviving under a newer one.
-- [ ] `curl` the daemon's log after a remote session: no `WsTransport could not decode a compressed frame` lines. One would mean the tags disagree.
+- [x] `curl` the daemon's log after a remote session: no `WsTransport could not decode a compressed frame` lines. One would mean the tags disagree.
+      _(verified 2026-09-20: zero occurrences in the daemon log after the remote,
+      loopback and untagged runs above, and the client decoded every deflated frame it
+      received — `decode_errors: 0` on all three.)_
 - [ ] Settings → Services → SSH Tunnels → edit a profile: **Compress the channel (ssh -C)** is on. Save, start the tunnel, and confirm with `ps ax | grep "[s]sh -N"` that the command line holds `-o Compression=yes`. Untick it, restart the tunnel, confirm `Compression=no`.
 - [ ] Open a repository through an **SSH remote connection** and attach a terminal. The stream socket asks for `compress=deflate` (the client sees a remote connection) but the daemon answers identity tags because the peer is loopback — the terminal must still work, and the saving comes from the tunnel instead.
+      _(NOTE 2026-09-20: the **daemon half is proven** — the same probe run on mac-mint
+      against `127.0.0.1:9879` with `?compress=deflate` got 10 tagged frames and **not
+      one** `TextDeflate`, where a remote peer on the identical workload got 2. The
+      wire cost was 4905 bytes for 4895 bytes of content: exactly the 10 tag bytes and
+      nothing else. What is left is the tunnel wiring that puts a real client on the
+      loopback side of it.)_
 
 ## Smart Prompts `api` mode runs on ego (story `787-ee50`, 2026-09-20) — **Rust, needs a `make dev` restart**
 
@@ -1999,7 +2021,7 @@ talking to a `tuic-remote` daemon got **404 on the whole Progress feature** — 
 route at all, which looked like an auth failure. Tests cover route existence;
 these check the live surface.
 
-- [ ] Start a headless daemon: `TUIC_APP_INSTANCE=remote-check tuic-remote`, then
+- [x] Start a headless daemon: `TUIC_APP_INSTANCE=remote-check tuic-remote`, then
       `curl -u <user>:<pass> -X POST 'http://127.0.0.1:<port>/progress/list'`.
       It must answer with a list body, not 404.
       _(NOTE 2026-09-18: `/progress/status` was deleted by `6b925e04` — probing it
@@ -2007,8 +2029,18 @@ these check the live surface.
       four: `/progress/{report,list,delete,viewed}`, all POST, and all still inside
       `shared_routes()` at `mcp_http/mod.rs:708-723`, so the property this item
       exists to protect is intact. Use `/progress/list`.)_
-- [ ] Same call with **no** credentials from a non-loopback address must still be
+      _(verified 2026-09-20 against a headless `tuic-remote` on mac-mint:
+      `POST /progress/list?path=/home/stefano` with credentials answers **200**
+      `{"project":"/home/stefano","entries":[]}`. The control that makes this mean
+      something: `POST /progress/nonexistent` with the same credentials answers **404**,
+      so the 200 is a registered route and not a catch-all.)_
+- [x] Same call with **no** credentials from a non-loopback address must still be
       rejected by the auth middleware — the move must not have widened access.
+      _(verified 2026-09-20: the same POST from this Mac to mac-mint — a genuine
+      non-loopback peer — answers **401** with no credentials and **401** with a wrong
+      password, while `GET /health` answers 200 unauthenticated, which is the one route
+      documented as open. The headless build has no loopback bypass, so this also holds
+      from the daemon's own localhost.)_
 - [ ] On the desktop instance, the Progress **dialog** must behave exactly as
       before: the routes are merged into `build_router` through `shared_routes()`
       now, so a regression here shows up as the dialog 404ing on every call.
@@ -2403,6 +2435,61 @@ restart, not before.
       the PTY map under the peer's `$TUIC_SESSION`, which only matches for a
       spawned child. The same fix also gives `ui action=tab` and `ui
       action=toast` the right repo badge in those tabs.
+- [ ] **Needs a `make dev` restart (Rust).** An agent that writes the ack and its
+      first `intent:` as one sentence run (`TUICommander v1.7.7 is connected.
+      intent: … (Title)`) now sets the tab title and the Progress journal row
+      instead of being dropped entirely; the same for an intent long enough that
+      the agent's own wrapping pushes the `(Title)` onto the next row. Prose is
+      still rejected — `Ready when you are. intent: x` must NOT set a title.
+
+## Remote repo browser (2026-09-20) — frontend only, Vite HMR picks it up
+
+`RemoteRepoPicker` replaces the "type the absolute path" prompt when adding a
+repository from a connected machine. No Rust changed, so HMR is enough — but
+nothing here is reachable until a remote connection reads **Connected**, which
+needs the `make dev` restart that #781-9652 is waiting on.
+
+- [ ] With **no** machine connected, the sidebar `+` must behave exactly as before:
+      straight to the local native dialog, no menu. The picker must not appear.
+- [ ] With mac-mint connected, `+` opens the menu; picking it opens the browser
+      showing `/` on **mac-mint**, not this Mac. Compare against
+      `ssh mac-mint ls /`.
+- [ ] Walk to `/home/stefano/Gits`, press **Add This Folder** on a real repo. It
+      lands in the sidebar with the remote badge, and its git status is the remote
+      machine's.
+- [ ] Only folders are listed — no files.
+- [ ] Type a path that does not exist on mac-mint into the field and press Enter:
+      the daemon's own message must show, not an empty folder.
+- [ ] Close the picker and reopen it for the same machine: it must resume where it
+      was left, not at `/`.
+- [ ] **[VISUAL]** The list scrolls inside the dialog without breaking its layout
+      on a directory with many entries (`/usr/lib` is a good one).
+
+## Orchestrator RESULT wake with background work (#797-8549) — needs a `make dev` restart
+
+- [x] After restarting `make dev`, leave an orchestrator at its confirmed-ready,
+      empty composer while one background descendant is still running, then have
+      a child send `RESULT`. The send must report
+      `delivery_path=wake_notification_and_inbox`; the parent must receive only
+      the generic `agent action=inbox` notice, and the inbox must contain one
+      untouched RESULT.
+      _(verified 2026-09-21: a delayed `tuic agent send` ran as the live Codex
+      process's background descendant. After this turn yielded, TUIC injected only
+      `[TUIC] message available`, the sender received
+      `wake_notification_and_inbox`, and `agent action=inbox` returned exactly one
+      untouched `RESULT live-wake-797-8549`.)_
+- [ ] Repeat with text partially typed in the parent composer: the route must be
+      `inbox_only` and the draft must remain unchanged. The focused Rust regression
+      covers this mechanically; this item retains the live composer check.
+
+## `tuic agent send` accepts current delivery reports (#800-18c6) — needs a sidecar rebuild
+
+- [ ] After the next `make dev` or sidecar rebuild, run the installed
+      `/usr/local/bin/tuic agent send` against a busy registered peer. It must exit
+      0 and print `Buffered … (inbox_only)`, not `Registry did not accept the
+      message`. The freshly built `target/debug/tuic` already passed this exact
+      live check; this item verifies that the installed sidecar has caught up.
+
 ## SQLite Viewer plugin host primitives — needs a `make dev` restart (#797-a4bd)
 
 - [x] Open a `.db` fixture from the File Browser and confirm the themed object
@@ -2417,3 +2504,42 @@ restart, not before.
 - [x] Close and reopen the SQLite tab and confirm a fresh iframe/database viewer
       is created. _(verified in the isolated instance; pending-load cleanup is
       also covered by `main.test.js`.)_
+
+## Remote machine reachability is visible outside Settings
+
+Boss added a repo from mac-mint, the daemon went unreachable, and the only place
+that said so was Settings -> Remote Machines. Frontend-only, so Vite HMR already
+has it: no `make dev` restart needed.
+
+- [ ] With a remote machine in `error`/`disconnected` and at least one repo
+      registered on it, the status bar shows `Offline: <machine>` in red, and the
+      tooltip points at Settings -> Remote Machines.
+- [ ] The sidebar badge on that repo reads `offline` in red instead of `remote`,
+      and its tooltip names the machine and its state.
+- [ ] Reconnect the machine: the status-bar pill disappears and the badge goes
+      back to a muted `remote` without a reload.
+- [ ] A remote machine with NO registered repo must NOT appear in the status bar
+      while disconnected — that is its normal resting state.
+
+## Adding a remote repo must open ONE tab, not two (`usePty` pre-registration)
+
+Observed: adding `/home/stefano/omi-local-stack` from mac-mint opened `shell 1`
+plus a phantom `PTY: Session 17`. Both were the same remote PTY — the desktop
+create is routed over HTTP to the daemon, whose `session-created` echo was not
+deduped because the guard keyed on `isTauri()` instead of "is this call routed
+to a remote connection". Covered by two new tests in `usePty.test.ts`.
+
+- [ ] Add a repo from a connected remote machine. Exactly one shell tab appears.
+- [ ] Adding a LOCAL repo still opens one tab and the backend still mints the id.
+
+### Root cause found while testing the above
+
+`remoteConnectionsStore.hydrate()` was called from exactly one place —
+`RemoteMachinesPanel.tsx`. Until the user opened Settings -> Remote Machines the
+store held nothing, so the status bar, the sidebar badge and `Sidebar.tsx`'s own
+`getConnections()` read an empty map and could not tell a live machine from a
+dead one. Now hydrated once at startup in `useAppInit`; `hydrate()` is
+idempotent, so the panel still calls it.
+
+- [ ] Start the app WITHOUT opening Settings. A down remote machine holding a
+      repo must already show `Offline: <name>` in the status bar.
