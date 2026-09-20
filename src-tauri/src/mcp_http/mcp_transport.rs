@@ -11991,6 +11991,69 @@ mod tests {
         );
     }
 
+    /// Which name gets the collapsed surface, and — the load-bearing half —
+    /// which does not.
+    ///
+    /// The other half of this contract is
+    /// `the_downstream_client_name_is_forwarded_and_not_replaced_by_the_bridges_own`
+    /// in `tuic-bridge`. ego reaches TUICommander through that bridge
+    /// (#796-7fa3), and the bridge opens its own transport session before
+    /// proxying ego's `initialize`. So the two names below are the two bodies
+    /// that arrive on one session, in that order, and only the second may
+    /// decide the surface.
+    ///
+    /// `tuic-bridge` asserting `false` is the point. If it read `true` the test
+    /// would pass whether or not the forwarding worked, and the regression this
+    /// pair exists to catch — every ego turn silently carrying the full
+    /// catalogue, 35.104 tokens against 615 — would be invisible from both
+    /// sides at once.
+    #[test]
+    fn the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded() {
+        assert!(client_requires_meta_tools(Some("ego")));
+        assert!(
+            !client_requires_meta_tools(Some("tuic-bridge")),
+            "the transport hop must not earn the collapsed surface by itself, or \
+             a broken forwarding would look identical to a working one"
+        );
+        assert!(!client_requires_meta_tools(Some("claude-code")));
+        assert!(!client_requires_meta_tools(None));
+
+        // Grok is here for the same reason and a different one: one `__`
+        // delimiter, not token cost. Both routes end at the same surface.
+        assert!(client_requires_meta_tools(Some("grok-shell-1")));
+    }
+
+    /// What ego actually receives, rather than only which flag was computed.
+    ///
+    /// The collapsed surface is three meta-tools plus `progress`, which stays
+    /// directly callable because reporting must not require a discovery call
+    /// first. Everything else is reachable through `call_tool`, so this is a
+    /// smaller list and not a smaller capability.
+    #[test]
+    fn the_collapsed_surface_is_the_meta_tools_plus_progress() {
+        let state = test_state();
+
+        let collapsed = tool_names(&merged_tool_definitions_for_mode(&state, None, true));
+        assert_eq!(
+            collapsed,
+            ["search_tools", "get_tool_schema", "call_tool", "progress"]
+                .map(String::from)
+                .to_vec(),
+            "ego must get the discovery surface, not the catalogue"
+        );
+
+        let full = tool_names(&merged_tool_definitions_for_mode(&state, None, false));
+        assert!(
+            full.len() > collapsed.len(),
+            "the uncollapsed surface must be the larger one, or this test proves \
+             nothing about the saving: {full:?}"
+        );
+        assert!(
+            full.iter().any(|name| name == "session"),
+            "the uncollapsed surface is the native catalogue: {full:?}"
+        );
+    }
+
     #[tokio::test]
     async fn progress_persists_before_emitting_and_each_report_is_its_own_entry() {
         let config = tempfile::tempdir().unwrap();
