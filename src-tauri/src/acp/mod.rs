@@ -130,21 +130,31 @@ pub const TUICOMMANDER_MCP_SERVER_NAME: &str = "tuicommander";
 /// every PTY agent, so reaching ego the same way costs no listener and couples
 /// nothing to a remote-access switch.
 ///
-/// `instance` travels as an environment variable rather than being left to
-/// inheritance: the bridge resolves the socket from the config directory, and a
-/// named instance whose id failed to reach it would talk to the default
-/// instance's socket instead — a test build driving Boss's repositories.
+/// The **bound** socket travels as `TUIC_SOCKET` rather than being left to the
+/// bridge's own search. `TUIC_APP_INSTANCE` used to be sent instead, and nothing
+/// read it: `tuic-bridge` resolves `TUIC_SOCKET`, then `<config dir>/mcp.sock`,
+/// then any `mcp-*.sock` beside it, while a named instance binds
+/// `$TMPDIR/tuic-mcp-<sha>.sock`. With a named instance and the default instance
+/// both running, ego therefore drove the DEFAULT one — a test build steering
+/// Boss's repositories, which is the exact failure this paragraph used to claim
+/// was prevented. The bound path also covers the case the id could not: a
+/// primary socket already held makes this process bind the `-<pid>` alternative.
 ///
 /// A process in the middle does not cost ego its identity, and that matters
 /// more than it looks: `client_requires_meta_tools` gives the name `ego` the
 /// collapsed tool surface, worth 35.104 tokens a turn against 615 at 190 tools.
-/// The bridge opens the transport session under its own name but then proxies
-/// the downstream `initialize` verbatim (`handle_initialize`), so the
-/// `clientInfo` TUICommander reads is still ego's. Two tests hold that from
-/// both ends, because either one alone passes while the contract is broken:
+/// Ego speaks the stateless 2026-07-28 lifecycle: it never sends `initialize`,
+/// so `handle_initialize` is not on its path at all. It names itself in the
+/// `_meta` `clientInfo` of **every** request, the bridge proxies that block
+/// verbatim, and `merged_tool_definitions` lets that per-request identity decide
+/// the surface — the session `tuic-bridge` opened under its own name is only the
+/// fallback for a legacy client that named itself once. Three tests hold it,
+/// because no one of them fails alone:
 /// `the_downstream_client_name_is_forwarded_and_not_replaced_by_the_bridges_own`
-/// in `tuic-bridge`, and `the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded`
-/// in `mcp_http::mcp_transport`.
+/// in `tuic-bridge`, `the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded`
+/// in `mcp_http::mcp_transport`, and
+/// `a_bridge_session_reused_by_ego_still_lists_the_collapsed_surface`, which is
+/// the one that drives a real `tuic-bridge` session id through `tools/list`.
 ///
 /// `None` when the bridge is not where we can see it, for the same reason port
 /// 0 used to yield `None`: an entry that cannot run makes ego report a server
@@ -152,17 +162,20 @@ pub const TUICOMMANDER_MCP_SERVER_NAME: &str = "tuicommander";
 #[must_use]
 pub fn tuicommander_mcp_server(
     bridge: Option<std::path::PathBuf>,
-    instance: Option<&str>,
+    socket: Option<&std::path::Path>,
 ) -> Option<v1::McpServer> {
     let mut server = v1::McpServerStdio::new(TUICOMMANDER_MCP_SERVER_NAME, bridge?);
-    if let Some(id) = instance {
-        server = server.env(vec![v1::EnvVariable::new(
-            crate::app_instance::APP_INSTANCE_ENV_VAR,
-            id,
-        )]);
+    if let Some(socket) = socket.and_then(|s| s.to_str()) {
+        server = server.env(vec![v1::EnvVariable::new(BRIDGE_SOCKET_ENV_VAR, socket)]);
     }
     Some(v1::McpServer::Stdio(server))
 }
+
+/// The variable `tuic-bridge` reads to skip its own socket search.
+///
+/// Named here because this is the only producer; the bridge is a separate
+/// crate, so the two ends agree by spelling and by the story796 contract test.
+pub const BRIDGE_SOCKET_ENV_VAR: &str = "TUIC_SOCKET";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgoAcpConfig {

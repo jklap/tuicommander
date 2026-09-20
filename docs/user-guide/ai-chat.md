@@ -34,7 +34,9 @@ beside it moves between them.
 ego reaches terminals and repositories the way any external agent does: by
 calling TUICommander's own MCP server. The entry for it is built by
 TUICommander, not by whoever opened the session, so a conversation can never be
-pointed at some other endpoint.
+pointed at some other endpoint. It also names the socket **this** copy of
+TUICommander bound, so a second copy started with `TUIC_APP_INSTANCE=<id>` drives
+its own terminals and repositories rather than the default install's.
 
 ## During a turn
 

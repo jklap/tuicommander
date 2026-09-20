@@ -457,6 +457,13 @@ anyone else.
   ego is stateless, so the name is read from each request's `_meta` rather than
   from a handshake.
 
+A request that names a client in `_meta` decides the surface **by itself**; the
+session's remembered flag is the fallback for a legacy client that named itself
+once at `initialize`. The precedence runs that way because ego reaches `/mcp`
+through `tuic-bridge`, which opened the transport session under its own name:
+preferring the session made `server/discover` advertise the collapsed surface and
+the very next `tools/list` deliver the full one, for the identical request.
+
 **Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `disabled_native_tools` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
 
 The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `disabled_native_tools` edit, `collapse_tools` toggle).

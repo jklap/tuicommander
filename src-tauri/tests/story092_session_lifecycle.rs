@@ -444,6 +444,13 @@ async fn a_settled_connection_refuses_session_work_as_transport_closed() {
 /// what is under test is the entry the client writes, not what answers it.
 const BRIDGE: &str = "/opt/tuic/tuic-bridge";
 
+/// The socket this process pretends to have bound.
+///
+/// Any path would do — nothing listens on it during the test. What is under
+/// test is that the path the process *bound* reaches the entry, rather than the
+/// bridge being left to find a socket of its own.
+const SOCKET: &str = "/tmp/tuic-mcp-0badc0de.sock";
+
 /// Every session carries TUICommander, and carries nothing a caller named.
 ///
 /// Both halves of plan §4.5 in one scenario, because they are one rule: the
@@ -456,12 +463,20 @@ const BRIDGE: &str = "/opt/tuic/tuic-bridge";
 /// The intruder is an HTTP entry on purpose: replacement has to hold for a
 /// transport the grant no longer uses, or the test would pass on a list that
 /// merely filtered by shape.
+///
+/// The scenario also pins `TUIC_SOCKET`, because the entry naming our bridge is
+/// only half the grant: the bridge left to its own search finds the DEFAULT
+/// instance's socket, so a named instance would hand ego the wrong machine's
+/// repositories under the right command line.
 #[tokio::test]
 async fn every_session_carries_this_process_and_nothing_a_caller_named() {
     let fixture = Fixture::with("session-new-tuic-mcp");
     fixture
         .manager
         .set_bridge_binary(Some(std::path::PathBuf::from(BRIDGE)));
+    fixture
+        .manager
+        .set_socket_path(Some(std::path::PathBuf::from(SOCKET)));
     let connection = fixture.connect().await;
 
     let intruder = AcpSessionAuthority {

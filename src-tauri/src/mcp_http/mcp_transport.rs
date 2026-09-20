@@ -1382,18 +1382,29 @@ fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
 ///
 /// A stateless caller has no session meta to read `requires_meta_tools` from,
 /// so it says who it is in this request's `_meta` instead — that name arrives
-/// as `stateless_client_name`. The session lookup stays authoritative when
-/// there is a session: a legacy client that recorded its name at `initialize`
-/// does not repeat it per request, and must not lose collapsing because of it.
+/// as `stateless_client_name`. **That identity wins**, and the session flag is
+/// the fallback for a legacy client that recorded its name once at `initialize`
+/// and does not repeat it per request.
+///
+/// The order matters because a session is not always the caller. `tuic-bridge`
+/// opens the transport session under its own name and then proxies ego's
+/// requests through it verbatim, so reading the session first handed ego the
+/// full catalogue — 615 tools against the 35.104 tokens a turn the collapsed
+/// surface costs — while `server/discover`, which reads the request `_meta`,
+/// had just advertised the collapsed one. A handshake that disagrees with the
+/// list that follows it is worse than either answer alone.
 fn merged_tool_definitions(
     state: &Arc<AppState>,
     mcp_session_id: Option<&str>,
     stateless_client_name: Option<&str>,
 ) -> serde_json::Value {
-    let force_meta_tools = mcp_session_id
-        .and_then(|sid| state.mcp.sessions.get(sid))
-        .map(|meta| meta.requires_meta_tools)
-        .unwrap_or_else(|| client_requires_meta_tools(stateless_client_name));
+    let force_meta_tools = match stateless_client_name {
+        // The same expression `server/discover` evaluates for the same request.
+        Some(name) => client_requires_meta_tools(Some(name)),
+        None => mcp_session_id
+            .and_then(|sid| state.mcp.sessions.get(sid))
+            .is_some_and(|meta| meta.requires_meta_tools),
+    };
     merged_tool_definitions_for_mode(state, mcp_session_id, force_meta_tools)
 }
 
@@ -12120,6 +12131,100 @@ mod tests {
         // Grok is here for the same reason and a different one: one `__`
         // delimiter, not token cost. Both routes end at the same surface.
         assert!(client_requires_meta_tools(Some("grok-shell-1")));
+    }
+
+    /// The whole path, end to end: `tuic-bridge` opens the transport session
+    /// under its own name, then proxies ego's `tools/list` through it.
+    ///
+    /// Both halves of the contract have to hold at once, which is why the unit
+    /// tests above could not catch this. `client_requires_meta_tools` was right
+    /// about the names; `merged_tool_definitions` read the *session* first, so
+    /// the bridge's own identity won and ego was handed the catalogue — right
+    /// after `server/discover`, which reads the request `_meta`, had advertised
+    /// the collapsed surface to the very same client.
+    #[tokio::test]
+    async fn a_bridge_session_reused_by_ego_still_lists_the_collapsed_surface() {
+        let state = test_state();
+        // Otherwise every surface collapses and the test proves nothing.
+        assert!(
+            !state.config.read().collapse_tools,
+            "the fixture must start uncollapsed"
+        );
+
+        let initialize = mcp_post(
+            State(Arc::clone(&state)),
+            ConnectInfo(loopback_addr()),
+            HeaderMap::new(),
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": { "name": "tuic-bridge", "version": "test" }
+                }
+            })),
+        )
+        .await
+        .into_response();
+        let session_id = initialize
+            .headers()
+            .get(MCP_SESSION_HEADER)
+            .expect("the bridge's session id")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        async fn list_names(
+            state: &Arc<AppState>,
+            session_id: &str,
+            meta: serde_json::Value,
+        ) -> Vec<String> {
+            let mut headers = HeaderMap::new();
+            headers.insert(MCP_SESSION_HEADER, session_id.parse().unwrap());
+            let response = mcp_post(
+                State(Arc::clone(state)),
+                ConnectInfo(loopback_addr()),
+                headers,
+                Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/list",
+                    "params": { "_meta": meta }
+                })),
+            )
+            .await
+            .into_response();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            tool_names(&parsed["result"]["tools"])
+        }
+
+        let ego = list_names(
+            &state,
+            &session_id,
+            serde_json::json!({ CLIENT_INFO_META_KEY: { "name": "ego", "version": "test" } }),
+        )
+        .await;
+        assert_eq!(
+            ego,
+            ["search_tools", "get_tool_schema", "call_tool", "progress"]
+                .map(String::from)
+                .to_vec(),
+            "ego named itself in this request's _meta and must get the collapsed surface"
+        );
+
+        // The control, and the reason this is not "tools/list always collapses":
+        // the same session, with no identity on the request, is still the legacy
+        // client the session recorded — `tuic-bridge`, which earns nothing.
+        let bridge = list_names(&state, &session_id, serde_json::json!({})).await;
+        assert!(
+            bridge.len() > ego.len() && bridge.iter().any(|name| name == "session"),
+            "a request with no identity falls back to the session flag: {bridge:?}"
+        );
     }
 
     /// What ego actually receives, rather than only which flag was computed.
