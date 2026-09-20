@@ -4450,7 +4450,7 @@ fn handle_messaging(
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "Use blocking waits instead of polling: agent action=wait (wakes on new mail; the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited|awaiting_input, session_id, exit_code?, prompt?}. This is not task output. awaiting_input means the child hit an interactive prompt and is parked with nobody at its keyboard — it will NOT progress until you answer it with session action=input (the `prompt` field carries the question). Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer tuic_session | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle may submit one coalesced, payload-free wake instructing `agent action=inbox`, while working, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
+                    "send": "agent action=send to=<peer tuic_session | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
@@ -4657,7 +4657,7 @@ fn handle_messaging(
                     object.insert(
                         "warning".to_string(),
                         serde_json::json!(if managed_recipient {
-                            "The orchestrator is not authoritatively idle/completed and has no active wait. The message remains inbox-only until it reads the inbox."
+                            "The orchestrator has no active wait or safely claimable composer. The message remains inbox-only until it reads the inbox."
                         } else {
                             "Recipient has NO terminal and no active wait: nothing will wake it. The message stays in its inbox until it calls agent action=wait/inbox. If you need an answer, do not block on it."
                         }),
@@ -11408,6 +11408,105 @@ mod tests {
             state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
             "secret peer payload"
         );
+    }
+
+    /// A background descendant describes task ownership, not composer safety.
+    /// The live regression had an empty, confirmed-ready composer and an idle
+    /// shell, but `background_work` kept the derived agent state `working` and
+    /// stranded a child's RESULT in the inbox without waking the parent.
+    #[cfg(unix)]
+    #[test]
+    fn ready_orchestrator_with_background_work_receives_generic_mail_wake() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "orchestrator", "mcp-recipient");
+        state.orchestrator_peers.insert(TEST_UUID_B.to_string());
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "codex");
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .expect("orchestrator session state")
+            .background_work = true;
+
+        let before = state.session_state_with_shell(TEST_UUID_B).unwrap();
+        assert_eq!(before.shell_state.as_deref(), Some("idle"));
+        assert_eq!(before.agent_state.as_deref(), Some("working"));
+        assert!(crate::pty::should_inject_now(&state, TEST_UUID_B));
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "RESULT\nsecret child payload",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(result["delivery_path"], "wake_notification_and_inbox");
+        assert_eq!(result["delivered"], true);
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("generic wake should submit a new turn");
+        assert!(output.contains("message available"), "{output:?}");
+        assert!(output.contains("agent action=inbox"), "{output:?}");
+        assert!(
+            !output.contains("secret child payload"),
+            "the child payload must remain in the inbox: {output:?}"
+        );
+        let inbox = state.agent_inbox.get(TEST_UUID_B).unwrap();
+        assert_eq!(
+            inbox.len(),
+            1,
+            "the authoritative RESULT must be stored once"
+        );
+        assert_eq!(inbox[0].content, "RESULT\nsecret child payload");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_work_does_not_override_a_nonquiescent_composer() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "orchestrator", "mcp-recipient");
+        state.orchestrator_peers.insert(TEST_UUID_B.to_string());
+        let _submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "codex");
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .expect("orchestrator session state")
+            .background_work = true;
+        let mut composer = crate::input_line_buffer::InputLineBuffer::new();
+        composer.feed("Boss draft");
+        state
+            .session_maps
+            .input_buffers
+            .insert(TEST_UUID_B.to_string(), Mutex::new(composer));
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "RESULT\ndo not splice this into the draft",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(result["delivery_path"], "inbox_only");
+        assert_eq!(result["delivered"], false);
+        assert!(
+            state
+                .pending_injections
+                .get(TEST_UUID_B)
+                .is_none_or(|pending| pending.is_empty()),
+            "an orchestrator wake must never queue behind partial input"
+        );
+        assert_eq!(state.agent_inbox.get(TEST_UUID_B).unwrap().len(), 1);
     }
 
     #[cfg(unix)]

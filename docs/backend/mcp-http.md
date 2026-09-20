@@ -1143,8 +1143,13 @@ top-level `count` is gone: the array's own length already reports it. Its routin
 child-lifecycle message remains in the authoritative inbox, and peer payloads
 never enter its channel, active turn, pending-injection queue, or composer. An
 active `agent wait` owns delivery and suppresses terminal wake. Without a waiter,
-only canonical `idle` or `completed` lifecycle may submit the payload-free notification
-`[TUIC] message available — read it with: agent action=inbox`.
+canonical `idle` or `completed` lifecycle may submit the payload-free notification
+`[TUIC] message available — read it with: agent action=inbox`. A derived `working`
+state may submit the same notice only when the existing composer-safety gate proves
+the shell is idle, readiness is confirmed, and no question or partial input owns the
+composer. This covers reconciled background descendants without weakening the
+gate for an active turn. A pending process probe still waits for its existing
+settlement retry before a wake is eligible.
 
 One exception, and it is narrow: when *every* message in the reserved window is a
 server-authored lifecycle notification (`tuic-auto-*`), the notice types those
@@ -1157,7 +1162,7 @@ message in the window disqualifies the whole group back to the generic notice:
 a partial summary would satisfy the reader and silently bury the rest. The
 summary also falls back when it would exceed 240 characters. Mail that coalesces
 *while* the summary is being typed falls outside the acknowledged window and
-earns its own notice. Working,
+earns its own notice. Busy or otherwise non-quiescent working sessions,
 awaiting-input, starting, missing, and unknown state fail closed to inbox-only.
 Mail received while working remains eligible and is re-evaluated at the next
 authoritative idle/completed transition. One pending wake covers later unread
@@ -1285,7 +1290,7 @@ requests (`focus=false`) do not change repository context.
    external generated peers omit `recipient_state`.
 4. **Receive** — three layers, most-immediate first:
    - **Channel push**: real-time `notifications/claude/channel` only when an ordinary managed Claude Code recipient already has a working turn and holds an SSE stream (CC + channels flag). A managed non-Claude worker, or an idle/completed Claude worker, uses PTY delivery even if its MCP bridge has an SSE stream. Registered orchestrators never receive peer payloads through this channel.
-   - **PTY injection**: for an ordinary idle or completed managed agent, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it submits a real next turn without polling. A busy ordinary recipient without active Claude channel support gets the message on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead. An idle/completed orchestrator receives only the generic inbox wake described above; a busy orchestrator is never queued or steered.
+   - **PTY injection**: for an ordinary idle or completed managed agent, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it submits a real next turn without polling. A busy ordinary recipient without active Claude channel support gets the message on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead. An idle/completed orchestrator receives only the generic inbox wake described above; so does a confirmed-ready, empty composer whose task state remains working only because of background work. A busy, questioning, or partially typed orchestrator is never queued or steered.
    - **Inbox poll**: `agent action=inbox` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
