@@ -889,11 +889,11 @@ mod tests {
     #[cfg(unix)]
     use std::path::PathBuf;
     #[cfg(unix)]
-    use std::sync::Arc;
-    #[cfg(unix)]
     use std::sync::atomic::AtomicUsize;
     #[cfg(unix)]
     use std::sync::atomic::Ordering;
+    #[cfg(unix)]
+    use std::sync::{Arc, Mutex};
     #[cfg(unix)]
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
@@ -941,6 +941,12 @@ mod tests {
         max_in_flight: AtomicUsize,
         initializes: AtomicUsize,
         tool_calls: AtomicUsize,
+        /// Every `initialize` body the bridge posted, in order.
+        ///
+        /// Counting them proves a reconnect did not storm; reading them is the
+        /// only way to prove the *downstream* client's identity survived the
+        /// hop, which is what decides the tool surface TUIC serves it.
+        initialize_bodies: std::sync::Mutex<Vec<String>>,
     }
 
     /// Mock TUIC IPC endpoint. Answers `initialize` with a session id and any other
@@ -979,6 +985,11 @@ mod tests {
                     // The SSE listener opens a GET /mcp stream; only count RPC posts.
                     if text.contains("\"initialize\"") {
                         stats.initializes.fetch_add(1, Ordering::SeqCst);
+                        stats
+                            .initialize_bodies
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(text.to_string());
                     } else if text.contains("tools/call") {
                         stats.tool_calls.fetch_add(1, Ordering::SeqCst);
                     }
@@ -1158,6 +1169,59 @@ mod tests {
         assert!(
             state.downstream_initialize().is_some(),
             "the downstream initialize must be retained for replay after a restart"
+        );
+    }
+
+    /// The downstream client's own identity reaches TUIC through the bridge.
+    ///
+    /// Half of a two-sided contract; the other half is
+    /// `the_collapsed_surface_is_decided_by_the_name_the_bridge_forwarded` in
+    /// `mcp_http::mcp_transport`. TUIC decides which tool surface to serve from
+    /// `clientInfo.name` — ego gets three meta-tools instead of the whole
+    /// catalogue, measured at 615 tokens a turn against 35.104. The bridge opens
+    /// its transport session under its *own* name, so if it answered the
+    /// downstream `initialize` locally, or rewrote it, every client behind it
+    /// would read as `tuic-bridge` and ego would silently start paying for the
+    /// full catalogue on every model call. Nothing else fails when that breaks.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_downstream_client_name_is_forwarded_and_not_replaced_by_the_bridges_own() {
+        let mock = start_mock_ipc(0).await;
+        let state = Arc::new(BridgeState::new());
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tx.send(
+            r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ego","version":"1.2.3"}}}"#
+                .to_string(),
+        )
+        .unwrap();
+        drop(tx);
+
+        dispatch_loop(Arc::clone(&state), rx).await;
+
+        let bodies = mock
+            .stats
+            .initialize_bodies
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "expected the bridge's own session establishment plus the proxied \
+             downstream initialize, got {bodies:?}"
+        );
+        assert!(
+            bodies[0].contains("\"name\":\"tuic-bridge\""),
+            "the first initialize opens the transport session under the bridge's \
+             own name: {}",
+            bodies[0]
+        );
+        assert!(
+            bodies[1].contains("\"name\":\"ego\""),
+            "the downstream initialize must reach TUIC carrying the client's own \
+             name, or TUIC serves it the wrong tool surface: {}",
+            bodies[1]
         );
     }
 
