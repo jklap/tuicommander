@@ -11,6 +11,10 @@ use std::num::NonZero;
 use std::time::Duration;
 
 const SAMPLE_RATE: u32 = 48_000;
+/// Keep the device fed with zeroes after the audible source ends. Without this,
+/// CoreAudio can tear down the short-lived stream on a non-silent hardware
+/// buffer boundary and produce a click after the chime.
+const OUTPUT_SETTLE_DURATION: Duration = Duration::from_millis(100);
 
 /// Notification sound types — mirrors the TypeScript `NotificationSound` union.
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
@@ -220,11 +224,12 @@ impl EnvelopedTone {
         } else {
             // Linear ramp down: 1 -> 0
             let release_len = self.total_samples - self.sustain_end;
-            if release_len == 0 {
+            let last_release_index = release_len.saturating_sub(1);
+            if last_release_index == 0 {
                 return 0.0;
             }
             let release_pos = i - self.sustain_end;
-            1.0 - (release_pos as f32 / release_len as f32)
+            1.0 - (release_pos as f32 / last_release_index as f32)
         }
     }
 
@@ -375,6 +380,17 @@ pub(crate) fn play(sound: NotificationSound, volume: f32, device_name: Option<St
             }
         }
 
+        // The audible source ends at exactly zero, then the stream remains open
+        // through several device buffers. Dropping it immediately after the last
+        // tone caused a relay-like crackle on macOS audio outputs.
+        player.append(
+            rodio::source::Zero::new(
+                NonZero::new(1).expect("one channel is non-zero"),
+                NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
+            )
+            .take_duration(OUTPUT_SETTLE_DURATION),
+        );
+
         player.sleep_until_end();
     });
 }
@@ -466,10 +482,14 @@ mod tests {
             "Expected ~0.5 at mid-release, got {env}"
         );
 
-        // At the very end, should be ~0
+        // The final emitted sample must be exactly silent. Merely approaching
+        // zero still leaves a discontinuity when the source is detached.
         tone.sample_index = total - 1;
         let env = tone.envelope();
-        assert!(env < 0.05, "Expected ~0 at end of release, got {env}");
+        assert!(
+            env.abs() < f32::EPSILON,
+            "Expected 0 at end of release, got {env}"
+        );
     }
 
     #[test]

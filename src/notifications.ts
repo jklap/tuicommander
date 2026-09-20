@@ -57,8 +57,8 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
  *  AudioContext restrictions entirely. */
 export class NotificationManager {
 	private config: NotificationConfig;
-	private lastPlayTime: Map<NotificationSound, number> = new Map();
-	private readonly minInterval = 500; // Minimum ms between same sound
+	private lastPlayTime: number | null = null;
+	private readonly minInterval = 500; // Minimum ms between notification sounds
 	private consecutiveFailures = 0;
 	private backoffUntil = 0;
 
@@ -80,10 +80,11 @@ export class NotificationManager {
 			// Back off after repeated failures (exponential: 5s, 30s, 5min cap)
 			if (now < this.backoffUntil) return;
 
-			// Rate limit: prevent spam
-			const lastPlay = this.lastPlayTime.get(sound) || 0;
-			if (now - lastPlay < this.minInterval) return;
-			this.lastPlayTime.set(sound, now);
+			// One audio output serves every notification type. A per-sound limit let
+			// completion, question, and attention tones start on separate native
+			// threads and overlap during a burst, so throttle the shared output.
+			if (this.lastPlayTime !== null && now - this.lastPlayTime < this.minInterval) return;
+			this.lastPlayTime = now;
 		}
 
 		try {
