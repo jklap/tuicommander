@@ -144,10 +144,29 @@ fn register_call(id: u64, arguments: Value) -> Value {
     })
 }
 
+/// Validate the current registry send contract without reviving removed
+/// compatibility fields. Both delivered and inbox-only routes are accepted:
+/// the boolean describes whether something surfaced the message, not whether
+/// the registry stored it.
+fn validate_delivery_report(payload: Value) -> Result<Value, String> {
+    let valid = payload.get("message_id").and_then(Value::as_str).is_some()
+        && payload.get("delivered").and_then(Value::as_bool).is_some()
+        && payload
+            .get("delivery_path")
+            .and_then(Value::as_str)
+            .is_some();
+    if valid {
+        Ok(payload)
+    } else {
+        Err(format!("Registry returned a malformed delivery report: {payload}"))
+    }
+}
+
 /// Deliver `message` to peer `to` through the registry.
 ///
-/// Returns the delivery report so the caller can print the route. `accepted`
-/// alone only means "buffered", so callers must not treat it as delivery.
+/// Returns the delivery report so the caller can print the route. The current
+/// contract is `message_id` + `delivered` + `delivery_path`; the removed
+/// `accepted` field must not be required by this client.
 pub fn agent_send(to: &str, message: &str) -> Result<Value, String> {
     let mcp_session = connect()?;
     let call = json!({
@@ -161,10 +180,7 @@ pub fn agent_send(to: &str, message: &str) -> Result<Value, String> {
     });
     let resp = post(&call, Some(&mcp_session))?;
     let payload = unwrap_tool_result(&resp)?;
-    if payload.get("accepted").and_then(Value::as_bool) != Some(true) {
-        return Err(format!("Registry did not accept the message: {payload}"));
-    }
-    Ok(payload)
+    validate_delivery_report(payload)
 }
 
 #[cfg(test)]
@@ -234,7 +250,12 @@ mod tests {
 
     #[test]
     fn a_live_route_reads_as_delivered() {
-        let report = json!({ "delivered": true, "delivery_path": "sse_channel_and_inbox" });
+        let report = json!({
+            "message_id": "message-1",
+            "delivered": true,
+            "delivery_path": "sse_channel_and_inbox",
+        });
+        let report = validate_delivery_report(report).expect("valid current contract");
         assert_eq!(
             delivery_line("peer-1", &report),
             "Delivered to peer-1 (sse_channel_and_inbox)"
@@ -247,11 +268,12 @@ mod tests {
     #[test]
     fn an_inbox_only_route_is_never_announced_as_delivered() {
         let report = json!({
-            "accepted": true,
+            "message_id": "message-1",
             "delivered": false,
             "delivery_path": "inbox_only",
             "warning": "Recipient has no live channel",
         });
+        let report = validate_delivery_report(report).expect("valid inbox-only contract");
         let line = delivery_line("peer-1", &report);
         assert!(!line.contains("Delivered"), "{line}");
         assert!(line.contains("inbox_only"), "{line}");
@@ -263,6 +285,16 @@ mod tests {
     fn a_report_without_a_delivered_flag_is_not_delivered() {
         let line = delivery_line("peer-1", &json!({ "accepted": true }));
         assert!(!line.contains("Delivered"), "{line}");
+    }
+
+    #[test]
+    fn a_malformed_delivery_report_is_rejected() {
+        let error = validate_delivery_report(json!({
+            "message_id": "message-1",
+            "delivery_path": "wake_notification_and_inbox",
+        }))
+        .unwrap_err();
+        assert!(error.contains("malformed delivery report"), "{error}");
     }
 
     #[test]

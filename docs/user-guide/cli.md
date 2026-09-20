@@ -158,7 +158,9 @@ warning: Recipient has NO terminal and no active wait: nothing will wake it. …
 means the registry took the message but nothing will wake the recipient: it sits
 unread until that peer calls `agent action=wait`/`inbox`. Both exit 0, because
 the registry accepted the message in both cases — do not block on an answer
-after a `Buffered` line.
+after a `Buffered` line. The CLI validates this current report contract through
+`message_id`, `delivered`, and `delivery_path`; it does not require the removed
+`accepted` compatibility field.
 
 `tuic agent type` keeps the agent-safe framing: the text and the Enter are sent
 as **separate** PTY writes, because a raw-mode Ink TUI treats a combined
