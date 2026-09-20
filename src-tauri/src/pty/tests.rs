@@ -14344,8 +14344,15 @@ fn chunk_trace_matches_recorded_baseline() {
             trace.ring_len
         );
         let expected = match fixture {
+            // The `intent` at 225 was ABSENT from the 2026-09-05 recording, and
+            // its absence was the defect, not the baseline: this capture holds
+            // `TUICommander v1.7.4 is connected. intent: Conto da 1 a 5.
+            // (Count)` — the two markers the protocol forces into the same
+            // first message, written as one sentence run. A column-0-only
+            // anchor captured nothing at all from it. See
+            // `the_ack_prefixed_intent_reaches_a_session` below for the text.
             "grok-1.0.5-minimal-turn.tcap" => {
-                "[(0, [\"shell-state\"]), (225, [\"status-line\"])] \
+                "[(0, [\"shell-state\"]), (225, [\"status-line\", \"intent\"])] \
                  shell=Some(1) q=None sig=None alt=false ring=28282"
             }
             "claude-quoted-ink-footer.tcap" => {
@@ -14368,6 +14375,32 @@ fn chunk_trace_matches_recorded_baseline() {
             "{fixture}: the chunk path changed what a session observes"
         );
     }
+}
+
+/// The baseline above records event TYPES; a tab title is made of the text.
+/// This replays the same recorded grok turn through the same real chunk path
+/// and asserts what the session actually reads out of an ack-prefixed intent —
+/// body and `(title)` split at the right place, with the ack sentence gone.
+#[test]
+fn the_ack_prefixed_intent_reaches_a_session() {
+    let bytes = agent_prompt_fixture("grok-1.0.5-minimal-turn.tcap");
+    let trace = trace_capture_through_process_chunk(&bytes, Some("grok"));
+    let intent = trace
+        .per_chunk_events
+        .iter()
+        .flatten()
+        .find(|e| e.get("type").and_then(|t| t.as_str()) == Some("intent"))
+        .expect("the recorded turn declares an intent");
+    assert_eq!(
+        intent.get("text").and_then(|t| t.as_str()),
+        Some("Conto da 1 a 5."),
+        "the ack sentence must not survive into the intent body"
+    );
+    assert_eq!(
+        intent.get("title").and_then(|t| t.as_str()),
+        Some("Count"),
+        "the (title) is the tab name — losing it is the whole cost of the bug"
+    );
 }
 
 /// Screens the fixtures do not contain: a choice dialog, an Ink question

@@ -7905,10 +7905,31 @@ fn summarize_lifecycle_group(
     (summary.chars().count() <= ORCHESTRATOR_SUMMARY_MAX_CHARS).then_some(summary)
 }
 
-/// Submit one notification only when the registered parent's canonical
-/// lifecycle still says idle/completed. Unlike ordinary managed-peer delivery,
-/// a lost idle race is never queued: working and unknown lifecycle states
-/// remain inbox-only and are not steered on a later transition.
+/// Whether the orchestrator may safely receive a new, payload-free turn.
+///
+/// Canonical idle/completed lifecycle remains sufficient. A derived `working`
+/// state can also be safe when it comes only from background work: in that
+/// case the stricter composer gate proves the shell is idle, readiness is
+/// confirmed, and neither a question nor partial input owns the composer.
+/// Other lifecycle states fail closed.
+fn orchestrator_mail_wake_allowed(state: &AppState, session_id: &str) -> bool {
+    let Some(session) = state.session_state_with_shell(session_id) else {
+        return false;
+    };
+    match session.agent_state.as_deref() {
+        Some("idle" | "completed") => true,
+        Some("working") => {
+            session.background_work
+                && !session.has_pending_background_probe()
+                && should_inject_now(state, session_id)
+        }
+        _ => false,
+    }
+}
+
+/// Submit one notification only when the registered parent's lifecycle or
+/// confirmed-ready composer says that a new turn is safe. Unlike ordinary
+/// managed-peer delivery, a lost readiness race is never queued.
 ///
 /// The line is either a self-acknowledging lifecycle summary (see
 /// `summarize_lifecycle_group`) or the payload-free generic wake.
@@ -7920,11 +7941,7 @@ fn submit_orchestrator_mail_wake(
 ) -> crate::state::OrchestratorWakeAttemptOutcome {
     use crate::state::OrchestratorWakeAttemptOutcome;
 
-    let wake_allowed = state
-        .session_state_with_shell(session_id)
-        .and_then(|session| session.agent_state)
-        .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
-    if !wake_allowed {
+    if !orchestrator_mail_wake_allowed(state, session_id) {
         return OrchestratorWakeAttemptOutcome::NotStarted;
     }
     #[cfg(unix)]
@@ -7974,9 +7991,7 @@ pub(crate) fn route_registered_orchestrator_mail(
     let pty_session = state.live_pty_for_peer(recipient);
     let wake_allowed = pty_session
         .as_deref()
-        .and_then(|session_id| state.session_state_with_shell(session_id))
-        .and_then(|session| session.agent_state)
-        .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
+        .is_some_and(|session_id| orchestrator_mail_wake_allowed(state, session_id));
     let assignment = state.assign_orchestrator_delivery_with_wake_outcome(
         recipient,
         message_id,
