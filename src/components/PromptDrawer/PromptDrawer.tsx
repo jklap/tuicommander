@@ -772,7 +772,7 @@ const PromptEditor: Component<PromptEditorProps> = (props) => {
 							<option value="inject">Inject into terminal</option>
 							<option value="shell">Shell script (direct run)</option>
 							<option value="headless">Headless (one-shot CLI)</option>
-							<option value="api">API (moving to ego — cannot run yet)</option>
+							<option value="api">API (via ego)</option>
 						</select>
 					</div>
 
