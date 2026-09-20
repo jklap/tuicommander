@@ -47,6 +47,7 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
         session_count,
         protocol_version: 1,
         socket_path,
+        instance_id: crate::app_instance::instance_identity(),
     })
 }
 

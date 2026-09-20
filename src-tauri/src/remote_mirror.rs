@@ -106,6 +106,39 @@ async fn seed(
     response.json().await.map_err(|e| e.to_string())
 }
 
+/// Stamped into every mirrored payload, and the reason a mirrored event cannot
+/// cross a second hop.
+///
+/// Its *presence* is the whole rule: `apply_frame` drops a frame that already
+/// carries one, so a payload can never be marked twice and a hop count would
+/// always read 1. Two machines pointed at each other, or a Direct connection to
+/// this machine's own daemon, therefore stop after one repeat instead of
+/// looping forever — the self-connection check in `remote_runtime::connect`
+/// refuses the second case outright, this is what holds when the loop runs
+/// through a third machine it cannot see.
+pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
+
+/// Mirrored event names the desktop window is allowed to hear.
+///
+/// The window emit uses the daemon's own event name, so an unfiltered mirror
+/// hands a remote machine's `session-created`, `ui-tab`, `worktree-created`,
+/// `worktree-removed` and `repo-changed` to handlers that mutate LOCAL state: a
+/// phantom tab per remote session attached to the local transport, a workspace
+/// written into the local repositories store, git work spawned for a path that
+/// does not exist here. Only these two are session-scoped and idempotent
+/// against a session this client already knows about — the badge push, and the
+/// close that retires it. Everything else still reaches the local bus, where
+/// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
+/// asked for the mirror wants it.
+#[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
+const WINDOW_MIRRORABLE_EVENTS: [&str; 2] = ["session-state-changed", "session-closed"];
+
+/// Whether a mirrored event may be repeated on the desktop window.
+#[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
+fn window_may_hear(event: &str) -> bool {
+    WINDOW_MIRRORABLE_EVENTS.contains(&event)
+}
+
 /// One decoded SSE frame.
 struct Frame {
     event: String,
@@ -119,22 +152,30 @@ struct Frame {
 /// dependency that parses into its own event type would only have to be undone.
 /// Comment lines (`:` keep-alives) and `id:` are dropped — the daemon's ids are
 /// its own counter and mean nothing on this machine.
+///
+/// The buffer holds **bytes**, not text, and a line is decoded only once it is
+/// whole. Decoding each network chunk first is what a naive version did, and a
+/// multibyte character that straddled two chunks was replaced with U+FFFD
+/// before the decoder ever saw it — a corrupted question, tab title or path,
+/// with nothing downstream able to tell it apart from what the daemon sent.
 #[derive(Default)]
 struct FrameDecoder {
-    buffer: String,
+    buffer: Vec<u8>,
     event: Option<String>,
     data: Vec<String>,
 }
 
 impl FrameDecoder {
     /// Append a chunk and return every frame it completed.
-    fn push(&mut self, chunk: &str) -> Vec<Frame> {
-        self.buffer.push_str(chunk);
+    fn push(&mut self, chunk: &[u8]) -> Vec<Frame> {
+        self.buffer.extend_from_slice(chunk);
         let mut frames = Vec::new();
         // A frame ends at a blank line, so the last (possibly partial) line
         // stays in the buffer until more bytes arrive.
-        while let Some(newline) = self.buffer.find('\n') {
-            let line = self.buffer[..newline].trim_end_matches('\r').to_string();
+        while let Some(newline) = self.buffer.iter().position(|b| *b == b'\n') {
+            let raw = &self.buffer[..newline];
+            let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
+            let line = String::from_utf8_lossy(raw).into_owned();
             self.buffer.drain(..=newline);
             if line.is_empty() {
                 if let Some(frame) = self.take_frame() {
@@ -189,6 +230,28 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
         );
         return false;
     };
+    // Only an object can be stamped, and an unstampable payload is an
+    // unstoppable one: it would cross hop after hop with nothing to mark it.
+    // Every event this backend publishes builds a JSON object, so this rejects
+    // nothing a daemon of ours sends.
+    let Some(body) = payload.as_object() else {
+        tracing::warn!(
+            source = "remote",
+            connection = connection_id,
+            event = %frame.event,
+            "Dropping a mirrored event whose body is not a JSON object"
+        );
+        return false;
+    };
+    if body.contains_key(ORIGIN_MARKER) {
+        tracing::debug!(
+            source = "remote",
+            connection = connection_id,
+            event = %frame.event,
+            "Dropping an already-mirrored event rather than repeating it a second hop"
+        );
+        return false;
+    }
     let reseed = match frame.event.as_str() {
         "session-state-changed" => {
             patch_state(state, connection_id, &payload);
@@ -225,9 +288,23 @@ fn patch_state(state: &Arc<AppState>, connection_id: &str, payload: &serde_json:
 ///
 /// The desktop event name is the daemon's own, so a window listener registered
 /// for `session-state-changed` receives a remote one without knowing it exists.
+/// That is also why the window hears only `WINDOW_MIRRORABLE_EVENTS`: a name
+/// the local handlers act on locally must not arrive from another machine.
+///
+/// The payload leaves here stamped with `ORIGIN_MARKER`, which is what stops a
+/// third machine from mirroring it onward.
 fn republish(state: &Arc<AppState>, connection_id: &str, event: &str, payload: serde_json::Value) {
+    let mut payload = payload;
+    if let Some(body) = payload.as_object_mut() {
+        body.insert(
+            ORIGIN_MARKER.to_string(),
+            serde_json::json!({ "connection": connection_id }),
+        );
+    }
     #[cfg(feature = "desktop")]
-    if let Some(app) = state.app_handle.read().as_ref() {
+    if window_may_hear(event)
+        && let Some(app) = state.app_handle.read().as_ref()
+    {
         use tauri::Emitter;
         let _ = app.emit(event, &payload);
     }
@@ -263,8 +340,7 @@ async fn consume_stream(
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&chunk).into_owned();
-        for frame in decoder.push(&text) {
+        for frame in decoder.push(&chunk) {
             if apply_frame(state, connection_id, &frame) {
                 match seed(client, base_url, token).await {
                     Ok(rows) => store_seed(state, connection_id, rows),
@@ -356,6 +432,10 @@ mod tests {
     use crate::state::tests_support::make_test_app_state;
 
     fn frames(chunks: &[&str]) -> Vec<(String, String)> {
+        frame_bytes(&chunks.iter().map(|c| c.as_bytes()).collect::<Vec<_>>())
+    }
+
+    fn frame_bytes(chunks: &[&[u8]]) -> Vec<(String, String)> {
         let mut decoder = FrameDecoder::default();
         let mut out = Vec::new();
         for chunk in chunks {
@@ -415,6 +495,43 @@ mod tests {
             frames(&["event: a\ndata: {\ndata: }\n\n"]),
             vec![("a".to_string(), "{\n}".to_string())]
         );
+    }
+
+    /// Chunk boundaries are the network's business, not the daemon's. A
+    /// character split across two of them used to be replaced with U+FFFD
+    /// before the decoder ever saw it, because each chunk was decoded on
+    /// arrival; the buffer holds bytes now, so the question text survives.
+    #[test]
+    fn a_multibyte_character_split_across_two_chunks_decodes_intact() {
+        let body = "event: session-state-changed\ndata: {\"q\":\"è\"}\n\n".as_bytes();
+        // `è` is 0xC3 0xA8: cut between its two bytes.
+        let split = body
+            .windows(2)
+            .position(|w| w == [0xC3, 0xA8])
+            .expect("the body carries the two-byte character")
+            + 1;
+        assert_eq!(
+            frame_bytes(&[&body[..split], &body[split..]]),
+            vec![(
+                "session-state-changed".to_string(),
+                "{\"q\":\"è\"}".to_string()
+            )]
+        );
+    }
+
+    /// Every emoji, CJK and accented path in the stream, one boundary at a
+    /// time: no cut position may change what comes out.
+    #[test]
+    fn no_chunk_boundary_changes_the_decoded_body() {
+        let body = "event: ui-tab\ndata: {\"t\":\"日本語 — café 🎛\"}\n\n".as_bytes();
+        let whole = frame_bytes(&[body]);
+        for cut in 1..body.len() {
+            assert_eq!(
+                frame_bytes(&[&body[..cut], &body[cut..]]),
+                whole,
+                "a cut at byte {cut} changed the frame"
+            );
+        }
     }
 
     #[test]
@@ -529,6 +646,93 @@ mod tests {
                 data: r#"{"session_id":"s1"}"#.into(),
             }
         ));
+    }
+
+    /// Two hops: A's frame is repeated by B, and what B publishes must not be
+    /// repeatable again. Machine C here is a second `apply_frame` fed B's own
+    /// output — the shape a chain of three machines, or two pointed at each
+    /// other, produces.
+    #[test]
+    fn a_frame_that_was_already_mirrored_does_not_cross_a_second_hop() {
+        let state = Arc::new(make_test_app_state());
+        let mut rx = state.event_bus.subscribe();
+
+        assert!(!apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "pty-activity".into(),
+                data: r#"{"session_id":"s1"}"#.into(),
+            }
+        ));
+        let AppEvent::RemoteMirrored {
+            event,
+            payload: first_hop,
+            ..
+        } = rx.try_recv().expect("the first hop published")
+        else {
+            panic!("expected a mirrored event");
+        };
+        assert_eq!(
+            first_hop[ORIGIN_MARKER]["connection"], "vps",
+            "the first hop must stamp where it came from"
+        );
+
+        // Machine C reads B's `/events` and sees exactly this body.
+        apply_frame(
+            &state,
+            "other-machine",
+            &Frame {
+                event,
+                data: first_hop.to_string(),
+            },
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a mirrored frame must not be mirrored again"
+        );
+    }
+
+    /// The origin marker is only reachable when the body can hold it.
+    #[test]
+    fn a_body_that_is_json_but_not_an_object_is_dropped() {
+        let state = Arc::new(make_test_app_state());
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "pty-activity".into(),
+                data: "[1,2,3]".into(),
+            },
+        );
+        assert!(rx.try_recv().is_err(), "nothing was published");
+    }
+
+    /// The window emit runs the local handlers. `session-created` there builds
+    /// a tab on the local transport for a session this machine does not run;
+    /// `repo-changed` and the worktree pair spawn git work for a path that does
+    /// not exist here. Only the badge pair is safe, and the bus still carries
+    /// everything.
+    #[test]
+    fn only_the_session_scoped_badge_events_reach_the_desktop_window() {
+        for event in ["session-state-changed", "session-closed"] {
+            assert!(window_may_hear(event), "{event} feeds the badge");
+        }
+        for event in [
+            "session-created",
+            "ui-tab",
+            "worktree-created",
+            "worktree-removed",
+            "repo-changed",
+            "head-changed",
+            "repositories-changed",
+        ] {
+            assert!(
+                !window_may_hear(event),
+                "{event} mutates local state and must not arrive from a remote daemon"
+            );
+        }
     }
 
     #[test]

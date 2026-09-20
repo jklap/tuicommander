@@ -222,6 +222,11 @@ Remote connections let you manage `tuic-remote` daemons running on other machine
 4. Set the auth username and password
 5. Save — health polling begins immediately
 
+A URL that points back at the TUICommander you are configuring is refused with
+"this very TUICommander instance — a machine cannot mirror itself". The check
+compares the `instance_id` in `GET /health` against this process's own, so a
+second daemon on the same machine (a different port) is still a valid peer.
+
 ### Authentication
 
 `tuic-remote` authenticates **every** TCP request. The headless build has no

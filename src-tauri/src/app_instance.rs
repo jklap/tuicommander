@@ -140,3 +140,16 @@ pub fn select_app_instance_from_env() -> Result<(), String> {
 pub fn current_app_instance() -> &'static AppInstance {
     APP_INSTANCE.get_or_init(AppInstance::default)
 }
+
+/// Who this *running process* is, on the wire.
+///
+/// Deliberately minted per process rather than derived from the instance id or
+/// the config directory: two daemons on one machine are two legitimate peers,
+/// and what a remote connection must never do is dial the process it is
+/// already running in. `/health` publishes it, and `remote_runtime::connect`
+/// refuses a base URL that answers with this exact value — a self-connection
+/// mirrors every local event back onto the bus that produced it.
+pub fn instance_identity() -> &'static str {
+    static IDENTITY: OnceLock<String> = OnceLock::new();
+    IDENTITY.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}

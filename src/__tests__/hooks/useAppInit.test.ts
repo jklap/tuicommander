@@ -439,6 +439,41 @@ describe("initApp", () => {
 		expect(terminal?.backgroundWork).toBe(true);
 	});
 
+	/// A daemon on another machine publishes `session-created` for its own PTYs,
+	/// and `remote_mirror.rs` repeats the whole stream. Building a tab for one
+	/// attaches this client's transport to a PTY this machine does not run — the
+	/// phantom `PTY: Session N` beside the real tab. The mirrored session is
+	/// already listed as a row carrying its connection id; the marker is what
+	/// tells the two apart.
+	it("ignores a session-created event mirrored from another machine", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+
+		let sessionCreated: ((event: { payload: Record<string, unknown> }) => void) | null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") sessionCreated = handler as typeof sessionCreated;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		await initApp(createMockDeps());
+
+		sessionCreated!({
+			payload: {
+				session_id: "sess-on-mac-mint",
+				cwd: "/home/stefano/omi",
+				__tuic_origin: { connection: "mac-mint" },
+			},
+		});
+		expect(terminalsStore.getCount()).toBe(0);
+
+		// The control: the same event without the marker is a local session and
+		// still opens its tab, so the guard is not "session-created is ignored".
+		sessionCreated!({ payload: { session_id: "sess-local", cwd: "/repo" } });
+		expect(terminalsStore.getCount()).toBe(1);
+	});
+
 	it("does not overwrite a newer shell event while reconciling a deduplicated surviving session", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

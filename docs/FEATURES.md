@@ -2147,6 +2147,9 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - The stream carries **no** `types=` filter, and every frame is repeated on the local bus under the daemon's own event name — a client cannot tell a mirrored event from a local one, so the existing handlers raise the same badge, the same notification and the same queue gate, and a new event type crosses for free
 - Mirrored sessions appear in `list_active_sessions` and `GET /sessions` beside local ones, each carrying `connection_id` — the only field that says which machine runs it
 - The stream is re-seeded after every reconnect, so a gap in the SSE cannot leave a stale badge; losing the connection announces each mirrored session closed and then drops it
+- Every mirrored payload is stamped `__tuic_origin`, and a frame that already carries one is dropped: a mirrored event never crosses a second hop, so two machines pointed at each other stop after one repeat instead of looping. A body that is not a JSON object cannot be stamped and is dropped for the same reason
+- The **desktop window** hears only `session-state-changed` and `session-closed`. Those handlers are session-scoped; `session-created`, `ui-tab`, `worktree-created`, `worktree-removed` and `repo-changed` mutate local state — a phantom tab per remote session, a workspace in the local store, git work on a path this machine does not have. They still reach the local bus and `/events`
+- `connect` refuses a base URL whose `/health` reports this process's own `instance_id`: a machine cannot mirror itself. A daemon too old to publish the field still connects
 
 ---
 
