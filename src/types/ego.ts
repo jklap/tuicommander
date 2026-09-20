@@ -1,0 +1,58 @@
+/**
+ * What `ego_cli.rs` sends the Providers tab.
+ *
+ * A mirror of the Rust types, not a second opinion about them: the join
+ * between ego's three commands — which provider a model belongs to, which
+ * credential a provider has, which model is the default — is computed in Rust
+ * and arrives finished. Nothing here reshapes it.
+ */
+
+/** Whether a provider can be used, as `ego doctor` reported it. */
+export type EgoCredential =
+	| { state: "stored"; detail: string }
+	/** ego refreshes this by itself on its next run; nobody has to log in again. */
+	| { state: "expired"; detail: string }
+	| { state: "missing" }
+	/** doctor could not read the store. Not the same as "nothing is there". */
+	| { state: "unknown"; detail: string };
+
+export interface EgoModel {
+	/** The whole `provider/model` id — what ego stores as its `model` key. */
+	slug: string;
+	/** The half after the first separator. Split in Rust, never here. */
+	name: string;
+	available: boolean;
+	/** Why not, in ego's own words. */
+	unavailable: string | null;
+}
+
+export interface EgoProvider {
+	name: string;
+	credential: EgoCredential;
+	models: EgoModel[];
+}
+
+export interface EgoProviders {
+	/** ego's `model` key: the default a run starts from. */
+	defaultModel: string | null;
+	providers: EgoProvider[];
+}
+
+export type EgoCliErrorCode = "notConfigured" | "invalidInput" | "launchFailed" | "commandFailed" | "unreadableOutput";
+
+/** A failure of the ego command line, carrying what it printed. */
+export interface EgoCliError {
+	code: EgoCliErrorCode;
+	message: string;
+	command: string;
+	stdout: string;
+	stderr: string;
+	exitCode: number | null;
+}
+
+/** Whether a rejected promise carries an ego failure or something else. */
+export function isEgoCliError(value: unknown): value is EgoCliError {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Partial<EgoCliError>;
+	return typeof candidate.code === "string" && typeof candidate.message === "string";
+}

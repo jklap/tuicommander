@@ -19,7 +19,7 @@ const { handlers, mockListen, mockSetLastMenuActionTime, mockSettings, mockStore
 			ui: {
 				toggleSidebar: vi.fn(),
 				toggleMarkdownPanel: vi.fn(),
-				toggleNotesPanel: vi.fn(),
+				toggleIdeasPanel: vi.fn(),
 				toggleFileBrowserPanel: vi.fn(),
 				toggleOutlinePanel: vi.fn(),
 				toggleFocusMode: vi.fn(),

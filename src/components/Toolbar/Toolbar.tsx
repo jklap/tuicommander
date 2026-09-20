@@ -12,7 +12,6 @@ import type { PrNotification } from "../../stores/prNotifications";
 import { type PrNotificationType, prNotificationsStore } from "../../stores/prNotifications";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
-import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { updaterStore } from "../../stores/updater";
@@ -23,7 +22,6 @@ import { getRepoColor } from "../../utils/repoColor";
 import { IdeLauncher } from "../IdeLauncher";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { SmartPromptsDropdown } from "../SmartPromptsDropdown/SmartPromptsDropdown";
-import { WatcherManager } from "../WatcherManager/WatcherManager";
 import s from "./Toolbar.module.css";
 
 function relativeAge(timestamp: number): string {
@@ -139,26 +137,21 @@ export interface ToolbarProps {
 	onRun?: (shiftKey: boolean) => void;
 	onReviewPr?: (repoPath: string, branchName: string, command: string) => void;
 	/** Matches DeepLinkCallbacks.openSettings — `tab` selects which Settings tab opens. */
-	onOpenSettings?: (tab?: string) => void;
+	onOpenSettings?: () => void;
 	onShowWhatsNew?: (version: string) => void;
 }
 
 export const Toolbar: Component<ToolbarProps> = (props) => {
 	const [showNotifPopover, setShowNotifPopover] = createSignal(false);
-	const [showWatcherPopover, setShowWatcherPopover] = createSignal(false);
 	const [prDetailTarget, setPrDetailTarget] = createSignal<{ repoPath: string; branch: string } | null>(null);
 	let notifRef: HTMLDivElement | undefined;
-	let watcherRef: HTMLDivElement | undefined;
 
 	// Close popover on outside click
 	createEffect(() => {
-		if (!showNotifPopover() && !showWatcherPopover()) return;
+		if (!showNotifPopover()) return;
 		const handler = (e: MouseEvent) => {
-			if (showNotifPopover() && notifRef && !notifRef.contains(e.target as Node)) {
+			if (notifRef && !notifRef.contains(e.target as Node)) {
 				setShowNotifPopover(false);
-			}
-			if (showWatcherPopover() && watcherRef && !watcherRef.contains(e.target as Node)) {
-				setShowWatcherPopover(false);
 			}
 		};
 		document.addEventListener("mousedown", handler);
@@ -263,7 +256,6 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 		if (!src) return;
 		setSeenKeys((prev) => new Set(prev).add(lastItemKey(src)));
 		setShowNotifPopover(true);
-		if (showWatcherPopover()) setShowWatcherPopover(false);
 	};
 
 	return (
@@ -453,32 +445,11 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 			</div>
 
 			<div class={s.right}>
-				{/* Notification group: smart prompts + watcher (eye) + last-item pill + bell.
-				    The eye sits left of the pill so the pill and bell stay adjacent —
-				    the pill is a preview of the bell's newest notification. */}
+				{/* Notification group: smart prompts + last-item pill + bell.
+				    The pill is a preview of the bell's newest notification, so the two
+				    stay adjacent. */}
 				<div class={s.notifGroup} ref={notifRef}>
 					<SmartPromptsDropdown repoPath={props.repoPath} onOpenSettings={props.onOpenSettings} />
-
-					{/* Watcher manager (eye) */}
-					<Show when={settingsStore.isAiWatchersEnabled()}>
-						<div ref={watcherRef} style={{ position: "relative", display: "inline-flex", height: "100%" }}>
-							<button
-								class={s.watcherBtn}
-								onClick={() => {
-									setShowWatcherPopover(!showWatcherPopover());
-									if (showNotifPopover()) setShowNotifPopover(false);
-								}}
-								title="Watchers"
-							>
-								<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-									<path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
-								</svg>
-							</button>
-							<Show when={showWatcherPopover()}>
-								<WatcherManager />
-							</Show>
-						</div>
-					</Show>
 
 					{/* Last-item shortcut — only when there are items */}
 					<Show when={lastItem()}>

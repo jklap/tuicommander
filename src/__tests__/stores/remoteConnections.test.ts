@@ -1,19 +1,53 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock only the external boundaries: IPC (invoke), the SSE event bridge, and
-// fetch. The connect/disconnect cleanup sequencing (health-poll interval
-// teardown, bridge cleanup, state reset) is the real logic under test.
-const bridgeCleanup = vi.fn();
-const startBridge = vi.fn((..._args: unknown[]) => bridgeCleanup);
-vi.mock("../../utils/remoteEventBridge", () => ({
-	startRemoteEventBridge: (...args: unknown[]) => startBridge(...args),
+// The connection state machine lives in `remote_runtime.rs` since #790-ef85:
+// health probe, password-for-token exchange, status poll, SSH tunnel and the
+// re-authentication after a daemon restart are all proven there, against a mock
+// daemon (`remote_runtime::tests`). What is left here is a renderer, and these
+// tests assert exactly that — it applies what the backend pushes, asks the
+// backend to act, and does no networking of its own.
+//
+// It opens no stream to the daemon either. Since #791-055e `remote_mirror.rs`
+// consumes the daemon's `/events` and repeats every frame on the local bus, so
+// a remote event reaches this renderer through the ordinary local handlers. The
+// `EventSource` the store used to own was a second, narrower copy of that pipe.
+const eventSourceCtor = vi.fn();
+
+const { invokeMock, subscribeEventsMock } = vi.hoisted(() => ({
+	invokeMock: vi.fn(),
+	subscribeEventsMock: vi.fn(),
 }));
-vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../../invoke", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
+// Partial: `appLogger` pulls `rpc` out of the same module, and a store that
+// warns must not take the transport down with it.
+vi.mock("../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../transport")>()),
+	subscribeEvents: (...args: unknown[]) => subscribeEventsMock(...args),
+}));
+
+// A machine's `agents.json` is cached per connection. Whether the cache is
+// dropped and refilled on a status edge is this store's decision, so it is
+// asserted here; what the registry then does with it belongs to its own tests.
+const { ensureAgentConfigsMock, invalidateAgentConfigsMock } = vi.hoisted(() => ({
+	ensureAgentConfigsMock: vi.fn(() => Promise.resolve({})),
+	invalidateAgentConfigsMock: vi.fn(),
+}));
+vi.mock("../../stores/agentConfigs", () => ({
+	ensureAgentConfigs: (...args: unknown[]) => ensureAgentConfigsMock(...(args as [])),
+	invalidateAgentConfigs: (...args: unknown[]) => invalidateAgentConfigsMock(...(args as [])),
+}));
 
 import type { RemoteConnection } from "../../stores/remoteConnections";
-import { remoteConnectionsStore } from "../../stores/remoteConnections";
 
-const fetchMock = vi.fn();
+type Store = typeof import("../../stores/remoteConnections").remoteConnectionsStore;
+type StatusPayload = {
+	id: string;
+	status: string;
+	base_url?: string;
+	token?: string;
+	protocol_version?: number;
+	error?: string;
+};
 
 function directConn(id: string): RemoteConnection {
 	return {
@@ -25,82 +59,253 @@ function directConn(id: string): RemoteConnection {
 	};
 }
 
-describe("remoteConnectionsStore connect/disconnect (Direct)", () => {
-	beforeEach(() => {
+const connected: StatusPayload = {
+	id: "c1",
+	status: "connected",
+	base_url: "http://remote.test:9876",
+	token: "tok-abc",
+	protocol_version: 2,
+};
+
+describe("remoteConnectionsStore renders what the backend reports", () => {
+	let store: Store;
+	/** The `remote-connection-status` handler the store subscribed with. */
+	let push: (payload: StatusPayload) => void;
+	/** What `remote_connection_statuses` answers during the next hydrate. */
+	let initialStatuses: StatusPayload[];
+	/** Every backend interaction, in order — hydrate's ordering is load bearing. */
+	let calls: string[];
+	const fetchMock = vi.fn();
+
+	beforeEach(async () => {
+		vi.resetModules();
 		vi.useFakeTimers();
-		startBridge.mockClear();
-		bridgeCleanup.mockClear();
+		eventSourceCtor.mockReset();
+		vi.stubGlobal("EventSource", eventSourceCtor);
+		invokeMock.mockReset();
+		subscribeEventsMock.mockReset();
 		fetchMock.mockReset();
-		fetchMock.mockResolvedValue({
-			ok: true,
-			json: async () => ({ protocol_version: 2 }),
-		});
 		vi.stubGlobal("fetch", fetchMock);
+		calls = [];
+		initialStatuses = [];
+
+		subscribeEventsMock.mockImplementation(async (handlers: Record<string, (p: unknown) => void>) => {
+			calls.push("subscribe");
+			push = handlers["remote-connection-status"] as (payload: StatusPayload) => void;
+			return () => {};
+		});
+		invokeMock.mockImplementation((command: string) => {
+			calls.push(command);
+			if (command === "list_remote_connections") return Promise.resolve([directConn("c1")]);
+			if (command === "remote_connection_statuses") return Promise.resolve(initialStatuses);
+			return Promise.resolve(undefined);
+		});
+
+		store = (await import("../../stores/remoteConnections")).remoteConnectionsStore;
 	});
-	afterEach(async () => {
-		// Ensure no health-poll interval leaks between tests.
-		await remoteConnectionsStore.disconnect("c1");
+
+	afterEach(() => {
 		vi.useRealTimers();
 		vi.unstubAllGlobals();
 	});
 
-	async function connect(id: string) {
-		await remoteConnectionsStore.addConnection(directConn(id));
-		await remoteConnectionsStore.connect(id);
-	}
-
-	it("connect sets baseUrl, health-checks, and starts the SSE bridge", async () => {
-		await connect("c1");
-		const st = remoteConnectionsStore.getConnectionState("c1");
-		expect(st?.status).toBe("connected");
-		expect(st?.protocolVersion).toBe(2);
-		expect(remoteConnectionsStore.getBaseUrl("c1")).toBe("http://remote.test:9876");
-		expect(startBridge).toHaveBeenCalledTimes(1);
-		expect(startBridge).toHaveBeenCalledWith("c1", "http://remote.test:9876");
-		// The health poll keeps running on its interval.
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-		await vi.advanceTimersByTimeAsync(5000);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+	it("subscribes before reading the statuses, so a change in between is not lost", async () => {
+		await store.hydrate();
+		expect(calls).toEqual(["list_remote_connections", "subscribe", "remote_connection_statuses"]);
 	});
 
-	it("disconnect stops health polling, tears down the bridge, and resets state", async () => {
-		await connect("c1");
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+	it("hydrate adopts the live status the backend already holds", async () => {
+		initialStatuses = [connected];
+		await store.hydrate();
 
-		await remoteConnectionsStore.disconnect("c1");
-
-		// Bridge cleanup ran exactly once.
-		expect(bridgeCleanup).toHaveBeenCalledTimes(1);
-		// State reset — getBaseUrl only returns a url while connected.
-		const st = remoteConnectionsStore.getConnectionState("c1");
-		expect(st?.status).toBe("disconnected");
-		expect(st?.baseUrl).toBeUndefined();
-		expect(remoteConnectionsStore.getBaseUrl("c1")).toBeUndefined();
-		// The interval is cleared: advancing time triggers no further health fetches.
-		await vi.advanceTimersByTimeAsync(15000);
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(store.getConnectionState("c1")?.status).toBe("connected");
+		expect(store.getBaseUrl("c1")).toBe("http://remote.test:9876");
+		expect(store.getToken("c1")).toBe("tok-abc");
 	});
 
-	it("reconnecting swaps the bridge: the previous cleanup runs before a new bridge", async () => {
-		await connect("c1");
-		expect(startBridge).toHaveBeenCalledTimes(1);
-		// Force a second connect by first marking it disconnected without cleanup…
-		await remoteConnectionsStore.disconnect("c1");
-		bridgeCleanup.mockClear();
-		startBridge.mockClear();
-		await remoteConnectionsStore.connect("c1");
-		expect(startBridge).toHaveBeenCalledTimes(1); // fresh bridge established
-	});
+	describe("once hydrated", () => {
+		beforeEach(async () => {
+			await store.hydrate();
+		});
 
-	it("connect is a no-op when already connected (no duplicate bridge)", async () => {
-		await connect("c1");
-		expect(startBridge).toHaveBeenCalledTimes(1);
-		await remoteConnectionsStore.connect("c1"); // already connected → guarded
-		expect(startBridge).toHaveBeenCalledTimes(1);
-	});
+		it("connect asks the backend and waits: the status arrives as a push", async () => {
+			await store.connect("c1");
 
-	it("disconnect on an unknown connection is a safe no-op", async () => {
-		await expect(remoteConnectionsStore.disconnect("ghost")).resolves.toBeUndefined();
-		expect(bridgeCleanup).not.toHaveBeenCalled();
+			expect(invokeMock).toHaveBeenCalledWith("connect_remote_connection", { id: "c1" });
+			// Nothing moved yet — the renderer does not guess at a status.
+			expect(store.getConnectionState("c1")?.status).toBe("disconnected");
+
+			push({ id: "c1", status: "connecting" });
+			expect(store.getConnectionState("c1")?.status).toBe("connecting");
+
+			push(connected);
+			expect(store.getConnectionState("c1")?.status).toBe("connected");
+			expect(store.getConnectionState("c1")?.protocolVersion).toBe(2);
+		});
+
+		it("does no networking and runs no poll of its own", async () => {
+			await store.connect("c1");
+			push(connected);
+			await vi.advanceTimersByTimeAsync(60_000);
+
+			// The poll is a Rust task now. A second one here would double every
+			// probe and could contradict the backend's own status. The stream is
+			// a Rust task too, so a connected connection opens no `EventSource`.
+			expect(fetchMock).not.toHaveBeenCalled();
+			expect(eventSourceCtor).not.toHaveBeenCalled();
+			const commands = invokeMock.mock.calls.map((c) => c[0]);
+			expect(commands).toEqual(["list_remote_connections", "remote_connection_statuses", "connect_remote_connection"]);
+		});
+
+		it("disconnect forgets the token and tells the backend", async () => {
+			push(connected);
+			expect(store.getToken("c1")).toBe("tok-abc");
+
+			await store.disconnect("c1");
+
+			expect(store.getToken("c1")).toBeUndefined();
+			expect(invokeMock).toHaveBeenCalledWith("disconnect_remote_connection", { id: "c1" });
+
+			// …and the push that follows agrees, without starting anything again.
+			push({ id: "c1", status: "disconnected" });
+			expect(store.getConnectionState("c1")?.status).toBe("disconnected");
+			expect(store.getConnectionState("c1")?.baseUrl).toBeUndefined();
+			expect(store.getBaseUrl("c1")).toBeUndefined();
+		});
+
+		it("reconnecting restores the route the disconnect retracted", () => {
+			push(connected);
+			push({ id: "c1", status: "disconnected" });
+			expect(store.getBaseUrl("c1")).toBeUndefined();
+
+			push(connected);
+			expect(store.getBaseUrl("c1")).toBe("http://remote.test:9876");
+			expect(store.getToken("c1")).toBe("tok-abc");
+		});
+
+		/**
+		 * A run config describes the machine, so the cached copy is only valid
+		 * while this exact daemon is up: it may have been reinstalled, edited, or
+		 * be a different box behind the same name by the time it answers again.
+		 */
+		describe("the machine's agent config follows the connection", () => {
+			beforeEach(() => {
+				ensureAgentConfigsMock.mockClear();
+				invalidateAgentConfigsMock.mockClear();
+			});
+
+			it("reads it once the machine is up, not on every status repeat", () => {
+				push(connected);
+				push(connected);
+
+				expect(ensureAgentConfigsMock).toHaveBeenCalledTimes(1);
+				expect(ensureAgentConfigsMock).toHaveBeenCalledWith("c1");
+			});
+
+			it("drops it when the machine goes away", () => {
+				push(connected);
+				invalidateAgentConfigsMock.mockClear();
+
+				push({ id: "c1", status: "disconnected" });
+
+				expect(invalidateAgentConfigsMock).toHaveBeenCalledWith("c1");
+			});
+
+			it("re-reads it on reconnect rather than trusting the old copy", () => {
+				push(connected);
+				push({ id: "c1", status: "disconnected" });
+				ensureAgentConfigsMock.mockClear();
+				invalidateAgentConfigsMock.mockClear();
+
+				push(connected);
+
+				expect(invalidateAgentConfigsMock).toHaveBeenCalledWith("c1");
+				expect(ensureAgentConfigsMock).toHaveBeenCalledWith("c1");
+			});
+
+			it("drops it when the daemon stops taking the credential", () => {
+				push(connected);
+				invalidateAgentConfigsMock.mockClear();
+
+				push({ id: "c1", status: "unauthenticated" });
+
+				expect(invalidateAgentConfigsMock).toHaveBeenCalledWith("c1");
+			});
+		});
+
+		it("connect on an unknown connection reaches no backend", async () => {
+			await store.connect("ghost");
+			expect(invokeMock).not.toHaveBeenCalledWith("connect_remote_connection", { id: "ghost" });
+		});
+
+		it("disconnect on an unknown connection is a safe no-op", async () => {
+			await expect(store.disconnect("ghost")).resolves.toBeUndefined();
+			expect(invokeMock).not.toHaveBeenCalledWith("disconnect_remote_connection", { id: "ghost" });
+		});
+
+		// The bug the whole feature exists for: `/health` is the only route
+		// tuic-remote serves without a credential, so a client reading "connected"
+		// off it then 401s on every real call. The backend now distinguishes the
+		// two, and the store must render the distinction rather than flatten it.
+		it("an unauthenticated connection routes nothing", () => {
+			push({
+				id: "c1",
+				status: "unauthenticated",
+				error: "The remote daemon rejected these credentials — check the username and password.",
+			});
+
+			const state = store.getConnectionState("c1");
+			expect(state?.status).toBe("unauthenticated");
+			expect(state?.error).toContain("rejected these credentials");
+			expect(store.getBaseUrl("c1")).toBeUndefined();
+			expect(store.getToken("c1")).toBeUndefined();
+		});
+
+		it("a status without a token forgets the one it held", () => {
+			push(connected);
+			expect(store.getToken("c1")).toBe("tok-abc");
+
+			// The daemon restarted and rejected the old token: the backend says so
+			// in one push, and a renderer holding the stale copy would sign calls
+			// with a credential that is already dead.
+			push({ id: "c1", status: "error", error: "Unreachable" });
+			expect(store.getToken("c1")).toBeUndefined();
+			expect(store.getBaseUrl("c1")).toBeUndefined();
+		});
+
+		it("a re-authenticated connection is signed with the new token", () => {
+			push(connected);
+			push({ ...connected, token: "tok-2" });
+
+			expect(store.getToken("c1")).toBe("tok-2");
+			expect(store.getConnectionState("c1")?.status).toBe("connected");
+			expect(store.getBaseUrl("c1")).toBe("http://remote.test:9876");
+		});
+
+		it("a status for a connection this store does not know is dropped", () => {
+			push({ id: "ghost", status: "connected", base_url: "http://ghost:9876", token: "t" });
+			expect(store.getConnectionState("ghost")).toBeUndefined();
+			expect(store.getToken("ghost")).toBeUndefined();
+		});
+
+		it("the password goes to the vault through the backend and is never held here", async () => {
+			await store.setPassword("c1", "s3cret");
+			expect(invokeMock).toHaveBeenCalledWith("set_remote_connection_password", {
+				id: "c1",
+				password: "s3cret",
+			});
+			expect(JSON.stringify(store.getConnections())).not.toContain("s3cret");
+		});
+
+		it("removing a live connection disconnects it first", async () => {
+			push(connected);
+			await store.removeConnection("c1");
+
+			const commands = invokeMock.mock.calls.map((c) => c[0]);
+			expect(commands.indexOf("disconnect_remote_connection")).toBeLessThan(
+				commands.indexOf("delete_remote_connection"),
+			);
+			expect(store.getConnectionState("c1")).toBeUndefined();
+		});
 	});
 });

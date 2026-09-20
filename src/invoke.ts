@@ -12,7 +12,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { appLogger } from "./stores/appLogger";
-import { isTauri, rpc } from "./transport";
+import { isTauri, owningConnectionFor, rpc } from "./transport";
 import { randomId } from "./utils/randomId";
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -59,7 +59,6 @@ const DEDUP_COMMANDS = new Set([
 	"get_last_prompt",
 	"load_config",
 	"load_agents_config",
-	"load_provider_registry",
 	"load_keybindings",
 	"load_notification_config",
 	"load_notes",
@@ -84,6 +83,12 @@ const DEDUP_COMMANDS = new Set([
 
 export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 	if (isTauri()) {
+		// A repository held by another machine is not reachable over this process's
+		// IPC. The desktop path skips rpc() entirely, so it has to ask the same
+		// resolver rpc() asks — otherwise every call from a desktop satellite runs
+		// against the local backend and quietly answers about the wrong disk.
+		const owner = owningConnectionFor(cmd, args ?? {});
+		if (owner) return rpc<T>(cmd, args ?? {}, owner);
 		if (DEDUP_COMMANDS.has(cmd)) {
 			const key = args !== undefined ? `${cmd}:${JSON.stringify(args)}` : cmd;
 			const existing = _inflight.get(key) as Promise<T> | undefined;

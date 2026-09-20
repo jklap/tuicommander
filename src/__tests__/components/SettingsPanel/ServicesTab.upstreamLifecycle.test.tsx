@@ -30,7 +30,9 @@ describe("UpstreamMcpPanel lifecycle", () => {
 		const statusCalls = () =>
 			vi.mocked(rpc).mock.calls.filter(([command]) => command === "get_mcp_upstream_status").length;
 
-		expect(rpc).toHaveBeenCalledWith("load_mcp_upstreams");
+		// The third argument is the machine the panel is editing — `undefined` is
+		// this one, which is where the panel opens.
+		expect(rpc).toHaveBeenCalledWith("load_mcp_upstreams", {}, undefined);
 		expect(statusCalls()).toBe(1);
 
 		await vi.advanceTimersByTimeAsync(3000);

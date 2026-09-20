@@ -1,7 +1,8 @@
-import { batch } from "solid-js";
+import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { AGENT_TYPES } from "../agents";
 import { invoke, listen } from "../invoke";
+import { setRepoConnectionLookup } from "../transportRuntime";
 import type { SavedTerminal } from "../types";
 import { pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { markPerf } from "../utils/perfTrace";
@@ -1972,3 +1973,29 @@ export function placementWorkspaceFor(owner: RepoOwner): string | null {
 	const atRoot = Object.entries(repo.workspaces).find(([, ws]) => ws.worktreePath === owner.repoPath);
 	return atRoot?.[0] ?? null;
 }
+
+/** True while at least one registered repository lives on another machine. */
+function anyRepoIsRemote(): boolean {
+	const repos = repositoriesStore.state.repositories;
+	for (const path in repos) {
+		if (repos[path]?.connectionId) return true;
+	}
+	return false;
+}
+
+// Route repo-scoped calls to the machine that holds the repo. The transport asks
+// this on every call, so a call reaches the right backend without its call site
+// knowing a remote machine exists. Registered here rather than imported there:
+// `transportRuntime` must import no store, because the stores import it.
+//
+// `untrack` because this runs inside whichever effect happened to make the call:
+// a transport detail must not subscribe that effect to the whole registry. And
+// the early exit matters — on a machine with no remote repo, which is every
+// machine until one is added, the prefix walk below is pure cost on every call.
+setRepoConnectionLookup((path) =>
+	untrack(() => {
+		if (!anyRepoIsRemote()) return undefined;
+		const repoPath = resolveRepoPathFor(path);
+		return repoPath ? repositoriesStore.getConnectionId(repoPath) : undefined;
+	}),
+);

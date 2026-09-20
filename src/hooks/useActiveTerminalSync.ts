@@ -1,32 +1,20 @@
-import { createEffect, on, onCleanup } from "solid-js";
+import { createEffect, on } from "solid-js";
 import { activityStore } from "../stores/activityStore";
-import { conversationStore } from "../stores/conversationStore";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
 
-/** Synchronizes active-terminal context with conversation, activity, and repository state. */
+/** Synchronizes active-terminal context with activity and repository state. */
 export function useActiveTerminalSync(): void {
 	createEffect(
 		on(
 			() => terminalsStore.state.activeId,
 			(id) => {
 				if (!id) return;
-				const terminal = terminalsStore.get(id);
-				const key = terminal?.tuicSession ?? id;
-				conversationStore.setActiveTerminal(key);
-				void conversationStore.initFromDisk(terminal?.tuicSession ?? undefined);
 				activityStore.dismissItem(`terminal-done-${id}`);
 			},
 			{ defer: true },
 		),
 	);
-
-	const unsubscribeRemove = terminalsStore.onRemove((id) => {
-		const terminal = terminalsStore.get(id);
-		const key = terminal?.tuicSession ?? id;
-		void conversationStore.onTerminalClose(key);
-	});
-	onCleanup(unsubscribeRemove);
 
 	createEffect(
 		on(

@@ -3,7 +3,7 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: 200px;
+  height: 160px;
   background: var(--bg-primary);
   border-top: 1px solid var(--border);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
@@ -78,7 +78,9 @@
 }
 
 .queueList {
-  max-height: 120px;
+  /* Shares the panel's 160px with the editor and the status bar, and does not
+     shrink. Above ~96px the editor is left with too few rows to compose in. */
+  max-height: 96px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);

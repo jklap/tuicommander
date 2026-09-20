@@ -1,10 +1,10 @@
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
 import type { ForwardSpec, ProfileOptions, TunnelProfile } from "../../stores/tunnels";
 import { tunnelsStore } from "../../stores/tunnels";
+import { openDialog as openFileDialog } from "../../utils/nativeDialog";
 import s from "../SettingsPanel/Settings.module.css";
 import d from "../shared/dialog.module.css";
 
@@ -29,6 +29,7 @@ function defaultOptions(): ProfileOptions {
 		server_alive_interval: 15,
 		server_alive_count_max: 3,
 		strict_host_key_checking: "Yes",
+		compression: true,
 	};
 }
 
@@ -382,6 +383,15 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 							</select>
 						</div>
 					</div>
+
+					<label class={s.toggle}>
+						<input
+							type="checkbox"
+							checked={options().compression}
+							onChange={(e) => setOptions((o) => ({ ...o, compression: e.currentTarget.checked }))}
+						/>
+						<span>Compress the channel (ssh -C)</span>
+					</label>
 
 					<label class={s.toggle}>
 						<input type="checkbox" checked={autoConnect()} onChange={(e) => setAutoConnect(e.currentTarget.checked)} />

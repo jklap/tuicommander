@@ -7,8 +7,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 	invoke: mockInvoke,
 }));
 
-describe("notesStore", () => {
-	let store: typeof import("../../stores/notes").notesStore;
+describe("ideasStore", () => {
+	let store: typeof import("../../stores/ideas").ideasStore;
 
 	beforeEach(async () => {
 		vi.resetModules();
@@ -16,55 +16,55 @@ describe("notesStore", () => {
 
 		vi.doMock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 
-		store = (await import("../../stores/notes")).notesStore;
+		store = (await import("../../stores/ideas")).ideasStore;
 		// Mirror the real boot order (useAppBootstrap hydrates before any UI can mutate).
 		// Without a successful hydrate the store refuses to persist — see GH #107 below.
 		await store.hydrate();
 		mockInvoke.mockClear();
 	});
 
-	describe("addNote()", () => {
+	describe("addIdea()", () => {
 		it("adds a note with trimmed text", () => {
 			testInScope(() => {
-				store.addNote("  hello world  ");
-				expect(store.state.notes[0].text).toBe("hello world");
+				store.addIdea("  hello world  ");
+				expect(store.state.ideas[0].text).toBe("hello world");
 			});
 		});
 
 		it("ignores empty string (after trim)", () => {
 			testInScope(() => {
-				store.addNote("   ");
-				expect(store.state.notes.length).toBe(0);
+				store.addIdea("   ");
+				expect(store.state.ideas.length).toBe(0);
 			});
 		});
 
 		it("ignores empty string", () => {
 			testInScope(() => {
-				store.addNote("");
-				expect(store.state.notes.length).toBe(0);
+				store.addIdea("");
+				expect(store.state.ideas.length).toBe(0);
 			});
 		});
 
 		it("prepends: most recent note is first", () => {
 			testInScope(() => {
-				store.addNote("first");
-				store.addNote("second");
-				expect(store.state.notes[0].text).toBe("second");
-				expect(store.state.notes[1].text).toBe("first");
+				store.addIdea("first");
+				store.addIdea("second");
+				expect(store.state.ideas[0].text).toBe("second");
+				expect(store.state.ideas[1].text).toBe("first");
 			});
 		});
 
 		it("assigns a unique id to each note", () => {
 			testInScope(() => {
-				store.addNote("a");
-				store.addNote("b");
-				expect(store.state.notes[0].id).not.toBe(store.state.notes[1].id);
+				store.addIdea("a");
+				store.addIdea("b");
+				expect(store.state.ideas[0].id).not.toBe(store.state.ideas[1].id);
 			});
 		});
 
 		it("persists via invoke save_notes", () => {
 			testInScope(() => {
-				store.addNote("saved note");
+				store.addIdea("saved note");
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
 					config: { notes: expect.arrayContaining([expect.objectContaining({ text: "saved note" })]) },
 				});
@@ -72,41 +72,41 @@ describe("notesStore", () => {
 		});
 	});
 
-	describe("removeNote()", () => {
+	describe("removeIdea()", () => {
 		it("removes the note by id", () => {
 			testInScope(() => {
-				store.addNote("to remove");
-				const id = store.state.notes[0].id;
-				store.removeNote(id);
-				expect(store.state.notes.length).toBe(0);
+				store.addIdea("to remove");
+				const id = store.state.ideas[0].id;
+				store.removeIdea(id);
+				expect(store.state.ideas.length).toBe(0);
 			});
 		});
 
 		it("only removes the matching note", () => {
 			testInScope(() => {
-				store.addNote("keep me");
-				store.addNote("remove me");
-				const idToRemove = store.state.notes[0].id; // most recent
-				store.removeNote(idToRemove);
-				expect(store.state.notes.length).toBe(1);
-				expect(store.state.notes[0].text).toBe("keep me");
+				store.addIdea("keep me");
+				store.addIdea("remove me");
+				const idToRemove = store.state.ideas[0].id; // most recent
+				store.removeIdea(idToRemove);
+				expect(store.state.ideas.length).toBe(1);
+				expect(store.state.ideas[0].text).toBe("keep me");
 			});
 		});
 
 		it("ignores unknown id without error", () => {
 			testInScope(() => {
-				store.addNote("note");
-				expect(() => store.removeNote("nonexistent")).not.toThrow();
-				expect(store.state.notes.length).toBe(1);
+				store.addIdea("note");
+				expect(() => store.removeIdea("nonexistent")).not.toThrow();
+				expect(store.state.ideas.length).toBe(1);
 			});
 		});
 
 		it("persists via invoke save_notes", () => {
 			testInScope(() => {
-				store.addNote("note");
+				store.addIdea("note");
 				mockInvoke.mockClear();
-				const id = store.state.notes[0].id;
-				store.removeNote(id);
+				const id = store.state.ideas[0].id;
+				store.removeIdea(id);
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
 					config: { notes: [] },
 				});
@@ -131,7 +131,7 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.notes).toEqual(savedNotes);
+				expect(store.state.ideas).toEqual(savedNotes);
 				expect(mockInvoke).toHaveBeenCalledWith("load_notes");
 			});
 		});
@@ -141,7 +141,7 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.notes).toEqual([]);
+				expect(store.state.ideas).toEqual([]);
 			});
 		});
 
@@ -151,10 +151,10 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.notes).toEqual([]);
+				expect(store.state.ideas).toEqual([]);
 				expect(consoleSpy).toHaveBeenCalledWith(
 					"[store]",
-					expect.stringContaining("Failed to hydrate notes"),
+					expect.stringContaining("Failed to hydrate ideas"),
 					expect.any(Error),
 				);
 			});
@@ -169,7 +169,7 @@ describe("notesStore", () => {
 			vi.resetModules();
 			mockInvoke.mockReset().mockImplementation(invokeImpl);
 			vi.doMock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
-			return (await import("../../stores/notes")).notesStore;
+			return (await import("../../stores/ideas")).ideasStore;
 		}
 
 		it("does not call save_notes for a mutation issued after a failed hydrate", async () => {
@@ -178,8 +178,8 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await fresh.hydrate();
-				fresh.addNote("must not wipe notes.json");
-				expect(fresh.state.notes.length).toBe(1);
+				fresh.addIdea("must not wipe notes.json");
+				expect(fresh.state.ideas.length).toBe(1);
 				expect(mockInvoke).not.toHaveBeenCalledWith("save_notes", expect.anything());
 			});
 			consoleSpy.mockRestore();
@@ -190,7 +190,7 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await fresh.hydrate();
-				fresh.addNote("kept");
+				fresh.addIdea("kept");
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
 			});
 		});
@@ -205,18 +205,18 @@ describe("notesStore", () => {
 
 		it("increments on add", () => {
 			testInScope(() => {
-				store.addNote("a");
-				store.addNote("b");
+				store.addIdea("a");
+				store.addIdea("b");
 				expect(store.count()).toBe(2);
 			});
 		});
 	});
 
-	describe("addNote() with repo context", () => {
+	describe("addIdea() with repo context", () => {
 		it("saves repoPath and repoDisplayName when provided", () => {
 			testInScope(() => {
-				store.addNote("idea", "/Users/foo/project-x", "project-x");
-				const note = store.state.notes[0];
+				store.addIdea("idea", "/Users/foo/project-x", "project-x");
+				const note = store.state.ideas[0];
 				expect(note.repoPath).toBe("/Users/foo/project-x");
 				expect(note.repoDisplayName).toBe("project-x");
 			});
@@ -224,8 +224,8 @@ describe("notesStore", () => {
 
 		it("defaults repoPath and repoDisplayName to null when not provided", () => {
 			testInScope(() => {
-				store.addNote("global idea");
-				const note = store.state.notes[0];
+				store.addIdea("global idea");
+				const note = store.state.ideas[0];
 				expect(note.repoPath).toBeNull();
 				expect(note.repoDisplayName).toBeNull();
 			});
@@ -233,7 +233,7 @@ describe("notesStore", () => {
 
 		it("persists repo fields via save_notes", () => {
 			testInScope(() => {
-				store.addNote("tagged", "/path/repo", "repo");
+				store.addIdea("tagged", "/path/repo", "repo");
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", {
 					config: {
 						notes: expect.arrayContaining([
@@ -249,61 +249,61 @@ describe("notesStore", () => {
 		});
 	});
 
-	describe("reassignNote()", () => {
+	describe("reassignIdea()", () => {
 		it("updates repoPath and repoDisplayName", () => {
 			testInScope(() => {
-				store.addNote("idea", "/old/repo", "old-repo");
-				const id = store.state.notes[0].id;
-				store.reassignNote(id, "/new/repo", "new-repo");
-				expect(store.state.notes[0].repoPath).toBe("/new/repo");
-				expect(store.state.notes[0].repoDisplayName).toBe("new-repo");
+				store.addIdea("idea", "/old/repo", "old-repo");
+				const id = store.state.ideas[0].id;
+				store.reassignIdea(id, "/new/repo", "new-repo");
+				expect(store.state.ideas[0].repoPath).toBe("/new/repo");
+				expect(store.state.ideas[0].repoDisplayName).toBe("new-repo");
 			});
 		});
 
 		it("can reassign to global (null)", () => {
 			testInScope(() => {
-				store.addNote("idea", "/some/repo", "repo");
-				const id = store.state.notes[0].id;
-				store.reassignNote(id, null, null);
-				expect(store.state.notes[0].repoPath).toBeNull();
-				expect(store.state.notes[0].repoDisplayName).toBeNull();
+				store.addIdea("idea", "/some/repo", "repo");
+				const id = store.state.ideas[0].id;
+				store.reassignIdea(id, null, null);
+				expect(store.state.ideas[0].repoPath).toBeNull();
+				expect(store.state.ideas[0].repoDisplayName).toBeNull();
 			});
 		});
 
 		it("persists after reassign", () => {
 			testInScope(() => {
-				store.addNote("idea", "/old", "old");
+				store.addIdea("idea", "/old", "old");
 				mockInvoke.mockClear();
-				const id = store.state.notes[0].id;
-				store.reassignNote(id, "/new", "new");
+				const id = store.state.ideas[0].id;
+				store.reassignIdea(id, "/new", "new");
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
 			});
 		});
 
 		it("ignores unknown id", () => {
 			testInScope(() => {
-				store.addNote("idea");
-				expect(() => store.reassignNote("nonexistent", "/x", "x")).not.toThrow();
+				store.addIdea("idea");
+				expect(() => store.reassignIdea("nonexistent", "/x", "x")).not.toThrow();
 			});
 		});
 	});
 
-	describe("getFilteredNotes()", () => {
+	describe("getFilteredIdeas()", () => {
 		it("returns all notes when activeRepo is null", () => {
 			testInScope(() => {
-				store.addNote("global");
-				store.addNote("tagged", "/repo/a", "a");
-				store.addNote("tagged2", "/repo/b", "b");
-				expect(store.getFilteredNotes(null)).toHaveLength(3);
+				store.addIdea("global");
+				store.addIdea("tagged", "/repo/a", "a");
+				store.addIdea("tagged2", "/repo/b", "b");
+				expect(store.getFilteredIdeas(null)).toHaveLength(3);
 			});
 		});
 
 		it("returns matching + global notes when activeRepo is set", () => {
 			testInScope(() => {
-				store.addNote("global");
-				store.addNote("repo-a", "/repo/a", "a");
-				store.addNote("repo-b", "/repo/b", "b");
-				const filtered = store.getFilteredNotes("/repo/a");
+				store.addIdea("global");
+				store.addIdea("repo-a", "/repo/a", "a");
+				store.addIdea("repo-b", "/repo/b", "b");
+				const filtered = store.getFilteredIdeas("/repo/a");
 				expect(filtered).toHaveLength(2);
 				expect(filtered.map((n) => n.text).sort()).toEqual(["global", "repo-a"]);
 			});
@@ -311,8 +311,8 @@ describe("notesStore", () => {
 
 		it("includes notes with null repoPath (global) in any filter", () => {
 			testInScope(() => {
-				store.addNote("always visible");
-				const filtered = store.getFilteredNotes("/any/repo");
+				store.addIdea("always visible");
+				const filtered = store.getFilteredIdeas("/any/repo");
 				expect(filtered).toHaveLength(1);
 				expect(filtered[0].text).toBe("always visible");
 			});
@@ -322,17 +322,17 @@ describe("notesStore", () => {
 	describe("filteredCount()", () => {
 		it("returns total count when activeRepo is null", () => {
 			testInScope(() => {
-				store.addNote("a");
-				store.addNote("b", "/repo", "repo");
+				store.addIdea("a");
+				store.addIdea("b", "/repo", "repo");
 				expect(store.filteredCount(null)).toBe(2);
 			});
 		});
 
 		it("returns filtered count when activeRepo is set", () => {
 			testInScope(() => {
-				store.addNote("global");
-				store.addNote("match", "/repo/a", "a");
-				store.addNote("other", "/repo/b", "b");
+				store.addIdea("global");
+				store.addIdea("match", "/repo/a", "a");
+				store.addIdea("other", "/repo/b", "b");
 				expect(store.filteredCount("/repo/a")).toBe(2); // match + global
 			});
 		});
@@ -345,108 +345,108 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.notes[0].repoPath).toBeNull();
-				expect(store.state.notes[0].repoDisplayName).toBeNull();
-				expect(store.state.notes[0].usedAt).toBeNull();
+				expect(store.state.ideas[0].repoPath).toBeNull();
+				expect(store.state.ideas[0].repoDisplayName).toBeNull();
+				expect(store.state.ideas[0].usedAt).toBeNull();
 			});
 		});
 	});
 
-	describe("addNote() with images", () => {
+	describe("addIdea() with images", () => {
 		it("stores images array when provided", () => {
 			testInScope(() => {
-				store.addNote("idea with image", null, null, ["/path/img.png"]);
-				expect(store.state.notes[0].images).toEqual(["/path/img.png"]);
+				store.addIdea("idea with image", null, null, ["/path/img.png"]);
+				expect(store.state.ideas[0].images).toEqual(["/path/img.png"]);
 			});
 		});
 
 		it("defaults images to empty array when not provided", () => {
 			testInScope(() => {
-				store.addNote("plain idea");
-				expect(store.state.notes[0].images).toEqual([]);
+				store.addIdea("plain idea");
+				expect(store.state.ideas[0].images).toEqual([]);
 			});
 		});
 
 		it("allows image-only notes (no text)", () => {
 			testInScope(() => {
-				store.addNote("", null, null, ["/path/img.png"]);
-				expect(store.state.notes.length).toBe(1);
-				expect(store.state.notes[0].text).toBe("");
-				expect(store.state.notes[0].images).toEqual(["/path/img.png"]);
+				store.addIdea("", null, null, ["/path/img.png"]);
+				expect(store.state.ideas.length).toBe(1);
+				expect(store.state.ideas[0].text).toBe("");
+				expect(store.state.ideas[0].images).toEqual(["/path/img.png"]);
 			});
 		});
 
 		it("rejects notes with no text AND no images", () => {
 			testInScope(() => {
-				store.addNote("", null, null, []);
-				expect(store.state.notes.length).toBe(0);
+				store.addIdea("", null, null, []);
+				expect(store.state.ideas.length).toBe(0);
 			});
 		});
 
 		it("accepts optional noteId parameter", () => {
 			testInScope(() => {
-				store.addNote("with id", null, null, [], "custom-id-123");
-				expect(store.state.notes[0].id).toBe("custom-id-123");
+				store.addIdea("with id", null, null, [], "custom-id-123");
+				expect(store.state.ideas[0].id).toBe("custom-id-123");
 			});
 		});
 	});
 
-	describe("updateNote()", () => {
+	describe("updateIdea()", () => {
 		it("updates text in-place preserving id and createdAt", () => {
 			testInScope(() => {
-				store.addNote("original");
-				const note = store.state.notes[0];
+				store.addIdea("original");
+				const note = store.state.ideas[0];
 				const { id, createdAt } = note;
-				store.updateNote(id, "updated text", []);
-				expect(store.state.notes[0].id).toBe(id);
-				expect(store.state.notes[0].createdAt).toBe(createdAt);
-				expect(store.state.notes[0].text).toBe("updated text");
+				store.updateIdea(id, "updated text", []);
+				expect(store.state.ideas[0].id).toBe(id);
+				expect(store.state.ideas[0].createdAt).toBe(createdAt);
+				expect(store.state.ideas[0].text).toBe("updated text");
 			});
 		});
 
 		it("updates images in-place", () => {
 			testInScope(() => {
-				store.addNote("idea", null, null, ["/old.png"]);
-				const id = store.state.notes[0].id;
-				store.updateNote(id, "idea", ["/old.png", "/new.png"]);
-				expect(store.state.notes[0].images).toEqual(["/old.png", "/new.png"]);
+				store.addIdea("idea", null, null, ["/old.png"]);
+				const id = store.state.ideas[0].id;
+				store.updateIdea(id, "idea", ["/old.png", "/new.png"]);
+				expect(store.state.ideas[0].images).toEqual(["/old.png", "/new.png"]);
 			});
 		});
 
 		it("preserves repoPath and repoDisplayName", () => {
 			testInScope(() => {
-				store.addNote("idea", "/repo", "my-repo");
-				const id = store.state.notes[0].id;
-				store.updateNote(id, "updated", []);
-				expect(store.state.notes[0].repoPath).toBe("/repo");
-				expect(store.state.notes[0].repoDisplayName).toBe("my-repo");
+				store.addIdea("idea", "/repo", "my-repo");
+				const id = store.state.ideas[0].id;
+				store.updateIdea(id, "updated", []);
+				expect(store.state.ideas[0].repoPath).toBe("/repo");
+				expect(store.state.ideas[0].repoDisplayName).toBe("my-repo");
 			});
 		});
 
 		it("persists via save_notes", () => {
 			testInScope(() => {
-				store.addNote("idea");
+				store.addIdea("idea");
 				mockInvoke.mockClear();
-				store.updateNote(store.state.notes[0].id, "updated", []);
+				store.updateIdea(store.state.ideas[0].id, "updated", []);
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
 			});
 		});
 
 		it("ignores unknown id", () => {
 			testInScope(() => {
-				store.addNote("idea");
-				expect(() => store.updateNote("nonexistent", "x", [])).not.toThrow();
+				store.addIdea("idea");
+				expect(() => store.updateIdea("nonexistent", "x", [])).not.toThrow();
 			});
 		});
 	});
 
-	describe("removeNote() with image cleanup", () => {
+	describe("removeIdea() with image cleanup", () => {
 		it("calls delete_note_assets on removal", () => {
 			testInScope(() => {
-				store.addNote("to remove", null, null, ["/img.png"]);
-				const id = store.state.notes[0].id;
+				store.addIdea("to remove", null, null, ["/img.png"]);
+				const id = store.state.ideas[0].id;
 				mockInvoke.mockClear();
-				store.removeNote(id);
+				store.removeIdea(id);
 				expect(mockInvoke).toHaveBeenCalledWith("delete_note_assets", { noteId: id });
 			});
 		});
@@ -461,7 +461,7 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.notes[0].images).toEqual([]);
+				expect(store.state.ideas[0].images).toEqual([]);
 			});
 		});
 
@@ -481,7 +481,7 @@ describe("notesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				expect(store.state.notes[0].images).toEqual(["/path/img.png"]);
+				expect(store.state.ideas[0].images).toEqual(["/path/img.png"]);
 			});
 		});
 	});
@@ -489,36 +489,36 @@ describe("notesStore", () => {
 	describe("pendingCount()", () => {
 		it("returns total count when all notes are pending (no repo filter)", () => {
 			testInScope(() => {
-				store.addNote("a");
-				store.addNote("b");
+				store.addIdea("a");
+				store.addIdea("b");
 				expect(store.pendingCount(null)).toBe(2);
 			});
 		});
 
 		it("excludes used notes", () => {
 			testInScope(() => {
-				store.addNote("pending");
-				store.addNote("used");
-				store.markUsed(store.state.notes[0].id);
+				store.addIdea("pending");
+				store.addIdea("used");
+				store.markUsed(store.state.ideas[0].id);
 				expect(store.pendingCount(null)).toBe(1);
 			});
 		});
 
 		it("returns 0 when all notes are used", () => {
 			testInScope(() => {
-				store.addNote("a");
-				store.addNote("b");
-				store.markUsed(store.state.notes[0].id);
-				store.markUsed(store.state.notes[1].id);
+				store.addIdea("a");
+				store.addIdea("b");
+				store.markUsed(store.state.ideas[0].id);
+				store.markUsed(store.state.ideas[1].id);
 				expect(store.pendingCount(null)).toBe(0);
 			});
 		});
 
 		it("filters by repo when activeRepo is set", () => {
 			testInScope(() => {
-				store.addNote("global pending");
-				store.addNote("repo-a pending", "/repo/a", "a");
-				store.addNote("repo-b pending", "/repo/b", "b");
+				store.addIdea("global pending");
+				store.addIdea("repo-a pending", "/repo/a", "a");
+				store.addIdea("repo-b pending", "/repo/b", "b");
 				// global + repo-a match, repo-b excluded
 				expect(store.pendingCount("/repo/a")).toBe(2);
 			});
@@ -526,9 +526,9 @@ describe("notesStore", () => {
 
 		it("excludes used notes from repo filter", () => {
 			testInScope(() => {
-				store.addNote("global pending");
-				store.addNote("repo-a used", "/repo/a", "a");
-				store.markUsed(store.state.notes[0].id); // most recent = repo-a used
+				store.addIdea("global pending");
+				store.addIdea("repo-a used", "/repo/a", "a");
+				store.markUsed(store.state.ideas[0].id); // most recent = repo-a used
 				expect(store.pendingCount("/repo/a")).toBe(1);
 			});
 		});
@@ -537,35 +537,35 @@ describe("notesStore", () => {
 	describe("clearCompleted()", () => {
 		it("removes all used notes", () => {
 			testInScope(() => {
-				store.addNote("pending");
-				store.addNote("used");
-				store.markUsed(store.state.notes[0].id); // most recent = "used"
+				store.addIdea("pending");
+				store.addIdea("used");
+				store.markUsed(store.state.ideas[0].id); // most recent = "used"
 				mockInvoke.mockClear();
 
 				store.clearCompleted();
 
-				expect(store.state.notes).toHaveLength(1);
-				expect(store.state.notes[0].text).toBe("pending");
+				expect(store.state.ideas).toHaveLength(1);
+				expect(store.state.ideas[0].text).toBe("pending");
 			});
 		});
 
 		it("does nothing when no notes are used", () => {
 			testInScope(() => {
-				store.addNote("a");
-				store.addNote("b");
+				store.addIdea("a");
+				store.addIdea("b");
 				mockInvoke.mockClear();
 
 				store.clearCompleted();
 
-				expect(store.state.notes).toHaveLength(2);
+				expect(store.state.ideas).toHaveLength(2);
 				expect(mockInvoke).not.toHaveBeenCalled();
 			});
 		});
 
 		it("persists via save_notes after clearing", () => {
 			testInScope(() => {
-				store.addNote("used");
-				store.markUsed(store.state.notes[0].id);
+				store.addIdea("used");
+				store.markUsed(store.state.ideas[0].id);
 				mockInvoke.mockClear();
 
 				store.clearCompleted();
@@ -576,10 +576,10 @@ describe("notesStore", () => {
 
 		it("calls delete_note_assets_batch for all cleared notes", () => {
 			testInScope(() => {
-				store.addNote("used-1");
-				store.addNote("used-2");
-				const id1 = store.state.notes[0].id;
-				const id2 = store.state.notes[1].id;
+				store.addIdea("used-1");
+				store.addIdea("used-2");
+				const id1 = store.state.ideas[0].id;
+				const id2 = store.state.ideas[1].id;
 				store.markUsed(id1);
 				store.markUsed(id2);
 				mockInvoke.mockClear();
@@ -594,15 +594,15 @@ describe("notesStore", () => {
 
 		it("clears all used notes while preserving pending ones", () => {
 			testInScope(() => {
-				store.addNote("keep-1");
-				store.addNote("remove");
-				store.addNote("keep-2");
-				store.markUsed(store.state.notes[1].id); // "remove" is at index 1
+				store.addIdea("keep-1");
+				store.addIdea("remove");
+				store.addIdea("keep-2");
+				store.markUsed(store.state.ideas[1].id); // "remove" is at index 1
 
 				store.clearCompleted();
 
-				expect(store.state.notes).toHaveLength(2);
-				expect(store.state.notes.map((n) => n.text).sort()).toEqual(["keep-1", "keep-2"]);
+				expect(store.state.ideas).toHaveLength(2);
+				expect(store.state.ideas.map((n) => n.text).sort()).toEqual(["keep-1", "keep-2"]);
 			});
 		});
 	});
@@ -610,29 +610,29 @@ describe("notesStore", () => {
 	describe("markUsed()", () => {
 		it("sets usedAt timestamp on the note", () => {
 			testInScope(() => {
-				store.addNote("idea");
-				const id = store.state.notes[0].id;
-				expect(store.state.notes[0].usedAt).toBeNull();
+				store.addIdea("idea");
+				const id = store.state.ideas[0].id;
+				expect(store.state.ideas[0].usedAt).toBeNull();
 				const before = Date.now();
 				store.markUsed(id);
 				const after = Date.now();
-				expect(store.state.notes[0].usedAt).toBeGreaterThanOrEqual(before);
-				expect(store.state.notes[0].usedAt).toBeLessThanOrEqual(after);
+				expect(store.state.ideas[0].usedAt).toBeGreaterThanOrEqual(before);
+				expect(store.state.ideas[0].usedAt).toBeLessThanOrEqual(after);
 			});
 		});
 
 		it("persists after marking used", () => {
 			testInScope(() => {
-				store.addNote("idea");
+				store.addIdea("idea");
 				mockInvoke.mockClear();
-				store.markUsed(store.state.notes[0].id);
+				store.markUsed(store.state.ideas[0].id);
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
 			});
 		});
 
 		it("ignores unknown id", () => {
 			testInScope(() => {
-				store.addNote("idea");
+				store.addIdea("idea");
 				expect(() => store.markUsed("nonexistent")).not.toThrow();
 			});
 		});

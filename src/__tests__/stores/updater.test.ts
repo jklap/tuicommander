@@ -161,6 +161,22 @@ describe("updaterStore", () => {
 			});
 		});
 
+		it("reports a symlinked binary path as unsupported, not as an error", async () => {
+			mockCheck.mockRejectedValue(
+				new Error(
+					"StartingBinary found current_exe() that contains a symlink on a non-allowed platform: /Users/x/src-tauri/target",
+				),
+			);
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
+				expect(store.state.unsupported).toMatch(/symlink/);
+				expect(store.state.error).toBeNull();
+				expect(store.state.noRelease).toBe(false);
+				expect(store.state.available).toBe(false);
+			});
+		});
+
 		it("passes through unrecognized errors", async () => {
 			mockCheck.mockRejectedValue(new Error("some unexpected error"));
 
@@ -445,6 +461,17 @@ describe("updaterStore", () => {
 				expect(store.state.error).toBeNull();
 				expect(store.state.noRelease).toBe(false);
 				expect(store.state.downloadUrl).toBeNull();
+			});
+		});
+
+		it("clears the unsupported-binary notice", async () => {
+			mockCheck.mockRejectedValue(new Error("current_exe() that contains a symlink"));
+
+			await testInScopeAsync(async () => {
+				await store.checkForUpdate();
+				expect(store.state.unsupported).not.toBeNull();
+				store.dismiss();
+				expect(store.state.unsupported).toBeNull();
 			});
 		});
 

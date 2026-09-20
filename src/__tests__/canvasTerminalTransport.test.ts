@@ -29,7 +29,32 @@ import {
 	toBinaryPayload,
 	WsTransport,
 } from "../components/Terminal/canvasTerminalTransport";
+import { FRAME_TAG } from "../components/Terminal/wsFrameCodec";
 import { isTauri } from "../transport";
+import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../transportRuntime";
+
+/**
+ * Build the bytes `mcp_http::ws_compression` puts on a negotiated socket: one
+ * tag byte, then the payload, deflated when the tag says so.
+ *
+ * Deflated with the platform's own `CompressionStream`, not with a hand-rolled
+ * fixture — a frame this test invented could be one the server would never
+ * send, and the decoder would then be proved against nothing.
+ */
+async function taggedFrame(tag: number, payload: Uint8Array): Promise<ArrayBuffer> {
+	const deflated = tag === FRAME_TAG.binaryDeflate || tag === FRAME_TAG.textDeflate;
+	const body = deflated
+		? new Uint8Array(
+				await new Response(
+					new Blob([payload as BlobPart]).stream().pipeThrough(new CompressionStream("deflate-raw")),
+				).arrayBuffer(),
+			)
+		: payload;
+	const frame = new Uint8Array(body.length + 1);
+	frame[0] = tag;
+	frame.set(body, 1);
+	return frame.buffer;
+}
 
 describe("canvasTerminalTransport", () => {
 	beforeEach(() => {
@@ -388,8 +413,136 @@ describe("canvasTerminalTransport", () => {
 			const transport = new WsTransport("session-1");
 			const result = await transport.invoke("resize_pty", { sessionId: "session-1", rows: 24, cols: 80 });
 
-			expect(rpc).toHaveBeenCalledWith("resize_pty", { sessionId: "session-1", rows: 24, cols: 80 });
+			// No connection id: a browser-mode local terminal, which is what `rpc`
+			// already assumes when the third argument is absent.
+			expect(rpc).toHaveBeenCalledWith("resize_pty", { sessionId: "session-1", rows: 24, cols: 80 }, undefined);
 			expect(result).toBe("ws-result");
+		});
+
+		// A terminal owned by a remote machine: the socket, and every call about
+		// that session, must reach the daemon that owns the PTY — with a credential
+		// the upgrade request cannot put in a header.
+		describe("against a remote connection", () => {
+			beforeEach(() => {
+				setRemoteBaseUrlLookup((id) => (id === "conn-1" ? "http://remote.test:9876" : undefined));
+				setRemoteTokenLookup((id) => (id === "conn-1" ? "tok-abc" : undefined));
+			});
+			afterEach(() => {
+				setRemoteBaseUrlLookup(() => undefined);
+				setRemoteTokenLookup(() => undefined);
+			});
+
+			it("opens the stream on the remote daemon with the session token in the URL", async () => {
+				const transport = new WsTransport("sess-9", "conn-1");
+				const subscribed = transport.subscribe(vi.fn());
+				wsInstances[0].onopen!();
+				await subscribed;
+
+				expect(MockWebSocket.lastUrl).toBe(
+					"ws://remote.test:9876/sessions/sess-9/stream?format=grid&compress=deflate&token=tok-abc",
+				);
+			});
+
+			// The whole point of the feature: this is the socket with a link on
+			// it. A local socket asks for nothing (asserted above), so the query
+			// parameter is the one thing that tells the two apart on the wire.
+			it("asks the remote daemon to compress the stream", async () => {
+				const transport = new WsTransport("sess-9", "conn-1");
+				const subscribed = transport.subscribe(vi.fn());
+				wsInstances[0].onopen!();
+				await subscribed;
+
+				expect(MockWebSocket.lastUrl).toContain("compress=deflate");
+			});
+
+			it("reads a deflated grid frame back to the bytes the server serialised", async () => {
+				const onFrame = vi.fn();
+				const transport = new WsTransport("sess-9", "conn-1");
+				const subscribed = transport.subscribe(onFrame);
+				wsInstances[0].onopen!();
+				await subscribed;
+
+				const grid = new Uint8Array(4096).fill(0x41);
+				wsInstances[0].onmessage!({ data: await taggedFrame(FRAME_TAG.binaryDeflate, grid) });
+				await vi.waitFor(() => expect(onFrame).toHaveBeenCalledTimes(1));
+
+				expect(new Uint8Array(onFrame.mock.calls[0][0] as ArrayBuffer)).toEqual(grid);
+			});
+
+			// Criterion 4 on the client: a frame the server decided not to
+			// compress still arrives tagged, and the tag byte must not reach the
+			// grid decoder as if it were a row.
+			it("strips the tag from a frame the server chose not to compress", async () => {
+				const onFrame = vi.fn();
+				const transport = new WsTransport("sess-9", "conn-1");
+				const subscribed = transport.subscribe(onFrame);
+				wsInstances[0].onopen!();
+				await subscribed;
+
+				const grid = new Uint8Array([7, 8, 9]);
+				wsInstances[0].onmessage!({ data: await taggedFrame(FRAME_TAG.binary, grid) });
+				await vi.waitFor(() => expect(onFrame).toHaveBeenCalledTimes(1));
+
+				expect(new Uint8Array(onFrame.mock.calls[0][0] as ArrayBuffer)).toEqual(grid);
+			});
+
+			it("delivers a deflated JSON frame to the handler for its type", async () => {
+				const transport = new WsTransport("sess-9", "conn-1");
+				const subscribed = transport.subscribe(vi.fn());
+				wsInstances[0].onopen!();
+				await subscribed;
+
+				const handler = vi.fn();
+				await transport.onEvent("cwd", handler);
+
+				const json = new TextEncoder().encode(JSON.stringify({ type: "cwd", cwd: "/tmp/work" }));
+				wsInstances[0].onmessage!({ data: await taggedFrame(FRAME_TAG.textDeflate, json) });
+
+				await vi.waitFor(() => expect(handler).toHaveBeenCalledWith({ cwd: "/tmp/work" }));
+			});
+
+			// Grid frames are deltas. Inflating is asynchronous, so two frames
+			// racing would be applied in whichever order finished first, and the
+			// rows the loser carried would be painted over stale content.
+			it("applies frames in the order the server sent them, not the order they inflate", async () => {
+				const seen: number[] = [];
+				const transport = new WsTransport("sess-9", "conn-1");
+				const subscribed = transport.subscribe((data) => seen.push(new Uint8Array(data)[0]));
+				wsInstances[0].onopen!();
+				await subscribed;
+
+				// The first is big and slow to inflate, the second is one byte and
+				// instant. Without the chain the second would land first.
+				const big = await taggedFrame(FRAME_TAG.binaryDeflate, new Uint8Array(200_000).fill(1));
+				const small = await taggedFrame(FRAME_TAG.binary, new Uint8Array([2]));
+				wsInstances[0].onmessage!({ data: big });
+				wsInstances[0].onmessage!({ data: small });
+
+				await vi.waitFor(() => expect(seen).toHaveLength(2));
+				expect(seen).toEqual([1, 2]);
+			});
+
+			it("routes invoke to the machine that owns the session", async () => {
+				const { rpc } = await import("../transport");
+				(rpc as ReturnType<typeof vi.fn>).mockResolvedValue("ok");
+				const transport = new WsTransport("sess-9", "conn-1");
+				await transport.invoke("write_to_pty", { sessionId: "sess-9", data: "ls\r" });
+
+				expect(rpc).toHaveBeenCalledWith("write_to_pty", { sessionId: "sess-9", data: "ls\r" }, "conn-1");
+			});
+
+			// Not connected, or connected but unauthenticated: there is no URL to
+			// open, and retrying would spin against a daemon answering 401.
+			it("refuses to open a socket for a connection that is not connected", async () => {
+				const transport = new WsTransport("sess-9", "conn-gone");
+				await expect(transport.subscribe(vi.fn())).rejects.toThrow("not connected");
+				expect(wsInstances).toHaveLength(0);
+			});
+
+			it("createTransport picks the WS even under Tauri when a connection owns the session", () => {
+				(isTauri as ReturnType<typeof vi.fn>).mockReturnValue(true);
+				expect(createTransport("sess-9", "conn-1")).toBeInstanceOf(WsTransport);
+			});
 		});
 	});
 });

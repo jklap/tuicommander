@@ -12,6 +12,9 @@ describe("ServicesTab remote machine presentation", () => {
 		["connecting", "Connecting...", "var(--fg-warning, #e5a100)"],
 		["error", "Error", "var(--accent-red, #ef4444)"],
 		["disconnected", "Disconnected", "var(--fg-muted)"],
+		// Reachable but rejected. Not green (a lie) and not red (the network is
+		// fine) — the fix is a password, and the label has to say which.
+		["unauthenticated", "Not authenticated", "var(--fg-warning, #e5a100)"],
 	])("maps %s status without changing its label or color", (status, label, color) => {
 		expect(remoteStatusLabel(status)).toBe(label);
 		expect(remoteStatusColor(status)).toBe(color);
@@ -42,6 +45,9 @@ describe("ServicesTab remote machine presentation", () => {
 			remoteDaemonPort: 9876,
 			directUrl: "",
 			authUsername: "",
+			// Blank on a new machine and blank again on every edit: the vault never
+			// hands the password back, so the field can only ever mean "set this".
+			authPassword: "",
 		});
 	});
 });

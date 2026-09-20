@@ -15,7 +15,9 @@
   align-items: flex-start;
   gap: 8px;
   padding: 10px 14px;
-  max-width: 420px;
+  /* Never wider than the viewport: the container is right-anchored, so an
+     over-wide toast would run off the left edge on a narrow window. */
+  max-width: min(480px, calc(100vw - 32px));
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -49,6 +51,10 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  /* Claim the row rather than being sized by content, so the title and the
+     message share one width instead of the title getting whatever the action
+     button leaves over. */
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -67,7 +73,8 @@
 .titleRow {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 2px 6px;
   min-width: 0;
 }
 
@@ -90,6 +97,13 @@
 
 .title {
   font-weight: 600;
+  /* A flex BASIS, not just a min-width. `overflow-wrap: anywhere` puts the
+     title's min-content width at one character, so on its own the title would
+     never wrap onto its own line — it would squash into whatever column the
+     repo chip left, which is how a long title came to be drawn four words
+     deep and one word wide. With a basis, the row breaks when fewer than
+     ~14 characters fit beside the chip and the title gets the full width. */
+  flex: 1 1 14ch;
   min-width: 0;
   overflow-wrap: anywhere;
 }

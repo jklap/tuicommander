@@ -87,7 +87,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
 
 		const branch = autofixBranchName(issueNumber);
-		const agentSeed = buildAgentSeed(prompt);
+		const agentSeed = await buildAgentSeed(prompt, repoPath);
 
 		try {
 			// Fork the auto-fix branch off the repo's default branch (main/master).
@@ -155,7 +155,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 					base_repo: repoPath,
 				},
 				result.branch,
-				buildAgentSeed(result.prompt),
+				await buildAgentSeed(result.prompt, repoPath),
 			);
 		} catch (err) {
 			appLogger.error("git", `Failed to start conflict assist for PR #${prNumber}`, err);

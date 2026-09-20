@@ -1,6 +1,8 @@
 import { appLogger } from "../../stores/appLogger";
 import { isTauri, rpc } from "../../transport";
+import { getRemoteBaseUrl, withRemoteToken } from "../../transportRuntime";
 import { isPerfDebug } from "../../utils/perfDebug";
+import { canDecodeDeflate, decodeTaggedFrame } from "./wsFrameCodec";
 
 export interface TerminalTransport {
 	subscribe(onFrame: (data: ArrayBuffer) => void): Promise<void>;
@@ -39,8 +41,16 @@ export function toBinaryPayload(data: unknown): ArrayBuffer | null {
 	return null;
 }
 
-export function createTransport(sessionId: string, baseUrl?: string): TerminalTransport {
-	if (baseUrl) return new WsTransport(sessionId, baseUrl);
+/**
+ * Build the transport for a terminal.
+ *
+ * `connectionId` names a remote daemon; the base URL and the session token both
+ * come from it, so the caller never has to hold a credential. A terminal owned
+ * by a remote machine is always a WebSocket — Tauri IPC reaches this process
+ * only.
+ */
+export function createTransport(sessionId: string, connectionId?: string): TerminalTransport {
+	if (connectionId) return new WsTransport(sessionId, connectionId);
 	return isTauri() ? new TauriTransport(sessionId) : new WsTransport(sessionId);
 }
 
@@ -152,7 +162,7 @@ const INITIAL_RECONNECT_MS = 1000;
 
 export class WsTransport implements TerminalTransport {
 	private sessionId: string;
-	private baseUrl: string | undefined;
+	private connectionId: string | undefined;
 	private ws: WebSocket | null = null;
 	private onFrameHandler: ((data: ArrayBuffer) => void) | null = null;
 	private eventHandlers = new Map<string, (payload: unknown) => void>();
@@ -160,9 +170,9 @@ export class WsTransport implements TerminalTransport {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private reconnectAttempts = 0;
 
-	constructor(sessionId: string, baseUrl?: string) {
+	constructor(sessionId: string, connectionId?: string) {
 		this.sessionId = sessionId;
-		this.baseUrl = baseUrl;
+		this.connectionId = connectionId;
 	}
 
 	async subscribe(onFrame: (data: ArrayBuffer) => void): Promise<void> {
@@ -180,16 +190,55 @@ export class WsTransport implements TerminalTransport {
 		await this.connect();
 	}
 
+	/**
+	 * Dispatch one JSON frame to the handler registered for its `type`.
+	 *
+	 * Shared by the plain and the negotiated path so the two cannot drift: the
+	 * only difference between them is how the string was obtained.
+	 */
+	private handleTextFrame(text: string): void {
+		try {
+			const event = JSON.parse(text) as { type: string; [key: string]: unknown };
+			const { type, ...payload } = event;
+			this.eventHandlers.get(type)?.(payload);
+		} catch (err) {
+			if (isPerfDebug()) {
+				appLogger.debug("terminal", "WsTransport received an unparseable text frame", {
+					sessionId: this.sessionId,
+					frameStart: text?.slice?.(0, 100),
+					error: err,
+				});
+			}
+		}
+	}
+
 	private async connect(): Promise<void> {
 		let url: string;
-		if (this.baseUrl) {
-			// Remote: convert http(s) baseUrl to ws(s)
-			const wsBase = this.baseUrl.replace(/^http/, "ws");
-			url = `${wsBase}/sessions/${encodeURIComponent(this.sessionId)}/stream?format=grid`;
+		const remoteBaseUrl = this.connectionId ? getRemoteBaseUrl(this.connectionId) : undefined;
+		// Only a remote connection has a link worth compressing, and only a
+		// runtime with the platform inflate can read the answer. Asking for an
+		// encoding we cannot decode would break the terminal rather than slow
+		// it down, so both have to hold.
+		const compressed = Boolean(this.connectionId) && canDecodeDeflate();
+		const query = compressed ? "format=grid&compress=deflate" : "format=grid";
+		if (this.connectionId) {
+			if (!remoteBaseUrl) {
+				// Not connected, or connected but unauthenticated: there is no URL to
+				// open. Reconnecting blindly would spin against a daemon that answers
+				// 401 to the upgrade, so give up and let connect() surface the reason.
+				throw new Error(`Remote connection ${this.connectionId} not connected`);
+			}
+			// Remote: convert http(s) baseUrl to ws(s). The upgrade request cannot
+			// carry an Authorization header, so the token rides in the query string.
+			const wsBase = remoteBaseUrl.replace(/^http/, "ws");
+			url = withRemoteToken(
+				`${wsBase}/sessions/${encodeURIComponent(this.sessionId)}/stream?${query}`,
+				this.connectionId,
+			);
 		} else {
 			// Local: use current page origin
 			const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-			url = `${proto}//${window.location.host}/sessions/${encodeURIComponent(this.sessionId)}/stream?format=grid`;
+			url = `${proto}//${window.location.host}/sessions/${encodeURIComponent(this.sessionId)}/stream?${query}`;
 		}
 		// Every handler below is guarded on `this.ws === ws`. A socket the transport
 		// has moved on from still fires its callbacks: its onclose reads as an
@@ -199,25 +248,40 @@ export class WsTransport implements TerminalTransport {
 		const ws = new WebSocket(url);
 		this.ws = ws;
 		ws.binaryType = "arraybuffer";
+		// Inflating a frame is asynchronous, and grid frames are DELTAS: one
+		// overtaking another paints stale rows with no error. Every frame on a
+		// negotiated socket therefore goes through this chain, text ones
+		// included, so their order relative to the deltas is the order the
+		// server sent them in.
+		let pending: Promise<void> = Promise.resolve();
 		ws.onmessage = (e) => {
 			if (this.ws !== ws) return;
-			if (e.data instanceof ArrayBuffer) {
-				this.onFrameHandler?.(e.data);
-			} else {
-				try {
-					const event = JSON.parse(e.data as string) as { type: string; [key: string]: unknown };
-					const { type, ...payload } = event;
-					this.eventHandlers.get(type)?.(payload);
-				} catch (err) {
-					if (isPerfDebug()) {
-						appLogger.debug("terminal", "WsTransport received an unparseable text frame", {
-							sessionId: this.sessionId,
-							frameStart: (e.data as string)?.slice?.(0, 100),
-							error: err,
-						});
-					}
-				}
+			if (!compressed) {
+				// A socket that did not ask gets the original framing, handled
+				// synchronously exactly as before.
+				if (e.data instanceof ArrayBuffer) this.onFrameHandler?.(e.data);
+				else this.handleTextFrame(e.data as string);
+				return;
 			}
+			pending = pending
+				.then(async () => {
+					if (this.ws !== ws) return;
+					const frame = await decodeTaggedFrame(e.data as ArrayBuffer);
+					// Re-checked after the await: the socket can be replaced while a
+					// frame is inflating, and this one belongs to the old stream.
+					if (this.ws !== ws) return;
+					if (frame.kind === "binary") this.onFrameHandler?.(frame.data);
+					else this.handleTextFrame(frame.data);
+				})
+				.catch((err) => {
+					// An undecodable frame is a protocol disagreement, not a slow
+					// link, and it will repeat. Say so once per frame at warn level
+					// rather than hiding it behind the perf-debug gate.
+					appLogger.warn("terminal", "WsTransport could not decode a compressed frame", {
+						sessionId: this.sessionId,
+						error: err,
+					});
+				});
 		};
 		ws.onclose = () => {
 			if (this.closed || this.ws !== ws) return;
@@ -259,7 +323,10 @@ export class WsTransport implements TerminalTransport {
 	}
 
 	async invoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
-		return rpc(cmd, args);
+		// The session lives on whichever machine this socket points at, so every
+		// call about it — write, resize, scroll — goes to the same place. Undefined
+		// for a browser-mode local terminal, which is what `rpc` already assumes.
+		return rpc(cmd, args, this.connectionId);
 	}
 
 	ackFrame(_received: number): void {

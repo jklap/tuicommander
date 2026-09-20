@@ -1,5 +1,5 @@
 import { AGENTS, type AgentType } from "../agents";
-import { agentConfigsStore } from "../stores/agentConfigs";
+import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../stores/agentConfigs";
 import { rpc } from "../transport";
 import { pathBasename } from "./pathUtils";
 
@@ -28,9 +28,14 @@ import { pathBasename } from "./pathUtils";
  * that decides where the session is stored. The prefix stays in front of the
  * binary; the resume flags still go between the binary and its args.
  */
-function applyDefaultRunConfig(agentType: AgentType, command: string, launchCommand?: string | null): string {
+function applyDefaultRunConfig(
+	agentType: AgentType,
+	command: string,
+	launchCommand?: string | null,
+	cwd?: string | null,
+): string {
 	const launch = launchCommand ? splitEnvPrefix(launchCommand) : null;
-	const runConfig = launch ? null : agentConfigsStore.getDefaultConfig(agentType);
+	const runConfig = launch ? null : agentConfigsForRepo(cwd).getDefaultConfig(agentType);
 	if (!launch && !runConfig) return command;
 
 	const resumeFlags = tokenize(command).slice(1); // drop the hardcoded binary
@@ -52,7 +57,11 @@ function applyDefaultRunConfig(agentType: AgentType, command: string, launchComm
  * survives the process. Otherwise fall back to the run config, which knows the
  * env only when the user typed it into TUIC rather than into a shell alias.
  */
-function resolveLaunchEnv(agentType: AgentType, launchCommand?: string | null): Record<string, string> {
+function resolveLaunchEnv(
+	agentType: AgentType,
+	launchCommand?: string | null,
+	cwd?: string | null,
+): Record<string, string> {
 	const prefix = launchCommand ? splitEnvPrefix(launchCommand).env : [];
 	if (prefix.length > 0) {
 		return Object.fromEntries(
@@ -62,11 +71,12 @@ function resolveLaunchEnv(agentType: AgentType, launchCommand?: string | null): 
 			}),
 		);
 	}
+	const machineConfigs = agentConfigsForRepo(cwd);
 	const config = launchCommand
-		? agentConfigsStore
+		? machineConfigs
 				.getRunConfigs(agentType)
 				.find((candidate) => [candidate.command, ...candidate.args].join(" ") === launchCommand)
-		: agentConfigsStore.getDefaultConfig(agentType);
+		: machineConfigs.getDefaultConfig(agentType);
 	return config?.env ?? {};
 }
 
@@ -160,6 +170,7 @@ export function buildResumeCommand(
 	agentType: AgentType,
 	agentSessionId?: string | null,
 	launchCommand?: string | null,
+	cwd?: string | null,
 ): string | null {
 	let base: string | null = null;
 	if (agentSessionId) {
@@ -168,7 +179,7 @@ export function buildResumeCommand(
 	}
 	if (base === null) base = AGENTS[agentType].resumeCommand;
 	if (base === null) return null;
-	return applyDefaultRunConfig(agentType, base, launchCommand);
+	return applyDefaultRunConfig(agentType, base, launchCommand, cwd);
 }
 
 /**
@@ -191,6 +202,10 @@ export async function verifyAndBuildResumeCommand(
 
 	const sessionId = disc ? agentSessionId : (tuicSession ?? agentSessionId);
 
+	// The tab resumes on the machine that holds its working directory, so the run
+	// config that rebuilds the command has to be read there before it is used.
+	await ensureAgentConfigsForRepo(cwd);
+
 	if (sessionId && cwd && disc) {
 		try {
 			// At restore time the agent process has exited, so agentPid is null.
@@ -200,11 +215,11 @@ export async function verifyAndBuildResumeCommand(
 				sessionId,
 				cwd,
 				agentPid: null,
-				envOverrides: resolveLaunchEnv(agentType, launchCommand),
+				envOverrides: resolveLaunchEnv(agentType, launchCommand, cwd),
 			});
 			if (exists) {
 				const cmd = disc.resumeWithId(sessionId);
-				return applyDefaultRunConfig(agentType, cmd, launchCommand);
+				return applyDefaultRunConfig(agentType, cmd, launchCommand, cwd);
 			}
 			return null;
 		} catch {
@@ -213,5 +228,5 @@ export async function verifyAndBuildResumeCommand(
 	}
 
 	// No verified session — fall back to static resumeCommand
-	return buildResumeCommand(agentType, agentSessionId, launchCommand);
+	return buildResumeCommand(agentType, agentSessionId, launchCommand, cwd);
 }

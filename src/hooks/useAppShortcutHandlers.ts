@@ -1,4 +1,3 @@
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { Accessor, Setter } from "solid-js";
 import { invoke } from "../invoke";
 import { normalizeCombo } from "../keybindingDefaults";
@@ -15,12 +14,12 @@ import { mdTabsStore } from "../stores/mdTabs";
 import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { repositoriesStore } from "../stores/repositories";
 import { paneLayoutKey } from "../stores/savedPaneLayouts";
-import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
 import { worktreeManagerStore } from "../stores/worktreeManager";
 import { isTauri } from "../transport";
+import { openDialog, saveDialog } from "../utils/nativeDialog";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { nextWaitingTerminal } from "../utils/nextWaitingTerminal";
 import type { useGitOperations } from "./useGitOperations";
@@ -109,7 +108,7 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 		toggleTaskQueue: () => options.setTaskQueueVisible((visible) => !visible),
 		toggleGitOpsPanel: () => togglePanel("git"),
 		toggleHelpPanel: () => options.setHelpPanelVisible((visible) => !visible),
-		toggleNotesPanel: uiStore.toggleNotesPanel,
+		toggleIdeasPanel: uiStore.toggleIdeasPanel,
 		toggleFileBrowserPanel: uiStore.toggleFileBrowserPanel,
 		requestFileBrowserContentSearch: uiStore.requestFileBrowserContentSearch,
 		toggleOutlinePanel: uiStore.toggleOutlinePanel,
@@ -200,9 +199,6 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			);
 		},
 		toggleCommandOverview: mdTabsStore.addCommandOverview,
-		openAiTriage: () => {
-			if (settingsStore.isAiTriageEnabled()) uiStore.toggleAiTriagePanel();
-		},
 		toggleComposePanel: () => terminalsStore.getActive()?.ref?.toggleCompose(),
 		detachActivityDashboard: () => {
 			if (!isTauri()) return;

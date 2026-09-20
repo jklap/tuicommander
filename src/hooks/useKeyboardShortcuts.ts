@@ -54,7 +54,7 @@ export interface ShortcutHandlers {
 	toggleTaskQueue: () => void;
 	toggleGitOpsPanel: () => void;
 	toggleHelpPanel: () => void;
-	toggleNotesPanel: () => void;
+	toggleIdeasPanel: () => void;
 	toggleFileBrowserPanel: () => void;
 	requestFileBrowserContentSearch: () => void;
 	toggleOutlinePanel: () => void;
@@ -85,7 +85,6 @@ export interface ShortcutHandlers {
 	openPath: () => void;
 	openSecondaryWindow: () => void;
 	toggleCommandOverview: () => void;
-	openAiTriage: () => void;
 	toggleComposePanel: () => void;
 	detachActivityDashboard: () => void;
 	toggleProcessManager: () => void;
@@ -237,7 +236,7 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			handlers.toggleMarkdownPanel();
 			return true;
 		case "toggle-notes":
-			handlers.toggleNotesPanel();
+			handlers.toggleIdeasPanel();
 			return true;
 		case "toggle-file-browser":
 			handlers.toggleFileBrowserPanel();
@@ -337,9 +336,6 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			return true;
 		case "command-overview":
 			handlers.toggleCommandOverview();
-			return true;
-		case "ai-triage":
-			handlers.openAiTriage();
 			return true;
 		case "toggle-compose-panel":
 			handlers.toggleComposePanel();

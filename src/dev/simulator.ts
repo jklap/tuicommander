@@ -206,7 +206,7 @@ const simulator = {
 				uiStore.toggleFileBrowserPanel();
 				break;
 			case "notes":
-				uiStore.toggleNotesPanel();
+				uiStore.toggleIdeasPanel();
 				break;
 			default:
 				console.error(`[tuic] Unknown panel: "${name}". Options: diff, markdown, files, notes`);
@@ -476,7 +476,7 @@ const simulator = {
   __tuic.panel('diff')             Toggle diff panel
   __tuic.panel('markdown')         Toggle markdown panel
   __tuic.panel('files')            Toggle file browser panel
-  __tuic.panel('notes')            Toggle notes/ideas panel
+  __tuic.panel('notes')            Toggle ideas panel
 
 ── Activity Bell (plugin sections) ───────────────────────────
   __tuic.activity()                                         Add item to "SIMULATED ACTIVITY" section

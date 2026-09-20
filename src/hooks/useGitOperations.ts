@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { batch, createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
@@ -12,6 +11,7 @@ import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri, rpc } from "../transport";
 import type { RepoInfo } from "../types";
+import { openDialog as open } from "../utils/nativeDialog";
 import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
 import { createRepositoryRefreshCoordinator } from "./git/createRepositoryRefreshCoordinator";

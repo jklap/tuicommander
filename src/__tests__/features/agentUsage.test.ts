@@ -19,7 +19,9 @@ vi.mock("../../stores/statusBarTicker", () => ({
 	},
 }));
 
-vi.mock("../../stores/mdTabs", () => ({ mdTabsStore: { addClaudeUsage: vi.fn(), addCodexUsage: vi.fn() } }));
+vi.mock("../../stores/mdTabs", () => ({
+	mdTabsStore: { addClaudeUsage: vi.fn(), addCodexUsage: vi.fn(), addGrokUsage: vi.fn() },
+}));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
 
 interface FakeTerminal {
@@ -96,6 +98,16 @@ describe("agent usage ticker — no vendor default", () => {
 		expect(invoke).toHaveBeenCalledTimes(1);
 		expect(invoke).toHaveBeenCalledWith("get_codex_usage_api");
 		expect(addMessage).toHaveBeenCalledWith(expect.objectContaining({ label: "Codex" }));
+	});
+
+	it("uses Grok's provider billing surface for a Grok tab", async () => {
+		setTerminals({ activeId: "t1", terminals: { t1: { agentType: "grok" } } });
+
+		initAgentUsage();
+		await settle();
+
+		expect(invoke).toHaveBeenCalledExactlyOnceWith("get_grok_usage_api");
+		expect(addMessage).toHaveBeenCalledWith(expect.objectContaining({ label: "Grok" }));
 	});
 
 	it("starts polling when an agent tab becomes active after an empty start", async () => {

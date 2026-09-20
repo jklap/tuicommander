@@ -17,25 +17,30 @@ import {
 	type EnvFlagDef,
 } from "../../../data/ccEnvFlags";
 import { type AgentAvailability, useAgentDetection } from "../../../hooks/useAgentDetection";
-import { t } from "../../../i18n";
 import { invoke } from "../../../invoke";
 import { setClaudeUsageEnabled } from "../../../plugins";
 import { isPluginDisabled, setPluginEnabled } from "../../../plugins/pluginLoader";
-import { agentConfigsStore } from "../../../stores/agentConfigs";
-import { aiPromptsStore, DEFAULT_DIFF_TRIAGE_PROMPT } from "../../../stores/aiPrompts";
+import { agentConfigsStore, ensureAgentConfigs } from "../../../stores/agentConfigs";
 import { appLogger } from "../../../stores/appLogger";
 import { editorTabsStore } from "../../../stores/editorTabs";
 import { remoteConnectionsStore } from "../../../stores/remoteConnections";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
-import { isTauri } from "../../../transport";
+import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
 import { AgentIcon } from "../../ui/AgentIcon";
+import { MachineSelector } from "../MachineSelector";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import a from "./AgentsTab.module.css";
-import { AgentConfigProvider, createRemoteAgentConfigStore, useAgentConfig } from "./agentConfigContext";
+import {
+	AgentConfigProvider,
+	createRemoteAgentConfigStore,
+	MachineProvider,
+	useAgentConfig,
+	useMachine,
+} from "./agentConfigContext";
 
 const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
 
@@ -608,6 +613,7 @@ const AgentRow: Component<{
 	onExpand?: (type: AgentType) => void;
 }> = (props) => {
 	const configStore = useAgentConfig();
+	const machine = useMachine();
 	const [expanded, setExpanded] = createSignal(false);
 	const [addingConfig, setAddingConfig] = createSignal(false);
 	const [mcpStatus, setMcpStatus] = createSignal<McpStatus | null>(null);
@@ -623,8 +629,18 @@ const AgentRow: Component<{
 	const supportsLaunchSignals = () => props.agentType === "claude" || props.agentType === "codex";
 	const supportsGlobalHooks = () => ["gemini", "grok", "opencode"].includes(props.agentType);
 
+	/**
+	 * The MCP bridge is installed on this machine only.
+	 *
+	 * `get_agent_mcp_status`, `install_agent_mcp`, `remove_agent_mcp` and
+	 * `get_agent_config_path` have no HTTP route (`INTENTIONALLY_UNMAPPED`), so
+	 * they cannot be sent to a daemon. Showing them while a remote machine is
+	 * selected would report the Mac's bridge as the remote machine's.
+	 */
+	const mcpEditable = () => supportsMcp() && isTauri() && !machine();
+
 	const loadMcpStatus = async () => {
-		if (!supportsMcp() || !isTauri()) return;
+		if (!mcpEditable()) return;
 		try {
 			const status = await invoke<McpStatus>("get_agent_mcp_status", { agentType: props.agentType });
 			setMcpStatus(status);
@@ -634,9 +650,9 @@ const AgentRow: Component<{
 	};
 
 	const loadHookState = async () => {
-		if (!supportsHooks() || !isTauri()) return;
+		if (!supportsHooks() || (!isTauri() && !machine())) return;
 		try {
-			const st = await invoke<AgentHookState>("get_agent_hook_state", { agentType: props.agentType });
+			const st = await rpc<AgentHookState>("get_agent_hook_state", { agentType: props.agentType }, machine());
 			setHookState(st);
 		} catch (err) {
 			appLogger.error("config", `Failed to get hook state for ${props.agentType}`, err);
@@ -649,7 +665,7 @@ const AgentRow: Component<{
 		try {
 			const next = !(configStore.getHookInstrumentation(props.agentType) ?? false);
 			// The command persists the flag AND installs/removes the hooks.
-			await invoke("set_agent_hook_instrumentation", { agentType: props.agentType, enabled: next });
+			await rpc("set_agent_hook_instrumentation", { agentType: props.agentType, enabled: next }, machine());
 			configStore.syncHookInstrumentation(props.agentType, next);
 			await loadHookState();
 		} catch (err) {
@@ -664,7 +680,7 @@ const AgentRow: Component<{
 		setHookLoading(true);
 		try {
 			const next = !configStore.getNativeStatusSignals(props.agentType);
-			await invoke("set_agent_native_status_signals", { agentType: props.agentType, enabled: next });
+			await rpc("set_agent_native_status_signals", { agentType: props.agentType, enabled: next }, machine());
 			configStore.syncNativeStatusSignals(props.agentType, next);
 		} catch (err) {
 			appLogger.error("config", `Native status signal toggle failed for ${props.agentType}`, err);
@@ -937,10 +953,13 @@ const AgentRow: Component<{
 					<div class={a.expandedSection}>
 						<div class={a.expandedLabel}>Actions</div>
 						<div class={a.actionsRow}>
-							<button class={a.actionBtn} onClick={handleEditConfig}>
-								Edit Agent Config
-							</button>
-							<Show when={supportsMcp() && isTauri()}>
+							{/* Opens the file in this app's editor, so it can only be a local path. */}
+							<Show when={!machine()}>
+								<button class={a.actionBtn} onClick={handleEditConfig}>
+									Edit Agent Config
+								</button>
+							</Show>
+							<Show when={mcpEditable()}>
 								<button
 									class={a.actionBtn}
 									classList={{ [a.installed]: mcpStatus()?.installed }}
@@ -1047,77 +1066,6 @@ const McpIntegrationsSection: Component = () => {
 // AI Prompts section (embedded in Agents tab)
 // ---------------------------------------------------------------------------
 
-const AiPromptsSection: Component = () => {
-	const [expanded, setExpanded] = createSignal(false);
-	const [draft, setDraft] = createSignal("");
-	const [dirty, setDirty] = createSignal(false);
-
-	const handleExpand = () => {
-		if (!expanded()) {
-			aiPromptsStore
-				.hydrate()
-				.then(() => {
-					setDraft(aiPromptsStore.getEffectivePrompt("diff_triage"));
-					setDirty(false);
-				})
-				.catch((err: unknown) => appLogger.error("ai-agent", "Failed to hydrate AI prompts", err));
-		}
-		setExpanded(!expanded());
-	};
-
-	const handleSave = () => {
-		const val = draft();
-		const isDefault = val.trim() === DEFAULT_DIFF_TRIAGE_PROMPT.trim();
-		aiPromptsStore.setDiffTriagePrompt(isDefault ? null : val);
-		setDirty(false);
-	};
-
-	const handleReset = () => {
-		aiPromptsStore.resetToDefault("diff_triage");
-		setDraft(DEFAULT_DIFF_TRIAGE_PROMPT);
-		setDirty(false);
-	};
-
-	return (
-		<div class={s.group} style={{ "margin-top": "16px" }}>
-			<h3 style={{ cursor: "pointer", display: "flex", "align-items": "center", gap: "6px" }} onClick={handleExpand}>
-				<span class={a.expandIcon} classList={{ [a.expanded]: expanded() }}>
-					&#9654;
-				</span>
-				{t("aiPrompts.heading.title", "AI Prompts")}
-			</h3>
-			<p class={s.hint}>{t("aiPrompts.hint.description", "Customize system prompts sent to AI services.")}</p>
-
-			<Show when={expanded()}>
-				<div style={{ "margin-top": "8px" }}>
-					<label>{t("aiPrompts.heading.diffTriage", "Diff Triage")}</label>
-					<p class={s.hint}>
-						{t("aiPrompts.hint.diffTriage", "System prompt sent to the LLM when classifying changed files.")}
-					</p>
-					<div class={s.group}>
-						<textarea
-							rows={12}
-							value={draft()}
-							onInput={(e) => {
-								setDraft(e.currentTarget.value);
-								setDirty(true);
-							}}
-						/>
-					</div>
-					<div class={s.actions}>
-						<button disabled={!dirty()} onClick={handleSave}>
-							{t("aiPrompts.save", "Save")}
-						</button>
-						<button disabled={!aiPromptsStore.isCustom("diff_triage") && !dirty()} onClick={handleReset}>
-							{t("aiPrompts.resetDefault", "Revert to Default")}
-						</button>
-					</div>
-				</div>
-			</Show>
-		</div>
-	);
-};
-
 // ---------------------------------------------------------------------------
 // Main tab
 // ---------------------------------------------------------------------------
@@ -1131,21 +1079,25 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 	const [remoteLoading, setRemoteLoading] = createSignal(false);
 	const [remoteError, setRemoteError] = createSignal<string | null>(null);
 	const [activeStore, setActiveStore] = createSignal(agentConfigsStore);
+	/**
+	 * `undefined` until the user picks: the tab then follows the repository the
+	 * settings nav is standing on, which is the common case. An explicit pick
+	 * wins, so a remote machine stays editable from a local repo.
+	 */
+	const [pickedMachine, setPickedMachine] = createSignal<string | undefined>(undefined);
+	const [machinePicked, setMachinePicked] = createSignal(false);
+	const machine = () => (machinePicked() ? pickedMachine() : props.connectionId);
 
 	createEffect(
-		on(
-			() => props.connectionId,
-			(cid) => {
-				const store = cid ? createRemoteAgentConfigStore(cid) : agentConfigsStore;
-				setActiveStore(() => store);
-				setRemoteLoading(!!cid);
-				setRemoteError(null);
-				store
-					.hydrate()
-					.catch((e: Error) => setRemoteError(e.message ?? "Failed to load remote config"))
-					.finally(() => setRemoteLoading(false));
-			},
-		),
+		on(machine, (cid) => {
+			const store = cid ? createRemoteAgentConfigStore(cid) : agentConfigsStore;
+			setActiveStore(() => store);
+			setRemoteLoading(!!cid);
+			setRemoteError(null);
+			ensureAgentConfigs(cid)
+				.catch((e: Error) => setRemoteError(e.message ?? "Failed to load remote config"))
+				.finally(() => setRemoteLoading(false));
+		}),
 	);
 
 	onMount(() => {
@@ -1163,63 +1115,75 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 
 	return (
 		<AgentConfigProvider value={activeStore()}>
-			<div class={s.section}>
-				<Show when={props.connectionId}>
-					{(cid) => {
-						const conn = () => remoteConnectionsStore.getConnectionState(cid());
-						return (
-							<div class={a.remoteBanner}>
-								<span class={a.remoteBannerIcon}>&#x27D0;</span>
-								Configuring remote: <strong>{conn()?.connection.name ?? cid()}</strong>
-							</div>
-						);
-					}}
-				</Show>
-				<Show when={remoteLoading()}>
-					<div class={a.remoteLoading}>Loading remote configuration...</div>
-				</Show>
-				<Show when={remoteError()}>
-					<div class={a.remoteError}>Remote config unavailable: {remoteError()}</div>
-				</Show>
+			<MachineProvider value={machine}>
+				<div class={s.section}>
+					<MachineSelector
+						value={machine()}
+						label="Configure agents on"
+						onChange={(id) => {
+							setMachinePicked(true);
+							setPickedMachine(id);
+						}}
+					/>
+					<Show when={machine()}>
+						{(cid) => {
+							const conn = () => remoteConnectionsStore.getConnectionState(cid());
+							return (
+								<div class={a.remoteBanner}>
+									<span class={a.remoteBannerIcon}>&#x27D0;</span>
+									Configuring remote: <strong>{conn()?.connection.name ?? cid()}</strong>
+								</div>
+							);
+						}}
+					</Show>
+					<Show when={remoteLoading()}>
+						<div class={a.remoteLoading}>Loading remote configuration...</div>
+					</Show>
+					<Show when={remoteError()}>
+						<div class={a.remoteError}>Remote config unavailable: {remoteError()}</div>
+					</Show>
 
-				<h3>Agents</h3>
-				<p class={s.hint} style={{ "margin-bottom": "12px" }}>
-					Configure AI coding agents, manage run configurations, and install MCP bridge integrations.
-				</p>
+					<h3>Agents</h3>
+					<p class={s.hint} style={{ "margin-bottom": "12px" }}>
+						Configure AI coding agents, manage run configurations, and install MCP bridge integrations.
+					</p>
 
-				<SettingToggle
-					checked={settingsStore.state.intentTabTitle}
-					onChange={(v) => settingsStore.setIntentTabTitle(v)}
-					label="Show agent intent as tab title"
-					hint="When agents declare their current work phase, update the tab name with a short title"
-				/>
+					<SettingToggle
+						checked={settingsStore.state.intentTabTitle}
+						onChange={(v) => settingsStore.setIntentTabTitle(v)}
+						label="Show agent intent as tab title"
+						hint="When agents declare their current work phase, update the tab name with a short title"
+					/>
 
-				<SettingToggle
-					checked={settingsStore.state.suggestFollowups}
-					onChange={(v) => settingsStore.setSuggestFollowups(v)}
-					label="Show suggested follow-up actions"
-					hint="Display actionable suggestions from agents after completing a task"
-				/>
+					<SettingToggle
+						checked={settingsStore.state.suggestFollowups}
+						onChange={(v) => settingsStore.setSuggestFollowups(v)}
+						label="Show suggested follow-up actions"
+						hint="Display actionable suggestions from agents after completing a task"
+					/>
 
-				<SettingToggle
-					checked={settingsStore.state.progressTracking}
-					onChange={(v) => settingsStore.setProgressTracking(v)}
-					label="Collect project progress"
-					hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
-				/>
+					<SettingToggle
+						checked={settingsStore.state.progressTracking}
+						onChange={(v) => settingsStore.setProgressTracking(v)}
+						label="Collect project progress"
+						hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
+					/>
 
-				<div class={a.agentList}>
-					<For each={sortedAgents()}>
-						{(type) => (
-							<AgentRow agentType={type} detection={detection.getDetection(type)} onExpand={detection.detectVersion} />
-						)}
-					</For>
+					<div class={a.agentList}>
+						<For each={sortedAgents()}>
+							{(type) => (
+								<AgentRow
+									agentType={type}
+									detection={detection.getDetection(type)}
+									onExpand={detection.detectVersion}
+								/>
+							)}
+						</For>
+					</div>
+
+					<McpIntegrationsSection />
 				</div>
-
-				<McpIntegrationsSection />
-
-				<AiPromptsSection />
-			</div>
+			</MachineProvider>
 		</AgentConfigProvider>
 	);
 };

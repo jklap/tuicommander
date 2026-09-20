@@ -81,6 +81,13 @@ export interface ActiveSessionInfo {
 		background_work?: boolean;
 		queued_commands?: number;
 	} | null;
+	/**
+	 * Which remote machine runs this session; absent for a local one. The list
+	 * holds both since #791-055e, and this is the only field that tells them
+	 * apart — everything else about a mirrored row is shaped like a local one on
+	 * purpose.
+	 */
+	connection_id?: string | null;
 }
 
 /** PTY hook for managing terminal sessions */

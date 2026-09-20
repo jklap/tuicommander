@@ -334,7 +334,7 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 												<span class={s.mainBadge}>main</span>
 											</Show>
 											<Show when={wt.lifecycleStatus?.dirty}>
-								<span class={s.dirtyBadge} title="Staged, unstaged, or untracked files exist">
+												<span class={s.dirtyBadge} title="Staged, unstaged, or untracked files exist">
 													Dirty
 												</span>
 											</Show>

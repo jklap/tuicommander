@@ -214,6 +214,7 @@ export interface GitHubIssue {
 	updated_at: string;
 }
 
+/** Issue filter mode for the GitHub panel */
 export interface CreatedIssue {
 	number: number;
 	url: string;
@@ -239,7 +240,50 @@ export interface ImprovementScanResult {
 	proposals: ImprovementProposal[];
 }
 
-/** Issue filter mode for the GitHub panel */
+/** How bad ego said it is. */
+export type FindingSeverity = "bug" | "risk" | "nit";
+
+export interface ReviewFinding {
+	path: string;
+	line: number | null;
+	hunk: string | null;
+	severity: FindingSeverity;
+	/** How sure ego said it was. Under the backend's gate it is never sent at all. */
+	confidence: number;
+	message: string;
+}
+
+export interface ReviewedFile {
+	path: string;
+	summary: string;
+	findings: ReviewFinding[];
+}
+
+/**
+ * One ego PR review.
+ *
+ * `head_sha` is a hash of the diff that was reviewed, not a git sha — it exists
+ * to tell a stale review from a current one. There is deliberately no model
+ * field: which model ran is ego's configuration and this side is not told.
+ */
+export interface PrReviewResult {
+	repo_path: string;
+	pr_number: number;
+	head_sha: string;
+	summary: string | null;
+	files: ReviewedFile[];
+}
+
+export interface ChangelogResult {
+	markdown: string;
+	/**
+	 * The structured half of the split, `null` when ego answered in prose only.
+	 * The modal renders the markdown and never reads this — it is here because
+	 * it is on the wire for HTTP and MCP callers, which do consume it.
+	 */
+	json: unknown;
+}
+
 export type IssueFilterMode = "assigned" | "created" | "mentioned" | "all" | "disabled";
 
 /** Orchestrator stats from backend */

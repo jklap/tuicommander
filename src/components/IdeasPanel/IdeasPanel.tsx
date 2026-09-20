@@ -3,20 +3,23 @@ import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
-import { generateId, notesStore } from "../../stores/notes";
+import { generateId, ideasStore } from "../../stores/ideas";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
 import { formatRelativeTime } from "../../utils/time";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
-import s from "./NotesPanel.module.css";
+import s from "./IdeasPanel.module.css";
 
-export interface NotesPanelProps {
+export interface IdeasPanelProps {
 	visible: boolean;
 	repoPath: string | null;
 	onClose: () => void;
 	onSendToTerminal: (text: string) => void;
+	/** Leave the idea in the agent's Compose queue instead of typing it now.
+	 *  Absent when the host cannot queue (no agent session). */
+	onQueueToTerminal?: (text: string) => void;
 	mode?: "inline" | "detached";
 }
 
@@ -57,19 +60,19 @@ function buildTerminalText(text: string, images: string[]): string {
 	return `${text} ${refs}`;
 }
 
-export const NotesPanel: Component<NotesPanelProps> = (props) => {
+export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 	const mode = () => props.mode ?? "inline";
 	const [inputText, setInputText] = createSignal("");
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [reassigningId, setReassigningId] = createSignal<string | null>(null);
 	const [pendingImages, setPendingImages] = createSignal<string[]>([]);
-	const [pendingNoteId, setPendingNoteId] = createSignal<string | null>(null);
+	const [pendingIdeaId, setPendingIdeaId] = createSignal<string | null>(null);
 	const [editingImages, setEditingImages] = createSignal<string[]>([]);
 	let textareaRef: HTMLTextAreaElement | undefined;
 
-	const filteredNotes = () => notesStore.getFilteredNotes(props.repoPath);
-	const badgeCount = () => notesStore.pendingCount(props.repoPath);
-	const hasCompleted = () => notesStore.getFilteredNotes(props.repoPath).some((n) => n.usedAt !== null);
+	const filteredIdeas = () => ideasStore.getFilteredIdeas(props.repoPath);
+	const badgeCount = () => ideasStore.pendingCount(props.repoPath);
+	const hasCompleted = () => ideasStore.getFilteredIdeas(props.repoPath).some((n) => n.usedAt !== null);
 
 	const repoOptions = () => {
 		const repos = repositoriesStore.state.repositories;
@@ -92,14 +95,17 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 				const blob = item.getAsFile();
 				if (!blob) continue;
 
-				const noteId = pendingNoteId() ?? editingId() ?? generateId();
-				if (!pendingNoteId() && !editingId()) setPendingNoteId(noteId);
+				const ideaId = pendingIdeaId() ?? editingId() ?? generateId();
+				if (!pendingIdeaId() && !editingId()) setPendingIdeaId(ideaId);
 
 				try {
 					const dataBase64 = await blobToBase64(blob);
 					const extension = mimeToExtension(item.type);
+					// `noteId` is the backend argument name and the on-disk asset
+					// directory (`note-images/<id>/`). It keeps the old vocabulary
+					// on purpose — see the boundary note in `stores/ideas.ts`.
 					const savedPath = await invoke<string>("save_note_image", {
-						noteId,
+						noteId: ideaId,
 						dataBase64,
 						extension,
 					});
@@ -120,16 +126,16 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 
 		const editing = editingId();
 		if (editing) {
-			notesStore.updateNote(editing, text, images);
+			ideasStore.updateIdea(editing, text, images);
 			setEditingId(null);
 		} else {
-			const noteId = pendingNoteId() ?? undefined;
-			notesStore.addNote(text, props.repoPath, deriveDisplayName(props.repoPath), images, noteId);
+			const ideaId = pendingIdeaId() ?? undefined;
+			ideasStore.addIdea(text, props.repoPath, deriveDisplayName(props.repoPath), images, ideaId);
 		}
 
 		setInputText("");
 		setPendingImages([]);
-		setPendingNoteId(null);
+		setPendingIdeaId(null);
 		setEditingImages([]);
 	};
 
@@ -138,7 +144,7 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 		setEditingId(id);
 		setEditingImages(images);
 		setPendingImages([]);
-		setPendingNoteId(null);
+		setPendingIdeaId(null);
 		textareaRef?.focus();
 	};
 
@@ -147,7 +153,7 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 		setEditingId(null);
 		setEditingImages([]);
 		setPendingImages([]);
-		setPendingNoteId(null);
+		setPendingIdeaId(null);
 	};
 
 	const removePendingImage = (path: string) => {
@@ -174,20 +180,25 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 		}
 	};
 
-	const handleReassign = (noteId: string, newRepoPath: string) => {
+	const handleReassign = (ideaId: string, newRepoPath: string) => {
 		if (newRepoPath === "__global__") {
-			notesStore.reassignNote(noteId, null, null);
+			ideasStore.reassignIdea(ideaId, null, null);
 		} else {
 			const repos = repositoriesStore.state.repositories;
 			const displayName = repos[newRepoPath]?.displayName ?? deriveDisplayName(newRepoPath);
-			notesStore.reassignNote(noteId, newRepoPath, displayName);
+			ideasStore.reassignIdea(ideaId, newRepoPath, displayName);
 		}
 		setReassigningId(null);
 	};
 
-	const handleSend = (note: { text: string; images: string[]; id: string }) => {
-		props.onSendToTerminal(buildTerminalText(note.text, note.images));
-		notesStore.markUsed(note.id);
+	const handleSend = (idea: { text: string; images: string[]; id: string }) => {
+		props.onSendToTerminal(buildTerminalText(idea.text, idea.images));
+		ideasStore.markUsed(idea.id);
+	};
+
+	const handleQueue = (idea: { text: string; images: string[]; id: string }) => {
+		props.onQueueToTerminal?.(buildTerminalText(idea.text, idea.images));
+		ideasStore.markUsed(idea.id);
 	};
 
 	return (
@@ -199,7 +210,7 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 				<div class={p.headerLeft}>
 					<span class={p.title}>
 						<span style={{ filter: "grayscale(1) brightness(1.5)", "font-style": "normal" }}>💡</span>{" "}
-						{t("notesPanel.title", "Ideas")}
+						{t("ideasPanel.title", "Ideas")}
 					</span>
 					<Show when={badgeCount() > 0}>
 						<span class={p.fileCountBadge}>{badgeCount()}</span>
@@ -209,8 +220,8 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 					<Show when={hasCompleted()}>
 						<button
 							class={p.headerBtn}
-							onClick={() => notesStore.clearCompleted()}
-							title={t("notesPanel.clearCompleted", "Clear completed ideas")}
+							onClick={() => ideasStore.clearCompleted()}
+							title={t("ideasPanel.clearCompleted", "Clear completed ideas")}
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 								<path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5V1.5A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zm1.958 1l-.846 10.58a1 1 0 0 1-.997.92h-6.23a1 1 0 0 1-.997-.92L3.042 3.5h9.916z" />
@@ -222,22 +233,22 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 			</div>
 
 			<div class={cx(p.content, s.list)}>
-				<Show when={filteredNotes().length === 0}>
-					<div class={s.empty}>{t("notesPanel.empty", "No ideas yet. Add one below.")}</div>
+				<Show when={filteredIdeas().length === 0}>
+					<div class={s.empty}>{t("ideasPanel.empty", "No ideas yet. Add one below.")}</div>
 				</Show>
-				<For each={filteredNotes()}>
-					{(note) => (
-						<div class={cx(s.item, !!note.usedAt && s.itemUsed)}>
+				<For each={filteredIdeas()}>
+					{(idea) => (
+						<div class={cx(s.item, !!idea.usedAt && s.itemUsed)}>
 							<div class={s.body}>
-								<Show when={note.text}>
-									<span class={s.text} title={note.text}>
-										{note.usedAt ? "✓ " : ""}
-										{note.text}
+								<Show when={idea.text}>
+									<span class={s.text} title={idea.text}>
+										{idea.usedAt ? "✓ " : ""}
+										{idea.text}
 									</span>
 								</Show>
-								<Show when={note.images.length > 0}>
+								<Show when={idea.images.length > 0}>
 									<div class={s.thumbnails}>
-										<For each={note.images}>
+										<For each={idea.images}>
 											{(imgPath) => (
 												<img
 													class={s.thumbnail}
@@ -253,23 +264,23 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 									</div>
 								</Show>
 								<div class={s.meta}>
-									<span class={s.date}>{formatRelativeTime(note.createdAt, { showDateFallback: true })}</span>
+									<span class={s.date}>{formatRelativeTime(idea.createdAt, { showDateFallback: true })}</span>
 									<Show
-										when={reassigningId() === note.id}
+										when={reassigningId() === idea.id}
 										fallback={
 											<button
-												class={cx(s.projectLabel, note.repoPath ? s.projectTagged : s.projectGlobal)}
-												onClick={() => setReassigningId(note.id)}
+												class={cx(s.projectLabel, idea.repoPath ? s.projectTagged : s.projectGlobal)}
+												onClick={() => setReassigningId(idea.id)}
 												title="Click to reassign project"
 											>
-												{note.repoDisplayName ?? "Global"}
+												{idea.repoDisplayName ?? "Global"}
 											</button>
 										}
 									>
 										<select
 											class={s.reassignSelect}
-											value={note.repoPath ?? "__global__"}
-											onChange={(e) => handleReassign(note.id, e.currentTarget.value)}
+											value={idea.repoPath ?? "__global__"}
+											onChange={(e) => handleReassign(idea.id, e.currentTarget.value)}
 											onBlur={() => setReassigningId(null)}
 											ref={(el) => requestAnimationFrame(() => el.focus())}
 										>
@@ -282,22 +293,33 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 							<div class={s.actions}>
 								<button
 									class={cx(s.actionBtn, s.editBtn)}
-									onClick={() => handleEdit(note.id, note.text, note.images)}
-									title={t("notesPanel.edit", "Edit note")}
+									onClick={() => handleEdit(idea.id, idea.text, idea.images)}
+									title={t("ideasPanel.edit", "Edit idea")}
 								>
 									✎
 								</button>
+								<Show when={props.onQueueToTerminal}>
+									<button
+										class={cx(s.actionBtn, s.queueBtn)}
+										onClick={() => handleQueue(idea)}
+										title={t("ideasPanel.queue", "Queue for the agent's next idle moment")}
+									>
+										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+											<path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" />
+										</svg>
+									</button>
+								</Show>
 								<button
 									class={cx(s.actionBtn, s.sendBtn)}
-									onClick={() => handleSend(note)}
-									title={t("notesPanel.send", "Send to terminal")}
+									onClick={() => handleSend(idea)}
+									title={t("ideasPanel.send", "Send to terminal")}
 								>
 									▶
 								</button>
 								<button
 									class={cx(s.actionBtn, s.deleteBtn)}
-									onClick={() => notesStore.removeNote(note.id)}
-									title={t("notesPanel.delete", "Delete note")}
+									onClick={() => ideasStore.removeIdea(idea.id)}
+									title={t("ideasPanel.delete", "Delete idea")}
 								>
 									✕
 								</button>
@@ -337,8 +359,8 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 					rows={5}
 					placeholder={
 						editingId()
-							? t("notesPanel.editPlaceholder", "Edit idea... (Esc to cancel)")
-							: t("notesPanel.placeholder", "Type an idea and press Enter... (Ctrl+V to paste image)")
+							? t("ideasPanel.editPlaceholder", "Edit idea... (Esc to cancel)")
+							: t("ideasPanel.placeholder", "Type an idea and press Enter... (Ctrl+V to paste image)")
 					}
 					value={inputText()}
 					onInput={(e) => setInputText(e.currentTarget.value)}
@@ -349,7 +371,7 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 					class={s.submitBtn}
 					onClick={handleSubmit}
 					disabled={!inputText().trim() && allPendingImages().length === 0}
-					title={t("notesPanel.submit", "Add note (Enter)")}
+					title={t("ideasPanel.submit", "Add idea (Enter)")}
 				>
 					+
 				</button>
@@ -358,4 +380,4 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 	);
 };
 
-export default NotesPanel;
+export default IdeasPanel;

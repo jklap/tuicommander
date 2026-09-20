@@ -14,19 +14,23 @@ vi.mock("../../invoke", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { NotesPanel } from "../../components/NotesPanel/NotesPanel";
-import { notesStore } from "../../stores/notes";
+import { IdeasPanel } from "../../components/IdeasPanel/IdeasPanel";
+import { ideasStore } from "../../stores/ideas";
 
 const noop = () => {};
 
 function renderPanel() {
-	return render(() => <NotesPanel visible={true} repoPath={null} onClose={noop} onSendToTerminal={noop} />);
+	return render(() => <IdeasPanel visible={true} repoPath={null} onClose={noop} onSendToTerminal={noop} />);
 }
 
-describe("NotesPanel — IME composition handling", () => {
+function queueButton(container: HTMLElement): HTMLButtonElement | null {
+	return container.querySelector<HTMLButtonElement>('button[title*="Queue"]');
+}
+
+describe("IdeasPanel — IME composition handling", () => {
 	beforeEach(() => {
-		for (const note of [...notesStore.state.notes]) {
-			notesStore.removeNote(note.id);
+		for (const note of [...ideasStore.state.ideas]) {
+			ideasStore.removeIdea(note.id);
 		}
 		mockInvoke.mockClear();
 	});
@@ -38,7 +42,7 @@ describe("NotesPanel — IME composition handling", () => {
 		fireEvent.input(textarea, { target: { value: "ねこ" } });
 		fireEvent.keyDown(textarea, { key: "Enter", isComposing: true, keyCode: 229 });
 
-		expect(notesStore.state.notes.length).toBe(0);
+		expect(ideasStore.state.ideas.length).toBe(0);
 		expect(textarea.value).toBe("ねこ");
 	});
 
@@ -49,7 +53,7 @@ describe("NotesPanel — IME composition handling", () => {
 		fireEvent.input(textarea, { target: { value: "猫" } });
 		fireEvent.keyDown(textarea, { key: "Enter", isComposing: false, keyCode: 229 });
 
-		expect(notesStore.state.notes.length).toBe(0);
+		expect(ideasStore.state.ideas.length).toBe(0);
 		expect(textarea.value).toBe("猫");
 	});
 
@@ -60,7 +64,7 @@ describe("NotesPanel — IME composition handling", () => {
 		fireEvent.input(textarea, { target: { value: "猫" } });
 		fireEvent.keyDown(textarea, { key: "Enter", isComposing: true, keyCode: 13 });
 
-		expect(notesStore.state.notes.length).toBe(0);
+		expect(ideasStore.state.ideas.length).toBe(0);
 		expect(textarea.value).toBe("猫");
 	});
 
@@ -71,8 +75,8 @@ describe("NotesPanel — IME composition handling", () => {
 		fireEvent.input(textarea, { target: { value: "plain text" } });
 		fireEvent.keyDown(textarea, { key: "Enter", isComposing: false });
 
-		expect(notesStore.state.notes.length).toBe(1);
-		expect(notesStore.state.notes[0].text).toBe("plain text");
+		expect(ideasStore.state.ideas.length).toBe(1);
+		expect(ideasStore.state.ideas[0].text).toBe("plain text");
 	});
 
 	it("submits normally on a real Enter press (not IME)", () => {
@@ -82,8 +86,8 @@ describe("NotesPanel — IME composition handling", () => {
 		fireEvent.input(textarea, { target: { value: "hello world" } });
 		fireEvent.keyDown(textarea, { key: "Enter", isComposing: false, keyCode: 13 });
 
-		expect(notesStore.state.notes.length).toBe(1);
-		expect(notesStore.state.notes[0].text).toBe("hello world");
+		expect(ideasStore.state.ideas.length).toBe(1);
+		expect(ideasStore.state.ideas[0].text).toBe("hello world");
 	});
 
 	it("still inserts a newline on Shift+Enter without submitting", () => {
@@ -93,6 +97,47 @@ describe("NotesPanel — IME composition handling", () => {
 		fireEvent.input(textarea, { target: { value: "line one" } });
 		fireEvent.keyDown(textarea, { key: "Enter", shiftKey: true, isComposing: false, keyCode: 13 });
 
-		expect(notesStore.state.notes.length).toBe(0);
+		expect(ideasStore.state.ideas.length).toBe(0);
+	});
+});
+
+describe("IdeasPanel — queue to the agent's Compose queue", () => {
+	beforeEach(() => {
+		for (const note of [...ideasStore.state.ideas]) {
+			ideasStore.removeIdea(note.id);
+		}
+		mockInvoke.mockClear();
+	});
+
+	it("offers no queue action when the host cannot queue", () => {
+		ideasStore.addIdea("run the tests");
+		const { container } = renderPanel();
+
+		expect(queueButton(container)).toBeNull();
+	});
+
+	it("queues the idea instead of typing it, and marks it used", () => {
+		ideasStore.addIdea("run the tests");
+		const queued: string[] = [];
+		const sent: string[] = [];
+		const { container } = render(() => (
+			<IdeasPanel
+				visible={true}
+				repoPath={null}
+				onClose={noop}
+				onSendToTerminal={(text) => sent.push(text)}
+				onQueueToTerminal={(text) => queued.push(text)}
+			/>
+		));
+
+		const button = queueButton(container);
+		expect(button).not.toBeNull();
+		fireEvent.click(button as HTMLButtonElement);
+
+		expect(queued).toEqual(["run the tests"]);
+		// Queueing is a delivery mode, not a different message: it must never
+		// also type the idea into the prompt.
+		expect(sent).toEqual([]);
+		expect(ideasStore.state.ideas[0].usedAt).toBeGreaterThan(0);
 	});
 });

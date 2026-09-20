@@ -91,8 +91,8 @@ export const TIPS: Tip[] = [
 		shortcut: `${mod}+Shift+W`,
 	},
 	{
-		feature: "Notes Panel",
-		description: "A per-repo scratchpad for context, links, and commands — click the Notes icon in the toolbar.",
+		feature: "Ideas Panel",
+		description: "A per-repo scratchpad for context, links, and commands — click the Ideas icon in the toolbar.",
 		shortcut: null,
 	},
 	{
@@ -262,9 +262,9 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
-		feature: "Image Paste in Notes",
+		feature: "Image Paste in Ideas",
 		description:
-			"Paste images into the Notes panel with Ctrl+V — thumbnails render inline, and paths are sent to agents so they can read the files.",
+			"Paste images into the Ideas panel with Ctrl+V — thumbnails render inline, and paths are sent to agents so they can read the files.",
 		shortcut: null,
 	},
 	{

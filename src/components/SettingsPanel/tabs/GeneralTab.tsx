@@ -141,6 +141,28 @@ export const GeneralTab: Component = () => {
 				hint={t("general.hint.shell", "Shell used in terminals (leave blank for system default)")}
 			/>
 
+			{/* Offered with the panel it configures: while the AI Chat panel is
+			    behind the experimental toggle, a path to its engine is a setting
+			    with nothing to act on. */}
+			<Show when={settingsStore.isAiChatEnabled()}>
+				<h3>{t("general.heading.aiChat", "AI Chat")}</h3>
+
+				<SettingInput
+					label={t("general.label.egoExecutable", "ego executable")}
+					value={settingsStore.state.egoExecutable}
+					onInput={(v) => settingsStore.setEgoExecutable(v)}
+					placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
+					hint={
+						settingsStore.isAcpConfigured()
+							? t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")
+							: t(
+									"general.hint.egoExecutableEmpty",
+									"Empty: ACP is not configured, so the AI Chat panel cannot start a conversation. Name the ego binary to enable it.",
+								)
+					}
+				/>
+			</Show>
+
 			<Show when={isTauri() && cliStatus()}>
 				<h3>
 					{t("general.heading.cli", "TUIC CLI")}
@@ -426,10 +448,16 @@ export const GeneralTab: Component = () => {
 						!updaterStore.state.available &&
 						!updaterStore.state.checking &&
 						!updaterStore.state.error &&
-						!updaterStore.state.noRelease
+						!updaterStore.state.noRelease &&
+						!updaterStore.state.unsupported
 					}
 				>
 					<p class={s.hint}>{t("general.hint.latestVersion", "You are on the latest version")}</p>
+				</Show>
+				<Show when={updaterStore.state.unsupported}>
+					<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
+						{updaterStore.state.unsupported}
+					</p>
 				</Show>
 				<Show when={updaterStore.state.noRelease}>
 					<p class={s.hint} style={{ color: "var(--fg-muted)" }}>
@@ -531,40 +559,10 @@ export const GeneralTab: Component = () => {
 				<p class={s.hint}>
 					{t(
 						"general.hint.experimentalFeatures",
-						"Opt in to features under active development. Individual options appear below when enabled.",
+						"Opt in to features under active development: the AI Chat panel and SSH Tunnels.",
 					)}
 				</p>
 			</div>
-
-			<Show when={settingsStore.state.experimentalFeaturesEnabled}>
-				<SettingToggle
-					checked={settingsStore.state.aiChatEnabled}
-					onChange={(v) => settingsStore.setAiChatEnabled(v)}
-					label={t("general.toggle.aiChat", "AI Chat")}
-					hint={t("general.hint.aiChat", "Enable the AI Chat panel, keyboard shortcut, and command palette entry.")}
-				/>
-
-				<SettingToggle
-					checked={settingsStore.state.aiTriageEnabled}
-					onChange={(v) => settingsStore.setAiTriageEnabled(v)}
-					label={t("general.toggle.aiTriage", "AI Triage")}
-					hint={t(
-						"general.hint.aiTriage",
-						"Enable AI-powered diff triage to classify changed files by relevance and risk.",
-					)}
-				/>
-
-				<SettingToggle
-					checked={settingsStore.state.aiWatchersEnabled}
-					onChange={(v) => settingsStore.setAiWatchersEnabled(v)}
-					label={t("general.toggle.aiWatchers", "AI Watchers")}
-					hint={t(
-						"general.hint.aiWatchers",
-						"Enable terminal watchers that trigger AI actions on shell events (idle, busy, errors).",
-					)}
-				/>
-
-			</Show>
 		</div>
 	);
 };

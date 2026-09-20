@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
-import { notesStore } from "../../stores/notes";
+import { ideasStore } from "../../stores/ideas";
 import { rpc } from "../../transport";
 import { sendCommand } from "../../utils/sendCommand";
 import { formatRelativeTime } from "../../utils/time";
@@ -16,7 +16,7 @@ interface IdeasOverlayProps {
 export function IdeasOverlay(props: IdeasOverlayProps) {
 	const [inputText, setInputText] = createSignal("");
 
-	const notes = () => notesStore.getFilteredNotes(props.repoPath);
+	const notes = () => ideasStore.getFilteredIdeas(props.repoPath);
 
 	function handleBackdrop(e: MouseEvent) {
 		if (e.target === e.currentTarget) props.onDismiss();
@@ -25,7 +25,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 	function handleSubmit() {
 		const text = inputText().trim();
 		if (!text) return;
-		notesStore.addNote(text, props.repoPath, deriveDisplayName(props.repoPath));
+		ideasStore.addIdea(text, props.repoPath, deriveDisplayName(props.repoPath));
 		setInputText("");
 	}
 
@@ -41,7 +41,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 
 	async function handleSend(note: { id: string; text: string }) {
 		props.onDismiss();
-		notesStore.markUsed(note.id);
+		ideasStore.markUsed(note.id);
 		try {
 			// Route through the canonical sendCommand helper (split Enter for Ink
 			// raw mode, bracketed-paste for multi-line, Windows-native Ctrl-U skip).
@@ -103,7 +103,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 									</button>
 									<button
 										class={`${styles.actionBtn} ${styles.deleteBtn}`}
-										onClick={() => notesStore.removeNote(note.id)}
+										onClick={() => ideasStore.removeIdea(note.id)}
 										title="Delete"
 									>
 										<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

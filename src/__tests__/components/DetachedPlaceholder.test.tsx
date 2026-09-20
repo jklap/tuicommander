@@ -9,6 +9,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("../../transport", () => ({
 	isTauri: () => true,
+	// These suites are desktop-only and register no remote repo, so nothing
+	// diverts off local IPC.
+	owningConnectionFor: () => undefined,
 }));
 
 describe("DetachedPlaceholder", () => {
@@ -24,6 +27,7 @@ describe("DetachedPlaceholder", () => {
 		}));
 		vi.doMock("../../transport", () => ({
 			isTauri: () => true,
+			owningConnectionFor: () => undefined,
 		}));
 
 		const uiMod = await import("../../stores/ui");

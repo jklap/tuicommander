@@ -1007,6 +1007,63 @@ describe("Sidebar", () => {
 			expect(stats).toBeNull();
 		});
 
+		it("explains the Dirty lifecycle badge with a WebView tooltip", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							lifecycleStatus: {
+								dirty: true,
+								commitStatus: "unmerged",
+								removalSafety: "requires_force",
+							},
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const badge = container.querySelector(".lifecycleBadge");
+			expect(badge?.textContent).toBe("Dirty");
+			expect(badge?.getAttribute("data-tooltip")).toContain("staged, unstaged, or untracked files");
+			expect(badge?.getAttribute("data-tooltip-pos")).toBe("bottom");
+			expect(badge?.getAttribute("title")).toBeNull();
+		});
+
+		it("explains the Unknown lifecycle badge and includes the inspection error", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							lifecycleStatus: {
+								dirty: null,
+								commitStatus: "unknown",
+								removalSafety: "unknown",
+								error: "git status failed",
+							},
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const badge = container.querySelector(".lifecycleBadge");
+			expect(badge?.textContent).toBe("Unknown");
+			expect(badge?.getAttribute("data-tooltip")).toBe(
+				"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked. git status failed",
+			);
+		});
+
 		it("shows StatsBadge when only additions > 0", () => {
 			setRepos({
 				"/repo1": makeRepo({

@@ -32,6 +32,12 @@ export interface ProfileOptions {
 	server_alive_interval: number;
 	server_alive_count_max: number;
 	strict_host_key_checking: "Yes" | "AcceptNew";
+	/**
+	 * `ssh -C`. On by default: a tunnel usually carries a terminal stream, and
+	 * the WebSocket layer refuses to deflate a loopback peer precisely because a
+	 * tunnelled client's frames are compressed here instead.
+	 */
+	compression: boolean;
 }
 
 export type TunnelStatus =

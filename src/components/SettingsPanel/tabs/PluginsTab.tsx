@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
@@ -12,6 +11,7 @@ import { pluginStore } from "../../../stores/pluginStore";
 import { type RegistryEntry, registryStore } from "../../../stores/registryStore";
 import { settingsStore } from "../../../stores/settings";
 import { isTauri } from "../../../transport";
+import { openDialog as open } from "../../../utils/nativeDialog";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";

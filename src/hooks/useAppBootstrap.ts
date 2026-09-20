@@ -9,12 +9,11 @@ import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { dictationStore } from "../stores/dictation";
 import { githubStore } from "../stores/github";
+import { ideasStore } from "../stores/ideas";
 import { keybindingsStore } from "../stores/keybindings";
-import { notesStore } from "../stores/notes";
 import { notificationsStore } from "../stores/notifications";
 import { prNotificationsStore } from "../stores/prNotifications";
 import { promptLibraryStore } from "../stores/promptLibrary";
-import { providerRegistryStore } from "../stores/providerRegistry";
 import { registryStore } from "../stores/registryStore";
 import { repoDefaultsStore } from "../stores/repoDefaults";
 import { repoSettingsStore } from "../stores/repoSettings";
@@ -57,11 +56,10 @@ async function hydrateStores(): Promise<void> {
 		repoSettingsStore.hydrate(),
 		repoDefaultsStore.hydrate(),
 		promptLibraryStore.hydrate(),
-		notesStore.hydrate(),
+		ideasStore.hydrate(),
 		activityStore.hydrate(),
 		keybindingsStore.hydrate(),
 		agentConfigsStore.hydrate(),
-		providerRegistryStore.hydrate(),
 	]);
 	const failures = results.filter((result) => result.status === "rejected");
 	if (failures.length > 0) {

@@ -227,6 +227,7 @@
       "Plan Tracker and Stories Ticker ship as ordinary plugins, so both can be updated or removed independently.",
       "An AI stream now reaches a detached panel instead of rendering nowhere once the docked terminal unmounts.",
       "The MCP session and peer payloads dropped the fields that restated each other, and is_caller marks the caller's own tab.",
+      "Windows is exercised by the suite now, fixing tilde expansion, plugin ZIP installs, child environment inheritance and the progress store there.",
       "The TLS stack takes rustls 0.23.45 for RUSTSEC-2026-0285, covering remote access, the relay and tunnel HTTPS calls."
     ],
     "date": "2026-09-16"

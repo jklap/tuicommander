@@ -3,7 +3,6 @@ import { ApplicationOverlays } from "./components/ApplicationOverlays/Applicatio
 import { BranchSwitcher } from "./components/BranchSwitcher/BranchSwitcher";
 import { CommandPalette } from "./components/CommandPalette";
 import { createContextMenu } from "./components/ContextMenu";
-import { KnowledgeHistoryOverlay } from "./components/KnowledgeHistory/KnowledgeHistoryOverlay";
 import { PanelOrchestrator } from "./components/PanelOrchestrator";
 import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { PromptDrawer } from "./components/PromptDrawer";
@@ -38,7 +37,6 @@ import { useAppBootstrap } from "./hooks/useAppBootstrap";
 import { useAppearanceSync } from "./hooks/useAppearanceSync";
 import { useAppShortcutHandlers } from "./hooks/useAppShortcutHandlers";
 import { useAutoDeleteBranch } from "./hooks/useAutoDeleteBranch";
-import { useAutomationEventBridges } from "./hooks/useAutomationEventBridges";
 import { useCiHeal } from "./hooks/useCiHeal";
 import { useCommandPaletteActions } from "./hooks/useCommandPaletteActions";
 import { useConfirmDialog } from "./hooks/useConfirmDialog";
@@ -50,7 +48,6 @@ import { useFileOpenBridge } from "./hooks/useFileOpenBridge";
 import { useFocusRestore } from "./hooks/useFocusRestore";
 import { useFocusTracker } from "./hooks/useFocusTracker";
 import { useGitOperations } from "./hooks/useGitOperations";
-import { useIdleTriage } from "./hooks/useIdleTriage";
 import { useKeyboardRedirect } from "./hooks/useKeyboardRedirect";
 import { useNativeMenuBridge } from "./hooks/useNativeMenuBridge";
 import { usePluginContextActions } from "./hooks/usePluginContextActions";
@@ -75,8 +72,8 @@ import { activityPanelAdapter } from "./panelAdapters/activity";
 import { aiChatPanelAdapter } from "./panelAdapters/aiChat";
 import { fileBrowserPanelAdapter } from "./panelAdapters/fileBrowser";
 import { gitPanelAdapter } from "./panelAdapters/git";
+import { ideasPanelAdapter } from "./panelAdapters/ideas";
 import { markdownPanelAdapter } from "./panelAdapters/markdown";
-import { notesPanelAdapter } from "./panelAdapters/notes";
 import { outlinePanelAdapter } from "./panelAdapters/outline";
 import { registerPanel, renderPanelMode, togglePanel } from "./panelRouter";
 import { activityDashboardStore } from "./stores/activityDashboard";
@@ -89,9 +86,9 @@ import { diffTabsStore } from "./stores/diffTabs";
 import { errorLogStore } from "./stores/errorLog";
 import { githubStore } from "./stores/github";
 import { globalWorkspaceStore } from "./stores/globalWorkspace";
+import { ideasStore } from "./stores/ideas";
 import { keybindingsStore } from "./stores/keybindings";
 import { mdTabsStore } from "./stores/mdTabs";
-import { notesStore } from "./stores/notes";
 import { notificationsStore } from "./stores/notifications";
 import { paneLayoutStore } from "./stores/paneLayout";
 import { pluginStore } from "./stores/pluginStore";
@@ -120,13 +117,13 @@ const getMaxTabNameLength = () => settingsStore.state.maxTabNameLength;
 /** Detect secondary window mode via URL query param */
 const isSecondaryWindow = () => new URLSearchParams(window.location.search).get("mode") === "secondary";
 
-registerPanel(aiChatPanelAdapter);
 registerPanel(activityPanelAdapter);
 registerPanel(gitPanelAdapter);
 registerPanel(fileBrowserPanelAdapter);
 registerPanel(markdownPanelAdapter);
-registerPanel(notesPanelAdapter);
+registerPanel(ideasPanelAdapter);
 registerPanel(outlinePanelAdapter);
+registerPanel(aiChatPanelAdapter);
 
 const App: Component = () => {
 	// Detached panel mode: full-viewport single panel.
@@ -166,7 +163,7 @@ const App: Component = () => {
 			diffTabs: diffTabsStore,
 			mdTabs: mdTabsStore,
 			editorTabs: editorTabsStore,
-			notes: notesStore,
+			notes: ideasStore,
 			keybindings: keybindingsStore,
 			prNotifications: prNotificationsStore,
 			updater: updaterStore,
@@ -418,7 +415,6 @@ const App: Component = () => {
 	usePluginContextActions(smartPrompts);
 	usePluginRuntime();
 	useSystemLifecycle();
-	useAutomationEventBridges({ executeSmartPrompt: smartPrompts.executeSmartPrompt });
 
 	const detachedPanelBridge = useDetachedPanelBridge();
 
@@ -449,7 +445,6 @@ const App: Component = () => {
 	useTerminalShellExit(terminalLifecycle.closeTerminal);
 
 	useTerminalCompletionNotifications({ navigateToTerminal });
-	useIdleTriage();
 
 	// Force quit - close all sessions and exit (Story 057)
 	const forceQuit = async () => {
@@ -823,7 +818,7 @@ const App: Component = () => {
 				// Toolbar forwards this straight to SmartPromptsDropdown; `tab` lets a
 				// specific route (e.g. "providers" from a missing-provider hint) override
 				// the default "smart-prompts" tab used by its "Manage Smart Prompts..." link.
-				onOpenSettings={(tab) => openSettings(tab ?? "smart-prompts")}
+				onOpenSettings={() => openSettings("smart-prompts")}
 				onShowWhatsNew={(v) => setWhatsNewVersion(v)}
 			/>
 
@@ -944,7 +939,7 @@ const App: Component = () => {
 						statusInfo={statusInfo()}
 						onToggleDiff={() => togglePanel("git")}
 						onToggleMarkdown={() => uiStore.toggleMarkdownPanel()}
-						onToggleNotes={() => uiStore.toggleNotesPanel()}
+						onToggleNotes={() => uiStore.toggleIdeasPanel()}
 						onToggleFileBrowser={() => uiStore.toggleFileBrowserPanel()}
 						onToggleAiChat={() => togglePanel("ai-chat")}
 						onToggleErrorLog={() => errorLogStore.toggle()}
@@ -978,7 +973,6 @@ const App: Component = () => {
 			<PromptOverlay />
 
 			{/* AI knowledge history overlay */}
-			<KnowledgeHistoryOverlay />
 
 			{/* Dictation streaming toast — shows partial transcription */}
 			<DictationToast />

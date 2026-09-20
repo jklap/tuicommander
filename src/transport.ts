@@ -6,7 +6,13 @@
  */
 
 import type { LogLine } from "./mobile/utils/logLine";
-import { getRemoteBaseUrl, previewLogPayload, transportLogger } from "./transportRuntime";
+import {
+	getRemoteBaseUrl,
+	previewLogPayload,
+	resolveOwningConnection,
+	transportLogger,
+	withRemoteToken,
+} from "./transportRuntime";
 
 // ---------------------------------------------------------------------------
 // MCP upstream config types (mirrors Rust structs in mcp_upstream_config.rs)
@@ -302,6 +308,25 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { action: args.action },
 		}),
 	},
+	// Not session-scoped: this one owns the connection it runs on, from launch
+	// to shutdown, so there is no id to put in the path.
+	acp_one_shot_prompt: {
+		map: (args) => ({ method: "POST", path: "/acp/one-shot", body: { root: args.root, prompt: args.prompt } }),
+	},
+
+	// --- ego's command line (Providers) ---
+	// Not part of the ACP surface above: ACP carries a session, and which model
+	// a run defaults to is ego's own configuration. Both routes start a process,
+	// so both are behind the spawn guard on the Rust side.
+	ego_providers: {
+		map: (args) => ({
+			method: "GET",
+			path: args.refresh ? "/ego/providers?refresh=true" : "/ego/providers",
+		}),
+	},
+	ego_set_default_model: {
+		map: (args) => ({ method: "POST", path: "/ego/providers/model", body: { model: args.model } }),
+	},
 
 	// --- Session lifecycle ---
 	create_pty: {
@@ -587,6 +612,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_claude_project_list: { map: () => ({ method: "GET", path: "/claude/projects" }) },
 	get_codex_usage_api: { map: () => ({ method: "GET", path: "/codex/usage" }) },
 	get_codex_usage_stats: { map: () => ({ method: "GET", path: "/codex/stats" }) },
+	get_grok_usage_api: { map: () => ({ method: "GET", path: "/grok/usage" }) },
 	get_claude_usage_timeline: {
 		map: (args, p) => {
 			let path = `/claude/timeline?scope=${p("scope")}`;
@@ -768,32 +794,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/api/plugins/${p("pluginId")}/data/${p("path")}`,
 			body: { content: args.content },
 		}),
-	},
-
-	// --- Config: provider registry ---
-	load_provider_registry: { map: () => ({ method: "GET", path: "/config/provider-registry" }) },
-	save_provider_registry: {
-		map: (args) => ({ method: "PUT", path: "/config/provider-registry", body: args.registry }),
-	},
-	// --- Story 072: provider API keys (keyring-proxied) + slot/ollama checks ---
-	get_provider_api_key_exists: {
-		map: (_args, p) => ({ method: "GET", path: `/config/provider-key/exists?providerId=${p("providerId")}` }),
-	},
-	save_provider_api_key: {
-		map: (args) => ({
-			method: "POST",
-			path: "/config/provider-key",
-			body: { providerId: args.providerId, key: args.key },
-		}),
-	},
-	delete_provider_api_key: {
-		map: (args) => ({ method: "DELETE", path: "/config/provider-key", body: { providerId: args.providerId } }),
-	},
-	test_slot_connection: {
-		map: (args) => ({ method: "POST", path: "/config/slot-test", body: { slot: args.slot } }),
-	},
-	check_ollama_models: {
-		map: (args) => ({ method: "POST", path: "/config/ollama-models", body: { providerId: args.providerId } }),
 	},
 
 	// --- Git/GitHub ---
@@ -985,13 +985,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, title: args.title, body: args.body },
 		}),
 	},
-	create_issue_from_proposal: {
-		map: (args) => ({
-			method: "POST",
-			path: "/repo/create-issue-from-proposal",
-			body: { repoPath: args.repoPath, proposal: args.proposal },
-		}),
-	},
 	post_pr_review: {
 		map: (args) => ({
 			method: "POST",
@@ -1076,12 +1069,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/github/resolve-repos", body: { repoPaths: args.repoPaths } }),
 	},
 	// --- Story 066: config / themes / notes / misc ---
-	load_ai_prompts: {
-		map: () => ({ method: "GET", path: "/config/ai-prompts" }),
-	},
-	save_ai_prompts: {
-		map: (args) => ({ method: "PUT", path: "/config/ai-prompts", body: args.config }),
-	},
 	save_repo_local_config: {
 		map: (args) => ({
 			method: "POST",
@@ -1173,172 +1160,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 	fetch_plugin_registry: {
 		map: () => ({ method: "GET", path: "/registry/plugins" }),
-	},
-	// --- Story 070: AI watchers (RPC; fires surface as session-created SSE) ---
-	watcher_list: {
-		map: () => ({ method: "GET", path: "/ai/watchers" }),
-	},
-	watcher_create: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/watchers",
-			body: {
-				name: args.name,
-				sessionId: args.sessionId,
-				trigger: args.trigger,
-				instructions: args.instructions,
-				promptId: args.promptId,
-				repoPath: args.repoPath,
-				maxFires: args.maxFires,
-				cooldownSecs: args.cooldownSecs,
-			},
-		}),
-	},
-	watcher_update: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/watchers/update",
-			body: {
-				id: args.id,
-				name: args.name,
-				trigger: args.trigger,
-				instructions: args.instructions,
-				promptId: args.promptId,
-				repoPath: args.repoPath,
-				maxFires: args.maxFires,
-				cooldownSecs: args.cooldownSecs,
-			},
-		}),
-	},
-	watcher_delete: {
-		map: (args) => ({ method: "POST", path: "/ai/watchers/delete", body: { id: args.id } }),
-	},
-	watcher_toggle: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/watchers/toggle",
-			body: { id: args.id, enabled: args.enabled },
-		}),
-	},
-	watcher_attach: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/watchers/attach",
-			body: { templateId: args.templateId, sessionId: args.sessionId },
-		}),
-	},
-	watcher_detach: {
-		map: (args) => ({ method: "POST", path: "/ai/watchers/detach", body: { id: args.id } }),
-	},
-	// --- Story 069: AI chat config + conversation CRUD (chat_subscribe stream = WS, later) ---
-	load_ai_chat_config: {
-		map: () => ({ method: "GET", path: "/ai/chat/config" }),
-	},
-	save_ai_chat_config: {
-		map: (args) => ({ method: "PUT", path: "/ai/chat/config", body: args.config }),
-	},
-	list_conversations: {
-		map: () => ({ method: "GET", path: "/ai/chat/conversations" }),
-	},
-	load_conversation: {
-		map: (_args, p) => ({ method: "GET", path: `/ai/chat/conversation?id=${p("id")}` }),
-	},
-	save_conversation: {
-		map: (args) => ({ method: "POST", path: "/ai/chat/conversation", body: args.conversation }),
-	},
-	delete_conversation: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/chat/conversation/delete",
-			body: { id: args.id },
-		}),
-	},
-	new_conversation_id: {
-		map: () => ({ method: "POST", path: "/ai/chat/new-id" }),
-	},
-	// --- Story 068: agent loop control + knowledge + scheduler (start_conversation = WS, later) ---
-	cancel_conversation: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/conversation/cancel",
-			body: { sessionId: args.sessionId },
-		}),
-	},
-	pause_conversation: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/conversation/pause",
-			body: { sessionId: args.sessionId },
-		}),
-	},
-	resume_conversation: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/conversation/resume",
-			body: { sessionId: args.sessionId },
-		}),
-	},
-	approve_conversation_action: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/conversation/approve",
-			body: { sessionId: args.sessionId, approved: args.approved },
-		}),
-	},
-	get_session_knowledge: {
-		map: (_args, p) => ({
-			method: "GET",
-			path: `/ai/session-knowledge?sessionId=${p("sessionId")}`,
-		}),
-	},
-	toggle_ai_suggestions: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/suggestions/toggle",
-			body: { sessionId: args.sessionId },
-		}),
-	},
-	list_knowledge_sessions: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/knowledge/sessions",
-			body: { filter: args.filter, limit: args.limit },
-		}),
-	},
-	get_knowledge_session_detail: {
-		map: (_args, p) => ({
-			method: "GET",
-			path: `/ai/knowledge/session?sessionId=${p("sessionId")}`,
-		}),
-	},
-	load_scheduler_config: {
-		map: () => ({ method: "GET", path: "/ai/scheduler/config" }),
-	},
-	save_scheduler_config: {
-		map: (args) => ({ method: "PUT", path: "/ai/scheduler/config", body: args.config }),
-	},
-	// Diff triage (event-bridge plan Step 2): trigger over HTTP; progress
-	// frames arrive over the `/events` SSE bridge as "triage-progress".
-	run_diff_triage: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/triage/run",
-			body: { repoPath: args.repoPath, refresh: args.refresh },
-		}),
-	},
-	run_pr_review: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/review/pr",
-			body: { repoPath: args.repoPath, prNumber: args.prNumber },
-		}),
-	},
-	run_improvement_scan: {
-		map: (args) => ({
-			method: "POST",
-			path: "/ai/improvements/scan",
-			body: { repoPath: args.repoPath, focus: args.focus },
-		}),
 	},
 	github_start_polling: {
 		map: (args) => ({
@@ -1620,6 +1441,27 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				(args.sinceTag ? `&sinceTag=${encodeURIComponent(String(args.sinceTag))}` : ""),
 		}),
 	},
+	run_pr_review: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/pr-review",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+		}),
+	},
+	run_improvement_scan: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/improvement-scan",
+			body: { repoPath: args.repoPath, focus: args.focus },
+		}),
+	},
+	create_issue_from_proposal: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/create-issue-from-proposal",
+			body: { repoPath: args.repoPath, proposal: args.proposal },
+		}),
+	},
 	start_conflict_assist: {
 		map: (args) => ({
 			method: "POST",
@@ -1687,17 +1529,6 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				timeoutMs: args.timeoutMs,
 				repoPath: args.repoPath,
 				env: args.env,
-			},
-		}),
-	},
-	execute_api_prompt: {
-		map: (args) => ({
-			method: "POST",
-			path: "/prompt/execute-api",
-			body: {
-				systemPrompt: args.systemPrompt,
-				content: args.content,
-				timeoutMs: args.timeoutMs,
 			},
 		}),
 	},
@@ -1923,6 +1754,35 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	delete_remote_connection: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }),
 	},
+	set_remote_connection_password: {
+		map: (args, p) => ({
+			method: "PUT",
+			path: `/config/remote-connections/${p("id")}/password`,
+			body: { password: args.password },
+		}),
+	},
+	remote_connection_password_exists: {
+		map: (_args, p) => ({ method: "GET", path: `/config/remote-connections/${p("id")}/password` }),
+	},
+	fetch_remote_connection_token: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("id")}/token`,
+			body: { baseUrl: args.baseUrl, username: args.username },
+		}),
+	},
+	// The live half: status is what the backend knows about a connection right
+	// now, connect and disconnect ask it to change that. The state machine runs
+	// there, so these three are the whole client surface (#790-ef85).
+	remote_connection_statuses: {
+		map: () => ({ method: "GET", path: "/config/remote-connections/status" }),
+	},
+	connect_remote_connection: {
+		map: (_args, p) => ({ method: "POST", path: `/config/remote-connections/${p("id")}/connect` }),
+	},
+	disconnect_remote_connection: {
+		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}/connect` }),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
@@ -2103,6 +1963,10 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"focus_main_window",
 	// Native drag-and-drop (WKWebView/OS drag) — no browser equivalent.
 	"start_native_drag",
+	// Native file pickers (NSOpenPanel/NSSavePanel and their peers) — the host's
+	// own filesystem browser. A remote client picks from ITS machine through the
+	// in-app file browser, so there is nothing to map.
+	"pick_path",
 	// Power management — OS sleep assertions only make sense on the host.
 	"block_sleep",
 	"unblock_sleep",
@@ -2156,15 +2020,6 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// faithful HTTP contract yet.
 	"debug_agent_detection",
 	"set_ansi_colors",
-	// AI high-frequency streams are bridged by dedicated WebSockets:
-	// /ai/conversation/{session_id}/stream and /ai/chat/{chat_id}/stream.
-	"start_conversation",
-	"chat_subscribe",
-	"chat_unsubscribe",
-	// Agent loop/suggestion state has partial HTTP control today, but these IPC
-	// reads do not yet have byte-identical HTTP response routes.
-	"agent_loop_status",
-	"get_ai_suggestions_enabled",
 	// GitHub issues: Tauri command is multi-repo; current HTTP route is single-repo
 	// (/repo/issues), so mapping here would silently change the contract.
 	"get_all_issues",
@@ -2354,13 +2209,48 @@ function queueKeyFor(sessionId: string, connectionId?: string): string {
 	return connectionId ? `${connectionId}:${sessionId}` : sessionId;
 }
 
+/** Commands already reported as unroutable, so the warning below fires once each. */
+const _hostOnlyOnRemoteWarned = new Set<string>();
+
+/**
+ * The remote connection this call belongs to, or undefined for a local one.
+ *
+ * Only a command with an HTTP mapping can be routed. The host-only ones
+ * (`INTENTIONALLY_UNMAPPED`) and the WS-streamed ones have no request/response
+ * route to send, so routing one would turn a working local call into a throw.
+ * They keep running on this machine — and say so once, instead of leaving a
+ * remote repo looking as if it were local.
+ *
+ * Exported for `invoke()`, which short-circuits to Tauri IPC on the desktop and
+ * so never reaches `rpc()`. Both entry points ask this one function; nothing
+ * else decides where a call goes.
+ */
+export function owningConnectionFor(command: string, args: Record<string, unknown>): string | undefined {
+	const owner = resolveOwningConnection(args);
+	if (!owner) return undefined;
+	if (COMMAND_TABLE[command]) return owner;
+	if (!_hostOnlyOnRemoteWarned.has(command)) {
+		_hostOnlyOnRemoteWarned.add(command);
+		transportLogger().warn("network", `"${command}" has no remote route and ran on the local machine`, {
+			command,
+			connectionId: owner,
+		});
+	}
+	return undefined;
+}
+
 /**
  * RPC call — uses Tauri invoke() or HTTP fetch() based on environment.
  * Concurrent identical idempotent calls are coalesced into a single in-flight request.
  * write_pty calls are serialized per-session in browser mode to prevent reordering.
  * Usage: `const result = await rpc<string>("create_pty", { config });`
+ *
+ * `explicitConnectionId` is for the callers that hold a connection but no repo
+ * yet — probing a machine, or reading a path before it is registered. Everything
+ * else leaves it out and is routed from its own arguments.
  */
-export function rpc<T>(command: string, args: Record<string, unknown> = {}, connectionId?: string): Promise<T> {
+export function rpc<T>(command: string, args: Record<string, unknown> = {}, explicitConnectionId?: string): Promise<T> {
+	const connectionId = explicitConnectionId ?? owningConnectionFor(command, args);
 	// Serialize write_pty per session in browser mode to prevent letter reordering
 	if (command === "write_pty" && (!isTauri() || connectionId)) {
 		const sessionId = (args.sessionId ?? args.id) as string;
@@ -2443,7 +2333,7 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	if (connectionId && !baseUrl) {
 		throw new Error(`Remote connection ${connectionId} not connected`);
 	}
-	const url = buildHttpUrl(mapping.path, baseUrl);
+	const url = withRemoteToken(buildHttpUrl(mapping.path, baseUrl), connectionId);
 
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), 30_000);

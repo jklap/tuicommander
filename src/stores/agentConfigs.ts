@@ -1,6 +1,8 @@
 import { createStore, produce } from "solid-js/store";
 import { AGENTS, type AgentRunConfig, type AgentsConfig, type AgentType } from "../agents";
 import { invoke } from "../invoke";
+import { rpc } from "../transport";
+import { getRepoConnection } from "../transportRuntime";
 import { buildEnvFromEntries, type EnvVarEntry } from "../utils/envVars";
 import { appLogger } from "./appLogger";
 
@@ -13,6 +15,19 @@ const defaultIO: AgentConfigIO = {
 	load: () => invoke<AgentsConfig>("load_agents_config"),
 	save: (config) => invoke("save_agents_config", { config }),
 };
+
+/**
+ * Read and write the `agents.json` of one remote machine.
+ *
+ * `load_agents_config` carries no path and no session, so the transport's
+ * argument-driven routing cannot place it: the connection has to be named.
+ */
+function remoteIO(connectionId: string): AgentConfigIO {
+	return {
+		load: () => rpc<AgentsConfig>("load_agents_config", {}, connectionId),
+		save: (config) => rpc<void>("save_agents_config", { config }, connectionId),
+	};
+}
 
 interface AgentConfigsState {
 	agents: Record<
@@ -381,4 +396,85 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 	return { state, ...actions };
 }
 
-export const agentConfigsStore = createAgentConfigsStore();
+export type AgentConfigStore = ReturnType<typeof createAgentConfigsStore>;
+
+// ---------------------------------------------------------------------------
+// One config per machine
+// ---------------------------------------------------------------------------
+
+/**
+ * A run config describes a machine, not this app.
+ *
+ * `claude`, `grok` and `codex` live on the box that runs them, with their own
+ * paths, their own licences and their own config directories, so a tab opened on
+ * a remote repository has to launch with that machine's `agents.json`. A single
+ * global config could only ever describe the Mac. The registry keys one store
+ * per machine and the local one is the entry with no connection id.
+ */
+const machineStores = new Map<string, AgentConfigStore>();
+const machineHydrations = new Map<string, Promise<void>>();
+
+/** The key a machine is cached under. Local is the empty id — there is no connection. */
+const LOCAL_MACHINE = "";
+
+/**
+ * The store holding one machine's run configs, created on first use.
+ *
+ * Synchronous on purpose: a context menu is built inside the click that opens
+ * it. A machine whose config has not been read yet answers with an empty set
+ * rather than another machine's — `ensureAgentConfigs` is what fills it, and a
+ * connection that comes up prefetches so the menu is warm before it is opened.
+ */
+export function agentConfigsFor(connectionId?: string | null): AgentConfigStore {
+	const key = connectionId ?? LOCAL_MACHINE;
+	let store = machineStores.get(key);
+	if (!store) {
+		store = createAgentConfigsStore(connectionId ? remoteIO(connectionId) : defaultIO);
+		machineStores.set(key, store);
+	}
+	return store;
+}
+
+/**
+ * The same store, with its first read completed.
+ *
+ * The local machine is hydrated at boot, so a local launch resolves here with no
+ * round trip at all. Concurrent callers share one load.
+ */
+export function ensureAgentConfigs(connectionId?: string | null): Promise<AgentConfigStore> {
+	const key = connectionId ?? LOCAL_MACHINE;
+	const store = agentConfigsFor(connectionId);
+	if (store.state.loaded) return Promise.resolve(store);
+	let pending = machineHydrations.get(key);
+	if (!pending) {
+		pending = store.hydrate().finally(() => machineHydrations.delete(key));
+		machineHydrations.set(key, pending);
+	}
+	return pending.then(() => store);
+}
+
+/**
+ * Forget a machine's config so the next reader loads it again.
+ *
+ * Called when a connection changes state: a daemon that went away and came back
+ * may have been reinstalled, reconfigured, or be a different machine entirely.
+ * The local entry is never dropped — nothing invalidates it.
+ */
+export function invalidateAgentConfigs(connectionId: string): void {
+	if (!connectionId) return;
+	machineStores.delete(connectionId);
+	machineHydrations.delete(connectionId);
+}
+
+/** The run configs of the machine that owns `repoPath`, loaded if needed. */
+export function ensureAgentConfigsForRepo(repoPath?: string | null): Promise<AgentConfigStore> {
+	return ensureAgentConfigs(getRepoConnection(repoPath));
+}
+
+/** The same, without waiting — for the synchronous menu-building path. */
+export function agentConfigsForRepo(repoPath?: string | null): AgentConfigStore {
+	return agentConfigsFor(getRepoConnection(repoPath));
+}
+
+/** The local machine's configs. Kept as a binding because most callers are local-only. */
+export const agentConfigsStore = agentConfigsFor();

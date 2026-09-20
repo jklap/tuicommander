@@ -1,7 +1,8 @@
-import { batch } from "solid-js";
+import { batch, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { AgentType } from "../agents";
 import { rpc } from "../transport";
+import { getRepoConnection, setSessionConnectionLookup } from "../transportRuntime";
 import type { TerminalMatch } from "../types";
 import { isPerfDebug } from "../utils/perfDebug";
 import { appLogger } from "./appLogger";
@@ -1059,3 +1060,18 @@ export const terminalsStore = createTerminalsStore();
 // the terminal pane active underneath it. Uses setActive(null), not a raw state
 // write, so the visibility RPC for the terminal we're leaving still fires.
 registerPaneDeactivator("terminals", () => terminalsStore.setActive(null));
+
+// A session belongs to the backend that spawned it, which is the one owning its
+// repo. `repoPath` is assigned by ownership reconciliation and can still be null
+// right after a tab opens, so `cwd` — what the tab was opened in — answers until
+// then. Without this, a write or resize on a remote session would land locally.
+// `untrack` for the same reason as the repo lookup: this runs inside whichever
+// effect made the call, and reading the terminal would otherwise subscribe that
+// effect to it.
+setSessionConnectionLookup((sessionId) =>
+	untrack(() => {
+		const terminalId = terminalsStore.getTerminalForSession(sessionId);
+		const terminal = terminalId ? terminalsStore.get(terminalId) : undefined;
+		return getRepoConnection(terminal?.repoPath ?? terminal?.cwd ?? null);
+	}),
+);

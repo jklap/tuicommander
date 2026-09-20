@@ -7,6 +7,9 @@ const ClaudeUsageDashboard = lazy(() =>
 const CodexUsageDashboard = lazy(() =>
 	import("../CodexUsageDashboard").then((module) => ({ default: module.CodexUsageDashboard })),
 );
+const GrokUsageDashboard = lazy(() =>
+	import("../GrokUsageDashboard").then((module) => ({ default: module.GrokUsageDashboard })),
+);
 const CommandOverview = lazy(() =>
 	import("../CommandOverview").then((module) => ({ default: module.CommandOverview })),
 );
@@ -26,6 +29,7 @@ export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void; visi
 			{(() => {
 				if (tab.type === "claude-usage") return <ClaudeUsageDashboard />;
 				if (tab.type === "codex-usage") return <CodexUsageDashboard />;
+				if (tab.type === "grok-usage") return <GrokUsageDashboard />;
 				if (tab.type === "github-ops") return <GithubOpsDashboard repoPath={(tab as GithubOpsTabData).repoPath} />;
 				if (tab.type === "command-overview") return <CommandOverview />;
 				if (tab.type === "plugin-panel")

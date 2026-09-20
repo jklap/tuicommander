@@ -6,6 +6,7 @@ import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
+import { getSessionConnection } from "../../transportRuntime";
 import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
@@ -2123,7 +2124,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// shell prints its first prompt as soon as the PTY spawns, while
 		// `document.fonts.load` may still have a cold-cache round trip to make.
 		// The grid subscription stays below: frames replay on subscribe.
-		transport = createTransport(props.sessionId);
+		// A session on a remote machine streams from that machine's WebSocket, not
+		// from this origin — so the owner is resolved here rather than assumed local.
+		transport = createTransport(props.sessionId, getSessionConnection(props.sessionId));
 		invokeRef = (cmd, args) => transport!.invoke(cmd, args);
 		// Teardown covering what exists right now: unmounting during the font load
 		// below must not leave these listeners attached. Widened to the DOM

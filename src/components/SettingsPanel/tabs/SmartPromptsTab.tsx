@@ -382,7 +382,7 @@ const PromptEditor: Component<{
 						<option value="inject">Inject into terminal</option>
 						<option value="shell">Shell script (direct run)</option>
 						<option value="headless">Headless (one-shot CLI)</option>
-						<option value="api">API (LLM direct)</option>
+						<option value="api">API (moving to ego — cannot run yet)</option>
 					</select>
 				</div>
 
@@ -443,7 +443,7 @@ const PromptEditor: Component<{
 						<For each={props.headlessAgents}>
 							{(type) => <option value={type}>{AGENTS[type]?.name ?? type}</option>}
 						</For>
-						<option value="api">External API</option>
+						<option value="api">External API (moving to ego — cannot run yet)</option>
 					</select>
 					<p class={sp.fieldHint}>Override the global headless agent for this prompt</p>
 				</div>
@@ -728,7 +728,7 @@ export const SmartPromptsTab: Component = () => {
 							);
 						}}
 					</For>
-					<option value="api">External API</option>
+					<option value="api">External API (moving to ego — cannot run yet)</option>
 				</select>
 				<p class={s.hint}>
 					Default agent for headless prompts. Individual prompts can override this in their settings.
