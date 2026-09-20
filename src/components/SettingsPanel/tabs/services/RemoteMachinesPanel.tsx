@@ -364,11 +364,11 @@ export const RemoteMachinesPanel: Component = () => {
 						/>
 						<TransportFields formData={form()} setFormData={setForm} />
 						<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-							<button class={s.copyBtn} onClick={addConnection} disabled={saving()}>
+							<button class={s.textBtn} onClick={addConnection} disabled={saving()}>
 								{saving() ? "Saving..." : "Save"}
 							</button>
 							<button
-								class={s.copyBtn}
+								class={s.textBtn}
 								onClick={() => {
 									setShowAdd(false);
 									setForm(emptyRemoteForm());
@@ -457,8 +457,7 @@ export const RemoteMachinesPanel: Component = () => {
 								</div>
 								{/* Connect / Disconnect */}
 								<button
-									class={s.copyBtn}
-									style={{ "flex-shrink": 0, "white-space": "nowrap" }}
+									class={s.textBtn}
 									onClick={() => {
 										// "unauthenticated" still holds a tunnel and a baseUrl, so it
 										// disconnects like any live connection rather than re-dialling.
@@ -512,11 +511,11 @@ export const RemoteMachinesPanel: Component = () => {
 											passwordStored={passwordStored()}
 										/>
 										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-											<button class={s.copyBtn} onClick={() => saveEdit(connState)} disabled={saving()}>
+											<button class={s.textBtn} onClick={() => saveEdit(connState)} disabled={saving()}>
 												{saving() ? "Saving..." : "Save"}
 											</button>
 											<button
-												class={s.copyBtn}
+												class={s.textBtn}
 												onClick={() => {
 													setEditingId(null);
 													setError("");
