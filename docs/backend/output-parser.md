@@ -216,7 +216,12 @@ ParsedEvent::Intent {
 }
 ```
 
-Detected as a single-line plain-prefix token at column 0: `intent: <text> (<title>)`.
+Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>)`, optionally behind an agent bullet glyph or the wrap indent.
+
+Two shapes the row-anchored regex cannot read on its own, both rejoined before it runs:
+
+- **After the ack sentence.** The protocol puts the ack and the first `intent:` in the same message by construction, so an agent that writes them as one sentence run leaves the token mid-row. `ACK_SENTENCE_PREFIX` allows that one sentence and nothing else — any other leading prose is still rejected, so `The intent: of this code` stays prose.
+- **Wrapped across physical rows.** `suggest:` is bounded by its closing `]`; `intent:` has no terminator, so the regex `$` cuts the token at the wrap and drops the `(title)` — the tab title — with it. `dewrap_intent_continuation` rejoins at most two following rows, and only the wrap shape an Ink-hosted agent produces: indented, non-empty, no bullet or prompt glyph, and never past a row that already carries a closed `(title)`.
 
 Agents receive this instruction automatically via MCP init. To use manually without MCP, add to CLAUDE.md or equivalent:
 
@@ -231,7 +236,7 @@ The terminal Context bar shows intent separately from the orchestrator assignmen
 
 **Colorization:** `colorize_intent()` wraps intent text in `\x1b[2;33m` (dim yellow) for the terminal output stream. The optional `(title)` suffix is stripped from the display. Colorization is agent-gated to prevent false positives.
 
-**PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients.
+**PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients. It delegates to `output_parser::strip_plain_prefix_tokens`, which is built from the same bullet class and ack prefix the parser anchors on — a second copy of the grammar lived in `state.rs` and drifted, so Codex-bulleted tokens were parsed by TUIC and then shown to the user anyway. The ack sentence is kept; only the marker behind it is removed.
 
 **Active subtask detection:** The output parser recognizes `⏵⏵` (U+23F5) and `››` (U+203A) mode-line prefixes as active subtask indicators. The `active_sub_tasks` count is tracked in `SessionState` and used to suppress premature completion notifications.
 
