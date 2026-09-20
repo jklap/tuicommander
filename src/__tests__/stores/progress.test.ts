@@ -103,6 +103,12 @@ describe("progressStore", () => {
 		// entry is never an interruption and never leaves the app.
 		expect(toastAdd.mock.calls[0][3]).toBe(false);
 		expect(toastAdd.mock.calls[0][8]).toBe(false);
+		// The title is the step alone. The repo goes in as `repoPath` (7th
+		// argument) and the toast draws it as its own badge, so a title of
+		// "<project> · <step>" would print the project twice and leave the step
+		// squashed into what the badge did not take.
+		expect(toastAdd.mock.calls[0][0]).toBe("Delivery");
+		expect(toastAdd.mock.calls[0][6]).toBe("/repo");
 
 		store.presentLive({ repo_path: "/repo", payload: { entry: entry(2, 200, "intent") } });
 		expect(toastAdd).toHaveBeenCalledTimes(1);

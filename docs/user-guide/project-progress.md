@@ -40,8 +40,11 @@ TUICommander adds the project, the time and the agent's name. The agent does not
 supply them.
 
 The receipt is `{"id": <n>}` and nothing more. Each call appends one entry: the
-journal has no deduplication, because an agent that reported the same step twice
-did the work twice, and only you can decide what that means.
+journal does not deduplicate agent reports, because an agent that reported the
+same step twice did the work twice, and only you can decide what that means.
+Intents are the exception. TUICommander reads them off the screen, and a repaint
+of the same `intent:` line is not a new intent, so a repeat of the project's
+newest intent — same text, same agent — returns that entry instead of adding one.
 
 `step` is a free-text label, not a registered object. Nothing has to be created
 in advance, and two agents writing the same label are simply two entries with
