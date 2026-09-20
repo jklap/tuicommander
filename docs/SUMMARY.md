@@ -77,7 +77,6 @@
 - [PTY Management](./backend/pty.md)
 - [Output Parser](./backend/output-parser.md)
 - [Error Classification](./backend/error-classification.md)
-- [AI Watchers](./backend/ai-watchers.md)
 - [Git Operations](./backend/git.md)
 - [GitHub Integration](./backend/github.md)
 - [MCP & HTTP Server](./backend/mcp-http.md)

@@ -1,6 +1,6 @@
 # GitHub Integration
 
-**Modules:** `src-tauri/src/github.rs`, `src-tauri/src/github_auth.rs`, `src-tauri/src/github_account.rs`, `src-tauri/src/github_poller.rs`, `src-tauri/src/improvement_scan.rs`
+**Modules:** `src-tauri/src/github.rs`, `src-tauri/src/github_auth.rs`, `src-tauri/src/github_account.rs`, `src-tauri/src/github_poller.rs`
 
 Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
 
@@ -62,7 +62,6 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
 | `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String) -> String` | Merge PR via GitHub API |
 | `fetch_ci_failure_logs` | `(repo_path: String, branch: String) -> String` | Fetch failure logs for the branch's latest head commit, for CI auto-heal |
-| `run_improvement_scan` | `(repo_path: String, focus: ImprovementFocus) -> ImprovementScanResult` | Headless-slot one-shot AI scan for refactor/testing/perf proposals; emits `proposals-ready` |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 
 ### Circuit breaker coverage

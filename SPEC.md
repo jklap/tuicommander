@@ -224,15 +224,36 @@ When the ACP connection fails, it settles as a failure. It does not degrade to a
 PTY session, to reading ego's files, or to terminal input. There is no runtime
 feature flag selecting between the two paths.
 
-The source contract is `plans/ego-acp-client.md`, which is final rather than
-exploratory. It supersedes `plans/acp-transport-integration.md` and
-`ideas/acp-integration.md`; those describe an early proof of concept whose PTY
-fallback and feature gate were rejected, and they do not define the
-implementation.
+**This section is the contract.** It is final rather than exploratory, and it is
+self-contained on purpose: an earlier version delegated its authority to a plan
+file that a plan sweep later replaced with a status stub, which left the rule
+looking unsubstantiated. Nothing outside this section defines the routing.
+
+An early proof of concept did propose a PTY fallback behind a feature gate. Both
+were rejected, and the rule above states the rejection directly. Do not restore
+them from an archived plan or an idea file.
 
 ## Rate Limit Detection
 
 Provider-specific patterns detect rate limits in terminal output:
+
+### Provider usage capabilities
+
+Account usage is capability-based, not assumed to be uniform across agents:
+
+- **Claude:** account limits plus local transcript analytics.
+- **Codex:** account limits and token history come through the documented Codex
+  App Server JSON-RPC API. TUICommander does not read Codex OAuth credentials or
+  call private ChatGPT backend routes.
+- **Grok:** account billing comes through a short-lived `grok agent stdio` ACP
+  connection and its `_x.ai/billing` extension. This telemetry-only connection
+  does not change Grok's PTY session routing and is not a PTY/ACP fallback.
+- **Gemini:** no stable machine-readable account quota interface is available.
+  TUICommander keeps terminal rate-limit detection and does not fabricate an
+  account dashboard from session-local `/stats` output.
+
+An unavailable capability stays unavailable. Authentication, protocol, network,
+and schema failures must never be converted into zero usage or full headroom.
 
 ### Claude Code
 - `rate limit`
@@ -490,15 +511,15 @@ Some frontend-only stores persist to localStorage:
 - [x] Notes/Ideas: mark as used, badge count in status bar
 - [x] Notes/Ideas: image paste support (Ctrl+V), thumbnails, send absolute paths to terminal
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
-- [x] Smart Prompts (29 built-in AI prompts with context variable resolution, inject/headless/API execution, toolbar dropdown, SmartButtonStrip, Command Palette integration, direct LLM API mode via genai crate)
-- [x] AI Chat panel (`Cmd+Alt+A`) — streaming conversational AI with terminal context injection, multi-provider (Ollama/Anthropic/OpenAI/OpenRouter), conversation persistence, OS-keyring API keys
-- [x] AI Agent loop (ReAct) — terminal observe/act, filesystem, search, drive_agent, and reactive watch tools; pause/resume, destructive-command approval gate, tool-call cards
+- [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
+- [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own
+- [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
 - [x] Session knowledge store — per-session command outcomes, error→fix pairs, CWD history, TUI apps seen; fed by OSC 133 with silence-timer fallback; persisted with 2s debounce
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
-- [x] `ai_terminal_*` MCP tools — external agent surface (Claude Code, Cursor) driving TUICommander terminals with user-confirmation gates
+- [~] `ai_terminal_*` MCP tools — shipped, then deleted in #f6ed. Two overlapping tool families cost tokens on every turn and made the model guess; external clients now drive terminals through the `session` tool. Secret redaction moved to `session action=output`; the mandatory native confirmation was dropped on purpose (a remote client cannot answer it — `ui action=confirm` can)
 - [x] ChoicePrompt parser variant — numbered confirmation menu detection with destructive-label flagging, PWA overlay, `sendPtyKey()` helper
 - [x] MCP OAuth 2.1 — RFC 9728 + RFC 8414 PKCE flow for upstream MCP servers, `tuic://oauth-callback` deep link, shared `TokenManager` with thundering-herd-safe refresh
-- [x] GitHub Ops dashboard — live review/conflict/autofix/changelog state plus Headless-slot improvement proposals with explicit issue creation
+- [x] GitHub Ops dashboard — live review findings, proposals, auto-fix sessions, conflict assists, and CI/merge readiness. Review, changelog, and improvement scans run as unattended ego turns (#795-320b)
 
 ### Completed (Voice Dictation)
 - [x] Local Whisper inference via whisper-rs (Metal GPU acceleration)

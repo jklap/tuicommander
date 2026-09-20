@@ -232,7 +232,7 @@ needs an app restart is what that costs.
 | `font_size` | `u16` | `14` | Terminal font size |
 | `theme` | `String` | `"vscode-dark"` | Terminal theme |
 | `ide` | `String` | `""` | IDE for "Open in..." |
-| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. Deliberately unreachable over IPC or HTTP: a caller supplies a working directory and nothing else, so no request can choose which binary runs |
+| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General > AI Chat` and written through `save_config` like any other field |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
@@ -267,12 +267,7 @@ cleartext copy does not survive on disk.
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
-| `experimental_features_enabled` | `bool` | `false` | Master toggle for experimental features |
-| `ai_chat_enabled` | `bool` | `false` | Sub-flag: enable AI Chat panel and shortcuts (requires `experimental_features_enabled`) |
-| `scroll_history_enabled` | `bool` | `false` | Sub-flag: scrollback history overlay on scroll-up in agent mode (requires `experimental_features_enabled`) |
-| `ai_triage_enabled` | `bool` | `false` | Sub-flag: AI diff triage (requires `experimental_features_enabled`) |
-| `ai_watchers_enabled` | `bool` | `false` | Sub-flag: terminal event watchers that trigger AI actions (requires `experimental_features_enabled`) |
-| `ai_terminal_mcp_enabled` | `bool` | `false` | Expose `ai_terminal_*` tools to external MCP clients. Off by default — see [`mcp-http.md`](mcp-http.md#mcp-tools-ai_terminal_-external-agent-surface) |
+| `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
@@ -451,39 +446,16 @@ work starts.
 
 **Commands:** `load_notification_config()`, `save_notification_config(config)`
 
-### AI Chat Config (`ai-chat-config.json`)
+### Files the embedded AI engine owned (#784-0aec)
 
-**Type:** `AiChatConfig`
+`ai-chat-config.json`, `providers.json`, `ai-prompts.json`, `ai-watchers.json`,
+`ai-cron.json` and `ai-chat-conversations/` are no longer read or written.
+Nothing migrates or deletes them: a file left behind by an older version is
+inert, and removing a user's data on upgrade is a worse default than leaving it.
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `provider` | `String` | `"ollama"` | AI provider: `ollama`, `anthropic`, `openai`, `openrouter`, `custom` |
-| `model` | `String` | `""` | Model name |
-| `base_url` | `Option<String>` | per-provider | Endpoint base URL |
-| `temperature` | `f32` | `0.7` | Sampling temperature |
-| `context_lines` | `u32` | `150` | VtLogBuffer rows injected per turn |
-| `experimental_ai_block_enrichment` | `bool` | `false` | Enrich OSC 133 blocks with semantic intent |
-| `agent_model_overrides` | `Option<HashMap<ToolPhase, String>>` | `None` | Per-phase model routing. Keys: `plan`, `search`, `read`, `write` |
-
-**Commands:** `load_ai_chat_config()`, `save_ai_chat_config(config)`
-
-### Cron Scheduler Config (`ai-cron.json`)
-
-**Type:** `SchedulerConfig`
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `jobs` | `Vec<ScheduledJob>` | `[]` | List of scheduled agent jobs |
-
-Each `ScheduledJob`:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | `String` | Unique job identifier |
-| `cron_expr` | `String` | Cron expression (validated on save) |
-| `goal` | `String` | Agent goal to execute |
-
-**Commands:** `load_scheduler_config()`, `save_scheduler_config(config)`
+`ai-sessions/<session_id>.json` is the exception and stays live — `pty.rs` writes
+command outcomes there and `ai_agent::knowledge::spawn_persist_task` flushes them,
+neither of which involves a model. Nothing reads them back yet.
 
 ### UI Preferences (`ui-prefs.json`)
 
@@ -502,7 +474,6 @@ Each `ScheduledJob`:
 | `outline_panel_visible` | `bool` | `false` | Outline panel open |
 | `references_panel_visible` | `bool` | `false` | References panel open |
 | `ai_chat_panel_visible` | `bool` | `false` | AI chat panel open |
-| `ai_triage_panel_visible` | `bool` | `false` | AI triage panel open |
 | `file_browser_view_mode` | `String` | `"flat"` | File browser listing: `flat` or `tree` |
 | `diff_panel_width` | `u32` | `400` | Diff panel width in pixels |
 | `markdown_panel_width` | `u32` | `400` | Markdown panel width in pixels |
@@ -768,18 +739,6 @@ struct PromptEntry {
 
 **Commands:** `load_prompt_library()`, `save_prompt_library(config)`
 
-### AI Prompts (`ai-prompts.json`)
-
-**Type:** `AiPromptsConfig`
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `diff_triage_system_prompt` | `Option<String>` | `None` | Custom system prompt for diff triage LLM classification. Falls back to built-in default when `None` or empty. |
-
-**Commands:** `load_ai_prompts()`, `save_ai_prompts(config)`
-
-**MCP actions:** `list_ai_prompts`, `load_ai_prompt` (requires `service`), `save_ai_prompt` (requires `service` + `prompt`, localhost only)
-
 ### Notes (`notes.json`)
 
 **Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
@@ -822,23 +781,21 @@ struct AgentsConfig {
 
 **Commands:** `load_agents_config()`, `save_agents_config(config)`
 
-### AI Chat Config (`ai-chat-config.json`)
+**This file belongs to a machine, not to the app.** Every backend reads its own copy, and
+the frontend keeps one per machine: a tab opened on a repository registered against a
+remote connection launches with that connection's `agents.json`, because the agent binary,
+its paths and its config directory are on that box. Neither command carries a path or a
+session, so the transport's argument-driven routing cannot place them — the connection is
+named explicitly (`src/stores/agentConfigs.ts`, `agentConfigsFor` / `ensureAgentConfigs`).
+The cache is dropped on every connection status edge and refilled when the machine comes
+up. `set_agent_hook_instrumentation`, `set_agent_native_status_signals` and the upstream
+MCP config follow the same rule; `install_agent_mcp`, `get_agent_config_path` and the
+upstream OAuth flow do not, having no HTTP route and nothing to open a browser with.
 
-**Type:** `AiChatConfig`
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `provider` | `String` | `"ollama"` | Provider: `"ollama"`, `"anthropic"`, `"openai"`, `"openrouter"`, `"custom"` |
-| `model` | `String` | provider-specific | Model name (free text; settings tab suggests per provider) |
-| `base_url` | `Option<String>` | provider-specific | Pre-filled per provider, editable. Ollama default: `http://localhost:11434/v1/` |
-| `temperature` | `f32` | `0.7` | Sampling temperature passed through to provider |
-| `context_lines` | `u32` | `150` | Maximum `VtLogBuffer` lines injected into each turn's context |
-
-**Commands:** `load_ai_chat_config()`, `save_ai_chat_config(config)`
-
-API keys are stored in the OS keyring — service `tuicommander-ai-chat`, user `api-key` — via `save_ai_chat_api_key` / `delete_ai_chat_api_key`. Saved conversations live in `<config_dir>/ai-chat-conversations/<id>.json`.
-
-Each file carries a `schema_version` stamped by `save_conversation` — 1 = chat text only, 2 = tool-call fields on messages, 3 = the `agent` block (`state`, `currentIteration`, `toolCalls`) that restores an interrupted agent run. Older files load unchanged: every field added since v1 has a serde default, and `load_conversation` re-stamps and rewrites anything below the current version. Types in `src-tauri/src/ai_agent/conversation.rs`.
+The families that stay local are the ones describing this app rather than a machine:
+`config.json`, `keybindings.json`, the pane layout, the notification config and
+`repositories.json` — the last definitionally so, since it is the list deciding which
+repository maps to which machine.
 
 ### Dictation Config (`dictation-config.json`)
 

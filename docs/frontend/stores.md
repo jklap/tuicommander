@@ -355,22 +355,29 @@ interface TickerMessage {
 
 ---
 
-## notesStore
+## ideasStore
 
-**File:** `src/stores/notes.ts`
+**File:** `src/stores/ideas.ts`
 
-Persistent notes/ideas with per-repo tagging and usage tracking.
+Persistent ideas with per-repo tagging and usage tracking.
 
-### Note Type
+The store, the panel and this type say "idea". The backend commands
+(`load_notes` / `save_notes` / `save_note_image` / `delete_note_assets`), the
+`notes.json` payload field and the `note-` id prefix still say "note": they are
+on-disk and on-wire identifiers, renamed by no migration. The translation
+happens only at the IO boundary in `hydrate()` and `saveIdeas()`.
+
+### Idea Type
 
 ```typescript
-interface Note {
+interface Idea {
   id: string;
   text: string;
   createdAt: number;
   repoPath: string | null;
   repoDisplayName: string | null;
-  usedAt: number | null;      // Timestamp when sent to terminal
+  usedAt: number | null;      // Timestamp when sent to or queued for a terminal
+  images: string[];
 }
 ```
 
@@ -378,37 +385,26 @@ interface Note {
 
 | Method | Description |
 |--------|-------------|
-| `hydrate()` | Load notes from Rust backend |
-| `addNote(text, repoPath?, repoDisplayName?)` | Add a new note, optionally tagged with a repo |
-| `removeNote(id)` | Remove a note by ID |
-| `reassignNote(id, repoPath, repoDisplayName)` | Reassign a note to a different project |
-| `markUsed(id)` | Mark a note as used (sets `usedAt` timestamp) |
+| `hydrate()` | Load ideas from Rust backend |
+| `addIdea(text, repoPath?, repoDisplayName?, images?, ideaId?)` | Add a new idea, optionally tagged with a repo |
+| `removeIdea(id)` | Remove an idea by ID |
+| `updateIdea(id, text, images)` | Update an idea in-place |
+| `reassignIdea(id, repoPath, repoDisplayName)` | Reassign an idea to a different project |
+| `markUsed(id)` | Mark an idea as used (sets `usedAt` timestamp) |
+| `clearCompleted()` | Remove every idea that has been used |
 
 ### Queries
 
 | Method | Description |
 |--------|-------------|
-| `getFilteredNotes(activeRepo)` | Get notes for repo (global + repo-specific). `null` = all notes. |
-| `filteredCount(activeRepo)` | Count of notes visible for the given repo filter |
-| `count()` | Total note count |
+| `getFilteredIdeas(activeRepo)` | Get ideas for repo (global + repo-specific). `null` = all ideas. |
+| `filteredCount(activeRepo)` | Count of ideas visible for the given repo filter |
+| `pendingCount(activeRepo)` | Count of ideas not yet used |
+| `count()` | Total idea count |
 
 ---
 
 ## Other Stores
-
-### conversationStore (`conversationStore.ts`)
-
-Owns the per-terminal AI Chat and autonomous-agent conversation state. Each
-terminal key has independent messages, streaming state, conversation ID, usage,
-tool calls, and approval state; the exported accessors follow the active terminal.
-
-Conversation persistence always uses the shared `invoke` transport: desktop calls
-the Tauri IPC commands, while browser/PWA clients use the matching HTTP routes with
-the same request and response shapes. Messages autosave after a 500 ms debounce,
-terminal close performs an immediate save, and initialization restores the newest
-saved conversation for the terminal session. History list, load, and delete use the
-same transport path. A load is discarded if the local message array changed while
-the backend read was in flight, preventing stale history from erasing a newer turn.
 
 ### repoSettingsStore (`repoSettings.ts`)
 Per-repository settings (base branch, scripts, worktree options).
@@ -420,6 +416,9 @@ Panel visibility (sidebar, diff, markdown, notes, file browser), sidebar width, 
 Notification sound preferences and playback. Remote orchestration muting uses
 the terminal's backend-preserved `isRemote` origin; completion lifecycle code
 sets a per-busy-cycle latch before playback so idle and exit cannot both chime.
+The playback manager applies one 500 ms gate across every sound type, because
+all types share the same audio output and separate per-type gates allowed tones
+from a notification burst to overlap.
 
 ### dictationStore (`dictation.ts`)
 Whisper dictation config, model management, recording state.

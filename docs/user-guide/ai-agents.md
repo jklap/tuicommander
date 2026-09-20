@@ -219,46 +219,14 @@ When you spawn an agent via the context menu or command palette, TUICommander au
 
 When the run config's command is a custom alias, symlink, or wrapper (e.g. `c2`, `c`), the foreground-process name no longer matches `"claude"` in `classify_agent`. TUICommander compensates by pre-seeding the session's `agent_type` from the run config at PTY creation time, so intent/suggest parsing and tab-title binding work from the first output line. The foreground-process detector also falls back to the pre-seeded type whenever it sees a non-shell process it doesn't recognise, which covers aliases and wrapper scripts without requiring every name to be hardcoded.
 
-## Unsafe Mode (Unrestricted)
+## The embedded agent loop is gone
 
-The AI Agent loop can run in **unrestricted mode**, bypassing the `SafetyChecker` approval flow and `FileSandbox` path jail. Toggle via the lock icon in the AI Chat panel header — a confirmation dialog warns that "The agent will skip all approval prompts and operate without sandbox restrictions" before activating. The header turns red to indicate the mode is active.
-
-Use this for trusted automation tasks where approval prompts would slow down the workflow (e.g. batch refactoring inside a known repo). Unrestricted mode is per-session and resets when the agent loop ends.
-
-## Agent Cost Tracking
-
-The AI Chat panel shows a live **usage footer** at the bottom of each conversation:
-
-- **Prompt tokens** (↑N) — input tokens sent to the provider
-- **Completion tokens** (↓N) — output tokens received
-- **Estimated cost** ($X.XXXX) — calculated from the provider's per-token pricing
-- **Cache hit rate** — percentage of prompt tokens served from cache (when the provider supports it)
-
-Costs are tracked per-session and reset when a new conversation starts.
-
-## Agent Model Overrides per Task Phase
-
-The agent loop can use different models for different tool phases, optimizing cost/quality trade-offs:
-
-| Phase | Description | Example model |
-|-------|-------------|---------------|
-| `plan` | Goal decomposition, next-step reasoning | Opus, GPT-4o |
-| `search` | `search_files`, `search_code`, `list_files` | Haiku, GPT-4o-mini |
-| `read` | `read_screen`, `read_file`, `get_state`, `get_context` | Haiku, GPT-4o-mini |
-| `write` | `send_input`, `send_key`, `write_file`, `edit_file`, `run_command` | Sonnet, GPT-4o |
-
-Configure in **Settings > AI Chat > Agent model overrides**. When no override is set for a phase, the default model is used.
-
-## Cron Scheduler
-
-Time-triggered agent tasks that run on a schedule. Define jobs in **Settings > AI Chat > Scheduler**:
-
-- **Cron expression** — standard cron syntax (e.g. `0 */2 * * *` for every 2 hours)
-- **Goal** — the agent goal to execute when the schedule fires
-
-Jobs are persisted to `<config_dir>/ai-cron.json`. The scheduler ticks every 30 seconds and launches agent loops on matching terminals. Cron expressions are validated before saving.
-
-Tauri commands: `load_scheduler_config`, `save_scheduler_config`.
+Unsafe mode, the per-conversation cost footer, per-phase model overrides and the
+cron scheduler all belonged to TUICommander's own ReAct loop, which was deleted
+in #784-0aec. `ego` runs its own loop over ACP and reaches terminals from
+outside, through the `session` MCP tool family — so none of those controls has a
+TUICommander-side equivalent any more. Nothing on this page below is affected:
+it describes PTY agents (Claude Code, Codex, Gemini, …), which are unchanged.
 
 ## Sleep Prevention
 

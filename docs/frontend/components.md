@@ -36,11 +36,13 @@ App.tsx (central orchestrator)
 │   │   └── ContentRenderer  # Markdown to HTML (DOMPurify), interactive checkboxes, tweak highlights
 │   ├── HtmlPreviewTab/       # Multi-format preview tab (HTML, PDF, images, video, audio, text)
 │   ├── MarkdownTab/          # Individual markdown file tab (checkbox toggle, tweak comments, search)
-│   ├── NotesPanel/           # Ideas/notes panel with edit, send, delete
+│   ├── IdeasPanel/           # Ideas panel with edit, send, delete
 │   ├── FileBrowserPanel/     # File tree browser with content search
 │   │   └── TreeNode          # Recursive tree node (lazy-loaded)
 │   ├── PluginPanel/          # Plugin HTML panel (sandboxed iframe)
 │   ├── ClaudeUsageDashboard/ # Claude API usage dashboard (SolidJS)
+│   ├── CodexUsageDashboard/  # Codex App Server usage dashboard
+│   ├── GrokUsageDashboard/   # Grok ACP billing dashboard
 │   ├── ErrorLogPanel/        # Application error log viewer
 │   └── StatusBar/            # Status messages, agent badge, toggles
 │       └── ZoomIndicator     # Font size display
@@ -130,7 +132,8 @@ Repository tree with branch management.
 - PR status badge
 - Compact diff stats (additions/deletions) with exact tooltip counts
 - Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`),
-  keyed by workspace id
+  keyed by workspace id; `Dirty` and `Unknown` expose their meaning and removal
+  consequence in a WebView-compatible hover/focus tooltip
 - Context menu (right-click) for repo/branch operations
 - Resizable width via drag handle (200-500px)
 - Keyboard redirect to active terminal
@@ -228,13 +231,13 @@ The agent badge appears when the active terminal has a recognized agent type. It
 
 **Pendulum ticker:** When the status info text overflows its container, a CSS pendulum animation scrolls the text back and forth at ~50px/s. Clicking the text dismisses the notification until the message changes.
 
-**Notes badge:** The Ideas toggle button shows a count badge (accent-colored) with the number of notes visible for the current repo filter. Uses `notesStore.filteredCount()`.
+**Ideas badge:** The Ideas toggle button shows a count badge (accent-colored) with the number of ideas visible for the current repo filter. Uses `ideasStore.filteredCount()`.
 
 **PR lifecycle in StatusBar:** CLOSED PRs are never shown. MERGED PRs are shown with a 5-minute activity-based grace period (accumulated user activity tracked by `userActivityStore`). OPEN PRs are shown as-is.
 
-### NotesPanel (`NotesPanel/`)
+### IdeasPanel (`IdeasPanel/`)
 
-Ideas/notes panel with per-repo filtering and terminal integration.
+Ideas panel with per-repo filtering and terminal integration.
 
 **Features:**
 - Add, edit, delete notes
@@ -278,6 +281,19 @@ Reusable in-app confirmation dialog that replaces native Tauri `ask()` dialogs (
 
 Native SolidJS component (not a plugin) showing Claude API usage data. Displayed as a tab in the markdown/editor area. Features rate bucket gauges, per-model token breakdown, daily usage chart, and project stats. Opened by clicking the Claude Usage ticker in the status bar.
 
+### CodexUsageDashboard (`CodexUsageDashboard/`)
+
+Native dashboard for the official Codex App Server account snapshot. Shows rate
+windows, reset times, daily token buckets, and the lifetime metrics that the
+documented surface actually supplies. Unsupported legacy metrics are omitted.
+
+### GrokUsageDashboard (`GrokUsageDashboard/`)
+
+Native dashboard for Grok Build's `_x.ai/billing` ACP extension. Shows the
+current billing-period percentage, subscription tier, period end, on-demand
+used/cap amounts, and prepaid balance. It shares the usage-dashboard visual
+system and never turns an absent provider value into zero.
+
 ## UI Primitives (`components/ui/`)
 
 | Component | Description |
@@ -308,7 +324,7 @@ Native SolidJS component (not a plugin) showing Claude API usage data. Displayed
 | Sidebar | `Cmd+B` | `uiStore.toggleSidebar()` |
 | Git Panel | `Cmd+Shift+D` | `uiStore.toggleGitPanel()` |
 | Markdown Panel | `Cmd+Shift+M` | `uiStore.toggleMarkdownPanel()` |
-| Notes/Ideas Panel | `Cmd+Alt+N` | `uiStore.toggleNotesPanel()` |
+| Ideas Panel | `Cmd+Alt+N` | `uiStore.toggleIdeasPanel()` |
 | File Browser | `Cmd+E` | `uiStore.toggleFileBrowserPanel()` |
 | Settings | `Cmd+,` | Local state in App.tsx |
 | Help | `Cmd+?` | Local state in App.tsx |

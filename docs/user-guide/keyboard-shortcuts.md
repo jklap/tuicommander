@@ -281,13 +281,12 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `toggle-file-browser-content-search` | `Cmd+Shift+F` | File content search |
 | `toggle-diff-scroll` | `Cmd+Shift+G` | Diff scroll view |
 | `toggle-global-workspace` | `Cmd+Shift+X` | Toggle global workspace |
-| `toggle-ai-chat` | `Cmd+Alt+A` | Toggle AI Chat panel |
+| `toggle-ai-chat` | `Cmd+Alt+A` | Toggle the ego-backed AI Chat panel. Listed only while **Experimental features** is on |
 | `clear-scrollback` | `Cmd+K` | Clear scrollback |
 | `open-folder` | `Cmd+Shift+O` | Open folder picker |
 | `open-path` | `Cmd+Alt+O` | Open path… |
 | `open-secondary-window` | — | Open secondary window |
 | `command-overview` | — | Command overview |
-| `ai-triage` | — | AI Triage |
 | `toggle-outline` | `Cmd+Alt+L` | Toggle outline panel |
 | `toggle-compose-panel` | `Cmd+I` | Toggle compose panel |
 | `detach-activity-dashboard` | — | Open Activity Dashboard in separate window |

@@ -1,8 +1,36 @@
 # AI Evolution
 
-**Status:** Proposed
+**Status:** SUPERSEDED — history only. Do not implement anything below.
 **Created:** 2026-08-18
 **Last audited:** 2026-08-18
+**Superseded:** 2026-09-19
+
+> **The authority claim in "Purpose" below is retracted.** This document is not
+> authoritative over anything. It plans the evolution of an embedded LLM engine
+> that the project decided on 2026-09-18 to delete: `ai_chat`, `ai_agent`, the
+> provider registry, and every path that calls a model from inside
+> TUICommander. The replacement engine for the AI Chat panel is `ego`, reached
+> over the ACP client in `src-tauri/src/acp/`. TUICommander holds no API keys
+> and makes no provider calls.
+>
+> Three premises here are now false end to end, and each one is a trap for a
+> reader who takes a single section out of context:
+>
+> - **Provider breadth.** Model selection, phase overrides, usage and cost
+>   reporting all move to `ego`. No provider registry survives in TUICommander.
+> - **`conversation_engine` as the design target.** That module is deleted. The
+>   chat's state comes from ACP session updates, not from a local ReAct loop.
+> - **One terminal per conversation.** The chat becomes one orchestration
+>   surface over all repositories and all terminals. "The exact terminal the
+>   user is looking at" is an entry point into it, not its scope.
+>
+> What survives is the Product Thesis below, and only as a goal: a copilot that
+> explains real state with concrete evidence and proposes the next safe action.
+> The mechanism is replaced in full.
+>
+> Current contract: `SPEC.md` → "PTY versus ACP routing". `ego` is the engine
+> behind the chat panel and is never an agent tab — see `AGENTS.md` → "Agent
+> Session Management".
 
 ## Purpose
 

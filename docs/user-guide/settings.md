@@ -15,7 +15,8 @@ Two limits are deliberate:
   repository, and a global box has no way to know which one you mean.
 - **Settings the current build does not render are not listed.** Dictation, for
   example, is desktop-only, so searching for it in a browser session reports no
-  match rather than opening a tab with nothing in it.
+  match rather than opening a tab with nothing in it. The same rule hides the AI
+  Providers tab while Experimental Features is off.
 
 ## General Tab
 
@@ -37,7 +38,8 @@ Two limits are deliberate:
 | **Show scrollbar marks** | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. Enabled by default. |
 | **Reflow scrollback on resize** | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. Enabled by default; a change applies to sessions already open. |
 | **Repository defaults** | Base branch, file handling, setup/run scripts applied to new repos |
-| **Experimental Features** | Master toggle for experimental features. When enabled, shows sub-toggles: **AI Chat** (AI Chat panel, shortcuts, command palette entry), **Scroll History** (scrollback overlay with search when scrolling up in agent mode), **AI Triage** (diff classification), **AI Watchers** (terminal event watchers), **Copy-on-write workspaces** (new workspaces become full repository clones instead of linked worktrees; workspaces you already created stay usable when it is off). |
+| **ego executable** | Path to the ego binary the **AI Chat** panel talks to over ACP. Shown only while Experimental Features is on. While it is empty, ACP is not configured: every connect is refused in Rust and the panel says so rather than launching nothing. Read at each connect, so a correction takes effect without a restart. |
+| **Experimental Features** | One toggle, no sub-toggles. It opts in to the **AI Chat** panel (ego over ACP, #785-58ca) and **SSH Tunnels**. The AI Chat, AI Triage and AI Watchers sub-toggles went with the embedded AI engine (#784-0aec). |
 
 ## Appearance Tab
 
@@ -70,9 +72,6 @@ Each supported agent has an expandable row showing detection status, version, an
 | **Collect project progress** | Global switch for the Progress journal. On by default. Off removes the `progress` tool from every agent's tool list, stops the reporting obligation being sent, and records nothing — including the `intent:` markers TUICommander writes itself. |
 | **Collect progress** (per agent) | Per-agent override, shown with the agent's MCP settings and disabled while the global switch is off. The effective value is *global AND (per-agent, default on)*, so an agent with no opinion follows the global switch. An agent that reports while its own override is off is answered `progress_tracking_disabled` rather than silently ignored. |
 | **Claude Usage Dashboard** | (Claude Code only) Toggle under Features when the Claude row is expanded. Enables rate limit monitoring, session analytics, token usage charts, activity heatmap, and per-project breakdowns. Usage data appears in the status bar agent badge and in a dedicated dashboard tab. |
-| **Agent Model Overrides** | Per-task-phase model routing for the AI Agent loop. Four phases: `plan`, `search`, `read`, `write`. Each phase can use a different model (e.g. a cheaper model for search, a stronger model for write). Configure in Settings > AI Chat. |
-| **Unsafe Mode** | When enabled, the agent skips all approval prompts and operates without sandbox restrictions (`TrustLevel::Unrestricted`). Toggle via the lock icon in the AI Chat panel header. A confirmation dialog warns before activating. The header turns red to indicate unrestricted operation. |
-| **Cron Scheduler** | Time-triggered agent tasks. Define cron expressions with goals in Settings > AI Chat > Scheduler. Jobs are persisted to `ai-cron.json` and tick every 30 s. |
 
 See [AI Agents](ai-agents.md) for details on agent detection, rate limits, and the usage dashboard.
 
@@ -170,42 +169,68 @@ Manage the AI-powered actions surfaced in the toolbar, context menus, and comman
 
 See [Smart Prompts](smart-prompts.md) for the full guide.
 
-## Providers Tab
+## AI Providers Tab
 
-Declares the LLM endpoints TUICommander calls directly — the AI Chat panel, diff triage, and Smart Prompts in API mode. Agent CLIs (Claude Code, Codex, …) keep their own credentials and are configured in the **Agents** tab instead.
+Shows which providers and models `ego` can use, and which model it starts from.
+Offered only while **Experimental Features** is on, because that is what offers
+the AI Chat panel — the one place ego is reachable from.
 
-The registry lives in `<config_dir>/providers.json`. **API keys are never written there** — they go to the OS keyring under `provider/<provider-id>`.
+Everything on this tab is ego's, read and written by running ego:
 
-### Providers
+- **Default model** — a picker over every model ego knows, grouped by provider.
+  Choosing one runs `ego config set model="<slug>"` and then re-reads, so what
+  you see afterwards is what ego persisted, not what was sent. It survives a
+  restart because ego holds it, not TUICommander. A model ego marked unavailable
+  cannot be picked.
+- **Refresh from providers** — asks ego to re-enumerate its sources
+  (`ego models --refresh`). This is the only action anywhere in TUICommander
+  that reaches a provider over the network, and it is ego that reaches it.
+  Opening the tab does not.
+- **Providers** — one row per source ego knows, with how many of its models are
+  usable and why the rest are not, in ego's own words.
+- **Credential state** — read from `ego doctor`. *stored*, *expired* (ego renews
+  it on its next run; you do not log in again), *no credential*, or *ego could
+  not read its credential store* — the last is not the same as an empty store.
 
-**+ Add** opens the form:
+**No API key ever enters TUICommander.** None is stored, none reaches the OS
+keyring, and no provider HTTP call is made from this process. Adding a
+credential is done in a terminal with `ego auth login <provider>`; the tab names
+the command rather than running it, because that flow is interactive and would
+mean handling a secret on the way past.
 
-| Field | Description |
-|---------|-------------|
-| **Type** | Anthropic, OpenAI, Google Gemini, DeepSeek, Mistral, Fireworks AI, SambaNova, Moonshot, xAI (Grok), Zhipu AI, OpenRouter, Requesty, LiteLLM, Ollama (local), LM Studio (local), or Custom (OpenAI-compatible). AWS Bedrock and Google Vertex are listed as **coming soon** and are refused on save. |
-| **Label** | Required. Free text — how the provider appears in the model dropdowns, e.g. "Anthropic (personal)". |
-| **Base URL** | Optional, hidden for Anthropic / OpenAI / Gemini. Blank uses the type's default (`http://localhost:11434/v1/` for Ollama, `http://localhost:1234/v1/` for LM Studio). |
-| **API Key** | Required for every type except the local ones (Ollama, LM Studio, LiteLLM). |
+When ego is not configured the tab says so and names the field to fill
+(General → AI Chat → *ego executable*) instead of rendering an empty list. A
+path that is set but cannot be started is reported as its own thing. When an ego
+command fails, what ego printed is shown verbatim — the command, its exit code,
+and its output.
 
-Each saved provider is a card showing its type, its key state (**✓ key**, **no key**, or **no key needed**), and a list of its models. Controls per card:
+The in-chat model switch is a different control: that one is a session option
+and changes one conversation. This changes the default every new run starts
+from.
 
-- **Add model** — model name as the provider spells it (e.g. `claude-sonnet-4-5-20241022`) plus a tier (Economic / Standard / Premium). The tier is stored with the model and shown next to it.
-- **API key row** — save a key, or replace / remove an existing one. The key never returns to the UI once saved.
-- **×** — remove the model, or the whole provider.
+### The old provider registry is gone
 
-**Reachability (Ollama only).** An Ollama card probes `/api/tags` when the tab opens and shows **Reachable** or **Not detected**. When it fails, the backend's own wording is shown underneath — the endpoint answered an HTTP error, it did not answer within the timeout, or the connection was refused ("is Ollama running?"). A reachable Ollama also lists the models it actually holds, which is what you type into **Add model**. Other provider types have no probe; use **Test** on a slot instead.
+The provider registry, its slots and the API keys it put in the OS keyring were
+deleted with the embedded AI engine (#784-0aec).
+`<config_dir>/providers.json` is no longer read or written, and a file left by
+an older version is inert. This tab is not its replacement — it edits ego's
+configuration and stores nothing of its own.
 
-### Slot Assignments
+Agent CLIs (Claude Code, Codex, …) are unaffected — they keep their own
+credentials and are configured in the **Agents** tab.
 
-A slot names which model a TUIC feature uses. Each is a dropdown of every model in the registry, plus **Test** — one real request with a 15 s timeout, answering either the model's reply or the failure verbatim.
+**Smart Prompts in API mode** used the old registry's headless slot. It now runs
+one unattended ego turn instead (#787-ee50): the model is whatever this tab's
+default is, the prompt is sent once, and the answer goes to the prompt's output
+target. Nothing streams — there is no panel open to stream to. With no ego
+binary named, the mode refuses and says to name one under **General** and pick a
+model here. Shell, inject and headless-CLI modes are unaffected.
 
-| Slot | Used by |
-|---------|-------------|
-| **Main** | AI Chat and on-demand PR review. Per-phase AI Chat overrides (`plan`, `search`, `read`, `write`) are set separately in Settings > AI Chat. |
-| **Triage** | Diff triage annotations and automated code analysis. |
-| **Headless / Smart Prompts** | One-shot calls: commit messages, code review, Smart Prompts in API mode. |
-
-The headless slot picks an **agent** rather than a model: any detected agent that has a headless template, or one of its run configurations. Choosing **External API** reveals the model dropdown and routes those calls through the provider registry instead of a CLI.
+The turn runs with **no TUICommander tools**, so it cannot open a terminal or
+touch a repository, and any permission ego asks for is declined at once: nobody
+is watching, and a question nobody answers is a turn that never ends. If a
+prompt comes back empty because of that, the refusal is reported rather than the
+empty answer.
 
 ## Repository Settings
 
@@ -246,7 +271,7 @@ User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intent
   - Warning
   - Info
   - Attention (agent needs you)
-- **Test buttons** — Test each sound individually. The Test button bypasses the anti-spam rate limit, so rapid A/B volume comparisons always play.
+- **Test buttons** — Test each sound individually. Normal notifications share one anti-spam interval across every sound type so a burst cannot play overlapping tones. The Test button bypasses that limit, so rapid A/B volume comparisons always play.
 - **Silence orchestration completions** — Remote HTTP/MCP workers still appear in Activity and update their tab state, but do not play a completion chime. The remote classification survives frontend reloads, and each busy cycle can notify at most once even when idle and process exit arrive separately.
 - **Reset to Defaults** — Restore default notification settings
 - **Keep toasts in the bell** — Each toast is also written to a **MESSAGES** section in the toolbar bell, so a message that faded while you looked at another window stays readable afterwards. The bell entry keeps the toast level (info / warning / error) and its action, if it had one. Turn this off to leave toasts transient. This setting is outside the audio block: the bell is visual, so it stays reachable on a machine with no audio output.

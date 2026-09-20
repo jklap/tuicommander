@@ -104,7 +104,7 @@ dictationStore ──manages──> dictation state, model downloads
 notificationsStore ──plays──> sound alerts on terminal events
 errorHandlingStore ──retries──> failed operations with backoff
 statusBarTicker ──feeds──> StatusBar (rotating priority-based messages)
-notesStore ──provides──> NotesPanel (ideas/notes), StatusBar (badge count)
+ideasStore ──provides──> IdeasPanel (ideas), StatusBar (badge count)
 userActivityStore ──tracks──> StatusBar (merged PR grace period)
 ```
 
@@ -137,7 +137,7 @@ useAppInit.initApp()
     ├──> repoSettingsStore.hydrate()    → load_repo_settings
     ├──> repoDefaultsStore.hydrate()    → load_repo_defaults
     ├──> promptLibraryStore.hydrate()   → load_prompt_library
-    ├──> notesStore.hydrate()           → load_notes
+    ├──> ideasStore.hydrate()           → load_notes
     ├──> keybindingsStore.hydrate()     → load_keybindings
     ├──> agentConfigsStore.hydrate()    → load_agents_config
     └──> agentDetection.detectAll()     → detect installed AI agents

@@ -322,7 +322,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **View / edit / delete**: commented passages are highlighted (`.tweak-highlight`); hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete
   - **Storage**: comments live *inside* the `.md` source as HTML-comment markers — `<!--tweak:begin:ID-->highlighted text<!--tweak:end:ID @<ISO-timestamp>` + body + `-->`. They are invisible to any standard markdown renderer, survive round-trips, and are committed with the file. The only escaped sequence is `-->` (→ `--&gt;`)
   - **LLM-friendly**: the first comment added to a file prepends a one-time convention header explaining the format, so an AI agent reading the file understands it without external context — the intended workflow is "human highlights + comments → agent applies the feedback to the highlighted text → agent removes the markers"
-  - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose only consumers are the Markdown panel and the AI Chat panel
+  - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose consumers are the Markdown panel and the AI Chat transcript
 
 ### 3.4 File Browser Panel (`Cmd+E`)
 - Directory tree of active repository
@@ -371,8 +371,11 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 ### 3.6 Ideas Panel (`Cmd+Alt+N`)
 - Quick notes / idea capture with send-to-terminal
 - `Enter` submits idea, `Shift+Enter` inserts newline
-- Per-idea actions: Edit (copies back to input), Send to Terminal (sends + return), Delete
-- Mark as used: notes sent to terminal are timestamped (`usedAt`) for tracking
+- Per-idea actions: Edit (copies back to input), Queue (agent tabs only), Send to Terminal (sends + return), Delete
+- Queue leaves the idea in the agent's Compose FIFO for its next idle window instead of typing it
+  into the prompt now, so it never steers the running turn. The action appears only when the active
+  tab runs a detected agent; a detached Ideas window always shows it and reports a refusal by toast.
+- Mark as used: notes sent to terminal or queued are timestamped (`usedAt`) for tracking
 - Badge count: status bar toggle shows count of notes visible for the active repo
 - Per-repo filtering: notes can be tagged to a repository; untagged notes visible everywhere
 - **Image paste**: `Ctrl+V` / `Cmd+V` pastes clipboard images as thumbnails attached to the note
@@ -684,9 +687,9 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Color-coded badge in status bar (blue < 70%, yellow 70-89%, red pulsing >= 90%)
 - Integrated into unified agent badge (see section 5.1)
 
-### 6.6 Claude and Codex Usage Dashboards
+### 6.6 Provider Usage Dashboards
 - Native SolidJS component (not a plugin panel — renders as a first-class tab)
-- The active Claude or Codex badge opens its matching dashboard; `Cmd+Shift+A` opens Claude Usage
+- The active Claude, Codex, or Grok badge opens its matching dashboard; `Cmd+Shift+A` opens Claude Usage
 - **Rate Limits section:** Live utilization bars from Anthropic OAuth usage API
   - 5-Hour, 7-Day, 7-Day Opus, 7-Day Sonnet, 7-Day Cowork buckets
   - Color-coded bars: green < 70%, yellow 70-89%, red >= 90%
@@ -705,7 +708,15 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
   - File-size-based cache (only new bytes parsed on each scan)
   - Cache persisted to disk as JSON for fast restarts
 - **Codex dashboard:** account rate-limit windows, per-model limits, reset times,
-  plan type, and credit balance from the local Codex credentials/API surface
+  plan type, credit balance, and token history from the official local Codex
+  App Server. The Codex CLI owns OAuth and refresh; TUIC does not read its token.
+- **Grok dashboard:** billing-period usage, subscription tier, on-demand spend,
+  cap, and prepaid balance from Grok Build's official `_x.ai/billing` ACP
+  extension. The short-lived connection is telemetry-only; normal Grok tabs
+  remain PTY sessions.
+- **Gemini:** terminal rate-limit detection remains available, but there is no
+  account dashboard because Gemini CLI has no stable machine-readable account
+  quota interface. Session-local `/stats` is not treated as account headroom.
 
 ### 6.7 Intent Event Tracking
 - Agents declare work phases via `intent: text (Title)` tokens at column 0, colorized dim yellow in terminal output
@@ -770,69 +781,60 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - TUICommander acts as the messaging hub — no external daemon needed
 - **Durable task handles**: `agent action=spawn` returns `task_id` and `poll_interval_ms` alongside `session_id`. The `task` MCP tool polls that handle without blocking — `task action=get` returns `{task_id, status, status_message?, result?, error_detail?, poll_interval_ms}` where status is `working|input_required|completed|failed|cancelled` (the last three final), and `task action=cancel` marks the task cancelled **without** killing the agent (`session action=kill` does that). Use this instead of `agent action=wait` / `session action=wait` when work runs past their 300 s cap or when the client may reconnect: the outcome is recorded by the session exit path whether or not anyone was listening. Tasks live for the TUICommander process only — they are deliberately not persisted, because a restart tears down every PTY
 
-### 6.14 AI Chat Panel (`Cmd+Alt+A`)
-- Conversational AI companion docked on the right, streaming markdown with syntax-highlighted code blocks. Every code block has *Run* (sends to the attached terminal via `sendCommand()`), *Copy*, and *Insert* actions
-- Multi-provider: **Ollama** (local, auto-detected on `localhost:11434` with live model list), **Anthropic**, **OpenAI**, **OpenRouter**, custom OpenAI-compatible endpoint. Provider abstraction via `genai` crate
-- **Per-terminal state** — each terminal tab maintains its own independent chat history, streaming state, and conversation ID (keyed by `tuicSession`). The header shows the active terminal's name as a badge
-- **Frozen state** — when no terminal is focused (e.g. Git panel or settings active), a banner reads "No terminal focused — chat is read-only", input is disabled, and the send button is greyed out
-- Per-turn terminal context: last `context_lines` rows from `VtLogBuffer` (ANSI-stripped, alt-screen suppressed), `SessionState`, recent `ParsedEvent`s, git branch/diff. Terminal follows the focused tab automatically
-- API keys stored in OS keyring (service `tuicommander-ai-chat`, user `api-key`) — masked with eye-toggle in Settings
-- Streaming via Tauri `Channel<ChatStreamEvent>` (`chunk`/`end`/`error`); cancellable mid-stream
-- Conversation persistence: save / load / delete with in-memory cap of 100 messages per conversation. Files at `<config_dir>/ai-chat-conversations/<id>.json`
-- **Conversation history panel** — click the clock/history icon in the header to browse all saved conversations (title, terminal name, message count, date). Click a row to load it
-- **Usage footer** — live token counter at the bottom: prompt tokens (↑N), completion tokens (↓N), estimated cost ($X.XXXX), cache hit rate
-- Terminal context menu: *Send selection to AI Chat*, *Explain this error*. Toolbar toggle + hotkey
-- **Detachable panel** — click the detach icon in the header to pop the panel into a separate window (500×700). The main window shows a placeholder with "Bring back". Closing the detached window automatically restores the panel. **The two windows hand the conversation over through disk, they do not share it live.**
-  - **Hand-over out.** The window is opened with the chat id *and* the terminal it was detached from (key, PTY session, name), and adopts both before rendering — the terminal first, since conversations are stored per terminal. It then reads that conversation off disk. An id with nothing saved under it simply opens empty
-  - **It is a full chat, not a viewer.** It sends, runs the agent, and pauses/stops it against the terminal it was handed, and stays pinned to that terminal for its whole life even if the main window moves on. Detaching with no terminal focused hands over no session, and the window is read-only, exactly as the docked panel is. *Run in terminal* on a code block is the one thing that does not work there: it needs the terminal's live xterm handle, which cannot cross a window boundary
-  - **Hand-over back.** On close or reattach the main window re-reads that conversation, so whatever was sent from the detached copy is there. If the user switched terminals meanwhile, the detached terminal's cached conversation is invalidated instead, and re-read when they switch back to it. A conversation the main window is *still streaming* is also invalidated rather than re-read: a watcher rule, an automation goal or a terminal context action can start one while the panel is away, and that reply exists only in memory — reading disk over it blanks `streamingText` and `isStreaming` while the backend keeps writing into them, so the panel would come home dead until the stream ended
-  - Detaching hides the docked panel (`onDetach`), because the homecoming path toggles it back on. Left visible, that toggle turned it *off* and the panel never reappeared
-  - **One live link, in one direction: the stream.** The main window projects its live stream for the handed-over terminal every 250ms (`src/utils/aiChatSnapshot.ts`, over the generic `panelSync` channel), because `PanelOrchestrator` unmounts the docked panel while detached and `watcherFire`, `useAutomationEventBridges` and the terminal context menu all keep starting conversations on the main window's store — those replies previously rendered nowhere at all. The projection is an **overlay, never a replacement**: it carries the stream and no message history, so the worst a stale snapshot can say is "nothing is streaming", which writes nothing. `projectAiChat` drops a snapshot whose chat id is not this window's, and drops every snapshot while the detached window is running a stream of ITS own — ownership is decided by a `mirroring` flag, not by `isStreaming`, which the act of mirroring sets locally. A mirrored reply is appended with the raw setter and **never persisted**: this window never saw the prompt that produced it, so writing its shorter list back under the same chat id would delete that prompt from disk
-  - Everything else is still hand-over, not link: messages typed in either window are invisible to the other until the next hand-over. A Rust-side `ChatRegistry` and its `chat_subscribe` / `/ai/chat/{id}/stream` surfaces exist but have **no producer** — nothing ever published to them, and the frontend subscription that consumed them wiped loaded history with an empty snapshot, so it was removed (see story `624-a6c3`)
+### 6.14 AI Chat Panel (`Cmd+Alt+A`) — ego over ACP
+**The conversation lives in ego, not in TUICommander.** There is no LLM client
+here: no provider, no API key, no tool loop, no sandbox. TUICommander launches
+one configured ego binary and speaks ACP to it, per
+`plans/ego-integration/plan.md` section 1.
+
+- **Bound to a repository and a session, never to a terminal.** A turn ego runs
+  outlives any tab and may touch files no tab is showing. Switching repository
+  opens a new conversation and leaves the previous one running; coming back
+  picks it up without relaunching anything. One connection per repo root
+- Docked on the right, resizable by its left edge (session-scoped width, not
+  persisted); detaches into its own window, with `DetachedPlaceholder` in the
+  main window meanwhile
+- **Streamed answers**, reasoning folded into a disclosure, one card per tool
+  call updated in place, and the agent's plan replaced whole each time it changes
+- **Permission requests** are answered with one of the option ids ego published.
+  **Elicitations** are drawn as a form, and only in `form` mode — the client
+  declines every other mode before it reaches a person
+- **Model, reasoning effort and mode** come from the options the session
+  publishes through `set_config_option`. TUICommander holds no model list
+- **Pause, resume and compact** are drawn only when ego advertised each
+  extension
+- **A stream gap is a state, not a skip**: the panel says it missed part of the
+  conversation and offers the one recovery there is — a fresh process replaying
+  the history through `session/load`
+- Terminal right-click keeps **Explain with AI** and **Fix this error**; both
+  write a question about the selection into the composer and open the panel
+- Gated by `experimental_features_enabled` (`settingsStore.isAiChatEnabled`,
+  off by default) plus a configured `ego_executable`. While that path is empty
+  the panel says ACP is not configured and launches nothing
 - Full user guide: [`docs/user-guide/ai-chat.md`](user-guide/ai-chat.md)
 
-### 6.15 AI Agent Loop (ReAct)
-- Autonomous loop that observes and acts in a terminal. Same panel as AI Chat, mode toggle in the header
-- **Terminal observe tools**: `read_screen` (text + live `shell_state`/`awaiting_input`/`agent_intent`), `get_context` (cheap orientation: shell state, cwd, git branch, last exit code), `get_command_history` (OSC 133 command outcomes — exit codes, durations), `explain_last_failure` (last failed command + captured output), `get_error_fixes` (known error→fix correlations), `search_scrollback` (regex search across screen + history, secrets redacted), `get_hyperlinks` (OSC 8 links on the active screen), `get_semantic_zones` (OSC 133 prompt/input/output zones), `get_state`, `wait_for` (regex or stability) + act tools `send_input` / `send_key` + **`search_code`** (BM25 semantic search over repo files via `content_index`)
-- Agent lifecycle state is backend-authoritative: sticky awaiting transitions use a lossless reducer lane, while live SSE/WS delivery remains best-effort; an unobserved shell reports agent state `starting` instead of idle.
-- **Reactive watches** — `watch_for` arms a watch on the session (triggers: `idle`/`busy`/`command_done`/`question`/`error`/`unseen`/`pattern`); when it fires, a fresh autonomous conversation runs the supplied instructions. Approval-gated (the model cannot silently arm autonomous loops), scoped to the agent's bound session, and bounded by `max_fires`/`cooldown` via the shared `WatcherEngine` (cooldown/burst/user-input-pause guards). `list_watches` / `cancel_watch` manage armed watches
-- **Safety gates** via the `SafetyChecker` trait — three verdicts: `Allow`, `NeedsApproval { reason }`, `Block { reason }`. Destructive commands (`rm -rf`, `git reset --hard`, `git push --force`, `DROP TABLE`, `dd of=`, …) surface a pending-approval card; hard-coded blocks refuse patterns like `rm -rf /`
-- **Pause / resume / cancel** between iterations with clean state transitions. Tool-call cards collapse/expand in the panel. Conversation schema v2 persists tool-call records alongside messages
-- **Session knowledge store** (Level 3): command outcomes (exit code, duration, CWD, classification, output snippet), auto-correlated error→fix pairs, CWD history, `tui_apps_seen`, terminal mode. Injected into the agent system prompt as a compact markdown summary
-- **OSC 133 semantic prompts** feed exact exit codes when the shell supports them; a silence-timer fallback records `Inferred` outcomes otherwise. Persisted to `<config_dir>/ai-sessions/<session_id>.json` with a 2 s debounced flush
-- **SessionKnowledgeBar** — collapsible footer under the panel showing live command count, last 5 outcomes with kind badges, recent errors with inferred `error_type`, TUI mode indicator. A **History** button opens the knowledge history overlay (two-pane sessions/detail browser with full-text search, errors-only filter, and 24h/7d/30d date window)
-- **Experimental AI block enrichment** (opt-in, `Settings > AI Chat`) — after each completed OSC 133 D block, a bounded `mpsc` worker asks the active AI provider for a one-line `semantic_intent` and stamps it onto the `CommandOutcome` (identified by stable `id: u64`). Rate-limited ~10/min, silent drop on full queue, never blocks the PTY path
-- **TUI app detection** via alternate-screen tracking (`ESC[?1049h`/`l`). `TerminalMode::FullscreenTui { app_hint, depth }` is set when the terminal enters vim/htop/lazygit/less/tmux/…; the agent adapts (prefers `send_key` + `wait_for` over line-oriented `send_input`)
-- **External MCP surface** — 13 tools exposed as `ai_terminal_read_screen`, `ai_terminal_send_input`, `ai_terminal_send_key`, `ai_terminal_wait_for`, `ai_terminal_get_state`, `ai_terminal_get_context`, `ai_terminal_drive_agent`, `ai_terminal_read_file`, `ai_terminal_write_file`, `ai_terminal_edit_file`, `ai_terminal_list_files`, `ai_terminal_search_files`, `ai_terminal_run_command`. Input operations always require user confirmation and are rejected while the internal agent loop is active on the target session
-- **`drive_agent`** — atomic send→wait→read tool. Sends a command, waits for idle/pattern, returns screen + shell state in one call. Replaces the common `send_input` → `wait_for` → `read_screen` three-step pattern
-- **Session aliases** — Human-friendly aliases auto-assigned from repo directory name (e.g. `tuicommander` → `tu-1`). A multi-word name contributes the first character of each segment (split on `-`, `_`, `.`, camelCase); a single word contributes its first two characters. Collisions are resolved on assignment. The alias is one of three interchangeable addresses — every `session`/`agent` action that takes a `session_id`, and `agent action=send`'s `to`, also accept the PTY id and the `tuic_session`; all `ai_terminal_*` tools accept aliases in place of UUIDs. Visible in tab tooltips, the tab context menu (click to copy), and `list_sessions`/`list_peers` output. The alias survives an app restart: the frontend persists it with the tab and replays it at create time, and the backend reserves it and advances the per-prefix counter past it
-- **Delta cursor** — `read_screen`, `drive_agent`, and `session action=output` return a monotonic `cursor` field. Pass `since_cursor` on subsequent calls to receive only new scrollback lines since that position, avoiding full re-reads. Client-side tracking, zero server state
-- **Unsafe mode** — lock icon in the AI Chat header toggles unrestricted operation (`TrustLevel::Unrestricted`). Bypasses `SafetyChecker` approval and `FileSandbox` path jail. Confirmation dialog before activation; header turns red while active. Per-session, resets on loop end
-- **Agent model overrides** — per-task-phase model routing (`agent_model_overrides` in `ai-chat-config.json`). Four phases: `plan`, `search`, `read`, `write`. Each phase can use a different model to optimize cost/quality trade-offs
-- **Cross-session memory injection** — `build_cross_session_section()` scans all sessions whose CWD history overlaps the current session's repo root and injects a summarised memory block into the agent system prompt. The agent inherits knowledge from prior sessions in the same repo without manual intervention
-- **Cron scheduler** — time-triggered agent tasks defined in Settings > AI Chat > Scheduler. Cron expressions with goals, persisted to `<config_dir>/ai-cron.json`. Scheduler ticks every 30 s. Tauri commands: `load_scheduler_config`, `save_scheduler_config`
+What went with the embedded engine (#784-0aec) and did not come back here:
 
-### 6.16 Provider Registry
-- Centralized multi-provider configuration replacing per-feature provider settings
-- Supported provider types: **Anthropic**, **OpenAI**, **OpenRouter**, **Ollama** (local, auto-detected), custom OpenAI-compatible endpoints
-- Per-provider API keys stored in OS keyring via `Credential::Provider` variant
-- Per-provider model lists with add/remove/reorder
-- **Slot resolver** — logical slots (`headless`, `chat`, `triage`) map to concrete provider+model pairs with a configurable fallback chain
-- **Legacy migration** — existing `ai-chat-config.json` provider/model/API key settings auto-migrated to `providers.json` on first load
-- **Settings > Providers tab** — full CRUD UI: add/edit/remove providers, manage model lists, assign slots, test connections
-- **Availability indicator** — a provider whose reachability can be probed (Ollama) shows **Reachable** or **Not detected** in its row, as an inline SVG plus label; when it is not detected, the backend's reason (refused, no answer within the 4s probe, or the HTTP status it answered with) is shown underneath. The wording is authored in `detect_ollama`, never composed in the UI
-- All Rust consumers (`ai_chat`, `ai_agent`, `headless`, `triage`) resolve models via the registry instead of reading config directly
-- Config file: `<config_dir>/providers.json`
+| Removed | Returns as |
+|---|---|
+| Provider registry, models, slots, API keys in the keyring, Ollama detection | 786-4a6d — configured in ego; TUICommander stores no API key |
+| The ReAct agent loop, its 31 tools, `SafetyChecker`, `FileSandbox`, unsafe mode, agent model overrides, cross-session memory injection | nothing. ego runs its own loop and drives terminals from outside, through the `session` MCP tool family |
+| Terminal watchers and the cron scheduler (`ai-watchers.json`, `ai-cron.json`) | not scheduled |
+| AI diff triage | nothing. #795-320b restored the review but not the triage: one unattended turn gets the whole diff, so there is no per-file classification pass to run |
+| PR AI review, changelog generation, improvement scan | **795-320b** — one unattended ego turn each; see 8.3 and 8.10 |
+| Smart Prompts `api` execution mode | **787-ee50** — one unattended ego turn; see 10.5 |
 
-### 6.17 AI Diff Triage
-- LLM-powered code review panel for `git diff` changes
-- Progressive loading: diffs grouped by file with heuristic pre-classification (formatting-only, rename, test, config changes) before LLM analysis
-- Multi-turn conversation via `TriageSession` — ask follow-up questions about specific findings
-- "Diff" button on findings opens the relevant file diff in context
-- Refresh support: re-run triage when the diff changes
-- Backed by `run_diff_triage` Tauri command with `classify_multi_turn` for iterative refinement
+### 6.15 Session Knowledge Store (recording only)
+Outlived the engine because none of it involves a model, and `pty.rs` is the
+producer. Nothing reads it today — it is kept because the history cannot be
+re-derived later.
+- **Command outcomes** — exit code, duration, CWD, classification, output snippet, auto-correlated error→fix pairs, CWD history, `tui_apps_seen`, terminal mode
+- **OSC 133 semantic prompts** feed exact exit codes where the shell supports them; the PTY silence timer records an `Inferred` outcome where it does not
+- Persisted to `<config_dir>/ai-sessions/<session_id>.json` with a 2 s debounced flush
+- **TUI app detection** via alternate-screen tracking (`ESC[?1049h`/`l`). `TerminalMode::FullscreenTui { app_hint, depth }` is set when the terminal enters vim/htop/lazygit/less/tmux/…
+- Code: `src-tauri/src/ai_agent/{knowledge,tui_detect}.rs` — they kept the `ai_agent/` module path because `pty.rs` reads them there
 
-### 6.18 ChoicePrompt Detection
+### 6.16 ChoicePrompt Detection
 - New `ParsedEvent::ChoicePrompt { title, options, dismiss_key, amend_key }` recognises Claude-Code-style numbered confirmation menus (footer matches `Esc to cancel · Tab to amend`)
 - Options parsed by regex with optional cursor marker (`❯`, `›`, `>`). Title heuristics require `?` or a verb prefix (`proceed`, `confirm`, `do you want`, …) to avoid matching Markdown numbered lists. Minimum two options
 - Destructive labels (`no`, `cancel`, `reject`, `abort`, `deny`, `don't`) flagged for styling
@@ -863,7 +865,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Warm linked worktrees**: every workspace shares refs and objects with the parent. After `git worktree add`, ignored directories such as `node_modules`, `target`, and `.venv` are copied with clonefile/reflink when supported; tracked paths, ignored files, nested repositories, and the destination ancestor are never copied
   - Capability is measured against the actual source/destination pair. Unsupported filesystems produce one warning and a valid cold worktree
   - Parent tracked and untracked changes are not carried into the new checkout
-  - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); unknown blocks removal
+  - Shared lifecycle state: sidebar, Worktree Manager, and removal confirmation render one workspace-id keyed backend verdict (`Dirty`, `Merged`, or `Unknown`); sidebar Dirty/Unknown badges explain their meaning on hover or keyboard focus, and unknown blocks removal
   - MCP creation payload reports `warm_artifacts.warmed_directories` and states the linked-worktree isolation semantics
   - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
   - Dedicated overlay listing all worktrees across all repos with metadata: branch name, repo badge, PR state (open/merged/closed), dirty stats, last commit timestamp
@@ -927,7 +929,10 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Author, timestamps, state, merge readiness, review decision
 - CI check details, labels, line changes, commit count
 - View Diff button: opens PR diff as a dedicated panel tab with collapsible file sections, dual line numbers, and color-coded additions/deletions
-- AI Review: reviews PR diffs from the popover and falls back to a local-clone diff when GitHub refuses to render oversized PR diffs
+- AI Review: one unattended ego turn over the PR diff (#795-320b). Findings are listed with severity, path and line; each one with a concrete line can be
+  selected and posted to GitHub as an inline review comment. Findings below the confidence threshold (default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD`
+  overrides) never leave the backend. TUICommander stores no API key and names no model — that is ego's configuration. When ego is not reachable the
+  popover shows ego's own sentence, never an empty finding list
 - Merge button: visible when PR is open, approved, CI green — merges via GitHub API. Merge method auto-detected from repo-allowed methods; auto-fallback to squash on HTTP 405 rejection
 - Approve button: submit an approving review via GitHub API (remote-only PRs)
 - Post-merge cleanup dialog: after merge, offers checkable steps (switch to base, pull, delete local/remote branch)
@@ -998,9 +1003,15 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 8.10 GitHub Ops Dashboard
 - Dedicated GitHub Ops dashboard tab with live columns for PR review findings, auto-fix sessions, conflict assists, improvement proposals, and CI / merge readiness.
-- Improvement scans run a one-shot Headless-slot LLM pass over local repo context with focus modes: `refactor`, `testing`, and `perf`.
+- The review column shows Working, Done with a finding count, or ego's own failure sentence. It deliberately never names a model: one unattended turn is all ego reports.
+- Improvement scans run one unattended ego turn over local repo context with focus modes: `refactor`, `testing`, and `perf`. At most five proposals survive one scan.
 - Proposals are notification-first: scan results emit `proposals-ready` over desktop events and `/events` SSE; that event is the *only* path that publishes them into the store — the scan's return value is for the caller, not for the panel. No GitHub issue is created automatically.
 - Each proposal can be promoted to a GitHub issue only through an explicit user action, using the existing authenticated issue creation path.
+
+### 8.10a Changelog Generation
+- Button in the GitHub panel header opens the Changelog modal, which runs one unattended ego turn over the merged PRs since the last tag (#795-320b).
+- The result is markdown plus a structured JSON split; the modal renders the markdown and offers Copy and Save (`CHANGELOG-ai.md`). HTTP and MCP callers get both halves.
+- Ego answering in prose only is a valid answer — the JSON half is `null` and the markdown still renders. Ego being unreachable shows ego's own sentence, never a blank changelog.
 
 ### 8.11 Polling
 - Active window: every 30 seconds
@@ -1124,8 +1135,8 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 - **Edit Prompt dialog**: full editor with name, description, content textarea, variable insertion dropdown (grouped by Git/GitHub/Terminal with descriptions), placement checkboxes, execution mode, auto-execute, and keyboard shortcut capture
 - **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: the **Compose box** (default) or editable text in the **Terminal**
 - **Auto-execute**: when enabled, a prompt submits exactly once through agent-aware `sendCommand`, regardless of its review target. When disabled, it remains editable. Explicit **Insert** and **Insert & Run** actions override the saved setting.
-- **API execution mode**: calls LLM providers directly via HTTP API (genai crate) without terminal or agent CLI. Per-prompt system prompt field. Output routed via the same outputTarget options (clipboard, commit-message, toast, panel). Tauri-only (PWA shows "requires desktop app")
-- **LLM API config** (Settings > Agents): global provider/model/API key for all API-mode prompts. Supports OpenAI, Anthropic, Gemini, OpenRouter, Ollama, and any OpenAI-compatible endpoint via custom base URL. API key stored in OS keyring. Test button validates connection
+- **API execution mode runs one unattended ego turn (#787-ee50)**: it used to call LLM providers directly over HTTP from TUICommander; that client, its provider registry and its keyring entry were deleted with the embedded AI engine (#784-0aec). It now goes through `acp_one_shot_prompt` — launch the configured ego, one `session/new` with **no MCP server**, one prompt, shut down — and the turn's final text goes to the prompt's `outputTarget`. Nothing streams: a Smart Prompt runs with no panel open. A `headless` prompt whose resolved agent is `api` takes the same one path. Every permission request and elicitation is declined the instant it arrives, because a seat nobody takes is a turn that never ends; the count comes back as `declined` so an empty answer caused by a refused tool is reported as that rather than as an empty answer. The turn is abandoned after 300s
+- **No LLM API config**: there is no global provider/model/API key in `Settings > Agents` any more, and TUICommander stores no API key. The model an `api` prompt runs on is ego's default, set in `Settings > AI Providers` (786-4a6d). With no ego binary named, the mode refuses and points at `Settings > General` first
 
 ### 10.6 Built-in Prompts by Category
 
@@ -1229,7 +1240,8 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Updates: auto-check, check now
 - Git integration: auto-show PR popover
 - Terminal: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, agent context bar, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry)
-- Experimental Features: master toggle + per-feature sub-flags (AI Chat, AI Triage, AI Watchers, Scrollback Reflow)
+- AI Chat: the `ego_executable` path, shown only while Experimental Features is on. Empty means ACP is not configured — every connect is refused and the panel says so
+- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Providers** settings tab (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
 - Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
 
 ### 11.2 Appearance
@@ -1279,9 +1291,16 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - See **6.9 Agent Configuration** for full details
 - Claude Usage Dashboard enable/disable toggle (under Claude agent section)
 
-### 11.8 Providers
-- Settings > Providers tab for centralized AI provider management
-- See **6.16 Provider Registry** for full details
+### 11.8 AI Providers
+Shown only while Experimental Features is on, because that flag is what offers the AI Chat panel — the one place `ego` is reachable from.
+- Reads and writes **ego's** configuration by running ego: `config ls --json`, `models --json`, `doctor --json`, and `config set model="<slug>"`. All three reads must succeed, so the tab is never a partial picture
+- Default model: a picker over every model ego knows, grouped by provider, with unavailable models disabled. A write is followed by a fresh read, so what is shown is what ego persisted. It survives a restart because ego holds it, not TUICommander
+- Refresh from providers: `ego models --refresh`, the only action in TUICommander that reaches a provider over the network — and it is ego that reaches it. Opt-in; opening the tab does not
+- Per-provider rows: how many models are usable, and ego's own words for why the rest are not (once per distinct reason)
+- Credential state from `ego doctor`: stored, expired (ego renews it on its next run), missing, or "could not read the store" — which is deliberately not the same as an empty store
+- **No API key enters TUICommander**: none is stored, none reaches the OS keyring, and no provider HTTP call is made from this process. `ego auth login <provider>` is named, not run — the flow is interactive and would mean handling a secret on the way past
+- `model` is the only writable key, exposed as its own operation rather than a key/value pair, so no caller over IPC or HTTP can reach `sandbox` or `permissions.judge`
+- Four failure states, each distinct: ego not configured (names the field to fill), a configured path that will not start, an ego command that failed (shown with the command, exit code and its verbatim output), and a transport fault that is not attributed to ego
 
 ---
 
@@ -1299,7 +1318,6 @@ All data persisted to platform config directory via Rust:
 - `prompt_library.json` — saved prompts
 - `notes.json` — ideas panel data
 - `dictation_config.json` — dictation settings
-- `providers.json` — provider registry (providers, models, slot assignments)
 - `.tuic.json` — repo-root team config (read-only from app, highest precedence for overridable fields)
 - `claude-usage-cache.json` — incremental session transcript parse cache
 
@@ -1759,6 +1777,8 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 ### 18.9 Notification Sounds
 - Audio playback via Rust `rodio` crate (Tauri command `play_notification_sound`), replacing the previous Web Audio API approach
 - Eliminates AudioContext suspend issues on WebKit and works in headless/remote modes
+- Native tones end on an exact zero-amplitude sample and keep the output stream alive for a 100 ms silent tail, avoiding end-of-chime clicks when CoreAudio releases a short-lived stream
+- One shared 500 ms anti-spam gate covers every sound type, preventing different tones in a notification burst from overlapping; explicit Settings test playback bypasses it
 - State transition detection: question, rate-limit, error, completion
 - Completion notifications deferred 10s and suppressed when active sub-tasks are running (detected via `⏵⏵`/`››` mode-line prefix)
 - **Sounds:** `question` (C5→E5 chime), `completion` (C5→E5→G5 arpeggio), `error` (E4→C4), `warning` (A4 double-tap), `info` (single G5 pluck), and `attention` — a triangular G4→G4→E5 callback with two short knocks and a longer rise. Native and browser/PWA playback share the motif and 0.8 gain; each engine applies its own envelope. The repeated opening is immediately recognizable while the softer timbre avoids the old square buzzer's harshness. Meant for an agent that is working unattended and is blocked on the user
@@ -1980,6 +2000,18 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Same HTTP/WebSocket API as the desktop app's remote access feature
 - No Tauri dependency — pure Rust binary
 - Available as GitHub Release artifacts for Linux x64/ARM64, macOS ARM, and Windows x64
+- `tuic-bridge` is published for every one of those targets too, and belongs next
+  to the daemon: the daemon writes an MCP entry naming it into the config of each
+  agent installed on the machine, so an agent launched there gets the full
+  `tuicommander` tool surface (`session`, `repo`, `progress`, `agent`, peer mail)
+- Agents reach the daemon over its local IPC endpoint (`mcp.sock`, or the
+  `tuicommander-mcp` named pipe) — never over the authenticated TCP port
+- Runs the desktop's background tasks that a machine needs: process snapshots,
+  standby parking, content indexing and boot pre-warm, tool search index, upstream
+  MCP auto-connect and health checks, CPU watchdog, maintenance sweep. It does not
+  run the WebView watchdog (no WebView) or command-knowledge persistence (no
+  route exposes it). The embedded assistant's scheduler and watcher engine are
+  not on this list any more — they were deleted outright in #784-0aec
 
 ### 22.2 Configuration
 - Without `--instance`, uses the desktop app's existing platform config directory,
@@ -2090,18 +2122,30 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
 - Each connection has UUID, name, transport, auth username, and enabled flag
+- The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
 
-### 24.3 Remote Repositories and Terminals
+### 24.3 Authentication
+- `tuic-remote` authenticates every TCP request: the headless build has no loopback bypass and `run_remote` forces `lan_auth_bypass` off, so an SSH tunnel does not make it local. `GET /health` is the only unauthenticated route
+- On connect, the backend trades the vault password for the daemon's session token (`GET /api/auth/session-token`, Basic Auth) — in Rust, so the password never reaches the WebView
+- The token is appended as `?token=` to HTTP, the terminal WebSocket and the `/events` SSE stream by the single helper `withRemoteToken` (`transportRuntime.ts`). A WS upgrade cannot set a header and `Access-Control-Allow-Origin: *` rules out credentialed cookies, so the query string is the only credential all three share
+- Held in memory only, never persisted: the daemon mints a new one on every restart, and a 401 from the status poll triggers one re-authentication
+- Status separates **Not authenticated** (reachable, credentials rejected) from **Error** (unreachable). An unauthenticated connection starts no poll, no event bridge and routes no calls
+
+### 24.4 Remote Repositories and Terminals
 - Repos can be assigned to a remote connection; sidebar shows remote badge
 - Terminals on remote repos route WebSocket I/O through the connection's base URL
-- `transport.ts` routes `invoke()` calls based on the active connection's `connectionId`
-- `canvasTerminalTransport.ts` supports configurable `baseUrl` for remote WebSocket connections
-- Health polling for direct connections; SSH connections rely on tunnel supervisor status
+- **One choke point decides the machine.** `resolveOwningConnection` (`transportRuntime.ts`) reads the call's own arguments — a session id first, then a repository path — and answers which connection owns it. Both entry points ask it: `rpc()` for the HTTP transport and `invoke()` for the desktop IPC path, which would otherwise short-circuit straight to the local backend. A call site cannot forget to route, because it never routes
+- Path→connection resolution reuses `resolveRepoPathFor` (deepest registered repo or linked worktree wins); session→connection goes through the terminal's `repoPath`, falling back to its `cwd` while ownership reconciliation has not run yet
+- A command with no HTTP route (`INTENTIONALLY_UNMAPPED`) stays local and warns once — routing it would replace a working call with a throw
+- A call on a repo whose connection is down fails with `Remote connection <id> not connected`; it is never answered by the local backend
+- `canvasTerminalTransport.ts` takes the `connectionId` and derives both the base URL and the token from it
+- Status polling runs against `/api/version`, not `/health`: only a route behind the auth middleware can tell a working connection from a rejected one
 
-### 24.4 SSE Event Bridge
-- `remoteEventBridge.ts` subscribes to server-sent events from remote daemons
-- Bridges remote events (repo changes, PTY output, agent status) into local stores
-- Automatic reconnection on connection loss
+### 24.5 Event Mirror
+- `remote_mirror.rs` runs one task per connected connection: it reads the daemon's `GET /sessions` and then its `/events` stream, in Rust
+- The stream carries **no** `types=` filter, and every frame is repeated on the local bus under the daemon's own event name — a client cannot tell a mirrored event from a local one, so the existing handlers raise the same badge, the same notification and the same queue gate, and a new event type crosses for free
+- Mirrored sessions appear in `list_active_sessions` and `GET /sessions` beside local ones, each carrying `connection_id` — the only field that says which machine runs it
+- The stream is re-seeded after every reconnect, so a gap in the SSE cannot leave a stale badge; losing the connection announces each mirrored session closed and then drops it
 
 ---
 

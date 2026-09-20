@@ -8,6 +8,96 @@
 
 # To Test
 
+## Notification sound teardown (2026-09-20) — **Rust, needs a `make dev` restart**
+
+- [ ] In Settings → Notifications, play each Test sound through the output device that previously crackled. The tone must end cleanly, with no relay-like click after its release. The source now reaches an exact zero sample and feeds 100 ms of silence before closing, but only the real CoreAudio device can verify the hardware-buffer teardown.
+
+## Progress dialog and journal (2026-09-19)
+
+- [ ] Open Progress (palette: "Open Project Progress"), move the pointer across three rows, then off the list. Every delete icon must be hidden again; before, WKWebView kept the icon of every row crossed. CSS only, live via HMR — no restart. Item created because the fix could not be reproduced programmatically.
+- [ ] **Rust, needs a `make dev` restart.** With an agent tab open, let it print `intent: …` and let the screen repaint (spinner running). `sqlite3 "<config dir>/progress.sqlite3" "select count(*) from entries where kind='intent' and created_at_ms > <restart ms>"` must grow by one per distinct intent, not per repaint. Then call the `progress` tool twice with the same `done` text and confirm both rows land.
+
+## ego reaches TUIC over the stdio bridge (story `796-7fa3`, 2026-09-20) — **Rust, needs a `make dev` restart**
+
+The session's MCP entry moved from an HTTP URL to the `tuic-bridge` sidecar on
+stdio. Every test here stops at the wire shape TUICommander writes; what none of
+them reaches is ego actually spawning that binary and calling a tool through it.
+
+- [ ] With **Remote Access off** (Settings → Remote Access), open the AI Chat panel and ask ego to list the open terminal sessions. It must answer with them. Before this change the same question got a refusal or an empty answer, because the session carried no MCP server at all — that is the whole bug.
+- [ ] Turn Remote Access **on**, start a new chat session, ask again. Same answer. The switch must no longer change what ego can reach.
+- [ ] Check the tool surface is still the collapsed one: ego's turn should reach tools through `call_tool` rather than being handed the full upstream catalogue. If ego suddenly sees 200+ tools, the bridge stopped forwarding ego's own `initialize` and every turn just got ~35k tokens more expensive.
+- [ ] Launch a second instance with `TUIC_APP_INSTANCE=qa`, open AI Chat there, and ask ego which repositories it can see. It must see the `qa` instance's repositories, never the default instance's.
+
+## PR review, changelog and improvement scan run on ego (story `795-320b`, 2026-09-20) — **Rust, needs a `make dev` restart**
+
+`pr_review.rs`, `changelog.rs`, `improvement_scan.rs`, two new `AppEvent`
+variants and four new HTTP routes are all new Rust, and none of them load into a
+running `make dev`. The parsers, the confidence gate and the stores are unit
+tested; what no test reaches is a real ego process answering a real diff.
+
+- [ ] Open a PR's detail popover and click **Run** under AI Review. It must produce findings (or "No findings" with a reviewed-file count and "by ego"), never a blank panel. Tick a finding with a line number and click **Post review**; the comment must appear on the PR in GitHub.
+- [ ] A finding with **no** line number must be listed but its checkbox disabled — GitHub refuses an inline comment without a line.
+- [ ] Rename `ego_executable` in Settings → General to something that does not exist and run the review again. The popover must show ego's own sentence, not an empty finding list. Put the real path back.
+- [ ] GitHub panel header → the document icon opens the Changelog modal. It must produce markdown for the merged PRs since the last tag, and **Copy** and **Save** must both work on the result.
+- [ ] Open the **Ops Dashboard** (the chart icon in the same header). Click each of `refactor`, `testing` and `perf`. Each scan must fill the Proposals column with at most five cards, and **Create issue** on one of them must file a real GitHub issue.
+- [ ] While a review is running, the dashboard's Review findings column must show the PR as Working and then Done with a count — that is the `review-progress` event arriving over the bus.
+- [ ] From a browser (not the Tauri app) at `localhost:9876`, run the same review and the same scan. Both must work: these routes are deliberately not desktop-gated.
+
+## The terminal stream is compressed over a remote connection (story `794-832e`, 2026-09-20) — **Rust, needs a `make dev` restart**
+
+`ws_stream`, `mcp_http::ws_compression` and the ssh `Compression=yes` are new
+Rust. The codec is unit-tested on both sides and the framing end to end against a
+mock socket; what no test reaches is a real browser inflating a real socket, and
+a real ssh process.
+
+- [ ] From a **second machine** (or a phone on the LAN), open the web UI against this daemon's IP and attach a terminal. In devtools → Network → the `stream` socket, the URL must carry `compress=deflate`, every message must be **Binary**, and the terminal must paint and stay live. Run something noisy (`yes | head -100000`) and watch the socket's byte counter — it should be a small fraction of what the same run costs locally.
+- [ ] Same devtools panel, from a browser on **this** machine at `localhost:9876`: the URL must have **no** `compress=` at all and the messages must still be a mix of Binary and Text. This is the local path, and it must be untouched.
+- [ ] Resize the remote terminal, scroll it, and let the agent repaint a full screen. No stale rows, no torn frames — a mis-ordered inflate would show as rows from an older screen surviving under a newer one.
+- [ ] `curl` the daemon's log after a remote session: no `WsTransport could not decode a compressed frame` lines. One would mean the tags disagree.
+- [ ] Settings → Services → SSH Tunnels → edit a profile: **Compress the channel (ssh -C)** is on. Save, start the tunnel, and confirm with `ps ax | grep "[s]sh -N"` that the command line holds `-o Compression=yes`. Untick it, restart the tunnel, confirm `Compression=no`.
+- [ ] Open a repository through an **SSH remote connection** and attach a terminal. The stream socket asks for `compress=deflate` (the client sees a remote connection) but the daemon answers identity tags because the peer is loopback — the terminal must still work, and the saving comes from the tunnel instead.
+
+## Smart Prompts `api` mode runs on ego (story `787-ee50`, 2026-09-20) — **Rust, needs a `make dev` restart**
+
+`acp_one_shot_prompt`, `POST /acp/one-shot` and `acp/oneshot.rs` are new Rust, so
+none of this is live in a running `make dev`. The collector is unit-tested
+against event sequences and the frontend against a double; what no test reaches
+is a real ego process, which is every item below.
+
+- [ ] With **ego executable** empty, a prompt saved with `executionMode: "api"` is listed but disabled, and hovering it says ego is not configured and names *General* then *AI Providers*.
+- [ ] With ego configured but no repository or terminal open, the same prompt is disabled and says ego needs a working directory.
+- [ ] With a real ego and a repository open, run an `api` prompt whose output target is the clipboard. The clipboard must hold ego's final text, trimmed, with no reasoning in it.
+- [ ] While it runs: `ps ax | grep ego` shows exactly one extra process, and it is gone within a second of the answer arriving. Run the prompt three times — no ego process accumulates.
+- [ ] The AI Chat panel's own connection is untouched: open the panel, send a turn, then run an `api` prompt. The panel's conversation must survive, and the prompt must not appear in it.
+- [ ] Ask an `api` prompt to do something that needs a tool ("list the files in this directory"). It must come back refused, saying how many permissions were declined — not as an empty answer, and never hanging.
+- [ ] Run one with the output target set to *commit message*: the Git panel's commit box must fill.
+
+## AI Providers tab over ego's configuration (story `786-4a6d`, 2026-09-20) — **Rust, needs a `make dev` restart**
+
+The backend (`ego_cli.rs`, `/ego/*`) is new Rust, so none of this is live in a
+running `make dev`. Every check below also needs a real ego binary: the tests
+prove the join and the failure shapes against a double, never against ego.
+
+- [ ] With **Experimental Features** off, the Settings nav has no *AI Providers* entry and searching for "default model" finds nothing. Turn it on: the tab appears.
+- [ ] With **ego executable** empty, open the tab. It must name the field to fill (General → AI Chat), not render an empty list, and launch nothing.
+- [ ] Point the setting at a path that does not exist. The tab must say the executable could not be *started* — a different message from "not configured" — and show what the OS reported.
+- [ ] With a real ego: the provider rows must match `ego doctor --json`, the model list `ego models --json`, and the picker's selection `ego config ls --json`'s `model`.
+- [ ] Change the default model, then `ego config ls --json` in a terminal: the new value must be there, quoted. Restart TUICommander — the tab must still show it. (This is the criterion no test can reach: ego holds it, TUIC does not.)
+- [ ] Press **Refresh from providers** and watch the network (or ego's own logs): the refresh must be the only outbound call, and opening the tab must make none.
+- [ ] Break one provider (revoke a token, or point ego at an unreachable base URL) and press Refresh. The failure must be shown in ego's own words with the command and exit code, not swallowed into an empty list.
+- [ ] Log out of one provider (`ego auth logout <provider>`) and confirm its row reads "no credential" while the others stay "stored" — a missing credential must not blank out the whole tab.
+
+## AI Chat runs on ego (story `785-58ca`, 2026-09-20) — frontend, Vite HMR picks it up, but it needs a real ego binary
+
+Everything below is proven against a test double at the IPC boundary. What no
+test can reach is the live process: these are the checks that need one.
+
+- [ ] With **ego executable** empty, open the panel: it must say ACP is not configured, show no input box, and launch nothing.
+- [ ] Set the path, open the panel on a repository, send a turn. The answer must stream in, reasoning must fold into a *Thinking* disclosure, and tool calls must stay one card each as their status changes.
+- [ ] Let ego ask for permission. The buttons must be the ones ego published, and answering must clear the card in every open window — not only the one that answered.
+- [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there.
+- [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. The panel writes the message locally, so if ego echoes it the bubble appears twice and `acpTranscript.noteUserMessage` has to go.
+
 ## Launch-scoped native agent status signals (story `746-30a9`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
 - [ ] [HUMAN] After restarting `make dev`, launch Claude from a TUIC shell and confirm the generated `--settings` hooks coexist with and execute alongside a same-event hook in global/project settings; confirm OSC 7770 busy/awaiting/idle reaches the tab.
@@ -125,20 +215,14 @@ Evidence that closed the bulk, all measured against the running 09-03 binary:
   `cargo build --bin tuic-remote --no-default-features` building. So the Rust
   claims below are no longer read-only inferences; the suite backs them.
 
-## Idle watchers stop stalling the event loop (2026-09-05, **Rust change — needs `make dev` restart**) — story `674-78a8`
+## Idle watchers stop stalling the event loop — story `674-78a8` — **DELETED 2026-09-19**
 
-The idle classifier now runs in its own task, gated by the rule cooldown and a
-4-permit lane. Covered by unit tests against a hanging local provider; what the
-tests cannot show is behaviour under a real slow provider with several watchers
-armed at once.
-
-- [ ] Arm an Idle watcher on two busy agent sessions. While one is waiting on the
-  classifier, the other session's Busy/Question/Error watchers must still fire —
-  no lag, no `Watcher lagged N events` line in `GET :9876/logs`.
-- [ ] Let a watcher fire, then trigger it again inside its cooldown. The logs must
-  show `Watcher skipped — cooldown` and NO classifier call for that event.
-- [ ] Fire a watcher until `max_fires`, restart the app, and confirm the rule comes
-  back as `exhausted` in the Watcher Manager — the deferred write must land.
+Three items on the idle classifier, the watcher cooldown and `max_fires`
+persistence. #784-0aec deleted the terminal-watcher engine outright —
+`ai_agent/watcher.rs`, `ai_agent/triggers.rs` and `ai_agent/scheduler.rs` are
+gone, there is no Watcher Manager to open and no classifier to stall. Watchers
+are not scheduled for the ego rebuild, so these are unrunnable rather than
+pending and the items are removed instead of ticked.
 
 ## A backend-created worktree offers itself as a toast, not a modal (2026-08-30, frontend only — HMR)
 
@@ -297,14 +381,14 @@ runs in the backend, so nothing changes until the Rust process is rebuilt.
 - [ ] A 429/overload (`API Error: 529` or "temporarily limiting requests") is
   still logged as a rate limit, not as a server error, and injects nothing.
 
-## Usage ticker follows the agent in the terminal (Claude / Codex)
+## Usage ticker follows the agent in the terminal (Claude / Codex / Grok)
 
-**Rust change — a `make dev` restart (or `make build`) is required.** The new
-`get_codex_usage_api` command and the `GET /codex/usage` route live in the
-backend, so the ticker shows `offline` until the Rust process is rebuilt.
+**The Rust restart is complete.** The active debug backend on :9876 was verified
+on 2026-09-19 with the Codex App Server and Grok ACP integrations loaded.
 
 **Precondition:** Settings → Agents → the Claude Usage toggle must stay enabled;
-it now drives both agents. A Codex login must exist (`~/.codex/auth.json`).
+it now drives all supported usage providers. Codex and Grok must be logged in
+through their own CLIs.
 
 - [ ] Focus a tab running Claude: the status bar ticker is labelled `Claude` and
   shows the `5h` / `7d` numbers as before. Clicking it still opens the Claude
@@ -314,25 +398,26 @@ it now drives both agents. A Codex login must exist (`~/.codex/auth.json`).
   without waiting for the 5-minute poll.
 - [ ] Clicking the Codex ticker opens a **Codex Usage Dashboard** tab (a
   singleton — clicking again focuses the existing tab, it does not duplicate).
+- [ ] Focus a tab running Grok: the ticker is labelled `Grok`, shows the
+  provider's billing period and percentage, and opens a singleton **Grok Usage
+  Dashboard** with tier and billing amounts.
 - [ ] Switch to a plain shell tab: the ticker keeps showing the last agent
   rather than blanking or reverting to Claude.
 - [ ] Switch Claude → Codex → Claude quickly. No stale value from the previous
   agent lands on the ticker (the seq guard should drop late responses).
-- [x] `curl http://localhost:9876/codex/usage` returns the JSON payload and
+- [x] `curl http://localhost:9877/codex/usage` returns the JSON payload and
   contains **no** `email`, `user_id` or `account_id` field.
-  _(verified 2026-09-07, live PID 28512: HTTP 200, 791 bytes. Full recursive key
-  set is rate-limit/quota data only — `plan_type`, `credits`, `model_usage`,
-  `primary_window`, `used_percent`, … — and none of `email`, `user_id`,
-  `account_id` appears at any depth. Port was written as 9877; only 9876 runs.)_
-- [ ] Rename `~/.codex/auth.json` away and focus a Codex tab: the ticker shows
-  `no token`, and `GET /logs` has no warn line for it (missing token is not an
-  error worth logging).
-- [ ] With the Claude Usage toggle off, no ticker appears for either agent.
+  _(verified 2026-09-19 against an isolated `tuic-remote` on :9877: the official
+  App Server replacement returned HTTP 200 with plan and rate-limit data and no
+  identity fields)_
+- [ ] Log Codex out through the Codex CLI and focus a Codex tab: the ticker
+  reports the authentication failure without displaying a cached reading.
+- [ ] With the Claude Usage toggle off, no usage ticker appears for Claude,
+  Codex, or Grok.
 
 ### Codex Usage Dashboard
 
-Same `make dev` restart precondition — the `get_codex_usage_stats` command and
-`GET /codex/stats` are new Rust.
+The active backend now includes `get_codex_usage_stats` and `GET /codex/stats`.
 
 - [ ] **Rate Limits** section shows the account windows first with plain `5h` /
   `7d` names, then the per-model windows prefixed with the model name. A window
@@ -340,17 +425,34 @@ Same `make dev` restart precondition — the `get_codex_usage_stats` command and
 - [ ] **Tokens per Day** renders one bar per day; hovering a bar shows the date
   and the token count. The tallest bar is the busiest day, and a near-zero day
   is still visible as a sliver rather than invisible.
-- [ ] **Insights** tiles are populated (lifetime tokens, peak day, threads,
-  streak, longest turn, fast mode, skills, reasoning effort) — no `NaN`, and
-  absent values read `--`.
-- [ ] Kill the network (or rename `~/.codex/auth.json`) and open the dashboard:
-  each section shows its own error hint independently — one failing endpoint
-  must not blank the other section.
-- [x] `curl http://localhost:9876/codex/stats` contains **no** `profile` object
+- [ ] **Insights** shows the fields the official App Server supplies (lifetime
+  tokens, peak day, streak, longest turn). Fields absent from that API are not
+  invented and do not render as misleading zeroes.
+- [ ] Kill the network and open the dashboard: a cached snapshot is used only
+  for up to 30 minutes; authentication failures are always surfaced.
+- [x] `curl http://localhost:9877/codex/stats` contains **no** `profile` object
   (no username, display name or avatar URL).
-  _(verified 2026-09-07, live PID 28512: HTTP 200, 1618 bytes, single top-level
-  key `stats`. None of `profile`, `username`, `display_name`, `avatar_url`,
-  `email` appears at any depth. Port corrected from 9877.)_
+  _(verified 2026-09-19 against an isolated `tuic-remote` on :9877: the official
+  App Server response returned token summary/daily buckets under `stats` and no
+  profile or identity fields)_
+
+### Grok Usage Dashboard
+
+The active backend now includes `get_grok_usage_api` and `GET /grok/usage`.
+
+- [x] `curl http://localhost:9877/grok/usage` returns `credit_usage_percent`,
+  `current_period`, and the subscription tier without exposing credentials.
+  _(verified 2026-09-19 against an isolated `tuic-remote` on :9877: 26% weekly,
+  subscription tier and billing fields present; the public payload uses
+  `current_period.period_type` and contains no legacy `type` field)_
+- [x] The usage bar, billing period end, on-demand used/cap, and prepaid balance
+  match Grok's own billing view. Missing values render as unavailable, not zero.
+  _(verified 2026-09-19 in browser mode against the isolated :9877 backend: the
+  live 26% weekly period, tier, end date and billing cards rendered correctly;
+  `GrokUsageDashboard.test.tsx` separately proves null renders as `--` while a
+  real zero renders as `0.00`)_
+- [ ] A logged-out Grok CLI surfaces an authentication error instead of a stale
+  cached percentage.
 
 ## `index.lock` owner probe now fails closed (#694-4fcc)
 
@@ -678,29 +780,16 @@ Rust does not hot-reload, so this needs a `make dev` restart to load.
   `cargo test` or a `sh -c 'sleep 30'`), open the process manager and confirm
   each session still lists its child AND its descendants, with non-zero RSS.
 
-## Smart Prompts dropdown: missing-provider hint is now clickable (story 706-8d98, frontend only — Vite HMR, visual)
+## Smart Prompts dropdown: missing-provider hint is now clickable (story 706-8d98) — **DELETED 2026-09-19**
 
-Only the toolbar "Smart Prompts Library" dropdown (the sparkle icon) got the
-fix. The compact split-button strip (git changes tab, PR popover, etc.) still
-shows the same reason as a plain hover tooltip — see the DEFERRED comment at
-`SmartButtonStrip.tsx` for why that one was left alone.
-
-- [ ] In Settings → Providers, make sure no model is assigned to the "Headless"
-  slot (or temporarily unassign it).
-- [ ] Create or edit a Smart Prompt with Execution Mode = "API (LLM direct)"
-  (or "Headless" with the agent set to "API"), and give it `placement: toolbar`.
-- [ ] Open the toolbar's Smart Prompts dropdown (sparkle icon). The prompt
-  should appear dimmed/disabled, and *underneath its name* (not just as a
-  hover tooltip) you should see the full reason text — "Headless provider not
-  configured — add a provider and assign the Headless slot in Settings →
-  Providers" — rendered as an underlined, clickable control.
-- [ ] Click that reason text. Confirm it opens the Settings panel directly on
-  the **Providers** tab (not the default "Smart Prompts" tab the footer
-  "Manage Smart Prompts..." link opens), and confirm nothing was sent/run in
-  the terminal.
-- [ ] Confirm a prompt disabled for an unrelated reason (e.g. no active
-  terminal) still shows only the old hover tooltip — no clickable text was
-  added there.
+Five items on a dimmed `api`-mode prompt whose reason text was clickable through
+to `Settings → Providers`. #784-0aec deleted every precondition: there is no
+Providers tab and no Headless slot to unassign, and an `api` prompt is now
+refused with a reason rather than dimmed behind a provider hint. The tab comes
+back as 786-4a6d and `api` execution as 787-ee50, each with its own checks —
+these are unrunnable rather than pending and the items are removed instead of
+ticked. The DEFERRED comment in `SmartButtonStrip.tsx` still records why the
+compact split-button strip kept a plain hover tooltip.
 
 ## HTTP git commands are now bounded (story 697-d6ea, Rust — needs a `make dev` restart)
 
@@ -1070,39 +1159,16 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   (3) Same check for a grok tab (binding comes from `~/.grok/active_sessions.json`).
   (4) No regression for Codex/Gemini, which have no pid registry and keep the old
   heuristic: a single Codex tab must still resume its own session.
-- [ ] Frontend only, Vite HMR picks it up — no restart. Detached AI Chat window,
-  story `700-4d5d`. Detach-panel windows are desktop-only, so none of this renders
-  in browser mode and no agent can check it. (1) **The panel comes back:** open the
-  AI Chat panel, click detach, then close the detached window. The docked panel must
-  reappear. Before this it did not — `onDetach` never hid it, so the toggle on the
-  way home flipped it off. (2) **The stream reaches the detached window:** with the
-  chat detached, make the MAIN window start a conversation for that same terminal (a
-  file watcher rule firing, an automation goal, or right-click the terminal →
-  *Explain this error* — all three run on the main window's store, which renders
-  nowhere while detached). The reply must now stream *in the detached window*, and
-  must still be on screen after it finishes. (3) **The local stream wins:** type a
-  message in the detached window and, while it is streaming, trigger a main-window
-  conversation as in (2). What you asked for in the detached window must not be
-  painted over. (4) **A live stream survives the homecoming:** repeat (2) and close
-  the detached window while the reply is still arriving. The docked panel must come
-  back showing the answer mid-stream; before this it came back blank and stayed
-  blank until the stream finished. (5) **No cross-talk:** detach from terminal A,
-  focus terminal B in the main window, and start a conversation on B. Nothing may
-  appear in the detached window.
-- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Agent runs now
-  persist with the conversation (story `705-57fa`). The backend stamps
-  `schema_version: 3` and migrates older files on read. (1) **Existing conversations
-  survive:** with saved chats already on disk from an older build, open a terminal
-  that had one — the history must load as before, and
-  `<config_dir>/ai-chat-conversations/<id>.json` must come back rewritten with
-  `"schema_version": 3` after it is read once. Nothing may be lost or dropped.
-  (2) **A run survives a reload mid-iteration:** start an autonomous agent goal in
-  the AI Chat panel, wait until a tool card or two has appeared and the banner reads
-  `Agent running — iter N`, then reload the window (browser mode: refresh; desktop:
-  reopen the tab). The tool cards and the banner must come back as they were.
-  Before this only the prose came back. (3) **A plain L1 chat file gains no `agent`
-  block:** send a normal (assisted) message, then inspect the saved JSON — there
-  must be no `"agent"` key.
+- **DELETED 2026-09-19 — two items, both unrunnable.** **Detached AI Chat
+  window** (`700-4d5d`) asked for a stream to follow the panel into its own window,
+  and **agent runs persist with the conversation** (`705-57fa`) asked for a
+  `schema_version: 3` migration and tool cards surviving a reload. #784-0aec deleted
+  the engine under both: no conversation store, no
+  `<config_dir>/ai-chat-conversations/`, no autonomous agent goal, no tool card, no
+  *Explain this error* context-menu entry. The one surviving check — the panel
+  detaches and comes home — is listed under *The embedded AI engine is gone
+  (#784-0aec)* at the end of this file. The streaming half returns with 785-58ca and
+  will be written against ego rather than restored from here.
 - [ ] **Rust change — needs a `make dev` restart** (or `make build`). Session state is
   pushed, not polled (story `687-be9d`). The desktop no longer calls
   `list_active_sessions` on a 1 Hz timer; the backend emits `session-state-changed`
@@ -1119,19 +1185,11 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   the one mount-time `list_active_sessions` catch-up, the only call left.
   (4) **Browser parity:** open `http://localhost:9876/` in a browser and repeat (1);
   the SSE arm carries the same payload.
-- [ ] **Rust change — needs a `make dev` restart** (or `make build`). Provider
-  availability is now rendered (story `701-b6ac`). `detect_ollama` returns a
-  `detail` string saying *why* the endpoint is unusable, and the Providers tab
-  shows it. Visual confirmation is what is needed here — the states are covered
-  by tests, the rendering is not. (1) **Reachable:** with Ollama running, open
-  `Settings > Providers` with an Ollama provider configured — its row must show a
-  green check icon and `Reachable`, and no reason line underneath. (2)
-  **Unreachable:** stop Ollama (`pkill ollama`), reopen the tab — the row must
-  show a yellow `(!)` icon and `Not detected`, with
-  `Cannot reach http://localhost:11434 — is Ollama running?` underneath.
-  (3) **Wrong port:** point the provider's base URL at a port serving something
-  else and confirm the reason names the HTTP status instead. (4) The icons must
-  be SVG glyphs, not emoji, and must recolour with the theme (check light theme).
+- **DELETED 2026-09-19 — unrunnable.** **Provider availability is now rendered**
+  (`701-b6ac`) asked for a visual check of the reachable / not-detected / wrong-port
+  rows in `Settings > Providers`. #784-0aec deleted `detect_ollama` with the rest of
+  the provider registry and removed the tab itself — no row, no icon, no reason line.
+  Provider configuration moves into ego as 786-4a6d, which brings its own checks.
 - [ ] **Rust change — needs a `make dev` restart** (or `make build`). Block-display
   settings now persist (story `702-327a`). `show_block_timestamps`,
   `show_scrollbar_marks` and `block_folding_enabled` were absent from the Rust
@@ -1172,26 +1230,12 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   (5) **It persists:** turn it off, restart, confirm `config.json` carries
   `"show_scrollbar_marks": false` and the toggle is still off.
 
-- [ ] **Agent tool-log bound, measured on a real run** (718-aebf) — frontend
-  only, so Vite HMR picks it up. This is the half of the story code could not
-  close: criterion 1 asked for the file size and rewrite rate of a *real* long
-  agent run, and no such run exists yet — the tool log itself landed this
-  session (705-57fa) and the Rust half needs a `make dev` restart, so every
-  conversation on disk predates it (8 files, largest 3.3 KB, newest Jun 3).
-  After the restart, run one long autonomous agent session — the longer and the
-  more tool-heavy the better — then:
-  (1) **Size:** `ls -laS "$HOME/Library/Application Support/com.tuic.commander/ai-chat-conversations"`.
-  The active conversation's `.json` must stay under ~560 KB. Above that, the
-  512 KB ceiling in `conversationStore.ts` is not biting where it should.
-  (2) **Rewrite rate:** watch the same file's mtime during the run (`stat -f %m`
-  in a loop). It should move at most twice a second, and each write should now
-  be a fraction of a megabyte instead of up to 4 MB.
-  (3) **The log is still useful:** open the AI panel's tool cards on that
-  conversation after a reload. The MOST RECENT tool calls must be there — the
-  bound drops from the oldest end, so a run that trimmed shows a truncated
-  history, never a stale one.
-  (4) **Ordinary runs are untouched:** a normal short session should keep every
-  tool card it produced; the cap was sized so only megabyte-scale output trims.
+- **DELETED 2026-09-19 — unrunnable.** **Agent tool-log bound, measured on a real
+  run** (`718-aebf`) asked for the file size and rewrite rate of a long autonomous
+  agent session. #784-0aec deleted `conversationStore.ts`, the 512 KB tool-log
+  ceiling it enforced, and the agent run that filled it; there is no conversation
+  file left to measure and no tool card to reload. ego keeps its own transcript, so
+  bounding it is ego's problem, not TUICommander's.
 
 - [ ] **Scrollback reflow honours its Settings toggle** (660-d087) — **Rust
   change, needs a `make dev` restart.** Until now the grid reflowed scrollback
@@ -1885,7 +1929,14 @@ Still owed, and only these — all of them are about what is drawn:
       had to avoid: the persisted `token.index` values are fxhash32 hashes, so a
       drifted algorithm still decodes the file and then matches nothing.
 
-## Progress Markdown export (story `753-9998`, 2026-09-13) — **Rust, needs a `make dev` restart**
+## Progress Markdown export (story `753-9998`, 2026-09-13) — **OBSOLETE, do not run**
+
+_(NOTE 2026-09-18: the feature every item below tests no longer exists. `6b925e04`
+deleted `src-tauri/src/progress/export.rs` with its routes and `EXPORT_LOCK`, and
+replaced the Progress **panel** with `ProgressDialog` — which has no export card,
+no source-metadata checkbox and no preview. `src/components/` holds only
+`ProgressDialog`, and no `/progress/export*` route survives in `mcp_http/mod.rs`.
+Kept for history; the five items are unrunnable, not pending.)_
 
 Automated verification already covers the backend contract end to end (unit
 tests plus a live HTTP run against a rebuilt debug instance on `:9877`:
@@ -1935,13 +1986,20 @@ route at all, which looked like an auth failure. Tests cover route existence;
 these check the live surface.
 
 - [ ] Start a headless daemon: `TUIC_APP_INSTANCE=remote-check tuic-remote`, then
-      `curl -u <user>:<pass> 'http://127.0.0.1:<port>/progress/status?path=<repo>'`.
-      It must answer with a status body, not 404.
+      `curl -u <user>:<pass> -X POST 'http://127.0.0.1:<port>/progress/list'`.
+      It must answer with a list body, not 404.
+      _(NOTE 2026-09-18: `/progress/status` was deleted by `6b925e04` — probing it
+      returns 404 for that reason, not a routing regression. The ten routes are now
+      four: `/progress/{report,list,delete,viewed}`, all POST, and all still inside
+      `shared_routes()` at `mcp_http/mod.rs:708-723`, so the property this item
+      exists to protect is intact. Use `/progress/list`.)_
 - [ ] Same call with **no** credentials from a non-loopback address must still be
       rejected by the auth middleware — the move must not have widened access.
-- [ ] On the desktop instance, the Progress panel must behave exactly as before:
-      the routes are merged into `build_router` through `shared_routes()` now, so
-      a regression here shows up as the panel 404ing on every call.
+- [ ] On the desktop instance, the Progress **dialog** must behave exactly as
+      before: the routes are merged into `build_router` through `shared_routes()`
+      now, so a regression here shows up as the dialog 404ing on every call.
+      _(NOTE 2026-09-18: "panel" — `ProgressPanel` was replaced by `ProgressDialog`
+      in `6b925e04`. Same check, different surface.)_
 
 ## A turn closed by the foreground probe logs `activity_source=process` — needs a `make dev` restart
 
@@ -2015,9 +2073,18 @@ build has the old behaviour until restart.
       text wraps with `overflow-wrap: anywhere` — and the header must keep the
       blocked-only toggle and the close button on one row (778-a9a6 criterion 8).
 - [ ] After the restart has proved the new store works, delete the stale
-      per-repo databases — 42 `.tuic/` directories holding 17 rows in total,
-      9 of them in `~/Gits/.tmp` fixtures. They are not migrated by design:
-      `find ~/Gits -maxdepth 4 -name .tuic -type d -exec rm -rf {} +`
+      per-repo databases. They are not migrated by design. Delete the **files**,
+      not the directory:
+      `find ~/Gits -maxdepth 5 -path '*/.tuic/progress.sqlite3*' -delete`
+      then drop the directories that this leaves empty:
+      `find ~/Gits -maxdepth 4 -type d -name .tuic -empty -delete`
+      _(NOTE 2026-09-18: the previous `rm -rf` on the whole `.tuic/` directory is
+      wrong even though it happens to be harmless today. `.tuic/` is a live
+      namespace — `tunnels/storage.rs:33,59,69` writes `<repo>/.tuic/tunnels/` —
+      so the blanket delete destroys tunnel storage for any repo that has one.
+      Verified 2026-09-18: 43 `.tuic` directories (not 42; `agent2__wt/`
+      `analysis-ai-risk-score-20260918` is new), 0 contain `tunnels/`, and every
+      file in all 43 matches `progress.sqlite3*`.)_
 - [ ] Run diff-scoped mutation testing once on the final HEAD of this batch:
       `make mutants RANGE=<commit before the Progress rewrite>`. It is an
       overnight-class job (~5 min per viable mutant), so it is deliberately not
@@ -2025,3 +2092,300 @@ build has the old behaviour until restart.
 - [ ] Bring the worktree build up on `:9877` and exercise Progress through its
       own HTTP instance — creating a throwaway session, reporting, listing and
       deleting — rather than against the orchestrator on `:9876`.
+
+## File pickers moved off `tauri-plugin-dialog` — needs a `make dev` restart
+
+The app died on 2026-09-18 when `+[NSOpenPanel openPanel]` returned NULL after
+the window-server connection was interrupted, panicking on the main thread. The
+pickers now go through our own `pick_path` command, which owns the main-thread
+closure and catches that unwind (`src-tauri/src/native_dialog.rs`). Automated
+tests cover the wire contract and the wrapper's mapping; the panels themselves
+need a window server, so these are by hand.
+
+- [ ] Sidebar → add a repository: the folder picker opens, a pick registers the
+      repo, and Cancel leaves the sidebar unchanged.
+- [ ] Cmd+O (open file) and the open-folder action: both return a path and the
+      chosen file opens in an editor tab.
+- [ ] New File (save panel): the suggested name is pre-filled and the file is
+      created at the chosen location.
+- [ ] Settings → Plugins → Install from ZIP: the type filter still restricts the
+      selection to `.zip` — that filter is the one option most likely to have
+      been dropped in the move.
+- [ ] Settings → Plugins → Install from Folder, and Tunnels → the SSH identity
+      file browse button: both still pick.
+- [ ] **[HUMAN]** The crash path itself: let the Mac sleep with the display off,
+      wake it, and immediately open a picker. It must either open, or show the
+      "system file dialog is unavailable" error — the app must NOT exit. This
+      needs real standby, which no automated check here can reach.
+
+## Remote Machines authentication (#781-9652) — needs a `make dev` restart
+
+The whole change is Rust plus the transport layer, so nothing here is live in
+Boss's running session. Restart first. A daemon to test against is already up:
+`mac-mint:9877`, user `stefano`, systemd user unit `tuic-remote`, running a
+headless build of this tree.
+
+- [ ] Settings → Services → Remote Machines → add a Direct connection to
+      `http://mac-mint:9877` with the username and password. Connect: the status
+      goes **Connected**, not "Not authenticated".
+- [ ] Same connection with a wrong password: the status reads **Not
+      authenticated** with "rejected these credentials", stays amber rather than
+      red, and no terminal or repo call goes through.
+- [ ] Edit an existing connection: the password field shows the "stored — leave
+      blank to keep it" placeholder, and saving with it blank keeps the
+      connection working.
+- [ ] Restart `tuic-remote` on mac-mint under a live connection. The daemon mints
+      a new token; within one poll (5s) the connection re-authenticates by itself
+      and stays Connected.
+- [ ] **[VISUAL]** The password field and the vault hint render inside the
+      add/edit form without breaking the Settings layout.
+
+## Remote repos run on the remote machine (#782-3d05) — needs a `make dev` restart
+
+Frontend-only, but it changes where every repo-scoped call goes, so it needs the
+same restart as the item above and the same daemon (`mac-mint:9877`).
+
+- [ ] With the connection Connected, add a remote repo from it. The sidebar shows
+      the repo with its remote badge and the git status, branch and file tree are
+      the **remote machine's** — compare against `ssh mac-mint git -C <path> status`.
+- [ ] Open a terminal on that repo. It spawns on mac-mint: `hostname` and `pwd`
+      answer for the remote box, typing and resizing work, and closing the tab
+      ends the session there (`ssh mac-mint` + check the daemon's `/sessions`).
+- [ ] Edit a file on mac-mint by hand while the repo is open locally. The git
+      panel and file tree refresh by themselves — the remote watcher and its SSE
+      stream are doing it.
+- [ ] Commit and stage from the git panel on the remote repo. The commit lands on
+      mac-mint, not on any local repo.
+- [ ] A local repo behaves exactly as before — no extra latency, no remote call.
+      Confirm with `GET http://localhost:9876/logs?source=network`.
+- [ ] Stop `tuic-remote` on mac-mint with the repo still open. Repo operations
+      report "Remote connection … not connected" rather than showing local data.
+- [ ] Open a file from the remote repo in the editor and use Go to definition.
+      mdkb has no remote route, so it runs locally against a path this machine
+      does not have and logs `has no remote route and ran on the local machine`
+      once — check `GET http://localhost:9876/logs?source=network`. The log line
+      is the thing under test; the feature itself is a known gap.
+
+## The connection runtime moved to Rust (#790-ef85) — needs a `make dev` restart
+
+The health probe, the token exchange, the 5s status poll and the SSH tunnel now
+run in the backend; `remoteConnections.ts` only renders what the backend pushes.
+Every item below must behave exactly as it did before the move — that is the
+point of the story — plus the two things only the backend can do.
+
+- [ ] Connect a remote machine from Settings → Remote Machines. The status goes
+      Connecting → Connected and the panel shows the protocol version.
+- [ ] Connect the same machine from a second client (browser at
+      `http://localhost:9876/`) while the desktop app is open. **Both** panels
+      show Connected: the status is pushed to every client, not owned by the one
+      that clicked.
+- [ ] A wrong password reports `unauthenticated` (not "connection error") and no
+      repo or terminal call is routed to that machine while it is in that state.
+- [ ] Restart `tuic-remote` under a live connection: within one poll the
+      connection re-authenticates by itself and stays Connected. This is now a
+      Rust task, so it keeps working with the TUICommander window closed to the
+      tray or the WebView asleep — the case the WebView implementation lost.
+- [ ] Disconnect: the tab's remote sessions stop being routed, the SSH tunnel is
+      gone (`ps aux | grep ssh` on this machine), and the Tunnels panel shows no
+      leftover `__remote_*` profile — the tunnel is built in memory now.
+- [ ] Quit TUICommander with an SSH-transport connection live. No orphan `ssh`
+      process and no `__remote_<id>` profile file is left behind.
+
+## Remote sessions report idle / busy / question (#791-055e) — needs a `make dev` restart
+
+`remote_mirror.rs` now follows the remote daemon's own `/events` and repeats
+every frame on the local bus under the daemon's own name, and the WebView's
+`remoteEventBridge.ts` is gone with it. Nothing on the frontend subscribes to a
+remote machine any more.
+
+Verified 2026-09-19 against a **real second daemon** — `tuic-remote --instance
+mirrortest` on `:9899` with its own password, reached over a Direct connection
+from the running desktop on `:9876`. Not a mock: a separate process, real auth,
+real SSE. Torn down afterwards (connection deleted, vault entry cleared, instance
+dir removed).
+
+- [x] The dot goes busy while a remote session runs and idle when it stops.
+      _(verified: a session created on the `:9899` daemon appeared in the
+      desktop's `GET /sessions` as `3b19ac21 | connection_id=1111…5555 | shell=idle`;
+      writing a 5-second loop to it produced, on the **desktop's own**
+      `/events?types=session-state-changed`, the sequence idle → busy → idle —
+      11 frames, under the ordinary event name and matched by the ordinary type
+      filter, which is exactly what `applySessionStateEvent` consumes.)_
+- [x] A daemon restart under a live connection re-seeds instead of leaving stale
+      rows. _(verified: two mirrored sessions before; killed and restarted the
+      daemon; the connection re-authenticated by itself with a new token and the
+      list came back holding only the one session the restarted daemon actually
+      has.)_
+- [x] Disconnecting clears the badges and drops the sessions.
+      _(verified: `DELETE …/connect` published
+      `session-closed {"session_id":"3b19ac21…","reason":"remote-disconnected"}`
+      on the local `/events`, and `GET /sessions` then held no row with a
+      `connection_id`.)_
+- [ ] Make a remote **agent** ask a question. The question badge and the
+      notification are the same ones a local agent raises. Answer it: the badge
+      clears. _(Not covered above: the probe drove a plain shell, so
+      `awaiting_input` never moved. Needs a real agent on the other machine.)_
+- [ ] While the remote agent is mid-turn, queue a command from the Compose
+      panel. The `N queued` badge moves and the command is delivered at the
+      agent's next idle window — the queue gate reads the mirrored state.
+- [ ] Commit something on the remote repo from a shell there. The local panels
+      for that repo still refresh (this used to come from `remoteEventBridge.ts`;
+      it now arrives on the mirrored `repo-changed`, through the same coalescer a
+      local change uses). Needs a repo registered on the remote machine.
+- [x] With no remote connection configured at all, nothing changes.
+      _(verified 2026-09-19 on the restarted build: no `connections.json` exists,
+      `GET /sessions` returns the 4 local rows with their state and **no**
+      `connection_id` field on any of them — the mirror adds nothing when there
+      is nothing to mirror.)_
+
+## Ideas panel: queue instead of typing, and a shorter Compose panel
+
+- [ ] Open an agent tab and the Ideas panel. Each idea shows a queue button
+      (stacked lines) left of the ▶ send button. On a plain shell tab the queue
+      button is absent and only ▶ remains.
+- [ ] Click queue while the agent is mid-turn: nothing is typed into the prompt,
+      the Compose `N queued` badge goes up by one, and the idea gets its used
+      timestamp. The idea is delivered at the agent's next idle window.
+- [ ] Detach the Ideas panel to its own window. The queue button is always shown
+      there; clicking it with a plain shell active raises the "not running an
+      agent" toast in the main window instead of queueing, and does NOT steal
+      focus back to the main window (unlike ▶, which does).
+- [ ] The Compose panel is visibly shorter (160px, was 200px) and still fits the
+      editor, the status bar and the buttons. Open the queue list with several
+      queued commands: the list caps at 96px and the editor keeps usable rows.
+
+## Updater — symlinked binary path (2026-09-19)
+
+- [ ] Settings -> General -> Updates -> Check Now, on a build whose binary sits
+      under a symlinked path (a `make dev` build: `src-tauri/target` is an mbx
+      target view). It must print a muted "In-app updates are unavailable…"
+      hint and NOT the red "Update failed" dialog nor the red hint.
+- [ ] The same build on a release install with no symlink in the path still
+      reports "You are on the latest version" or the available version.
+- [ ] After the Notes→Ideas rename: existing ideas still load. The store reads
+      the same `notes.json` through the same `load_notes`/`save_notes` commands,
+      so nothing should have moved — but this is the one failure that would be
+      silent and lossy, so open the panel and count the ideas before trusting it.
+      Add, edit, reassign and delete one; paste an image (assets still land in
+      `note-images/<id>/`); detach the panel and re-dock it.
+
+## MCP 2026-07-28 stateless lifecycle — needs a `make dev` restart (#843d)
+
+Rust-only change: it is NOT live in the running session until the backend is
+rebuilt.
+
+- [ ] `curl -s localhost:9876/mcp -H 'content-type: application/json' -d @src-tauri/src/mcp_http/fixtures/ego_server_discover.json`
+      returns a `result` with `resultType: "complete"`, `supportedVersions`,
+      `capabilities.tools.listChanged`, `instructions`, and NO `mcp-session-id`
+      response header.
+- [ ] Claude Code (the legacy `initialize` path) still connects and still lists
+      the full tool surface — the two lifecycles share one endpoint.
+- [ ] A `tools/list` carrying `params._meta."io.modelcontextprotocol/clientInfo"`
+      with `name: "ego"` returns the three meta-tools plus `progress`, and no
+      native or upstream definitions.
+
+## One MCP tool family — needs a `make dev` restart (#f6ed)
+
+- [ ] `tools/list` on `:9877` returns exactly `session, agent, task, repo,
+      progress, ui, plugin_dev_guide, config, debug` and no `ai_terminal_*`.
+- [ ] `call_tool`/`tools/call` with `ai_terminal_read_screen` answers
+      "Unknown tool", and the message does not advertise `ai_terminal_*`.
+- [ ] Echo a fake token into a terminal (`echo GITHUB_TOKEN=ghp_…`), then read
+      it back with `session action=output`: the value must come back
+      `[REDACTED]`, in both the default format and `format=raw`.
+- [ ] A `config.json` still carrying `ai_terminal_mcp_enabled` loads without
+      error — the field is simply ignored now.
+
+## Bridged `log` records are diagnostic — needs a `make dev` restart
+
+- [ ] With an upstream whose TLS fails (or any dependency logging through the
+      `log` facade at error level), the error log panel's default **User** tab
+      stays clean and the unseen-error badge does not move.
+- [ ] The same entries are present under the **Diagnostic** tab, with `source`
+      showing the real module (e.g. `rustls_platform_verifier::verification::apple`)
+      instead of `log`.
+- [ ] `GET /logs?source=rustls_platform_verifier::verification::apple` returns
+      them; `GET /logs?source=log` returns none.
+
+## The daemon is a whole machine — needs a real `tuic-remote` run (#23a5)
+
+Run on a *separate* box, or on this Mac with `--instance <id>` and after
+checking the note below. `tuic-remote` now writes an MCP entry into the config
+of every agent installed on the machine it runs on — including this one, whose
+agent configs Boss uses. Running an unisolated daemon here rewrites them with
+the path it resolves for `tuic-bridge`.
+
+- [ ] Start the daemon and confirm `<config dir>/mcp.sock` exists (Windows:
+      the `tuicommander-mcp` named pipe) while it runs.
+- [ ] Put `tuic-bridge` next to `tuic-remote`, launch an agent in a tab bound to
+      a repo on that machine, and confirm it lists the `tuicommander` tools —
+      `session`, `repo`, `progress`, `agent` — not an empty tool list.
+- [ ] `repo action=worktree_list` from that agent answers about the daemon's
+      repos, not the Mac's.
+- [ ] Remove `tuic-bridge` from beside the daemon, restart, and confirm the
+      written config names a path that does not exist (the failure this story
+      exists to remove) — then put it back.
+- [ ] On a daemon with no agents installed at all: no agent config file and no
+      agent config directory is created.
+- [ ] Cross-repo content search (Cmd+P → search file contents) against the
+      daemon returns results for the pre-warmed repo instead of reporting every
+      repo pending forever.
+- [ ] Leave the daemon running for an hour and confirm the maintenance sweep
+      logs reaped MCP sessions rather than growing without bound.
+
+## `tools/list` gained a 2026-07-28 cache envelope — needs a `make dev` restart (#3c1b)
+
+The three new fields are withheld from the legacy revision, so the risk is not
+that ego breaks — it is that Claude Code does. Verified in tests; confirm on a
+live instance.
+
+- [ ] Claude Code connects to the running instance and lists TUIC's tools as
+      before (its `initialize` names 2025-11-25, so its `tools/list` result must
+      still carry `tools` and nothing else).
+- [ ] `curl -s -X POST localhost:9876/mcp -H 'mcp-protocol-version: 2026-07-28'
+      -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`
+      answers with `resultType`, `ttlMs` and `cacheScope` beside `tools`.
+- [ ] The same call without the header answers with `tools` alone.
+
+## The embedded AI engine is gone — needs a `make dev` restart (#784-0aec)
+
+~24k lines of Rust and ~44 frontend files were deleted. Nothing below is a new
+feature: each item confirms that removing the engine did not take a *surviving*
+feature with it. All of it needs the rebuilt backend, so run it after the
+restart, not before.
+
+- [ ] The app starts with the existing `config.json` and no config backup
+      appears beside it (`ai_chat_enabled`, `ai_triage_enabled` and
+      `ai_watchers_enabled` are still in Boss's file and must be ignored).
+- [ ] Settings → General → Experimental Features shows the master toggle alone;
+      the AI Chat, AI Triage and AI Watchers sub-toggles are gone.
+- [ ] With the master toggle ON, the AI Chat panel opens and shows the
+      "moving to ego" shell with the focused terminal's name in its header; with
+      it OFF the panel, its shortcut and its command-palette entry are absent.
+- [ ] SSH Tunnels still opens — it shares that master toggle.
+- [ ] Settings has no Providers tab and no AI Chat tab, and its search returns
+      nothing for "provider", "triage" or "watcher".
+- [ ] The toolbar has no watcher eye next to the notification bell.
+- [ ] A PR detail popover opens and shows checks, files and comments with no AI
+      review section and no error in its place.
+- [ ] The GitHub Ops dashboard renders three columns — auto-fix sessions,
+      conflict assists, CI/merge readiness — and conflict assist still populates
+      its column when a conflicting PR is opened.
+- [ ] Smart Prompts still run in shell, inject and headless modes.
+- [ ] A terminal's command knowledge still records: run a failing command, then
+      a passing one, and confirm the session's knowledge survives a restart
+      (this is the one part of `ai_agent/` that was kept).
+- [ ] Nothing in the app opens a knowledge-history overlay any more. Its only
+      opener was the chat panel's knowledge footer, so the overlay and its two
+      backend commands went with it — `<config_dir>/ai-sessions/*.json` keeps
+      filling up with no reader.
+- [ ] The AI Chat panel still detaches into its own window and the main window
+      shows the *Bring back* placeholder; closing the detached window restores
+      the docked shell.
+- [ ] **Needs a `make dev` restart (Rust).** In a tab *you* opened by hand (not
+      one an orchestrator spawned), an agent calling `progress type=done` no
+      longer answers `project_required`: the entry lands in that project's
+      journal and a toast appears. `resolve_mcp_origin_repo_path` used to read
+      the PTY map under the peer's `$TUIC_SESSION`, which only matches for a
+      spawned child. The same fix also gives `ui action=tab` and `ui
+      action=toast` the right repo badge in those tabs.
