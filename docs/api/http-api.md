@@ -566,6 +566,7 @@ the server is back to the filter the connection was opened with.
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
 | `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
+| *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
 
 ### MCP Streamable HTTP
@@ -1256,7 +1257,13 @@ not expose a Gemini account-usage route.
 GET /health
 ```
 
-Returns `{ "status": "ok" }`.
+Returns `{ "ok": true, "uptime_secs": N, "session_count": N, "protocol_version": 1, "socket_path"?: "...", "instance_id": "<uuid>" }`.
+
+The one route served without a credential. `instance_id` identifies the running
+**process** (minted at startup, not derived from the instance id or the config
+directory): a remote connection compares it against its own before mirroring and
+refuses a base URL that resolves back to itself. A daemon that omits the field is
+older than the check and still connects.
 
 ### Orchestrator Stats
 

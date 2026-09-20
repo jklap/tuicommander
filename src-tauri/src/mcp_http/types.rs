@@ -10,6 +10,10 @@ pub(super) struct HealthResponse {
     pub protocol_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub socket_path: Option<String>,
+    /// Which running process answered. A remote connection compares it against
+    /// its own before mirroring, so a base URL that resolves back to this very
+    /// process is refused instead of looping every event through itself.
+    pub instance_id: &'static str,
 }
 
 #[derive(Serialize)]

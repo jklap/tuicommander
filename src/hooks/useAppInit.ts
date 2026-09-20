@@ -76,6 +76,15 @@ function replaceMcpToastListener(handler: (event: { payload: McpToastPayload }) 
 		.catch((err) => appLogger.error("app", "Failed to register mcp-toast listener", err));
 }
 
+interface SessionCreatedPayload {
+	session_id: string;
+	cwd: string | null;
+	agent_type?: string | null;
+	display_name?: string | null;
+	/** Present only on an event mirrored from a remote daemon (`remote_mirror.rs`). */
+	__tuic_origin?: unknown;
+}
+
 function parseAgentType(value: string | null | undefined): AgentType | null {
 	return value && (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
 }
@@ -502,59 +511,63 @@ export async function initApp(deps: AppInitDeps) {
 	});
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
-	listen<{ session_id: string; cwd: string | null; agent_type?: string | null; display_name?: string | null }>(
-		"session-created",
-		(event) => {
-			const { session_id, cwd, agent_type, display_name } = event.payload;
-			const parsedAgentType = parseAgentType(agent_type);
-			// Skip if this session was created by the local browser client or is already tracked
-			if (browserCreatedSessions.has(session_id)) return;
-			const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
-			if (existing) return;
+	listen<SessionCreatedPayload>("session-created", (event) => {
+		const { session_id, cwd, agent_type, display_name } = event.payload;
+		const parsedAgentType = parseAgentType(agent_type);
+		// A mirrored event describes a session on ANOTHER machine. It is stamped
+		// `__tuic_origin` by `remote_mirror.rs`; building a tab for it attaches the
+		// local transport to a PTY this machine does not run. The mirrored session
+		// is already visible as a session-list row carrying its connection id.
+		// (The desktop window never hears this name from a mirror at all; the SSE
+		// transport carries the whole stream, so the guard lives here too.)
+		if (event.payload.__tuic_origin !== undefined) return;
+		// Skip if this session was created by the local browser client or is already tracked
+		if (browserCreatedSessions.has(session_id)) return;
+		const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
+		if (existing) return;
 
-			appLogger.info("app", `Remote session created: ${session_id}`);
-			const id = terminalsStore.add({
-				sessionId: session_id,
-				fontSize: deps.getDefaultFontSize(),
-				name:
-					display_name ||
-					(parsedAgentType
-						? `Session ${terminalsStore.getCount() + 1}`
-						: `PTY: Session ${terminalsStore.getCount() + 1}`),
-				// A spawn-assigned display name is the base title, not a manual rename.
-				// Intent/OSC titles may replace it until the user explicitly renames the tab.
-				nameIsCustom: false,
-				cwd: cwd ?? null,
-				awaitingInput: null,
-				isRemote: true,
-				agentType: parsedAgentType,
-				ptyDescription: null,
-			});
-			remoteSessionTabs.set(session_id, id);
+		appLogger.info("app", `Remote session created: ${session_id}`);
+		const id = terminalsStore.add({
+			sessionId: session_id,
+			fontSize: deps.getDefaultFontSize(),
+			name:
+				display_name ||
+				(parsedAgentType
+					? `Session ${terminalsStore.getCount() + 1}`
+					: `PTY: Session ${terminalsStore.getCount() + 1}`),
+			// A spawn-assigned display name is the base title, not a manual rename.
+			// Intent/OSC titles may replace it until the user explicitly renames the tab.
+			nameIsCustom: false,
+			cwd: cwd ?? null,
+			awaitingInput: null,
+			isRemote: true,
+			agentType: parsedAgentType,
+			ptyDescription: null,
+		});
+		remoteSessionTabs.set(session_id, id);
 
-			assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo);
+		assignSessionToRepoBranch(session_id, id, cwd, deps.registerRepo);
 
-			// Dock agent-spawned tabs so swarm workers show up in the tab strip.
-			// Only for agent_type (MCP agent spawn), not for manually created
-			// sessions. The tab is docked but never selected: an MCP spawn must
-			// not take over the pane the user is working in.
-			if (agent_type) {
-				// In split mode, ensure there is an active group so assignTabToActiveGroup
-				// doesn't silently no-op and leave the tab invisible.
-				if (paneLayoutStore.isSplit() && !paneLayoutStore.state.activeGroupId) {
-					const leafIds = paneLayoutStore.getAllGroupIds();
-					if (leafIds.length > 0) {
-						paneLayoutStore.setActiveGroup(leafIds[0]);
-					}
-				}
-				assignTabToActiveGroup(id, "terminal", false);
-				// Only steal focus when there is no existing active terminal.
-				if (!terminalsStore.state.activeId) {
-					terminalsStore.setActive(id);
+		// Dock agent-spawned tabs so swarm workers show up in the tab strip.
+		// Only for agent_type (MCP agent spawn), not for manually created
+		// sessions. The tab is docked but never selected: an MCP spawn must
+		// not take over the pane the user is working in.
+		if (agent_type) {
+			// In split mode, ensure there is an active group so assignTabToActiveGroup
+			// doesn't silently no-op and leave the tab invisible.
+			if (paneLayoutStore.isSplit() && !paneLayoutStore.state.activeGroupId) {
+				const leafIds = paneLayoutStore.getAllGroupIds();
+				if (leafIds.length > 0) {
+					paneLayoutStore.setActiveGroup(leafIds[0]);
 				}
 			}
-		},
-	).catch((err) => appLogger.error("app", "Failed to register session-created listener", err));
+			assignTabToActiveGroup(id, "terminal", false);
+			// Only steal focus when there is no existing active terminal.
+			if (!terminalsStore.state.activeId) {
+				terminalsStore.setActive(id);
+			}
+		}
+	}).catch((err) => appLogger.error("app", "Failed to register session-created listener", err));
 
 	listen<{ session_id: string; description?: string | null }>("pty-description-changed", (event) => {
 		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);

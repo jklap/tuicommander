@@ -8,6 +8,27 @@
 
 # To Test
 
+## Mirrored remote events stay remote (#801-d34e, 2026-09-21) — **Rust, needs a `make dev` restart**
+
+A mirrored event was indistinguishable from a local one, so a remote daemon's
+`session-created`, `ui-tab`, `repo-changed` and worktree events ran the LOCAL
+handlers. The window emit is now limited to `session-state-changed` and
+`session-closed`, every mirrored payload carries `__tuic_origin`, and a frame
+that already has one is dropped.
+
+- [ ] Connect mac-mint, start a PTY **on mac-mint** (ssh in, `tuic session` there,
+      or its own UI). This Mac must show it as a session-list row with the remote
+      badge and **no new tab** — no `PTY: Session N`.
+- [ ] Its busy/idle/question badge still moves from here while it works. That is
+      the one thing the window emit is still allowed to carry.
+- [ ] Open a repo folder on mac-mint from its own UI: no repository appears in
+      this Mac's sidebar, and no git work runs here for that path.
+- [ ] Add a **Direct** connection whose URL is this machine's own daemon
+      (`http://127.0.0.1:9876`). Connect must fail with "this very TUICommander
+      instance — a machine cannot mirror itself", and the row must read Error.
+- [ ] `curl -s localhost:9876/health | jq .instance_id` returns a UUID, and it
+      changes after a restart.
+
 ## Workspace badge: file count instead of "Dirty", `in_sync` instead of "Merged" (2026-09-20) — **Rust, needs a `make dev` restart**
 
 The sidebar called a worktree "Merged" while it held 24 uncommitted files. The

@@ -240,9 +240,19 @@ fn http_client() -> reqwest::Client {
     reqwest::Client::new()
 }
 
+/// What `/health` says about the daemon behind a base URL.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Health {
+    protocol_version: Option<u64>,
+    /// Which process answered. `None` from a daemon older than the field —
+    /// unknown identity cannot prove a self-connection, so it is not treated as
+    /// one.
+    instance_id: Option<String>,
+}
+
 /// Read `/health` — the one route served without a credential — to learn the
 /// protocol version and prove the daemon is reachable at all.
-async fn read_health(base_url: &str) -> Result<Option<u64>, String> {
+async fn read_health(base_url: &str) -> Result<Health, String> {
     let url = format!("{}/health", base_url.trim_end_matches('/'));
     let response = http_client()
         .get(&url)
@@ -257,9 +267,15 @@ async fn read_health(base_url: &str) -> Result<Option<u64>, String> {
         .json()
         .await
         .map_err(|e| format!("Malformed health response: {e}"))?;
-    Ok(body
-        .get("protocol_version")
-        .and_then(serde_json::Value::as_u64))
+    Ok(Health {
+        protocol_version: body
+            .get("protocol_version")
+            .and_then(serde_json::Value::as_u64),
+        instance_id: body
+            .get("instance_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 /// Outcome of a probe against a route that requires the credential.
@@ -344,7 +360,22 @@ pub(crate) async fn connect(state: &Arc<AppState>, id: &str) -> Result<(), Strin
     update(state, id, |e| e.base_url = Some(base_url.clone()));
 
     match read_health(&base_url).await {
-        Ok(version) => update(state, id, |e| e.protocol_version = version),
+        Ok(health) => {
+            // A connection that resolves back to this very process mirrors every
+            // local event onto the bus that produced it, and both `/events` and
+            // the window emit repeat it — the origin marker stops the second hop,
+            // but nothing downstream can make sense of a machine mirroring
+            // itself. Refuse it where the user can still read why.
+            if health.instance_id.as_deref() == Some(crate::app_instance::instance_identity()) {
+                let msg = format!(
+                    "{base_url} is this very TUICommander instance — a machine cannot mirror itself. \
+                     Point this connection at another machine's daemon."
+                );
+                set_error(state, id, RemoteStatus::Error, msg.clone());
+                return Err(msg);
+            }
+            update(state, id, |e| e.protocol_version = health.protocol_version);
+        }
         Err(e) => {
             set_error(state, id, RemoteStatus::Error, e.clone());
             return Err(e);
@@ -705,11 +736,33 @@ mod tests {
             .mock("GET", "/health")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"protocol_version":4}"#)
+            .with_body(r#"{"protocol_version":4,"instance_id":"other-process"}"#)
             .create_async()
             .await;
-        assert_eq!(read_health(&server.url()).await.unwrap(), Some(4));
+        assert_eq!(
+            read_health(&server.url()).await.unwrap(),
+            Health {
+                protocol_version: Some(4),
+                instance_id: Some("other-process".into()),
+            }
+        );
         mock.assert_async().await;
+    }
+
+    /// A daemon too old to publish an identity cannot be proven to be this
+    /// process, and an unprovable self-connection must still connect: the
+    /// alternative refuses every pre-#801 daemon on the network.
+    #[tokio::test]
+    async fn health_without_an_identity_is_not_a_self_connection() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/health")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"protocol_version":1}"#)
+            .create_async()
+            .await;
+        assert_eq!(read_health(&server.url()).await.unwrap().instance_id, None);
     }
 
     #[tokio::test]
@@ -864,6 +917,45 @@ mod tests {
         );
         assert_eq!(state.remote.snapshot()[0].protocol_version, Some(4));
         disconnect(&state, &id).await;
+    }
+
+    /// A Direct connection aimed at this machine's own daemon mirrors every
+    /// local event back onto the bus that produced it. The origin marker keeps
+    /// that from looping, but the connection itself is meaningless, so it is
+    /// refused at the one place that can still explain why.
+    #[tokio::test]
+    async fn connecting_to_this_very_process_is_refused_by_identity() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body(format!(
+                r#"{{"protocol_version":4,"instance_id":"{}"}}"#,
+                crate::app_instance::instance_identity()
+            ))
+            .create_async()
+            .await;
+        // Answering this one proves the refusal happened before the probe: a
+        // connect that reached it would have succeeded.
+        let version = server
+            .mock("GET", "/api/version")
+            .with_body("{}")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+
+        let error = connect(&state, &id)
+            .await
+            .expect_err("a self-connection is not a connection");
+        assert!(
+            error.contains("this very TUICommander instance"),
+            "the error must name the cause: {error}"
+        );
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        assert!(state.remote.token(&id).is_none());
+        version.assert_async().await;
     }
 
     #[tokio::test]
