@@ -1,266 +1,109 @@
 # AI Chat
 
-AI Chat is a conversational AI companion that lives next to your terminals and sees what they see. Unlike spawning a full agent (Claude Code, Aider, …) in a PTY, the chat panel gives you a quick explain / summarise / suggest loop that shares the exact screen state of your active terminal.
-
-Two progressive capability levels ride on the same panel:
-
-| Level | What it does |
-|-------|--------------|
-| **Chat** (default) | Streaming Q&A with terminal context injection. You ask, the model sees the last N lines, replies in markdown. "Run this" and "Copy" on every code block. |
-| **Agent** (ReAct loop) | The model *acts*: it reads the screen, sends input/keys, waits for patterns, asks for approval before destructive commands. Pause / resume between iterations. Built on six tools exposed both internally and as `ai_terminal_*` MCP tools. |
-
-The same panel switches modes — no separate UI.
-
-## Opening the panel
-
-- **Hotkey:** `Cmd+Alt+A` (macOS) / `Ctrl+Alt+A` (others) — toggle.
-- **Toolbar:** chat icon in the right section of the toolbar.
-- **Context menu:** right-click a terminal → *Send selection to AI Chat* or *Explain this error*.
-
-The panel docks on the right. Drag its left edge to resize it; the width applies
-for the session and is not persisted across restarts.
-
-### Detaching it into its own window
-
-Click the detach icon in the header to move the chat into a separate 500x700
-window. The main window shows a *Bring back* placeholder until you reattach or
-close the detached one.
-
-The detached window is a full chat, not a viewer: it opens on the conversation
-you detached, and it sends, runs the agent, and pauses or stops it against the
-terminal it was detached from. It stays on that terminal for its whole life — if
-you focus a different terminal in the main window, the detached chat does not
-follow. Detach with no terminal focused and the window is read-only, exactly as
-the docked panel is.
-
-The two windows hand the conversation over through disk. Messages you type in one
-are invisible to the other until the next hand-over: when the detached window
-closes or reattaches, the main window re-reads the conversation, so what you sent
-from it is there.
-
-One thing does travel live, in one direction. A reply the *main* window is
-running — a file watcher rule firing, an automation goal, or *Explain this error*
-from a terminal — appears in the detached window as it streams. Those replies had
-nowhere to go before: detaching hides the docked panel, so they streamed into a
-window with nothing on screen. A reply you asked for in the detached window is
-never overwritten by this, and a reply belonging to a different terminal is not
-shown.
-
-If such a reply is still arriving when you close the detached window, the
-hand-over back leaves it alone: the panel comes back showing the answer as it
-streams, instead of blanking it and waiting for the end.
-
-One action does not work in the detached window: *Run* on a code block. It needs
-the terminal's live view, which cannot cross a window boundary.
-
-## Providers
-
-AI Chat calls whichever model the **Main** slot points at. Providers, their models and the slots all live in `Settings > Providers` — see [Settings — Providers Tab](settings.md#providers-tab) for the full form. Sixteen provider types are selectable there; these are the common ones:
-
-| Provider | Default base URL | Notes |
-|----------|------------------|-------|
-| **Ollama** (local) | `http://localhost:11434/v1/` | Auto-detected — the provider row in `Settings > Providers` shows **Reachable** or **Not detected**, plus the reason it failed (refused, no answer within 4s, or the HTTP status it answered with), and the model list pulled from `GET /api/tags`. No API key required. |
-| **Anthropic** | `https://api.anthropic.com` | Direct Messages API. API key from Anthropic console. |
-| **OpenAI** | `https://api.openai.com/v1` | Chat Completions. |
-| **OpenRouter** | `https://openrouter.ai/api/v1` | Single key, many models. |
-| **Custom** | *(editable)* | Any OpenAI-compatible endpoint. |
-
-### Model recommendations
-
-| Use case | Local (Ollama) | API |
-|---|---|---|
-| Enrichment / triage | Qwen 2.5 Coder 3B (Q4_K_M) | Haiku, GPT-4o-mini |
-| Explain output, quick Q&A | Qwen 2.5 7B, Llama 3.3 8B | Haiku, GPT-4o-mini |
-| Generate commands, review diffs | Qwen3-Coder 14B | Sonnet, GPT-4o |
-| Agent loop (tool calling) | DeepSeek R1 32B, Qwen 27B | Sonnet, Opus |
-
-API keys are stored in the OS keyring, one entry per provider under the key `provider/<provider-id>` — never written to disk in plaintext, and never part of `providers.json`. A key left over from the single-provider era (keyring service `tuicommander-ai-chat`) is migrated on first load.
-
-### Local MLX models (Apple Silicon)
-
-On Apple Silicon Macs, MLX models run natively via the MLX framework and are significantly faster than GGUF models for small inference tasks like enrichment and triage.
-
-**Option A: mlx_lm.server (recommended for enrichment)**
-
-Serves an MLX model with an OpenAI-compatible API. Configure as a Custom provider in TUIC.
-
-```bash
-# Install
-pipx install mlx-lm
-
-# Start server (port 8899, Qwen 2.5 Coder 3B 4-bit)
-mlx_lm.server --model mlx-community/Qwen2.5-Coder-3B-Instruct-4bit --port 8899
-```
-
-In `Settings > Providers`, add a **Custom** provider with base URL `http://127.0.0.1:8899/v1/` and model name `mlx-community/Qwen2.5-Coder-3B-Instruct-4bit`. Assign it to the **Triage** slot.
-
-Benchmark (M4): ~120 tok/s generation vs ~98 tok/s for the same model via Ollama GGUF.
-
-**Option B: Ollama with MLX tags**
-
-Some models have native MLX tags on the Ollama registry (e.g. `qwen3.5:4b-mlx-bf16`). These run on Ollama's built-in MLX runner automatically. Check available tags with `ollama pull <model>:<size>-mlx-<dtype>`.
-
-**Option C: MLX → GGUF conversion**
-
-For MLX models without Ollama MLX tags, convert to GGUF and import into Ollama:
-
-```bash
-# 1. Download MLX model
-pipx run --spec huggingface_hub hf download \
-  mlx-community/Qwen2.5-Coder-3B-Instruct-4bit \
-  --local-dir /tmp/model-mlx
-
-# 2. Dequantize MLX → HF safetensors
-mlx_lm.convert --hf-path /tmp/model-mlx --mlx-path /tmp/model-hf -d
-
-# 3. Convert HF → GGUF (requires llama.cpp + torch)
-git clone --depth 1 https://github.com/ggerganov/llama.cpp /tmp/llama.cpp
-cd /tmp/llama.cpp && cmake -B build -DGGML_METAL=ON && cmake --build build --target llama-quantize -j
-python3 convert_hf_to_gguf.py /tmp/model-hf --outtype f16 --outfile /tmp/model-f16.gguf
-./build/bin/llama-quantize /tmp/model-f16.gguf /tmp/model-q4.gguf Q4_K_M
-
-# 4. Import into Ollama
-cat > /tmp/Modelfile <<'EOF'
-FROM /tmp/model-q4.gguf
-TEMPLATE """{{ if .System }}<|im_start|>system
-{{ .System }}<|im_end|>
-{{ end }}{{ if .Prompt }}<|im_start|>user
-{{ .Prompt }}<|im_end|>
-{{ end }}<|im_start|>assistant
-"""
-PARAMETER stop "<|im_end|>"
-PARAMETER stop "<|endoftext|>"
-EOF
-ollama create my-model -f /tmp/Modelfile
-```
-
-Note: double quantization (MLX 4-bit → bf16 → GGUF Q4_K_M) introduces quality loss. Prefer Option A for MLX models or pull the native GGUF from Ollama when available (`ollama pull qwen2.5-coder:3b`).
-
-## Context injection
-
-Every turn the backend assembles a compact context from the currently-attached terminal:
-
-- **Clean screen text** — last `context_lines` rows from the `VtLogBuffer` (ANSI-stripped, TUI alternate-screen suppressed). Default: 150. Tune in settings.
-- **Session state** — shell busy / idle, CWD, last exit code, detected agent type, terminal mode (`Shell` vs `FullscreenTui`).
-- **Recent parsed events** — errors, questions, rate limits, status lines.
-- **Git context** — branch, short diff stats, staged file list (same variables Smart Prompts use).
-- **Session knowledge** (when the agent has been active) — compact markdown summary of recent command outcomes, error→fix pairs, TUI apps seen.
-
-The panel follows the focused terminal automatically — the header shows the active terminal's name as a badge. When no terminal is focused (e.g. a Git or settings tab is active), the panel enters **frozen state**: a banner reads "No terminal focused — chat is read-only", the input placeholder changes to "Focus a terminal first…", and the send button is disabled. Focus any terminal tab to resume.
-
-## Conversations
-
-- **Per-terminal state** — each terminal tab maintains its own independent chat history, streaming state, and conversation ID (keyed by `tuicSession`). Switching tabs switches the conversation. Messages sent from a tab always target that tab's PTY session.
-- **Desktop and browser/PWA persistence** — conversations autosave to the same backend store on every transport, and closing a terminal flushes pending messages immediately. Reloading the page restores the latest conversation for that terminal. The history panel lists, opens, and deletes the same saved conversations in desktop and browser/PWA mode.
-- Hard cap: **100 messages** per conversation in memory; older messages are evicted FIFO. Saved conversations keep the full history on disk.
-- **An agent run is saved with the conversation** — the tool-call log, the loop state (running / paused / completed / …) and the iteration counter are written on every step of the loop, not only when a turn ends. Reload in the middle of an iteration and the panel comes back with the tool cards and the banner it had, instead of prose alone. Tool output in that log is redacted and capped the same way message tool results are, and the log as a whole is bounded — at 500 entries and 512 KB, whichever bites first. A run that produces megabytes of tool output therefore keeps its most recent activity and loses its oldest entries; a run with ordinary output keeps everything. A run restored as *running* after the app itself restarted is only a record of where it stopped — nothing is driving it; press Stop to clear the banner.
-- Streaming uses a Tauri `Channel<ChatStreamEvent>` on desktop and a dedicated WebSocket in browser/PWA mode — you see tokens as they arrive. Cancel mid-stream with the stop button or `cancel_ai_chat`.
-- **Conversation history panel** — click the clock/history icon in the header to open a slide-in list of all saved conversations. Each row shows the title, terminal session name, message count, and date. Click a row to load that conversation into the current terminal's chat.
-
-## Run-this, copy, and actions
-
-Every fenced code block in the AI reply has a small toolbar:
-
-| Action | Effect |
-|--------|--------|
-| **Run** | Sends the block to the attached terminal via `sendCommand()` (handles Ink raw mode). Disabled when no terminal is attached. |
-| **Copy** | Clipboard. |
-| **Insert** | Prepends the block to the current prompt input (for refinement). |
-
-Language hints in the fence control button visibility — a ` ```text ` block hides *Run*.
-
-## Agent mode (ReAct)
-
-Flip the panel into agent mode via the header toggle or the command palette (`Agent: start`). Give it a goal ("set up pnpm and install deps", "fix the failing test") and press Enter. The loop:
-
-1. Assemble context.
-2. Ask the LLM with six tools available: `read_screen`, `send_input`, `send_key`, `wait_for`, `get_state`, `get_context`.
-3. Dispatch tool calls — each appears as a collapsible card in the panel.
-4. Record outcomes into the session knowledge store.
-5. Stop on `end_turn` or when cancelled.
-
-### Safety gates
-
-The `SafetyChecker` trait inspects every would-be `send_input`. Three verdicts:
-
-- **Allow** — common commands, `ls`, `git status`, `cargo build`, editor launches …
-- **NeedsApproval** — destructive patterns (`rm -rf`, `git reset --hard`, `git push --force`, `DROP TABLE`, `dd of=`, package uninstall …). The panel shows a *Pending approval* card with a one-line reason. Approve / reject with a click or `approve_agent_action`.
-- **Block** — hard-coded refusals (e.g. `rm -rf /`, `:(){ :|:& };:`).
-
-Pause / resume any time — the loop cleanly stops between iterations.
-
-### Session knowledge
-
-As the agent runs, the `SessionKnowledgeBar` footer shows live telemetry:
-
-- Commands run this session (count).
-- Last 5 outcomes with kind badges (Success / Error / TuiLaunched / Timeout …).
-- Last 5 errors with inferred `error_type` (e.g. `rust-error-borrow`, `npm-missing-module`).
-- TUI mode indicator + list of TUI apps seen.
-
-OSC 133 semantic prompts (`OSC 133;A/B/C/D`) feed accurate exit codes when the shell supports them (modern `bash`/`zsh`/`fish` with the integration enabled). Without OSC 133, the PTY silence timer records an `Inferred` outcome so the loop still learns.
-
-Knowledge persists to `<config_dir>/ai-sessions/<session_id>.json` with a 2 s debounced background flush. Reopening a session rehydrates the store.
-
-### Knowledge history overlay
-
-Click **History** next to the `SessionKnowledgeBar` to open a two-pane browser over every persisted session on disk — not just the currently active one. Useful for "find the command that fixed the build error last week":
-
-- **Sessions list** (left) — sorted by most recent activity, showing command count, error count, and last CWD.
-- **Detail pane** (right) — one card per command with kind badge, timestamp, exit code, duration, CWD, output snippet, and a **copy** button.
-- **Filters** — debounced full-text search (matches command, output, inferred `error_type`, and `semantic_intent`), `errors only` checkbox, date window (`24h` / `7d` / `30d` / `all`).
-
-Esc closes. Backed by the `list_knowledge_sessions` + `get_knowledge_session_detail` Tauri commands.
-
-## External MCP surface (`ai_terminal_*` tools)
-
-The same six ReAct tools are exposed to external MCP clients (Claude Code, Cursor, …) through the TUICommander MCP server:
-
-| Tool | Purpose |
-|------|---------|
-| `ai_terminal_read_screen` | Last N rows of clean text (secrets redacted). |
-| `ai_terminal_send_input` | Send a command — **always** prompts for user confirmation. |
-| `ai_terminal_send_key` | Send a single special key — **always** prompts for confirmation. |
-| `ai_terminal_wait_for` | Wait for regex match or screen stability. |
-| `ai_terminal_get_state` | Structured `SessionState`. |
-| `ai_terminal_get_context` | Cheap orientation: shell state, cwd, git branch, last exit code, agent type. |
-
-Input tools are refused while the internal agent loop is active on that session, so an external agent can't fight the internal one for the same PTY.
-
-## Settings reference (`Settings > AI Chat`)
-
-| Field | Stored in | Notes |
-|-------|-----------|-------|
-| Provider | `ai-chat-config.json` | `ollama` / `anthropic` / `openai` / `openrouter` / `custom` |
-| Model | `ai-chat-config.json` | Free-text; settings tab populates suggestions per provider |
-| Base URL | `ai-chat-config.json` | Pre-filled per provider, editable |
-| Temperature | `ai-chat-config.json` | Default `0.7` |
-| Agent model overrides | `ai-chat-config.json` (`agent_model_overrides`) | Per-task-phase model routing. Keys: `plan`, `search`, `read`, `write` (matching `ToolPhase`). Values: model name strings. When set, the agent loop selects the model based on the current tool phase instead of using a single model for all iterations. |
-| Context lines | `ai-chat-config.json` | Default `150`. Raise for richer context, lower for smaller prompts. |
-| API key | OS keyring (`tuicommander-ai-chat` / `api-key`) | Masked with eye-toggle. "Test connection" validates the key + base URL. |
-| Experimental: enrich command blocks | `ai-chat-config.json` (`experimental_ai_block_enrichment`) | Default off. When on, each completed OSC 133 block is sent to the provider for a one-line `semantic_intent`. Rate-limited to ~10/min, silent on failure. |
-
-## Keyboard shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Cmd+Alt+A` | Toggle panel |
-| `Cmd+Enter` (panel focused) | Send message |
-| `Esc` (panel focused) | Cancel in-flight stream |
-| *(palette)* Agent: start / stop / pause / resume | Agent-mode control |
-
-## Files & storage
-
-| Path | Purpose |
-|------|---------|
-| `<config_dir>/ai-chat-config.json` | Provider, model, base URL, temperature, context budget |
-| `<config_dir>/ai-chat-conversations/<id>.json` | Saved conversation bodies |
-| `<config_dir>/ai-sessions/<session_id>.json` | Per-session knowledge store (browsable from the History overlay) |
-| OS keyring (`tuicommander-ai-chat` / `api-key`) | Provider API key |
+AI Chat is a conversation with **ego**, which TUICommander launches and speaks to
+over ACP. TUICommander is the environment — terminals, repositories, the MCP
+server — and ego is the intelligence. TUICommander keeps no provider, no API key,
+no tool loop and no sandbox of its own.
+
+## Before it can talk
+
+1. Turn on **Experimental features** in `Settings > General`. The panel is behind
+   it and there is no separate AI Chat switch.
+2. Set **ego executable** in the same tab. While it is empty, ACP is not
+   configured: the panel says so and launches nothing.
+
+## Opening it
+
+`Cmd+Alt+A` (macOS) / `Ctrl+Alt+A` toggles the panel; so do the status-bar
+button and the command palette. The detach control moves it into its own window,
+and the main window shows the *Bring back* placeholder. Drag the left edge to
+resize — the width applies for the session and is not persisted.
+
+## What it is bound to
+
+**A repository and a session, never a terminal.** A turn ego runs outlives any
+tab, may touch files no tab is showing, and is the same conversation for every
+window looking at that repository. The header names the repository.
+
+Switching repository opens a new conversation and leaves the previous one
+running. Coming back to a repository picks its conversation up where it was —
+nothing is relaunched, and the turn that was running kept running. **New** in the
+control bar starts a second conversation on the same repository; the picker
+beside it moves between them.
+
+ego reaches terminals and repositories the way any external agent does: by
+calling TUICommander's own MCP server. The entry for it is built by
+TUICommander, not by whoever opened the session, so a conversation can never be
+pointed at some other endpoint.
+
+## During a turn
+
+- **Streamed answer.** Text arrives a chunk at a time. Reasoning is folded into
+  a *Thinking* disclosure, kept apart from the answer.
+- **Tool calls** appear as one card per call, updated in place — not one card per
+  status change.
+- **The plan** ego publishes is shown as a list and replaced whole each time it
+  changes.
+- **Stop** cancels the turn. **Pause** and **Resume** hold it where ego supports
+  them; **Compact** shortens the conversation. Each button is drawn only when ego
+  advertised that extension, so a build without it shows no button rather than a
+  button that fails.
+- **Model, reasoning effort and mode** come from the options the session
+  publishes. There is no list of models in TUICommander: the session is asked,
+  and the answer is what the control bar draws. This changes one conversation.
+  The model every *new* run starts from is ego's own default, editable in
+  Settings → **AI Providers** (see [Settings](settings.md#ai-providers-tab)).
+
+## Questions ego asks back
+
+- **Permission.** The buttons are the options ego published, answered with one of
+  its own option ids. TUICommander never invents an Allow/Deny pair of its own.
+- **A form.** An elicitation is drawn as a form built from the schema ego sent.
+  Only `form` mode is ever drawn; any other mode is declined before it reaches
+  the panel.
+
+A question raised while this window was not listening is still shown: the panel
+fetches what is open when it attaches, rather than waiting for an announcement
+that already happened.
+
+## When it misses something
+
+- **"Missed part of this conversation"** means the journal no longer holds the
+  point the panel had read up to — a gap, not a dropped connection. **Recover**
+  starts a fresh ego process and replays the conversation into it.
+- **"Not receiving updates"** means the connection is up but nothing is reading
+  its journal any more. The conversation on screen is intact; it has stopped
+  moving.
+
+## From a terminal
+
+Right-click a terminal: **Explain with AI** and **Fix this error** put a question
+about the selection — or about the last 50 lines when nothing is selected — into
+the panel's composer and open it. They write the question; you send it.
+
+## The session knowledge store
+
+Command outcomes are still recorded per terminal — exit codes from OSC 133 where
+the shell supports it, an `Inferred` outcome from the PTY silence timer where it
+does not — and persist to `<config_dir>/ai-sessions/<session_id>.json`. Nothing
+reads them today. They are kept because the recording has nothing to do with a
+model and re-deriving the history later is impossible.
+
+## Not here
+
+| Feature | Where it went |
+|---------|---------------|
+| Providers, models, slots, API keys, Ollama detection | Settings → **AI Providers** shows what ego is configured with and sets its default model (#786-4a6d). Slots, API keys and Ollama detection did not come back: no key is stored by TUICommander and no provider call is made from it |
+| Agent mode (ReAct loop), the safety checker, the file sandbox | nothing. ego runs its own tool loop and reaches terminals through TUICommander's MCP server |
+| Terminal watchers (autonomous rules) | not scheduled |
+| PR AI review, changelog generation, improvement scan | 795-320b |
+| Smart Prompts `api` execution mode | One unattended ego turn (#787-ee50), with no interactive tools and the final text routed to the prompt's configured output |
 
 ## See also
 
-- [`docs/backend/mcp-http.md`](../backend/mcp-http.md) — `ai_terminal_*` MCP tools + OAuth 2.1 upstream auth.
-- [`docs/api/tauri-commands.md`](../api/tauri-commands.md) — Full Tauri command reference for chat + agent.
-- [`docs/backend/pty.md`](../backend/pty.md) — PTY lifecycle, OSC 133, TUI detection, silence-based idle.
-- [`ideas/ai-assisted-terminal.md`](../../ideas/ai-assisted-terminal.md) — Original 3-level plan (Level 1 = Chat, Level 2 = Agent, Level 3 = Knowledge).
+- [`docs/backend/acp.md`](../backend/acp.md) — the ACP client, its journal and
+  the authority a session is given.
+- [`docs/backend/mcp-http.md`](../backend/mcp-http.md) — how an external agent
+  drives TUICommander terminals, which is the path ego uses.
+- [`docs/backend/pty.md`](../backend/pty.md) — PTY lifecycle, OSC 133, TUI
+  detection, silence-based idle.

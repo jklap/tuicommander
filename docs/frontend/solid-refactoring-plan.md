@@ -126,7 +126,7 @@ High fan-in modules are legitimate shared boundaries but require stable contract
 
 The production runtime import graph contains three strongly connected components:
 
-1. Transport/store cycle: `tunnels -> perfTrace -> repositories -> remoteEventBridge -> remoteConnections -> transport -> appLogger -> invoke`.
+1. Transport/store cycle: `tunnels -> perfTrace -> repositories -> remoteConnections -> transport -> appLogger -> invoke`.
 2. Sidebar component cycle: `PrSection -> GitHubPanel -> RemoteOnlyPrPopover -> RepoSection`.
 3. Appearance component cycle: `AppearanceTab -> ColorSwatchPicker`.
 

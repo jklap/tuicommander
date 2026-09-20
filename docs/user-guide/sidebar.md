@@ -71,7 +71,9 @@ Each branch row can show:
 | **CI ring** | Proportional arc segments — green (passed), red (failed), yellow (pending) |
 | **PR badge** | Always shows the PR number plus its highest-priority state when applicable, such as Draft, Conflicts, or CI Failed. Click for detail popover. |
 | **Diff stats** | `+N / -N` additions and deletions |
+| **Dirty badge** | The workspace contains staged, unstaged, or untracked changes. Hover or focus the badge for the removal-safety explanation. |
 | **Merged badge** | Branches merged into main show a "Merged" badge |
+| **Unknown badge** | TUICommander could not verify the workspace state, so removal is blocked. Hover or focus the badge for the inspection error. |
 | **Question icon** | An agent in this branch's terminal is asking a question |
 | **Grey icon** | No active terminals in the repo — branch icons dim to grey |
 

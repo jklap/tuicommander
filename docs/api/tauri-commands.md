@@ -34,7 +34,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `can_spawn_session` | -- | `bool` | Check session limit |
 | `get_orchestrator_stats` | -- | `OrchestratorStats` | Active/max/available |
 | `get_session_metrics` | -- | `JSON` | Spawn/fail/byte counts |
-| `list_active_sessions` | -- | `Vec<ActiveSessionInfo>` | List all sessions with `display_name_is_custom`, `is_remote`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` |
+| `list_active_sessions` | -- | `Vec<SessionInfo>` | List all sessions with `display_name_is_custom`, `is_remote`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` — one builder serves both. Sessions running on a connected remote machine are in the list too, each carrying `connection_id`; a local row has none (#791-055e) |
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
 | `get_kitty_flags` | `session_id` | `u32` | Get Kitty keyboard protocol flags for session |
@@ -144,14 +144,25 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | `merge_pr_via_github` | `repo_path, pr_number, merge_method` | `String` | Merge PR via GitHub API |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
 | `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
-| `run_pr_review` | `repo_path, pr_number` | `PrReviewResult` | AI review of a PR diff (multi-turn engine, Main slot) → line-level findings |
-| `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date (AI changelog source) |
-| `generate_changelog` | `repo_path, since_tag?` | `{markdown, json}` | AI changelog from merged PRs (headless slot, one-shot) |
+| `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
-| `run_improvement_scan` | `repo_path, focus` | `ImprovementScanResult` | One-shot Headless-slot scan of local repo context for improvement proposals (`focus`: `refactor`, `testing`, `perf`); emits `proposals-ready` |
-| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | Human-gated issue creation from an improvement proposal |
 | `fetch_ci_failure_logs` | `repo_path, branch` | `String` | Fetch failed-job logs for the branch's latest GitHub Actions head, including partially completed workflow runs |
 | `check_github_circuit` | `path` | `CircuitState` | Check GitHub API circuit breaker state |
+
+## Review, Changelog and Improvement Scan (`pr_review.rs`, `changelog.rs`, `improvement_scan.rs`)
+
+Each of the first three is one unattended `acp::oneshot` turn (#795-320b): the
+whole input goes inline, ego is offered no host tools, and every permission
+request is refused. No API key is stored and no provider HTTP call is made from
+TUICommander; which model runs is ego's own configuration. An ego that cannot be
+reached is an error carrying ego's own sentence, never an empty result.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `run_pr_review` | `repo_path, pr_number` | `PrReviewResult` | Review a PR's diff. Findings under the confidence threshold (default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD` overrides) are dropped before the result is built. Emits `review-progress` |
+| `generate_changelog` | `repo_path, since_tag?` | `ChangelogResult` | Changelog over the merged PRs since a tag. `{ markdown, json }`; `json` is `null` when ego answered in prose only |
+| `run_improvement_scan` | `repo_path, focus` | `ImprovementScanResult` | Up to five proposals for `refactor`, `testing` or `perf`. Emits `proposals-ready` |
+| `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | File one proposal as a GitHub issue through `gh`. No model call |
 
 ## Worktree Management (`worktree.rs`)
 
@@ -228,6 +239,30 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | `get_tunnel_audit` | `id, limit?` | `Vec<JSON>` | Query audit log events for a tunnel (default limit 20). Returns timestamp, kind, and extracted message |
 | `list_ssh_agent_keys` | -- | `SshAgentInfo` | Detect SSH agent type (1Password, Secretive, GPG, generic) and list loaded keys via `ssh-add -l` |
 
+## Remote Connections (`remote_connection.rs`)
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
+| `save_remote_connection` | `connection` | `()` | Create or update a remote machine. Validates before saving |
+| `delete_remote_connection` | `id` | `()` | Delete a remote machine and its vault password. The vault key is the connection's UUID, so a secret left behind is unreachable forever |
+| `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json` |
+| `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
+| `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |
+
+## Remote Connection Runtime (`remote_runtime.rs`)
+
+`remote_connection.rs` above says what a connection *is*; these say whether it is
+up. The state machine — health probe, token exchange, status poll, SSH tunnel and
+base URL — runs in Rust so that backend tasks, not only the WebView, can reach a
+remote daemon.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `connect_remote_connection` | `id` | `()` | Bring a connection up: resolve the base URL (starting an SSH tunnel when the transport needs one), read `/health`, trade the stored password for a session token, then prove it on `/api/version`. Idempotent while connecting or connected, so a double click opens one tunnel. Every transition is announced as a `remote-connection-status` event |
+| `disconnect_remote_connection` | `id` | `()` | Stop the status poll, forget the token, stop the tunnel |
+| `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected — a connection that is not connected has no route to hand out |
+
 ## Agent Detection (`agent.rs`)
 
 | Command | Args | Returns | Description |
@@ -246,90 +281,37 @@ open for a bounded terminal-movement receipt. Desktop `write_pty` and
 | `discover_agent_session` | `agent_type, cwd, claimed_ids, agent_pid, env_overrides` | `Option<{ sessionId, launchCommand }>` | Discover the agent's session UUID for session-aware resume. Claude and grok resolve it exactly from their pid→session registry when `agent_pid` is known; every other agent (and any Claude/grok too old to publish one) falls back to the newest unclaimed session file, which cannot tell two tabs in one folder apart. `launchCommand` is the command the live process really runs, rebuilt from its argv and env (`CLAUDE_CONFIG_DIR=… claude --dangerously-skip-permissions`) — a shell alias is expanded before `exec`, so it is the only record of which config dir holds the session. `null` for agents with no verified session-flag list, and on Windows, where argv is unreadable |
 | `verify_agent_session` | `agent_type, session_id, cwd` | `bool` | Verify if a specific agent session file exists on disk (for TUIC_SESSION resume) |
 
-## AI Chat (`ai_chat.rs`)
+## Panel Windows (`panel_window.rs`)
 
-Conversational AI companion with terminal context injection. See [`docs/user-guide/ai-chat.md`](../user-guide/ai-chat.md) for the feature overview.
-
-| Command | Args | Returns | Description |
-|---------|------|---------|-------------|
-| `load_ai_chat_config` | -- | `AiChatConfig` | Load provider / model / base URL / temperature / `context_lines` from `ai-chat-config.json` |
-| `save_ai_chat_config` | `config` | `()` | Persist chat config |
-| `has_ai_chat_api_key` | -- | `bool` | Whether an API key is stored in the OS keyring for the current provider |
-| `save_ai_chat_api_key` | `key: String` | `()` | Store API key in OS keyring (service `tuicommander-ai-chat`, user `api-key`) |
-| `delete_ai_chat_api_key` | -- | `()` | Remove stored API key |
-| `check_ollama_models` | `providerId: String` | `OllamaStatus` | Probe `GET /api/tags` on the provider's base URL (default `http://localhost:11434/v1/`). Returns `{ available, models[], detail }` — `detail` is the backend-authored reason the endpoint is unusable (refused / timed out / HTTP status) and is `null` when reachable. The settings UI renders it verbatim |
-| `test_ai_chat_connection` | -- | `String` | Validate API key + base URL with a minimal completion request |
-| `list_conversations` | -- | `Vec<ConversationMeta>` | List persisted conversations (id, title, updated_at, message count) |
-| `load_conversation` | `id: String` | `Conversation` | Load a saved conversation body. A document below the current schema version is migrated on read and written back — never discarded |
-| `save_conversation` | `conversation: Conversation` | `()` | Persist a conversation to `ai-chat-conversations/<id>.json`. The backend stamps `schema_version` (callers never send one), redacts secrets and caps captured tool output. `conversation.agent` carries the agent run — `{ state, currentIteration, toolCalls[] }` — so a reload taken mid-iteration restores the loop, not just the prose |
-| `delete_conversation` | `id: String` | `()` | Remove a saved conversation (idempotent) |
-| `new_conversation_id` | -- | `String` | Mint a fresh conversation UUID |
-| `stream_ai_chat` | `session_id, messages, chat_id, on_event: Channel<ChatStreamEvent>` | `()` | Stream a turn. Events: `chunk { text }`, `end`, `error { message }`, `tool_call` / `tool_result` (agent mode). Context assembly pulls `VtLogBuffer` (capped at `context_lines`), `SessionState`, recent `ParsedEvent`s, git context |
-| `cancel_ai_chat` | `chat_id: String` | `()` | Cancel an in-flight stream (idempotent) |
-
-### Chat Registry (`ai_chat_registry.rs`)
-
-Cross-window state synchronization for the AI Chat panel, **as designed — not as it runs.** Nothing calls `fan_out` or any `ConversationState` setter, so the registry holds the empty default for every chat and no event is ever published. The frontend consumer was removed in story `600-d664`. Every command below still works; they just have no producer behind them, and the AI Chat panel is not a client of any of them. Wire a producer before treating this as a source of truth.
+Detaching a panel into its own OS window. Used by the AI Chat panel, the
+Activity Dashboard and the Git panel.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `chat_subscribe` | `chat_id, on_event: Channel<ChatEvent>` | `{ subscriptionId, snapshot }` | Subscribe to a chat's state changes. Returns current snapshot + subscription ID. Events: `snapshot`, `chunk { delta }`, `error { message }`, `cleared`. **No frontend caller**: `ChatRegistry` has no producer, so the snapshot is always the empty default and no event ever follows. The AI chat panel stopped subscribing — applying that snapshot wiped the history it had just loaded. Wire a producer before using this. |
-| `chat_unsubscribe` | `chat_id, subscription_id` | `()` | Remove a subscriber (normal cleanup path) |
-| `chat_get_state` | `chat_id` | `ConversationStateSnapshot` | Read-only snapshot of a chat's current state |
-| `chat_push_message` | `chat_id, role, content` | `()` | Push a message to the registry and fan-out to subscribers |
-| `chat_clear` | `chat_id` | `()` | Clear conversation state and notify subscribers |
-| `chat_set_pinned` | `chat_id, pinned` | `()` | Set the pinned flag on a chat |
-| `chat_attach_terminal` | `chat_id, terminal_id` | `()` | Attach a terminal session to a chat |
-| `chat_detach_terminal` | `chat_id` | `()` | Detach the terminal from a chat |
 | `open_panel_window` | `panel_id, title?, params?, width?, height?` | `()` | Open (or focus) a detached panel window. `panel_id` becomes the window label prefix (`panel-{id}`). URL: `/?mode=panel&panel={id}&{params}`. Emits `panel-window-closed { panelId }` on destroy |
 | `close_panel_window` | `panel_id` | `()` | Close a detached panel window by ID |
 | `focus_main_window` | — | `()` | Bring the main window to foreground (used by detached panels after cross-window actions) |
 
-## AI Agent Loop (`ai_agent/commands.rs`)
+## The embedded AI engine is gone (#784-0aec)
 
-ReAct-style agent loop driving a terminal session with `ai_terminal_*` tools,
-plus a Tauri-side query for the per-session knowledge store.
+There is no `ai_chat.rs`, `ai_chat_registry.rs`, `provider_registry.rs`,
+`llm_api.rs`, `diff_triage.rs`, `improvement_scan.rs` or `changelog.rs`, and
+`ai_agent/` holds only `knowledge.rs` and `tui_detect.rs`. Every command those
+modules registered is unregistered, every `/ai/*` route is unmounted, and the
+matching `COMMAND_TABLE` entries are removed from `src/transport.ts`.
+TUICommander makes no provider HTTP call and stores no model API key.
 
-| Command | Args | Returns | Description |
-|---------|------|---------|-------------|
-| `start_agent_loop` | `session_id, goal, unrestricted?: bool` | `String` (status message) | Start a ReAct loop on the given terminal session with the given goal. When `unrestricted=true`, sets `TrustLevel::Unrestricted` — bypasses sandbox and approval prompts. Errors if an agent is already active for the session. |
-| `cancel_agent_loop` | `session_id` | `String` | Cancel the active agent loop. Errors if no loop is active. |
-| `pause_agent_loop` | `session_id` | `String` | Pause the active agent loop between iterations. |
-| `resume_agent_loop` | `session_id` | `String` | Resume a paused agent loop. |
-| `agent_loop_status` | `session_id` | `{ active: bool, state: AgentState?, session_id }` | Query whether an agent is active and its current state (`running`/`paused`/`pending_approval`). |
-| `approve_agent_action` | `session_id, approved` | `String` | Approve or reject the pending destructive command the agent wants to run. Errors if no agent is active. |
-| `get_session_knowledge` | `session_id` | `SessionKnowledgeSummary` | Lightweight summary for the `SessionKnowledgeBar` UI: commands count, last 5 outcomes with kind badges, recent errors with `error_type`, TUI mode indicator, TUI apps seen. Returns an empty summary when the session has no recorded knowledge yet. |
-| `list_knowledge_sessions` | `filter?: { text?, hasErrors?, since? }, limit?` | `SessionListEntry[]` | Scan persisted `ai-sessions/` and list sessions sorted by most recent activity. Filter by text (matches command/output/intent/error_type), errors-only, or UNIX-seconds `since` lower bound. `limit` clamps at 500 (default 100). |
-| `get_knowledge_session_detail` | `session_id` | `SessionDetail?` | Full command history for one session — reads the in-memory store when active, falls back to disk otherwise. `HistoryCommand` rows include pre-extracted `kind`/`error_type` and the opt-in `semantic_intent`. |
-| `load_scheduler_config` | -- | `SchedulerConfig` | Load cron scheduler config from `ai-cron.json`. Returns `{ jobs: ScheduledJob[] }` where each job has `id`, `cron_expr`, `goal`. |
-| `save_scheduler_config` | `config: SchedulerConfig` | `()` | Validate cron expressions and persist scheduler config. Errors if any expression is invalid. Also starts the 30s cron tick loop if the new config has an enabled job and it wasn't running, or stops it if it now has none (#672-c1a3) — the loop no longer runs unconditionally from boot. |
+`ego` supplies the intelligence over ACP — see **ACP client for ego** below.
+What comes back where is tabulated in [`docs/sync-matrix.md`](../sync-matrix.md)
+under *What #784-0aec removed*.
 
-### Agent Tools (`ai_agent/tools.rs`)
+Command knowledge is the one thing that stayed, because recording it involves no
+model: `pty.rs` still writes `CommandOutcome` rows per session and
+`ai_agent::knowledge::spawn_persist_task` still flushes them to
+`<config_dir>/ai-sessions/<session_id>.json`. No command reads them back — the
+`get_session_knowledge`, `list_knowledge_sessions` and
+`get_knowledge_session_detail` accessors went with the UI that called them.
 
-13 tools available to the ReAct agent loop and exposed via MCP as `ai_terminal_*`:
-
-**Terminal tools** (require `session_id`):
-
-| Tool | Args | Description |
-|------|------|-------------|
-| `read_screen` | `session_id, lines?` | Read visible terminal text (default 50 lines). Secrets redacted. |
-| `send_input` | `session_id, command` | Send a text command to the PTY (Ctrl-U prefix + \\r). |
-| `send_key` | `session_id, key` | Send a special key (enter, tab, ctrl+c, escape, arrows). |
-| `wait_for` | `session_id, pattern?, timeout_ms?, stability_ms?` | Wait for regex match or screen stability. |
-| `get_state` | `session_id` | Structured session metadata (shell_state, cwd, terminal_mode). |
-| `get_context` | `session_id` | Cheap orientation: `{shell_state, cwd, git_branch, last_exit_code, agent_type}`. Branch from `.git/HEAD` (no subprocess). |
-
-**Filesystem tools** (sandboxed per session via `FileSandbox`):
-
-| Tool | Args | Description |
-|------|------|-------------|
-| `read_file` | `file_path, offset?, limit?` | Paginated file read (default 200, max 2000 lines). Binary/10MB rejected. Secrets redacted. |
-| `write_file` | `file_path, content` | Atomic create/overwrite (tmp+rename). Sensitive paths flagged. |
-| `edit_file` | `file_path, old_string, new_string, replace_all?` | Search-and-replace. Must be unique unless replace_all=true. |
-| `list_files` | `pattern, path?` | Glob match (e.g. `src/**/*.rs`). Max 500 entries. |
-| `search_files` | `pattern, path?, glob?, context_lines?` | Regex search, .gitignore-aware. Max 50 matches with context. |
-| `search_code` | `query, path?, limit?` | BM25 semantic search over repo files via `AppState::content_index`. Returns ranked file paths with relevance scores. |
-| `run_command` | `command, timeout_ms?, cwd?` | Shell command with captured stdout/stderr. Safety-checked. Env sanitized. |
 
 ## MCP OAuth 2.1 (`mcp_oauth/commands.rs`)
 
@@ -425,8 +407,9 @@ The live registry exposes status via SSE events (`upstream_status_changed`). Val
 | `get_claude_usage_timeline` | `scope, days?` | `Vec<TimelinePoint>` | Hourly token usage from session transcripts |
 | `get_claude_session_stats` | `scope` | `SessionStats` | Aggregated token/session stats from JSONL transcripts |
 | `get_claude_project_list` | -- | `Vec<ProjectEntry>` | List project slugs with session counts |
-| `get_codex_usage_api` | -- | `CodexUsageApiResponse` | Fetch rate-limit usage from the Codex CLI's usage endpoint |
-| `get_codex_usage_stats` | -- | `CodexStatsResponse` | Daily token history + lifetime stats for the Codex dashboard |
+| `get_codex_usage_api` | -- | `CodexUsageApiResponse` | Fetch rate-limit usage through the official Codex App Server |
+| `get_codex_usage_stats` | -- | `CodexStatsResponse` | Fetch daily token history and supported lifetime stats through the Codex App Server |
+| `get_grok_usage_api` | -- | `GrokUsageApiResponse` | Fetch billing-period usage through Grok Build's `_x.ai/billing` ACP extension |
 | `set_terminal_theme_colors` | `foreground: [u8;3]`, `background: [u8;3]`, `cursor: [u8;3]` | `()` | Publish the resolved terminal theme so the emulator can answer OSC 10/11/12 colour queries |
 
 `scope` values: `"all"` (all projects) or a specific project slug. `days` defaults to 7.
@@ -451,6 +434,25 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `set_dictation_config` | `config` | `()` | Save config |
 | `check_microphone_permission` | -- | `String` | Check macOS microphone TCC permission status |
 | `open_microphone_settings` | -- | `()` | Open macOS System Settings > Privacy > Microphone |
+
+## Native file dialogs (`native_dialog.rs`)
+
+Desktop-only, therefore `INTENTIONALLY_UNMAPPED` in `transport.ts`: the panel
+browses the **host's** filesystem, and a remote client uses the in-app file
+browser instead.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `pick_path` | `kind ("file"\|"files"\|"folder"\|"save"), title?, defaultPath?, fileName?, filters?` | `Option<Vec<String>>` | Open a native file/folder/save panel. `null` when the user cancels; always an array otherwise, even for a single pick. `Err` — never a crash — when the panel cannot be built |
+
+Call it through `src/utils/nativeDialog.ts` (`openDialog`/`saveDialog`), not
+directly, and **do not** import `open`/`save` from `@tauri-apps/plugin-dialog`.
+The plugin builds `NSOpenPanel`/`NSSavePanel` inside its own main-thread closure,
+so when AppKit's window-server link is interrupted — the state the Mac wakes into
+after standby — the binding's NULL check panics on the main thread and the
+process dies with every live PTY session. `native_dialog.rs` owns that closure so
+the unwind is caught and returned as an error. The plugin's `confirm`/`message`
+are unaffected (they build `NSAlert`) and stay as they are.
 
 ## Filesystem (`fs.rs`)
 
@@ -624,23 +626,9 @@ empty result.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `play_notification_sound` | `sound, volume, device?` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) on `device`, or the system default |
+| `play_notification_sound` | `sound, volume, device?` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) on `device`, or the system default; every tone releases to zero and drains a short silent tail before the output stream closes |
 | `block_sleep` | -- | `()` | Prevent system sleep |
 | `unblock_sleep` | -- | `()` | Allow system sleep |
-
-## LLM API (`llm_api.rs`)
-
-Smart Prompts "API" execution mode — direct LLM calls for prompt-based automation (distinct from AI Chat keyring).
-
-| Command | Args | Returns | Description |
-|---------|------|---------|-------------|
-| `load_llm_api_config` | -- | `LlmApiConfig` | Load `llm-api.json` (provider, model, base_url) |
-| `save_llm_api_config` | `config: LlmApiConfig` | `()` | Persist LLM API config |
-| `has_llm_api_key` | -- | `bool` | Check if an API key exists in the keyring for `Credential::LlmApiKey` |
-| `save_llm_api_key` | `key: String` | `()` | Store the LLM API key in the OS keyring |
-| `delete_llm_api_key` | -- | `()` | Remove the LLM API key from the OS keyring |
-| `execute_api_prompt` | `system_prompt, content, timeout_ms?` | `String` | Execute a direct LLM call using the configured provider/model. Returns the model's response text. |
-| `test_llm_api` | -- | `String` | Validate connection to the configured LLM endpoint (sends a test prompt) |
 
 ## ACP client for ego (`acp_commands.rs`)
 
@@ -677,6 +665,46 @@ can choose what the host runs.
 | `acp_pending_interactions` | `connectionId` | `Vec<AcpPendingInteraction>` | Questions the agent is waiting on, for a client that was not listening when they were asked |
 | `acp_respond_permission` | `connectionId, requestId, outcome` | `AcpInteractionSettlement` | Answer a `session/request_permission` |
 | `acp_respond_elicitation` | `connectionId, requestId, action` | `AcpInteractionSettlement` | Answer a `session/create_elicitation` |
+| `acp_one_shot_prompt` | `root, prompt` | `EgoTurn` | One unattended turn: launch, prompt, shut down. No connection id — it owns the whole lifetime |
 
 Errors are an `AcpClientError` — `code`, `message`, `connectionId`,
 `sessionId`, `operation`, `retryable` — identical on both transports.
+
+`acp_one_shot_prompt` is the odd one out and deliberately so. It is what a Smart
+Prompt in `api` mode runs on, with no panel open and nobody watching, so its
+session is opened with **no MCP server** and every permission request and
+elicitation is refused the instant it arrives. `EgoTurn` is
+`{ text, stopReason, declined }`; `declined` separates "ego had nothing to say"
+from "ego wanted a tool this mode cannot grant". The turn is abandoned after
+300s, a server-side constant rather than an argument.
+
+## ego command line (`ego_cli.rs`)
+
+Reads and writes **ego's** configuration by running ego, for the Settings → AI
+Providers tab. TUIC stores no API key and makes no provider HTTP call; the one
+network call is `ego models --refresh`, which ego makes, and only when asked.
+
+Four rules hold this surface down:
+
+- The binary is the configured `ego_executable`, read per call. No argument
+  names a program.
+- There is no key parameter. `model` is the only writable key and it is spelled
+  as its own operation, so a caller cannot reach `sandbox` or
+  `permissions.judge` at all.
+- A value may not look like a flag, carry whitespace or a control character, or
+  contain `"` or `\` — the last two would break out of ego's TOML string.
+- A failure carries what ego printed.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `ego_providers` | `refresh?` | `EgoProviders` | `config ls --json` + `models --json` + `doctor --json`, joined. `refresh: true` adds `--refresh`, the only call that reaches a provider |
+| `ego_set_default_model` | `model` | `EgoProviders` | `config set model="<slug>"`, then a fresh read — the answer is what ego persisted, not what was sent |
+
+All three reads must succeed. A partial answer would render as a tab silently
+missing one of the three things it exists to show.
+
+Errors are an `EgoCliError` — `code` (`notConfigured`, `invalidInput`,
+`launchFailed`, `commandFailed`, `unreadableOutput`), `message`, `command`,
+`stdout`, `stderr`, `exitCode` — identical on both transports. `command` is
+spelled by file name only, and the captured output is clipped to 4000
+characters on a character boundary.

@@ -25,6 +25,7 @@
   <a href="https://github.com/sstraus/tuicommander/releases/latest"><strong>Download</strong></a> &bull;
   <a href="https://github.com/sstraus/tuicommander/releases/tag/tip"><strong>Nightly</strong></a> &bull;
   <a href="docs/FEATURES.md"><strong>All Features</strong></a> &bull;
+  <a href="https://github.com/sstraus/tuicommander-plugins"><strong>Plugins</strong></a> &bull;
   <a href="docs/plugins.md"><strong>Plugin API</strong></a> &bull;
   <a href="docs/"><strong>Docs</strong></a>
 </p>
@@ -67,7 +68,7 @@ TUICommander auto-detects **11 AI coding agents** (Claude Code, Codex CLI, Aider
 
 - **Rate limit detection** — Provider-specific patterns with countdown timers per session.
 - **Question detection** — Y/N prompts, numbered options, inquirer-style menus. Tab indicator, notification sound, keyboard overlay.
-- **Usage tracking** — Claude Code weekly/session limits with color-coded thresholds. Full Claude Usage Dashboard with rate limit bars, 7-day chart, 52-week heatmap, per-project breakdown.
+- **Usage tracking** — Provider-aware Claude, Codex, and Grok limits with color-coded thresholds and native dashboards; Gemini remains terminal-detection only until it exposes a stable account quota API.
 - **Activity dashboard** — Every session at a glance: agent type, status (working / waiting / rate-limited / idle), last activity.
 - **Session-aware resume** — Auto-discovers agent session IDs from disk (Claude Code, Gemini CLI, Codex CLI, Grok). Resume exactly where you left off.
 
@@ -95,15 +96,17 @@ The feedback loop happens in the same window:
 - **Built-in code editor** — Syntax highlighting, find/replace, disk conflict detection, a VS Code-style change-overview ruler, and a Cmd/Ctrl+hover go-to-definition affordance.
 - **File browser** — Directory tree, content search (grep), git status indicators.
 
-### Built-in AI Chat & autonomous agent
+### AI Chat — ego over ACP
 
-A conversational AI companion that sees your terminal as you see it. Ask about errors, get code suggestions, or let the autonomous agent take the wheel and drive your terminal directly.
+TUICommander used to carry its own LLM client and autonomous agent loop. Both
+were removed: it stores no model API key and makes no provider HTTP call.
+Intelligence comes from `ego` over ACP, while TUICommander stays the environment
+— terminals, repositories and the MCP server that agents drive.
 
-- Multi-provider: Ollama (local, free), Anthropic, OpenAI, OpenRouter, or any compatible endpoint
-- Autonomous AI Agent (ReAct loop) with 30+ tools: read screen, send input, edit files, search code, run commands
-- Session knowledge: the agent learns from your terminal history — commands, errors, fix patterns
-- Live cost tracking: prompt/completion tokens and estimated cost per turn
-- Per-terminal chat state, conversation history, detachable panel for multi-monitor
+The panel streams ego conversations, reasoning, tool calls, plans, permissions,
+and elicitation forms. Sessions belong to repositories rather than terminal
+tabs, so a turn keeps running while you move elsewhere. See
+[`docs/user-guide/ai-chat.md`](docs/user-guide/ai-chat.md).
 
 ### MCP Proxy Hub — one connection for all your tools
 
@@ -154,7 +157,7 @@ On-device speech-to-text powered by whisper-rs. No cloud service, no API keys, n
 - Status bar tickers, custom panels, notification contributions
 - Browse and install with one click
 
-[Plugin Authoring Guide →](docs/plugins.md)
+[Browse the plugin registry →](https://github.com/sstraus/tuicommander-plugins) &bull; [Plugin Authoring Guide →](docs/plugins.md)
 
 ### Built to be scripted — CLI, HTTP, and MCP control surface
 
@@ -186,7 +189,7 @@ TUICommander isn't a black box. Everything you click, you can also drive from a 
 | Plugin system | No | No | Extensions | No | Hot reload + SDK |
 | GitHub Issues & PR management | No | No | Extension | No | Built-in |
 | Multi-account & Enterprise GitHub | No | No | No | No | github.com + GHE |
-| Built-in AI Chat | No | Built-in | Built-in | Built-in | Multi-provider (beta) |
+| Built-in AI Chat | No | Built-in | Built-in | Built-in | ego over ACP |
 | CI Auto-Heal | No | No | No | No | Built-in |
 
 ---
@@ -300,6 +303,7 @@ Rust + [Tauri v2](https://tauri.app) backend, [SolidJS](https://solidjs.com) UI,
 | [Getting Started](docs/user-guide/getting-started.md) | First-run guide |
 | [Features](docs/FEATURES.md) | Complete feature reference with all keyboard shortcuts |
 | [AI Agents](docs/user-guide/ai-agents.md) | Agent detection, rate limits, question detection |
+| [Plugins](https://github.com/sstraus/tuicommander-plugins) | Community plugin registry: browse and install ready-made plugins |
 | [Plugin API](docs/plugins.md) | Build plugins for TUICommander |
 | [HTTP API](docs/api/http-api.md) | REST/WebSocket/SSE endpoints |
 | [Architecture](docs/architecture/overview.md) | System design and component overview |

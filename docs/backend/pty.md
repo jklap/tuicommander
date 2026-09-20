@@ -444,8 +444,9 @@ enum TerminalMode {
 ```
 
 `depth` is a counter for nested alt-screen pushes (e.g. `less` invoked from inside `vim`). Known app hints — matched heuristically from nearby screen rows — include `vim`, `nvim`, `htop`, `btop`, `lazygit`, `less`, `tmux`, `claude`, and others. The mode is surfaced on `SessionState.terminal_mode` and used by:
-- `ai_terminal_get_context` — tells the model it's in a TUI so it prefers `send_key` + `wait_for` over line-oriented `send_input`.
-- `SessionKnowledgeBar` — renders a `TUI` badge and accumulates `tui_apps_seen`.
+- The session knowledge store — `tui_apps_seen` accumulates from it. Its two
+  former readers, the ReAct loop's `get_context` tool and the
+  `SessionKnowledgeBar` footer, went with the embedded AI engine (#784-0aec).
 - The agent safety layer — blocks Ctrl-U prefix injection while a TUI app is in the foreground.
 
 ## Silence-Based Question Detection

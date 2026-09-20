@@ -54,11 +54,19 @@ Low-level PTY session management. Wraps Tauri PTY commands.
 
 **File:** `src/hooks/useSmartPrompts.ts`
 
-Resolves Smart Prompt variables and routes inject, shell, headless, and API
+Resolves Smart Prompt variables and routes inject, shell and headless
 execution. For inject mode, explicit Insert/Run choices take precedence over
 `autoExecute`; prompts without that persisted field retain their legacy target
 default. Only actions that will submit are idle-gated. PTY delivery always uses
 `usePty.sendCommand`, including review-only fallback with `submit=false`.
+
+**`api` mode has no executor.** `canExecute` refuses it with a reason naming
+#787-ee50 rather than falling through to inject, and `resolveHeadlessAgent`
+returns `api` as its own answer so a headless prompt pointing at the removed
+External API slot is refused the same way. The mode stays a value a saved prompt
+can hold, and stays an option the editor offers, because ego restores it — but
+silently running the prompt as something the user did not choose is worse than
+saying where it went.
 
 ---
 

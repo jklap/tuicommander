@@ -18,34 +18,34 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
   5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
   Only use `[HUMAN]` when the item genuinely requires real hardware (audio, IME, touch), multi-app interaction (drag to Finder, global hotkey from another app), or timing-sensitive observation that none of the above can capture. When code-verifying, change `[HUMAN]` to `[x]` with a `_(verified: file:line explanation)_` annotation. When code reveals the description is wrong, change to `[ ]` with a `_(NOTE: ...)_` correction.
 
-## The suite skips 15 tests on purpose — classify them, never pin the count
+## The suite skips 16 tests on purpose — classify them, never pin the count
 
-`cargo nextest run --lib` reports 15 skipped. All 15 are `#[ignore]`, each with a
+`cargo nextest run --lib` reports 16 skipped. All 16 are `#[ignore]`, each with a
 reason string. None is a `cfg` exclusion and none is a filter artifact, so the
-skips are not missing coverage and not a harness defect: `5171 run, 15 skipped`
+skips are not missing coverage and not a harness defect: `4605 run, 16 skipped`
 is a **complete** result for what an unattended run can execute.
 
 | Category | Count | Precondition an unattended run cannot meet |
 |---|---|---|
 | Environment | 9 | interactive Keychain (×4), network + GitHub token (×2), authenticated `gh` CLI, downloaded whisper model, real `openpty` |
 | Corpus-driven | 4 | `TUIC_CAPTURE_CORPUS`, `TUIC_DAMAGE_CORPUS`, `TUIC_REPLAY_FILE`, plus 744-138c's evidence capture |
-| Benchmark | 2 | `bench_chunk_path_replay`, `tunnels::audit::tests::bulk_insert_performance` |
+| Benchmark | 3 | `bench_chunk_path_replay`, `tunnels::audit::tests::bulk_insert_performance`, `mcp_http::ws_compression::measurement::level_six_is_the_knee_of_the_curve` |
 
 **`dump_committed_tcap_fixture_event_sequences_744` is not a pass/fail test.** It
 is an evidence-capture harness for story 744-138c and the comment above it says
 so. Un-ignoring it during a tidy-up of ignored tests is the failure to avoid.
 
 **Re-derive the classification; do not trust a count.** Counting `#[ignore]`
-attributes in the source happens to give 15 today, which is the right answer for
+attributes in the source happens to give 16 today, which is the right answer for
 the wrong reason — it counts one mechanism and cannot see the other two. This
 does discriminate:
 
 ```
-cargo nextest list --lib --run-ignored all   ->  5187
-cargo nextest list --lib                     ->  5172
+cargo nextest list --lib --run-ignored all   ->  4621
+cargo nextest list --lib                     ->  4605
 ```
 
-The delta is 15 and the set difference *is* the 15 names. A `cfg`-excluded test
+The delta is 16 and the set difference *is* the 16 names. A `cfg`-excluded test
 is absent from **both** lists, so the delta would not close if any were excluded
 that way; a filtered skip would move the second number alone.
 `--run-ignored ignored-only` is stronger still: it lists the set instead of
@@ -235,6 +235,8 @@ When adding a new agent: choose discovery-based if the agent writes session file
 
 All of the above describes the **PTY** transport. `ego` does not use it — it runs over ACP and is deliberately not an `AgentType`. Read SPEC.md → "PTY versus ACP routing" before wiring any assistant that speaks a protocol instead of a terminal: the hybrid PTY/ACP route, and every fallback between the two, are rejected by contract rather than merely unimplemented.
 
+**And `ego` is the engine behind the AI Chat panel — not a tab, not an agent, not a terminal.** The sentence above says which transport it uses; this one says what it is allowed to be. It has no tab, no `AgentType`, no PTY, and no place in tab routing, split panes, or agent-state detection. It reaches terminals and repositories the same way Claude Code does, by calling TUICommander's own MCP server from outside — never by being one of the things that server drives. A change that makes `ego` look like an agent tab is wrong even when it compiles and even when it would be convenient.
+
 ## Logging
 
 Use `appLogger` from `src/stores/appLogger.ts` — never `console.log/warn/error`. Check app logs via `GET http://localhost:9876/logs` (supports `?level=`, `?source=`, `?limit=` filters) before asking Boss for logs.
@@ -340,10 +342,17 @@ lowest empty prompt row (`lowest_input_box_row`). Never widen the loose
 
 ## Agent state detection — capture before you theorise
 
-Working / idle / awaiting is decided from bytes an agent writes **once**. The
-per-session output ring holds only the last 8 KB, which one Ink repaint overruns
-in seconds, so by the time a wrong badge is reported the evidence is gone. Do not
-reason about the code first — record the stream, then replay it.
+Working / idle / awaiting is decided from bytes an agent writes **once**, and
+nothing retains them in the shape the decision saw. The ring holds 2 MB
+(`OUTPUT_RING_BUFFER_CAPACITY`) and the VT log 10.000 lines
+(`VT_LOG_BUFFER_CAPACITY`), so a busy agent still rolls past both, and what
+survives is rendered rows rather than the chunk boundaries and timing the
+detector actually read. Do not reason about the code first — record the stream,
+then replay it.
+
+(The 8192 that looks like a ring size is the default byte `limit` of
+`GET /sessions/{id}/output`, `mcp_http/session.rs:460` — a page size, not a
+retention bound.)
 
 ```bash
 curl -X POST localhost:9876/diagnostics/capture -H 'content-type: application/json' \
@@ -501,7 +510,7 @@ Do NOT flag these as security issues in reviews — they are intentional design 
 
 - **CSP is intentionally wide open.** TUIC is a local dev tool, not a SaaS. The user IS the trust boundary. The CSP uses a single permissive `default-src` that allows `https:`, `http:`, `data:`, `blob:`, `unsafe-inline`, etc. **NEVER tighten the CSP.** Every time we've had per-directive restrictions, some iframe content (reveal.js slides, plugin panels, dashboards) broke. The only specific directive kept is `frame-src` (for localhost wildcard ports). If you feel the urge to add CSP restrictions, don't — read this bullet point again.
 - **`dangerousDisableAssetCspModification: ["style-src", "script-src"]`** in `tauri.conf.json` — **DO NOT REMOVE.** Tauri auto-injects sha256 hashes for inline `<script>` tags. Per CSP3, hashes silently disable `'unsafe-inline'`. This kills all JS in srcdoc iframes (plugins, HTML previews). The override prevents Tauri from injecting those hashes.
-- **`lazy_static` in `output_parser.rs`, `pty.rs`, etc.** — transitive deps (`portable-pty`, `symphonia`) also use it; removing the direct dep saves nothing. Modules outside `ai_agent/` will migrate opportunistically.
+- **`lazy_static` in `output_parser.rs`, `pty.rs`, etc.** — transitive deps (`portable-pty`, `symphonia`) also use it; removing the direct dep saves nothing. The remaining direct users are `output_parser.rs`, `pty.rs`, `state.rs` and `error_classification.rs`; they migrate opportunistically. (This used to say "modules outside `ai_agent/`", which stopped parsing when #784-0aec deleted all but two files there.)
 - **`opener:allow-open-path` scope `"**"`** — FileBrowser must open any file the user can see. Narrower globs break external drives and network mounts.
 - **Iframe sandbox = `allow-scripts allow-same-origin`** — ALL iframes MUST use this. NEVER use bare `sandbox=""` — it kills JavaScript.
 - **Plugin capabilities do not isolate plugins from each other.** `plugin_id` is caller-supplied and plugins load into the same JS realm as the host, so any plugin can pass another plugin's id and inherit its grants. This is known, documented at the capability check in `plugins.rs`, at the `import()` in `pluginLoader.ts`, and in `docs/plugins.md`. A per-plugin token was considered and rejected — same-realm JS can read or proxy it, so it would be security theatre. Real isolation needs Worker/iframe + a host-created MessagePort; it is deferred, not overlooked. Do NOT propose the token.

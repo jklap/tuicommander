@@ -3,7 +3,7 @@
 ## Project Progress reporting
 
 The compact `progress` native tool is available directly in classic and
-collapsed/Grok discovery, and through the meta-tool index, unless disabled by
+every collapsed discovery (Grok, ego), and through the meta-tool index, unless disabled by
 `disabled_native_tools` or by the global `progress_tracking` flag. It takes
 `{ type, text, step? }` with `type` restricted to `done` or `blocked`, derives
 the project and the reporting agent from the caller, appends to the shared
@@ -142,12 +142,10 @@ uncapping the server.
 | `GET` | `/repo/github-status?path=` | Get GitHub status |
 | `GET` | `/repo/pr-statuses?path=` | Get batch PR statuses |
 | `GET` | `/repo/ci-checks?path=` | Get CI check details |
-| `POST` | `/ai/review/pr` | AI review of a PR diff → line-level findings (Main slot) |
 | `POST` | `/repo/create-pr` | Create a PR (gh wrapper, UI-gated) |
 | `POST` | `/repo/create-issue` | Create an issue (gh wrapper, UI-gated) |
 | `POST` | `/repo/post-pr-review` | Post a PR review with inline comments |
-| `GET` | `/repo/merged-prs?path=&sinceTag=` | Merged PRs via GraphQL (changelog source) |
-| `GET` | `/repo/changelog?path=&sinceTag=` | AI changelog `{markdown, json}` (Headless slot) |
+| `GET` | `/repo/merged-prs?path=&sinceTag=` | Merged PRs via GraphQL |
 | `POST` | `/repo/conflict-assist` | Worktree + rebase; reports verified/unverified clean or conflicts, base source, warning, and agent prompt |
 
 ### Configuration
@@ -286,7 +284,7 @@ it names.
 
 ### Streamable HTTP (`POST /mcp`)
 
-MCP Streamable HTTP transport using the legacy 2025-11-25 revision:
+MCP Streamable HTTP transport, serving **two lifecycles on one endpoint**:
 
 ```
 Client ──POST──> /mcp   (JSON-RPC request, response in body)
@@ -294,15 +292,55 @@ Client ──GET───> /mcp   (SSE stream for server notifications, requires
 Client ──DELETE─> /mcp  (end session, pass Mcp-Session-Id header)
 ```
 
-`initialize` negotiates the revision: it echoes `params.protocolVersion` when
-that value is one of `2026-07-28`, `2025-11-25` or `2025-03-26`, and answers
-`2025-11-25` (the revision this endpoint implements) for anything else or for a
-request that names no version. A missing `MCP-Protocol-Version` request header
-remains accepted for older clients; `tuic-bridge` supplies the version carried
-by each proxied stdio request and falls back to `2025-11-25` when the request
-carries none. Modern `2026-07-28` `server/discover` remains outside this legacy
-endpoint and returns JSON-RPC method-not-found as documented in the dual-era
-migration plan.
+**Legacy (2025-11-25) — `initialize`.** It negotiates the revision: it echoes
+`params.protocolVersion` when that value is one of `2026-07-28`, `2025-11-25`
+or `2025-03-26`, and answers `2025-11-25` for anything else or for a request
+that names no version. A missing `MCP-Protocol-Version` request header remains
+accepted for older clients; `tuic-bridge` supplies the version carried by each
+proxied stdio request and falls back to `2025-11-25` when the request carries
+none.
+
+**Modern (2026-07-28, SEP-2549) — `server/discover`.** One stateless request,
+no `initialize`, no `mcp-session-id` minted or required. The result carries
+`resultType: "complete"`, the full `supportedVersions` list, the same
+`capabilities` the legacy handshake declares (`tools.listChanged` plus
+`experimental.claude/channel`), the server instructions, `ttlMs: 0` and
+`cacheScope: "private"`, with `_meta."io.modelcontextprotocol/serverInfo"`
+naming the server. `ego` is the client this exists for: it pins the revision as
+a const, sends only `server/discover`, and treats a JSON-RPC error as a hard
+failure — so the previous method-not-found meant zero TUIC tools reached it and
+`session/new` was refused.
+
+A stateless client has no handshake to record its identity in, so it sends it on
+**every request** in `params._meta."io.modelcontextprotocol/clientInfo"`.
+`tools/list` reads that name when there is no protocol session to read it from,
+which is what keeps collapsing and lazy discovery working on the new lifecycle.
+
+**On 2026-07-28 a list result is a cache entry, not a bare array.** `tools/list`
+adds `resultType: "complete"`, `ttlMs: 0` and `cacheScope: "private"` — the same
+three fields `server/discover` carries, and for the same reason: the tool surface
+moves with upstream connects and config toggles, so none of it is cacheable. The
+revision is re-read per request (`MCP-Protocol-Version` header, else the
+`params._meta."io.modelcontextprotocol/protocolVersion"` key) because there is no
+session to remember it in, and the fields are **withheld** from a legacy client,
+which has neither the fields nor a reader for them.
+
+Not schema tidiness: ego enforces all three before it admits a server. Measured
+2026-09-19 against real ego 0.1.0 (#783-3c1b) — `server/discover` answered,
+`tools/list` answered with the whole catalogue, and `session/new` still failed
+with `the supplied MCP servers could not be admitted`, because the result carried
+`tools` and nothing else. Injecting the three fields in a proxy, changing nothing
+else, opened the session.
+
+`ego` therefore gets the **collapsed** catalogue whatever `collapse_tools` says
+(`client_requires_meta_tools`), for a different reason than grok's `__`
+delimiter limit: ego captures one immutable catalogue per generation and ships
+every definition on every model call, while `/mcp` proxies 200+ upstream tools
+on a normal day. Measured 2026-09-13 at 190 tools: 35.104 tokens per turn
+against 615 collapsed, and flat as upstreams grow. Nothing is unreachable —
+every native and upstream tool is still callable through `call_tool`, and
+`progress` stays directly callable — the cost is one extra round trip before
+the first use of an unfamiliar tool.
 
 The handshake declares `tools.listChanged` (plus `experimental.claude/channel`).
 The GET `/mcp` SSE stream emits `notifications/tools/list_changed` when the
@@ -403,13 +441,21 @@ When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP >
 
 Rationale, measured 2026-09-13 on the running desktop instance with 190 tools connected (see [Measuring the surfaces](#measuring-the-surfaces) for the method): the full list is 154,117 bytes / 35,104 tokens in every agent turn, against 2,810 bytes / 615 tokens for the collapsed surface — which does not grow with the upstream count, because the upstream tools are no longer in the list. The agent fetches other schemas on demand. `progress` stays direct so routine reporting needs no search/schema preflight. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
 
-TUIC also selects this three-tool surface automatically for an individual Grok
-session when `initialize.clientInfo.name` starts with `grok-shell-`. Grok accepts
-only one `__` namespace delimiter in a qualified MCP tool name, so it otherwise
-discards proxied names such as `tuicommander__upstream__tool`. The meta-tools keep
-the upstream identifier in the `call_tool` argument instead of the qualified MCP
-tool id. This compatibility mode is session-local: it does not change
-`collapse_tools` or the tool surface returned to other connected clients.
+TUIC also selects this three-tool surface automatically for two clients
+(`client_requires_meta_tools`), for two unrelated reasons. The selection is
+per-client: it does not change `collapse_tools` or the surface returned to
+anyone else.
+
+- **Grok** (`clientInfo.name` starts with `grok-shell-`) accepts only one `__`
+  namespace delimiter in a qualified MCP tool name, so it otherwise discards
+  proxied names such as `tuicommander__upstream__tool`. The meta-tools keep the
+  upstream identifier in the `call_tool` argument instead of the qualified id.
+  Session-local, read from `initialize`.
+- **ego** (`clientInfo.name` is `ego`) pays for the catalogue on every model
+  call — one immutable tool list per generation, every definition sent with
+  every request — so the numbers above are its per-turn cost, not a one-off.
+  ego is stateless, so the name is read from each request's `_meta` rather than
+  from a handshake.
 
 **Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `disabled_native_tools` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
 
@@ -698,15 +744,45 @@ The `url` param of `action=tab` supports three schemes:
 
 Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside iframes and must not be used with `action=tab`.
 
-### MCP Tools: `ai_terminal_*` (external agent surface)
+### One tool family, and why the second one went
 
-Thirteen tools exposed to external MCP clients (e.g. Claude Code, Cursor) that let a
-remote AI agent observe and interact with a TUICommander terminal, plus read/write/run
-files in the session's sandboxed repo. All input and mutating
-operations (`send_input`, `send_key`, `drive_agent`, `write_file`, `edit_file`, `run_command`) require user confirmation and are
-rejected while an internal agent loop is active on the target session.
+TUICommander exposes **one** MCP tool family: `session`, `agent`, `task`,
+`repo`, `progress`, `ui`, `plugin_dev_guide`, `config`, `debug`. Few tools,
+many actions.
 
-**Session aliases** — Every tool that accepts a `session_id` also accepts a human-friendly alias (e.g. `tu-1`). Aliases are auto-assigned from the repo directory name: a multi-word name contributes the first character of each segment, a single word its first two characters (`tuicommander` -> `tu`), plus a per-repo counter. `list_sessions` includes the `alias` field.
+It used to expose a second — 13 flat `ai_terminal_*` tools behind the
+`ai_terminal_mcp_enabled` flag. They overlapped this family without being
+equivalent, so a model that saw both had to guess, and paid for both catalogues
+on every turn. Six of the 13 needed a per-session filesystem sandbox only the
+embedded agent loop creates, so they refused every external caller before
+dispatch. Deleted in story 789-f6ed; the tool-by-tool comparison behind it is
+`plans/ego-integration/tool-family-comparison.md`. The embedded agent loop that
+created those sandboxes is itself gone (#784-0aec).
+
+**The surviving tool names are a public contract.** They appear in users' ego
+rule files (`allow 'tool(tuicommander/session)'`), so renaming one silently
+stops a user's policy from matching — the call starts prompting, or stops. The
+contract covers the tool names and the MCP server name. It does **not** cover
+the action strings inside them: ego matches an action as an opaque argument, so
+an action may still be added or renamed under the normal deprecation rules.
+
+The three gates the deleted family carried, and where each landed:
+
+| Gate | Outcome |
+|---|---|
+| **Secret redaction** on screen reads | **Preserved, and widened.** `redact_secrets` moved out of the condemned `ai_agent` module into `crate::redaction` and is now applied in `session action=output` — the screen read every client uses, Claude Code included, which never had it |
+| **Concurrent-writer interlock** | **Retired.** Its only producer was `conversation_engine::ACTIVE_CONVERSATIONS`, i.e. the embedded agent loop. `session action=submit` guards more, not less: it refuses on `session_not_found`, `not_managed_agent`, `partial_composer`, `awaiting_input`, `agent_not_ready` and `queued_commands_pending` before touching the PTY. `session action=input` stays raw and unguarded, as it always was |
+| **Mandatory write confirmation** (native dialog) | **Deliberately dropped.** AGENTS.md → Security Scope names agents driving TUIs a feature, not a risk to gate. A blocking native dialog is also unanswerable by a remote client — the exact defect that moved `ui action=confirm` onto the `mcp-confirm` event. A caller that wants a human gate calls `ui action=confirm`, which any client can answer |
+
+Two capabilities have no replacement and were not reinstated: `wait_for`'s regex
+and stability wait (poll `session action=output` with `since_cursor` instead),
+and `get_context`'s compact summary.
+
+**Session aliases** — Every action that accepts a `session_id` also accepts a
+human-friendly alias (e.g. `tu-1`). Aliases are auto-assigned from the repo
+directory name: a multi-word name contributes the first character of each
+segment, a single word its first two characters (`tuicommander` -> `tu`), plus a
+per-repo counter. `session action=list` includes the `alias` field.
 
 An alias survives an app restart. The frontend persists it with the rest of the tab
 state and replays it at create time; the backend reserves the requested alias when it
@@ -714,24 +790,6 @@ still has the `<prefix>-<number>` shape and no live session holds it, and raises
 per-prefix counter past it so the next auto-assignment cannot collide. A restored alias
 is untrusted input, so a malformed or already-taken value is dropped and the session
 gets a freshly minted alias instead.
-
-**Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > Services & MCP. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
-
-| Tool | Params | Description |
-|------|--------|-------------|
-| `ai_terminal_read_screen` | `session_id`, `lines?` (default 50, max 500), `since_cursor?` | Read terminal text. Returns `{screen, cursor, shell_state, awaiting_input, agent_intent?, agent_type?}` — `shell_state` is `busy` while the agent works (a spinner means busy, not idle), `idle` once stopped; `awaiting_input` is true when blocked on a question. Pass `since_cursor` for delta mode. Output passes through secret redaction. |
-| `ai_terminal_send_input` | `session_id`, `text` | Send a text command to the session. Always prompts for confirmation. |
-| `ai_terminal_send_key` | `session_id`, `key` (enter/tab/ctrl+c/escape/up/down/…) | Send a single special key. Always prompts for confirmation. |
-| `ai_terminal_wait_for` | `session_id`, `pattern?`, `timeout_ms?` (10000), `stability_ms?` (500) | Wait for a regex match or for the screen to stabilise. |
-| `ai_terminal_get_state` | `session_id` | Return structured `SessionState` (shell_state, cwd, terminal_mode, agent_type, …). |
-| `ai_terminal_get_context` | `session_id` | Cheap orientation: `{shell_state, cwd, git_branch, last_exit_code, agent_type, terminal_mode}`. Git branch read from `.git/HEAD` (no subprocess, no index lock). |
-| `ai_terminal_drive_agent` | `session_id`, `command?`, `timeout_ms?` (30000), `wait_pattern?`, `lines?` (80), `since_cursor?` | Atomic send→wait→read. Sends command, waits for idle/pattern, returns `{screen, cursor, shell_state, session_state}`. Pass `since_cursor` for delta mode. Requires user confirmation. |
-| `ai_terminal_read_file` | `session_id`, `file_path`, `offset?`, `limit?` (default 200, max 2000) | Read a text file from the session's sandboxed repo. Paginated; binary files and files >10MB rejected. Secrets redacted. |
-| `ai_terminal_write_file` | `session_id`, `file_path`, `content` | Create or overwrite a text file. Always prompts for confirmation. Atomic via tmp+rename. |
-| `ai_terminal_edit_file` | `session_id`, `file_path`, `old_string`, `new_string`, `replace_all?` | Surgical search-and-replace on a file. Always prompts for confirmation. `old_string` must be unique unless `replace_all=true`. |
-| `ai_terminal_list_files` | `session_id`, `pattern`, `path?` | List files matching a glob pattern inside the session's sandbox. Max 500 entries. |
-| `ai_terminal_search_files` | `session_id`, `pattern`, `path?`, `glob?`, `context_lines?` | Regex search across files in the session's sandbox. Honors `.gitignore`. Max 50 matches with context lines. |
-| `ai_terminal_run_command` | `session_id`, `command`, `timeout_ms?`, `cwd?` | Run a shell command and capture stdout/stderr. Always prompts for confirmation. Destructive commands blocked. Default timeout 2min, max 10min. |
 
 ### MCP Tool: `debug` — `invoke_js` and the Debug Registry
 
@@ -1371,16 +1429,6 @@ invoke("get_repo_info", { path }) → GET /repo/info?path=...
 ```
 
 PTY output in browser mode uses WebSocket instead of Tauri events.
-
-### GitHub Ops AI Routes
-
-Desktop/browser mode exposes the GitHub Ops AI helpers over HTTP; the remote
-daemon does not serve them because they depend on desktop provider credentials.
-
-| Endpoint | Body | Response | Notes |
-|----------|------|----------|-------|
-| `POST /ai/improvements/scan` | `{ repoPath, focus }` | `ImprovementScanResult` | One-shot Headless-slot LLM scan over local repo context (`focus`: `refactor`, `testing`, `perf`). Dual-emits `proposals-ready` to the window and `/events` SSE. |
-| `POST /repo/create-issue-from-proposal` | `{ repoPath, proposal }` | `CreatedIssue` | Explicit user-gated issue creation from one proposal; scan itself never creates issues. |
 
 ## Mobile Transport
 

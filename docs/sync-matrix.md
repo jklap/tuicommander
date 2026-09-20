@@ -85,9 +85,9 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `repo-changed` (git-state) | `{ repo_path: string, kind: "git-state" }` | `repo_watcher.rs` — **only when the git-state fingerprint changed** (index size + resolved HEAD + porcelain status + the sorted `.git/worktrees/*` set; skips no-op `.git` touches). The worktree set is an input because add/remove touches nothing else, so worktree-only changes used to be swallowed and left ghost sidebar rows. Last fingerprint in `AppState.repo_git_fingerprints`. | `useAppInit.ts` → coalesced one bump/repo/frame via `revisionCoalescer` → `repositoriesStore.bumpGitRevision`, which bumps **both** the general and the git revision |
 | `repo-changed` (working-tree) | `{ repo_path: string, kind: "working-tree" }` | `repo_watcher.rs` — non-`.git`, non-ignored file changes, debounced 1.5s when the repo is hot (has ≥1 open terminal, `set_hot_repos`) and 15s when cold. Ignore coverage is the **full git set**: the global `core.excludesFile`, the root `.gitignore` plus `.git/info/exclude`, and nested `.gitignore` files. `ALWAYS_EXCLUDED_DIRS` matches on **any path component**, so a nested git repo's `.git/` is treated as noise rather than a working-tree change. No fingerprint guard, but a firing git-state emit **cancels the pending working-tree emit** as a duplicate. Covers the main checkout **and every linked worktree** (`sync_worktree_watches`), which is what keeps a branch's sidebar diff badge live while an agent works in its worktree; the payload always names the parent repo. | `useAppInit.ts` → `revisionCoalescer` → `bumpRevision` (general revision **only**) + debounced `refreshAllBranchStats` |
 | `head-changed` | `{ repo_path: string, branch: string }` | `repo_watcher.rs` — **only when the resolved HEAD target changed** (`resolve_head_target`); skips the Linux inotify storm where `.git/HEAD` events recur without HEAD moving (issue #82). Last target in `AppState.repo_head_targets`; suppressed-emit count in `AppState.repo_head_emits_suppressed`. | `useAppInit.ts` → branch rename/activate (also dedupes on `activeBranch === branch`) |
-| `review-progress` | `{ repo_path: string, payload: { pr_number, summary, files (COUNT, not the vector — the only consumer reads its length), phase, done, llm_used, llm_model } }` | `diff_triage.rs` `ProgressSink::PrReview` during `run_pr_review`; also sent on `event_bus` for `/events` SSE | `githubOpsStore` listener updates per-PR review progress |
 | `conflict-assist-status` | `{ repo_path: string, payload: { pr_number, status, conflicted_files } }` | `conflict_assist.rs` `emit_conflict_assist_status()` lifecycle; also sent on `event_bus` for `/events` SSE | `githubOpsStore` listener updates conflict-assist state |
-| `proposals-ready` | `{ repo_path: string, payload: ImprovementScanResult }` | `improvement_scan.rs` after `run_improvement_scan` completes; also sent on `event_bus` for `/events` SSE | `githubOpsStore` listener accumulates proposals for the GitHub Ops dashboard — the sole publisher, since it reaches every window on both transports while the invoke's return value reaches only the caller |
+| `review-progress` | `{ repo_path: string, payload: { pr_number, done, findings_count?, error? } }` | `pr_review.rs` `emit_review_progress()` — once with `done: false` when the turn starts, once with `done: true` carrying either `findings_count` or ego's `error`; also sent on `event_bus` for `/events` SSE | `githubOpsStore` listener → Review findings column. `pr_number` must be a JSON **number**: `Number(null)` is `0`, so a missing one would file as PR #0 |
+| `proposals-ready` | `{ repo_path: string, payload: { focus, proposals[] } }` | `improvement_scan.rs` `emit_proposals_ready()` just before the command returns; also sent on `event_bus` for `/events` SSE. It, not the return value, is the path that reaches every window and every transport | `githubOpsStore` listener replaces the repo's proposals and clears the running flag |
 | `ctrl-tab` | `"next"` \| `"prev"` | `native_keys.rs` — macOS only; the `NSEvent` is swallowed so AppKit cannot also cycle tabs | `useNativeMenuBridge.ts` → tab switch |
 | `native-key-down` | `{ key: "F13".."F20", cmd, ctrl, alt, shift }` | `native_keys.rs` — macOS only, scoped to the `main` window; the event is passed through (nothing native to suppress) | `useNativeKeyCombo.ts`, attached only while a shortcut recorder is open |
 | `mcp-toast` | `{ title, message, level, sound, origin_repo_path?, origin_session_id? }` | `mcp_transport.rs` — `ui action=toast`; derives origin from the calling MCP session rather than accepting caller-supplied scope. `origin_session_id` is the caller's TUIC session, absent for an unbound caller | `useAppInit.ts` → repository-scoped toast + Messages item; the repo is carried as `repoPath`, NOT glued into the message text — `ToastContainer.tsx` renders it as its own badge and uses `origin_session_id` to navigate to the originating terminal on click |
@@ -101,6 +101,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `pty-watcher-lines-{session_id}` | `{ session_id: string, lines: [{ text: string, matched_ids: string[] }] }` | `pty.rs emit_watcher_lines()` — one emit per 100 ms batch of assembled lines; `text` is the CLEANED text Rust matched on, `matched_ids` are qualified `client_id/watcher_id`. Rust ships every line only while a registered pattern could not be compiled, otherwise the matched ones alone. Dual-emitted on `event_bus` as `PluginWatcherLines` (`watcher-lines` WS frame on `/sessions/:id/stream` in both `?format=grid` and raw mode — **not** `?format=log|text`, which returns before the event loop — plus `plugin-watcher-lines` SSE) | `CanvasTerminal.tsx` → `transport.onEvent("watcher-lines", …)` → `pluginRegistry.handleWatcherLines()`, which re-runs the JS `RegExp` on each line. The listener is installed BEFORE the grid subscription — a line that lands while it is being attached is lost. **Not** in `useAppInit.ts` — the listener is per-session |
 | `session-state-changed` | `{ session_id: string, state: SessionState }` — `state` is exactly the object `list_active_sessions` returns per session, snake_case, with serde skipping the zero-valued fields. Both transports build it from `state.rs session_state_payload()`, one function on purpose | `state.rs publish_session_state_change()`, called only from the session-state accumulator — the sole writer of `session_states` and therefore the only place that can see a transition. Deduped by `SessionState`'s `PartialEq` (which excludes `last_activity_ms`), so a repaint that changes nothing a client renders emits nothing. Dual-emitted on `event_bus` as `SessionStateChanged` (`session-state-changed` SSE on `/events`). Ignored by `apply_event_to_session_state` — it is the accumulator's output, never its input | `useAgentPolling.ts` → `subscribeEvents({"session-state-changed"})` → `applySessionState()` → tab awaiting/busy badges + Activity Dashboard. Replaced a 1 Hz `list_active_sessions` poll; the only remaining reads are a single mount-time catch-up, for sessions already idle and silent, and the same catch-up re-run from `subscribeEvents`' `onResync` when the SSE stream reconnects or reports `lagged` (browser only — Tauri `listen()` cannot drop) |
 | `acp-notice` | `{ connectionId, generation, sessionId?, requestId?, sequence, kind }` — `kind` is `ready` \| `settled` \| `interaction_pending` \| `interaction_settled`. camelCase, unlike the PTY rows above: it is the same object the `/acp` routes and the `acp_*` commands return, and a second spelling would be a second thing to keep in sync | `state.rs spawn_acp_notice_pump()`, fed by `acp/events.rs` `AcpEventJournal::append` — the one place every ACP event is stamped, so a notice cannot be forgotten by a new producer. Dual-emitted on `event_bus` as `AcpNotice` (`acp-notice` SSE on `/events`) | TBD — no ACP frontend yet. It is a wake signal: react by reading `acp_connection_snapshot`, `acp_pending_interactions`, or the stream from the `sequence` it names. The ordered turn frames stay on `acp_subscribe` / the `/acp/connections/:id/stream` WebSocket and never ride this bus |
+| `remote-connection-status` | `{ id, status, base_url?, token?, protocol_version?, error? }` — `status` is `disconnected` \| `connecting` \| `connected` \| `unauthenticated` \| `error`. snake_case: it is the `RemoteConnectionStatus` struct as `/config/remote-connections/status` returns it, and the push is the whole client view rather than a delta, so a missed event cannot leave a client holding a route the backend has retracted. `base_url` and `token` are present only while connected | `remote_runtime.rs publish()` — dual-emitted on every real change (dedup is on the snapshot, so a poll that keeps answering 200 emits nothing) | `stores/remoteConnections.ts` `applyStatus()` → store state + the SSE bridge, which exists exactly while the connection is connected |
 
 ### HTTP & MCP Server
 When adding routes or changing server behavior:
@@ -111,6 +112,7 @@ When adding routes or changing server behavior:
 | `docs/backend/mcp-http.md` | Server architecture, routing, lazy tool discovery (`collapse_tools` / meta-tools) |
 | `docs/user-guide/remote-access.md` | User setup guide |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | PLUGIN_DOCS (if plugin-facing) |
+| `src-tauri/src/mcp_http/fixtures/` | A client's exact captured handshake, when the change touches a lifecycle. `/mcp` serves two — legacy `initialize` (2025-11-25) and stateless `server/discover` (2026-07-28) — and a client that speaks only one is proven by its own request, not by a hand-written approximation |
 
 ### Diagnostics
 When modifying `cpu_watchdog.rs` or the `/diagnostics` HTTP endpoint:
@@ -163,109 +165,137 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 - `agent action=register` response includes **`terminal`** (bool): false means the identity resolves to no live PTY (`live_pty_for_peer` → `None`), so it can never be typed into or woken, and the peer must consume its own inbox via `wait`/`inbox`. Identities without a PTY arise from a bridge that sent no `x-tuic-session` header (agent launched outside a TUIC PTY) — the server then mints an MCP-scoped UUID.
 - `agent action=register` accepts **`orchestrator`** (bool) as the only role declaration seam; omission preserves the current role and child spawn never infers it. The `register` response surfaces `orchestrator` plus **`mail_wake`** (`managed_pty_lifecycle` or `none`); `list_peers` reports `orchestrator` but not `mail_wake`, which is a property of the caller's own identity rather than of every peer in a listing. External/headerless orchestrators are inbox/wait-only because MCP/SSE activity is not an authoritative idle or wake surface.
 
-### Provider Registry
-When modifying provider types, slot names, credential storage, or the ProvidersTab UI:
+### Smart Prompts `api` mode (one unattended ego turn)
+The same ego, a different shape of use (#787-ee50): no panel, no stream, no
+second turn, and **no MCP server in the session** — a turn nobody watches cannot
+be handed the tools that drive terminals and repositories. Changing any of the
+three rules in `acp/oneshot.rs` changes what the mode is allowed to do.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/provider_registry.rs` | `ProviderType`, `SlotName`, `ProviderRegistry` structs + Tauri commands |
-| `src-tauri/src/credentials.rs` | `Credential::Provider` variant for per-provider key storage |
-| `src/stores/providerRegistry.ts` | Frontend store: hydrate, save, slot resolution, CRUD |
-| `src/components/SettingsPanel/tabs/ProvidersTab.tsx` | Settings UI: provider cards, model CRUD, slot assignments, availability badge (renders `OllamaStatus.detail` verbatim) |
-| `src-tauri/src/ai_chat.rs` | `detect_ollama` + `OllamaStatus` — the availability verdict AND its user-facing reason are authored here, never in the UI |
-| `src/hooks/useSmartPrompts.ts` | `resolveSlot("headless")` check for headless execution |
-| `docs/backend/config.md` | `providers.json` schema documentation |
+| `src-tauri/src/acp/oneshot.rs` | The turn: what counts as the answer, which questions are refused, how long the turn may take |
+| `src-tauri/src/acp/manager.rs` | `new_unattended_session` / `unattended` — the emptied authority. `granted` is its attended counterpart |
+| `src-tauri/src/acp_commands.rs`, `src-tauri/src/mcp_http/acp_routes.rs` | `acp_one_shot_prompt` and `POST /acp/one-shot`. The route takes the spawn guard: it launches a process |
+| `src/transport.ts`, `src-tauri/src/mcp_http/command_table_paths.txt` | The parity entry and its regenerated snapshot |
+| `src/hooks/useSmartPrompts.ts` | `canExecuteApi`, `apiRoot`, `executeApi` — and the `api` branch of `executeHeadless`, which is the same one path |
+| `src/types/acp.ts` | `EgoTurn`, the mirror of the Rust type |
+| `docs/api/tauri-commands.md`, `docs/api/http-api.md`, `docs/FEATURES.md`, `docs/user-guide/settings.md` | The command, the route, the feature and what a user is told when ego is not configured |
 
-### AI Prompts
-When modifying customizable AI service prompts (diff triage, future services):
-
-| File | What to update |
-|------|----------------|
-| `src-tauri/src/config.rs` | `AiPromptsConfig` struct, load/save commands |
-| `src-tauri/src/diff_triage.rs` | `build_chat_request` system_prompt param, `default_system_prompt()` |
-| `src/stores/aiPrompts.ts` | Frontend store: hydrate, save, `DEFAULT_DIFF_TRIAGE_PROMPT` const |
-| `src/components/SettingsPanel/tabs/AgentsTab.tsx` | Settings UI: diff-triage prompt textarea + reset button (`aiPromptsStore`) |
-| `src-tauri/src/mcp_http/mcp_transport.rs` | MCP config tool: `list_ai_prompts`, `load_ai_prompt`, `save_ai_prompt` actions |
-| `docs/backend/config.md` | `ai-prompts.json` schema documentation |
-
-### AI Chat
-When modifying AI Chat panel, settings, context menu actions, or streaming backend:
+### PR review, changelog and improvement scan (one unattended ego turn each)
+The three GitHub features #784-0aec deleted, back on ego (#795-320b). Each is
+**one** `acp::oneshot` turn with the whole input inline — there is no multi-turn
+engine, no `read_file` tool use and no per-file phase, because an unattended turn
+is refused every tool it asks for. TUIC stores no API key and makes no provider
+HTTP call for any of the three; which model runs is ego's configuration and this
+side is never told it. When ego is not reachable each one fails with ego's own
+sentence, never with an empty result.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/ai_chat.rs` | Backend: config, streaming, context assembly, Ollama detection, conversation CRUD (`save_conversation` stamps the schema version; `load_conversation` migrates) |
-| `src-tauri/src/ai_agent/conversation.rs` | Persisted conversation types: `Conversation`, `ChatMessage`, `AgentSnapshot`, `CURRENT_SCHEMA_VERSION` + `migrate()`. Bump the version and extend `migrate()` on any shape change |
-| `src-tauri/src/ai_chat_registry.rs` | Chat Registry: cross-window state sync, Channel fan-out, subscribe/unsubscribe |
-| `src/stores/conversationStore.ts` | Frontend store: messages, streaming state, registry subscription (sessionId passed per-call, derived from focused terminal) |
-| `src/components/AIChatPanel/AIChatPanel.tsx` | Chat panel component + detach button + registry lifecycle + the optional `terminal` binding a detached window is handed |
-| `src/panelAdapters/aiChat.tsx` | Detached-window adapter: params handed over at detach, docked panel hidden on detach, terminal + chat id adoption on mount, re-read on reattach unless a stream is live |
-| `src/components/AIChatPanel/contextMenuActions.ts` | Terminal context menu integration |
+| `src-tauri/src/acp/oneshot.rs` | `ask`, `answer_text`, `extract_json`, `unparseable` — the seam all three share. A change here changes all three |
+| `src-tauri/src/pr_review.rs` | The review: diff split, prompt, envelope, and `filter_findings_by_confidence` — the gate runs before anything leaves the module. `TUIC_REVIEW_CONFIDENCE_THRESHOLD` overrides it |
+| `src-tauri/src/changelog.rs` | The changelog: prompt over merged PRs, plus `split_changelog_output` — lenient about format (markdown with a null json half is a valid answer), strict about reachability |
+| `src-tauri/src/improvement_scan.rs` | The scan: focus, prompt, `parse_improvement_output`, the five-proposal cap, and `create_issue_from_proposal` |
+| `src-tauri/src/state.rs`, `src-tauri/src/mcp_http/sse_routes.rs` | `AppEvent::ReviewProgress` / `ProposalsReady` and their `/events` SSE arms. Producers dual-emit |
+| `src-tauri/src/mcp_http/{mod,github_routes,types}.rs` | `GET /repo/changelog`, `POST /repo/pr-review`, `POST /repo/improvement-scan`, `POST /repo/create-issue-from-proposal`. Not desktop-gated: ego is reached over ACP, so `tuic-remote` serves them too |
+| `src/transport.ts`, `src-tauri/src/mcp_http/command_table_paths.txt` | The four parity entries and the regenerated snapshot |
+| `src/types/index.ts` | `PrReviewResult`, `ReviewedFile`, `ReviewFinding`, `FindingSeverity`, `ChangelogResult`, `ImprovementProposal`, `ImprovementScanResult`, `ImprovementFocus`, `CreatedIssue` |
+| `src/stores/prReview.ts` | Per-PR review state, the flatten/id scheme and GitHub's needs-a-line posting rule |
+| `src/stores/githubOps.ts` | The ops event accumulator: `review-progress` and `proposals-ready` |
+| `src/components/PrDetailPopover/PrDetailContent.tsx`, `src/components/shared/SeverityIcon.tsx` | Where findings are shown, selected and posted |
+| `src/components/ChangelogModal/`, `src/components/Sidebar/GitHubPanel.tsx` | The modal and the button that opens it |
+| `src/components/GithubOpsDashboard/GithubOpsDashboard.tsx` | The Review findings and Proposals columns, the focus buttons and create-issue |
+| `docs/api/tauri-commands.md`, `docs/api/http-api.md`, `docs/FEATURES.md`, `docs/backend/github.md` | The four commands, the four routes and the three features |
+
+### AI Chat panel (ego over ACP)
+The panel is a control plane over an agent that lives outside it (#785-58ca). It
+binds to a **repository root and a session**, never to a terminal: a turn ego
+runs outlives any tab and touches files no tab is showing. Nothing here holds a
+provider, an API key or a tool loop.
+
+The session's one MCP server is **our `tuic-bridge` sidecar over stdio**
+(#796-7fa3), the same adapter every PTY agent uses to reach `mcp.sock`. It was an
+HTTP URL built from the bound TCP port, which made the panel's tools depend on
+Remote Access being on; the socket has no such condition. A stdio entry is a
+command ego runs, so the server-side synthesis in `granted` is what keeps it safe
+— see plan §4.5.
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/acp/mod.rs` | `tuicommander_mcp_server` — which binary, the `TUIC_APP_INSTANCE` it carries, and `mcp_stdio` in `capability_snapshot` |
+| `src-tauri/src/acp/manager.rs` | `granted` replaces the caller's list; `set_bridge_binary` is what a wire test pins |
+| `src-tauri/src/agent_mcp.rs` | `locate_bridge_binary` — where the sidecar is looked for, shared with the agent config writers |
+| `src/components/AIChatPanel/AIChatPanel.tsx` | The panel frame plus the banners: gap, refusal, "not receiving updates" |
+| `src/components/AIChatPanel/useAcpChat.ts` | Which connection and session the panel is looking at; one connection per repo root, and every action it offers |
+| `src/components/AIChatPanel/Transcript.tsx` | How each transcript entry is drawn — message, thought, tool call, plan, a turn that ended without answering |
+| `src/components/AIChatPanel/Interactions.tsx` | Permission options and the elicitation form. `form` is the only mode drawn |
+| `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, plus pause/resume/compact — each drawn only when ego advertised it |
+| `src/components/AIChatPanel/Composer.tsx`, `draft.ts` | Where a turn is written; the draft is module-scoped so the context menu can seed it |
+| `src/components/AIChatPanel/contextMenuActions.ts` | "Explain with AI" / "Fix this error" on terminal right-click, registered through `contextMenuActionsStore` |
+| `src/services/acpClient.ts`, `src/services/acpStream.ts` | Every command the panel sends and the frame stream behind it |
+| `src/stores/acp.ts` | Protocol state per connection: snapshot, journal cursor, pending questions, gap |
+| `src/stores/acpTranscript.ts` | The render projection, keyed by session |
+| `src/panelAdapters/aiChat.tsx` | Registry entry: what makes `Cmd+Alt+A`, the status-bar button, the palette entry and detach work |
 | `src/components/PanelOrchestrator.tsx` | Switches between AIChatPanel and DetachedPlaceholder |
-| `src/components/DetachedPlaceholder.tsx` | Placeholder shown in main window when panel is detached |
-| `src/components/SettingsPanel/tabs/AiChatTab.tsx` | Settings panel section |
-| `src/stores/ui.ts` | `aiChatPanelVisible` + `detachedPanels` map |
+| `src/components/DetachedPlaceholder.tsx` | Placeholder shown in the main window when the panel is detached |
 | `src/panelRouter.tsx` | Panel adapter registry + routing for detached panel windows |
-| `src/utils/panelSync.ts` | PanelSyncProvider + PanelSyncReceiver for main↔detached communication |
-| `src/utils/aiChatSnapshot.ts` | Live-stream projection to the detached window: snapshot shape, `projectAiChat` ownership rules (overlay-only, `mirroring` flag, chat-id guard), push interval |
+| `src/utils/panelSync.ts` | PanelSyncProvider + PanelSyncReceiver for main<->detached communication |
 | `src/hooks/initPanelWindow.ts` | Bootstrap for detached panel windows (theme, font, settings) |
+| `src/stores/ui.ts` | `aiChatPanelVisible` + `detachedPanels` map |
+| `src/stores/settings.ts` | `isAiChatEnabled()` — whether the panel is offered at all (reads `experimental_features_enabled`) — and `isAcpConfigured()`/`egoExecutable`, the one binary the host may launch |
 | `src/keybindingDefaults.ts` | `toggle-ai-chat` + `detach-activity-dashboard` hotkeys |
-| `docs/FEATURES.md` | AI Chat feature section |
 | `docs/user-guide/ai-chat.md` | User-facing AI Chat guide |
-| `docs/api/tauri-commands.md` | Chat Registry + `open_panel_window` / `close_panel_window` / `focus_main_window` commands |
+| `docs/FEATURES.md` | AI Chat feature section |
 
-### Extended thinking (Opus 4.7+ reasoning)
-When modifying reasoning effort, the thinking stream, or its gating:
-
-| File | What to update |
-|------|----------------|
-| `src-tauri/src/ai_agent/conversation_engine.rs` | `ReasoningLevel`, `supports_extended_thinking`, `resolve_reasoning`, `ConversationEvent::ReasoningChunk`, ChatOptions build + `captured_content` (thinking+signature) append |
-| `src-tauri/src/ai_agent/commands.rs` | `reasoning_effort` param + persisted-config fallback + 50ms ReasoningChunk batching |
-| `src-tauri/src/ai_chat.rs` | `AiChatConfig.reasoning_effort` field |
-| `src/stores/conversationStore.ts` | `reasoning_chunk` event + `reasoningChunks` signal + reset on new turn |
-| `src/components/AIChatPanel/AIChatPanel.tsx` | "Thinking" disclosure render |
-| `src/components/SettingsPanel/tabs/AiChatTab.tsx` | Extended-thinking effort dropdown |
-
-### AI Agent (ReAct loop, knowledge store, MCP terminal tools)
-When modifying the AI agent loop engine, tool dispatch, session knowledge store,
-OSC 133 outcome capture, or the `ai_terminal_*` MCP tools:
+### Providers tab (ego's own configuration)
+Settings → AI Providers reads and writes **ego's** configuration through ego's
+command line (#786-4a6d). It replaces the provider registry #784-0aec deleted,
+and the replacement is not a registry: TUIC stores no API key, keeps nothing in
+its keyring, and makes no provider HTTP call. The one network call anywhere in
+this area is `ego models --refresh`, which ego makes, when a person presses
+Refresh.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/ai_agent/engine.rs` | ReAct loop, approval flow, ACTIVE_AGENTS registry, system prompt |
-| `src-tauri/src/ai_agent/tools.rs` | Tool dispatch: 31 tools (terminal observe incl. get_command_history/explain_last_failure/get_error_fixes/search_scrollback/get_hyperlinks/get_semantic_zones, reactive watches watch_for/list_watches/cancel_watch, filesystem, drive_agent, search, list_sessions). Tool count assertions live in tools.rs `#[cfg(test)]` — bump them on add/remove |
-| `src-tauri/src/terminal_grid.rs` | Grid reader methods backing agent tools: `search_buffer`, `enumerate_visible_hyperlinks` (get_hyperlinks), `extract_semantic_zones` (get_semantic_zones); `VtLogBuffer` delegates in `state.rs` |
-| `src-tauri/src/ai_agent/safety.rs` | SafetyChecker: command safety + file-write sensitive path rules |
-| `src-tauri/src/ai_agent/sandbox.rs` | FileSandbox: path jail for filesystem tools (canonicalize + starts_with) |
-| `src-tauri/src/mcp_http/ai_terminal.rs` | MCP exposure of all 13 `ai_terminal_*` tools; write-tool confirmation |
+| `src-tauri/src/ego_cli.rs` | Which ego commands are run, how their three answers are joined, and what an ego failure carries. `model` is the only writable key, spelled as its own operation so no caller can reach `sandbox` or `permissions.judge` |
+| `src-tauri/src/mcp_http/ego_routes.rs` | `GET /ego/providers`, `POST /ego/providers/model`. Both are behind `require_local_or_auth` — spawning a process is not a read |
+| `src/transport.ts`, `src/__tests__/transport.test.ts` | The `ego_providers` / `ego_set_default_model` mappings and the generated path snapshot |
+| `src/types/ego.ts` | The TS mirror of the Rust projection. A mirror, not a second opinion — nothing reshapes it |
+| `src/services/egoCli.ts` | The two calls the tab makes |
+| `src/components/SettingsPanel/tabs/ProvidersTab.tsx` | What the tab draws: the default-model picker, the per-provider credential badge, and each of the four failure states |
+| `src/components/SettingsPanel/SettingsPanel.tsx` | The nav entry (hidden while `isAiChatEnabled()` is false) and the tab body |
+| `src/components/SettingsPanel/settingsSearchIndex.ts` | Its rows in the settings search index — the drift test re-derives them from the JSX |
+| `docs/user-guide/settings.md` | The AI Providers tab section |
+| `docs/api/tauri-commands.md`, `docs/api/http-api.md` | Both transports for the two commands |
+| `docs/FEATURES.md` | The AI Providers entry under Settings |
+
+### Session knowledge store and TUI detection
+Neither module has anything to do with an LLM, which is why both outlived the
+engine. `pty.rs` reads them, so they kept the `ai_agent/` module path:
+
+| File | What to update |
+|------|----------------|
 | `src-tauri/src/ai_agent/knowledge.rs` | CommandOutcome, SessionKnowledge, OSC 133 scanner, persist/load/spawn_persist_task |
-| `src-tauri/src/ai_agent/context.rs` | Session-knowledge injection into agent system prompt |
 | `src-tauri/src/ai_agent/tui_detect.rs` | TerminalMode heuristics (Shell vs FullscreenTui) |
-| `src-tauri/src/ai_agent/commands.rs` | Tauri commands: start/cancel/pause/resume/status/approve/get_session_knowledge |
-| `src-tauri/src/pty.rs` | ChunkProcessor.record_osc133_outcomes + Inferred fallback in silence timer |
+| `src-tauri/src/pty.rs` | ChunkProcessor.record_osc133_outcomes + Inferred fallback in the silence timer |
 | `src-tauri/src/state.rs` | session_knowledge DashMap, knowledge_dirty set, has_osc133_integration, record_outcome helper |
-| `src-tauri/src/lib.rs` | Register new commands in `invoke_handler`; spawn_persist_task at boot |
-| `src-tauri/src/mcp_http/mcp_transport.rs` | `ai_terminal_*` MCP tool defs + dispatch |
-| `src/stores/conversationStore.ts` | Frontend agent state (`AgentState`), `ToolCallEntry` log, `PendingApproval` |
-| `src/components/AIChatPanel/AIChatPanel.tsx` | Agent banner, approval card, tool-call cards |
-| `src/components/AIChatPanel/SessionKnowledgeBar.tsx` | Collapsible footer summarising the session's knowledge store |
-| `docs/api/tauri-commands.md` | `start_agent_loop`, `cancel_agent_loop`, `pause_agent_loop`, `resume_agent_loop`, `agent_loop_status`, `approve_agent_action`, `get_session_knowledge` |
-| `docs/backend/mcp-http.md` | `ai_terminal_*` MCP tools table |
-| `docs/FEATURES.md` | AI Agent section (Level 2/3 of the AI-assisted terminal roadmap) |
-| `ideas/ai-assisted-terminal.md` | Status updates as capability levels ship |
+| `src-tauri/src/lib.rs` | spawn_persist_task at boot |
+| `src-tauri/src/redaction.rs` | `redact_secrets` — lives OUTSIDE `ai_agent/` on purpose, because `session action=output` applies it |
+| `src-tauri/src/terminal_grid.rs` | Grid reader methods: `search_buffer`, `enumerate_visible_hyperlinks`, `extract_semantic_zones`; `VtLogBuffer` delegates in `state.rs` |
 
-### Terminal Watcher (event-driven autonomous actions)
-When modifying the watcher engine, trigger evaluation, or watcher UI:
+### What #784-0aec removed, and where it comes back
+These areas had sections here and no longer have any code to sync. They are
+listed so a search for the feature lands on the reason rather than on nothing.
+Do not re-add a section for one of them until the story that restores it lands —
+the replacement lives in ego and will have a different file list.
 
-| File | What to update |
-|------|----------------|
-| `src-tauri/src/ai_agent/watcher.rs` | WatcherRule model, WatcherEngine event loop, trigger evaluation, burst guard, fire_rule |
-| `src-tauri/src/ai_agent/commands.rs` | Tauri commands: watcher_create, watcher_list, watcher_delete, watcher_toggle, watcher_attach, watcher_detach, watcher_update |
-| `src-tauri/src/state.rs` | `watcher_engine` OnceLock in AppState, `session_visibility` DashMap |
-| `src-tauri/src/lib.rs` | Command registration + WatcherEngine spawn |
-| `src/components/WatcherManager/WatcherManager.tsx` | Template CRUD, attach/detach, edit form (toolbar popover) |
-| `src/components/WatcherManager/WatcherManager.module.css` | Popover styles |
-| `docs/backend/ai-watchers.md` | Architecture doc: data model, trigger paths, safety guards |
-| Config: `ai-watchers.json` | Persisted watcher rules (app config dir) |
+| Removed area | Went with it | Comes back as |
+|------|----------------|----------------|
+| AI Prompts (diff-triage prompt) | `AiPromptsConfig`, `diff_triage.rs`, `aiPrompts.ts`, the `list/load/save_ai_prompt` MCP config actions | nothing. #795-320b restored the review itself but not the editable prompt: an unattended turn sends one prompt this side owns, so there is nothing for a user to tune |
+| AI Agent ReAct loop | `ai_agent/{engine,tools,safety,sandbox,context,commands,triggers,scheduler}.rs`, `SessionKnowledgeBar.tsx` | nothing. ego runs its own tool loop; TUIC is the environment it drives, per `plans/ego-integration/plan.md` §1 |
+| Terminal Watcher | `ai_agent/watcher.rs`, the WatcherEngine spawn, the `watcher_*` commands, `WatcherManager/`, `ai-watchers.json` | not scheduled |
+| PR review, changelog, improvement scan | `diff_triage.rs`, `improvement_scan.rs`, `changelog.rs`, `aiTriageStore.ts`, `prReview.ts`, `AiTriagePanel/`, `ChangelogModal/` | **landed as 795-320b** — see "PR review, changelog and improvement scan" above. `diff_triage.rs` came back as `pr_review.rs`, because it no longer triages a diff; `aiTriageStore.ts` and `AiTriagePanel/` did not come back at all |
+| Smart Prompts `api` execution mode | `llm_api.rs`, `execute_api_prompt` | **landed as 787-ee50** — see "Smart Prompts `api` mode" above. The provider registry did not come back; the mode is one unattended ego turn |
 
 ### Remote Daemon (`tuic-remote`)
 When modifying the remote daemon binary, `run_headless`, or standalone server behavior:
@@ -273,10 +303,12 @@ When modifying the remote daemon binary, `run_headless`, or standalone server be
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/bin/tuic_remote.rs` | Binary entry point |
-| `src-tauri/src/lib.rs` | `run_headless()` function |
-| `docs/user-guide/remote-access.md` | `tuic-remote (Beta)` section |
+| `src-tauri/src/lib.rs` | `run_remote()` — the daemon; `run_headless()` |
+| `src-tauri/src/lib.rs` | `spawn_daemon_background_tasks()` — every task is started or refused with a reason; the guard test is `the_daemon_decides_on_every_desktop_background_task` |
+| `src-tauri/src/mcp_http/mod.rs` | `spawn_ipc_listener()` / `spawn_maintenance_sweep()` — shared by the desktop and the daemon |
+| `docs/user-guide/remote-access.md` | `tuic-remote (Beta)` section, incl. "What the daemon runs" |
 | `docs/FEATURES.md` | Section 22 (Remote Daemon) |
-| `.github/workflows/release.yml` | Release artifact build job |
+| `.github/workflows/release.yml` | Release artifact build job — publishes **both** `tuic-remote` and `tuic-bridge` per target |
 
 ### SSH Tunnel Management
 When modifying tunnel profiles, supervisor, audit logging, backoff, or tunnel UI:
@@ -308,13 +340,49 @@ When modifying remote connection config, storage, or transport routing:
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport, RemoteConnectionStore |
-| `src/stores/remoteConnections.ts` | Frontend remote connections store |
-| `src/utils/remoteEventBridge.ts` | SSE event bridge for remote daemons |
-| `src/transport.ts` | connectionId-based routing in COMMAND_TABLE |
-| `src/components/Terminal/canvasTerminalTransport.ts` | baseUrl support for remote WebSocket |
+| `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport, RemoteConnectionStore, the password/token commands |
+| `src-tauri/src/remote_runtime.rs` | The live half: status, base URL, session token, the status poll and the SSH tunnel. Every status change is dual-emitted as `remote-connection-status` |
+| `src-tauri/src/credentials.rs` | `Credential::RemoteConnection` — the password, keyed by the connection's UUID |
+| `src/stores/remoteConnections.ts` | Frontend remote connections store — a renderer of the backend status, plus the token it holds in memory for the transport |
+| `src/transportRuntime.ts` | `withRemoteToken` — the one place a credential is put on a URL; `resolveOwningConnection` — the one place a call's machine is decided |
+| `src/stores/repositories.ts` / `src/stores/terminals.ts` | the registered path→connection and session→connection lookups |
+| `src-tauri/src/remote_mirror.rs` | Mirrors a connected daemon's sessions and events onto the local bus |
+| `src/transport.ts` | `owningConnectionFor` + connectionId-based routing in COMMAND_TABLE |
+| `src/invoke.ts` | the desktop IPC path's diversion to `rpc()` for a remotely-owned call |
+| `src/components/Terminal/canvasTerminalTransport.ts` | connectionId support for the remote WebSocket |
 | `docs/FEATURES.md` | Section 24 (Remote Connection Manager) |
 | `docs/user-guide/remote-access.md` | Remote Connection Manager section |
+
+### Terminal stream compression
+
+When changing what a remote WebSocket puts on the wire, or which peers pay for it:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/mcp_http/ws_compression.rs` | The negotiation, the frame tags, the level, and the measurement the level and the stateless choice were made on |
+| `src-tauri/src/mcp_http/session.rs` | `ws_stream` reads `?compress=` and the peer address; all three handlers send through `WsFrameSender` |
+| `src-tauri/src/mcp_http/types.rs` | `OutputQuery::compress` |
+| `src/components/Terminal/wsFrameCodec.ts` | The client half — the tag values must match `FrameTag` literal for literal |
+| `src/components/Terminal/canvasTerminalTransport.ts` | Who asks for the encoding, and the chain keeping inflated deltas in order |
+| `src-tauri/src/tunnels/profile.rs` / `command.rs` | `ProfileOptions::compression` → `ssh -C`; the WebSocket's loopback refusal assumes this is on |
+| `docs/api/http-api.md` | "WebSocket compress=deflate" — the table of what is compressed by what |
+| `docs/user-guide/remote-access.md` | What a user is told about it |
+
+### Machine-owned configuration
+
+When changing which machine a config family belongs to, or adding a config file
+that describes a machine rather than this app:
+
+| File | What to update |
+|------|----------------|
+| `src/stores/agentConfigs.ts` | The per-machine registry: `agentConfigsFor`, `ensureAgentConfigs`, `invalidateAgentConfigs`, and the remote IO that names the connection |
+| `src/stores/remoteConnections.ts` | `applyStatus` — the connection edge that drops and refills a machine's cached config |
+| `src/components/SettingsPanel/MachineSelector.tsx` | The selector every tab in the machine family carries |
+| `src/components/SettingsPanel/tabs/AgentsTab.tsx` | Run configs, the hook toggles, and which controls stay local because they have no remote route |
+| `src/components/SettingsPanel/tabs/services/UpstreamMcpPanel.tsx` | Upstream MCP servers, and the OAuth flow that cannot follow a machine |
+| `src/__tests__/remoteRepoRouting.test.ts` | Both halves: what follows the repo, and what must never leave this machine |
+| `docs/backend/config.md` | Agents Config section — the ownership rule and the local families |
+| `docs/user-guide/remote-access.md` | "Which config follows the repo, and which stays here" |
 
 ### Project Progress (storage)
 

@@ -6,7 +6,139 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The AI Chat panel reaches TUICommander's tools on a default install.** The one
+  MCP server an ego session is given was an HTTP URL built from the TCP port this
+  process bound, and that port only exists while the TCP listener is up — which
+  happens only when Remote Access is enabled, and Remote Access is off by default.
+  So an ordinary install handed ego no server at all: a session that opened
+  normally and could reach nothing, with no error to say why. It now runs over the
+  `tuic-bridge` sidecar on stdio, the same adapter every terminal agent already
+  uses to reach `mcp.sock` — a socket that binds unconditionally. Nothing new
+  listens, and turning Remote Access on or off no longer changes what ego can do.
+  A named `TUIC_APP_INSTANCE` travels with the entry rather than relying on being
+  inherited twice, so a test instance cannot end up driving the default one's
+  repositories.
+
+### Added
+
+- **PR review, changelog generation and the improvement scan are back, on ego.**
+  All three went with the embedded engine and all three now run as one unattended
+  ego turn: the whole input goes inline, ego is offered no TUICommander tools, and
+  every permission request is refused. TUICommander stores no API key and makes no
+  provider HTTP call for any of them, and none of them names a model — which model
+  runs is ego's own configuration.
+  - **PR review** reads the PR diff (at most 30 files, 300 lines each, with the
+    truncation stated in the prompt so nothing is silently dropped) and returns
+    findings with severity, path, line and confidence. The confidence gate runs in
+    Rust before the result is built — default `0.7`, `TUIC_REVIEW_CONFIDENCE_THRESHOLD`
+    overrides it — so a finding that reaches the popover has already passed it.
+    Selected findings still post to GitHub as inline review comments, and GitHub's
+    rule that a comment needs a concrete line still decides which are selectable.
+  - **Changelog generation** produces the markdown plus the structured JSON split
+    over the merged PRs since a tag. Ego answering in prose only is a valid answer,
+    not an error: the JSON half is `null` and the markdown still renders.
+  - **The improvement scan** returns at most five proposals for `refactor`,
+    `testing` or `perf`, and each one is promoted to a GitHub issue only by an
+    explicit click. Nothing files an issue by itself.
+  The three do not fail quietly. An ego that is not configured, not reachable, or
+  that ends a turn without answering produces ego's own sentence — "no ego
+  executable is configured", "ego asked to use 2 tools that an unattended turn
+  cannot grant, and produced no answer" — where the deleted version would have
+  shown an empty result that reads as "nothing to report".
+  The four surfaces are reachable over HTTP as well (`POST /repo/pr-review`,
+  `GET /repo/changelog`, `POST /repo/improvement-scan`,
+  `POST /repo/create-issue-from-proposal`) and are deliberately not desktop-gated:
+  ego is reached over ACP, so `tuic-remote` serves them too.
+- **The terminal stream is compressed over a remote connection.** HTTP bodies
+  were already compressed; the WebSocket carrying the terminal was not, and it
+  is the traffic that matters — an agent repainting a full screen sends the grid
+  many times a second. A remote client now opens the stream with
+  `?compress=deflate` and every frame arrives raw-deflated, with a one-byte tag
+  naming its encoding so a frame that does not shrink is sent as it is rather
+  than sent larger. Measured on a replay of a real Codex session: 2.2 MB of grid
+  frames become 127 KB, and a full-screen repaint costs 0.234 ms to compress
+  against a 16 ms frame budget. A client that does not ask gets exactly the old
+  framing.
+- **An SSH tunnel compresses its channel.** `Compression=yes`, on by default and
+  switchable per profile. It is also why the WebSocket refuses to deflate for a
+  loopback peer: a tunnelled client reaches the daemon through the local ssh
+  process, so its frames would otherwise be compressed twice.
+- **Smart Prompts run in `api` mode again, on ego.** The mode used to call a
+  provider directly over HTTP from TUICommander; that client, its registry and
+  its keyring entry went with the embedded engine, and none of them came back.
+  An `api` prompt now runs one unattended ego turn — launch the configured ego
+  in the active directory, one session, one prompt, shut down — and the turn's
+  final text goes to the prompt's output target. Nothing streams, because a
+  Smart Prompt runs with no panel open. A `headless` prompt whose agent resolves
+  to `api` takes the same one path. The model is ego's default, set in Settings
+  → AI Providers; with no ego binary named the mode refuses and says to name one
+  under Settings → General first.
+- **An unattended turn gets no TUICommander tools, and cannot be left waiting.**
+  Every attended ego session is handed TUICommander's own MCP server, which is
+  how ego reaches terminals and repositories. A turn with nobody at the keyboard
+  to approve a single call is opened with **no MCP server at all**, and every
+  permission request and elicitation ego makes is refused the instant it
+  arrives — a seat nobody takes is a turn that never ends. How many were refused
+  comes back with the answer, so a prompt that returned nothing because the
+  model reached for a tool says that, instead of looking like an empty reply.
+  The turn is abandoned after 300 seconds, a server-side limit no request can
+  raise.
+
+### Fixed
+
+- **Notification sounds no longer overlap during a burst.** The anti-spam gate
+  used to be tracked separately for each tone, while every accepted tone opened
+  its own native playback thread. A completion, question, and attention event
+  arriving together could therefore all play at once. Normal notifications now
+  share one 500 ms playback gate; explicit Settings test clicks still bypass it.
+  Each native tone also ends on an exact zero-amplitude sample and drains 100 ms
+  of silence before closing the output stream, removing the crackle that could
+  follow an otherwise clean chime.
+
+- **A dependency's `log` output is no longer presented as a TUICommander
+  error.** `tracing_log` gives every record it bridges from the `log` facade the
+  target `"log"`, so the ring buffer filed them under that literal and the
+  audience fell through to `user` — the default tab of the error log, and the
+  only audience that moves the unseen-error badge. A TLS-intercepting middlebox
+  on the network was therefore reported as an unbroken flood of app errors from
+  `rustls_platform_verifier`, one per registry retry. Bridged records now carry
+  their real module as the source and the `diagnostic` audience; nothing is
+  dropped, and the line that is actionable ("Upstream '<x>' request failed") is
+  ours and unaffected.
+
 ### Changed
+
+- **One MCP tool family, not two.** The 13 `ai_terminal_*` tools and the
+  `ai_terminal_mcp_enabled` flag are gone. They overlapped `session`/`repo`/
+  `agent` without being equivalent, so a model paid for both catalogues on every
+  turn and had to guess which to call, and six of them needed a filesystem
+  sandbox only the embedded agent loop creates — they refused every external
+  caller before dispatch. External clients drive terminals through `session`
+  (`action=submit|input|output|status|wait`). **Secret redaction moved with
+  them**: `session action=output` now redacts, which it never did, so every MCP
+  client — Claude Code included — gains a protection instead of losing one. The
+  mandatory native write confirmation was dropped on purpose: no remote client
+  can answer a blocking OS dialog, and `ui action=confirm` is the gate that any
+  client can answer.
+
+- **TUICommander's `/mcp` now answers the 2026-07-28 stateless lifecycle**
+  (`server/discover`, SEP-2549) beside the legacy `initialize`. A client that
+  pins the modern revision and has no fallback used to get `-32601` and reach
+  zero TUIC tools. Stateless callers send their identity in `_meta` on every
+  request, which is what keeps tool collapsing working without a handshake.
+
+- **Usage dashboards now use provider-owned APIs.** Codex usage comes through
+  the documented local App Server instead of reading OAuth credentials and
+  calling private ChatGPT endpoints. Grok gains a native usage ticker and
+  dashboard backed by its `_x.ai/billing` ACP extension. Gemini remains
+  terminal-detection only because its CLI exposes no stable account quota API;
+  missing provider data is never presented as zero usage.
+
+- **Sidebar worktree warnings now explain themselves.** Hovering or keyboard-focusing
+  a `Dirty` or `Unknown` lifecycle badge shows what the state means, what it does
+  to removal safety, and the underlying inspection error when one is available.
 
 - **Project Progress is one journal, one database and a dialog.** The feature
   shipped in 1.7.7 asked agents to classify outcomes into five kinds, kept a
@@ -34,6 +166,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The Progress journal no longer fills with the same intent.** A repeat of a
+  project's newest intent — same text, same agent — now returns that entry
+  instead of adding a row. The changed-row parser handed the same `intent:`
+  line back on every repaint it survived (one intent landed 17 times in 8
+  seconds), and 596 of 764 recorded entries were byte-identical to the one
+  before them. Agent reports (`done`, `blocked`) are still never collapsed.
+
+- **The delete icon in the Progress dialog hides again when the pointer leaves
+  the row.** It followed the tab bar's hover-reveal pattern only halfway: the
+  opacity fade let WKWebView leave the icon visible on every row the pointer
+  had crossed. The fade is gone and the reveal is gated on `hover: hover`.
+
+- **A closed plan tab no longer comes back when you re-enter the repository.** The
+  Plan Tracker plugin re-opened the plan named in `.claude/active-plan.json` on
+  every repository switch, pinned, even after the user had closed it. It now
+  opens each plan once per app run, like the plans it discovers from terminal
+  output and from the `plans/` watcher.
+
 - **`make dev` no longer starts on the isolated test configuration.** The
   default that points `make test` at its own `instances/tuic-test/` namespace
   was written as a bare `TUIC_APP_INSTANCE?=tuic-test`, which is a *global*
@@ -60,6 +210,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Settings → AI Providers shows what `ego` is configured with, and sets the
+  model it starts from.** It replaces the provider registry deleted with the
+  embedded engine, and it is not a registry: every value is read and written by
+  running ego — `config ls`, `models`, `doctor`, and `config set model` — so
+  TUICommander stores no API key, puts nothing in the OS keyring, and makes no
+  provider HTTP call. The one call that reaches a provider is
+  `ego models --refresh`, which ego makes, and only when you press Refresh;
+  opening the tab makes none. Credential state comes from `ego doctor` and keeps
+  its distinctions: a store that could not be *read* is not an empty store, and
+  an expired credential says ego renews it on its next run instead of sending
+  you to log in again. `model` is the only writable key and it is its own
+  operation rather than a key/value pair, so no caller over IPC or HTTP can
+  reach `sandbox` or `permissions.judge`. When ego is not configured the tab
+  names the field to fill instead of rendering an empty list, and when an ego
+  command fails it shows the command, the exit code and what ego printed, word
+  for word. Offered while Experimental Features is on, beside the AI Chat panel
+  it configures.
 - **Project Progress answers "what changed since I last looked?"** Agents
   record outcomes — capabilities, decisions, discoveries, blockers, completed
   objectives — through one compact MCP `progress` call that persists the event

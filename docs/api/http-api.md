@@ -18,8 +18,11 @@ itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 
 The list is newest-first and capped at 500 entries. There is no paging, no
 cursor and no revision: the journal is append-only, so an entry is written once
-and either kept or deleted. `delete` is scoped to the project in the query, so
-one project cannot delete another project's row by id.
+and either kept or deleted. The one exception is a host-written `intent` that
+repeats the project's newest intent (same text, same agent): it returns the
+existing entry, because a screen repaint is not a new intent. `delete` is scoped
+to the project in the query, so one project cannot delete another project's row
+by id.
 
 Recorded entries are published as `progress-recorded` on `/events` with
 `{ entry }` as the payload.
@@ -43,6 +46,27 @@ password hash is empty, and the server then answers **every** Basic Auth attempt
 with `401` and the body `Scan the QR code or authenticate with Basic Auth` — the
 same response a request with no `Authorization` header gets. A 401 carrying that
 body while credentials were sent means the pair is incomplete, not wrong.
+
+### `GET /api/auth/session-token`
+
+Trades an authenticated Basic Auth call for the running session token:
+
+```json
+{ "token": "b0b9…" }
+```
+
+It is in `shared_routes()`, not the desktop router, on purpose — the daemon
+`run_remote` starts builds `build_remote_router`, so a route registered only in
+`build_router` would 404 on the one server that needs it.
+
+This is how a client escapes header-only Basic Auth. A WebSocket upgrade cannot
+carry an `Authorization` header, and with `remote_auth` on the server answers
+`Access-Control-Allow-Origin: *`, which forbids credentialed cookies; `?token=`
+is the only credential HTTP, WS and SSE can all carry. `503` means the server
+has no session token configured.
+
+`tuic-remote` generates its token in memory at startup and never persists it, so
+a client re-fetches it on every connect and after any daemon restart.
 
 ## Server Limits
 
@@ -140,6 +164,12 @@ requires a parsed `suggest: [ ... ]` marker. Other values are `starting`,
 `working`, and `awaiting_input`. `state.background_work` is true when meaningful
 non-helper descendants keep autonomous work alive despite an input-ready
 terminal (`state.shell_state == "idle"`).
+
+Sessions running on a **connected remote machine** are in this list too, each
+with `connection_id` naming the connection that owns it; a local row has no such
+field (#791-055e). The rows come from `remote_mirror.rs`, which reads the remote
+daemon's own `GET /sessions` and then follows its `/events`. The Tauri command
+`list_active_sessions` answers with the same rows, from the same builder.
 
 ### Create Session
 
@@ -436,6 +466,59 @@ carries a Rust-internal sequence number; when the reader sees a gap it re-serial
 the full grid and sends that instead. The sequence never reaches the wire, so the
 binary frame format is unchanged.
 
+#### WebSocket compress=deflate
+
+```
+WS /sessions/:id/stream?format=grid&compress=deflate
+```
+
+What is compressed on a remote connection, and by what:
+
+| Traffic | Compressed by | Where |
+|---|---|---|
+| HTTP request and response bodies over 860 bytes | `CompressionLayer` (gzip/br/deflate, from `Accept-Encoding`) | `mcp_http::build_router` |
+| Stream WebSocket frames, direct remote peer | raw deflate per frame, level 6, this option | `mcp_http::ws_compression` |
+| Stream WebSocket frames, SSH-tunnelled peer | `ssh -C` on the tunnel channel | `tunnels::command`, `ProfileOptions::compression` |
+| Stream WebSocket frames, local peer | nothing — there is no link to save | — |
+
+The WebSocket half needs its own mechanism because `CompressionLayer` is an HTTP
+layer and never sees a WebSocket frame, and tungstenite 0.30 — behind both
+`axum::extract::ws` and the tunnel's client — has no permessage-deflate.
+
+**Negotiation.** `?compress=deflate` on the upgrade. It is the only value offered;
+anything else, including absent, leaves the socket in the framing described above,
+byte for byte, so a client that does not know about this option is unaffected. The
+server refuses to deflate for a **loopback peer** even when it asks — a browser on
+this machine has no link, and an SSH-tunnelled client arrives through the local ssh
+process, whose channel `Compression=yes` already deflated. Such a socket still gets
+the tagged framing it asked for, with every tag saying identity.
+
+**Framing.** On a negotiated socket every frame is a **binary** WebSocket message
+whose first byte names the rest. Text travels as binary because deflate output is
+not UTF-8, and a frame whose WebSocket type changed with its size would leave the
+reader guessing:
+
+| Tag | Payload |
+|---|---|
+| `0x00` | binary (a grid frame), as it is |
+| `0x01` | binary, raw deflate |
+| `0x02` | UTF-8 (one of the JSON frames above), as it is |
+| `0x03` | UTF-8, raw deflate |
+
+Raw deflate, no zlib wrapper — `DecompressionStream("deflate-raw")` in a browser.
+A frame under 860 bytes, or one deflate does not shrink, is sent as it is with an
+identity tag, so compression can never make a frame larger than the one byte that
+describes it. An unrecognised tag must close the socket rather than be rendered.
+
+**Measured**, on 957 grid frames replayed from a committed capture of a real Codex
+session (`mcp_http::ws_compression::measurement`): 2,199,978 raw bytes become
+127,243 — 5.8%. One full-screen repaint is 111,158 bytes raw and 3,004 compressed,
+for 0.234 ms of added latency, against a 16 ms grid tick. Permessage-deflate with
+context takeover (what adopting `yawc` would buy) reaches 53,540 bytes, a further
+3.3% of the raw stream; that was judged not to pay for replacing the WebSocket
+implementation on both the server and the tunnel client, nor for a stream in which
+one dropped frame corrupts every frame after it.
+
 ### Server-Sent Events (SSE)
 
 ```
@@ -482,7 +565,6 @@ the server is back to the filter the connection was opened with.
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
 | `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
-| `triage-progress` | `{repo_path, summary, files, phase, done, llm_used, llm_model}` | Diff-triage classification progress (browser parity for the desktop window event) |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
 
@@ -794,398 +876,67 @@ GET /repo/pr-diff?path=/path/to/repo
 
 Returns diff for the current branch's open PR.
 
-### AI Review / Changelog / Conflict Assist
+### Conflict Assist
 
 ```
-POST /ai/review/pr           { repoPath, prNumber }        -> PrReviewResult
 GET  /repo/merged-prs?path=&sinceTag=                      -> MergedPr[]
-GET  /repo/changelog?path=&sinceTag=                       -> { markdown, json }
 POST /repo/conflict-assist   { repoPath, prNumber }        -> ConflictAssistResult
 ```
 
-`/ai/review/pr` runs the multi-turn review engine (Main slot) over a PR diff and
-returns line-level findings. `/repo/changelog` summarizes merged PRs (Headless
-slot) into markdown + a structured JSON breakdown; `sinceTag` filters to PRs
-merged at/after that tag's date. `/repo/conflict-assist` creates a worktree on
-the PR head and rebases it onto the base. `status` is `clean` only when the base
-was refreshed from origin, `clean_unverified` when a conflict-free result used
-an existing tracking ref or local fallback, and `conflicts` when manual
-resolution is needed. The response includes `base_source`, an optional
-`base_warning`, the conflicted-file list, and an agent prompt; it never pushes
-or merges.
+`/repo/conflict-assist` creates a worktree on the PR head and rebases it onto
+the base. `status` is `clean` only when the base was refreshed from origin,
+`clean_unverified` when a conflict-free result used an existing tracking ref or
+local fallback, and `conflicts` when manual resolution is needed. The response
+includes `base_source`, an optional `base_warning`, the conflicted-file list,
+and an agent prompt; it never pushes or merges. None of it calls a model.
 
-### Remote URL
+### Review, changelog and improvement scan (ego)
 
 ```
-GET /repo/remote-url?path=/path/to/repo
+POST /repo/pr-review                 { repoPath, prNumber }   -> PrReviewResult
+GET  /repo/changelog?path=&sinceTag=                          -> ChangelogResult
+POST /repo/improvement-scan          { repoPath, focus }      -> ImprovementScanResult
+POST /repo/create-issue-from-proposal { repoPath, proposal }  -> CreatedIssue
 ```
 
-Returns the remote origin URL.
+Each of the first three is **one unattended ego turn** (#795-320b) over the
+`acp::oneshot` seam: the whole input goes inline, ego is offered no host tools,
+and every permission request is refused. TUICommander stores no API key and makes
+no provider HTTP call for any of them; which model runs is ego's configuration.
+
+They are **not** desktop-gated — ego is reached over ACP, so `tuic-remote` serves
+them too. `/repo/merged-prs` is unchanged and still a plain GraphQL query.
+
+`PrReviewResult` carries `{ repo_path, pr_number, head_sha, summary, files[] }`,
+each file `{ path, summary, findings[] }` and each finding
+`{ path, line, hunk, severity, confidence, message }`. The confidence gate runs in
+Rust before the response is built (default `0.7`, overridable with
+`TUIC_REVIEW_CONFIDENCE_THRESHOLD`), so a finding that arrives has already passed
+it. `head_sha` hashes the reviewed diff — it is not a git sha.
+
+`ChangelogResult` is `{ markdown, json }`; `json` is `null` when ego answered in
+prose only, which is a valid answer rather than an error.
+
+An ego that cannot be reached is a `4xx`/`5xx` with ego's own sentence in the
+error body — never a `200` with an empty result. `POST /repo/pr-review` and
+`POST /repo/improvement-scan` also emit `review-progress` and `proposals-ready`
+on `/events` while they run.
+
+`POST /ai/review/pr` and `POST /ai/improvements/scan` are gone with the engine
+#784-0aec deleted; the `/ai/` prefix belonged to it, so the replacements sit
+under `/repo/`.
 
-## Git Panel Endpoints
-
-### Working Tree Status
-
-```
-GET /repo/working-tree-status?path=/path/to/repo
-```
-
-Returns porcelain v2 working tree status.
-
-### Panel Context
-
-```
-GET /repo/panel-context?path=/path/to/repo
-```
-
-Returns aggregated context for the Git Panel (status, branch, merge state).
-
-### Stage Files
-
-```
-POST /repo/stage
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "files": ["src/main.rs"] }
-```
-
-### Unstage Files
-
-```
-POST /repo/unstage
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "files": ["src/main.rs"] }
-```
-
-### Discard Files
-
-```
-POST /repo/discard
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "files": ["src/main.rs"] }
-```
-
-### Commit
-
-```
-POST /repo/commit
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "message": "feat: add feature" }
-```
-
-### Run Git Command
-
-```
-POST /repo/run-git
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "args": ["log", "--oneline", "-5"] }
-```
-
-Runs an arbitrary git command in the repo directory.
-
-### Commit Log
-
-```
-GET /repo/commit-log?path=/path/to/repo
-```
-
-Returns commit log entries.
-
-### File History
-
-```
-GET /repo/file-history?path=/path/to/repo&file=src/main.rs
-```
-
-Returns git log for a specific file.
-
-### File Blame
-
-```
-GET /repo/file-blame?path=/path/to/repo&file=src/main.rs
-```
-
-Returns line-by-line blame annotations.
-
-### Git Panel (Branches / Graph / Gutter)
-
-```
-GET  /repo/gutter-changes?path=&file=&scope=      -> GutterChange[]
-GET  /repo/branches-detail?path=                  -> BranchDetail[] (cached)
-GET  /repo/recent-branches?path=&limit=           -> string[]
-GET  /repo/branch-base?path=&branchName=          -> string | null
-GET  /repo/worktree-dirty?repoPath=&workspaceId=  -> bool
-GET  /repo/base-ref-options?repoPath=             -> BaseRefOption[]
-GET  /repo/commit-graph?path=&count=              -> GraphNode[]
-POST /repo/clone-branch-name   { sourceBranch, existingNames }   -> string
-POST /repo/create-branch       { path, name, startPoint?, checkout }       -> { ok: true }
-POST /repo/delete-branch       { path, name, force }                        -> DeleteBranchResult
-POST /repo/delete-local-branch { repoPath, branchName, workspaceId, keepWorktree? } -> { ok: true }
-POST /repo/update-from-base    { path, branchName, strategy? }              -> string
-POST /repo/switch-branch       { repoPath, branchName, force, stash }       -> SwitchBranchResult
-POST /repo/merge-archive-worktree { repoPath, branchName, workspaceId, targetBranch, afterMerge, force? } -> MergeArchiveResult
-```
-
-Powers the Git panel's Branches tab, commit graph, and editor gutter in
-browser/PWA/remote. Mutations call the shared `*_impl` + `invalidate_repo_caches`.
-`run_diff_triage` (event-emitting, LLM progress) is not yet mapped — it belongs with
-the agent/chat/watcher event-bridge work; see `todo.md`.
-
-## Stash Endpoints
-
-### List Stashes
-
-```
-GET /repo/stash?path=/path/to/repo
-```
-
-Returns stash list.
-
-### Apply Stash
-
-```
-POST /repo/stash/apply
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "index": 0 }
-```
-
-### Pop Stash
-
-```
-POST /repo/stash/pop
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "index": 0 }
-```
-
-### Drop Stash
-
-```
-POST /repo/stash/drop
-Content-Type: application/json
-
-{ "repoPath": "/path/to/repo", "index": 0 }
-```
-
-### Show Stash
-
-```
-GET /repo/stash/show?path=/path/to/repo&index=0
-```
-
-Returns diff of a stash entry.
-
-## Log Endpoints
-
-### Get Logs
-
-```
-GET /logs?limit=50&level=error&source=terminal
-```
-
-Retrieve log entries from the ring buffer (1000 entries max). All query params optional:
-- `limit` — max entries to return (0 = all, default: 0)
-- `level` — filter by level: `debug`, `info`, `warn`, `error`
-- `source` — filter by source: `app`, `plugin`, `git`, `network`, `terminal`, `github`, `dictation`, `store`, `config`
-
-`level`/`source` filters are applied first, then `limit` takes the most recent N of the *filtered* results — not the last N of the whole buffer. `?level=error&limit=50` returns up to 50 error entries, even if none of the errors are among the newest lines overall.
-
-### Push Log
-
-```
-POST /logs
-{ "level": "warn", "source": "git", "message": "...", "data_json": "{...}" }
-```
-
-### Clear Logs
-
-```
-DELETE /logs
-```
-
-### Capture Raw PTY Streams
-
-Start capture before reproducing an agent-state detection failure:
-
-```text
-POST /diagnostics/capture
-Content-Type: application/json
-
-{ "enabled": true, "session_id": "<session-id>" }
-```
-
-Omit `session_id` to capture every session. Starting capture creates a fresh set
-of files rather than appending to an earlier run. `GET /diagnostics/capture`
-returns `enabled`, the optional `session_filter`, the capture `dir`, and each
-recorded session's byte count. Stop with:
-
-```text
-POST /diagnostics/capture
-Content-Type: application/json
-
-{ "enabled": false }
-```
-
-Files are written as framed PTY timelines to
-`<app config dir>/captures/<session-id>.tcap`, capped at 512 KiB per session.
-Each record preserves input/output direction, original chunk boundaries and a
-monotonic timestamp. Legacy `.raw` fixtures remain readable as one output record.
-Copy the relevant file into `src-tauri/src/fixtures/agent_prompts/` and replay it
-through the production parser composition. Do not acquire state-detection
-fixtures from `GET /sessions/:id/output`: its ring is bounded, may already have
-overwritten the one-shot signal, and its string response is lossy UTF-8 rather
-than a byte-preserving fixture.
-
-### Execute JS in WebView (debug)
-
-```
-POST /debug/invoke_js
-{ "script": "return window.__TUIC__.terminals().length;" }
-```
-
-Executes JavaScript in the main WebView. **Loopback-only** (rejected with 403 from
-non-localhost peers) — this is an RCE surface and is exposed on the local router only,
-never the remote router. Fire-and-forget: the return value (`return expr`) and any
-captured `console.log/warn/error/info` output are pushed to the ring buffer with
-`source="eval_js"`. Read the result back via `GET /logs?source=eval_js&limit=1`.
-
-The only injected global is `window.__TUIC__` (stores, terminals, plugins, …). Mirrors
-the MCP `debug action=invoke_js` tool — both share `log_routes::eval_debug_script`. The
-HTTP route is what makes the `tauri dev` build (which has no MCP stdio transport)
-scriptable for diagnostics.
-
-### Reload the WebView (debug)
-
-```
-POST /debug/reload_webview
-```
-
-Sends the main WebView back to the last URL it was healthy at, from the **native**
-side (`WebviewWindow::navigate`), so it works precisely when the JavaScript side
-does not. **Loopback-only**, local router only. Returns
-`{"ok":true,"action":"navigate","url":…}`, or `{"error":…}` when the window is not
-available.
-
-**Navigate, not reload.** It used to call `WebviewWindow::reload`, and on
-2026-09-08 that answered `{"ok":true}` while the window stayed white for an hour:
-the main frame was on `about:srcdoc`, and there is no URL behind a blank document
-to reload. Changing this back to a reload re-breaks the one case the endpoint
-exists for.
-
-This is the recovery path for a white UI: a WebView whose main thread is blocked
-(or whose document is gone) cannot run `/debug/invoke_js`, because that route
-needs the very thread that is stuck. Before this endpoint existed the only remedy
-was restarting the app, which takes every PTY session with it — sessions live in
-the backend, so this costs nothing but a repaint.
-
-The backend names both conditions on its own and recovers the second by itself:
-the diagnostics thread logs `Frontend unresponsive: no heartbeat for Ns` when the
-main thread is blocked, and the `webview-recovery` thread logs
-`Main WebView lost its document` and re-navigates when the frame is on `about:`
-(see AGENTS.md → Diagnostics). Note that `grid frame gate stuck` is **not** either
-signal — hidden terminals never ack, so it fires in normal operation.
-
-### Memory report (diagnostics)
-
-```
-GET /diagnostics/memory
-```
-
-Names which structure holds the process's memory. Returns `phys_footprint_bytes`
-(resident **plus compressed** — `ps` RSS read 0.52 GB while the process held
-40 GB), `accounted_bytes`, and `maps`: every `AppState` structure that grows with
-sessions, clients or repos, with entry counts, measured bytes for the four that
-hold payloads, sorted biggest first.
-
-```json
-{"phys_footprint_bytes":123456789,"accounted_bytes":98765432,
- "maps":[{"name":"grid.vt_log_buffers","entries":15,"bytes":94371840}, …]}
-```
-
-`accounted_bytes` far below the footprint is itself the finding: the growth is
-outside `AppState`. Available on every instance, `tuic-remote` included.
-
-## Configuration Endpoints
-
-### App Config
-
-```
-GET /config
-PUT /config
-```
-
-Load/save `AppConfig`.
-
-`PUT /config` **merges** its body onto the live config rather than replacing it, so
-a caller may send only the fields it wants changed. Objects merge key by key;
-arrays and scalars replace wholesale (an empty array still clears a list, `""`
-still blanks a string). A wrongly-typed field is a `400`, never a silent default.
-When the body moves `services.server.{enabled,port,ipv6_enabled}` or
-`services.auth.{username,password_hash}`, the HTTP listener is rebound just as the
-IPC `save_config` does, so the running process cannot keep serving a configuration
-the disk no longer agrees with.
-
-`GET /config` redacts remote-access secrets (`services.auth.password_hash`,
-`services.auth.session_token`, `services.relay.token`, and
-`services.push.vapid_private_key`). Secret presence is exposed only through
-`session_token_exists`, `token_exists`, and `vapid_private_key_exists`.
-
-### Config / themes / notes / misc parity (story 066)
-
-Browser/PWA parity for assorted stateless commands. Loopback router only.
-Mutating/action routes carry the `require_local_or_auth` guard; reads do not.
-
-```
-GET  /config/ai-prompts                      -> AiPromptsConfig
-PUT  /config/ai-prompts        (AiPromptsConfig)            -> { ok }
-POST /config/repo-local-config { repoPath }                -> { ok }   (GET = read)
-POST /config/branch-label      { repoPath, branchName, label? } -> { ok }
-POST /config/note-image        { noteId, dataBase64, extension } -> string (path)
-POST /config/note-assets/delete       { noteId }           -> { ok }
-POST /config/note-assets/delete-batch { noteIds }          -> { ok }
-GET  /config/themes                          -> ThemeEntry[]
-POST /config/project-mcp-upstreams { repoPath, upstreamNames? } -> { ok }
-POST /exec/shell-script        { scriptContent, timeoutMs, repoPath } -> string  [guarded]
-GET  /audio/output-devices                   -> AudioOutputDevice[] (empty on remote)
-POST /agent/discover-session   { agentType, cwd, claimedIds, agentPid?, envOverrides } -> { sessionId, launchCommand }|null
-POST /agent/claude-project-dir { cwd, claudeConfigDir? }   -> string
-POST /agent/open-in-custom     { executable, args, ctx }   -> { ok }   [guarded]
-POST /generators/generate      { request }                 -> GeneratorResult  [guarded]
-GET  /registry/plugins                       -> RegistryEntry[]
-```
-
-Intentionally NOT mapped (no frontend `invoke()` caller — YAGNI): `load_app_config`,
-`save_app_config`, `get_note_images_dir`, `process_prompt_content_shell_safe`,
-`detect_claude_binary`, `mdkb_code_find`. Skipped as integration/stateful (separate
-follow-up): `set_ansi_colors` (PTY ring-buffer state), the `mdkb_*` daemon commands,
 `install_agent_mcp`/`remove_agent_mcp` (config-file writes, also no caller).
 
 `GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer.
 
-### Provider keyring + slot/ollama checks (story 072)
+### No provider keyring routes
 
-Browser/PWA parity for provider API-key storage (the OS keyring is proxied through
-the server so remote clients never touch it directly) plus slot/Ollama connectivity
-checks. Loopback router only; mutating routes carry the `require_local_or_auth` guard.
-
-```
-GET    /config/provider-key/exists?providerId=<id>   -> bool
-POST   /config/provider-key    { providerId, key }   -> { ok }    [guarded]
-DELETE /config/provider-key    { providerId }        -> { ok }    [guarded]
-POST   /config/slot-test       { slot }              -> string    (connection test result)
-POST   /config/ollama-models   { providerId }        -> OllamaStatus
-```
-
-`OllamaStatus` is `{ available: bool, models: [{ name, size }], detail: string|null }`.
-`detail` carries the backend's reason the endpoint is unusable — connection refused,
-no answer within the 4s probe timeout, or the HTTP status it answered with — and is
-`null` when the provider is reachable. Clients render it; they never compose their own
-wording, so a new failure mode is a change in `detect_ollama` and nowhere else.
+`/config/provider-key*`, `/config/slot-test` and `/config/ollama-models` were
+removed with the provider registry (#784-0aec). TUICommander stores no model API
+key and makes no provider HTTP call, so there is nothing for a browser or remote
+client to proxy. Story 786-4a6d brings a Providers tab back, configured against
+ego rather than against a registry of TUICommander's own.
 
 The OAuth upstream flow (`start_mcp_upstream_oauth` / `cancel_mcp_upstream_oauth`) is
 **not** mapped: `start` binds a loopback callback server and opens the OS browser, so
@@ -1314,6 +1065,47 @@ PUT /config/notes
 
 Load/save notes (opaque JSON, shape defined by frontend).
 
+### Remote Connections
+
+```
+GET    /config/remote-connections
+PUT    /config/remote-connections
+DELETE /config/remote-connections/{id}
+PUT    /config/remote-connections/{id}/password
+GET    /config/remote-connections/{id}/password
+POST   /config/remote-connections/{id}/token
+```
+
+The configured remote machines and their vault password. The password is write
+only: it goes to the OS credential vault keyed by the connection's UUID and is
+never returned, never written to `connections.json` — `GET .../password` answers
+whether one is stored, not what it is. `POST .../token` trades it for the remote
+daemon's in-memory session token.
+
+### Remote Connection Runtime
+
+```
+GET    /config/remote-connections/status
+POST   /config/remote-connections/{id}/connect
+DELETE /config/remote-connections/{id}/connect
+```
+
+Live state, not configuration: `GET .../status` answers with one object per
+connection — `{ id, status, base_url?, token?, protocol_version?, error? }`,
+where `status` is `disconnected | connecting | connected | unauthenticated |
+error`. `base_url`, `token` and `protocol_version` are present **only** while
+connected, because they are the answer to "where do I send a call", and a
+connection that is not connected has no such answer.
+
+`POST .../connect` brings a connection up and `DELETE .../connect` takes it
+down. Neither returns the new status: every transition is pushed as a
+`remote-connection-status` event on `/events` SSE (and to the desktop window),
+so one client connecting is visible to all of them.
+
+These three routes are desktop-only — they are registered on `build_router`, not
+in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote
+connection; it does not hold connections of its own.
+
 ### MCP Status
 
 ```
@@ -1412,6 +1204,7 @@ GET /claude/timeline?scope=all&days=7          -> TimelinePoint[] (hourly token 
 GET /claude/session-stats?scope=current        -> SessionStats
 GET /codex/usage                               -> CodexUsageApiResponse (rate-limit usage, 5-min cached)
 GET /codex/stats                               -> CodexStatsResponse (token history + lifetime stats)
+GET /grok/usage                                -> GrokUsageApiResponse (billing usage, 5-min cached)
 ```
 
 ### Terminal theme
@@ -1437,22 +1230,21 @@ Powers the Claude Usage dashboard in browser/PWA/remote. `scope` is `"all"`,
 commands; the handlers call non-gated `*_impl` siblings so they also serve the
 remote daemon.
 
-Both Codex routes read the OAuth token from `~/.codex/auth.json`; TUIC never
-refreshes it, so an expired token surfaces as a 401 rather than a silent retry.
+Both Codex routes launch the documented Codex App Server over JSONL and request
+`account/rateLimits/read` plus `account/usage/read` in one cached snapshot. The
+Codex CLI owns OAuth, refresh, and its upstream protocol; TUIC never reads
+`~/.codex/auth.json` or calls private ChatGPT backend routes. The response keeps
+the existing snake-case TUIC transport shape, but fields that the official
+surface does not expose remain `null` rather than being inferred.
 
-`/codex/usage` calls the endpoint the Codex CLI itself polls. It returns
-rate-limit windows, the per-model limits under `additional_rate_limits`, credits
-and `model_usage`.
+`/grok/usage` launches `grok agent stdio` briefly and calls Grok Build's
+`_x.ai/billing` ACP extension. It returns billing-period utilization,
+subscription tier, on-demand amounts, and prepaid balance. This process is
+telemetry-only and does not change the PTY routing of interactive Grok tabs.
 
-`/codex/stats` calls `/wham/profiles/me` upstream — the daily token history does
-**not** live under any `/usage` path. It returns `stats` with
-`daily_usage_buckets` (~30 days of `{start_date, tokens}`) plus lifetime totals,
-streaks, thread count, fast-mode share and reasoning-effort mix.
-
-Identity fields the upstream sends are deliberately dropped before either
-response leaves `codex_usage.rs`: `user_id`, `email` and `account_id` from the
-usage payload, and the whole `profile` object (username, display name, avatar
-URL) from the stats payload.
+Gemini has no corresponding endpoint: its `/stats` and `/usage` commands are
+session-local UI data, not a stable account quota contract. TUIC therefore does
+not expose a Gemini account-usage route.
 
 **Absolute-path write boundary.** `/fs/write-external`, `/fs/copy-abs`, and `/fs/move-abs` are gated to **registered repository roots** for the HTTP boundary (a 403 otherwise), mirroring `/fs/read-external`. The gate rejects traversal syntax (`..`), NUL bytes, and relative paths *before* the containment check: containment is `Path::starts_with`, which is purely lexical, so `/repo/../../etc/passwd` is "inside" `/repo` by components while the OS resolves it far outside. Paths are deliberately **not** canonicalized — a symlink inside a registered repo that points outside it is an accepted design decision in this project. `/fs/transfer` gates only its `destDir` — sources are commonly external (a file dragged in from the desktop). `/fs/stat` and `/fs/resolve-terminal-path` return only metadata (no content) so they are not repo-gated; both also refuse macOS TCC-protected directories. `/fs/resolve-terminal-path` returns JSON `null` on a miss (`Option<ResolvedFilePath>`). `/fs/resolve-terminal-paths` is its batched sibling and is a POST for one reason: a whole terminal screen's candidates do not fit a query string, and being able to send many of them is the point. It answers **positionally** — the array it returns has one entry per input candidate, in order, `null` where that candidate resolved to nothing — so a caller may index the response by the index of the request.
 
@@ -1537,109 +1329,23 @@ Body: `{"paths": ["/path/to/repo", ...]}`
 
 Updates the set of "hot" repository paths (repos with active terminals). Cold repos (not in this set) get throttled watcher debounce (15s vs 1.5s) and reduced GitHub polling frequency (~10min vs ~1min). HTTP equivalent of the `set_hot_repos` Tauri command, served by both the desktop server and `tuic-remote` — a browser client of the desktop app needs it just as much as a remote one.
 
-### AI Watchers (agent rules — story 070)
+### Every `/ai/*` route is unmounted (#784-0aec)
 
-```
-GET  /ai/watchers                                            -> WatcherRule[]
-POST /ai/watchers          { name, sessionId?, trigger, instructions?, promptId?, repoPath?, maxFires?, cooldownSecs? } -> id
-POST /ai/watchers/update   { id, name?, trigger?, instructions?, promptId?, repoPath?, maxFires?, cooldownSecs? } -> { ok }
-POST /ai/watchers/delete   { id }                            -> { ok }
-POST /ai/watchers/toggle   { id, enabled }                   -> { ok }
-POST /ai/watchers/attach   { templateId, sessionId }         -> id
-POST /ai/watchers/detach   { id }                            -> { ok }
-```
+`GET/PUT /ai/chat/config`, the `/ai/chat/conversation*` CRUD, the per-chat and
+per-session token WebSockets, `/ai/watchers*`, `/ai/conversation/*`,
+`/ai/session-knowledge`, `/ai/knowledge/*`, `/ai/scheduler/config`,
+`/ai/suggestions/toggle`, `/ai/triage/run`, `/ai/improvements/scan` and
+`/repo/create-issue-from-proposal` are all gone, together with the Rust modules
+behind them. Nothing under `/ai/` is served.
 
-CRUD for the agent watcher rules (WatcherManager). Watcher *fires* surface as the
-existing `session-created` SSE event (a fired watcher spawns an agent session), so no
-dedicated watcher-fire stream is needed. Config mutations are client-initiated → the UI
-refetches `GET /ai/watchers`; no push event for state changes. The mutation logic is the
-shared `ai_agent::watcher::*_rule` core; `watcher_create`/`watcher_update` reuse the
-extracted `*_impl`.
+`build_router` is the authority, and the route parity gate holds the two halves
+together: `command_table_paths_all_hit_a_registered_route` `PATCH`-probes every
+path `src/transport.ts` can produce, so a `COMMAND_TABLE` entry pointing at a
+removed route fails the Rust suite rather than 404-ing at runtime.
 
-### AI Chat (config + conversation CRUD — story 069 RPC slice)
-
-```
-GET  /ai/chat/config                         -> AiChatConfig
-PUT  /ai/chat/config          (AiChatConfig)  -> { ok }
-GET  /ai/chat/conversations                  -> ConversationMeta[]
-GET  /ai/chat/conversation?id=               -> Conversation
-POST /ai/chat/conversation    (Conversation)  -> { ok }   (save)
-POST /ai/chat/conversation/delete  { id }     -> { ok }
-POST /ai/chat/new-id                         -> string (new conversation id)
-```
-
-File-backed conversation persistence + chat config.
-
-```
-GET (WS) /ai/chat/{chat_id}/stream
-```
-
-Chat registry live stream (event-bridge plan Step 4). WebSocket upgrade: the first
-frame is a `ChatEvent::Snapshot` (`{"kind":"snapshot",...}`), then live `ChatEvent`
-frames (`chunk`/`error`/`cleared`/`snapshot`) as they are fanned out. Closing the
-socket unsubscribes (no explicit `chat_unsubscribe` call). Browser parity for the
-desktop `chat_subscribe` Tauri Channel. Dedicated per-chat WS, NOT the global
-`/events` bus (high-frequency token stream).
-
-**No producer, and no client.** Nothing in the backend calls `fan_out` or any
-`ConversationState` setter, so the only frame this stream ever sends is the empty
-default snapshot. The frontend consumer was removed in story `600-d664`: applying
-that snapshot ran `setMessages([])` and wiped the history `loadConversation` had
-just read from disk. The route stays, unused, until something produces the events.
-
-### AI Agent Loop control + knowledge + scheduler (story 068 RPC slice)
-
-```
-POST /ai/conversation/cancel   { sessionId }            -> string
-POST /ai/conversation/pause    { sessionId }            -> string
-POST /ai/conversation/resume   { sessionId }            -> string
-POST /ai/conversation/approve  { sessionId, approved }  -> { ok }
-GET  /ai/session-knowledge?sessionId=                   -> SessionKnowledgeSummary
-POST /ai/suggestions/toggle    { sessionId }            -> bool (new state)
-POST /ai/knowledge/sessions    { filter?, limit? }      -> SessionListEntry[]
-GET  /ai/knowledge/session?sessionId=                   -> SessionDetail | null
-GET  /ai/scheduler/config                               -> SchedulerConfig
-PUT  /ai/scheduler/config      (SchedulerConfig)        -> { ok }
-POST /ai/triage/run            { repoPath, refresh? }   -> TriageResult   (desktop only)
-POST /ai/improvements/scan     { repoPath, focus }      -> ImprovementScanResult (desktop only)
-POST /repo/create-issue-from-proposal { repoPath, proposal } -> CreatedIssue (desktop only)
-GET (WS) /ai/conversation/{session_id}/stream
-```
-
-Agent-loop *control* (cancel/pause/resume/approve), session-knowledge reads, and the
-scheduler config. State-taking commands reuse extracted `*_impl`s
-(`get_session_knowledge_impl`, `toggle_ai_suggestions_impl`,
-`get_knowledge_session_detail_impl`, `save_scheduler_config_impl`).
-
-`PUT /ai/scheduler/config` also reconciles the cron tick loop: it starts the
-30s-tick background task if the saved config has at least one enabled job and
-it wasn't already running, and stops it if the config has none (#672-c1a3) —
-previously the loop ticked (and re-read `ai-cron.json` from disk) forever from
-boot regardless of whether any job existed.
-
-**Conversation token stream** (event-bridge plan Step 3): the WebSocket
-`/ai/conversation/{session_id}/stream` is the browser parity for the desktop
-`start_conversation` Tauri Channel. The client sends the start params as the first
-text frame — `{ message, autonomy?, maxSteps?, temperature?, modelOverride?,
-bypassedTools?, reasoningEffort? }` — then receives `ConversationEvent` frames
-(`{"type":"text_chunk",...}` etc.) with the same 50ms batching as desktop. Dedicated
-per-session WS, NOT the global `/events` bus (high-frequency token stream). A client
-disconnect stops forwarding but leaves the conversation running — cancel explicitly
-via `/ai/conversation/cancel`. The bridge watches the socket alongside the event
-stream (same `forward_until_closed` helper as the chat bridge), so a disconnect on a
-*quiet* conversation — one blocked on tool approval, say — is noticed at once instead
-of waiting for a send failure on the next event, which may never arrive.
-
-**Diff triage** (`POST /ai/triage/run`, event-bridge plan Step 2): triggers
-`run_diff_triage`; progress frames stream over the global `/events` SSE bus as
-`triage-progress` (low-frequency, safe on the bus). Desktop-only — the triage LLM
-pipeline needs the desktop providers, so the remote daemon does not serve it.
-
-**Improvement proposals** (`POST /ai/improvements/scan`) run a one-shot Headless-slot
-LLM pass over deterministic local repo context (working-tree status + recent commits)
-and emit `proposals-ready` on the same GitHub Ops event shape. The scan never creates
-GitHub issues. A user action calls `POST /repo/create-issue-from-proposal`, which
-wraps the existing `create_issue_impl` path and returns `{ number, url, title }`.
+The ACP routes are the replacement surface — see **ACP endpoints** — and they
+carry no provider configuration: TUICommander launches one ego executable named
+by `ego_executable` in `app_config.json` and holds no API key.
 
 ## Agent Endpoints
 
@@ -2109,12 +1815,34 @@ POST   /acp/connections/{cid}/sessions/{session_id}/compact      {requestId}    
 GET    /acp/connections/{connection_id}/interactions                                       -> [AcpPendingInteraction]
 POST   /acp/connections/{cid}/permissions/{request_id}/response  {outcome}                 -> AcpInteractionSettlement
 POST   /acp/connections/{cid}/elicitations/{request_id}/response {action}                  -> AcpInteractionSettlement
+POST   /acp/one-shot                                            {root, prompt}            -> EgoTurn
 ```
 
-`POST /acp/connections` and `.../reconnect` are the only two that launch a
-process, and they are the only two that take the loopback-or-authenticated
-guard. The executable is never in the body: it comes from the `ego_executable`
-setting.
+`POST /acp/connections`, `.../reconnect` and `POST /acp/one-shot` are the three
+that launch a process, and they are the three that take the
+loopback-or-authenticated guard. The executable is never in the body: it comes
+from the `ego_executable` setting.
+
+### One-shot (`POST /acp/one-shot`)
+
+One unattended ego turn for a Smart Prompt in `api` mode. It takes no connection
+id because it owns the whole lifetime — launch, one turn, shutdown — so it can
+neither be handed a connection the AI Chat panel is using nor leave one behind.
+
+The session is opened with **no MCP server**, so ego cannot reach TUICommander's
+terminals or repositories from it, and every permission request and elicitation
+is refused the moment it arrives: there is no seat for anyone to answer from,
+and a question nobody answers is a turn that never ends.
+
+```json
+{ "text": "the answer, trimmed", "stopReason": "end_turn", "declined": 0 }
+```
+
+`declined` counts the questions refused. It is the only way to tell "ego had
+nothing to say" from "ego wanted a tool this mode cannot grant". The turn is
+abandoned after 300s, which is server-side and not a parameter — a timeout a
+request body could choose is a way to pin an ego process for as long as the
+sender likes.
 
 ### Stream (WebSocket)
 
@@ -2139,6 +1867,38 @@ subscriber. `/events` carries only the low-frequency `acp-notice` wake signal
 (`ready`, `settled`, `interaction_pending`, `interaction_settled`), whose
 payload names the connection, generation, sequence and — when it has one — the
 session and request it is about.
+
+## ego Command Line (`mcp_http/ego_routes.rs`)
+
+The browser half of `ego_providers` / `ego_set_default_model` — what Settings →
+AI Providers reads and writes. Same field names, same response body, same error
+body: an `EgoCliError` serialized whole (`code`, `message`, `command`, `stdout`,
+`stderr`, `exitCode`).
+
+```
+GET  /ego/providers[?refresh=true]     -> EgoProviders
+POST /ego/providers/model              {model} -> EgoProviders
+```
+
+**Both** routes take the loopback-or-authenticated guard, which is stricter than
+`/acp/*`, where only `connect` and `reconnect` do. The difference is deliberate:
+every route here runs a process, and the write one changes a configuration file
+that decides which model a later run uses. Neither is a read of state TUIC
+already holds.
+
+The executable is never in the request. It comes from the `ego_executable`
+setting, read per call. `model` is the only writable key, and it is its own
+route rather than a `key`/`value` pair, so no body can reach `sandbox` or
+`permissions.judge`.
+
+The status is a translation of `code`, never a second opinion about it:
+
+| `code` | Status |
+|--------|--------|
+| `notConfigured` | 409 — no ego executable is set; nothing was run |
+| `invalidInput` | 400 — the model id was refused before ego was started |
+| `launchFailed` | 424 — a binary is named and could not be started |
+| `commandFailed`, `unreadableOutput` | 502 — ego ran and failed, or printed something unreadable |
 
 ## Tauri-Only Commands (No HTTP Route)
 

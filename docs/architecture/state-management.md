@@ -126,7 +126,7 @@ contributor meets first; it is not the full inventory.
 | `promptStore` | `prompt.ts` | Active prompt overlay state | Not persisted |
 | `diffTabsStore` | `diffTabs.ts` | Open diff tabs | Not persisted |
 | `mdTabsStore` | `mdTabs.ts` | Open markdown tabs and plugin panels | Not persisted |
-| `notesStore` | `notes.ts` | Ideas/notes with repo tagging and used-at tracking | `notes.json` |
+| `ideasStore` | `ideas.ts` | Ideas with repo tagging and used-at tracking | `notes.json` |
 | `statusBarTicker` | `statusBarTicker.ts` | Priority-based rotating status bar messages | Not persisted |
 | `userActivityStore` | `userActivity.ts` | Tracks last user click/keydown for activity-based timeouts | Not persisted |
 | `updaterStore` | `updater.ts` | App update state (check, download, install) | Not persisted |
@@ -162,7 +162,7 @@ statusBarTicker
     ├── Claude Usage messages            ──from──> features/claudeUsage.ts (native)
     └── Plugin messages                  ──from──> pluginRegistry (ui:ticker capability)
 
-notesStore
+ideasStore
     │
     ├── Note.repoPath                    ──filters by──> active repo
     ├── Note.usedAt                      ──marks when──> sent to terminal
