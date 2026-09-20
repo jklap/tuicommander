@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`tuic agent send` no longer reports a successful delivery as refused.** The
+  registry removed its ambiguous `accepted` field when `delivered` and
+  `delivery_path` became authoritative, but the CLI still required that removed
+  field after sending. A message could wake its recipient and then make the
+  sender exit with “Registry did not accept the message”, inviting a duplicate
+  retry. The CLI now validates the current three-field delivery report and
+  accepts both surfaced and honestly buffered inbox-only routes.
+
+- **Child results wake a ready orchestrator even while background work remains.**
+  A real background descendant keeps the derived task state `working`, so the
+  mail router rejected a child `RESULT` even when the shell was
+  idle and the empty composer was confirmed ready. The router now reuses the
+  stricter composer-safety gate for that one state: the parent receives only the
+  payload-free inbox notice, while busy turns, questions, and partial drafts stay
+  untouched and the authoritative result remains exactly once in the inbox.
+
 - **The AI Chat panel reaches TUICommander's tools on a default install.** The one
   MCP server an ego session is given was an HTTP URL built from the TCP port this
   process bound, and that port only exists while the TCP listener is up — which
