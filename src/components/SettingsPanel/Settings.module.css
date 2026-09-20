@@ -823,6 +823,40 @@
   border-color: var(--accent);
 }
 
+/*
+ * The same chrome as .copyBtn, sized to its label instead of to an icon.
+ *
+ * .copyBtn is a 30x30 box with no padding, which is right for a glyph and wrong
+ * for a word: "Connect", "Save" and "Cancel" overflowed it and overlapped the
+ * buttons beside them. Reach for this one whenever the button contains text.
+ */
+.textBtn {
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.textBtn:hover:not(:disabled) {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+  border-color: var(--accent);
+}
+
+.textBtn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .mcpStatusRow {
   display: flex;
   align-items: center;

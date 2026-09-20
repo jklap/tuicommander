@@ -684,11 +684,8 @@ export const UpstreamMcpPanel: Component = () => {
 										when={st()?.status === "authenticating"}
 										fallback={
 											<button
-												class={s.copyBtn}
+												class={s.textBtn}
 												style={{
-													width: "auto",
-													padding: "0 10px",
-													"flex-shrink": 0,
 													color: st()?.status === "needs_auth" ? "var(--warning, #e5c07b)" : "var(--info, #61afef)",
 													"font-weight": st()?.status === "needs_auth" ? "600" : undefined,
 												}}
@@ -710,8 +707,8 @@ export const UpstreamMcpPanel: Component = () => {
 										}
 									>
 										<button
-											class={s.copyBtn}
-											style={{ width: "auto", padding: "0 10px", "flex-shrink": 0, color: "var(--warning, #e5c07b)" }}
+											class={s.textBtn}
+											style={{ color: "var(--warning, #e5c07b)" }}
 											title="Cancel authorization"
 											onClick={() =>
 												rpc("cancel_mcp_upstream_oauth", { name: server.name }).catch((e) =>
@@ -811,8 +808,8 @@ export const UpstreamMcpPanel: Component = () => {
 													</p>
 													<button
 														type="button"
-														class={s.copyBtn}
-														style={{ width: "auto", "margin-top": "4px" }}
+														class={s.textBtn}
+														style={{ "margin-top": "4px" }}
 														onClick={() => void clearUpstreamCredential(server.name)}
 													>
 														Clear saved token
