@@ -41,7 +41,7 @@ function createMockHandlers(): ShortcutHandlers {
 		toggleTaskQueue: vi.fn(),
 		toggleGitOpsPanel: vi.fn(),
 		toggleHelpPanel: vi.fn(),
-		toggleNotesPanel: vi.fn(),
+		toggleIdeasPanel: vi.fn(),
 		toggleFileBrowserPanel: vi.fn(),
 		requestFileBrowserContentSearch: vi.fn(),
 		toggleOutlinePanel: vi.fn(),
@@ -72,7 +72,6 @@ function createMockHandlers(): ShortcutHandlers {
 		openPath: vi.fn(),
 		openSecondaryWindow: vi.fn(),
 		toggleCommandOverview: vi.fn(),
-		openAiTriage: vi.fn(),
 		toggleComposePanel: vi.fn(),
 		detachActivityDashboard: vi.fn(),
 		toggleProcessManager: vi.fn(),
@@ -270,13 +269,12 @@ describe("useKeyboardShortcuts", () => {
 
 		it("Cmd+Alt+N toggles notes panel", () => {
 			fireKeydown("n", { metaKey: true, altKey: true });
-			expect(handlers.toggleNotesPanel).toHaveBeenCalled();
+			expect(handlers.toggleIdeasPanel).toHaveBeenCalled();
 		});
 
 		it("Cmd+Alt+A toggles AI chat panel (option-modified key → å)", () => {
 			// On macOS, Cmd+Alt+A produces e.key="å" — combo must still resolve via e.code
 			settingsStore.setExperimentalFeaturesEnabled(true);
-			settingsStore.setAiChatEnabled(true);
 			fireKeydown("å", { metaKey: true, altKey: true, code: "KeyA" });
 			expect(handlers.toggleAiChatPanel).toHaveBeenCalled();
 		});

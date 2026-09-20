@@ -146,6 +146,11 @@
   color: var(--bg-primary);
 }
 
+.queueBtn:hover {
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
 .sendBtn:hover {
   background: var(--accent);
   color: var(--text-on-accent);

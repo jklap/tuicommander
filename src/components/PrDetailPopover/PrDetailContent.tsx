@@ -2,7 +2,7 @@ import { type Component, createEffect, createMemo, For, type JSX, Show } from "s
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
-import { flattenReviewFindings, postableFindings, prReviewStore, type ReviewFinding } from "../../stores/prReview";
+import { flattenReviewFindings, postableFindings, prReviewStore, type SelectableFinding } from "../../stores/prReview";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
@@ -123,7 +123,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	const reviewError = () => reviewEntry()?.error ?? null;
 	const selectedFindingIds = () => reviewEntry()?.selectedIds ?? [];
 
-	const reviewFindings = createMemo<ReviewFinding[]>(() => flattenReviewFindings(review()?.files ?? []));
+	const reviewFindings = createMemo<SelectableFinding[]>(() => flattenReviewFindings(review()?.files ?? []));
 
 	const selectedFindings = createMemo(() => postableFindings(reviewFindings(), new Set(selectedFindingIds())));
 
@@ -379,7 +379,8 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 						<Show when={reviewError()}>{(err) => <div class={s.aiReviewError}>{err()}</div>}</Show>
 						<Show when={review()}>
 							{/* Proof-of-work line: without it a clean review is indistinguishable
-							    from a review that silently did nothing. */}
+							    from a review that silently did nothing. The model is deliberately
+							    not named — ego owns that choice and never tells us. */}
 							{(r) => (
 								<div class={s.aiReviewMeta}>
 									<Show when={r().summary}>{(sum) => <div class={s.aiReviewSummary}>{sum()}</div>}</Show>
@@ -388,7 +389,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 											? t("prDetail.reviewedOneFile", "1 file reviewed")
 											: `${r().files.length} ${t("prDetail.reviewedFiles", "files reviewed")}`}
 										{" · "}
-										{r().llm_model ?? t("prDetail.heuristicsOnly", "heuristics only")}
+										{t("prDetail.byEgo", "by ego")}
 									</div>
 								</div>
 							)}

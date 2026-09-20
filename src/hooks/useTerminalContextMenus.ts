@@ -3,7 +3,7 @@ import { AGENTS, type AgentType } from "../agents";
 import type { ContextMenuItem } from "../components/ContextMenu";
 import { invoke } from "../invoke";
 import { getModifierSymbol } from "../platform";
-import { agentConfigsStore } from "../stores/agentConfigs";
+import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
 import { paneLayoutStore } from "../stores/paneLayout";
@@ -53,13 +53,26 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 		});
 	};
 
+	/**
+	 * The run configs of the machine the active terminal runs on.
+	 *
+	 * A menu is built inside the click that opens it, so this reads the cached
+	 * copy and warms it for the next open; a machine that came up has already
+	 * been prefetched by `remoteConnections`.
+	 */
+	const activeTerminalConfigs = () => {
+		const cwd = terminalsStore.getActive()?.cwd ?? null;
+		void ensureAgentConfigsForRepo(cwd);
+		return agentConfigsForRepo(cwd);
+	};
+
 	const buildAgentMenuItems = (): ContextMenuItem[] =>
 		options.agentDetection
 			.getAvailable()
 			.filter((agent) => agent.type !== "git" && agent.type !== "api")
 			.map((agent) => {
 				const config = AGENTS[agent.type];
-				const runConfigs = agentConfigsStore.getRunConfigs(agent.type);
+				const runConfigs = activeTerminalConfigs().getRunConfigs(agent.type);
 				if (runConfigs.length > 1) {
 					return {
 						label: config.name,
@@ -81,9 +94,14 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 			.filter((agent) => agent.type !== "git" && agent.type !== "api" && settingsStore.isAgentEnabled(agent.type));
 		if (enabled.length === 0) return [];
 
+		// The tab will run on the machine that holds this repo, so the run configs
+		// offered here are that machine's, not the ones on this desktop.
+		void ensureAgentConfigsForRepo(repoPath);
+		const machineConfigs = agentConfigsForRepo(repoPath);
+
 		const buildAgentEntry = (agent: (typeof enabled)[0]) => {
 			const config = AGENTS[agent.type];
-			const runConfigs = agentConfigsStore.getRunConfigs(agent.type);
+			const runConfigs = machineConfigs.getRunConfigs(agent.type);
 			const launchAgent = async (command: string) => {
 				const termId = await options.gitOps.handleAddTerminalToWorkspace(repoPath, branchName);
 				if (!termId) return;

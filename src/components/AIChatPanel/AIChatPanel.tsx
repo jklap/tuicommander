@@ -1,491 +1,62 @@
-import {
-	type Component,
-	createEffect,
-	createMemo,
-	createSignal,
-	For,
-	lazy,
-	onCleanup,
-	onMount,
-	Show,
-	Suspense,
-} from "solid-js";
-import { invoke } from "../../invoke";
-import { appLogger } from "../../stores/appLogger";
-import { type ConversationMeta, conversationStore, type ToolCallEntry } from "../../stores/conversationStore";
-import { terminalsStore } from "../../stores/terminals";
+import { type Component, createMemo, Show } from "solid-js";
 import { cx } from "../../utils";
-import { onClickKeyDown } from "../../utils/a11y";
-import { writeClipboard } from "../../utils/clipboard";
-import { createThrottled } from "../../utils/createThrottled";
-import { getShellFamily, sendCommand } from "../../utils/sendCommand";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import s from "./AIChatPanel.module.css";
-import { SessionKnowledgeBar } from "./SessionKnowledgeBar";
-
-const ContentRenderer = lazy(() =>
-	import("../ui/ContentRenderer").then((module) => ({ default: module.ContentRenderer })),
-);
-
-/** `streaming` marks an append-only accumulator, which ContentRenderer may then
- *  render as a committed prefix plus a live tail. Settled messages are static
- *  and must not claim it — the split is only sound for text that only grows. */
-const MarkdownContent: Component<{ content: string; streaming?: boolean }> = (props) => (
-	<Suspense>
-		<ContentRenderer content={props.content} incremental={props.streaming} />
-	</Suspense>
-);
-
-/** How often a growing stream is re-rendered as markdown.
- *  The accumulators below render incrementally — only the block still being
- *  written is re-parsed — so an answer's cost is linear in its length rather
- *  than quadratic. This throttle remains because the token batcher's 50 ms is
- *  right for data and wrong for layout; settled messages are never throttled. */
-const STREAM_RENDER_MS = 200;
+import { Composer } from "./Composer";
+import { Interactions } from "./Interactions";
+import { SessionControls } from "./SessionControls";
+import { Transcript } from "./Transcript";
+import { createAcpChat } from "./useAcpChat";
 
 const isPanelMode = () => new URLSearchParams(window.location.search).get("mode") === "panel";
 
-/** The terminal an AI Chat talks to. Everything that needs a session — sending,
- *  agent controls, the knowledge footer — reads it from here and nowhere else. */
-export interface AIChatTerminalBinding {
-	/** PTY session of that terminal, null while it has none yet. */
-	sessionId: string | null;
-	/** Display name for the header. */
-	name: string | null;
-	/** False when no terminal is focused at all: the chat is read-only. */
-	attached: boolean;
-}
-
-/** Binding of the currently focused terminal tab, for the main window. */
-function activeTerminalBinding(): AIChatTerminalBinding {
-	const id = terminalsStore.state.activeId;
-	const terminal = id ? terminalsStore.get(id) : undefined;
-	return { sessionId: terminal?.sessionId ?? null, name: terminal?.name ?? null, attached: !!id };
+/** The last segment of a path, for the header. */
+function basename(path: string): string {
+	const parts = path.split(/[/\\]/).filter(Boolean);
+	return parts.at(-1) ?? path;
 }
 
 export interface AIChatPanelProps {
 	visible: boolean;
 	onClose: () => void;
-	/**
-	 * Detached-window only. That window is a separate WebView where
-	 * `terminalsStore` is never hydrated — App returns at `renderPanelMode()`
-	 * before any main-window effect — so deriving the terminal from the store
-	 * yields nothing and the chat can only ever be read-only. The window is
-	 * handed its binding instead, from the params it was opened with.
-	 */
-	terminal?: () => AIChatTerminalBinding;
+	/** The repository this conversation is about. */
+	repoPath: string | null;
+	/** Effective filesystem root — the worktree path when on a linked worktree. */
+	fsRoot?: string | null;
 }
 
-/** Copy text to clipboard, return true on success */
-async function copyToClipboard(text: string): Promise<boolean> {
-	try {
-		await writeClipboard(text);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-/** Extract code text from a <pre><code> element */
-function extractCodeText(pre: HTMLPreElement): string {
-	const code = pre.querySelector("code");
-	return (code ?? pre).textContent ?? "";
-}
-
-// ── Inline SVG icons (monochrome, fill=currentColor) ─────────────────────
-
-const IconSend = () => (
-	<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-		<path d="M8 2.5l-4.5 4.5h3v5h3v-5h3z" />
-	</svg>
-);
-
-const IconStop = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-		<rect x="2" y="2" width="10" height="10" rx="1" />
-	</svg>
-);
-
-const IconTrash = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
-		<path d="M2.5 4h9M5 4V2.5h4V4M3.5 4v7.5a1 1 0 001 1h5a1 1 0 001-1V4" />
-		<path d="M5.5 6.5v3M8.5 6.5v3" />
-	</svg>
-);
-
-// SVG strings for imperative DOM injection (codeBlock Copy/Run buttons live
-// inside markdown-parsed HTML, so they're constructed via createElement rather
-// than JSX). Content is fully static — no interpolation, safe via innerHTML.
-const SVG_COPY =
-	'<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="4" y="4" width="7" height="7" rx="1"/><path d="M3 10V3h7"/></svg>';
-const SVG_COPIED =
-	'<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 7l3 3 5-5"/></svg>';
-const SVG_RUN =
-	'<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M4 2.5l8 4.5-8 4.5z"/></svg>';
-
-const IconHistory = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
-		<circle cx="7" cy="7" r="5.5" />
-		<path d="M7 4v3.5l2 1.5" stroke-linecap="round" />
-	</svg>
-);
-
-const IconRobot = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-		<path d="M7 1a.75.75 0 01.75.75V3h1.5A2.25 2.25 0 0111.5 5.25v4.5A2.25 2.25 0 019.25 12h-4.5A2.25 2.25 0 012.5 9.75v-4.5A2.25 2.25 0 014.75 3h1.5V1.75A.75.75 0 017 1zM5 6.5a.75.75 0 100 1.5.75.75 0 000-1.5zm4 0a.75.75 0 100 1.5.75.75 0 000-1.5zM5.5 9a.5.5 0 000 1h3a.5.5 0 000-1h-3z" />
-	</svg>
-);
-
-const IconPause = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-		<rect x="3" y="2" width="3" height="10" rx="0.5" />
-		<rect x="8" y="2" width="3" height="10" rx="0.5" />
-	</svg>
-);
-
-const IconPlay = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-		<path d="M4 2.5l8 4.5-8 4.5z" />
-	</svg>
-);
-
-const IconUnlock = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
-		<rect x="2.5" y="6" width="9" height="6.5" rx="1" />
-		<path d="M5 6V4a2 2 0 014 0" stroke-linecap="round" />
-	</svg>
-);
-
-/** Fields stripped from the args display — internal plumbing the user doesn't need. */
-const TOOL_NOISE_FIELDS = new Set(["session_id", "timeout_ms"]);
-const TOOL_OUTPUT_TRUNCATE = 500;
-
-/** Collapsible tool call card */
-const ToolCallCard: Component<{ entry: ToolCallEntry }> = (props) => {
-	const [expanded, setExpanded] = createSignal(false);
-	const [outputExpanded, setOutputExpanded] = createSignal(false);
-	const [copied, setCopied] = createSignal(false);
-
-	const statusClass = () => {
-		if (props.entry.status === "pending") return s.toolCallPending;
-		return props.entry.result.success ? s.toolCallSuccess : s.toolCallFailure;
-	};
-
-	const filteredArgs = () => {
-		const args = props.entry.args;
-		if (!args || typeof args !== "object") return args;
-		const out: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
-			if (!TOOL_NOISE_FIELDS.has(k)) out[k] = v;
-		}
-		return out;
-	};
-
-	const doneEntry = () => (props.entry.status === "done" ? (props.entry as ToolCallEntry & { status: "done" }) : null);
-
-	const fullOutput = () => doneEntry()?.result.output ?? "";
-	const isLong = () => fullOutput().length > TOOL_OUTPUT_TRUNCATE;
-	const displayOutput = () =>
-		outputExpanded() || !isLong() ? fullOutput() : fullOutput().slice(0, TOOL_OUTPUT_TRUNCATE) + "…";
-
-	const handleCopy = () => {
-		void writeClipboard(fullOutput()).then(() => {
-			setCopied(true);
-			setTimeout(() => setCopied(false), 1500);
-		});
-	};
-
-	return (
-		<div class={s.toolCallCard}>
-			<div
-				class={s.toolCallHeader}
-				role="button"
-				tabIndex={0}
-				onClick={() => setExpanded(!expanded())}
-				onKeyDown={onClickKeyDown(() => setExpanded(!expanded()))}
-			>
-				<span class={cx(s.toolCallStatusDot, statusClass())} />
-				<span class={s.toolCallName}>{props.entry.toolName}</span>
-				<Show when={props.entry.status === "done" && doneEntry()}>
-					{(entry) => <span class={s.toolCallDuration}>{entry().duration}ms</span>}
-				</Show>
-			</div>
-			<Show when={expanded()}>
-				<div class={s.toolCallBody}>
-					<div>Args: {JSON.stringify(filteredArgs(), null, 2)}</div>
-					<Show when={doneEntry()}>
-						{(entry) => (
-							<div>
-								<div class={s.toolCallResultHeader}>
-									<span>Result ({entry().result.success ? "ok" : "error"}):</span>
-									<button
-										class={cx(s.toolCallCopyBtn, copied() ? s.toolCallCopyBtnCopied : "")}
-										onClick={handleCopy}
-										title="Copy result to clipboard"
-									>
-										{copied() ? "copied" : "copy"}
-									</button>
-								</div>
-								<div class={s.toolCallOutput}>{displayOutput()}</div>
-								<Show when={isLong()}>
-									<button class={s.toolCallExpandBtn} onClick={() => setOutputExpanded(!outputExpanded())}>
-										{outputExpanded()
-											? "Show less"
-											: `Show more (${fullOutput().length - TOOL_OUTPUT_TRUNCATE} more chars)`}
-									</button>
-								</Show>
-							</div>
-						)}
-					</Show>
-				</div>
-			</Show>
-		</div>
-	);
-};
-
+/**
+ * AI Chat, running on ego over ACP.
+ *
+ * The panel binds to a repository and a session. It does not bind to a
+ * terminal, and there is no per-terminal lock: a turn ego runs outlives any tab,
+ * may touch files no tab is showing, and is the same conversation for every
+ * window looking at that repository. The panel is a control plane over an agent
+ * that lives outside it — see `docs/user-guide/ai-chat.md`.
+ *
+ * Nothing in here interprets a frame or holds a cursor. `acpTranscript` folds
+ * the stream into something a person reads, `acpStore` holds what is true about
+ * the connection, and `createAcpChat` owns which of those this panel is looking
+ * at.
+ */
 export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
-	const [inputText, setInputText] = createSignal("");
-	let messageListRef: HTMLDivElement | undefined;
-	let textareaRef: HTMLTextAreaElement | undefined;
+	// The worktree path where there is one: ego works on the files the user is
+	// looking at, not on the repository's main checkout.
+	const root = createMemo(() => props.fsRoot || props.repoPath || null);
+	const chat = createAcpChat(root, () => props.visible);
 
-	const [autonomy, setAutonomy] = createSignal<"assisted" | "autonomous">("assisted");
-	const [maxSteps, setMaxSteps] = createSignal(20);
-	const [modelOverride, setModelOverride] = createSignal<string>("");
-	const [availableModels, setAvailableModels] = createSignal<string[]>([]);
-	const [showHistory, setShowHistory] = createSignal(false);
-	const [showUnrestrictedConfirm, setShowUnrestrictedConfirm] = createSignal(false);
-	const [historyList, setHistoryList] = createSignal<ConversationMeta[]>([]);
-
-	// The handed-over binding wins where there is one (detached window); the main
-	// window has none and follows the focused terminal tab.
-	const terminal = createMemo(() => props.terminal?.() ?? activeTerminalBinding());
-	const activeSessionId = createMemo(() => terminal().sessionId);
-	const isFrozen = createMemo(() => !terminal().attached);
-	const activeTerminalName = createMemo(() => terminal().name);
-
-	const openHistory = () => {
-		void conversationStore.listAllConversations().then(setHistoryList);
-		setShowHistory(true);
-	};
-
-	// Load available models from the Main slot provider on mount
-	onMount(() => {
-		invoke<{ slots: Record<string, string>; models: Array<{ id: string; model_name: string }> }>(
-			"load_provider_registry",
-		)
-			.then((reg) => {
-				const mainModelId = reg.slots["Main"];
-				const names = reg.models.map((m) => m.model_name).filter(Boolean);
-				setAvailableModels(names);
-				if (!modelOverride()) {
-					const main = reg.models.find((m) => m.id === mainModelId);
-					if (main) setModelOverride(main.model_name);
-				}
-			})
-			.catch(() => {
-				/* provider not configured */
-			});
-	});
-
-	const resolveSessionName = (sessionId?: string | null): string => {
-		if (!sessionId) return "";
-		const ids = terminalsStore.getIds();
-		for (const id of ids) {
-			const t = terminalsStore.get(id);
-			if (t?.tuicSession === sessionId || t?.sessionId === sessionId) return t.name ?? sessionId;
-		}
-		return sessionId.slice(0, 8);
-	};
-
-	const handleLoadConversation = async (id: string) => {
-		await conversationStore.loadConversation(id);
-		setShowHistory(false);
-	};
-
-	// No registry subscription here. The Rust `ChatRegistry` has no producer —
-	// nothing calls `fan_out` or any `ConversationState` setter — so every
-	// `chat_subscribe` was a round-trip that answered with an empty default
-	// snapshot and then went silent. Worse, applying that snapshot ran
-	// `setMessages([])`: the effect re-fired on each `chatId` change, so one IPC
-	// hop after `loadConversation` the empty snapshot wiped the history it had
-	// just read from disk. Restore the subscription only together with a
-	// producer.
-
-	// ── Rendered view of the live accumulators ─────────────────────────────
-	// The stores update ~20×/s; these mirror them at STREAM_RENDER_MS so the
-	// markdown pipeline and the DOM only see a fraction of those ticks. `chatId`
-	// is the stream identity: it differs per terminal and changes on a new or
-	// loaded conversation, which is what tells a switch apart from growth when the
-	// two answers happen to start with the same words.
-	const generation = () => conversationStore.chatId();
-	const streamingRender = createThrottled(() => conversationStore.streamingText(), STREAM_RENDER_MS, generation);
-	const reasoningRender = createThrottled(() => conversationStore.reasoningChunks(), STREAM_RENDER_MS, generation);
-	const textChunksRender = createThrottled(() => conversationStore.textChunks() ?? "", STREAM_RENDER_MS, generation);
-
-	// ── Auto-scroll on new messages / streaming chunks ──────────────────────
-	createEffect(() => {
-		// Subscribe to what actually changes the DOM. Reading scrollHeight forces a
-		// synchronous layout, so tracking the raw accumulators would pay that cost
-		// on the ticks that render nothing.
-		streamingRender();
-		reasoningRender();
-		textChunksRender();
-		conversationStore.messages().length;
-		if (messageListRef) {
-			messageListRef.scrollTop = messageListRef.scrollHeight;
-		}
-	});
-
-	// ── Auto-resize textarea ───────────────────────────────────────────────
-	const autoResize = () => {
-		if (!textareaRef) return;
-		textareaRef.style.height = "auto";
-		textareaRef.style.height = `${Math.min(textareaRef.scrollHeight, 150)}px`;
-	};
-
-	// ── Send message ───────────────────────────────────────────────────────
-	const handleSend = () => {
-		const text = inputText().trim();
-		if (!text || isFrozen()) return;
-		const sid = activeSessionId();
-
-		if (autonomy() === "autonomous") {
-			const st = conversationStore.agentState();
-			if (st === "running" || st === "paused") return;
-			if (sid) conversationStore.startAgent(sid, text, conversationStore.unrestricted());
-		} else {
-			if (conversationStore.isStreaming()) return;
-			conversationStore.sendMessage(text, sid);
-		}
-
-		setInputText("");
-		if (textareaRef) {
-			textareaRef.style.height = "auto";
-		}
-	};
-
-	const handleKeyDown = (e: KeyboardEvent) => {
-		if (e.key === "Enter") {
-			if (e.metaKey || e.ctrlKey || e.shiftKey) {
-				// Cmd/Ctrl/Shift+Enter = newline (default behavior)
-				return;
-			}
-			e.preventDefault();
-			handleSend();
-		}
-	};
-
-	// ── Run code in active terminal ────────────────────────────────────────
-	// DEFERRED (2026-08-18) — no-op in a detached window. Unlike sending, this
-	// needs the terminal's live xterm `ref`, a JS object that cannot cross a
-	// WebView boundary; it would have to go back to the main window as a
-	// panel-action. Logs "terminal ref not found" until then.
-	const runCodeInTerminal = async (code: string) => {
-		const sessionId = activeSessionId();
-		if (!sessionId) {
-			appLogger.warn("ai-chat", "Cannot run code: no terminal attached");
-			return;
-		}
-		// Find the terminal ref for this session
-		const ids = terminalsStore.getIds();
-		let termRef: { write: (data: string) => void } | undefined;
-		let agentType: string | null = null;
-		for (const id of ids) {
-			const t = terminalsStore.get(id);
-			if (t?.sessionId === sessionId && t.ref) {
-				termRef = t.ref;
-				agentType = t.agentType ?? null;
-				break;
-			}
-		}
-		if (!termRef) {
-			appLogger.warn("ai-chat", "Cannot run code: terminal ref not found", { sessionId });
-			return;
-		}
-		const resolvedRef = termRef;
-		const shellFamily = await getShellFamily(sessionId);
-		const lines = code.trim().split("\n");
-		for (const line of lines) {
-			await sendCommand(
-				(data: string) => {
-					resolvedRef.write(data);
-					return Promise.resolve();
-				},
-				line,
-				agentType,
-				shellFamily,
-			);
-		}
-	};
-
-	// ── Code block enhancement: inject Copy + Run buttons ──────────────────
-	const enhanceCodeBlocks = (container: HTMLDivElement, signal: AbortSignal) => {
-		const pres = container.querySelectorAll("pre");
-		for (const pre of pres) {
-			if (pre.parentElement?.classList.contains(s.codeBlockWrapper)) continue;
-
-			const parent = pre.parentElement;
-			if (!parent) continue;
-
-			const wrapper = document.createElement("div");
-			wrapper.className = s.codeBlockWrapper;
-			parent.insertBefore(wrapper, pre);
-			wrapper.appendChild(pre);
-
-			const actions = document.createElement("div");
-			actions.className = s.codeBlockActions;
-
-			// Copy button
-			const copyBtn = document.createElement("button");
-			copyBtn.className = s.codeActionBtn;
-			copyBtn.title = "Copy code";
-			copyBtn.innerHTML = SVG_COPY;
-			copyBtn.addEventListener(
-				"click",
-				async () => {
-					const text = extractCodeText(pre);
-					const ok = await copyToClipboard(text);
-					if (ok) {
-						copyBtn.innerHTML = SVG_COPIED;
-						copyBtn.classList.add(s.codeActionBtnCopied);
-						setTimeout(() => {
-							copyBtn.innerHTML = SVG_COPY;
-							copyBtn.classList.remove(s.codeActionBtnCopied);
-						}, 1500);
-					}
-				},
-				{ signal },
-			);
-			actions.appendChild(copyBtn);
-
-			// Run button
-			const runBtn = document.createElement("button");
-			runBtn.className = s.codeActionBtn;
-			runBtn.title = "Run in terminal";
-			runBtn.innerHTML = SVG_RUN;
-			runBtn.addEventListener(
-				"click",
-				() => {
-					const text = extractCodeText(pre);
-					void runCodeInTerminal(text).catch((e) => appLogger.warn("ai-chat", "Run code failed", { error: String(e) }));
-				},
-				{ signal },
-			);
-			actions.appendChild(runBtn);
-
-			wrapper.appendChild(actions);
-		}
-	};
-
-	// ── Retry last message on error ────────────────────────────────────────
-	const handleRetry = () => {
-		const msgs = conversationStore.messages();
-		const lastUser = [...msgs].reverse().find((m) => m.role === "user");
-		if (lastUser) {
-			conversationStore.setError(null);
-			conversationStore.sendMessage(lastUser.content, activeSessionId());
+	const emptyMessage = () => {
+		switch (chat.phase()) {
+			case "unconfigured":
+				return "ACP is not configured. Set the ego executable in Settings to start a conversation.";
+			case "no-repo":
+				return "Open a repository to start a conversation.";
+			case "starting":
+				return "Starting ego…";
+			default:
+				return "Ask ego about this repository.";
 		}
 	};
 
@@ -493,7 +64,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		<div id="ai-chat-panel" class={cx(s.panel, !props.visible && s.hidden)}>
 			<PanelResizeHandle panelId="ai-chat-panel" minWidth={300} maxWidth={700} />
 
-			{/* ── Header ──────────────────────────────────────────── */}
 			<div class={p.header}>
 				<div class={p.headerLeft}>
 					<span class={p.title}>
@@ -511,75 +81,9 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 						</svg>
 						AI Chat
 					</span>
-					<Show when={activeTerminalName()}>{(name) => <span class={s.terminalName}>{name()}</span>}</Show>
+					<Show when={root()}>{(path) => <span class={s.terminalName}>{basename(path())}</span>}</Show>
 				</div>
 				<div class={s.headerActions}>
-					{/* Model picker */}
-					<Show when={availableModels().length > 0}>
-						<select
-							class={s.modelPicker}
-							value={modelOverride()}
-							onChange={(e) => setModelOverride(e.currentTarget.value)}
-							title="Model override for this conversation"
-						>
-							<option value="">Default model</option>
-							<For each={availableModels()}>{(m) => <option value={m}>{m}</option>}</For>
-						</select>
-					</Show>
-					{/* Autonomy toggle */}
-					<button
-						class={cx(s.headerBtn, autonomy() === "autonomous" && s.headerBtnActive)}
-						onClick={() => setAutonomy((v) => (v === "assisted" ? "autonomous" : "assisted"))}
-						title={
-							autonomy() === "autonomous"
-								? "Autonomous mode — click for Assisted"
-								: "Assisted mode — click for Autonomous"
-						}
-					>
-						<IconRobot />
-					</button>
-					{/* Step count (autonomous only) */}
-					<Show when={autonomy() === "autonomous"}>
-						<input
-							type="number"
-							class={s.stepInput}
-							min={1}
-							max={50}
-							value={maxSteps()}
-							onInput={(e) => setMaxSteps(Math.max(1, Math.min(50, Number(e.currentTarget.value))))}
-							title="Max agent steps"
-						/>
-					</Show>
-					{/* Unrestricted toggle (autonomous only) */}
-					<Show when={autonomy() === "autonomous"}>
-						<button
-							class={cx(s.headerBtn, conversationStore.unrestricted() && s.headerBtnDanger)}
-							onClick={() => {
-								if (conversationStore.unrestricted()) {
-									conversationStore.setUnrestricted(false);
-								} else {
-									setShowUnrestrictedConfirm(true);
-								}
-							}}
-							title={
-								conversationStore.unrestricted()
-									? "Disable unrestricted mode"
-									: "Enable unrestricted mode (no approval prompts)"
-							}
-						>
-							<IconUnlock />
-						</button>
-					</Show>
-					<button
-						class={cx(s.headerBtn, showHistory() && s.headerBtnActive)}
-						onClick={() => (showHistory() ? setShowHistory(false) : openHistory())}
-						title="Conversation history"
-					>
-						<IconHistory />
-					</button>
-					<button class={s.headerBtn} onClick={() => conversationStore.clearHistory()} title="Clear conversation">
-						<IconTrash />
-					</button>
 					<PanelWindowControls
 						panelId="ai-chat"
 						mode={isPanelMode() ? "detached" : "inline"}
@@ -588,327 +92,59 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				</div>
 			</div>
 
-			{/* ── Error banner ────────────────────────────────────── */}
-			<Show when={conversationStore.error()}>
-				<div class={s.errorBanner}>
-					<span class={s.errorText}>{conversationStore.error()}</span>
-					<button class={s.retryBtn} onClick={handleRetry}>
-						Retry
-					</button>
-				</div>
-			</Show>
-
-			{/* ── Unrestricted confirmation dialog ─────────────── */}
-			<Show when={showUnrestrictedConfirm()}>
-				<div class={s.approvalCard}>
-					<div class={s.approvalText}>
-						<strong>Enable unrestricted mode?</strong>
-						<br />
-						<span style={{ "font-size": "var(--font-xs)", color: "var(--fg-secondary)" }}>
-							The agent will skip all approval prompts and operate without sandbox restrictions. Only use on repos you
-							fully trust.
-						</span>
-					</div>
-					<div class={s.approvalActions}>
-						<button
-							class={cx(s.approvalBtn, s.approveBtn)}
-							onClick={() => {
-								conversationStore.setUnrestricted(true);
-								setShowUnrestrictedConfirm(false);
-							}}
-						>
-							Enable
+			{/* A gap is not a transport hiccup: the journal no longer holds the
+			    sequence this window asked for, so the conversation on screen has a
+			    hole in it. Saying so and offering the one recovery there is — a
+			    fresh process replaying the history — is the whole point of
+			    surfacing it rather than skipping ahead in silence. */}
+			<Show when={chat.gap()}>
+				{(gap) => (
+					<div class={s.errorBanner}>
+						<span class={s.errorText}>Missed part of this conversation: {gap().message}</span>
+						<button type="button" class={s.retryBtn} onClick={() => void chat.recover()}>
+							Recover
 						</button>
-						<button class={cx(s.approvalBtn, s.denyBtn)} onClick={() => setShowUnrestrictedConfirm(false)}>
-							Cancel
-						</button>
-					</div>
-				</div>
-			</Show>
-
-			{/* ── Unrestricted banner ───────────────────────────── */}
-			<Show when={conversationStore.unrestricted()}>
-				<div class={s.unrestrictedBanner}>UNRESTRICTED</div>
-			</Show>
-
-			{/* ── Agent banner ──────────────────────────────────── */}
-			<Show when={conversationStore.agentState() === "running" || conversationStore.agentState() === "paused"}>
-				<div class={s.agentBanner}>
-					<IconRobot />
-					<Show
-						when={conversationStore.isThinking()}
-						fallback={
-							<span class={s.agentBannerText}>
-								Agent {conversationStore.agentState() === "paused" ? "paused" : "running"}
-							</span>
-						}
-					>
-						<span class={cx(s.agentBannerText, s.thinkingPulse)}>Thinking…</span>
-					</Show>
-					<span class={s.agentBannerIteration}>iter {conversationStore.currentIteration() + 1}</span>
-					<Show when={conversationStore.agentState() === "running"}>
-						<button
-							class={s.agentBannerBtn}
-							onClick={() => {
-								const sid = activeSessionId();
-								if (sid) conversationStore.pauseAgent(sid);
-							}}
-							title="Pause agent"
-						>
-							<IconPause />
-						</button>
-					</Show>
-					<Show when={conversationStore.agentState() === "paused"}>
-						<button
-							class={s.agentBannerBtn}
-							onClick={() => {
-								const sid = activeSessionId();
-								if (sid) conversationStore.resumeAgent(sid);
-							}}
-							title="Resume agent"
-						>
-							<IconPlay />
-						</button>
-					</Show>
-					<button
-						class={cx(s.agentBannerBtn, s.agentBannerBtnDanger)}
-						onClick={() => {
-							const sid = activeSessionId();
-							if (sid) conversationStore.cancelAgent(sid);
-						}}
-						title="Stop agent"
-					>
-						<IconStop />
-					</button>
-				</div>
-			</Show>
-
-			{/* ── Agent completion/error banner ─────────────────── */}
-			<Show when={["completed", "cancelled", "error"].includes(conversationStore.agentState())}>
-				<div class={cx(s.agentDoneBanner, conversationStore.agentState() === "error" && s.agentDoneBannerError)}>
-					<span class={s.agentBannerText}>
-						{conversationStore.agentState() === "completed"
-							? `Agent done${conversationStore.completionReason() ? ` — ${conversationStore.completionReason()}` : ""}`
-							: conversationStore.agentState() === "cancelled"
-								? "Agent cancelled"
-								: `Agent error: ${conversationStore.agentError() ?? "unknown error"}`}
-					</span>
-					<button class={s.agentBannerBtn} onClick={() => conversationStore.reset()} title="Dismiss">
-						✕
-					</button>
-				</div>
-			</Show>
-
-			{/* ── Approval prompt ────────────────────────────────── */}
-			<Show when={conversationStore.pendingApproval()}>
-				{(approval) => (
-					<div class={s.approvalCard}>
-						<div class={s.approvalText}>
-							Agent wants to run: <strong>{approval().command}</strong>
-							<br />
-							<span style={{ "font-size": "var(--font-xs)", color: "var(--fg-secondary)" }}>{approval().reason}</span>
-						</div>
-						<div class={s.approvalActions}>
-							<button
-								class={cx(s.approvalBtn, s.approveBtn)}
-								onClick={() => conversationStore.approveAction(approval().sessionId, true)}
-							>
-								Approve
-							</button>
-							<button
-								class={cx(s.approvalBtn, s.denyBtn)}
-								onClick={() => conversationStore.approveAction(approval().sessionId, false)}
-							>
-								Deny
-							</button>
-							<button
-								class={cx(s.approvalBtn, s.alwaysAllowBtn)}
-								onClick={() => {
-									conversationStore.setUnrestricted(true);
-									conversationStore.approveAction(approval().sessionId, true);
-								}}
-								title="Approve and disable all future approval prompts"
-							>
-								Always allow
-							</button>
-						</div>
 					</div>
 				)}
 			</Show>
 
-			{/* ── History panel ───────────────────────────────────── */}
-			<Show when={showHistory()}>
-				<div class={s.historyPanel}>
-					<div class={s.historyHeader}>All conversations</div>
-					<Show when={historyList().length === 0}>
-						<div class={s.historyEmpty}>No conversations saved yet</div>
-					</Show>
-					<For each={historyList()}>
-						{(conv) => (
-							<button class={s.historyItem} onClick={() => void handleLoadConversation(conv.id)}>
-								<span class={s.historyTitle}>{conv.title || "Untitled"}</span>
-								<span class={s.historyMeta}>
-									<Show when={resolveSessionName(conv.session_id)}>
-										<span class={s.historySession}>{resolveSessionName(conv.session_id)}</span>
-									</Show>
-									<Show when={conv.provider || conv.model}>
-										<span class={s.historyModel}>{[conv.provider, conv.model].filter(Boolean).join(" / ")}</span>
-									</Show>
-									<span class={s.historyCount}>{conv.message_count} msgs</span>
-									<span class={s.historyDate}>{new Date(conv.updated * 1000).toLocaleDateString()}</span>
-								</span>
-							</button>
-						)}
-					</For>
-				</div>
-			</Show>
-
-			{/* ── Message list ────────────────────────────────────── */}
-			<div class={cx(s.messageList, showHistory() && s.hidden)} ref={messageListRef}>
-				<Show
-					when={conversationStore.messages().length > 0 || conversationStore.isStreaming()}
-					fallback={<div class={s.emptyState}>Ask me about your terminal output</div>}
-				>
-					<For each={conversationStore.messages()}>
-						{(msg) => (
-							<Show
-								when={msg.role === "user"}
-								fallback={
-									<div
-										class={s.assistantMsg}
-										ref={(el) => {
-											const ac = new AbortController();
-											onCleanup(() => ac.abort());
-											requestAnimationFrame(() => enhanceCodeBlocks(el, ac.signal));
-										}}
-									>
-										<MarkdownContent content={msg.content} />
-									</div>
-								}
-							>
-								<div class={s.userMsg}>{msg.content}</div>
-							</Show>
-						)}
-					</For>
-
-					{/* Extended-thinking disclosure (Opus 4.7+): live reasoning, collapsible.
-					    Auto-opens while the model is thinking, stays available after. */}
-					<Show when={conversationStore.reasoningChunks()}>
-						<details class={s.reasoningDisclosure} open={conversationStore.isThinking()}>
-							<summary class={s.reasoningSummary}>Thinking</summary>
-							<div class={s.reasoningBody}>
-								<MarkdownContent content={reasoningRender()} streaming />
-							</div>
-						</details>
-					</Show>
-
-					{/* Streaming text: render as markdown so formatting is progressive */}
-					<Show when={conversationStore.isStreaming() && streamingRender()}>
-						{(text) => (
-							<div class={s.assistantMsg}>
-								<MarkdownContent content={text()} streaming />
-							</div>
-						)}
-					</Show>
-
-					{/* Agent tool call cards */}
-					<Show when={conversationStore.toolCalls().length > 0}>
-						<For each={conversationStore.toolCalls()}>{(entry) => <ToolCallCard entry={entry} />}</For>
-					</Show>
-
-					{/* Agent text output */}
-					<Show when={conversationStore.textChunks()}>
-						<div class={s.assistantMsg}>
-							<MarkdownContent content={textChunksRender()} streaming />
-						</div>
-					</Show>
-				</Show>
-			</div>
-
-			{/* ── Session knowledge footer ────────────────────────── */}
-			<SessionKnowledgeBar sessionId={activeSessionId()} />
-
-			{/* ── Frozen overlay ──────────────────────────────────── */}
-			<Show when={isFrozen()}>
-				<div class={s.frozenBanner}>No terminal focused — chat is read-only</div>
-			</Show>
-
-			{/* ── Input area ──────────────────────────────────────── */}
-			<div class={s.inputArea}>
-				<textarea
-					ref={textareaRef}
-					data-focus-target="ai-chat"
-					class={s.textarea}
-					rows={1}
-					placeholder={
-						isFrozen()
-							? "Focus a terminal first..."
-							: autonomy() === "autonomous"
-								? "Describe a goal for the agent..."
-								: "Ask about your terminal... (Enter to send)"
-					}
-					value={inputText()}
-					onInput={(e) => {
-						setInputText(e.currentTarget.value);
-						autoResize();
-					}}
-					onKeyDown={handleKeyDown}
-					disabled={isFrozen()}
-				/>
-				<Show
-					when={conversationStore.isStreaming()}
-					fallback={
-						<button
-							class={s.sendBtn}
-							onClick={handleSend}
-							disabled={
-								!inputText().trim() ||
-								conversationStore.isStreaming() ||
-								isFrozen() ||
-								(autonomy() === "autonomous" &&
-									(conversationStore.agentState() === "running" || conversationStore.agentState() === "paused"))
-							}
-							title="Send (Enter)"
-						>
-							<IconSend />
+			<Show when={chat.error()}>
+				{(message) => (
+					<div class={s.errorBanner}>
+						<span class={s.errorText}>{message()}</span>
+						<button type="button" class={s.retryBtn} onClick={() => void chat.recover()}>
+							Retry
 						</button>
-					}
-				>
-					<button class={s.stopBtn} onClick={() => conversationStore.cancelStream()} title="Stop generating">
-						<IconStop />
-					</button>
-				</Show>
-			</div>
+					</div>
+				)}
+			</Show>
 
-			{/* ── Usage footer ────────────────────────────────────── */}
-			<Show when={conversationStore.sessionUsage()}>
-				{(usage) => {
-					const prompt = () => usage().promptTokens ?? 0;
-					const completion = () => usage().completionTokens ?? 0;
-					const cached = () => usage().cachedTokens ?? 0;
-					const total = () => prompt() + completion();
-					const cachedPct = () => (total() > 0 ? Math.round((cached() / total()) * 100) : 0);
-					const cost = () => usage().costUsd;
-					return (
-						<div class={s.usageFooter}>
-							<span title="Prompt tokens">↑{prompt().toLocaleString()}</span>
-							<span title="Completion tokens">↓{completion().toLocaleString()}</span>
-							<span>tok</span>
-							<Show when={cost()}>
-								{(c) => (
-									<>
-										<span>·</span>
-										<span title="Estimated cost">${c().toFixed(4)}</span>
-									</>
-								)}
-							</Show>
-							<Show when={cached() > 0}>
-								<span>·</span>
-								<span title="Cache hit rate">{cachedPct()}% cached</span>
-							</Show>
-						</div>
-					);
-				}}
+			{/* A connection that is up but has nobody reading its journal is not a
+			    live panel. Say so rather than showing a conversation that has
+			    quietly stopped moving. */}
+			<Show when={chat.phase() === "live" && !chat.isStreaming()}>
+				<div class={s.frozenBanner}>Not receiving updates.</div>
+			</Show>
+
+			<Show when={chat.phase() === "live"}>
+				<SessionControls chat={chat} />
+			</Show>
+
+			<Transcript entries={chat.entries} busy={chat.busy} emptyMessage={emptyMessage()}>
+				<Interactions
+					interactions={chat.interactions}
+					onPermission={(requestId, optionId) => void chat.answerPermission(requestId, optionId)}
+					onPermissionDismissed={(requestId) => void chat.cancelPermission(requestId)}
+					onElicitationAccepted={(requestId, content) =>
+						void chat.answerElicitation(requestId, { action: "accept", content })
+					}
+					onElicitationDeclined={(requestId) => void chat.answerElicitation(requestId, { action: "decline" })}
+					onElicitationCancelled={(requestId) => void chat.answerElicitation(requestId, { action: "cancel" })}
+				/>
+			</Transcript>
+
+			<Show when={chat.phase() === "live"}>
+				<Composer chat={chat} />
 			</Show>
 		</div>
 	);

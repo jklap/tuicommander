@@ -123,7 +123,8 @@ export const CodexUsageDashboard: Component = () => {
 	const [loading, setLoading] = createSignal(true);
 
 	const refresh = async () => {
-		// Independent endpoints: one failing must not blank the other's section.
+		// The backend coalesces both commands into one App Server snapshot. Keep
+		// the calls independent so either transport error has an honest section.
 		const [usageResult, statsResult] = await Promise.allSettled([
 			invoke<CodexUsageApiResponse>("get_codex_usage_api"),
 			invoke<CodexStatsResponse>("get_codex_usage_stats"),
@@ -253,10 +254,6 @@ export const CodexUsageDashboard: Component = () => {
 									<span class={s.insightValue}>{formatTokens(st().peak_daily_tokens)}</span>
 								</div>
 								<div class={s.insightCard}>
-									<span class={s.insightLabel}>Threads</span>
-									<span class={s.insightValue}>{formatTokens(st().total_threads)}</span>
-								</div>
-								<div class={s.insightCard}>
 									<span class={s.insightLabel}>Streak</span>
 									<span class={s.insightValue}>{st().current_streak_days ?? "--"}d</span>
 									<span class={s.insightSub}>longest {st().longest_streak_days ?? "--"}d</span>
@@ -264,20 +261,6 @@ export const CodexUsageDashboard: Component = () => {
 								<div class={s.insightCard}>
 									<span class={s.insightLabel}>Longest turn</span>
 									<span class={s.insightValue}>{formatDuration(st().longest_running_turn_sec)}</span>
-								</div>
-								<div class={s.insightCard}>
-									<span class={s.insightLabel}>Fast mode</span>
-									<span class={s.insightValue}>{formatPercent(st().fast_mode_usage_percentage)}</span>
-								</div>
-								<div class={s.insightCard}>
-									<span class={s.insightLabel}>Skills used</span>
-									<span class={s.insightValue}>{formatTokens(st().total_skills_used)}</span>
-									<span class={s.insightSub}>{st().unique_skills_used ?? "--"} unique</span>
-								</div>
-								<div class={s.insightCard}>
-									<span class={s.insightLabel}>Reasoning effort</span>
-									<span class={s.insightValue}>{st().most_used_reasoning_effort ?? "--"}</span>
-									<span class={s.insightSub}>{formatPercent(st().most_used_reasoning_effort_percentage)} of turns</span>
 								</div>
 							</div>
 						</div>

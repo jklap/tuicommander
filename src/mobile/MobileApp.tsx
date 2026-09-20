@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
 import { appLogger } from "../stores/appLogger";
-import { notesStore } from "../stores/notes";
+import { ideasStore } from "../stores/ideas";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
 import { MobileToastContainer } from "./components/MobileToastContainer";
 import { QuestionBanner } from "./components/QuestionBanner";
@@ -74,7 +74,7 @@ export default function MobileApp() {
 	const { sessions, loading, refreshing, error, refresh, questionCount } = useSessions();
 	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
-	notesStore.hydrate();
+	ideasStore.hydrate();
 
 	// Keep the last known session data so the detail screen stays mounted
 	// and can show the "Session ended" overlay after a session closes.

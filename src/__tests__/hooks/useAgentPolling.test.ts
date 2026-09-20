@@ -815,5 +815,64 @@ describe("useAgentPolling", () => {
 				expect(store.get(id)?.agentState).toBe("working");
 			});
 		});
+
+		// #791-055e. `remote_mirror.rs` repeats a remote daemon's events on the
+		// local bus under the daemon's own name, so a session running on another
+		// machine reaches this handler with nothing here changed. The absence of
+		// a second subscription IS the parity: a future event type crosses for
+		// free, and there is no remote-only code path to keep in step.
+		it("a remote session raises the same question badge through the same handler", async () => {
+			mockInvoke.mockResolvedValue([{ session_id: "vps-sess", state: {}, connection_id: "vps" }]);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "VPS", sessionId: "vps-sess" }));
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				const { pluginRegistry } = await import("../../plugins/pluginRegistry");
+				const notify = vi.spyOn(pluginRegistry, "dispatchStructuredEvent");
+				useAgentPolling();
+				await tick(0);
+
+				expect(
+					[...listeners.keys()].filter((name) => name.startsWith("remote")),
+					"a mirrored event must need no subscription of its own",
+				).toEqual([]);
+
+				listeners.get("session-state-changed")?.({
+					payload: {
+						session_id: "vps-sess",
+						state: { awaiting_input: true, question_confident: true, agent_state: "awaiting_input" },
+					},
+				});
+
+				expect(store.get(id)?.awaitingInput).toBe("question");
+				expect(store.get(id)?.awaitingInputConfident).toBe(true);
+				expect(store.get(id)?.agentState).toBe("awaiting_input");
+				// The notification too, and through the same call a local agent
+				// makes — one applier, no branch on where the session runs.
+				expect(notify).toHaveBeenCalledWith("awaiting", { awaiting: true, confident: true }, "vps-sess");
+				notify.mockRestore();
+			});
+		});
+
+		it("the catch-up applies a mirrored row rather than skipping it", async () => {
+			// `list_active_sessions` answers local plus mirrored rows since
+			// #791-055e; `connection_id` names the machine and must not make the
+			// row unrecognisable to the applier.
+			const id = store.add(makeTerminal({ name: "VPS", sessionId: "vps-sess" }));
+			mockInvoke.mockResolvedValueOnce([
+				{
+					session_id: "vps-sess",
+					connection_id: "vps",
+					state: { shell_state: "busy", agent_state: "working" },
+				},
+			]);
+			const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+			await syncAgentLifecycleStates();
+			expect(store.get(id)?.agentState).toBe("working");
+			expect(store.get(id)?.shellState).toBe("busy");
+		});
 	});
 });

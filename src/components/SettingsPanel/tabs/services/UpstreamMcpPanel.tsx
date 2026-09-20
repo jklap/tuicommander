@@ -1,9 +1,10 @@
-import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer, type UpstreamTransport } from "../../../../transport";
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
+import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
 import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";
 
@@ -132,6 +133,14 @@ function emptyForm() {
 
 export const UpstreamMcpPanel: Component = () => {
 	const oauthDialog = useConfirmDialog();
+	/**
+	 * Which machine's upstream list this panel edits.
+	 *
+	 * An upstream MCP server is dialled by the backend that holds it, so the list
+	 * belongs to a machine the same way `agents.json` does. OAuth is the one part
+	 * that cannot follow: it opens a browser, and a headless daemon has none.
+	 */
+	const [machine, setMachine] = createSignal<string | undefined>(undefined);
 	const [upstreams, setUpstreams] = createSignal<UpstreamMcpServer[]>([]);
 	const [upstreamStatus, setUpstreamStatus] = createSignal<UpstreamStatusEntry[]>([]);
 	const [showAdd, setShowAdd] = createSignal(false);
@@ -153,7 +162,7 @@ export const UpstreamMcpPanel: Component = () => {
 
 	const refreshStatus = async () => {
 		try {
-			const snapshot = await rpc<{ upstreams: UpstreamStatusEntry[] }>("get_mcp_upstream_status");
+			const snapshot = await rpc<{ upstreams: UpstreamStatusEntry[] }>("get_mcp_upstream_status", {}, machine());
 			setUpstreamStatus(snapshot.upstreams ?? []);
 		} catch {
 			// Upstream status not available (e.g. server not running)
@@ -161,16 +170,22 @@ export const UpstreamMcpPanel: Component = () => {
 	};
 
 	// Load upstream config and preserve the existing three-second status cadence.
-	onMount(() => {
-		rpc<UpstreamMcpConfig>("load_mcp_upstreams")
-			.then((config) => setUpstreams(config.servers ?? []))
-			.catch(() => {
-				// Not in Tauri — silently skip
-			});
-		void refreshStatus();
-		const interval = setInterval(refreshStatus, 3000);
-		onCleanup(() => clearInterval(interval));
-	});
+	// Re-runs when the machine changes: the list and the statuses are that
+	// machine's, so both have to be re-read rather than merged.
+	createEffect(
+		on(machine, () => {
+			setUpstreams([]);
+			setUpstreamStatus([]);
+			rpc<UpstreamMcpConfig>("load_mcp_upstreams", {}, machine())
+				.then((config) => setUpstreams(config.servers ?? []))
+				.catch(() => {
+					// Not in Tauri — silently skip
+				});
+			void refreshStatus();
+			const interval = setInterval(refreshStatus, 3000);
+			onCleanup(() => clearInterval(interval));
+		}),
+	);
 
 	async function saveUpstreams(servers: UpstreamMcpServer[]): Promise<boolean> {
 		setSaving(true);
@@ -181,7 +196,7 @@ export const UpstreamMcpPanel: Component = () => {
 				serverCount: servers.length,
 				names: servers.map((s) => s.name),
 			});
-			await rpc("save_mcp_upstreams", { base, config: { servers } });
+			await rpc("save_mcp_upstreams", { base, config: { servers } }, machine());
 			appLogger.info("mcp", "saveUpstreams: RPC succeeded");
 			setUpstreams(servers);
 			return true;
@@ -236,7 +251,7 @@ export const UpstreamMcpPanel: Component = () => {
 		// Save credential before persisting config (ignored if empty)
 		if (f.credential && f.authMethod === "bearer") {
 			try {
-				await rpc("save_mcp_upstream_credential", { name: server.name, token: f.credential });
+				await rpc("save_mcp_upstream_credential", { name: server.name, token: f.credential }, machine());
 			} catch {
 				// Non-fatal — credential might not be needed
 			}
@@ -340,13 +355,13 @@ export const UpstreamMcpPanel: Component = () => {
 		const methodChanged = oldMethod !== f.authMethod;
 		try {
 			if (methodChanged) {
-				await rpc("delete_mcp_upstream_credential", { name: server.name });
+				await rpc("delete_mcp_upstream_credential", { name: server.name }, machine());
 			}
 			if (f.credential && f.authMethod === "bearer") {
-				await rpc("save_mcp_upstream_credential", { name: server.name, token: f.credential });
+				await rpc("save_mcp_upstream_credential", { name: server.name, token: f.credential }, machine());
 			}
 			if (methodChanged || f.credential) {
-				await rpc("reconnect_mcp_upstream", { name: server.name });
+				await rpc("reconnect_mcp_upstream", { name: server.name }, machine());
 			}
 		} catch (e) {
 			setError(`Authentication settings saved, but credential update failed: ${String(e)}`);
@@ -369,7 +384,7 @@ export const UpstreamMcpPanel: Component = () => {
 			confirmed = window.confirm(`Remove upstream "${name}"?`);
 		}
 		if (!confirmed) return;
-		await rpc("delete_mcp_upstream_credential", { name }).catch((e) =>
+		await rpc("delete_mcp_upstream_credential", { name }, machine()).catch((e) =>
 			appLogger.error("settings", "Failed to delete MCP upstream credential", { error: String(e) }),
 		);
 		await saveUpstreams(upstreams().filter((s) => s.id !== id));
@@ -377,9 +392,9 @@ export const UpstreamMcpPanel: Component = () => {
 
 	async function clearUpstreamCredential(name: string) {
 		try {
-			await rpc("delete_mcp_upstream_credential", { name });
+			await rpc("delete_mcp_upstream_credential", { name }, machine());
 			setEditForm((current) => ({ ...current, credential: "" }));
-			await rpc("reconnect_mcp_upstream", { name });
+			await rpc("reconnect_mcp_upstream", { name }, machine());
 			setError("");
 		} catch (e) {
 			setError(`Failed to clear saved credential: ${String(e)}`);
@@ -410,6 +425,8 @@ export const UpstreamMcpPanel: Component = () => {
 					Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
 				</p>
 			</div>
+
+			<MachineSelector value={machine()} label="Upstreams on" onChange={setMachine} />
 
 			{/* Add upstream form */}
 			<Show when={showAdd()}>
@@ -658,8 +675,11 @@ export const UpstreamMcpPanel: Component = () => {
 									</Show>
 								</div>
 								{/* Action buttons — never shrink */}
-								{/* Authorize — show for explicit OAuth2 config OR when server auto-detected needs_auth (DCR case) */}
-								<Show when={shouldShowAuthorize(server.auth?.type, st()?.status, server.enabled)}>
+								{/* Authorize — show for explicit OAuth2 config OR when server auto-detected needs_auth (DCR case).
+								    Local only: the flow opens a browser and listens on a loopback redirect,
+								    neither of which a headless daemon has. `start_mcp_upstream_oauth` has no
+								    HTTP route for the same reason. */}
+								<Show when={!machine() && shouldShowAuthorize(server.auth?.type, st()?.status, server.enabled)}>
 									<Show
 										when={st()?.status === "authenticating"}
 										fallback={
@@ -719,7 +739,7 @@ export const UpstreamMcpPanel: Component = () => {
 									style={{ "flex-shrink": 0 }}
 									title="Reconnect"
 									onClick={() =>
-										rpc("reconnect_mcp_upstream", { name: server.name }).catch((e) =>
+										rpc("reconnect_mcp_upstream", { name: server.name }, machine()).catch((e) =>
 											appLogger.warn("network", String(e)),
 										)
 									}

@@ -65,9 +65,6 @@ interface RustAppConfig {
 	pr_hide_conflicting?: boolean;
 	pr_hide_ci_failing?: boolean;
 	experimental_features_enabled?: boolean;
-	ai_chat_enabled?: boolean;
-	ai_triage_enabled?: boolean;
-	ai_watchers_enabled?: boolean;
 	scrollback_reflow?: boolean;
 	cursor_style?: string;
 	terminal_renderer?: string;
@@ -78,6 +75,8 @@ interface RustAppConfig {
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
 	inline_blame_enabled?: boolean;
+	/** The one binary the host may launch for ACP. Empty means ACP is unconfigured. */
+	ego_executable?: string;
 }
 
 // Default values
@@ -302,9 +301,6 @@ interface SettingsStoreState {
 	prHideConflicting: boolean;
 	prHideCiFailing: boolean;
 	experimentalFeaturesEnabled: boolean;
-	aiChatEnabled: boolean;
-	aiTriageEnabled: boolean;
-	aiWatchersEnabled: boolean;
 	scrollbackReflow: boolean;
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
@@ -315,6 +311,13 @@ interface SettingsStoreState {
 	standbyTimeoutMinutes: number;
 	customLaunchers: CustomLauncher[];
 	inlineBlameEnabled: boolean;
+	/**
+	 * Path to the ego binary the AI Chat panel talks ACP to.
+	 *
+	 * Empty is a meaningful value, not a missing one: Rust refuses every connect
+	 * while it is empty, and the panel says so rather than launching nothing.
+	 */
+	egoExecutable: string;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -355,9 +358,6 @@ function createSettingsStore() {
 		prHideConflicting: false,
 		prHideCiFailing: false,
 		experimentalFeaturesEnabled: false,
-		aiChatEnabled: false,
-		aiTriageEnabled: false,
-		aiWatchersEnabled: false,
 		scrollbackReflow: true,
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
@@ -368,6 +368,7 @@ function createSettingsStore() {
 		standbyTimeoutMinutes: 5,
 		customLaunchers: [],
 		inlineBlameEnabled: true,
+		egoExecutable: "",
 	});
 
 	// Cache of the last loaded config, refreshed on hydrate and each persist.
@@ -424,9 +425,6 @@ function createSettingsStore() {
 		config.pr_hide_conflicting = state.prHideConflicting;
 		config.pr_hide_ci_failing = state.prHideCiFailing;
 		config.experimental_features_enabled = state.experimentalFeaturesEnabled;
-		config.ai_chat_enabled = state.aiChatEnabled;
-		config.ai_triage_enabled = state.aiTriageEnabled;
-		config.ai_watchers_enabled = state.aiWatchersEnabled;
 		config.scrollback_reflow = state.scrollbackReflow;
 		config.cursor_style = state.cursorStyle;
 		config.terminal_renderer = state.terminalRenderer;
@@ -437,6 +435,7 @@ function createSettingsStore() {
 		config.standby_timeout_minutes = state.standbyTimeoutMinutes;
 		config.custom_launchers = [...state.customLaunchers];
 		config.inline_blame_enabled = state.inlineBlameEnabled;
+		config.ego_executable = state.egoExecutable;
 		return config;
 	}
 
@@ -529,9 +528,6 @@ function createSettingsStore() {
 				setState("prHideConflicting", config.pr_hide_conflicting ?? false);
 				setState("prHideCiFailing", config.pr_hide_ci_failing ?? false);
 				setState("experimentalFeaturesEnabled", config.experimental_features_enabled ?? false);
-				setState("aiChatEnabled", config.ai_chat_enabled ?? false);
-				setState("aiTriageEnabled", config.ai_triage_enabled ?? false);
-				setState("aiWatchersEnabled", config.ai_watchers_enabled ?? false);
 				setState("scrollbackReflow", config.scrollback_reflow ?? true);
 				const cs = config.cursor_style;
 				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
@@ -546,6 +542,7 @@ function createSettingsStore() {
 				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
 				setState("customLaunchers", config.custom_launchers ?? []);
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
+				setState("egoExecutable", config.ego_executable ?? "");
 				hydrated = true;
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
@@ -767,21 +764,6 @@ function createSettingsStore() {
 			save();
 		},
 
-		setAiChatEnabled(enabled: boolean): void {
-			setState("aiChatEnabled", enabled);
-			save();
-		},
-
-		setAiTriageEnabled(enabled: boolean): void {
-			setState("aiTriageEnabled", enabled);
-			save();
-		},
-
-		setAiWatchersEnabled(enabled: boolean): void {
-			setState("aiWatchersEnabled", enabled);
-			save();
-		},
-
 		setScrollbackReflow(enabled: boolean): void {
 			setState("scrollbackReflow", enabled);
 			save();
@@ -802,6 +784,12 @@ function createSettingsStore() {
 		/** Mark each command's position on the terminal scrollbar */
 		setShowScrollbarMarks(enabled: boolean): void {
 			setState("showScrollbarMarks", enabled);
+			save();
+		},
+
+		/** Set the ego binary the AI Chat panel launches. Empty disables ACP. */
+		setEgoExecutable(path: string): void {
+			setState("egoExecutable", path.trim());
 			save();
 		},
 
@@ -851,16 +839,20 @@ function createSettingsStore() {
 			return IDE_NAMES[state.ide] || IDE_NAMES[DEFAULTS.ide];
 		},
 
+		/** Whether the AI Chat panel is offered at all.
+		 *
+		 * Its own `ai_chat_enabled` sub-flag went with the embedded engine
+		 * (#784-0aec) — there is nothing left for a second toggle to switch on.
+		 * The panel is a shell until ego drives it (#785-58ca), so it stays behind
+		 * the experimental master toggle, which is off by default. */
 		isAiChatEnabled(): boolean {
-			return state.experimentalFeaturesEnabled && state.aiChatEnabled;
+			return state.experimentalFeaturesEnabled;
 		},
 
-		isAiTriageEnabled(): boolean {
-			return state.experimentalFeaturesEnabled && state.aiTriageEnabled;
-		},
-
-		isAiWatchersEnabled(): boolean {
-			return state.experimentalFeaturesEnabled && state.aiWatchersEnabled;
+		/** Whether an ego binary is named at all. Rust refuses every connect while
+		 *  it is not, so the panel says so instead of launching nothing. */
+		isAcpConfigured(): boolean {
+			return state.egoExecutable.trim().length > 0;
 		},
 	};
 

@@ -309,7 +309,6 @@ describe("workspace identity migration", () => {
 		expect(workspace.parentRepoPath).toBeNull();
 		expect(() => compareBranches(workspace, workspace, undefined, undefined)).not.toThrow();
 	});
-
 });
 
 describe("migrateActiveWorkspaceId", () => {

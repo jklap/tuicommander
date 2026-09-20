@@ -75,7 +75,6 @@ const BROWSER_ACTION_IDS = new Set([
 	"prompt-library",
 	"open-path",
 	"command-overview",
-	"ai-triage",
 	"toggle-tunnels",
 	"process-manager",
 	"open-generators",

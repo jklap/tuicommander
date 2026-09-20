@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHttpUrl, DEDICATED_WS_COMMANDS, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
-import { setTransportLogger } from "../transportRuntime";
+import { setRemoteBaseUrlLookup, setRemoteTokenLookup, setTransportLogger } from "../transportRuntime";
 
 function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
@@ -187,7 +187,7 @@ describe("transport", () => {
 		it("that field set is the one the frontend reads", () => {
 			// Guards the guard: both extractors returning [] would make the
 			// equality above pass vacuously. These are the two keys
-			// useAppInit.ts and remoteEventBridge.ts destructure.
+			// useAppInit.ts destructures.
 			expect(tauriPayloadFields()).toEqual(["kind", "repo_path"]);
 		});
 	});
@@ -543,6 +543,36 @@ describe("transport", () => {
 			expect(result.transform).toBeDefined();
 			expect(result.transform?.({ active_sessions: 2, max_sessions: 5 })).toBe(true);
 			expect(result.transform?.({ active_sessions: 5, max_sessions: 5 })).toBe(false);
+		});
+
+		// The password never travels back: `set` takes it, `exists` answers a bare
+		// boolean and `token` answers the daemon's session token. All three keep the
+		// IPC shape (`json_result`), so no mapping needs a transform.
+		describe("remote-connection credential mappings", () => {
+			it("maps set_remote_connection_password to PUT with the password in the body", () => {
+				const result = mapCommandToHttp("set_remote_connection_password", { id: "c1", password: "hunter2" });
+				expect(result.method).toBe("PUT");
+				expect(result.path).toBe("/config/remote-connections/c1/password");
+				expect(result.body).toEqual({ password: "hunter2" });
+			});
+
+			it("maps remote_connection_password_exists to a GET that carries no secret", () => {
+				const result = mapCommandToHttp("remote_connection_password_exists", { id: "c1" });
+				expect(result.method).toBe("GET");
+				expect(result.path).toBe("/config/remote-connections/c1/password");
+				expect(result.body).toBeUndefined();
+			});
+
+			it("maps fetch_remote_connection_token to POST with the daemon it must ask", () => {
+				const result = mapCommandToHttp("fetch_remote_connection_token", {
+					id: "c1",
+					baseUrl: "http://mac-mint:9877",
+					username: "stefano",
+				});
+				expect(result.method).toBe("POST");
+				expect(result.path).toBe("/config/remote-connections/c1/token");
+				expect(result.body).toEqual({ baseUrl: "http://mac-mint:9877", username: "stefano" });
+			});
 		});
 
 		it("maps detect_agents to GET /agents", () => {
@@ -1176,12 +1206,6 @@ describe("transport", () => {
 			expect(issue.path).toBe("/repo/create-issue");
 			expect(issue.body).toEqual({ repoPath: "/r", title: "Bug", body: "Broken" });
 
-			const proposal = { issue_title: "Improve tests", issue_body: "Acceptance:\n- covered" };
-			const proposalIssue = mapCommandToHttp("create_issue_from_proposal", { repoPath: "/r", proposal });
-			expect(proposalIssue.method).toBe("POST");
-			expect(proposalIssue.path).toBe("/repo/create-issue-from-proposal");
-			expect(proposalIssue.body).toEqual({ repoPath: "/r", proposal });
-
 			const review = mapCommandToHttp("post_pr_review", {
 				repoPath: "/r",
 				prNumber: 42,
@@ -1207,15 +1231,6 @@ describe("transport", () => {
 
 			const withTag = mapCommandToHttp("get_merged_prs", { repoPath: "/r", sinceTag: "v1.2.0" });
 			expect(withTag.path).toBe("/repo/merged-prs?path=%2Fr&sinceTag=v1.2.0");
-		});
-
-		it("maps generate_changelog to GET with optional sinceTag", () => {
-			const noTag = mapCommandToHttp("generate_changelog", { repoPath: "/r" });
-			expect(noTag.method).toBe("GET");
-			expect(noTag.path).toBe("/repo/changelog?path=%2Fr");
-
-			const withTag = mapCommandToHttp("generate_changelog", { repoPath: "/r", sinceTag: "v1.2.0" });
-			expect(withTag.path).toBe("/repo/changelog?path=%2Fr&sinceTag=v1.2.0");
 		});
 
 		it("maps start_conflict_assist to POST", () => {
@@ -1303,15 +1318,6 @@ describe("transport", () => {
 			expect(resolveBatch.body).toEqual({ repoPaths: ["/a", "/b"] });
 		});
 
-		it("maps ai-prompts load/save", () => {
-			expect(mapCommandToHttp("load_ai_prompts", {}).path).toBe("/config/ai-prompts");
-			expect(mapCommandToHttp("load_ai_prompts", {}).method).toBe("GET");
-			const save = mapCommandToHttp("save_ai_prompts", { config: { a: 1 } });
-			expect(save.method).toBe("PUT");
-			expect(save.path).toBe("/config/ai-prompts");
-			expect(save.body).toEqual({ a: 1 });
-		});
-
 		it("maps note asset commands", () => {
 			const img = mapCommandToHttp("save_note_image", {
 				noteId: "n1",
@@ -1385,111 +1391,6 @@ describe("transport", () => {
 			expect(gen.path).toBe("/generators/generate");
 			expect(gen.body).toEqual({ request: { type: "password" } });
 			expect(mapCommandToHttp("fetch_plugin_registry", {}).path).toBe("/registry/plugins");
-		});
-
-		it("maps AI watcher CRUD (story 070)", () => {
-			expect(mapCommandToHttp("watcher_list", {}).path).toBe("/ai/watchers");
-			expect(mapCommandToHttp("watcher_list", {}).method).toBe("GET");
-			const create = mapCommandToHttp("watcher_create", {
-				name: "w1",
-				sessionId: "s1",
-				trigger: { type: "Idle" },
-				instructions: "do it",
-				promptId: null,
-				repoPath: "/r",
-				maxFires: 3,
-				cooldownSecs: 30,
-			});
-			expect(create.method).toBe("POST");
-			expect(create.path).toBe("/ai/watchers");
-			expect(create.body).toEqual({
-				name: "w1",
-				sessionId: "s1",
-				trigger: { type: "Idle" },
-				instructions: "do it",
-				promptId: null,
-				repoPath: "/r",
-				maxFires: 3,
-				cooldownSecs: 30,
-			});
-			expect(mapCommandToHttp("watcher_update", { id: "x" }).path).toBe("/ai/watchers/update");
-			expect(mapCommandToHttp("watcher_delete", { id: "x" }).body).toEqual({ id: "x" });
-			expect(mapCommandToHttp("watcher_toggle", { id: "x", enabled: true }).body).toEqual({
-				id: "x",
-				enabled: true,
-			});
-			expect(mapCommandToHttp("watcher_attach", { templateId: "t", sessionId: "s" }).body).toEqual({
-				templateId: "t",
-				sessionId: "s",
-			});
-			expect(mapCommandToHttp("watcher_detach", { id: "x" }).path).toBe("/ai/watchers/detach");
-		});
-
-		it("maps AI chat config + conversation CRUD (story 069)", () => {
-			expect(mapCommandToHttp("load_ai_chat_config", {}).path).toBe("/ai/chat/config");
-			const save = mapCommandToHttp("save_ai_chat_config", { config: { temperature: 0.5 } });
-			expect(save.method).toBe("PUT");
-			expect(save.path).toBe("/ai/chat/config");
-			expect(save.body).toEqual({ temperature: 0.5 });
-			expect(mapCommandToHttp("list_conversations", {}).path).toBe("/ai/chat/conversations");
-			expect(mapCommandToHttp("load_conversation", { id: "abc" }).path).toBe("/ai/chat/conversation?id=abc");
-			const sc = mapCommandToHttp("save_conversation", { conversation: { meta: { id: "abc" } } });
-			expect(sc.method).toBe("POST");
-			expect(sc.path).toBe("/ai/chat/conversation");
-			expect(sc.body).toEqual({ meta: { id: "abc" } });
-			const del = mapCommandToHttp("delete_conversation", { id: "abc" });
-			expect(del.path).toBe("/ai/chat/conversation/delete");
-			expect(del.body).toEqual({ id: "abc" });
-			expect(mapCommandToHttp("new_conversation_id", {}).method).toBe("POST");
-			expect(mapCommandToHttp("new_conversation_id", {}).path).toBe("/ai/chat/new-id");
-		});
-
-		it("maps agent loop control + knowledge + scheduler (story 068)", () => {
-			for (const cmd of ["cancel_conversation", "pause_conversation", "resume_conversation"]) {
-				const r = mapCommandToHttp(cmd, { sessionId: "s1" });
-				expect(r.method).toBe("POST");
-				expect(r.path).toBe(`/ai/conversation/${cmd.split("_")[0]}`);
-				expect(r.body).toEqual({ sessionId: "s1" });
-			}
-			const ap = mapCommandToHttp("approve_conversation_action", { sessionId: "s1", approved: true });
-			expect(ap.path).toBe("/ai/conversation/approve");
-			expect(ap.body).toEqual({ sessionId: "s1", approved: true });
-			expect(mapCommandToHttp("get_session_knowledge", { sessionId: "s1" }).path).toBe(
-				"/ai/session-knowledge?sessionId=s1",
-			);
-			expect(mapCommandToHttp("toggle_ai_suggestions", { sessionId: "s1" }).path).toBe("/ai/suggestions/toggle");
-			const lk = mapCommandToHttp("list_knowledge_sessions", { filter: { text: "x" }, limit: 50 });
-			expect(lk.method).toBe("POST");
-			expect(lk.path).toBe("/ai/knowledge/sessions");
-			expect(lk.body).toEqual({ filter: { text: "x" }, limit: 50 });
-			expect(mapCommandToHttp("get_knowledge_session_detail", { sessionId: "s1" }).path).toBe(
-				"/ai/knowledge/session?sessionId=s1",
-			);
-			expect(mapCommandToHttp("load_scheduler_config", {}).path).toBe("/ai/scheduler/config");
-			const ss = mapCommandToHttp("save_scheduler_config", { config: { jobs: [] } });
-			expect(ss.method).toBe("PUT");
-			expect(ss.body).toEqual({ jobs: [] });
-		});
-
-		it("maps run_diff_triage trigger (event-bridge plan Step 2)", () => {
-			const r = mapCommandToHttp("run_diff_triage", { repoPath: "/r", refresh: true });
-			expect(r.method).toBe("POST");
-			expect(r.path).toBe("/ai/triage/run");
-			expect(r.body).toEqual({ repoPath: "/r", refresh: true });
-		});
-
-		it("maps run_pr_review trigger", () => {
-			const r = mapCommandToHttp("run_pr_review", { repoPath: "/r", prNumber: 42 });
-			expect(r.method).toBe("POST");
-			expect(r.path).toBe("/ai/review/pr");
-			expect(r.body).toEqual({ repoPath: "/r", prNumber: 42 });
-		});
-
-		it("maps run_improvement_scan trigger", () => {
-			const r = mapCommandToHttp("run_improvement_scan", { repoPath: "/r", focus: "testing" });
-			expect(r.method).toBe("POST");
-			expect(r.path).toBe("/ai/improvements/scan");
-			expect(r.body).toEqual({ repoPath: "/r", focus: "testing" });
 		});
 
 		it("maps plugin RPC commands (story 071)", () => {
@@ -1653,32 +1554,6 @@ describe("transport", () => {
 			expect(readme.path).toBe("/api/plugins/my-plugin/readme");
 			expect(readme.transform?.("/path/to/README.md")).toBe("/path/to/README.md");
 			expect(readme.transform?.(null)).toBeNull();
-		});
-
-		it("maps provider keyring + slot/ollama checks (story 072)", () => {
-			const exists = mapCommandToHttp("get_provider_api_key_exists", { providerId: "anthropic-main" });
-			expect(exists.method).toBe("GET");
-			expect(exists.path).toBe("/config/provider-key/exists?providerId=anthropic-main");
-
-			const save = mapCommandToHttp("save_provider_api_key", { providerId: "anthropic-main", key: "sk-ant-1" });
-			expect(save.method).toBe("POST");
-			expect(save.path).toBe("/config/provider-key");
-			expect(save.body).toEqual({ providerId: "anthropic-main", key: "sk-ant-1" });
-
-			const del = mapCommandToHttp("delete_provider_api_key", { providerId: "anthropic-main" });
-			expect(del.method).toBe("DELETE");
-			expect(del.path).toBe("/config/provider-key");
-			expect(del.body).toEqual({ providerId: "anthropic-main" });
-
-			const slot = mapCommandToHttp("test_slot_connection", { slot: "main" });
-			expect(slot.method).toBe("POST");
-			expect(slot.path).toBe("/config/slot-test");
-			expect(slot.body).toEqual({ slot: "main" });
-
-			const ollama = mapCommandToHttp("check_ollama_models", { providerId: "ollama-local" });
-			expect(ollama.method).toBe("POST");
-			expect(ollama.path).toBe("/config/ollama-models");
-			expect(ollama.body).toEqual({ providerId: "ollama-local" });
 		});
 
 		it("maps agent detection and spawn aliases to HTTP", () => {
@@ -1867,6 +1742,28 @@ describe("transport", () => {
 			expect(() => mapCommandToHttp("acp_subscribe", { connectionId: CONNECTION, afterSequence: 0 })).toThrow(
 				new RegExp(`dedicated WebSocket.*/acp/connections/${CONNECTION}/stream\\?after=0`),
 			);
+		});
+	});
+
+	describe("ego command line (Providers)", () => {
+		it("reads the providers without asking ego to re-enumerate its sources", () => {
+			const mapping = mapCommandToHttp("ego_providers", {});
+			expect(mapping.method).toBe("GET");
+			expect(mapping.path).toBe("/ego/providers");
+		});
+
+		// A refresh is the one thing on this surface that reaches a provider over
+		// the network, so it has to be asked for rather than implied.
+		it("asks for a refresh only when one was requested", () => {
+			expect(mapCommandToHttp("ego_providers", { refresh: true }).path).toBe("/ego/providers?refresh=true");
+			expect(mapCommandToHttp("ego_providers", { refresh: false }).path).toBe("/ego/providers");
+		});
+
+		it("writes the default model as the body of its own route", () => {
+			const mapping = mapCommandToHttp("ego_set_default_model", { model: "anthropic/claude-opus-5" });
+			expect(mapping.method).toBe("POST");
+			expect(mapping.path).toBe("/ego/providers/model");
+			expect(mapping.body).toEqual({ model: "anthropic/claude-opus-5" });
 		});
 	});
 
@@ -2072,6 +1969,48 @@ describe("transport", () => {
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
 			);
+		});
+
+		// The defect this story fixes: rpcImpl used to fetch a remote baseUrl with
+		// no Authorization header, no cookie and no token, so `/health` passed and
+		// every real call 401'd while the connection still read "connected".
+		describe("remote calls carry the connection's credential", () => {
+			afterEach(() => {
+				setRemoteBaseUrlLookup(() => undefined);
+				setRemoteTokenLookup(() => undefined);
+			});
+
+			it("signs a remote call with the session token", async () => {
+				const { rpc } = await import("../transport");
+				setRemoteBaseUrlLookup((id) => (id === "c1" ? "http://remote.test:9876" : undefined));
+				setRemoteTokenLookup((id) => (id === "c1" ? "tok-abc" : undefined));
+				globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("[]"));
+
+				await rpc("list_active_sessions", {}, "c1");
+
+				expect(globalThis.fetch).toHaveBeenCalledWith(
+					"http://remote.test:9876/sessions?token=tok-abc",
+					expect.objectContaining({ method: "GET" }),
+				);
+			});
+
+			it("leaves a local call unsigned — it has no connection id", async () => {
+				const { rpc } = await import("../transport");
+				setRemoteTokenLookup(() => "tok-abc");
+				globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("[]"));
+
+				await rpc("list_active_sessions");
+
+				expect(String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).not.toContain("token=");
+			});
+
+			it("refuses to call a connection that is not connected", async () => {
+				const { rpc } = await import("../transport");
+				globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("[]"));
+
+				await expect(rpc("list_active_sessions", {}, "c-gone")).rejects.toThrow("not connected");
+				expect(globalThis.fetch).not.toHaveBeenCalled();
+			});
 		});
 
 		it("returns a decoded JSON null response as null", async () => {

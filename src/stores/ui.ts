@@ -41,24 +41,19 @@ interface UIStoreState {
 
 	// Panel visibility
 	markdownPanelVisible: boolean;
-	notesPanelVisible: boolean;
+	ideasPanelVisible: boolean;
 	fileBrowserPanelVisible: boolean;
 	gitPanelVisible: boolean;
 
 	outlinePanelVisible: boolean;
 	referencesPanelVisible: boolean;
 	aiChatPanelVisible: boolean;
-	aiTriagePanelVisible: boolean;
 	detachedPanels: Record<string, string>;
 
 	/** Collapsed state of the GitHub panel sections, keyed by section id
 	 *  (`my-prs`, `prs`, `issues`). A missing key means the section has never
 	 *  been toggled and keeps its own default. */
 	githubSectionCollapsed: Record<string, boolean>;
-
-	// Knowledge history overlay — ephemeral, not persisted. Full-screen modal
-	// opened from SessionKnowledgeBar's "History" button.
-	knowledgeHistoryOverlayVisible: boolean;
 
 	// Requested active tab for the git panel (set by external actions like toggle-branches-tab)
 	gitPanelRequestedTab: GitPanelTab | null;
@@ -103,16 +98,14 @@ function createUIStore() {
 		repoFilterActiveOnly: false,
 		sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
 		markdownPanelVisible: false,
-		notesPanelVisible: false,
+		ideasPanelVisible: false,
 		fileBrowserPanelVisible: false,
 		gitPanelVisible: false,
 		outlinePanelVisible: false,
 		referencesPanelVisible: false,
 		aiChatPanelVisible: false,
-		aiTriagePanelVisible: false,
 		detachedPanels: {} as Record<string, string>,
 		githubSectionCollapsed: {} as Record<string, boolean>,
-		knowledgeHistoryOverlayVisible: false,
 		gitPanelRequestedTab: null,
 		settingsNavWidth: SETTINGS_NAV_DEFAULT_WIDTH,
 		diffViewMode: "split" as DiffViewMode,
@@ -150,8 +143,7 @@ function createUIStore() {
 		{ stateKey: "outlinePanelVisible", backendKey: "outline_panel_visible" },
 		{ stateKey: "referencesPanelVisible", backendKey: "references_panel_visible" },
 		{ stateKey: "aiChatPanelVisible", backendKey: "ai_chat_panel_visible" },
-		{ stateKey: "aiTriagePanelVisible", backendKey: "ai_triage_panel_visible" },
-		{ stateKey: "notesPanelVisible", backendKey: "notes_panel_visible" },
+		{ stateKey: "ideasPanelVisible", backendKey: "notes_panel_visible" },
 	] as const;
 
 	/** Keys of the mutually exclusive right-side panels */
@@ -292,12 +284,12 @@ function createUIStore() {
 			setExclusivePanel("markdownPanelVisible", visible);
 		},
 
-		toggleNotesPanel(): void {
-			setExclusivePanel("notesPanelVisible", !state.notesPanelVisible);
+		toggleIdeasPanel(): void {
+			setExclusivePanel("ideasPanelVisible", !state.ideasPanelVisible);
 		},
 
-		setNotesPanelVisible(visible: boolean): void {
-			setExclusivePanel("notesPanelVisible", visible);
+		setIdeasPanelVisible(visible: boolean): void {
+			setExclusivePanel("ideasPanelVisible", visible);
 		},
 
 		toggleFileBrowserPanel(): void {
@@ -354,14 +346,6 @@ function createUIStore() {
 			setExclusivePanel("aiChatPanelVisible", visible);
 		},
 
-		toggleAiTriagePanel(): void {
-			setExclusivePanel("aiTriagePanelVisible", !state.aiTriagePanelVisible);
-		},
-
-		setAiTriagePanelVisible(visible: boolean): void {
-			setExclusivePanel("aiTriagePanelVisible", visible);
-		},
-
 		setDetached(panelId: string, windowLabel: string): void {
 			setState("detachedPanels", panelId, windowLabel);
 			saveUIPrefs();
@@ -386,14 +370,6 @@ function createUIStore() {
 		setGithubSectionCollapsed(sectionId: string, collapsed: boolean): void {
 			setState("githubSectionCollapsed", sectionId, collapsed);
 			saveUIPrefs();
-		},
-
-		setKnowledgeHistoryOverlayVisible(visible: boolean): void {
-			setState("knowledgeHistoryOverlayVisible", visible);
-		},
-
-		toggleKnowledgeHistoryOverlay(): void {
-			setState("knowledgeHistoryOverlayVisible", (v) => !v);
 		},
 
 		// Dropdown management
@@ -502,7 +478,7 @@ registerDebugSnapshot("ui", () => {
 		focusMode: s.focusMode,
 		sidebarWidth: s.sidebarWidth,
 		markdownPanelVisible: s.markdownPanelVisible,
-		notesPanelVisible: s.notesPanelVisible,
+		ideasPanelVisible: s.ideasPanelVisible,
 		fileBrowserPanelVisible: s.fileBrowserPanelVisible,
 		gitPanelVisible: s.gitPanelVisible,
 		aiChatPanelVisible: s.aiChatPanelVisible,

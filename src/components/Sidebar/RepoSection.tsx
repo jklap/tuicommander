@@ -487,8 +487,15 @@ export const BranchItem: Component<{
 							if (status().commitStatus === "unknown") return "Unknown";
 							return null;
 						};
-						const title = () => {
-							if (status().error) return status().error;
+						const tooltip = () => {
+							if (status().commitStatus === "unknown") {
+								const explanation =
+									"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
+								return status().error ? `${explanation} ${status().error}` : explanation;
+							}
+							if (label() === "Dirty") {
+								return "Uncommitted changes: staged, unstaged, or untracked files. Removing this worktree requires confirmation.";
+							}
 							const workingTree = status().dirty ? "Dirty working tree" : "Clean working tree";
 							const commitState = status().commitStatus === "merged" ? "HEAD is merged" : "HEAD remains in the parent";
 							const removal =
@@ -499,11 +506,12 @@ export const BranchItem: Component<{
 							<Show when={label()}>
 								<span
 									class={`${s.lifecycleBadge} ${
-										status().removalSafety !== "safe"
-											? s.lifecycleRisk
-											: s.lifecycleMerged
+										status().removalSafety !== "safe" ? s.lifecycleRisk : s.lifecycleMerged
 									}`}
-									title={title()}
+									data-tooltip={tooltip()}
+									data-tooltip-pos="bottom"
+									data-tooltip-align="right"
+									tabIndex={0}
 								>
 									{label()}
 								</span>

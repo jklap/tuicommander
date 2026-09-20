@@ -11,6 +11,11 @@ const { mockAgentConfigsStore } = vi.hoisted(() => ({
 
 vi.mock("../../stores/agentConfigs", () => ({
 	agentConfigsStore: mockAgentConfigsStore,
+	// Every machine answers with the same stub here: which machine is chosen is
+	// asserted in remoteRepoRouting.test.ts, against the URL that leaves the
+	// process. These cases are about the command string the run config produces.
+	agentConfigsForRepo: () => mockAgentConfigsStore,
+	ensureAgentConfigsForRepo: () => Promise.resolve(mockAgentConfigsStore),
 }));
 
 // Mock rpc for verifyAndBuildResumeCommand tests

@@ -472,20 +472,19 @@ describe("uiStore", () => {
 	});
 
 	describe("exclusive panel persistence (story 653-4cdf)", () => {
-		// All 8 mutually exclusive panels must round-trip through save/load —
-		// stores/ui.ts previously dropped outline, references and aiTriage.
+		// All 7 mutually exclusive panels must round-trip through save/load —
+		// stores/ui.ts previously dropped outline and references.
 		const panels: Array<{
 			label: string;
 			setVisible: (v: boolean) => void;
 			stateKey:
 				| "markdownPanelVisible"
-				| "notesPanelVisible"
+				| "ideasPanelVisible"
 				| "fileBrowserPanelVisible"
 				| "gitPanelVisible"
 				| "outlinePanelVisible"
 				| "referencesPanelVisible"
-				| "aiChatPanelVisible"
-				| "aiTriagePanelVisible";
+				| "aiChatPanelVisible";
 			backendKey: string;
 		}> = [
 			{
@@ -496,8 +495,8 @@ describe("uiStore", () => {
 			},
 			{
 				label: "notes",
-				setVisible: (v: boolean) => store.setNotesPanelVisible(v),
-				stateKey: "notesPanelVisible",
+				setVisible: (v: boolean) => store.setIdeasPanelVisible(v),
+				stateKey: "ideasPanelVisible",
 				backendKey: "notes_panel_visible",
 			},
 			{
@@ -529,12 +528,6 @@ describe("uiStore", () => {
 				setVisible: (v: boolean) => store.setAiChatPanelVisible(v),
 				stateKey: "aiChatPanelVisible",
 				backendKey: "ai_chat_panel_visible",
-			},
-			{
-				label: "aiTriage",
-				setVisible: (v: boolean) => store.setAiTriagePanelVisible(v),
-				stateKey: "aiTriagePanelVisible",
-				backendKey: "ai_triage_panel_visible",
 			},
 		];
 
@@ -689,7 +682,7 @@ describe("uiStore", () => {
 		it("exposes no setters for them", () => {
 			const store_ = store as unknown as Record<string, unknown>;
 			expect(store_.setMarkdownPanelWidth).toBeUndefined();
-			expect(store_.setNotesPanelWidth).toBeUndefined();
+			expect(store_.setIdeasPanelWidth).toBeUndefined();
 			expect(store_.setGitPanelWidth).toBeUndefined();
 			expect(store_.setAiChatPanelWidth).toBeUndefined();
 		});
@@ -702,7 +695,7 @@ describe("uiStore", () => {
 
 				store.toggleSidebar();
 				store.toggleGitPanel();
-				store.toggleNotesPanel();
+				store.toggleIdeasPanel();
 
 				expect(mockInvoke.mock.calls.filter((c) => c[0] === "save_ui_prefs")).toHaveLength(0);
 

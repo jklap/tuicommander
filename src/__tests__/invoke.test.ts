@@ -14,6 +14,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 // Mock transport to simulate Tauri mode
 vi.mock("../transport", () => ({
 	isTauri: () => true,
+	// These suites are desktop-only and register no remote repo, so nothing
+	// diverts off local IPC.
+	owningConnectionFor: () => undefined,
 }));
 
 // Import after mocks are set up

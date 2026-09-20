@@ -5,7 +5,7 @@ import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
-import { agentConfigsStore } from "../../stores/agentConfigs";
+import { agentConfigsForRepo, ensureAgentConfigsForRepo } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore } from "../../stores/paneLayout";
@@ -416,7 +416,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					const willAutoRetry =
 						kind === "server" &&
 						agent &&
-						agentConfigsStore.isAutoRetryEnabled(agent) &&
+						agentConfigsForRepo(props.cwd).isAutoRetryEnabled(agent) &&
 						!retryTimer &&
 						retryCount < RETRY_DELAYS.length;
 
@@ -445,7 +445,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						if (
 							kind === "server" &&
 							agent &&
-							agentConfigsStore.isAutoRetryEnabled(agent) &&
+							agentConfigsForRepo(props.cwd).isAutoRetryEnabled(agent) &&
 							retryCount >= RETRY_DELAYS.length
 						) {
 							appLogger.warn(
@@ -473,7 +473,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					retryCount = 0;
 					const term = terminalsStore.get(props.id);
 					const agentType = term?.agentType;
-					const perAgentEnabled = agentType ? (agentConfigsStore.getIntentTabTitle(agentType) ?? true) : true;
+					const perAgentEnabled = agentType
+						? (agentConfigsForRepo(props.cwd).getIntentTabTitle(agentType) ?? true)
+						: true;
 					handleIntentEvent({
 						terminalId: props.id,
 						text: parsed.text,
@@ -835,6 +837,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			if (!reconnected) {
 				appLogger.debug("terminal", `initSession(${props.id}) — creating FRESH PTY session (no prior sessionId)`);
 				const termData = terminalsStore.get(props.id);
+				// The env flags describe the agent binary on the machine that will run
+				// it. Local resolves without a round trip — it is loaded at boot.
+				const machineConfigs = await ensureAgentConfigsForRepo(props.cwd);
 				sessionId = await pty.createSession({
 					rows: grid.rows,
 					cols: grid.cols,
@@ -842,7 +847,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					cwd: props.cwd || null,
 					tuic_session: termData?.tuicSession ?? null,
 					alias: termData?.alias ?? null,
-					env: agentConfigsStore.getEnvFlags("claude"),
+					env: machineConfigs.getEnvFlags("claude"),
 					agent_type: termData?.pendingInitCommand ? (termData.agentType ?? null) : null,
 				});
 				// The component can unmount during the await above (tab churn while

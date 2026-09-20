@@ -38,6 +38,8 @@ const emitEvent = (event: string, payload: unknown) => {
 
 const { FileBrowserPanel } = await import("../../../components/FileBrowserPanel/FileBrowserPanel");
 const { uiStore } = await import("../../../stores/ui");
+const { mdTabsStore } = await import("../../../stores/mdTabs");
+const { editorTabsStore } = await import("../../../stores/editorTabs");
 
 const dir = (name: string, path = name): DirEntry => ({
 	name,
@@ -358,6 +360,79 @@ describe("FileBrowserPanel streamed content search", () => {
 		await waitFor(() => expect(container.querySelector(".searchStatus")?.textContent).toBe("1 match in 1 file"));
 		// What it did find before being cut short stays on screen.
 		expect(container.querySelectorAll(".contentMatch").length).toBe(1);
+	});
+});
+
+describe("FileBrowserPanel active-file highlight", () => {
+	afterEach(() => {
+		mdTabsStore.clearAll();
+		editorTabsStore.clearAll();
+	});
+
+	/** The row classes of the entry whose name label is `name`. */
+	const rowClasses = (container: HTMLElement, name: string) => {
+		const label = Array.from(container.querySelectorAll(".entryName")).find((el) => el.textContent === name);
+		if (!label) throw new Error(`row not found: ${name}`);
+		return (label.parentElement as HTMLElement).className;
+	};
+
+	it("highlights the file behind an HTML preview tab", async () => {
+		listings.set("/repo|.", [file("page.html"), file("other.html")]);
+		mdTabsStore.addHtmlPreview("/repo", "page.html");
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("page.html")).not.toBeNull());
+
+		await waitFor(() => expect(rowClasses(container, "page.html")).toContain("entryActive"));
+		expect(rowClasses(container, "other.html")).not.toContain("entryActive");
+	});
+
+	it("highlights the file behind a markdown tab", async () => {
+		listings.set("/repo|.", [file("README.md"), file("CHANGELOG.md")]);
+		mdTabsStore.add("/repo", "README.md");
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("README.md")).not.toBeNull());
+
+		await waitFor(() => expect(rowClasses(container, "README.md")).toContain("entryActive"));
+		expect(rowClasses(container, "CHANGELOG.md")).not.toContain("entryActive");
+	});
+
+	it("highlights nothing for a markdown tab with no file behind it", async () => {
+		listings.set("/repo|.", [file("README.md")]);
+		mdTabsStore.addVirtual("Plan", "plan:file?path=/plan.md", "/repo");
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("README.md")).not.toBeNull());
+
+		expect(container.querySelector(".entryActive")).toBeNull();
+	});
+
+	it("prefers the editor tab over the markdown panel", async () => {
+		listings.set("/repo|.", [file("main.ts"), file("page.html")]);
+		mdTabsStore.addHtmlPreview("/repo", "page.html");
+		editorTabsStore.add("/repo", "main.ts");
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("main.ts")).not.toBeNull());
+
+		await waitFor(() => expect(rowClasses(container, "main.ts")).toContain("entryActive"));
+		expect(rowClasses(container, "page.html")).not.toContain("entryActive");
+	});
+
+	it("highlights nothing when the preview belongs to another root", async () => {
+		listings.set("/repo|.", [file("page.html")]);
+		mdTabsStore.addHtmlPreview("/other-repo", "page.html");
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("page.html")).not.toBeNull());
+
+		expect(container.querySelector(".entryActive")).toBeNull();
 	});
 });
 

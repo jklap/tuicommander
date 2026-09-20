@@ -3,9 +3,10 @@ import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { githubStore } from "../stores/github";
 import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
-import { providerRegistryStore } from "../stores/providerRegistry";
 import { repositoriesStore } from "../stores/repositories";
+import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
+import type { EgoTurn } from "../types/acp";
 import { writeClipboard } from "../utils/clipboard";
 import { prContextVariables } from "../utils/promptContext";
 import { usePty } from "./usePty";
@@ -20,16 +21,7 @@ export interface SmartPromptResult {
 export interface CanExecuteResult {
 	ok: boolean;
 	reason?: string;
-	/** Present when `reason` names a Settings destination — the tab key `openSettings(tab)` expects. */
-	settingsTab?: string;
 }
-
-/** Shared "no headless provider configured" result — carries the Providers tab route (#706-8d98). */
-const MISSING_PROVIDER_RESULT: CanExecuteResult = {
-	ok: false,
-	reason: "Headless provider not configured — add a provider and assign the Headless slot in Settings → Providers",
-	settingsTab: "providers",
-};
 
 /**
  * Minimal shell-word splitter for headless templates.
@@ -97,7 +89,41 @@ export function shellSplit(input: string): string[] {
 
 interface ResolvedAgent {
 	agent: string | null;
-	isApi: boolean;
+}
+
+/** Whether api mode has a model to run on.
+ *
+ * TUICommander holds no provider registry and makes no provider call any more
+ * (#784-0aec): ego owns the model, and api mode is one unattended ego turn. So
+ * the only thing that can be checked without launching anything is whether ego
+ * itself is named. Which model it will use is ego's own state, and asking would
+ * mean running ego to find out whether ego can be run.
+ *
+ * The refusal names both steps in order, because they live in different places:
+ * the binary is a TUICommander setting, the sign-in is ego's, and the tab that
+ * shows ego's side is the one that replaced the deleted provider registry. */
+function canExecuteApi(): CanExecuteResult {
+	if (!settingsStore.isAcpConfigured()) {
+		return {
+			ok: false,
+			reason:
+				"ego is not configured — name the binary in Settings → General, then pick a model in Settings → AI Providers",
+		};
+	}
+	// ACP gives a session one working directory and it must be a real one. An
+	// empty path would reach ego as a session it refuses to open, which reads as
+	// an ego fault rather than as "open a repository first".
+	if (!apiRoot()) {
+		return { ok: false, reason: "No repository open — ego needs a working directory to run in" };
+	}
+	return { ok: true };
+}
+
+/** The directory an unattended turn runs in: the active terminal's, else the
+ *  active repository's. The same fallback `executeHeadless` uses, so the two
+ *  modes cannot disagree about where a prompt ran. */
+function apiRoot(): string {
+	return terminalsStore.getActive()?.cwd ?? repositoriesStore.getActive()?.path ?? "";
 }
 
 /** Resolve whether an inject-mode prompt submits after insertion.
@@ -115,14 +141,13 @@ function resolveHeadlessAgent(prompt: SavedPrompt): ResolvedAgent {
 	const global = agentConfigsStore.getHeadlessAgent();
 
 	if (preferred) {
-		if (preferred === "api") return { agent: "api", isApi: true };
+		if (preferred === "api") return { agent: "api" };
 		const template = agentConfigsStore.getHeadlessTemplate(preferred);
-		if (template) return { agent: preferred, isApi: false };
+		if (template) return { agent: preferred };
 		appLogger.warn("prompts", `Preferred agent "${preferred}" has no template, falling back to global`);
 	}
 
-	if (!global) return { agent: null, isApi: false };
-	return { agent: global, isApi: global === "api" };
+	return { agent: global ?? null };
 }
 
 export function useSmartPrompts() {
@@ -137,16 +162,14 @@ export function useSmartPrompts() {
 		}
 
 		if (prompt.executionMode === "api") {
-			if (!providerRegistryStore.resolveSlot("headless")) return MISSING_PROVIDER_RESULT;
-			return { ok: true };
+			return canExecuteApi();
 		}
 
 		if (prompt.executionMode === "headless") {
 			const resolved = resolveHeadlessAgent(prompt);
-			if (resolved.isApi) {
-				if (!providerRegistryStore.resolveSlot("headless")) return MISSING_PROVIDER_RESULT;
-				return { ok: true };
-			}
+			// "api" is a headless agent the same way it is a mode: the work is one
+			// ego turn either way, so it answers to the same check.
+			if (resolved.agent === "api") return canExecuteApi();
 			if (!resolved.agent) return { ok: false, reason: "No headless agent configured — set one in Settings → Agents" };
 			return { ok: true };
 		}
@@ -203,9 +226,7 @@ export function useSmartPrompts() {
 			return check;
 		}
 
-		// If prompt is headless but the resolved agent is "api", upgrade to API mode
-		const rawMode = prompt.executionMode ?? "inject";
-		const effectiveMode = rawMode === "headless" && resolveHeadlessAgent(prompt).isApi ? "api" : rawMode;
+		const effectiveMode = prompt.executionMode ?? "inject";
 
 		// Single IPC: extract needed variable names + resolve only those from git.
 		const activeRepo = repositoriesStore.getActive();
@@ -267,9 +288,39 @@ export function useSmartPrompts() {
 		}
 	}
 
+	/** One unattended ego turn, the api-mode counterpart of `executeHeadless`.
+	 *
+	 * The same shape on purpose: one call that returns the whole answer, then
+	 * `routeHeadlessOutput`. Nothing streams, because there is nowhere to stream
+	 * to — a Smart Prompt runs with no panel open. */
+	async function executeApi(prompt: SavedPrompt, content: string): Promise<SmartPromptResult> {
+		try {
+			const turn = await invoke<EgoTurn>("acp_one_shot_prompt", { root: apiRoot(), prompt: content });
+			promptLibraryStore.markAsUsed(prompt.id);
+
+			// An empty answer after a refused question is not an empty answer. The
+			// model reached for a tool an unattended turn cannot grant, and
+			// reporting "it returned nothing" would send the reader to the prompt.
+			if (!turn.text && turn.declined > 0) {
+				const reason = `ego asked for ${turn.declined} permission${turn.declined === 1 ? "" : "s"} this mode cannot grant, so the turn produced nothing`;
+				appLogger.warn("prompts", `"${prompt.name}": ${reason}`);
+				return { ok: false, reason };
+			}
+
+			routeHeadlessOutput(prompt, turn.text);
+			return { ok: true, output: turn.text };
+		} catch (err) {
+			appLogger.error("prompts", `API execution failed for "${prompt.name}"`, err);
+			return { ok: false, reason: String(err) };
+		}
+	}
+
 	async function executeHeadless(prompt: SavedPrompt, content: string): Promise<SmartPromptResult> {
 		const resolved = resolveHeadlessAgent(prompt);
 		const headlessVal = resolved.agent;
+		// The "api" headless agent is the same unattended ego turn as api mode.
+		// Two paths to one behaviour would be two places to fix it.
+		if (headlessVal === "api") return executeApi(prompt, content);
 		if (!headlessVal) {
 			return { ok: false, reason: "No headless agent configured — set one in Settings → Agents" };
 		}
@@ -345,22 +396,6 @@ export function useSmartPrompts() {
 			return { ok: true, output };
 		} catch (err) {
 			appLogger.error("prompts", `Shell execution failed for "${prompt.name}"`, err);
-			return { ok: false, reason: String(err) };
-		}
-	}
-
-	async function executeApi(prompt: SavedPrompt, content: string): Promise<SmartPromptResult> {
-		try {
-			const output = await invoke<string>("execute_api_prompt", {
-				systemPrompt: prompt.systemPrompt || null,
-				content,
-				timeoutMs: 120000,
-			});
-			promptLibraryStore.markAsUsed(prompt.id);
-			routeHeadlessOutput(prompt, output);
-			return { ok: true, output };
-		} catch (err) {
-			appLogger.error("prompts", `API execution failed for "${prompt.name}"`, err);
 			return { ok: false, reason: String(err) };
 		}
 	}

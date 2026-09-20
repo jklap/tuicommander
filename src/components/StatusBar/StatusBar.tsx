@@ -17,7 +17,7 @@ import { shortenHomePath } from "../../platform";
 import { formatWaitTime } from "../../rate-limit";
 import { appLogger } from "../../stores/appLogger";
 import { dictationStore } from "../../stores/dictation";
-import { notesStore } from "../../stores/notes";
+import { ideasStore } from "../../stores/ideas";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
@@ -174,7 +174,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 	const getRepoPath = () => props.currentRepoPath;
 	const github = useGitHub(getRepoPath);
 
-	const notesBadgeCount = () => notesStore.pendingCount(props.currentRepoPath ?? null);
+	const notesBadgeCount = () => ideasStore.pendingCount(props.currentRepoPath ?? null);
 
 	const [changesCount, setChangesCount] = createSignal(0);
 	createEffect(() => {

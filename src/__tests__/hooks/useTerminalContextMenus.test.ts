@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockAgentConfigs, mockContextActions, mockPaneLayout, mockTerminals, mockWriteClipboard } = vi.hoisted(() => ({
+const {
+	mockAgentConfigs,
+	mockRemoteAgentConfigs,
+	mockContextActions,
+	mockPaneLayout,
+	mockTerminals,
+	mockWriteClipboard,
+} = vi.hoisted(() => ({
 	mockAgentConfigs: { getRunConfigs: vi.fn() },
+	mockRemoteAgentConfigs: { getRunConfigs: vi.fn() },
 	mockContextActions: { getActions: vi.fn(), getContextActions: vi.fn() },
 	mockPaneLayout: { state: { activeGroupId: null as string | null }, isSplit: vi.fn(), canSplit: vi.fn() },
 	mockTerminals: {
@@ -15,7 +23,20 @@ const { mockAgentConfigs, mockContextActions, mockPaneLayout, mockTerminals, moc
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../platform", () => ({ getModifierSymbol: () => "⌘" }));
-vi.mock("../../stores/agentConfigs", () => ({ agentConfigsStore: mockAgentConfigs }));
+// Two machines: `REMOTE_REPO` is held by another box and answers with its own
+// run configs. Which connection a path maps to is resolved by the registry and
+// asserted in remoteRepoRouting.test.ts against the URL that leaves the process;
+// what matters here is that the menu asks per repository at all.
+vi.mock("../../stores/agentConfigs", () => {
+	const REMOTE = "/srv/work/api";
+	const configsFor = (repoPath?: string | null) => (repoPath === REMOTE ? mockRemoteAgentConfigs : mockAgentConfigs);
+	return {
+		agentConfigsStore: mockAgentConfigs,
+		agentConfigsForRepo: (repoPath?: string | null) => configsFor(repoPath),
+		ensureAgentConfigsForRepo: (repoPath?: string | null) => Promise.resolve(configsFor(repoPath)),
+	};
+});
+const REMOTE_REPO = "/srv/work/api";
 vi.mock("../../stores/contextMenuActionsStore", () => ({ contextMenuActionsStore: mockContextActions }));
 vi.mock("../../stores/paneLayout", () => ({ paneLayoutStore: mockPaneLayout }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: { state: { activeRepoPath: "/repo" } } }));
@@ -49,6 +70,7 @@ describe("useTerminalContextMenus", () => {
 		mockTerminals.getActive.mockReset();
 		mockTerminals.update.mockClear();
 		mockAgentConfigs.getRunConfigs.mockReset().mockReturnValue([]);
+		mockRemoteAgentConfigs.getRunConfigs.mockReset().mockReturnValue([]);
 		mockContextActions.getActions.mockReset().mockReturnValue([]);
 		mockContextActions.getContextActions.mockReset().mockReturnValue([]);
 		mockPaneLayout.isSplit.mockReset().mockReturnValue(false);
@@ -93,6 +115,47 @@ describe("useTerminalContextMenus", () => {
 		expect(mockTerminals.update).toHaveBeenCalledWith(
 			"new-term",
 			expect.objectContaining({ name: "Claude Code", agentType: "claude", agentLaunchCommand: "claude" }),
+		);
+	});
+
+	/**
+	 * The tab runs on the machine that holds the repo, so the command typed into
+	 * it has to come from that machine's `agents.json`. The local wrapper would
+	 * name a path the remote box does not have.
+	 */
+	it("launches a remote repo's tab with that machine's run config", async () => {
+		mockTerminals.get.mockReturnValue({ tuicSession: "tuic-1" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "mac", command: "c2", args: ["--model", "opus"], is_default: true },
+		]);
+		mockRemoteAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "vps", command: "/opt/claude/bin/claude", args: ["--model", "opus"], is_default: true },
+		]);
+		const options = createOptions([{ type: "claude" }]);
+		const menus = useTerminalContextMenus(options as never);
+
+		await menus.buildSidebarAgentMenuItems(REMOTE_REPO, "feature")[0].action();
+
+		expect(mockTerminals.update).toHaveBeenCalledWith(
+			"new-term",
+			expect.objectContaining({ agentLaunchCommand: "/opt/claude/bin/claude --model opus" }),
+		);
+	});
+
+	it("keeps a local repo's tab on the local run config", async () => {
+		mockTerminals.get.mockReturnValue({ tuicSession: "tuic-1" });
+		mockAgentConfigs.getRunConfigs.mockReturnValue([{ name: "mac", command: "c2", args: [], is_default: true }]);
+		mockRemoteAgentConfigs.getRunConfigs.mockReturnValue([
+			{ name: "vps", command: "/opt/claude/bin/claude", args: [], is_default: true },
+		]);
+		const options = createOptions([{ type: "claude" }]);
+		const menus = useTerminalContextMenus(options as never);
+
+		await menus.buildSidebarAgentMenuItems("/repo", "feature")[0].action();
+
+		expect(mockTerminals.update).toHaveBeenCalledWith(
+			"new-term",
+			expect.objectContaining({ agentLaunchCommand: "c2" }),
 		);
 	});
 

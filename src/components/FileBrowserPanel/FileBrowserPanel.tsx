@@ -10,6 +10,7 @@ import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { markInternalDragEnd, markInternalDragStart, startNativeDrag } from "../../stores/dragDrop";
 import { editorTabsStore } from "../../stores/editorTabs";
+import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
@@ -96,12 +97,22 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	 */
 	const root = () => uiStore.state.fileBrowserExternalRoot || props.fsRoot || props.repoPath;
 
-	/** Relative path of the file shown in the active editor OR diff tab, when it
-	 * lives under the root this browser shows — for highlighting it in the tree
-	 * like VS Code. Editor-first: opening a diff clears the editor's active id, so
-	 * editor-first precedence resolves the visible tab correctly. Null otherwise. */
+	/** The active markdown-panel tab when a file on disk backs it — a markdown tab
+	 * or an HTML preview. The other md types (virtual, plugin panels, dashboards,
+	 * pr-diff) carry no path to highlight. */
+	const activeMdFileTab = () => {
+		const tab = mdTabsStore.getActive();
+		return tab && (tab.type === "file" || tab.type === "html-preview") ? tab : null;
+	};
+
+	/** Relative path of the file shown in the active editor, diff, markdown or
+	 * HTML-preview tab, when it lives under the root this browser shows — for
+	 * highlighting it in the tree like VS Code. Editor-first: opening a diff clears
+	 * the editor's active id, so editor-first precedence resolves the visible tab
+	 * correctly, and the markdown panel is the same fallback the Toolbar uses for
+	 * `focusedFilePath`. Null otherwise. */
 	const activeFilePath = createMemo(() => {
-		const tab = editorTabsStore.getActive() ?? diffTabsStore.getActive();
+		const tab = editorTabsStore.getActive() ?? diffTabsStore.getActive() ?? activeMdFileTab();
 		if (!tab) return null;
 		const r = root();
 		const tabFsRoot = "fsRoot" in tab ? tab.fsRoot : tab.repoPath;

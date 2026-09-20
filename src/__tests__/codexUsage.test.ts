@@ -165,6 +165,7 @@ describe("toUsageAgent", () => {
 	it("accepts only the agents that expose a usage API", () => {
 		expect(toUsageAgent("claude")).toBe("claude");
 		expect(toUsageAgent("codex")).toBe("codex");
+		expect(toUsageAgent("grok")).toBe("grok");
 	});
 
 	it("rejects agents without one, so the ticker keeps the last known agent", () => {
@@ -183,6 +184,10 @@ describe("describeUsageError", () => {
 
 	it("names a moved endpoint, the failure mode an internal API invites", () => {
 		expect(describeUsageError("Codex usage returned 404: {}", "No Codex OAuth token")).toBe("API moved");
+	});
+
+	it("surfaces a removed provider method as an API change", () => {
+		expect(describeUsageError("Codex usage failed: Method not found", "not logged in")).toBe("API changed");
 	});
 
 	it("falls back to offline for anything unrecognised", () => {

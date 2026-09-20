@@ -56,6 +56,7 @@ export interface SettingsSearchEntry {
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
+	{ tab: "general", section: "AI Chat", sectionKey: "general.heading.aiChat" },
 	{ tab: "general", section: "TUIC CLI", sectionKey: "general.heading.cli" },
 	{ tab: "general", section: "Code Intelligence", sectionKey: "general.heading.codeIntelligence" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
@@ -66,6 +67,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "Experimental Features", sectionKey: "general.heading.experimental" },
 	{ tab: "general", section: "General", label: "Language", labelKey: "general.label.language" },
 	{ tab: "general", section: "General", label: "Shell", labelKey: "general.label.shell" },
+	{ tab: "general", section: "AI Chat", label: "ego executable", labelKey: "general.label.egoExecutable" },
 	{
 		tab: "general",
 		section: "Confirmations",
@@ -121,9 +123,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{ tab: "general", section: "Updates", label: "Update Channel", labelKey: "general.label.updateChannel" },
 	{ tab: "general", section: "Updates", label: "Default IDE", labelKey: "general.label.defaultIde" },
-	{ tab: "general", section: "Experimental Features", label: "AI Chat", labelKey: "general.toggle.aiChat" },
-	{ tab: "general", section: "Experimental Features", label: "AI Triage", labelKey: "general.toggle.aiTriage" },
-	{ tab: "general", section: "Experimental Features", label: "AI Watchers", labelKey: "general.toggle.aiWatchers" },
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "appearance", section: "Terminal", sectionKey: "appearance.heading.terminal" },
@@ -292,26 +291,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/SmartPromptsTab.tsx
 	{ tab: "smart-prompts", section: "Smart Prompts" },
 	{ tab: "smart-prompts", section: "Smart Prompts", label: "Headless Agent" },
-	// tabs/ProvidersTab.tsx
-	{ tab: "providers", section: "Add Provider" },
-	{ tab: "providers", section: "Slot Assignments" },
-	{ tab: "providers", section: "Providers" },
-	{ tab: "providers", section: "Add Provider", label: "Type" },
-	{ tab: "providers", section: "Add Provider", label: "Label" },
-	{ tab: "providers", section: "Add Provider", label: "Base URL (optional)" },
-	{ tab: "providers", section: "Add Provider", label: "API Key" },
-	{ tab: "providers", section: "Add Provider", label: "Model name" },
-	{ tab: "providers", section: "Add Provider", label: "Tier" },
 	// tabs/AgentsTab.tsx
 	{ tab: "agents", section: "Agents" },
 	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
 	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
 	{ tab: "agents", section: "Agents", label: "Collect project progress" },
-	// tabs/AiChatTab.tsx
-	{ tab: "ai-chat", section: "Parameters" },
-	{ tab: "ai-chat", section: "Scheduled Tasks" },
-	{ tab: "ai-chat", section: "Parameters", label: "Temperature" },
-	{ tab: "ai-chat", section: "Parameters", label: "Extended thinking" },
+	// tabs/ProvidersTab.tsx
+	{ tab: "providers", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
+	{ tab: "providers", section: "Providers", sectionKey: "providers.heading.providers" },
+	{
+		tab: "providers",
+		section: "Default Model",
+		label: "Default model",
+		labelKey: "providers.label.defaultModel",
+	},
 ];
 
 /** Section heading as rendered, i18n applied. */
@@ -335,8 +328,8 @@ function matches(entry: SettingsSearchEntry, terms: string[]): boolean {
  * Entries matching `query`, restricted to tabs the user can actually open.
  *
  * `availableTabs` is the live nav key set: the Dictation tab is absent in
- * browser mode and AI Chat is absent unless the flag is on, so their settings
- * must not be offered — selecting one would open a tab that does not exist.
+ * browser mode, so its settings must not be offered — selecting one would open
+ * a tab that does not exist.
  */
 export function searchSettings(query: string, availableTabs: ReadonlySet<string>): SettingsSearchEntry[] {
 	const terms = query.toLowerCase().split(/\s+/).filter(Boolean);

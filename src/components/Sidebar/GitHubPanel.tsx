@@ -61,8 +61,6 @@ export const GitHubPanel: Component<{
 	onAutofix?: (issueNumber: number, prompt: string) => void;
 	onCleanupActive?: (active: boolean) => void;
 }> = (props) => {
-	const [showChangelog, setShowChangelog] = createSignal(false);
-
 	// Issue accordion state
 	const [expandedIssue, setExpandedIssue] = createSignal<number | null>(null);
 	// PR accordion state, lifted out of PrSection: Enter on a keyboard-navigated
@@ -73,6 +71,8 @@ export const GitHubPanel: Component<{
 	const [dismissedPrs, setDismissedPrs] = createSignal<Record<string, number[]>>({});
 	const [closingIssue, setClosingIssue] = createSignal<number | null>(null);
 	const [issueActionError, setIssueActionError] = createSignal<{ num: number; msg: string } | null>(null);
+	// Changelog modal visibility. The modal runs the ego turn itself on mount.
+	const [showChangelog, setShowChangelog] = createSignal(false);
 	// Auto-fix prompt dialog target (issue number), and in-flight PR create.
 	const [autofixIssue, setAutofixIssue] = createSignal<number | null>(null);
 	const [creatingPr, setCreatingPr] = createSignal<number | null>(null);

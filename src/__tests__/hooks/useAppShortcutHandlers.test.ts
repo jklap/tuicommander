@@ -33,7 +33,7 @@ const { mockDialogs, mockInvoke, mockNavigate, mockStores } = vi.hoisted(() => (
 			toggleFocusMode: vi.fn(),
 			toggleMarkdownPanel: vi.fn(),
 			toggleSidebar: vi.fn(),
-			toggleNotesPanel: vi.fn(),
+			toggleIdeasPanel: vi.fn(),
 			toggleFileBrowserPanel: vi.fn(),
 			requestFileBrowserContentSearch: vi.fn(),
 			toggleOutlinePanel: vi.fn(),

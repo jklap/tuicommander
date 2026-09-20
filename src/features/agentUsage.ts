@@ -26,6 +26,7 @@ import { statusBarTicker } from "../stores/statusBarTicker";
 import { terminalsStore } from "../stores/terminals";
 import { buildTickerText, getTickerPriority, type UsageApiResponse } from "./claudeUsage";
 import { buildCodexTickerText, type CodexUsageApiResponse, getCodexTickerPriority } from "./codexUsage";
+import { buildGrokTickerText, type GrokUsageApiResponse, getGrokTickerPriority } from "./grokUsage";
 
 const FEATURE_ID = "claude-usage";
 const TICKER_ID = "claude-usage:rate";
@@ -37,7 +38,7 @@ const API_POLL_MS = 5 * 60 * 1000;
 const CHART_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor"><path d="M0 11.5a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1-.5-.5v-4zm6-4a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5h-4a.5.5 0 0 1-.5-.5v-8zm6-7a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5v15a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5V.5z"/></svg>`;
 
 /** Agents that expose a usage API. Anything else leaves the ticker as it was. */
-export type UsageAgent = "claude" | "codex";
+export type UsageAgent = "claude" | "codex" | "grok";
 
 interface AgentUsageSpec {
 	/** Ticker label — the whole point of the feature: name the agent on screen. */
@@ -65,21 +66,31 @@ const SPECS: Record<UsageAgent, AgentUsageSpec> = {
 		command: "get_codex_usage_api",
 		buildText: (api: CodexUsageApiResponse) => buildCodexTickerText(api),
 		priority: (api: CodexUsageApiResponse) => getCodexTickerPriority(api),
-		missingTokenHint: "No Codex OAuth token",
+		missingTokenHint: "not logged in",
 		openDashboard: () => mdTabsStore.addCodexUsage(),
+	} as AgentUsageSpec,
+	grok: {
+		label: "Grok",
+		command: "get_grok_usage_api",
+		buildText: (api: GrokUsageApiResponse) => buildGrokTickerText(api),
+		priority: (api: GrokUsageApiResponse) => getGrokTickerPriority(api),
+		missingTokenHint: "not logged in",
+		openDashboard: () => mdTabsStore.addGrokUsage(),
 	} as AgentUsageSpec,
 };
 
 /** Map a detected agentType onto an agent with a usage API, or null. */
 export function toUsageAgent(agentType: string | null | undefined): UsageAgent | null {
-	return agentType === "claude" || agentType === "codex" ? agentType : null;
+	return agentType === "claude" || agentType === "codex" || agentType === "grok" ? agentType : null;
 }
 
 /** Classify a poll failure into the short text the ticker shows. */
 export function describeUsageError(errStr: string, missingTokenHint: string): string {
-	if (errStr.includes(missingTokenHint) || errStr.includes("No Codex credentials")) return "no token";
+	if (errStr.toLowerCase().includes(missingTokenHint.toLowerCase()) || errStr.includes("No Codex credentials"))
+		return "no token";
 	if (errStr.includes("401") || errStr.includes("403")) return "token expired";
 	if (errStr.includes("Failed to parse")) return "API changed";
+	if (/method not found|unknown method|unsupported method/i.test(errStr)) return "API changed";
 	if (errStr.includes("404")) return "API moved";
 	return "offline";
 }

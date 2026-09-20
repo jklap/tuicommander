@@ -16,7 +16,7 @@ export interface CodexRateWindow {
 }
 
 export interface CodexRateLimit {
-	allowed: boolean;
+	allowed: boolean | null;
 	limit_reached: boolean;
 	primary_window: CodexRateWindow | null;
 	secondary_window: CodexRateWindow | null;

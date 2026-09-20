@@ -69,11 +69,17 @@ function badgeClass(verdict: Verdict): string {
 	}
 }
 
+/** The card heading for a proposal: its own title, or the issue title it would file. */
 function proposalTitle(p: ImprovementProposal): string {
 	return p.title || p.issue_title;
 }
 
-/** GitHub Ops dashboard — five live columns for a single repo. */
+/** GitHub Ops dashboard — five live columns for a single repo.
+ *
+ * Review findings and Proposals went with the embedded engine (#784-0aec) and
+ * came back on ego with #795-320b. A review is now one unattended ego turn, so
+ * the findings card shows Working or Done and no per-file phase, and never the
+ * model — that is ego's configuration and this side is not told it. */
 export const GithubOpsDashboard: Component<{ repoPath: string }> = (props) => {
 	const opsState = () => githubOpsStore.getState(props.repoPath);
 
@@ -83,20 +89,27 @@ export const GithubOpsDashboard: Component<{ repoPath: string }> = (props) => {
 	const scanRunning = () => opsState().improvementScanRunning;
 	const scanError = () => opsState().improvementScanError;
 	const [creatingIssueFor, setCreatingIssueFor] = createSignal<number | null>(null);
+	const [issueError, setIssueError] = createSignal<string | null>(null);
 
+	// The store already records the scan error and the column renders it, so the
+	// rejection is swallowed here rather than left to become an unhandled one.
 	const runScan = (focus: ImprovementFocus) => {
-		void githubOpsStore.runImprovementScan(props.repoPath, focus);
+		void githubOpsStore.runImprovementScan(props.repoPath, focus).catch(() => {});
 	};
 
 	const createProposalIssue = async (proposal: ImprovementProposal, index: number) => {
 		setCreatingIssueFor(index);
+		setIssueError(null);
 		try {
 			await githubOpsStore.createIssueFromProposal(props.repoPath, proposal);
+		} catch (err) {
+			// gh's own sentence — "gh: Not Found" names the missing repo scope and a
+			// button that silently does nothing names nothing.
+			setIssueError(err instanceof Error ? err.message : String(err));
 		} finally {
 			setCreatingIssueFor(null);
 		}
 	};
-
 	// Auto-fix sessions — LIVE from the terminals store, scoped to this repo via
 	// the branch → terminals mapping (branches named `autofix/issue-*`).
 	const autofixSessions = createMemo<AutofixSession[]>(() => {
@@ -151,14 +164,20 @@ export const GithubOpsDashboard: Component<{ repoPath: string }> = (props) => {
 									<div class={s.card}>
 										<div class={s.cardRow}>
 											<span class={s.cardLabel}>PR #{r.pr_number}</span>
-											<span class={badgeClass(r.done ? "ok" : "warn")}>
-												{r.done ? t("github.ops.done", "Done") : (r.phase ?? t("github.ops.working", "Working"))}
+											<span class={badgeClass(r.error ? "critical" : r.done ? "ok" : "warn")}>
+												{r.error
+													? t("github.ops.failed", "failed")
+													: r.done
+														? t("github.ops.done", "Done")
+														: t("github.ops.working", "Working")}
 											</span>
 										</div>
 										<span class={s.cardSub}>
 											{t("github.ops.findings", "Findings")}: {r.findingsCount}
-											<Show when={r.llm_model}> · {r.llm_model}</Show>
 										</span>
+										<Show when={r.error}>
+											<span class={s.errorText}>{r.error}</span>
+										</Show>
 									</div>
 								)}
 							</For>
@@ -247,6 +266,9 @@ export const GithubOpsDashboard: Component<{ repoPath: string }> = (props) => {
 					</div>
 					<Show when={scanError()}>
 						<div class={s.errorText}>{scanError()}</div>
+					</Show>
+					<Show when={issueError()}>
+						<div class={s.errorText}>{issueError()}</div>
 					</Show>
 					<Show
 						when={proposals().length > 0}

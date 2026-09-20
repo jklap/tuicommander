@@ -123,7 +123,7 @@ export function dispatchNativeMenuAction(action: string, options: NativeMenuBrid
 			uiStore.toggleMarkdownPanel();
 			break;
 		case "notes-panel":
-			uiStore.toggleNotesPanel();
+			uiStore.toggleIdeasPanel();
 			break;
 		case "file-browser":
 			uiStore.toggleFileBrowserPanel();

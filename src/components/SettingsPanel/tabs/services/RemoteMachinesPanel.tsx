@@ -19,6 +19,10 @@ export function remoteStatusColor(status: string): string {
 			return "var(--accent-green, #22c55e)";
 		case "connecting":
 			return "var(--fg-warning, #e5a100)";
+		// Reachable, but every route but /health answers 401 — the same amber as
+		// "connecting" would read as progress, and green would be a lie.
+		case "unauthenticated":
+			return "var(--fg-warning, #e5a100)";
 		case "error":
 			return "var(--accent-red, #ef4444)";
 		default:
@@ -33,6 +37,8 @@ export function remoteStatusLabel(status: string): string {
 			return "Connected";
 		case "connecting":
 			return "Connecting...";
+		case "unauthenticated":
+			return "Not authenticated";
 		case "error":
 			return "Error";
 		default:
@@ -60,6 +66,7 @@ export function emptyRemoteForm() {
 		remoteDaemonPort: 9876,
 		directUrl: "",
 		authUsername: "",
+		authPassword: "",
 	};
 }
 
@@ -70,6 +77,7 @@ export const RemoteMachinesPanel: Component = () => {
 	const [error, setError] = createSignal("");
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [editForm, setEditForm] = createSignal(emptyRemoteForm());
+	const [passwordStored, setPasswordStored] = createSignal(false);
 
 	onMount(() => {
 		remoteConnectionsStore.hydrate();
@@ -120,6 +128,9 @@ export const RemoteMachinesPanel: Component = () => {
 		setError("");
 		try {
 			await remoteConnectionsStore.addConnection(conn);
+			// After the connection exists: the vault key is its id, so a password
+			// stored first would belong to an id nothing would ever look up again.
+			if (f.authPassword) await remoteConnectionsStore.setPassword(conn.id, f.authPassword);
 			setForm(emptyRemoteForm());
 			setShowAdd(false);
 		} catch (e) {
@@ -129,8 +140,11 @@ export const RemoteMachinesPanel: Component = () => {
 		}
 	}
 
-	function startEdit(conn: RemoteConnection) {
+	async function startEdit(conn: RemoteConnection) {
 		setEditingId(conn.id);
+		// The password itself is unreadable by design; all the form can show is
+		// whether one is there, so a blank field means "keep it" instead of "none".
+		setPasswordStored(await remoteConnectionsStore.hasPassword(conn.id).catch(() => false));
 		setEditForm({
 			name: conn.name,
 			transportType: conn.transport.type,
@@ -141,6 +155,7 @@ export const RemoteMachinesPanel: Component = () => {
 			remoteDaemonPort: conn.transport.type === "Ssh" ? conn.transport.remote_daemon_port : 9876,
 			directUrl: conn.transport.type === "Direct" ? conn.transport.url : "",
 			authUsername: conn.auth_username,
+			authPassword: "",
 		});
 	}
 
@@ -169,10 +184,12 @@ export const RemoteMachinesPanel: Component = () => {
 		setError("");
 		try {
 			// Disconnect first if connected, then save the updated connection
-			if (connState.status === "connecting" || connState.status === "connected") {
+			if (connState.status !== "disconnected") {
 				await remoteConnectionsStore.disconnect(connState.connection.id);
 			}
 			await remoteConnectionsStore.addConnection(updated);
+			// Blank means "keep what is in the vault" — the field can never show it.
+			if (f.authPassword) await remoteConnectionsStore.setPassword(updated.id, f.authPassword);
 			setEditingId(null);
 		} catch (e) {
 			setError(String(e));
@@ -204,6 +221,8 @@ export const RemoteMachinesPanel: Component = () => {
 	function TransportFields(props: {
 		formData: ReturnType<typeof emptyRemoteForm>;
 		setFormData: (updater: (f: ReturnType<typeof emptyRemoteForm>) => ReturnType<typeof emptyRemoteForm>) => void;
+		/** A password is already in the vault — the field then means "replace it". */
+		passwordStored?: boolean;
 	}) {
 		return (
 			<>
@@ -290,6 +309,19 @@ export const RemoteMachinesPanel: Component = () => {
 					value={props.formData.authUsername}
 					onInput={(e) => props.setFormData((f) => ({ ...f, authUsername: e.currentTarget.value }))}
 				/>
+				<input
+					type="password"
+					class={s.input}
+					autocomplete="off"
+					placeholder={props.passwordStored ? "Password (stored — leave blank to keep it)" : "Auth password"}
+					value={props.formData.authPassword}
+					onInput={(e) => props.setFormData((f) => ({ ...f, authPassword: e.currentTarget.value }))}
+				/>
+				<p class={s.hint} style={{ margin: 0 }}>
+					The password is kept in the OS credential vault, never in connections.json. It is traded for the daemon's
+					session token on every connect — <code>tuic-remote</code> authenticates every request, so a connection without
+					one reaches only <code>/health</code>.
+				</p>
 			</>
 		);
 	}
@@ -428,14 +460,16 @@ export const RemoteMachinesPanel: Component = () => {
 									class={s.copyBtn}
 									style={{ "flex-shrink": 0, "white-space": "nowrap" }}
 									onClick={() => {
-										if (connState.status === "connected" || connState.status === "connecting") {
-											remoteConnectionsStore.disconnect(conn().id);
-										} else {
+										// "unauthenticated" still holds a tunnel and a baseUrl, so it
+										// disconnects like any live connection rather than re-dialling.
+										if (connState.status === "disconnected" || connState.status === "error") {
 											remoteConnectionsStore.connect(conn().id);
+										} else {
+											remoteConnectionsStore.disconnect(conn().id);
 										}
 									}}
 								>
-									{connState.status === "connected" || connState.status === "connecting" ? "Disconnect" : "Connect"}
+									{connState.status === "disconnected" || connState.status === "error" ? "Connect" : "Disconnect"}
 								</button>
 								{/* Edit */}
 								<button
@@ -472,7 +506,11 @@ export const RemoteMachinesPanel: Component = () => {
 									}}
 								>
 									<div style={{ display: "grid", gap: "8px" }}>
-										<TransportFields formData={editForm()} setFormData={setEditForm} />
+										<TransportFields
+											formData={editForm()}
+											setFormData={setEditForm}
+											passwordStored={passwordStored()}
+										/>
 										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
 											<button class={s.copyBtn} onClick={() => saveEdit(connState)} disabled={saving()}>
 												{saving() ? "Saving..." : "Save"}

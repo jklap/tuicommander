@@ -71,6 +71,12 @@ export interface CodexUsageTab extends BaseTab {
 	title: string;
 }
 
+/** Native Grok Usage Dashboard tab */
+export interface GrokUsageTab extends BaseTab {
+	type: "grok-usage";
+	title: string;
+}
+
 /** Native GitHub Ops Dashboard tab (repo-scoped) */
 export interface GithubOpsTab extends BaseTab {
 	type: "github-ops";
@@ -112,6 +118,7 @@ export type MdTabData =
 	| PluginPanelTab
 	| ClaudeUsageTab
 	| CodexUsageTab
+	| GrokUsageTab
 	| GithubOpsTab
 	| PrDiffTab
 	| HtmlPreviewTab
@@ -438,6 +445,20 @@ function createMdTabsStore() {
 			const id = base._nextId("md");
 
 			return base._addTab({ type: "codex-usage", id, title: "Codex Usage", pinned: true } as CodexUsageTab);
+		},
+
+		/** Add the Grok Usage Dashboard tab (singleton — reuses existing if open) */
+		addGrokUsage(): string {
+			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "grok-usage") as
+				| GrokUsageTab
+				| undefined;
+			if (existing) {
+				base.setActive(existing.id);
+				return existing.id;
+			}
+
+			const id = base._nextId("md");
+			return base._addTab({ type: "grok-usage", id, title: "Grok Usage", pinned: true } as GrokUsageTab);
 		},
 
 		/** Add the GitHub Ops Dashboard tab (singleton per repo — reuses existing if open) */

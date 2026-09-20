@@ -19,18 +19,17 @@ import { SettingsShell } from "./SettingsShell";
 import { entryLabel, entrySection, type SettingsSearchEntry, searchSettings } from "./settingsSearchIndex";
 import {
 	AgentsTab,
-	AiChatTab,
 	AppearanceTab,
 	GeneralTab,
 	GitHubTab,
 	NotificationsTab,
 	PluginsTab,
+	ProvidersTab,
 	RepoScriptsTab,
 	RepoWorktreeTab,
 	ServicesTab,
 	SmartPromptsTab,
 } from "./tabs";
-import { ProvidersTab } from "./tabs/ProvidersTab";
 
 /** Context for initial selection when opening the panel */
 export type SettingsContext = { kind: "global" } | { kind: "repo"; repoPath: string; connectionId?: string };
@@ -53,16 +52,25 @@ const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "services", label: t("settings.services", "Services & MCP") },
 	{ key: "plugins", label: t("settings.plugins", "Plugins") },
 	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
-	{ key: "providers", label: "Providers" },
 	{ key: "agents", label: t("settings.agents", "Agents") },
+	{ key: "providers", label: t("settings.providers", "AI Providers") },
 ];
 
+/** Tabs whose feature is switched off right now, so their nav entry is noise. */
+function hiddenTabs(): Set<string> {
+	const hidden = new Set<string>();
+	// Desktop-only: the browser build has no microphone capture path.
+	if (!isTauri()) hidden.add("dictation");
+	// Providers configures ego, and ego is reachable only from the AI Chat panel.
+	// While that panel is behind the experimental toggle, this tab would let a
+	// person set a default model for an engine they cannot open.
+	if (!settingsStore.isAiChatEnabled()) hidden.add("providers");
+	return hidden;
+}
+
 function getGlobalTabs(): SettingsShellTab[] {
-	const tabs = isTauri() ? BASE_GLOBAL_TABS : BASE_GLOBAL_TABS.filter((tab) => tab.key !== "dictation");
-	if (settingsStore.isAiChatEnabled()) {
-		return [...tabs, { key: "ai-chat", label: "AI Chat" }];
-	}
-	return tabs;
+	const hidden = hiddenTabs();
+	return BASE_GLOBAL_TABS.filter((tab) => !hidden.has(tab.key));
 }
 
 function defaultTab(ctx: SettingsContext): string {
@@ -137,16 +145,6 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		setActiveTab(entry.tab);
 		setPendingTarget({ section: entrySection(entry), label: entryLabel(entry) });
 	};
-
-	// Auto-reset to general when the current tab vanishes (e.g. AI Chat flag
-	// toggled off while AI Chat tab is active). Without this, the body would
-	// also disappear (per the Show guard above) but the nav would have no
-	// highlight. (#1376-7333)
-	createEffect(() => {
-		if (activeTab() === "ai-chat" && !settingsStore.isAiChatEnabled()) {
-			setActiveTab("general");
-		}
-	});
 
 	/** Repo path if a repo nav item is currently active, null otherwise */
 	const activeRepoPath = (): string | null => {
@@ -279,14 +277,11 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				<Show when={activeTab() === "smart-prompts"}>
 					<SmartPromptsTab />
 				</Show>
-				<Show when={activeTab() === "providers"}>
-					<ProvidersTab />
-				</Show>
 				<Show when={activeTab() === "agents"}>
 					<AgentsTab connectionId={activeConnectionId()} />
 				</Show>
-				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-					<AiChatTab />
+				<Show when={activeTab() === "providers"}>
+					<ProvidersTab />
 				</Show>
 			</Show>
 		</SettingsShell>

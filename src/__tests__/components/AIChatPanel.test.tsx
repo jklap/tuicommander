@@ -1,33 +1,21 @@
+// @vitest-environment jsdom
+//
+// The panel renders an agent's answer through ContentRenderer, whose DOMPurify
+// pass needs a complete NodeIterator; happy-dom's is not.
+
 import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-	mockSubscribe,
-	mockUnsubscribe,
-	mockChatId,
-	mockDetachPanel,
-	mockReattachPanel,
-	mockClosePanel,
-	mockReasoningChunks,
-	mockIsThinking,
-	mockMessages,
-	mockSendMessage,
-} = vi.hoisted(() => ({
-	mockSubscribe: vi.fn().mockResolvedValue(undefined),
-	mockUnsubscribe: vi.fn().mockResolvedValue(undefined),
-	mockChatId: vi.fn(() => "chat-abc123"),
+const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
 	mockDetachPanel: vi.fn().mockResolvedValue(undefined),
 	mockReattachPanel: vi.fn().mockResolvedValue(undefined),
 	mockClosePanel: vi.fn().mockResolvedValue(undefined),
-	mockReasoningChunks: vi.fn(() => ""),
-	mockIsThinking: vi.fn(() => false),
-	mockMessages: vi.fn(() => [] as Array<{ role: string; content: string }>),
-	mockSendMessage: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
 	Channel: vi.fn(),
+	convertFileSrc: (path: string) => path,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -41,67 +29,8 @@ vi.mock("../../panelRouter", () => ({
 	closePanel: mockClosePanel,
 }));
 
-vi.mock("../../stores/conversationStore", () => ({
-	conversationStore: {
-		messages: mockMessages,
-		isStreaming: () => false,
-		streamingText: () => "",
-		error: () => null,
-		chatId: mockChatId,
-		sessionUsage: () => null,
-		sendMessage: mockSendMessage,
-		cancelStream: vi.fn(),
-		clearHistory: vi.fn(),
-		subscribeToRegistry: mockSubscribe,
-		unsubscribeFromRegistry: mockUnsubscribe,
-		listAllConversations: vi.fn().mockResolvedValue([]),
-		loadConversation: vi.fn(),
-		resetChatId: vi.fn(),
-		agentState: () => "idle",
-		toolCalls: () => [],
-		textChunks: () => null,
-		unrestricted: () => false,
-		setUnrestricted: vi.fn(),
-		startAgent: vi.fn(),
-		pauseAgent: vi.fn(),
-		resumeAgent: vi.fn(),
-		cancelAgent: vi.fn(),
-		pendingApproval: () => null,
-		approveAction: vi.fn(),
-		currentIteration: () => 0,
-		reset: vi.fn(),
-		reasoningChunks: mockReasoningChunks,
-		isThinking: mockIsThinking,
-	},
-}));
-
-// `activeId` is mutable so a test can reproduce a DETACHED window, where this
-// store is never hydrated and therefore holds no active terminal at all.
-const terminalsState = vi.hoisted(() => ({ activeId: "t1" as string | undefined, terminals: {} }));
-
-vi.mock("../../stores/terminals", () => ({
-	terminalsStore: {
-		state: terminalsState,
-		getIds: () => (terminalsState.activeId ? ["t1"] : []),
-		get: () =>
-			terminalsState.activeId
-				? { sessionId: "sess-1", tuicSession: "sess-1", name: "Terminal 1", ref: null }
-				: undefined,
-	},
-}));
-
 vi.mock("../../stores/appLogger", () => ({
-	appLogger: {
-		info: vi.fn(),
-		warn: vi.fn(),
-		error: vi.fn(),
-		debug: vi.fn(),
-	},
-}));
-
-vi.mock("../../utils/sendCommand", () => ({
-	sendCommand: vi.fn(),
-	getShellFamily: vi.fn(() => "posix"),
+	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 vi.mock("../../stores/ui", () => ({
@@ -115,182 +44,513 @@ vi.mock("../../stores/ui", () => ({
 
 vi.mock("../../transport", () => ({
 	isTauri: () => true,
+	owningConnectionFor: () => undefined,
 }));
 
-vi.mock("../../components/ui/ContentRenderer", () => ({
-	ContentRenderer: (props: { content: string }) => <div>{props.content}</div>,
+// Whether an ego binary is configured is the one setting this panel reads, and
+// criterion 9 turns on it being readable as "not configured" rather than as an
+// empty string nobody checked.
+const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego" }));
+
+vi.mock("../../stores/settings", () => ({
+	settingsStore: {
+		state: settings,
+		isAiChatEnabled: () => true,
+		isAcpConfigured: () => settings.egoExecutable.trim().length > 0,
+	},
 }));
+
+// The client is the IPC boundary and the only thing mocked below it: the store,
+// the transcript projection and every reducer between them are the real ones,
+// so a test that passes proves the panel reads what the wire actually carries.
+const client = vi.hoisted(() => ({
+	connect: vi.fn(),
+	reconnect: vi.fn(),
+	disconnect: vi.fn(),
+	newSession: vi.fn(),
+	loadSession: vi.fn(),
+	prompt: vi.fn(),
+	cancel: vi.fn(),
+	answerPermission: vi.fn(),
+	cancelPermission: vi.fn(),
+	answerElicitation: vi.fn(),
+	setConfigOption: vi.fn(),
+	pause: vi.fn(),
+	resumeTurn: vi.fn(),
+	compact: vi.fn(),
+}));
+
+vi.mock("../../services/acpClient", () => ({ acpClient: client }));
 
 import { AIChatPanel } from "../../components/AIChatPanel/AIChatPanel";
+import { aiChatDraft } from "../../components/AIChatPanel/draft";
+import { elicitationFields } from "../../components/AIChatPanel/Interactions";
+import { resetAcpChatBindings } from "../../components/AIChatPanel/useAcpChat";
+import { acpStore } from "../../stores/acp";
+import { acpTranscript } from "../../stores/acpTranscript";
+import type {
+	AcpAttachmentSnapshot,
+	AcpClientEvent,
+	AcpConnectionSnapshot,
+	AcpSessionConfigOption,
+} from "../../types/acp";
 
-describe("AIChatPanel lifecycle", () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-		mockMessages.mockReturnValue([]);
-		mockReasoningChunks.mockReturnValue("");
-		mockIsThinking.mockReturnValue(false);
+const ROOT = "/repo/tuicommander";
+const CONNECTION = "01932d5e-0000-7000-8000-0000000000c1";
+const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
+
+const MODEL_OPTION: AcpSessionConfigOption = {
+	id: "model",
+	name: "Model",
+	type: "select",
+	currentValue: "opus",
+	options: [
+		{ id: "opus", name: "Opus" },
+		{ id: "sonnet", name: "Sonnet" },
+	],
+};
+
+function attachment(overrides: Partial<AcpAttachmentSnapshot> = {}): AcpAttachmentSnapshot {
+	return {
+		sessionId: SESSION,
+		state: "idle",
+		cwd: ROOT,
+		additionalDirectories: [],
+		configOptions: [MODEL_OPTION],
+		usage: null,
+		activeTurn: null,
+		pendingPermissionIds: [],
+		pendingElicitationIds: [],
+		...overrides,
+	};
+}
+
+function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnectionSnapshot {
+	return {
+		connectionId: CONNECTION,
+		generation: 1,
+		state: "ready",
+		agentInfo: { name: "ego", version: "0.1.0" },
+		capabilities: {
+			protocol: 1,
+			load: true,
+			list: true,
+			resume: true,
+			fork: false,
+			delete: false,
+			close: true,
+			additionalDirectories: true,
+			promptImage: false,
+			promptAudio: false,
+			promptEmbeddedContext: false,
+			mcpStdio: false,
+			mcpHttp: true,
+			mcpSse: false,
+			clientFormElicitation: true,
+			clientBooleanConfig: false,
+			egoHoldVersion: 1,
+			egoCompactVersion: 1,
+		},
+		attachments: [],
+		earliestSequence: 1,
+		latestSequence: 1,
+		settlement: null,
+		...overrides,
+	};
+}
+
+let sequence = 0;
+
+/** One event frame, as the stream would deliver it. */
+function feed(event: AcpClientEvent, sessionId: string | null = SESSION): void {
+	sequence += 1;
+	const frame = {
+		kind: "event" as const,
+		connectionId: CONNECTION,
+		generation: 1,
+		sequence,
+		sessionId,
+		turnId: null,
+		event,
+	};
+	acpStore.applyFrame(frame);
+	acpTranscript.applyFrame(frame);
+}
+
+/** Let the panel's connect-then-open-session chain settle. */
+async function settle(): Promise<void> {
+	for (let turn = 0; turn < 6; turn += 1) await Promise.resolve();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function renderPanel() {
+	return render(() => <AIChatPanel visible={true} repoPath={ROOT} onClose={() => {}} />);
+}
+
+beforeEach(() => {
+	vi.clearAllMocks();
+	sequence = 0;
+	settings.egoExecutable = "/usr/local/bin/ego";
+	acpStore.reset();
+	acpTranscript.reset();
+	resetAcpChatBindings();
+	aiChatDraft.clear();
+
+	client.connect.mockImplementation(async () => {
+		const opened = snapshot();
+		acpStore.applySnapshot(opened);
+		acpStore.markStreaming(CONNECTION);
+		return opened;
 	});
-
-	afterEach(() => {
-		cleanup();
+	client.newSession.mockImplementation(async () => {
+		acpStore.applySnapshot(snapshot({ attachments: [attachment()] }));
+		return SESSION;
 	});
-
-	// The Rust `ChatRegistry` has no producer — nothing calls `fan_out` or any
-	// `ConversationState` setter — so `chat_subscribe` answered with an empty
-	// default snapshot and then went silent. Applying that snapshot ran
-	// `setMessages([])`, one IPC hop after `loadConversation` had filled them, so
-	// opening a conversation from history blanked it. Subscribing again requires a
-	// producer first.
-	it("does not subscribe to the producerless chat registry", async () => {
-		const { container, unmount } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		// Wait for the panel to be mounted and its effects flushed before asserting
-		// a negative — otherwise the assertion passes before anything could run.
-		await vi.waitFor(() => {
-			expect(container.querySelector('button[title="Open in separate window"]')).not.toBeNull();
-		});
-
-		expect(mockSubscribe).not.toHaveBeenCalled();
-		unmount();
-		expect(mockUnsubscribe).not.toHaveBeenCalled();
+	client.reconnect.mockImplementation(async () => {
+		const opened = snapshot({ attachments: [attachment()] });
+		acpStore.applySnapshot(opened);
+		acpStore.markStreaming(CONNECTION);
+		return opened;
 	});
+	for (const method of [
+		"disconnect",
+		"loadSession",
+		"cancel",
+		"answerPermission",
+		"cancelPermission",
+		"answerElicitation",
+		"setConfigOption",
+		"pause",
+		"resumeTurn",
+		"compact",
+	] as const) {
+		client[method].mockResolvedValue(undefined);
+	}
+	client.prompt.mockResolvedValue("turn-1");
+});
 
-	it("renders detach button in main window mode", () => {
-		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		const detachBtn = container.querySelector('button[title="Open in separate window"]');
-		expect(detachBtn).not.toBeNull();
-	});
+afterEach(cleanup);
 
-	it("detach button calls detachPanel", () => {
-		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		const detachBtn = container.querySelector('button[title="Open in separate window"]') as HTMLButtonElement;
-		detachBtn.click();
+describe("AIChatPanel: the frame it keeps", () => {
+	// The panel keeps its slot, its id and its detach control across the engine
+	// swap. The registry entry behind this button is what makes Cmd+Alt+A, the
+	// status-bar button and the command-palette entry work as well.
+	it("offers its own window", async () => {
+		const { container } = renderPanel();
+		await settle();
+
+		expect(container.querySelector("#ai-chat-panel")).not.toBeNull();
+		const detach = container.querySelector('button[title="Open in separate window"]') as HTMLButtonElement;
+		detach.click();
 		expect(mockDetachPanel).toHaveBeenCalledWith("ai-chat");
 	});
-});
 
-describe("AIChatPanel extended-thinking disclosure", () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-		// Reasoning only streams after a user turn exists, so keep a user message present.
-		mockMessages.mockReturnValue([{ role: "user", content: "hi" }]);
-		mockReasoningChunks.mockReturnValue("");
-		mockIsThinking.mockReturnValue(false);
-	});
+	// The header names the repository, not the focused terminal: the panel binds
+	// to a repo root and a session, and a per-terminal binding is the exact
+	// inverse of a control plane.
+	it("names the repository it is bound to", async () => {
+		const { container } = renderPanel();
+		await settle();
 
-	afterEach(() => {
-		cleanup();
-	});
-
-	it("does not render the disclosure when there is no reasoning", () => {
-		mockReasoningChunks.mockReturnValue("");
-		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		expect(container.querySelector("details")).toBeNull();
-	});
-
-	it("renders the Thinking disclosure when reasoning is present", async () => {
-		mockReasoningChunks.mockReturnValue("planning the steps");
-		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		const details = container.querySelector("details");
-		expect(details).not.toBeNull();
-		expect(details?.querySelector("summary")?.textContent).toBe("Thinking");
-		await vi.waitFor(() => expect(details?.textContent).toContain("planning the steps"));
-	});
-
-	it("auto-opens the disclosure while the model is thinking", () => {
-		mockReasoningChunks.mockReturnValue("still reasoning");
-		mockIsThinking.mockReturnValue(true);
-		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		expect(container.querySelector("details")?.hasAttribute("open")).toBe(true);
-	});
-
-	it("collapses the disclosure once thinking has finished", () => {
-		mockReasoningChunks.mockReturnValue("done reasoning");
-		mockIsThinking.mockReturnValue(false);
-		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		expect(container.querySelector("details")?.hasAttribute("open")).toBe(false);
+		expect(container.textContent).toContain("tuicommander");
 	});
 });
 
-// A detached panel window is a separate WebView: `terminalsStore` is never
-// hydrated there (App returns at renderPanelMode before any main-window
-// effect), so deriving the terminal from that store left the detached chat
-// permanently read-only — it could show a conversation but never add to it.
-// The window is therefore handed its terminal binding explicitly, and that
-// binding is what every send, agent control and session lookup must use.
-describe("AIChatPanel terminal binding", () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-		mockMessages.mockReturnValue([]);
-		terminalsState.activeId = "t1";
+describe("AIChatPanel: without a configured binary", () => {
+	// An empty `ego_executable` is refused in Rust at connect. Saying so is the
+	// difference between a panel that explains itself and one that silently
+	// never starts.
+	it("explains that ACP is not configured and launches nothing", async () => {
+		settings.egoExecutable = "";
+		const { container } = renderPanel();
+		await settle();
+
+		expect(container.textContent).toContain("ACP is not configured");
+		expect(client.connect).not.toHaveBeenCalled();
+		expect(container.querySelector("textarea")).toBeNull();
+	});
+});
+
+describe("AIChatPanel: a turn", () => {
+	it("opens a connection on the repo root and a session on the same root", async () => {
+		renderPanel();
+		await settle();
+
+		expect(client.connect).toHaveBeenCalledWith(ROOT);
+		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, ROOT);
 	});
 
-	afterEach(() => {
-		cleanup();
-		terminalsState.activeId = "t1";
-	});
+	it("sends what was typed and streams the answer back", async () => {
+		const { container } = renderPanel();
+		await settle();
 
-	const typeAndSend = (container: HTMLElement, text: string) => {
 		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
-		textarea.value = text;
+		textarea.value = "what does acp/mod.rs do?";
 		textarea.dispatchEvent(new Event("input", { bubbles: true }));
-		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-		return textarea;
-	};
+		await settle();
 
-	it("sends with the handed-over session when the store has no terminals", () => {
-		terminalsState.activeId = undefined; // the detached window
-		const { container } = render(() => (
-			<AIChatPanel
-				visible={true}
-				onClose={() => {}}
-				terminal={() => ({ sessionId: "sess-detached", name: "Terminal 7", attached: true })}
-			/>
-		));
+		const send = [...container.querySelectorAll("button")].find((button) => button.textContent === "Send");
+		send?.click();
+		await settle();
 
-		const textarea = typeAndSend(container, "hello from the detached window");
+		expect(client.prompt).toHaveBeenCalledWith(CONNECTION, SESSION, "what does acp/mod.rs do?");
 
-		expect(textarea.disabled).toBe(false);
-		expect(container.textContent).not.toContain("No terminal focused");
-		expect(mockSendMessage).toHaveBeenCalledWith("hello from the detached window", "sess-detached");
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "It " } },
+		});
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "serializes." } },
+		});
+		await settle();
+
+		expect(container.textContent).toContain("It serializes.");
 	});
 
-	it("names the handed-over terminal in the header", () => {
-		terminalsState.activeId = undefined;
-		const { container } = render(() => (
-			<AIChatPanel
-				visible={true}
-				onClose={() => {}}
-				terminal={() => ({ sessionId: "sess-detached", name: "Terminal 7", attached: true })}
-			/>
-		));
+	// One connection per root. Coming back to a repository must not launch a
+	// second ego on a root that already has one.
+	it("reuses the connection a root already has", async () => {
+		const first = renderPanel();
+		await settle();
+		first.unmount();
 
-		expect(container.textContent).toContain("Terminal 7");
+		renderPanel();
+		await settle();
+
+		expect(client.connect).toHaveBeenCalledTimes(1);
+		expect(client.newSession).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("AIChatPanel: permission", () => {
+	// The option list is the agent's. Answering with anything but one of its own
+	// option ids answers a question nobody asked.
+	it("renders the options ego published and answers with one of their ids", async () => {
+		const { container } = renderPanel();
+		await settle();
+
+		feed({
+			kind: "permissionRequested",
+			requestId: "req-1",
+			request: {
+				sessionId: SESSION,
+				toolCall: { title: "Write src/main.rs" },
+				options: [
+					{ optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+					{ optionId: "reject-once", name: "Reject", kind: "reject_once" },
+				],
+			},
+		});
+		await settle();
+
+		expect(container.textContent).toContain("Write src/main.rs");
+		const allow = [...container.querySelectorAll("button")].find((button) => button.textContent === "Allow once");
+		expect(allow).toBeDefined();
+		allow?.click();
+		await settle();
+
+		expect(client.answerPermission).toHaveBeenCalledWith(CONNECTION, "req-1", "allow-once");
+	});
+});
+
+describe("AIChatPanel: elicitation", () => {
+	it("renders a form and submits the values that were filled in", async () => {
+		const { container } = renderPanel();
+		await settle();
+
+		feed({
+			kind: "elicitationRequested",
+			requestId: "req-2",
+			request: {
+				mode: "form",
+				sessionId: SESSION,
+				message: "Which branch should I use?",
+				requestedSchema: {
+					type: "object",
+					properties: { branch: { type: "string", title: "Branch" } },
+					required: ["branch"],
+				},
+			},
+		});
+		await settle();
+
+		expect(container.textContent).toContain("Which branch should I use?");
+		const input = container.querySelector('input[type="text"]') as HTMLInputElement;
+		input.value = "main";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		const submit = [...container.querySelectorAll("button")].find((button) => button.textContent === "Submit");
+		submit?.click();
+		await settle();
+
+		expect(client.answerElicitation).toHaveBeenCalledWith(CONNECTION, "req-2", {
+			action: "accept",
+			content: { branch: "main" },
+		});
 	});
 
-	// Detaching while no terminal is focused hands over nothing to send to. The
-	// panel must stay read-only rather than send into a null session.
-	it("stays read-only when the handed-over binding has no terminal", () => {
-		terminalsState.activeId = undefined;
-		const { container } = render(() => (
-			<AIChatPanel
-				visible={true}
-				onClose={() => {}}
-				terminal={() => ({ sessionId: null, name: null, attached: false })}
-			/>
-		));
+	// The Rust client answers `cancel` to every mode but `form` before it reaches
+	// a host, so a mode this client never advertised must never be drawn — a form
+	// for it would collect values the agent cannot read back.
+	it("draws nothing for a mode this client did not advertise", async () => {
+		const { container } = renderPanel();
+		await settle();
 
-		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
-		expect(textarea.disabled).toBe(true);
-		expect(container.textContent).toContain("No terminal focused");
+		feed({
+			kind: "elicitationRequested",
+			requestId: "req-3",
+			request: { mode: "confirm", sessionId: SESSION, message: "Proceed?", requestedSchema: {} },
+		} as unknown as AcpClientEvent);
+		await settle();
+
+		expect(container.textContent).not.toContain("Proceed?");
+	});
+});
+
+describe("elicitationFields", () => {
+	it("reads a field per property, with its title and whether it is required", () => {
+		expect(
+			elicitationFields({
+				type: "object",
+				properties: {
+					branch: { type: "string", title: "Branch" },
+					depth: { type: "integer" },
+					force: { type: "boolean" },
+					mode: { type: "string", enum: ["fast", "safe"] },
+				},
+				required: ["branch"],
+			}),
+		).toEqual([
+			{ name: "branch", label: "Branch", type: "string", choices: [], required: true },
+			{ name: "depth", label: "depth", type: "number", choices: [], required: false },
+			{ name: "force", label: "force", type: "boolean", choices: [], required: false },
+			{ name: "mode", label: "mode", type: "enum", choices: ["fast", "safe"], required: false },
+		]);
 	});
 
-	// The main window passes no binding and must keep deriving it from the
-	// store exactly as before.
-	it("falls back to the terminals store when no binding is handed over", () => {
-		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
+	// A nested object has no single control to draw, and guessing one would
+	// collect a value the agent cannot read back.
+	it("skips a property it cannot draw one control for", () => {
+		expect(
+			elicitationFields({ type: "object", properties: { nested: { type: "object" }, list: { type: "array" } } }),
+		).toEqual([]);
+	});
 
-		typeAndSend(container, "hello from the main window");
+	it("reads no field out of a schema it cannot understand", () => {
+		expect(elicitationFields(null)).toEqual([]);
+		expect(elicitationFields({ type: "string" })).toEqual([]);
+	});
+});
 
-		expect(mockSendMessage).toHaveBeenCalledWith("hello from the main window", "sess-1");
+describe("AIChatPanel: a gap", () => {
+	// A gap says the journal no longer holds what the cursor asks for. Skipping
+	// ahead would leave a hole in the conversation that nothing on screen admits
+	// to; the recovery on record is a fresh process replaying the history.
+	it("surfaces the gap and offers the recovery", async () => {
+		const { container } = renderPanel();
+		await settle();
+
+		acpStore.applyFrame({
+			kind: "gap",
+			code: "stream_gap",
+			message: "sequence 3 is no longer held",
+			connectionId: CONNECTION,
+			sessionId: null,
+			operation: null,
+			retryable: false,
+		});
+		await settle();
+
+		expect(container.textContent).toContain("Missed part of this conversation");
+		const recover = [...container.querySelectorAll("button")].find((button) => button.textContent === "Recover");
+		recover?.click();
+		await settle();
+
+		expect(client.reconnect).toHaveBeenCalledWith(CONNECTION, ROOT);
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, SESSION, ROOT);
+	});
+});
+
+describe("AIChatPanel: the session's own knobs", () => {
+	// Model, effort and mode are the session's vocabulary. A list of models in
+	// the panel would be a second, wrong answer to a question ego already
+	// answers, and it would go stale the first time ego learned a new one.
+	it("renders the published options and sets one through set_config_option", async () => {
+		const { container } = renderPanel();
+		await settle();
+
+		const picker = [...container.querySelectorAll("select")].find((select) =>
+			[...select.options].some((option) => option.textContent === "Sonnet"),
+		) as HTMLSelectElement;
+		expect(picker.value).toBe("opus");
+
+		picker.value = "sonnet";
+		picker.dispatchEvent(new Event("change", { bubbles: true }));
+		await settle();
+
+		expect(client.setConfigOption).toHaveBeenCalledWith(CONNECTION, SESSION, "model", { value: "sonnet" });
+	});
+});
+
+describe("AIChatPanel: pause, resume and compact", () => {
+	it("pauses a running turn and resumes a held one", async () => {
+		const { container } = renderPanel();
+		await settle();
+
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+
+		const pause = [...container.querySelectorAll("button")].find((button) => button.textContent === "Pause");
+		pause?.click();
+		await settle();
+		expect(client.pause).toHaveBeenCalledWith(CONNECTION, SESSION);
+
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "paused" })] }));
+		await settle();
+
+		const resume = [...container.querySelectorAll("button")].find((button) => button.textContent === "Resume");
+		resume?.click();
+		await settle();
+		expect(client.resumeTurn).toHaveBeenCalledWith(CONNECTION, SESSION);
+	});
+
+	it("compacts the conversation", async () => {
+		const { container } = renderPanel();
+		await settle();
+
+		const compact = [...container.querySelectorAll("button")].find((button) => button.textContent === "Compact");
+		compact?.click();
+		await settle();
+
+		expect(client.compact).toHaveBeenCalledWith(CONNECTION, SESSION);
+	});
+
+	// An ego that did not advertise the extension gets no button, rather than a
+	// button that fails when it is pressed.
+	it("offers neither when the agent did not advertise them", async () => {
+		client.connect.mockImplementation(async () => {
+			const opened = snapshot({
+				capabilities: { ...snapshot().capabilities!, egoHoldVersion: null, egoCompactVersion: null },
+			});
+			acpStore.applySnapshot(opened);
+			acpStore.markStreaming(CONNECTION);
+			return opened;
+		});
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(
+				snapshot({
+					attachments: [attachment()],
+					capabilities: { ...snapshot().capabilities!, egoHoldVersion: null, egoCompactVersion: null },
+				}),
+			);
+			return SESSION;
+		});
+
+		const { container } = renderPanel();
+		await settle();
+
+		const labels = [...container.querySelectorAll("button")].map((button) => button.textContent);
+		expect(labels).not.toContain("Pause");
+		expect(labels).not.toContain("Compact");
 	});
 });

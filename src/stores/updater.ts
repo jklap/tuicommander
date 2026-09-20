@@ -47,12 +47,26 @@ interface UpdaterState {
 	error: string | null;
 	/** Informational message when no release exists for the channel (not an error) */
 	noRelease: boolean;
+	/** Why the built-in updater cannot run from this binary at all (not an error) */
+	unsupported: string | null;
 	/** For non-stable channels, a URL to the release page for manual download */
 	downloadUrl: string | null;
 }
 
 /** Sentinel to distinguish "check() timed out" from "no update available". */
 const TIMEOUT_SENTINEL = Symbol("timeout");
+
+/** Tauri resolves the running binary through `current_exe()` and refuses a path
+ *  containing a symlink, because it cannot prove what it would be replacing.
+ *  That is not a failure the user can act on: it is a property of where the
+ *  binary sits. A `make dev` build under an mbx target view
+ *  (`src-tauri/target` -> `~/Gits/.mbx/targets/...`) hits it every time, and so
+ *  would a release build installed under a symlinked path. Report it as a
+ *  condition, never as a red "Update failed". */
+function unsupportedBinaryPathReason(message: string): string | null {
+	if (!/current_exe\(\)/i.test(message) || !/symlink/i.test(message)) return null;
+	return "In-app updates are unavailable because this binary runs from a path containing a symlink. Download the update manually.";
+}
 
 /** Run Tauri's built-in stable update check with a 10-second timeout. */
 function checkStableWithTimeout(): Promise<Update | null | typeof TIMEOUT_SENTINEL> {
@@ -81,6 +95,7 @@ function createUpdaterStore() {
 		body: null,
 		error: null,
 		noRelease: false,
+		unsupported: null,
 		downloadUrl: null,
 	});
 
@@ -90,7 +105,7 @@ function createUpdaterStore() {
 		async checkForUpdate(): Promise<void> {
 			if (!isTauri()) return;
 			if (state.checking || state.downloading) return;
-			setState({ checking: true, error: null, noRelease: false });
+			setState({ checking: true, error: null, noRelease: false, unsupported: null });
 
 			const channel = settingsStore.state.updateChannel;
 
@@ -192,7 +207,11 @@ function createUpdaterStore() {
 				}
 			} catch (err) {
 				const raw = err instanceof Error ? err.message : String(err);
-				if (channel === "stable" && /fetch|load failed|valid release|404|not found/i.test(raw)) {
+				const unsupported = unsupportedBinaryPathReason(raw);
+				if (unsupported) {
+					appLogger.debug("app", "Built-in updater unavailable for this binary path", raw);
+					setState({ unsupported, available: false, version: null, body: null, downloadUrl: null });
+				} else if (channel === "stable" && /fetch|load failed|valid release|404|not found/i.test(raw)) {
 					// No release published for stable — informational, not an error
 					appLogger.debug("app", `No ${channel} release found`, raw);
 					setState({ noRelease: true });
@@ -235,7 +254,15 @@ function createUpdaterStore() {
 
 		dismiss(): void {
 			pendingUpdate = null;
-			setState({ available: false, version: null, body: null, error: null, noRelease: false, downloadUrl: null });
+			setState({
+				available: false,
+				version: null,
+				body: null,
+				error: null,
+				noRelease: false,
+				unsupported: null,
+				downloadUrl: null,
+			});
 		},
 
 		/** Simulate an available update (dev/testing only) */

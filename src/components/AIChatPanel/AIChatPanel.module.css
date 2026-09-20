@@ -784,3 +784,80 @@
   color: var(--fg-muted);
   opacity: 0.85;
 }
+
+/* --- The ego panel (#785-58ca) --------------------------------------------
+   Everything above is the frame the embedded engine left behind and is reused
+   as-is. What follows is only what the ACP conversation added and had no home:
+   the agent's plan, an elicitation form, and the row of session controls. */
+
+.controlBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.controlSpacer {
+  flex: 1;
+}
+
+.planList {
+  list-style: none;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: var(--font-sm);
+}
+
+.planItem {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--fg-secondary);
+  line-height: 1.5;
+}
+
+.planItemActive {
+  color: var(--fg-primary);
+}
+
+.planItemDone {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
+
+.settledNote {
+  align-self: center;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+.formField {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0;
+}
+
+.formLabel {
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
+}
+
+.formInput {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-family: var(--font-ui);
+  font-size: var(--font-sm);
+  padding: 4px 8px;
+}
+
+.formInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}

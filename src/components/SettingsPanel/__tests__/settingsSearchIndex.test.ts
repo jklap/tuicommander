@@ -14,9 +14,8 @@ const TAB_SOURCES: Record<string, string> = {
 	services: "tabs/ServicesTab.tsx",
 	plugins: "tabs/PluginsTab.tsx",
 	"smart-prompts": "tabs/SmartPromptsTab.tsx",
-	providers: "tabs/ProvidersTab.tsx",
 	agents: "tabs/AgentsTab.tsx",
-	"ai-chat": "tabs/AiChatTab.tsx",
+	providers: "tabs/ProvidersTab.tsx",
 };
 
 /** Occurrences the extraction rule cannot index, pinned so a new one is loud.
@@ -35,13 +34,16 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	services: { dynamic: 0, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 4, orphans: 11 },
-	providers: { dynamic: 3, orphans: 0 },
 	// 8th: the per-agent "Native status signals" toggle, which sits in the same
 	// runtime-rendered card as "Install hooks globally" and so cannot have a
-	// static scroll target either. 9th: the per-agent "Collect progress"
-	// override, in that same card.
-	agents: { dynamic: 9, orphans: 1 },
-	"ai-chat": { dynamic: 2, orphans: 0 },
+	// static scroll target either.
+	// The orphan is the machine selector's "Configure agents on" label. It is not
+	// a setting — it scopes every setting below it to one machine — so it sits
+	// above the first heading on purpose and has nothing to scroll to.
+	agents: { dynamic: 8, orphans: 1 },
+	// The `<optgroup label={provider.name}>` inside the default-model picker. It
+	// groups the options by provider and is not a setting anybody can scroll to.
+	providers: { dynamic: 1, orphans: 0 },
 };
 
 const readTab = (file: string) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");

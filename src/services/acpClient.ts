@@ -1,0 +1,272 @@
+/**
+ * Everything the panel does to an ACP connection, in one place.
+ *
+ * The store holds what is true; this holds what to do about it. Both halves of
+ * every decision that needs the journal cursor live here — when to resume a
+ * stream, when to stop resuming, what sequence to resume from — because the
+ * cursor has one owner and a second opinion about it would replay or skip a
+ * turn.
+ *
+ * Nothing here interprets a frame. The store reduces them and the panel renders
+ * them; this file only decides which streams exist.
+ */
+
+import { invoke } from "../invoke";
+import { acpStore } from "../stores/acp";
+import { acpTranscript } from "../stores/acpTranscript";
+import { appLogger } from "../stores/appLogger";
+import type {
+	AcpConnectionId,
+	AcpConnectionSettlement,
+	AcpConnectionSnapshot,
+	AcpElicitationAction,
+	AcpHostRequestId,
+	AcpPendingInteraction,
+	AcpSessionConfigOption,
+	AcpSessionConfigOptionValue,
+	AcpSessionId,
+	AcpStreamFrame,
+} from "../types/acp";
+import { randomUuid } from "../utils/randomId";
+import { type AcpStreamHandle, type AcpStreamOpener, openAcpStream } from "./acpStream";
+
+/**
+ * How many times a dropped stream may be reopened before the client stops.
+ *
+ * A backend that is gone answers every attempt identically, so an unbounded
+ * retry is a spin rather than a recovery. Stopping leaves `isStreaming` false
+ * with the snapshot intact, which is a state the panel can render and a person
+ * can act on. The budget is per unbroken run of failures: one delivered frame
+ * is proof the stream works and returns it.
+ */
+const RESUME_BUDGET = 3;
+
+interface Live {
+	handle: AcpStreamHandle | null;
+	/** Resumes spent since the last frame arrived. */
+	spent: number;
+	/** Set by `disconnect`, so the drop its own teardown causes resumes nothing. */
+	abandoned: boolean;
+}
+
+export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
+	const live = new Map<AcpConnectionId, Live>();
+
+	async function subscribe(connectionId: AcpConnectionId, entry: Live): Promise<void> {
+		const handle = await open({
+			connectionId,
+			afterSequence: acpStore.resumeFrom(connectionId),
+			onFrame: (frame) => receive(entry, frame),
+			onDropped: () => {
+				void resume(connectionId, entry);
+			},
+		});
+		if (entry.abandoned) {
+			// The connection went away while the socket was opening. Closing it
+			// here rather than leaving it live is the difference between a stream
+			// nobody reads and a stream that keeps a settled connection's entry
+			// alive in the store.
+			handle.close();
+			return;
+		}
+		entry.handle = handle;
+		acpStore.markStreaming(connectionId);
+	}
+
+	function receive(entry: Live, frame: AcpStreamFrame): void {
+		entry.spent = 0;
+		acpStore.applyFrame(frame);
+		acpTranscript.applyFrame(frame);
+		if (frame.kind !== "event") {
+			// `gap` and `end` are both terminal and neither is recoverable by
+			// reading again: a gap means the journal no longer holds what the
+			// cursor asks for, an end means there is nothing left to hold.
+			entry.abandoned = true;
+		}
+	}
+
+	async function resume(connectionId: AcpConnectionId, entry: Live): Promise<void> {
+		if (entry.abandoned) return;
+		if (entry.spent >= RESUME_BUDGET) {
+			appLogger.warn("ai-chat", "stream stopped after repeated failures to resume", { connectionId });
+			entry.abandoned = true;
+			acpStore.markStopped(connectionId);
+			return;
+		}
+		entry.spent += 1;
+		try {
+			await subscribe(connectionId, entry);
+		} catch (error) {
+			appLogger.debug("ai-chat", "resuming the stream failed", { connectionId, error });
+			void resume(connectionId, entry);
+		}
+	}
+
+	function forget(connectionId: AcpConnectionId): void {
+		const entry = live.get(connectionId);
+		if (!entry) return;
+		entry.abandoned = true;
+		entry.handle?.close();
+		live.delete(connectionId);
+	}
+
+	/**
+	 * Take a connection as current: hold its snapshot, its open questions, and a
+	 * stream over its journal.
+	 *
+	 * The questions are fetched rather than waited for. One raised before this
+	 * window subscribed is still unanswered and nothing will announce it again,
+	 * so a panel that only listened would show an idle session that is in fact
+	 * blocked.
+	 */
+	async function adopt(snapshot: AcpConnectionSnapshot): Promise<AcpConnectionSnapshot> {
+		acpStore.applySnapshot(snapshot);
+		const connectionId = snapshot.connectionId;
+		forget(connectionId);
+		const entry: Live = { handle: null, spent: 0, abandoned: false };
+		live.set(connectionId, entry);
+		const pending = await invoke<AcpPendingInteraction[]>("acp_pending_interactions", { connectionId });
+		acpStore.applyInteractions(connectionId, pending);
+		await subscribe(connectionId, entry);
+		return snapshot;
+	}
+
+	return {
+		/** Launch ego on a repo root and read everything that connection holds. */
+		async connect(root: string): Promise<AcpConnectionSnapshot> {
+			return adopt(await invoke<AcpConnectionSnapshot>("acp_connect", { root }));
+		},
+
+		/** Replace a connection with a fresh process on the same root. */
+		async reconnect(connectionId: AcpConnectionId, root: string): Promise<AcpConnectionSnapshot> {
+			return adopt(await invoke<AcpConnectionSnapshot>("acp_reconnect", { connectionId, root }));
+		},
+
+		/** Read the connection's current picture without touching its stream. */
+		async refresh(connectionId: AcpConnectionId): Promise<void> {
+			acpStore.applySnapshot(await invoke<AcpConnectionSnapshot>("acp_connection_snapshot", { connectionId }));
+		},
+
+		async disconnect(connectionId: AcpConnectionId): Promise<AcpConnectionSettlement> {
+			forget(connectionId);
+			try {
+				return await invoke<AcpConnectionSettlement>("acp_disconnect", { connectionId });
+			} finally {
+				acpStore.forget(connectionId);
+			}
+		},
+
+		/**
+		 * Open a session on the root this connection runs on.
+		 *
+		 * The authority names a directory and nothing else. What the session may
+		 * reach beyond it is decided in Rust: a body naming an MCP server is
+		 * refused, not stripped, so sending one would fail the whole request.
+		 */
+		async newSession(connectionId: AcpConnectionId, cwd: string): Promise<AcpSessionId> {
+			const attachment = await invoke<{ sessionId: AcpSessionId }>("acp_session_new", {
+				connectionId,
+				authority: { cwd, additionalDirectories: [] },
+			});
+			await this.refresh(connectionId);
+			return attachment.sessionId;
+		},
+
+		/** Attach to a session ego already owns and replay its history. */
+		async loadSession(connectionId: AcpConnectionId, sessionId: AcpSessionId, cwd: string): Promise<void> {
+			// `session/load` replays the whole history as updates. Without this the
+			// replay lands under what is already shown and every message doubles.
+			acpTranscript.clear(sessionId);
+			await invoke("acp_session_load", {
+				connectionId,
+				sessionId,
+				authority: { cwd, additionalDirectories: [] },
+			});
+			await this.refresh(connectionId);
+		},
+
+		async closeSession(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
+			await invoke("acp_session_close", { connectionId, sessionId });
+			await this.refresh(connectionId);
+		},
+
+		async listSessions(connectionId: AcpConnectionId, cwd?: string) {
+			return invoke<{ sessions: { sessionId: AcpSessionId; cwd: string }[] }>("acp_session_list", {
+				connectionId,
+				cwd,
+			});
+		},
+
+		/** Send one turn. A person types text; ego reads content blocks. */
+		async prompt(connectionId: AcpConnectionId, sessionId: AcpSessionId, text: string): Promise<string> {
+			// Shown before the agent answers. Ego echoes a user message only when
+			// it replays history, so nothing else would put it on screen.
+			acpTranscript.noteUserMessage(sessionId, text);
+			return invoke<string>("acp_session_prompt", {
+				connectionId,
+				sessionId,
+				prompt: [{ type: "text", text }],
+			});
+		},
+
+		async cancel(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {
+			await invoke("acp_session_cancel", { connectionId, sessionId });
+		},
+
+		/** Answer with one of the option ids the agent published, never another. */
+		async answerPermission(
+			connectionId: AcpConnectionId,
+			requestId: AcpHostRequestId,
+			optionId: string,
+		): Promise<void> {
+			await invoke("acp_respond_permission", {
+				connectionId,
+				requestId,
+				outcome: { outcome: "selected", optionId },
+			});
+		},
+
+		async cancelPermission(connectionId: AcpConnectionId, requestId: AcpHostRequestId): Promise<void> {
+			await invoke("acp_respond_permission", { connectionId, requestId, outcome: { outcome: "cancelled" } });
+		},
+
+		async answerElicitation(
+			connectionId: AcpConnectionId,
+			requestId: AcpHostRequestId,
+			action: AcpElicitationAction,
+		): Promise<void> {
+			await invoke("acp_respond_elicitation", { connectionId, requestId, action });
+		},
+
+		/** Set one of the knobs the session published, and take back the new list. */
+		async setConfigOption(
+			connectionId: AcpConnectionId,
+			sessionId: AcpSessionId,
+			configId: string,
+			value: AcpSessionConfigOptionValue,
+		): Promise<AcpSessionConfigOption[]> {
+			const options = await invoke<AcpSessionConfigOption[]>("acp_session_set_config_option", {
+				connectionId,
+				sessionId,
+				configId,
+				value,
+			});
+			await this.refresh(connectionId);
+			return options;
+		},
+
+		async pause(connectionId: AcpConnectionId, sessionId: AcpSessionId) {
+			return invoke("acp_turn_pause", { connectionId, sessionId, requestId: randomUuid() });
+		},
+
+		async resumeTurn(connectionId: AcpConnectionId, sessionId: AcpSessionId) {
+			return invoke("acp_turn_resume", { connectionId, sessionId, requestId: randomUuid() });
+		},
+
+		async compact(connectionId: AcpConnectionId, sessionId: AcpSessionId) {
+			return invoke("acp_session_compact", { connectionId, sessionId, requestId: randomUuid() });
+		},
+	};
+}
+
+export const acpClient = createAcpClient();

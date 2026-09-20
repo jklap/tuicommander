@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
 import * as platform from "../../platform";
@@ -12,6 +11,7 @@ import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import type { BranchPrStatus } from "../../types";
+import { openDialog as open } from "../../utils/nativeDialog";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -54,30 +54,30 @@ describe("buildAgentSeed", () => {
 		isWindowsSpy.mockRestore();
 	});
 
-	it("wraps the prompt as a POSIX single-quoted argument to the launch command", () => {
+	it("wraps the prompt as a POSIX single-quoted argument to the launch command", async () => {
 		isWindowsSpy.mockReturnValue(false);
-		const seed = buildAgentSeed("fix the bug");
+		const seed = await buildAgentSeed("fix the bug");
 		expect(seed.initCommand).toBe(`${seed.launchCommand} 'fix the bug'`);
 		expect(seed.agentType).toBe("claude");
 	});
 
-	it("escapes single quotes in the prompt as '\\''", () => {
+	it("escapes single quotes in the prompt as '\\''", async () => {
 		isWindowsSpy.mockReturnValue(false);
-		const seed = buildAgentSeed("hello 'world'");
+		const seed = await buildAgentSeed("hello 'world'");
 		// Each ' becomes '\'' — close quote, escaped quote, reopen quote.
 		expect(seed.initCommand).toBe(`${seed.launchCommand} 'hello '\\''world'\\'''`);
 	});
 
-	it("keeps launchCommand bare (no embedded prompt) so it can be reused for resume", () => {
+	it("keeps launchCommand bare (no embedded prompt) so it can be reused for resume", async () => {
 		isWindowsSpy.mockReturnValue(false);
-		const seed = buildAgentSeed("multi\nline prompt");
+		const seed = await buildAgentSeed("multi\nline prompt");
 		expect(seed.initCommand.startsWith(`${seed.launchCommand} `)).toBe(true);
 		expect(seed.launchCommand).not.toContain("multi");
 	});
 
-	it("wraps the prompt as a Windows double-quoted argument on cmd.exe", () => {
+	it("wraps the prompt as a Windows double-quoted argument on cmd.exe", async () => {
 		isWindowsSpy.mockReturnValue(true);
-		const seed = buildAgentSeed("fix the bug");
+		const seed = await buildAgentSeed("fix the bug");
 		expect(seed.initCommand).toBe(`${seed.launchCommand} "fix the bug"`);
 	});
 });
@@ -2152,12 +2152,7 @@ describe("useGitOperations", () => {
 			await noPromptGitOps.handleAddWorktree("/repo");
 
 			// Should use first baseRef option as the base
-			expect(mockRepo.createWorktree).toHaveBeenCalledWith(
-				"/repo",
-				"cool-ripley-007",
-				true,
-				"develop",
-			);
+			expect(mockRepo.createWorktree).toHaveBeenCalledWith("/repo", "cool-ripley-007", true, "develop");
 		});
 	});
 
@@ -2416,7 +2411,6 @@ describe("useGitOperations", () => {
 			const termId = branch!.terminals[0];
 			expect(terminalsStore.get(termId)?.pendingInitCommand).toBeNull();
 		});
-
 	});
 
 	describe("executeRunCommand", () => {
