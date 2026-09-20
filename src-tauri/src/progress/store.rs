@@ -101,6 +101,20 @@ impl ProgressStore {
         let text = entry.trimmed_text();
         let step = entry.trimmed_step();
         let agent_name = entry.trimmed_agent_name();
+        // A repeat of the project's newest intent is that intent, not a new
+        // row: the changed-row parser hands the same `intent:` line back on
+        // every repaint it survives, and one intent landed 17 times in 8 s.
+        // Agent reports are deliberately NOT collapsed — an agent that reported
+        // the same step twice did the work twice, and only the reader can say
+        // what that means (docs/user-guide/project-progress.md).
+        if entry.kind == ProgressKind::Intent
+            && let Some(newest) = Self::newest(&tx, project)?
+            && newest.kind == ProgressKind::Intent
+            && newest.text == text
+            && newest.agent_name == agent_name
+        {
+            return Ok(newest);
+        }
         tx.execute(
             "INSERT INTO entries (project, created_at_ms, kind, text, step, agent_name)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -125,6 +139,47 @@ impl ProgressStore {
             step,
             agent_name,
         })
+    }
+
+    /// The project's newest entry, read inside the caller's transaction so the
+    /// repeat check in `record` sees every row a concurrent writer has landed.
+    fn newest(
+        tx: &rusqlite::Transaction<'_>,
+        project: &str,
+    ) -> Result<Option<ProgressEntry>, String> {
+        let row = tx
+            .query_row(
+                "SELECT id, created_at_ms, kind, text, step, agent_name
+                   FROM entries
+                  WHERE project = ?1
+                  ORDER BY id DESC
+                  LIMIT 1",
+                params![project],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(db_error("read the newest progress entry"))?;
+        row.map(|(id, created_at_ms, kind, text, step, agent_name)| {
+            Ok(ProgressEntry {
+                id,
+                project: project.to_string(),
+                created_at_ms: u64_from_i64(created_at_ms),
+                kind: ProgressKind::parse(&kind)?,
+                text,
+                step,
+                agent_name,
+            })
+        })
+        .transpose()
     }
 
     pub fn list(&self, project: &str, input: &ProgressListInput) -> Result<ProgressList, String> {
@@ -310,6 +365,48 @@ mod tests {
         assert_eq!(listed.entries[0].agent_name.as_deref(), Some("claude"));
         assert_eq!(listed.entries[0].kind, ProgressKind::Blocked);
         assert_eq!(listed.last_viewed_ms, None);
+    }
+
+    /// A changed-row repaint hands the parser the same `intent:` line again and
+    /// again, so a repeat of the newest intent is that intent, not a new row.
+    /// An agent's own report is never collapsed: reporting the same step twice
+    /// means the work was done twice, and the reader decides what that means.
+    #[test]
+    fn a_repeat_of_the_newest_intent_is_not_recorded_twice_but_a_report_is() {
+        let (_guard, store, _dir) = isolated_store();
+        let first = store
+            .record("/p", &entry(ProgressKind::Intent, "fixing the tag"))
+            .unwrap();
+        let again = store
+            .record("/p", &entry(ProgressKind::Intent, "fixing the tag"))
+            .unwrap();
+        assert_eq!(again.id, first.id, "a repeat returns the existing row");
+
+        // The same text as a different kind is news, and so is the same text
+        // once something else has happened in between.
+        store
+            .record("/p", &entry(ProgressKind::Done, "fixing the tag"))
+            .unwrap();
+        let later = store
+            .record("/p", &entry(ProgressKind::Intent, "fixing the tag"))
+            .unwrap();
+        assert_ne!(later.id, first.id);
+
+        // Another project is not "in between" for this one.
+        store
+            .record("/other", &entry(ProgressKind::Intent, "fixing the tag"))
+            .unwrap();
+        let list = store.list("/p", &ProgressListInput::default()).unwrap();
+        assert_eq!(list.entries.len(), 3);
+
+        // The same report twice in a row is two reports.
+        let done = store
+            .record("/p", &entry(ProgressKind::Done, "parser shipped"))
+            .unwrap();
+        let done_again = store
+            .record("/p", &entry(ProgressKind::Done, "parser shipped"))
+            .unwrap();
+        assert_ne!(done_again.id, done.id, "agent reports are never collapsed");
     }
 
     #[test]

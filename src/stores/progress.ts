@@ -129,7 +129,11 @@ export function createProgressStore() {
 			payload.repo_path.split(/[\\/]/).pop() ??
 			payload.repo_path;
 		toastsStore.add(
-			entry.step ? `${projectName} · ${entry.step}` : projectName,
+			// The repo badge already names the project (it is passed below), so a
+			// title of "<project> · <step>" printed it twice and spent half the
+			// title's width doing it. The project name is the title only when
+			// there is no step to put there.
+			entry.step ?? projectName,
 			entry.text,
 			entry.type === "blocked" ? "warn" : "info",
 			// Silent by default: a blocked entry is not automatically a request
