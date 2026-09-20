@@ -1526,10 +1526,11 @@ jail, `plugin_http.rs` allowed-URL check, `plugin_exec.rs` binary whitelist).
 
 ```
 GET  /api/plugins/:plugin_id/fs/read?path=<p>                     -> string        (plugin_read_file)
-GET  /api/plugins/:plugin_id/fs/read-base64?path=<p>              -> string        (plugin_read_file_base64)
+GET  /api/plugins/:plugin_id/fs/read-base64?path=<p>&maxBytes=<n> -> string        (plugin_read_file_base64; maxBytes optional, 10 MiB default, 512 MiB host ceiling)
 GET  /api/plugins/:plugin_id/fs/tail?path=<p>&maxBytes=<n>        -> string        (plugin_read_file_tail)
 GET  /api/plugins/:plugin_id/fs/list?path=<p>&pattern=&sortBy=    -> string[]      (plugin_list_directory)
 POST /api/plugins/:plugin_id/fs/write    { path, content }        -> { ok }        (plugin_write_file)
+POST /api/plugins/:plugin_id/fs/write-base64 { path, content, maxBytes? } -> { ok } (plugin_write_file_base64; 10 MiB default, 512 MiB host ceiling, atomic replace)
 POST /api/plugins/:plugin_id/fs/rename   { from, to }             -> { ok }        (plugin_rename_path)
 POST /api/plugins/:plugin_id/build-artifacts/scan   { repoPaths, forceRefresh? } -> BuildArtifact[]
 POST /api/plugins/:plugin_id/build-artifacts/delete { path, repoPaths } -> { ok }

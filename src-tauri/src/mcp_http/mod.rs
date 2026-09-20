@@ -1621,6 +1621,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_fs_write),
         )
         .route(
+            "/api/plugins/{plugin_id}/fs/write-base64",
+            post(plugin_routes::plugin_fs_write_base64),
+        )
+        .route(
             "/api/plugins/{plugin_id}/fs/rename",
             post(plugin_routes::plugin_fs_rename),
         )
