@@ -83,17 +83,17 @@ describe("NotificationManager", () => {
 			expect(mockInvoke).not.toHaveBeenCalled();
 		});
 
-		it("rate limits: does nothing within 500ms of last play for same sound", async () => {
+		it("rate limits every sound against the shared 500ms playback window", async () => {
 			await manager.play("question");
 			expect(mockInvoke).toHaveBeenCalledTimes(1);
 
-			// Immediately try again — should be rate-limited
-			await manager.play("question");
+			// A different tone must not start over the question chime.
+			await manager.play("completion");
 			expect(mockInvoke).toHaveBeenCalledTimes(1);
 
 			// Advance past the 500ms threshold, then play should succeed again
 			vi.advanceTimersByTime(501);
-			await manager.play("question");
+			await manager.play("completion");
 			expect(mockInvoke).toHaveBeenCalledTimes(2);
 		});
 
