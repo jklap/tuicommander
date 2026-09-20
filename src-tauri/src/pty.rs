@@ -6930,23 +6930,17 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
     state.session_maps.term_aliases.remove(session_id);
     state.session_maps.marker_stats.remove(session_id);
     state.session_maps.session_visibility.remove(session_id);
-    state.ai.ai_suggestions_enabled.remove(session_id);
 }
 
-// NOT A DEFERRAL — four session-keyed maps are deliberately NOT reaped by
+// NOT A DEFERRAL — two session-keyed maps are deliberately NOT reaped by
 // either half, because the session is not what owns them:
-//   * `file_sandboxes` / `unrestricted_sessions` belong to the L2 conversation,
-//     which registers in ACTIVE_CONVERSATIONS and removes both when its task
-//     exits (`ai_agent::conversation_engine`). A conversation outlives its PTY —
-//     it can sit in an approval wait with no deadline — so a session-lifetime
-//     reap pulls the sandbox out from under a running file tool.
 //   * `session_knowledge` / `knowledge_dirty` ARE the cross-session memory:
 //     `knowledge::summarize_for_repo` and the agent prompt builder read the live
 //     map, never the files, so reaping a closed session removes knowledge the
 //     next session in that repo is supposed to inherit. Residency is bounded at
 //     startup (40 newest), not during a run.
-// Both need an owner-scoped lifetime, not a session-scoped one. Tie them to
-// ACTIVE_CONVERSATIONS and to a running residency bound respectively.
+// They need an owner-scoped lifetime, not a session-scoped one: tie them to a
+// running residency bound.
 
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
@@ -9452,132 +9446,6 @@ pub(crate) fn spawn_reader_thread(
     });
 }
 
-/// Spawn a headless PTY session for agent orchestration (no Tauri command context).
-/// Extracts AppHandle from `state.app_handle` and creates a minimal session.
-pub(crate) async fn spawn_session_for_agent(
-    state: &Arc<AppState>,
-    cwd: Option<String>,
-    display_name: Option<String>,
-) -> Result<String, String> {
-    let session_id = Uuid::new_v4().to_string();
-    let rows: u16 = 24;
-    let cols: u16 = 80;
-
-    let shell = resolve_shell(None);
-
-    let spawn_cwd = cwd.clone();
-    let spawn_shell = shell.clone();
-    let data_dir = state.data_dir.clone();
-    let state_for_env = state.clone();
-    let session_id_for_env = session_id.clone();
-    let (pair, child) = spawn_pty_pair_with_retry_async(
-        PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        },
-        move || {
-            let mut cmd = build_shell_command(&spawn_shell);
-
-            if let Some(ref dir) = spawn_cwd {
-                let expanded = crate::cli::expand_tilde(dir);
-                cmd.cwd(expanded);
-            }
-
-            crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
-            // No caller-supplied identity on this path, so the PTY key is the
-            // identity — see bind_pty_identity.
-            bind_pty_identity(&state_for_env, &mut cmd, &session_id_for_env, None);
-            cmd
-        },
-    )
-    .await?;
-    lower_pty_child_priority(child.process_id());
-
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("Failed to get PTY writer: {e}"))?;
-
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
-
-    let paused = Arc::new(AtomicBool::new(false));
-    state.session_maps.sessions.insert(
-        session_id.clone(),
-        Mutex::new(PtySession {
-            writer: Arc::new(Mutex::new(writer)),
-            master: pair.master,
-            _child: child,
-            paused: paused.clone(),
-            worktree: None,
-            cwd,
-            display_name: display_name.clone(),
-            display_name_is_custom: false,
-            is_remote: true,
-            shell: shell.clone(),
-        }),
-    );
-    state.assign_term_alias(&session_id, None);
-    state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
-    state
-        .metrics
-        .active_sessions
-        .fetch_add(1, Ordering::Relaxed);
-
-    state.session_maps.output_buffers.insert(
-        session_id.clone(),
-        Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
-    );
-    let vt_log = state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY);
-    state
-        .grid
-        .vt_log_buffers
-        .insert(session_id.clone(), Mutex::new(vt_log));
-    let grid_watch_tx = crate::grid_gate::new_grid_watch();
-    state.grid.watch.insert(session_id.clone(), grid_watch_tx);
-    state
-        .session_maps
-        .last_output_ms
-        .insert(session_id.clone(), AtomicU64::new(0));
-    state
-        .session_maps
-        .terminal_rows
-        .insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
-    state
-        .session_maps
-        .session_states
-        .insert(session_id.clone(), crate::state::SessionState::default());
-
-    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
-        session_id: session_id.clone(),
-        cwd: state
-            .session_maps
-            .sessions
-            .get(&session_id)
-            .and_then(|s| s.lock().cwd.clone()),
-        agent_type: None,
-        display_name: display_name.clone(),
-    });
-    #[cfg(feature = "desktop")]
-    if let Some(ref a) = *state.app_handle.read() {
-        let _ = a.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "display_name": display_name,
-            }),
-        );
-    }
-
-    spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
-
-    Ok(session_id)
-}
-
 #[cfg(feature = "desktop")]
 async fn write_pty_parts_off_thread(
     state: Arc<AppState>,
@@ -10526,22 +10394,6 @@ fn exact_agent_name(process_name: &str) -> Option<&'static str> {
         "pi" => Some("pi"),
         _ => None,
     }
-}
-
-/// Info about an active PTY session for frontend reconnection
-#[derive(Clone, Serialize)]
-pub(crate) struct ActiveSessionInfo {
-    session_id: String,
-    cwd: Option<String>,
-    worktree_path: Option<String>,
-    worktree_branch: Option<String>,
-    display_name: Option<String>,
-    display_name_is_custom: bool,
-    is_remote: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pty_description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    state: Option<crate::state::SessionState>,
 }
 
 /// Per-process resource usage for the process manager modal.

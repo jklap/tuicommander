@@ -338,28 +338,48 @@ const BRIDGE_NAME: &str = "tuic-bridge";
 
 /// Detect the tuic-bridge binary path.
 /// Priority: sidecar (same dir as main executable) → PATH → bare name.
-fn detect_bridge_binary() -> String {
+/// The bridge sitting next to an executable, if it is there.
+///
+/// Where "next to" means: `Contents/MacOS/` in a macOS bundle, beside the `.exe`
+/// on Windows, the same directory on Linux, `target/debug|release` in dev — and,
+/// since #793-23a5, the directory a `tuic-remote` daemon was unpacked into. The
+/// release publishes `tuic-bridge-<target>`; the install instructions download
+/// it as `tuic-bridge`, which is the name this looks for.
+fn bridge_beside(dir: &std::path::Path) -> Option<PathBuf> {
+    #[cfg(not(windows))]
+    let candidate = dir.join(BRIDGE_NAME);
+    #[cfg(windows)]
+    let candidate = dir.join(format!("{BRIDGE_NAME}.exe"));
+    candidate.exists().then_some(candidate)
+}
+
+/// The bridge binary, only when we can point at a file that exists.
+///
+/// Separate from [`detect_bridge_binary`] because the two callers want opposite
+/// things from a miss. A config file written for another agent may name a bare
+/// `tuic-bridge` and still work, since the agent resolves it against its own
+/// `PATH` at launch. A server handed to ego has no such second chance: it is a
+/// command we chose, and naming one we could not find would surface as ego
+/// failing to admit a server rather than as this process saying it is not ready.
+pub(crate) fn locate_bridge_binary() -> Option<PathBuf> {
     // Primary: sidecar bundled alongside the main executable
-    // In release: Contents/MacOS/ (macOS), next to .exe (Windows), same dir (Linux)
-    // In dev: target/debug/ or target/release/
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
+        && let Some(candidate) = bridge_beside(dir)
     {
-        #[cfg(not(windows))]
-        let candidate = dir.join(BRIDGE_NAME);
-        #[cfg(windows)]
-        let candidate = dir.join(format!("{BRIDGE_NAME}.exe"));
-        if candidate.exists() {
-            return candidate.to_string_lossy().to_string();
-        }
+        return Some(candidate);
     }
     // Fallback: resolve from PATH via well-known directories
-    let resolved = crate::cli::resolve_cli(BRIDGE_NAME);
-    if std::path::Path::new(&resolved).exists() {
-        return resolved;
-    }
-    // Last resort: bare name, hope it's on PATH
-    BRIDGE_NAME.to_string()
+    let resolved = PathBuf::from(crate::cli::resolve_cli(BRIDGE_NAME));
+    resolved.exists().then_some(resolved)
+}
+
+fn detect_bridge_binary() -> String {
+    locate_bridge_binary().map_or_else(
+        // Last resort: bare name, hope it's on PATH
+        || BRIDGE_NAME.to_string(),
+        |path| path.to_string_lossy().to_string(),
+    )
 }
 
 /// Read a JSON config file's raw text, returning an empty document when the file
@@ -1229,6 +1249,94 @@ mod tests {
     /// fixture is the only place a `Value` still becomes a file.
     fn write_fixture(path: &std::path::Path, value: &serde_json::Value) {
         std::fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    }
+
+    /// The daemon is unpacked into a directory of its own, so the bridge it
+    /// configures agents to run has to be found beside it. The release publishes
+    /// `tuic-bridge` for every target that publishes `tuic-remote` (#793-23a5);
+    /// this is the lookup that turns a downloaded file into a usable config.
+    #[test]
+    fn the_bridge_is_found_beside_the_executable_that_configures_it() {
+        let dir = TempDir::new().unwrap();
+        assert!(
+            bridge_beside(dir.path()).is_none(),
+            "an empty directory must not report a bridge"
+        );
+
+        let name = if cfg!(windows) {
+            format!("{BRIDGE_NAME}.exe")
+        } else {
+            BRIDGE_NAME.to_string()
+        };
+        let placed = dir.path().join(&name);
+        std::fs::write(&placed, b"").unwrap();
+
+        assert_eq!(bridge_beside(dir.path()), Some(placed));
+    }
+
+    /// Every target that publishes the daemon must publish the bridge too. The
+    /// daemon writes configs naming `tuic-bridge`; a platform that ships one
+    /// without the other ships a config pointing at nothing.
+    #[test]
+    fn the_release_publishes_a_bridge_wherever_it_publishes_the_daemon() {
+        let workflow = include_str!("../../.github/workflows/release.yml");
+        let job = workflow
+            .split("\n  remote-daemon:")
+            .nth(1)
+            .expect("the remote-daemon job must exist")
+            // The job that follows it. Splitting on a generic two-space indent
+            // would stop at the first nested key and read almost nothing.
+            .split("\n  finalize-release:")
+            .next()
+            .expect("job body");
+
+        assert!(
+            job.contains("--bin tuic-remote --target"),
+            "the daemon build step moved — this test is reading the wrong job"
+        );
+        assert!(
+            job.contains("--package tuic-bridge --target"),
+            "the daemon is built for this matrix but the bridge is not"
+        );
+        assert!(
+            job.contains("for BIN in tuic-remote tuic-bridge"),
+            "both binaries must be uploaded, or only one reaches the release page"
+        );
+    }
+
+    /// A machine with none of an agent installed must be left untouched — no
+    /// config file, and no directory created to hold one. The same rule the
+    /// desktop has always had now also runs on a `tuic-remote` daemon
+    /// (#793-23a5), where a stray `~/.codex/` would be the only trace of a tool
+    /// the machine does not have.
+    #[test]
+    fn an_absent_target_is_neither_configured_nor_given_a_directory() {
+        let dir = TempDir::new().unwrap();
+        let config_dir = dir.path().join("never-installed");
+        let spec = McpConfigSpec {
+            config_path: config_dir.join("mcp.json"),
+            key_path: vec!["mcpServers"],
+            format: McpFormat::Json,
+            // A binary name no PATH can resolve, so presence rests on the dir.
+            binaries: &["tuic-no-such-agent-binary"],
+            presence_dir: Some(config_dir.clone()),
+            requires_existing_config: false,
+            shared_settings_file: false,
+        };
+
+        assert!(
+            !auto_install_allowed(&spec, "never-installed"),
+            "an agent with no binary and no directory must not be auto-configured"
+        );
+        // Deliberately not calling `ensure_mcp_configs` here: it reads the real
+        // `$HOME` and would rewrite the config of every agent this machine does
+        // have. The gate above is the whole rule — `ensure_mcp_configs` calls
+        // it before `ensure_spec_entry`, which is the only thing that writes.
+        assert!(
+            !config_dir.exists(),
+            "the skip rule created a directory for an agent that is not installed"
+        );
+        assert!(!spec.config_path.exists());
     }
 
     #[test]

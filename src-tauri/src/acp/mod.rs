@@ -23,6 +23,7 @@ mod connection;
 mod ego_ext;
 mod events;
 mod manager;
+pub(crate) mod oneshot;
 
 pub use events::{AcpEventJournal, AcpEventStream};
 pub use manager::AcpClientManager;
@@ -86,12 +87,78 @@ impl AcpDetachKind {
 /// It is never restored from a stored snapshot: an authority that outlived the
 /// window in which it was granted is a wider authority than anyone gave, and
 /// reconnect is exactly when that would happen unnoticed.
+///
+/// **`mcp_servers` is not part of the request.** `connect` and `reconnect` take
+/// the spawn guard because they launch a process; the session routes underneath
+/// them do not, and they are reachable from a browser. A body that could name an
+/// MCP server would therefore let whoever sends one point the agent at an
+/// arbitrary HTTP endpoint, with arbitrary headers, and ego would egress to it —
+/// a hole no guard on `connect` can cover, because by then the connection is
+/// already legitimate. So the field is built server-side from configuration and
+/// `deny_unknown_fields` refuses a body that tries to supply one, rather than
+/// stripping it quietly: a caller that meant to widen the authority learns that
+/// it did not.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcpSessionAuthority {
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
+    #[serde(skip_deserializing)]
     pub mcp_servers: Vec<v1::McpServer>,
+}
+
+/// The name TUICommander's own MCP server carries in every ego session.
+///
+/// It is a public contract, not an implementation detail: it appears in users'
+/// ego rule files, so renaming it breaks policy somebody else wrote.
+pub const TUICOMMANDER_MCP_SERVER_NAME: &str = "tuicommander";
+
+/// The one MCP server a session is given: our own stdio bridge.
+///
+/// Synthesised here rather than accepted from a caller — see
+/// `AcpSessionAuthority` for why a request body must not be able to name one.
+/// That is what makes a stdio entry safe to send at all: a stdio MCP server is
+/// a command line the agent executes, and the danger has always been carrying
+/// somebody else's. This one is the sidecar we ship, located beside our own
+/// executable.
+///
+/// It used to be `http://127.0.0.1:{port}/mcp`, built from the port this
+/// process bound, and that port only exists when the TCP listener binds — which
+/// happens only when Remote Access is on. So the default install, with remote
+/// off, handed ego no server at all. The socket at `<config dir>/mcp.sock`
+/// binds unconditionally and `tuic-bridge` already speaks MCP stdio to it for
+/// every PTY agent, so reaching ego the same way costs no listener and couples
+/// nothing to a remote-access switch.
+///
+/// `instance` travels as an environment variable rather than being left to
+/// inheritance: the bridge resolves the socket from the config directory, and a
+/// named instance whose id failed to reach it would talk to the default
+/// instance's socket instead — a test build driving Boss's repositories.
+///
+/// A process in the middle does not cost ego its identity, and that matters
+/// more than it looks: `client_requires_meta_tools` gives the name `ego` the
+/// collapsed tool surface, worth 35.104 tokens a turn against 615 at 190 tools.
+/// The bridge opens the transport session under its own name but then proxies
+/// the downstream `initialize` verbatim (`handle_initialize`), so the
+/// `clientInfo` TUICommander reads is still ego's. Breaking that forwarding
+/// would not fail a test here; it would quietly make every turn expensive.
+///
+/// `None` when the bridge is not where we can see it, for the same reason port
+/// 0 used to yield `None`: an entry that cannot run makes ego report a server
+/// it could not admit, when the truth is that TUICommander was not ready.
+#[must_use]
+pub fn tuicommander_mcp_server(
+    bridge: Option<std::path::PathBuf>,
+    instance: Option<&str>,
+) -> Option<v1::McpServer> {
+    let mut server = v1::McpServerStdio::new(TUICOMMANDER_MCP_SERVER_NAME, bridge?);
+    if let Some(id) = instance {
+        server = server.env(vec![v1::EnvVariable::new(
+            crate::app_instance::APP_INSTANCE_ENV_VAR,
+            id,
+        )]);
+    }
+    Some(v1::McpServer::Stdio(server))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,12 +425,35 @@ pub struct AcpEventEnvelope {
     pub event: AcpClientEvent,
 }
 
+/// What happened, in the one shape a host reads it in.
+///
+/// `rename_all` renames the *variants*; `rename_all_fields` renames the fields
+/// inside them, and both are needed. Without the second, `permissionSettled`
+/// arrives carrying `request_id` while the envelope around it carries
+/// `connectionId` — one frame, two casings, and the half a client silently
+/// fails to read is the half that dismisses a question already answered.
+///
+/// The two state variants carry their payload under a named `state` field
+/// rather than as a bare newtype for the same reason. Serde's internal tagging
+/// has no key to put a plain string under, so it invents one from the value:
+/// `ConnectionState(Failed)` went on the wire as `{"kind":"connectionState",
+/// "failed":null}`, where the state is the *key* and every state is a
+/// differently-shaped object. Nothing errored — it is a valid JSON object, and
+/// it is unreadable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 #[non_exhaustive]
 pub enum AcpClientEvent {
-    ConnectionState(AcpConnectionState),
-    AttachmentState(AcpAttachmentState),
+    ConnectionState {
+        state: AcpConnectionState,
+    },
+    AttachmentState {
+        state: AcpAttachmentState,
+    },
     TurnStarted,
     /// Ego's own update, forwarded whole rather than reduced.
     ///
@@ -373,7 +463,18 @@ pub enum AcpClientEvent {
     /// Boxed because it dwarfs every other variant, and a journal retains a
     /// thousand of these per connection: unboxed, a bare `TurnStarted` would
     /// cost as much to keep as the update it followed.
-    SessionUpdate(Box<v1::SessionUpdate>),
+    /// Ego's own update, carried under a field of its own rather than flattened.
+    ///
+    /// A newtype variant here would spread the update's fields beside this
+    /// enum's `kind` tag, and `ToolCall` has a field called `kind` too: the
+    /// object would then hold that key twice, serde_json would write both, and
+    /// every reader keeps the last — so a `read` tool call would arrive
+    /// announcing itself as an event kind no host knows. Nothing errors on
+    /// either side. Pinned by
+    /// `a_tool_call_kind_does_not_overwrite_the_event_kind`.
+    SessionUpdate {
+        update: Box<v1::SessionUpdate>,
+    },
     TurnSettled {
         stop_reason: v1::StopReason,
         usage: Option<v1::Usage>,
@@ -453,14 +554,13 @@ impl AcpNotice {
     #[must_use]
     pub fn from_envelope(envelope: &AcpEventEnvelope) -> Option<Self> {
         let (kind, request_id) = match &envelope.event {
-            AcpClientEvent::ConnectionState(AcpConnectionState::Ready) => {
-                (AcpNoticeKind::Ready, None)
+            AcpClientEvent::ConnectionState {
+                state: AcpConnectionState::Ready,
+            } => (AcpNoticeKind::Ready, None),
+            AcpClientEvent::ConnectionState {
+                state:
+                    AcpConnectionState::Closed | AcpConnectionState::Failed | AcpConnectionState::Killed,
             }
-            AcpClientEvent::ConnectionState(
-                AcpConnectionState::Closed
-                | AcpConnectionState::Failed
-                | AcpConnectionState::Killed,
-            )
             | AcpClientEvent::TurnSettled { .. } => (AcpNoticeKind::Settled, None),
             AcpClientEvent::PermissionRequested { request_id, .. }
             | AcpClientEvent::ElicitationRequested { request_id, .. } => {
@@ -488,7 +588,11 @@ impl AcpNotice {
 /// Carried in snapshots as well as on the stream, so a frontend that was not
 /// running when the agent asked still finds the question when it comes back.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", tag = "kind")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind"
+)]
 #[non_exhaustive]
 pub enum AcpPendingInteraction {
     Permission {
@@ -1138,7 +1242,14 @@ pub fn capability_snapshot(
         prompt_image: prompt.image,
         prompt_audio: prompt.audio,
         prompt_embedded_context: prompt.embedded_context,
-        mcp_stdio: false,
+        // Not read from `mcp`, because v1 has no field to read: the capability
+        // struct carries `http` and `sse` only, so stdio is the protocol
+        // baseline and no agent advertises it. What this says is what *this
+        // client* carries, and it carries exactly one stdio server — the bridge
+        // in `tuicommander_mcp_server`. It sat at `false` for as long as the
+        // client carried none; leaving it there now would make the snapshot
+        // deny the transport it is about to use.
+        mcp_stdio: true,
         mcp_http: mcp.http,
         mcp_sse: mcp.sse,
         // What this client can do, not what the agent said. It is here rather

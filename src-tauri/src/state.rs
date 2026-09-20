@@ -357,34 +357,8 @@ pub enum AppEvent {
     /// Close HTML tabs owned by a session (emitted on session exit)
     #[serde(rename = "close-html-tabs")]
     CloseHtmlTabs { tab_ids: Vec<String> },
-    /// Scheduled agent job completed (from Scheduler)
-    #[serde(rename = "scheduled-job-completed")]
-    ScheduledJobCompleted {
-        job_id: String,
-        goal: String,
-        timed_out: bool,
-    },
-    /// Diff-triage classification progress — browser/SSE parity for the desktop
-    /// `triage-progress` window event. Low-frequency (a handful of phases per
-    /// triage), safe on the global bus.
-    #[serde(rename = "triage-progress")]
-    DiffTriageProgress {
-        repo_path: String,
-        summary: Option<String>,
-        files: Vec<crate::diff_triage::FileClassification>,
-        phase: String,
-        done: bool,
-        llm_used: bool,
-        llm_model: Option<String>,
-    },
-    /// Reserved lifecycle events for GitHub Ops workflows. Producers are wired
-    /// incrementally as each workflow graduates from primitive to runtime flow.
-    #[allow(dead_code)]
-    #[serde(rename = "review-progress")]
-    ReviewProgress {
-        repo_path: String,
-        payload: serde_json::Value,
-    },
+    /// Reserved lifecycle event for a GitHub Ops workflow. The producer is
+    /// wired when the workflow graduates from primitive to runtime flow.
     #[allow(dead_code)]
     #[serde(rename = "conflict-assist-status")]
     ConflictAssistStatus {
@@ -402,7 +376,22 @@ pub enum AppEvent {
         repo_path: String,
         payload: serde_json::Value,
     },
-    #[allow(dead_code)]
+    /// An ego PR review started or finished.
+    ///
+    /// Two events per review and not one per file: the review is a single
+    /// unattended ego turn (`acp::oneshot`), so there is no per-file phase to
+    /// report and a payload that claimed one would be inventing it. The
+    /// dashboard column needs to know a review is running and what it found;
+    /// that is exactly what this carries.
+    #[serde(rename = "review-progress")]
+    ReviewProgress {
+        repo_path: String,
+        payload: serde_json::Value,
+    },
+    /// An ego improvement scan produced its proposals.
+    ///
+    /// Pushed rather than returned only, because a scan started from the
+    /// dashboard must also reach a dashboard open on another transport.
     #[serde(rename = "proposals-ready")]
     ProposalsReady {
         repo_path: String,
@@ -417,7 +406,7 @@ pub enum AppEvent {
     /// `list_active_sessions` poll (#687-be9d).
     ///
     /// The payload is field-for-field an entry of that command's response
-    /// (`ActiveSessionInfo`'s `session_id` + `state`), and the same object the
+    /// (`SessionInfo`'s `session_id` + `state`), and the same object the
     /// browser-mode WebSocket already sends as `{"type":"state","state":…}`, so
     /// one frontend applier serves every transport.
     #[serde(rename = "session-state-changed")]
@@ -427,6 +416,29 @@ pub enum AppEvent {
         /// arm, and `AppEvent` is cloned once per broadcast subscriber, so an
         /// inline copy makes every *other* event pay for this one.
         state: Box<SessionState>,
+    },
+    /// A remote connection's status, base URL or token moved.
+    ///
+    /// The payload is the whole client view of that connection, not a delta: a
+    /// client that missed an event must never be left holding a base URL the
+    /// backend has retracted.
+    #[serde(rename = "remote-connection-status")]
+    RemoteConnectionStatusChanged { payload: serde_json::Value },
+    /// An event a remote daemon published, repeated verbatim on this bus.
+    ///
+    /// `event` is the daemon's own event name and `payload` its own body, so a
+    /// consumer cannot tell a mirrored event from a local one — which is the
+    /// point: a remote session must raise the same badge, the same notification
+    /// and the same queue gate as a local one, with no second code path to keep
+    /// in step. It also means a new event type crosses for free.
+    ///
+    /// It is a no-op for the session-state accumulator: the daemon ran its own
+    /// accumulator already and this is its output, not an input (#791-055e).
+    #[serde(rename = "remote-mirrored")]
+    RemoteMirrored {
+        connection_id: String,
+        event: String,
+        payload: serde_json::Value,
     },
 }
 
@@ -473,7 +485,13 @@ fn is_zero(v: &u32) -> bool {
 /// Per-session state accumulated from broadcast events.
 /// Updated by a background task that subscribes to the event bus.
 /// Read by `GET /sessions` to enrich the response for REST-polling clients.
-#[derive(Clone, Debug, Default, Serialize)]
+///
+/// `Deserialize` because a remote daemon's `GET /sessions` row carries this
+/// state back to the machine that mirrors it (#791-055e). `serde(default)` is
+/// load-bearing there: most fields are `skip_serializing_if`, so the wire form
+/// omits everything the remote had nothing to say about.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub(crate) struct SessionState {
     /// True when a Question parsed event is pending (no subsequent user-input or pty-exit)
     pub awaiting_input: bool,
@@ -1659,45 +1677,24 @@ pub(crate) struct GridState {
     pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
 }
 
-/// TUIC's own AI-agent subsystem inside [`AppState`] (#678-9a75): what the
-/// agent loop knows per session, what it is allowed to touch, and the two
-/// background engines (watcher, cron scheduler) that drive it.
+/// What a terminal session has learnt about its own commands (#678-9a75).
 ///
-/// `Default` is derived: every field starts empty, unset or false.
+/// This is all that is left of the embedded agent subsystem after the engine was
+/// deleted (#784-0aec): no loop, no sandbox, no watcher, no scheduler. The two
+/// fields below are written by `pty.rs` from OSC 133 boundaries and read back by
+/// the same file to explain a failed command, so they outlived the LLM that used
+/// to consume them as well.
+///
+/// `Default` is derived: both fields start empty.
 #[derive(Default)]
 pub(crate) struct AiAgentState {
     /// Per-session command outcome + error/fix knowledge store.
     /// Populated by pty.rs OSC 133 hooks and SessionState transitions.
-    /// Consumed by the agent loop for context injection.
     pub(crate) session_knowledge:
         DashMap<String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>,
     /// Sessions with unpersisted knowledge changes. Flushed to disk every 2s
     /// by the background knowledge-persist task.
     pub(crate) knowledge_dirty: DashMap<String, ()>,
-    /// Per-session filesystem sandbox for the L2 agent's file/shell tools.
-    /// Keyed by session_id. Populated when the agent loop starts, rooted at the
-    /// session's git repo root or CWD. See `ai_agent::sandbox::FileSandbox`.
-    pub(crate) file_sandboxes: DashMap<String, crate::ai_agent::sandbox::FileSandbox>,
-    /// Sessions running in unrestricted (TrustLevel::Unrestricted) mode.
-    /// Present = unrestricted; absent = standard safety gates apply.
-    pub(crate) unrestricted_sessions: DashMap<String, ()>,
-    /// Terminal watcher engine handle — initialized once at startup.
-    /// Commands access the shared config via `engine.config()`.
-    pub(crate) watcher_engine: std::sync::OnceLock<Arc<crate::ai_agent::watcher::WatcherEngine>>,
-    /// Whether the AI cron scheduler's 30s tick loop is currently spawned.
-    /// Lets `save_scheduler_config` start it only when the saved config has
-    /// at least one enabled job, and stop it when the last one is removed,
-    /// instead of ticking (and re-reading `ai-cron.json` from disk) forever
-    /// from boot regardless of whether any job exists (#672-c1a3).
-    pub(crate) scheduler_running: std::sync::atomic::AtomicBool,
-    /// Shared with the running `Scheduler` (if any) so it can be told to stop.
-    /// Reused across start/stop cycles — always exists, whether or not a
-    /// scheduler task is currently spawned.
-    pub(crate) scheduler_stop: Arc<tokio::sync::Notify>,
-    /// Evaluates CommandOutcome records and emits suggestions for AI investigation.
-    pub(crate) trigger_classifier: crate::ai_agent::triggers::TriggerClassifier,
-    /// Per-session opt-in for AI suggestions. Present + true = enabled.
-    pub(crate) ai_suggestions_enabled: DashMap<String, bool>,
 }
 
 /// The per-session side tables of [`AppState`] (#678-9a75).
@@ -2026,6 +2023,12 @@ pub struct AppState {
     pub(crate) tunnel_manager: Arc<crate::tunnels::manager::TunnelManager>,
     /// SSH tunnel audit log — persisted event history for all tunnels.
     pub(crate) tunnel_audit: Arc<parking_lot::Mutex<crate::tunnels::audit::AuditLog>>,
+    /// Live state of every remote connection: status, base URL, session token.
+    /// `connections.json` says what is configured; this says what is up.
+    pub(crate) remote: crate::remote_runtime::RemoteRuntime,
+    /// Sessions running on connected remote machines, mirrored from their own
+    /// `GET /sessions` and `/events` so they raise the same badges as local ones.
+    pub(crate) remote_sessions: crate::remote_mirror::RemoteSessions,
     /// Task registry for long-running MCP orchestration. Survives client
     /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
     pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
@@ -2961,6 +2964,8 @@ impl AppState {
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
             tunnel_manager,
+            remote: Default::default(),
+            remote_sessions: Default::default(),
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
@@ -3172,40 +3177,8 @@ impl AppState {
         session_id: &str,
         outcome: crate::ai_agent::knowledge::CommandOutcome,
     ) -> u64 {
-        // Evaluate trigger before recording (needs the outcome by ref).
-        let suggestion = {
-            let enabled = self
-                .ai
-                .ai_suggestions_enabled
-                .get(session_id)
-                .map(|v| *v)
-                .unwrap_or_else(|| {
-                    self.session_maps
-                        .session_states
-                        .get(session_id)
-                        .map(|s| s.agent_type.is_some())
-                        .unwrap_or(false)
-                });
-            if enabled {
-                self.ai.trigger_classifier.evaluate(session_id, &outcome)
-            } else {
-                None
-            }
-        };
-
         let id = self.knowledge_entry(session_id).lock().record(outcome);
         self.ai.knowledge_dirty.insert(session_id.to_string(), ());
-
-        #[cfg(feature = "desktop")]
-        if let Some(suggestion) = suggestion {
-            use tauri::Emitter as _;
-            if let Some(ref app) = *self.app_handle.read() {
-                let _ = app.emit("ai-suggestion", &suggestion);
-            }
-        }
-        #[cfg(not(feature = "desktop"))]
-        let _ = suggestion;
-
         id
     }
 }
@@ -4274,17 +4247,23 @@ impl AppState {
             | AppEvent::GitHubTransition { .. }
             | AppEvent::GitHubIssuesUpdate { .. }
             | AppEvent::CloseHtmlTabs { .. }
-            | AppEvent::ScheduledJobCompleted { .. }
-            | AppEvent::DiffTriageProgress { .. }
-            | AppEvent::ReviewProgress { .. }
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProgressRecorded { .. }
+            | AppEvent::ReviewProgress { .. }
             | AppEvent::ProposalsReady { .. }
             // This accumulator's own output. Feeding it back in would make the
             // session state a function of itself; it is a report, not an input.
             | AppEvent::SessionStateChanged { .. }
             // An ACP connection is not a PTY session and has no row here.
-            | AppEvent::AcpNotice(_) => {}
+            | AppEvent::AcpNotice(_)
+            // A remote daemon coming up or going down says nothing about any
+            // session: the sessions it holds report themselves, over the bridge
+            // that connection carries.
+            | AppEvent::RemoteConnectionStatusChanged { .. }
+            // A mirrored event is the far end's accumulator output. Feeding it
+            // in here would build a second, local row for a session this
+            // machine does not run.
+            | AppEvent::RemoteMirrored { .. } => {}
         }
     }
 
@@ -4861,14 +4840,6 @@ impl VtLogBuffer {
         query: &str,
     ) -> Vec<crate::terminal_grid::BufferSearchMatch> {
         self.grid.search_buffer(query)
-    }
-
-    pub(crate) fn grid_enumerate_hyperlinks(&self) -> Vec<(usize, usize, usize, String)> {
-        self.grid.enumerate_visible_hyperlinks()
-    }
-
-    pub(crate) fn grid_extract_semantic_zones(&self) -> Vec<(String, usize, usize, String)> {
-        self.grid.extract_semantic_zones()
     }
 
     // --- Row text delegate ---

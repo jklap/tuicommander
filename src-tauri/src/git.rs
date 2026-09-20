@@ -726,76 +726,6 @@ pub(crate) async fn get_git_diff(path: String, scope: Option<String>) -> Result<
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))?
 }
-
-/// Get diffs for multiple files in a single git call.
-/// Tracked files: one `git diff` split by `diff --git` header.
-/// Untracked files: read file contents directly (no subprocess per file).
-pub(crate) async fn get_bulk_diffs(
-    repo_path: String,
-    files: Vec<(String, bool)>,
-) -> Result<HashMap<String, String>, String> {
-    tokio::task::spawn_blocking(move || {
-        let repo = PathBuf::from(&repo_path);
-
-        let has_tracked = files.iter().any(|(_, untracked)| !*untracked);
-        let mut result: HashMap<String, String> = HashMap::with_capacity(files.len());
-
-        if has_tracked {
-            let out = git_cmd(&repo)
-                .args(["diff", "--color=never"])
-                .run()
-                .map_err(|e| format!("git diff failed: {e}"))?;
-            split_diff_output(&out.stdout, &mut result);
-        }
-
-        for (path, is_untracked) in &files {
-            if *is_untracked {
-                let full = repo.join(path);
-                match std::fs::read_to_string(&full) {
-                    Ok(content) => {
-                        let pseudo: String = content
-                            .lines()
-                            .map(|l| format!("+{l}"))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        result.insert(path.clone(), pseudo);
-                    }
-                    Err(e) => {
-                        tracing::warn!(path = %path, error = %e, "get_bulk_diffs: failed to read untracked file");
-                        result.insert(path.clone(), String::new());
-                    }
-                }
-            }
-        }
-
-        Ok(result)
-    })
-    .await
-    .map_err(|e| format!("spawn_blocking join error: {e}"))?
-}
-
-fn split_diff_output(output: &str, result: &mut HashMap<String, String>) {
-    let mut current_path: Option<String> = None;
-    let mut current_lines: Vec<&str> = Vec::new();
-
-    for line in output.lines() {
-        if let Some(rest) = line.strip_prefix("diff --git a/") {
-            if let Some(path) = current_path.take() {
-                result.insert(path, current_lines.join("\n"));
-            }
-            current_lines.clear();
-            // "diff --git a/foo b/foo" → extract path from the b/ side
-            if let Some(b_idx) = rest.find(" b/") {
-                current_path = Some(rest[b_idx + 3..].to_string());
-            }
-        }
-        current_lines.push(line);
-    }
-    if let Some(path) = current_path {
-        result.insert(path, current_lines.join("\n"));
-    }
-}
-
 /// Get diff stats (additions/deletions) for a repository
 #[cfg_attr(feature = "desktop", tauri::command)]
 /// Sync implementation of diff stats retrieval.
@@ -6165,47 +6095,5 @@ filename test.txt
         let result =
             git_apply_reverse_patch(path.to_string_lossy().to_string(), String::new(), None).await;
         assert!(result.is_err(), "empty patch should be rejected");
-    }
-
-    #[test]
-    fn split_diff_output_parses_multi_file_diff() {
-        let output = "\
-diff --git a/src/foo.rs b/src/foo.rs
-index abc..def 100644
---- a/src/foo.rs
-+++ b/src/foo.rs
-@@ -1,3 +1,3 @@
--old line
-+new line
-diff --git a/src/bar.rs b/src/bar.rs
-index 111..222 100644
---- a/src/bar.rs
-+++ b/src/bar.rs
-@@ -1 +1 @@
--x
-+y";
-        let mut result = HashMap::new();
-        split_diff_output(output, &mut result);
-        assert_eq!(result.len(), 2);
-        assert!(result.contains_key("src/foo.rs"), "should contain foo.rs");
-        assert!(result.contains_key("src/bar.rs"), "should contain bar.rs");
-        assert!(result["src/foo.rs"].contains("+new line"));
-        assert!(result["src/bar.rs"].contains("+y"));
-    }
-
-    #[test]
-    fn split_diff_output_handles_empty_input() {
-        let mut result = HashMap::new();
-        split_diff_output("", &mut result);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn split_diff_output_single_file() {
-        let output = "diff --git a/only.txt b/only.txt\n--- a/only.txt\n+++ b/only.txt\n+hello";
-        let mut result = HashMap::new();
-        split_diff_output(output, &mut result);
-        assert_eq!(result.len(), 1);
-        assert!(result.contains_key("only.txt"));
     }
 }

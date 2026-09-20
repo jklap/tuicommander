@@ -1,7 +1,7 @@
 use crate::{AppState, MAX_CONCURRENT_SESSIONS};
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -128,6 +128,35 @@ pub(super) async fn hash_password_http(
             Json(serde_json::json!({"error": format!("Hash task failed: {e}")})),
         ),
     }
+}
+
+/// Hand the running session token to a caller that already authenticated.
+///
+/// This is the only way a remote client can reach a WebSocket: an upgrade
+/// request cannot carry an `Authorization` header, and `remote_auth` serves
+/// `Access-Control-Allow-Origin: *`, which forbids credentialed cookies. A
+/// client therefore authenticates once with Basic Auth here and then puts
+/// `?token=` on every later request, exactly as the QR-code flow does.
+///
+/// The token is never written to `config.json` and stays redacted in `/config`;
+/// it lives in memory and changes on every daemon restart, so a client re-reads
+/// it whenever it reconnects.
+pub(super) async fn get_session_token(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp;
+    }
+    let token = state.session_token.read().clone();
+    if token.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "no session token configured"})),
+        );
+    }
+    (StatusCode::OK, Json(serde_json::json!({"token": token})))
 }
 
 pub(super) async fn rotate_session_token(
@@ -541,78 +570,6 @@ pub(super) async fn put_agent_native_status_signals(
     }
 }
 
-// --- Provider Registry ---
-
-pub(super) async fn get_provider_registry() -> impl IntoResponse {
-    Json(crate::provider_registry::load_provider_registry())
-}
-
-pub(super) async fn put_provider_registry(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<Authenticated>>,
-    Json(registry): Json<crate::provider_registry::ProviderRegistry>,
-) -> impl IntoResponse {
-    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
-        return resp;
-    }
-    match crate::provider_registry::save_provider_registry(registry) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-
-// --- Provider API keys (keyring-proxied — story 072) ---
-// State-free: the underlying commands talk to the credential keyring directly,
-// so the HTTP handlers call them verbatim (loopback router, local trust boundary).
-
-#[derive(serde::Deserialize)]
-pub(super) struct ProviderIdRef {
-    #[serde(rename = "providerId")]
-    pub provider_id: String,
-}
-
-#[derive(serde::Deserialize)]
-pub(super) struct SaveProviderKeyReq {
-    #[serde(rename = "providerId")]
-    pub provider_id: String,
-    pub key: String,
-}
-
-#[derive(serde::Deserialize)]
-pub(super) struct SlotTestReq {
-    pub slot: crate::provider_registry::SlotName,
-}
-
-pub(super) async fn provider_key_exists_http(Query(q): Query<ProviderIdRef>) -> Response {
-    json_result(crate::provider_registry::get_provider_api_key_exists(
-        q.provider_id,
-    ))
-}
-
-pub(super) async fn save_provider_key_http(Json(b): Json<SaveProviderKeyReq>) -> Response {
-    json_result(crate::provider_registry::save_provider_api_key(
-        b.provider_id,
-        b.key,
-    ))
-}
-
-pub(super) async fn delete_provider_key_http(Json(b): Json<ProviderIdRef>) -> Response {
-    json_result(crate::provider_registry::delete_provider_api_key(
-        b.provider_id,
-    ))
-}
-
-pub(super) async fn test_slot_connection_http(Json(b): Json<SlotTestReq>) -> Response {
-    json_result(crate::provider_registry::test_slot_connection(b.slot).await)
-}
-
-pub(super) async fn check_ollama_models_http(Json(b): Json<ProviderIdRef>) -> impl IntoResponse {
-    Json(crate::provider_registry::check_ollama_models(b.provider_id).await)
-}
-
 // --- MCP Status ---
 
 pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -721,14 +678,120 @@ pub(super) async fn delete_remote_connection(
         )
             .into_response();
     }
-    match crate::remote_connection::RemoteConnectionStore::save(&state.data_dir, &connections) {
-        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
-        Err(e) => (
+    if let Err(e) =
+        crate::remote_connection::RemoteConnectionStore::save(&state.data_dir, &connections)
+    {
+        return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         )
-            .into_response(),
+            .into_response();
     }
+    // Same reason as the IPC command: the vault key is the connection's UUID, so
+    // a secret left behind belongs to an id nothing can name again.
+    if let Err(e) = crate::remote_connection::set_connection_password(&id, "") {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({"ok": true})).into_response()
+}
+
+/// Store the Basic Auth password for a connection, or forget it when the body
+/// carries an empty string. Read-back is deliberately impossible: the only
+/// answers this file gives about a stored secret are "exists" and a token
+/// exchanged against the daemon.
+pub(super) async fn put_remote_connection_password(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(id): Path<String>,
+    Json(body): Json<RemoteConnectionPasswordRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::json_result(crate::remote_connection::set_connection_password(
+        &id,
+        &body.password,
+    ))
+}
+
+pub(super) async fn get_remote_connection_password_exists(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::json_result(crate::remote_connection::connection_password_exists(&id))
+}
+
+/// Exchange the stored password for the remote daemon's session token.
+///
+/// The failure is an upstream one — a wrong password or an unreachable daemon —
+/// so it answers 502 rather than 500, like every other call that leaves this
+/// machine. Which of the two happened is in the message.
+pub(super) async fn post_remote_connection_token(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(id): Path<String>,
+    Json(body): Json<RemoteConnectionTokenRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::remote_connection::fetch_connection_token(&id, &body.base_url, &body.username).await,
+    )
+}
+
+/// The live state of every remote connection this backend has been asked to
+/// connect: status, and — only while connected — where it answers and with
+/// which token.
+pub(super) async fn get_remote_connection_statuses(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Guarded like a write, not like a read: the snapshot carries the daemon's
+    // session token for every connected connection.
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::json_result(Ok::<_, String>(state.remote.snapshot()))
+}
+
+/// Bring a remote connection up. The upstream failures — unreachable daemon,
+/// rejected password, tunnel that never came up — answer 502, as every call that
+/// leaves this machine does.
+pub(super) async fn post_remote_connection_connect(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(crate::remote_runtime::connect(&state, &id).await)
+}
+
+/// Take a remote connection down. Always succeeds: a connection that was never
+/// up is already where the caller wants it.
+pub(super) async fn delete_remote_connection_connect(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    crate::remote_runtime::disconnect(&state, &id).await;
+    super::json_result(Ok::<_, String>(serde_json::json!({ "ok": true })))
 }
 
 // --- Story 066: config / themes / notes / misc stateless parity (loopback router) ---
@@ -737,21 +800,6 @@ pub(super) async fn delete_remote_connection(
 // other config writes in this file. Pure reads skip it (matching get_prompt_library
 // / get_repo_local_config). `/exec/shell-script` and `/agent/open-in-custom` run
 // processes, so they are guarded.
-
-pub(super) async fn get_ai_prompts_http() -> impl IntoResponse {
-    Json(crate::config::load_ai_prompts())
-}
-
-pub(super) async fn put_ai_prompts_http(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::AiPromptsConfig>,
-) -> axum::response::Response {
-    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
-        return resp.into_response();
-    }
-    json_result(crate::config::save_ai_prompts(config))
-}
 
 pub(super) async fn save_repo_local_config_http(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

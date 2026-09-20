@@ -111,6 +111,7 @@ pub(super) fn acp_routes() -> Router<Arc<AppState>> {
             "/connections/{connection_id}/elicitations/{request_id}/response",
             post(respond_elicitation),
         )
+        .route("/one-shot", post(one_shot_prompt))
 }
 
 /// The HTTP status that carries an ACP client error code.
@@ -161,6 +162,13 @@ fn answer<T: Serialize>(result: Result<T, AcpClientError>) -> Response {
 #[serde(rename_all = "camelCase")]
 struct RootBody {
     root: PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OneShotBody {
+    root: PathBuf,
+    prompt: String,
 }
 
 #[derive(Deserialize)]
@@ -241,6 +249,23 @@ async fn reconnect(
         return resp.into_response();
     }
     answer(acp_commands::reconnect(&state, connection_id, body.root).await)
+}
+
+/// The third route that launches ego, so it takes the same spawn guard.
+///
+/// It needs no connection id because it makes its own and shuts it down again,
+/// which is exactly why the guard belongs here: without it, anything that can
+/// reach this port could start an ego process per request.
+async fn one_shot_prompt(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<OneShotBody>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(crate::acp::oneshot::run_prompt(&state, body.root, body.prompt).await)
 }
 
 async fn connection_snapshot(
@@ -606,9 +631,12 @@ mod tests {
         }
     }
 
+    /// No `mcpServers`: the field is synthesised server-side and a body that
+    /// names one is refused, so sending it here would test the refusal on every
+    /// row instead of the route.
     fn authority() -> serde_json::Value {
         serde_json::json!({
-            "authority": {"cwd": "/tmp", "additionalDirectories": [], "mcpServers": []}
+            "authority": {"cwd": "/tmp", "additionalDirectories": []}
         })
     }
 
@@ -754,6 +782,14 @@ mod tests {
                 Some(serde_json::json!({"action": {"action": "decline"}})),
                 AcpClientErrorCode::NotFound,
             ),
+            // Launches its own ego, so with none configured it fails the same
+            // way `connect` does rather than for want of a connection.
+            (
+                "POST",
+                "/acp/one-shot".to_string(),
+                Some(serde_json::json!({"root": "/tmp", "prompt": "hi"})),
+                AcpClientErrorCode::InvalidInput,
+            ),
         ]
     }
 
@@ -805,6 +841,38 @@ mod tests {
             };
             assert_eq!(status, wanted, "{method} {path}");
         }
+    }
+
+    /// A body that names an MCP server is refused, not quietly stripped.
+    ///
+    /// The session routes carry no spawn guard and a browser can reach them, so
+    /// a caller able to add a server could point ego at any HTTP endpoint it
+    /// liked. Refusing is the whole reason `AcpSessionAuthority` denies unknown
+    /// fields; stripping would let a caller believe it had widened the authority.
+    #[tokio::test]
+    async fn a_session_body_cannot_name_an_mcp_server() {
+        let state = super::super::tests::test_state();
+        let app = super::super::shared_routes().with_state(state);
+        let body = serde_json::json!({
+            "authority": {
+                "cwd": "/tmp",
+                "additionalDirectories": [],
+                "mcpServers": [{"name": "elsewhere", "url": "http://evil.invalid/mcp"}],
+            }
+        });
+
+        let resp = app
+            .oneshot(request(
+                "POST",
+                &format!("/acp/connections/{CID}/sessions"),
+                Some(body),
+            ))
+            .await
+            .unwrap();
+
+        // Not `notFound`: the body is rejected before the unknown connection is
+        // ever looked up, which is what proves the field never reaches the call.
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     /// The stream is a WebSocket and only a WebSocket, and a subscription it

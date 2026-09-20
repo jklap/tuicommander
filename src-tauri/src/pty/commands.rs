@@ -843,37 +843,16 @@ pub(crate) fn remove_queued_agent_command(
     remove_queued_command(&state, &session_id, command_id)
 }
 
-/// List all active PTY sessions for reconnection after frontend reload
+/// List all active PTY sessions for reconnection after frontend reload.
+///
+/// Sessions a connected remote machine runs are in the list too, each carrying
+/// its `connection_id` — the desktop reconnects to them exactly like local ones.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<ActiveSessionInfo> {
-    state
-        .session_maps
-        .sessions
-        .iter()
-        .map(|entry| {
-            let session_id = entry.key().clone();
-            let session = entry.value().lock();
-            ActiveSessionInfo {
-                session_id,
-                cwd: session.cwd.clone(),
-                worktree_path: session
-                    .worktree
-                    .as_ref()
-                    .map(|w| w.path.to_string_lossy().to_string()),
-                worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
-                display_name: session.display_name.clone(),
-                display_name_is_custom: session.display_name_is_custom,
-                is_remote: session.is_remote,
-                pty_description: state
-                    .session_maps
-                    .pty_descriptions
-                    .get(entry.key())
-                    .map(|value| value.value().clone()),
-                state: state.session_state_with_shell(entry.key()),
-            }
-        })
-        .collect()
+pub(crate) fn list_active_sessions(
+    state: State<'_, Arc<AppState>>,
+) -> Vec<crate::mcp_http::types::SessionInfo> {
+    crate::mcp_http::session::session_rows_including_remote(&state)
 }
 
 #[cfg(feature = "desktop")]

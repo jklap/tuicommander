@@ -1,27 +1,17 @@
-//! Codex usage — rate limits and plan for the OpenAI Codex CLI.
+//! Codex account usage through the documented Codex App Server JSON-RPC API.
 //!
-//! - `get_codex_usage_api`: reads the OAuth token from `~/.codex/auth.json` and
-//!   calls the ChatGPT backend usage endpoint the Codex CLI itself polls.
-//!
-//! Mirrors `claude_usage`'s API path (in-memory TTL cache, 429 backoff, stale
-//! fallback) so the frontend treats both agents the same way.
-//!
-//! - `get_codex_usage_stats`: token history and lifetime stats from
-//!   `/wham/profiles/me` — the daily buckets live there, not under any `/usage`
-//!   path, which is why the name does not mention usage.
-//!
-//! Deliberately **not** deserialized: `user_id`, `email`, `account_id` from the
-//! usage endpoint, and the whole `profile` object (username, display name,
-//! avatar URL) from the stats endpoint. Nothing in TUIC needs them, and a usage
-//! payload that carries an email ends up in logs. Serde drops unknown fields, so
-//! leaving them out of the structs is the whole guard.
+//! The CLI owns authentication, token refresh and upstream schema translation.
+//! TUICommander never reads `~/.codex/auth.json` and never calls ChatGPT's
+//! private backend routes directly.
 
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// API types (from the ChatGPT backend usage endpoint)
+// Stable TUIC transport types (mapped from the App Server response)
 // ---------------------------------------------------------------------------
 
 /// One rate-limit window (session or weekly).
@@ -40,12 +30,78 @@ pub struct CodexRateWindow {
 /// Primary/secondary window pair plus the reached flags.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexRateLimit {
-    #[serde(default)]
-    pub allowed: bool,
+    pub allowed: Option<bool>,
     #[serde(default)]
     pub limit_reached: bool,
     pub primary_window: Option<CodexRateWindow>,
     pub secondary_window: Option<CodexRateWindow>,
+}
+
+// ---------------------------------------------------------------------------
+// Codex App Server wire types (camelCase, deliberately private)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppRateWindow {
+    used_percent: f64,
+    window_duration_mins: Option<i64>,
+    resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppCredits {
+    #[serde(default)]
+    has_credits: bool,
+    #[serde(default)]
+    unlimited: bool,
+    balance: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppRateLimitSnapshot {
+    limit_id: Option<String>,
+    limit_name: Option<String>,
+    plan_type: Option<String>,
+    primary: Option<AppRateWindow>,
+    secondary: Option<AppRateWindow>,
+    rate_limit_reached_type: Option<String>,
+    spend_control_reached: Option<bool>,
+    credits: Option<AppCredits>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppRateLimitsResponse {
+    rate_limits: AppRateLimitSnapshot,
+    rate_limits_by_limit_id: Option<HashMap<String, AppRateLimitSnapshot>>,
+    ordinary_usage_allowed: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppTokenSummary {
+    lifetime_tokens: Option<i64>,
+    peak_daily_tokens: Option<i64>,
+    current_streak_days: Option<i64>,
+    longest_streak_days: Option<i64>,
+    longest_running_turn_sec: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppDailyBucket {
+    start_date: String,
+    tokens: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppTokenUsageResponse {
+    summary: AppTokenSummary,
+    daily_usage_buckets: Option<Vec<AppDailyBucket>>,
 }
 
 /// A per-model limit (e.g. "GPT-5.3-Codex-Spark"), alongside the account limit.
@@ -77,7 +133,7 @@ pub struct CodexModelUsage {
     pub credits_would_enable: bool,
 }
 
-/// Response from the Codex usage endpoint, minus the identity fields.
+/// Provider-neutral response exposed through Tauri and HTTP.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexUsageApiResponse {
     pub plan_type: Option<String>,
@@ -97,10 +153,11 @@ pub struct CodexDailyBucket {
     pub tokens: i64,
 }
 
-/// Lifetime and rolling stats behind `/wham/profiles/me`.
+/// Lifetime and rolling stats from `account/usage/read`.
 ///
-/// The same response carries a `profile` object with username, display name and
-/// avatar URL. It is not modelled here on purpose — see the module header.
+/// Legacy optional fields stay in the transport shape for frontend
+/// compatibility. The official App Server does not expose them, so they remain
+/// `None` and the dashboard omits them.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CodexStats {
     pub lifetime_tokens: Option<i64>,
@@ -118,37 +175,11 @@ pub struct CodexStats {
     pub daily_usage_buckets: Vec<CodexDailyBucket>,
 }
 
-/// Response from the Codex stats endpoint, minus the identity fields.
+/// Token history response exposed through Tauri and HTTP.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CodexStatsResponse {
     #[serde(default)]
     pub stats: CodexStats,
-}
-
-// ---------------------------------------------------------------------------
-// Credentials
-// ---------------------------------------------------------------------------
-
-/// Read the Codex OAuth access token from `~/.codex/auth.json`.
-///
-/// TUIC never refreshes it: the Codex CLI owns that token and rotates it on its
-/// own runs. An expired token surfaces as a 401 the caller reports, exactly like
-/// the Claude path — attempting a refresh here could invalidate the user's login.
-fn read_codex_token() -> Result<String, String> {
-    let home = dirs::home_dir().ok_or_else(|| "No home directory".to_string())?;
-    let path = home.join(".codex").join("auth.json");
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("No Codex credentials at {}: {e}", path.display()))?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse auth.json: {e}"))?;
-
-    parsed
-        .get("tokens")
-        .and_then(|t| t.get("access_token"))
-        .and_then(|t| t.as_str())
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| "No Codex OAuth token found".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -184,272 +215,294 @@ impl<T: Clone> TtlCache<T> {
     }
 }
 
-static USAGE_CACHE: TtlCache<CodexUsageApiResponse> = TtlCache::new();
-static STATS_CACHE: TtlCache<CodexStatsResponse> = TtlCache::new();
+#[derive(Clone)]
+struct CodexSnapshot {
+    usage: CodexUsageApiResponse,
+    stats: CodexStatsResponse,
+}
 
-/// Shared across both endpoints: one 429 means the account is throttled, not
-/// just one path, so backing off per-URL would keep hammering the other.
-static RATE_LIMITED_UNTIL: parking_lot::Mutex<Option<Instant>> = parking_lot::Mutex::new(None);
+static SNAPSHOT_CACHE: TtlCache<CodexSnapshot> = TtlCache::new();
+static FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Cache TTL — matches the Claude path so both tickers poll at the same cadence.
 const API_CACHE_TTL: Duration = Duration::from_secs(300);
-/// Minimum backoff after a 429, so the next poll does not hammer the endpoint.
-const RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(120);
 /// How old a cached reading may be before it stops standing in for a live one.
-/// Neither response carries a timestamp, so the frontend cannot tell a fresh
-/// figure from an old one — past this age the error is the honest answer.
+/// Past this age the error is more honest than an apparently current figure.
 const STALE_FALLBACK_MAX_AGE: Duration = Duration::from_secs(1800);
 
-/// Rate limits — the endpoint the Codex CLI itself polls.
-const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+fn reset_after(resets_at: Option<i64>, now: i64) -> Option<i64> {
+    resets_at.map(|value| value.saturating_sub(now).max(0))
+}
 
-/// Token history and lifetime stats. The name says "profile", not "usage": the
-/// daily buckets live under `stats` here, and nowhere under a `/usage` path.
-const STATS_URL: &str = "https://chatgpt.com/backend-api/wham/profiles/me";
-
-/// Raw HTTP GET returning `T` — no caching, no retry. `(status, message)` on failure.
-async fn fetch_json<T: serde::de::DeserializeOwned>(
-    url: &str,
-    token: &str,
-) -> Result<T, (u16, String)> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(url)
-        // `originator` is what the CLI sends; the endpoint rejects requests without it.
-        .header("originator", "codex_cli_rs")
-        .header("Authorization", format!("Bearer {token}"))
-        .header("accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| (0, format!("Codex request failed: {e}")))?;
-
-    let status = resp.status().as_u16();
-    if !resp.status().is_success() {
-        // The body can be an HTML challenge page — truncate so a 20 KB blob
-        // never reaches the log or the ticker tooltip.
-        let body: String = resp
-            .text()
-            .await
-            .unwrap_or_default()
-            .chars()
-            .take(200)
-            .collect();
-        return Err((status, format!("Codex returned {status}: {body}")));
-    }
-
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| (0, format!("Failed to read Codex response: {e}")))?;
-
-    serde_json::from_str(&body).map_err(|e| {
-        tracing::error!(source = "codex_usage", "Parse error for {url}: {e}");
-        (0, format!("Failed to parse Codex response: {e}"))
+fn map_window(window: Option<AppRateWindow>, now: i64) -> Option<CodexRateWindow> {
+    window.map(|value| CodexRateWindow {
+        used_percent: value.used_percent,
+        limit_window_seconds: value.window_duration_mins.map(|minutes| minutes * 60),
+        reset_after_seconds: reset_after(value.resets_at, now),
+        reset_at: value.resets_at,
     })
 }
 
-/// Cached fetch with 429 backoff and stale fallback, shared by both endpoints.
-///
-/// On error it returns stale cache when there is any, so one bad poll leaves the
-/// last known numbers on screen instead of blanking them.
-async fn cached_fetch<T: Clone + serde::de::DeserializeOwned>(
-    cache: &TtlCache<T>,
-    url: &str,
-) -> Result<T, String> {
-    if let Some(cached) = cache.fresh() {
-        return Ok(cached);
+fn map_rate_limit(
+    snapshot: AppRateLimitSnapshot,
+    allowed: Option<bool>,
+    now: i64,
+) -> CodexRateLimit {
+    CodexRateLimit {
+        allowed,
+        limit_reached: snapshot.rate_limit_reached_type.is_some()
+            || snapshot.spend_control_reached == Some(true),
+        primary_window: map_window(snapshot.primary, now),
+        secondary_window: map_window(snapshot.secondary, now),
     }
+}
 
-    if let Some(until) = *RATE_LIMITED_UNTIL.lock()
-        && Instant::now() < until
-    {
-        if let Some(stale) = cache.stale() {
-            return Ok(stale);
-        }
-        return Err("Rate limited — waiting for backoff to expire".to_string());
+fn map_app_server_snapshot(
+    limits: AppRateLimitsResponse,
+    tokens: AppTokenUsageResponse,
+    now: i64,
+) -> CodexSnapshot {
+    let primary_id = limits.rate_limits.limit_id.clone();
+    let plan_type = limits.rate_limits.plan_type.clone();
+    let credits = limits
+        .rate_limits
+        .credits
+        .clone()
+        .map(|value| CodexCredits {
+            has_credits: value.has_credits,
+            unlimited: value.unlimited,
+            balance: value.balance,
+        });
+    let rate_limit = Some(map_rate_limit(
+        limits.rate_limits,
+        limits.ordinary_usage_allowed,
+        now,
+    ));
+    let mut additional_rate_limits = limits
+        .rate_limits_by_limit_id
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(key, value)| {
+            Some(key) != primary_id.as_ref()
+                && key.as_str() != "codex"
+                && value.limit_id != primary_id
+        })
+        .map(|(key, value)| CodexAdditionalRateLimit {
+            limit_name: value.limit_name.clone(),
+            metered_feature: value.limit_id.clone().or(Some(key)),
+            rate_limit: Some(map_rate_limit(value, limits.ordinary_usage_allowed, now)),
+        })
+        .collect::<Vec<_>>();
+    additional_rate_limits.sort_by(|a, b| a.limit_name.cmp(&b.limit_name));
+
+    let summary = tokens.summary;
+    CodexSnapshot {
+        usage: CodexUsageApiResponse {
+            plan_type,
+            rate_limit,
+            additional_rate_limits,
+            credits,
+            model_usage: HashMap::new(),
+        },
+        stats: CodexStatsResponse {
+            stats: CodexStats {
+                lifetime_tokens: summary.lifetime_tokens,
+                peak_daily_tokens: summary.peak_daily_tokens,
+                current_streak_days: summary.current_streak_days,
+                longest_streak_days: summary.longest_streak_days,
+                longest_running_turn_sec: summary.longest_running_turn_sec,
+                daily_usage_buckets: tokens
+                    .daily_usage_buckets
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|bucket| CodexDailyBucket {
+                        start_date: bucket.start_date,
+                        tokens: bucket.tokens,
+                    })
+                    .collect(),
+                ..CodexStats::default()
+            },
+        },
     }
+}
 
-    let token = read_codex_token()?;
+fn looks_like_auth_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("not logged in")
+        || lower.contains("authentication")
+        || lower.contains("unauthorized")
+        || lower.contains("401")
+        || lower.contains("403")
+}
 
-    match fetch_json::<T>(url, &token).await {
-        Ok(data) => {
-            *RATE_LIMITED_UNTIL.lock() = None;
-            cache.put(&data);
-            Ok(data)
+fn looks_like_contract_failure(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    message.contains("Failed to parse")
+        || message.contains("returned no result")
+        || message.contains("returned no response")
+        || lower.contains("method not found")
+        || lower.contains("unknown method")
+        || lower.contains("unsupported method")
+}
+
+async fn fetch_snapshot() -> Result<CodexSnapshot, String> {
+    let detection = crate::agent::detect_agent_binary("codex".to_string());
+    let binary = detection
+        .path
+        .ok_or_else(|| "Codex CLI not found".to_string())?;
+    let messages = [
+        serde_json::json!({
+            "method": "initialize",
+            "id": 0,
+            "params": {"clientInfo": {"name": "tuicommander", "title": "TUICommander", "version": env!("CARGO_PKG_VERSION")}}
+        }),
+        serde_json::json!({"method": "initialized", "params": {}}),
+        serde_json::json!({"method": "account/rateLimits/read", "id": 1, "params": null}),
+        serde_json::json!({"method": "account/usage/read", "id": 2, "params": null}),
+    ];
+    let responses = crate::cli_usage_rpc::request_jsonl(
+        Path::new(&binary),
+        &["app-server"],
+        &messages,
+        &[1, 2],
+        Duration::from_secs(20),
+    )
+    .await?;
+    let limits = crate::cli_usage_rpc::decode_result(&responses, 1, "Codex rate limits")?;
+    let tokens = crate::cli_usage_rpc::decode_result(&responses, 2, "Codex usage")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    Ok(map_app_server_snapshot(limits, tokens, now))
+}
+
+async fn cached_snapshot() -> Result<CodexSnapshot, String> {
+    if let Some(snapshot) = SNAPSHOT_CACHE.fresh() {
+        return Ok(snapshot);
+    }
+    let _guard = FETCH_LOCK.lock().await;
+    if let Some(snapshot) = SNAPSHOT_CACHE.fresh() {
+        return Ok(snapshot);
+    }
+    match fetch_snapshot().await {
+        Ok(snapshot) => {
+            SNAPSHOT_CACHE.put(&snapshot);
+            Ok(snapshot)
         }
-        Err((status, message)) => {
-            if status == 429 {
-                *RATE_LIMITED_UNTIL.lock() = Some(Instant::now() + RATE_LIMIT_BACKOFF);
-                tracing::warn!(
-                    source = "codex_usage",
-                    backoff_secs = RATE_LIMIT_BACKOFF.as_secs(),
-                    "Rate limited — backing off"
-                );
-            }
-            // A credential failure is not a transient blip: the Codex CLI owns
-            // this token and rotates it on its own runs, so 401/403 is the one
-            // thing the user must be told about rather than papered over.
-            if matches!(status, 401 | 403) {
-                tracing::warn!(
-                    source = "codex_usage",
-                    status,
-                    "Codex token rejected — surfacing the error instead of a cached reading"
-                );
-                return Err(message);
-            }
-            if let Some(stale) = cache.stale() {
+        Err(message)
+            if !looks_like_auth_failure(&message) && !looks_like_contract_failure(&message) =>
+        {
+            if let Some(snapshot) = SNAPSHOT_CACHE.stale() {
                 tracing::info!(
                     source = "codex_usage",
                     "Returning stale cache after error: {message}"
                 );
-                return Ok(stale);
+                Ok(snapshot)
+            } else {
+                Err(message)
             }
-            Err(message)
         }
+        Err(message) => Err(message),
     }
 }
 
 /// Fetch Codex rate-limit usage (powers the status bar ticker).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_codex_usage_api() -> Result<CodexUsageApiResponse, String> {
-    cached_fetch(&USAGE_CACHE, USAGE_URL).await
+    Ok(cached_snapshot().await?.usage)
 }
 
 /// Fetch Codex token history and lifetime stats (powers the dashboard).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn get_codex_usage_stats() -> Result<CodexStatsResponse, String> {
-    cached_fetch(&STATS_CACHE, STATS_URL).await
+    Ok(cached_snapshot().await?.stats)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The identity fields the endpoint sends must not survive deserialization —
-    /// this is the guard that keeps an email out of the usage payload.
     #[test]
-    fn drops_identity_fields() {
-        let body = r#"{
-            "user_id": "user-abc",
-            "account_id": "acct-1",
-            "email": "someone@example.com",
-            "plan_type": "pro",
-            "rate_limit": { "allowed": false, "limit_reached": true,
-                "primary_window": { "used_percent": 100, "limit_window_seconds": 604800,
-                                    "reset_after_seconds": 143951, "reset_at": 1788747989 },
-                "secondary_window": null }
-        }"#;
-        let parsed: CodexUsageApiResponse = serde_json::from_str(body).unwrap();
-        let round_tripped = serde_json::to_string(&parsed).unwrap();
-        assert!(!round_tripped.contains("someone@example.com"));
-        assert!(!round_tripped.contains("user-abc"));
-        assert!(!round_tripped.contains("acct-1"));
-        assert_eq!(parsed.plan_type.as_deref(), Some("pro"));
-    }
-
-    #[test]
-    fn parses_windows_and_per_model_limits() {
-        let body = r#"{
-            "plan_type": "pro",
-            "rate_limit": { "allowed": false, "limit_reached": true,
-                "primary_window": { "used_percent": 100, "limit_window_seconds": 604800,
-                                    "reset_after_seconds": 143951, "reset_at": 1788747989 },
-                "secondary_window": null },
-            "additional_rate_limits": [
-                { "limit_name": "GPT-5.3-Codex-Spark", "metered_feature": "codex_bengalfox",
-                  "rate_limit": { "allowed": true, "limit_reached": false,
-                    "primary_window": { "used_percent": 0, "limit_window_seconds": 18000,
-                                        "reset_after_seconds": 18000, "reset_at": 1788622039 },
-                    "secondary_window": { "used_percent": 4, "limit_window_seconds": 604800,
-                                          "reset_after_seconds": 604800, "reset_at": 1789208839 } } }
-            ],
-            "credits": { "has_credits": false, "unlimited": false, "balance": "0" },
-            "model_usage": { "gpt-6-astra": { "available": false,
-                                              "available_at": "2026-09-07T02:26:30Z",
-                                              "credits_would_enable": true } }
-        }"#;
-        let parsed: CodexUsageApiResponse = serde_json::from_str(body).unwrap();
-
-        let primary = parsed
-            .rate_limit
-            .as_ref()
-            .and_then(|r| r.primary_window.as_ref())
-            .expect("primary window");
-        assert!((primary.used_percent - 100.0).abs() < f64::EPSILON);
-        assert_eq!(primary.limit_window_seconds, Some(604_800));
-
-        assert_eq!(parsed.additional_rate_limits.len(), 1);
-        let extra = &parsed.additional_rate_limits[0];
-        assert_eq!(extra.limit_name.as_deref(), Some("GPT-5.3-Codex-Spark"));
-        let secondary = extra
-            .rate_limit
-            .as_ref()
-            .and_then(|r| r.secondary_window.as_ref())
-            .expect("secondary window");
-        assert!((secondary.used_percent - 4.0).abs() < f64::EPSILON);
-
-        assert_eq!(
-            parsed.credits.as_ref().unwrap().balance.as_deref(),
-            Some("0")
-        );
-        assert!(!parsed.model_usage["gpt-6-astra"].available);
-    }
-
-    /// The stats endpoint ships a `profile` object with username, display name
-    /// and avatar. It must not survive into anything TUIC can log or serve.
-    #[test]
-    fn stats_drops_the_profile_object() {
-        let body = r#"{
-            "profile": { "username": "someone", "display_name": "Some One",
-                         "profile_picture_url": "https://cdn.example/a.png" },
-            "metadata": { "whatever": 1 },
-            "stats": {
-                "lifetime_tokens": 25241643691,
-                "peak_daily_tokens": 2988540050,
-                "current_streak_days": 19,
-                "longest_streak_days": 19,
-                "total_threads": 3720,
-                "longest_running_turn_sec": 61603,
-                "fast_mode_usage_percentage": 0.09912030727295,
-                "total_skills_used": 752,
-                "unique_skills_used": 10,
-                "most_used_reasoning_effort": "xhigh",
-                "most_used_reasoning_effort_percentage": 31.16903545784292,
-                "daily_usage_buckets": [
-                    { "start_date": "2026-08-09", "tokens": 33848610 },
-                    { "start_date": "2026-08-10", "tokens": 511198907 }
-                ]
+    fn maps_official_app_server_snapshot() {
+        let limits: AppRateLimitsResponse = serde_json::from_value(serde_json::json!({
+            "ordinaryUsageAllowed": true,
+            "rateLimits": {
+                "limitId": "codex",
+                "planType": "pro",
+                "primary": {"usedPercent": 23.5, "windowDurationMins": 300, "resetsAt": 1600},
+                "credits": {"hasCredits": true, "unlimited": false, "balance": "12.5"}
+            },
+            "rateLimitsByLimitId": {
+                "codex": {"limitId": "codex", "planType": "pro"},
+                "spark": {
+                    "limitId": "spark",
+                    "limitName": "Spark",
+                    "secondary": {"usedPercent": 80, "windowDurationMins": 10080, "resetsAt": 2200},
+                    "rateLimitReachedType": "secondary"
+                }
             }
-        }"#;
-        let parsed: CodexStatsResponse = serde_json::from_str(body).unwrap();
-        let round_tripped = serde_json::to_string(&parsed).unwrap();
-        assert!(!round_tripped.contains("someone"));
-        assert!(!round_tripped.contains("Some One"));
-        assert!(!round_tripped.contains("cdn.example"));
+        }))
+        .unwrap();
+        let tokens: AppTokenUsageResponse = serde_json::from_value(serde_json::json!({
+            "summary": {"lifetimeTokens": 42, "currentStreakDays": 3},
+            "dailyUsageBuckets": [{"startDate": "2026-09-19", "tokens": 9}]
+        }))
+        .unwrap();
 
-        assert_eq!(parsed.stats.lifetime_tokens, Some(25_241_643_691));
-        assert_eq!(parsed.stats.total_threads, Some(3720));
-        assert_eq!(parsed.stats.daily_usage_buckets.len(), 2);
-        assert_eq!(parsed.stats.daily_usage_buckets[1].start_date, "2026-08-10");
-        assert_eq!(parsed.stats.daily_usage_buckets[1].tokens, 511_198_907);
+        let snapshot = map_app_server_snapshot(limits, tokens, 1000);
+        assert_eq!(snapshot.usage.plan_type.as_deref(), Some("pro"));
+        let primary = snapshot.usage.rate_limit.unwrap();
+        assert_eq!(primary.allowed, Some(true));
+        assert_eq!(
+            primary.primary_window.unwrap().limit_window_seconds,
+            Some(18_000)
+        );
+        assert_eq!(snapshot.usage.additional_rate_limits.len(), 1);
+        assert!(
+            snapshot.usage.additional_rate_limits[0]
+                .rate_limit
+                .as_ref()
+                .unwrap()
+                .limit_reached
+        );
+        assert_eq!(snapshot.stats.stats.lifetime_tokens, Some(42));
+        assert_eq!(snapshot.stats.stats.daily_usage_buckets[0].tokens, 9);
+        assert!(snapshot.usage.model_usage.is_empty());
     }
 
-    /// An account with no history yet returns the object without the buckets.
     #[test]
-    fn stats_tolerate_a_missing_history() {
-        let parsed: CodexStatsResponse = serde_json::from_str(r#"{ "stats": {} }"#).unwrap();
-        assert!(parsed.stats.daily_usage_buckets.is_empty());
-        assert!(parsed.stats.lifetime_tokens.is_none());
+    fn null_daily_buckets_are_empty_and_unknown_stats_stay_unknown() {
+        let limits: AppRateLimitsResponse = serde_json::from_value(serde_json::json!({
+            "ordinaryUsageAllowed": null,
+            "rateLimits": {"primary": null, "secondary": null},
+            "rateLimitsByLimitId": null
+        }))
+        .unwrap();
+        let tokens: AppTokenUsageResponse = serde_json::from_value(serde_json::json!({
+            "summary": {}, "dailyUsageBuckets": null
+        }))
+        .unwrap();
+
+        let snapshot = map_app_server_snapshot(limits, tokens, 0);
+        assert_eq!(snapshot.usage.rate_limit.unwrap().allowed, None);
+        assert!(snapshot.usage.additional_rate_limits.is_empty());
+        assert!(snapshot.stats.stats.daily_usage_buckets.is_empty());
+        assert!(snapshot.stats.stats.total_threads.is_none());
     }
 
-    /// A plan with no windows at all must still parse — a free/API-mode account
-    /// returns nulls rather than omitting the object.
     #[test]
-    fn tolerates_absent_windows() {
-        let body = r#"{ "plan_type": null, "rate_limit": null }"#;
-        let parsed: CodexUsageApiResponse = serde_json::from_str(body).unwrap();
-        assert!(parsed.rate_limit.is_none());
-        assert!(parsed.additional_rate_limits.is_empty());
-        assert!(parsed.model_usage.is_empty());
+    fn reset_countdown_never_goes_negative() {
+        assert_eq!(reset_after(Some(99), 100), Some(0));
+        assert_eq!(reset_after(Some(160), 100), Some(60));
+        assert_eq!(reset_after(None, 100), None);
+    }
+
+    #[test]
+    fn schema_failures_are_not_hidden_by_stale_data() {
+        assert!(looks_like_contract_failure(
+            "Failed to parse Codex rate limits response: invalid type: null"
+        ));
+        assert!(!looks_like_contract_failure("network connection reset"));
     }
 }

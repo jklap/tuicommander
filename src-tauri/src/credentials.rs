@@ -101,7 +101,9 @@ pub(crate) enum Credential<'a> {
     /// additional accounts (GitHub Enterprise Server) only.
     GithubToken(&'a str),
     McpUpstream(&'a str),
-    Provider(&'a str),
+    /// Basic Auth password for a remote `tuic-remote` daemon, keyed by the
+    /// connection's UUID. `connections.json` holds the username and never this.
+    RemoteConnection(&'a str),
 }
 
 impl Credential<'_> {
@@ -115,7 +117,7 @@ impl Credential<'_> {
             Self::PushVapidPrivateKey => "remote/push-vapid-private-key".into(),
             Self::GithubToken(id) => format!("github/account/{id}/token"),
             Self::McpUpstream(name) => format!("mcp/{name}"),
-            Self::Provider(id) => format!("provider/{id}"),
+            Self::RemoteConnection(id) => format!("remote/connection/{id}/password"),
         }
     }
 
@@ -129,7 +131,7 @@ impl Credential<'_> {
             | Self::RelayToken
             | Self::PushVapidPrivateKey
             | Self::GithubToken(_)
-            | Self::Provider(_) => None,
+            | Self::RemoteConnection(_) => None,
         }
     }
 }
@@ -613,12 +615,19 @@ mod tests {
             "github/oauth-token"
         );
         assert_eq!(Credential::McpUpstream("foo").vault_key(), "mcp/foo");
-        assert_eq!(Credential::Provider("my-id").vault_key(), "provider/my-id");
     }
 
+    // The key is the connection's UUID, which is what makes `delete_remote_connection`
+    // able to clean up after itself: a secret keyed by anything else would outlive
+    // the only name that could ever reach it.
     #[test]
-    fn provider_credential_has_no_legacy_entry() {
-        assert!(Credential::Provider("test").legacy_entry().is_none());
+    fn remote_connection_vault_key_is_uuid_scoped() {
+        assert_eq!(
+            Credential::RemoteConnection("2f1c8a3e-0000-4000-8000-000000000001").vault_key(),
+            "remote/connection/2f1c8a3e-0000-4000-8000-000000000001/password"
+        );
+        // A new feature: there is no legacy keyring slot to migrate from.
+        assert!(Credential::RemoteConnection("any").legacy_entry().is_none());
     }
 
     #[test]
@@ -651,19 +660,6 @@ mod tests {
         );
         delete(Credential::GithubToken("ghe.acme.com")).unwrap();
         assert_eq!(get(Credential::GithubToken("ghe.acme.com")).unwrap(), None);
-    }
-
-    #[test]
-    fn provider_credential_crud() {
-        let _guard = TEST_LOCK.lock().unwrap();
-        reset_vault();
-        set(Credential::Provider("anthropic-main"), "sk-ant-123").unwrap();
-        assert_eq!(
-            get(Credential::Provider("anthropic-main")).unwrap(),
-            Some("sk-ant-123".to_string())
-        );
-        delete(Credential::Provider("anthropic-main")).unwrap();
-        assert_eq!(get(Credential::Provider("anthropic-main")).unwrap(), None);
     }
 
     #[test]

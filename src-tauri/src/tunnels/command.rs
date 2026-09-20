@@ -46,6 +46,21 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
     args.push("-o".to_string());
     args.push("ForwardAgent=no".to_string());
 
+    // Compress the channel. A tunnelled terminal stream is the traffic this
+    // link carries, and it deflates to a few percent of itself — measured in
+    // `mcp_http::ws_compression`. Named explicitly in both directions rather
+    // than left to `ssh_config`, so what the tunnel does does not depend on a
+    // file this app did not write.
+    args.push("-o".to_string());
+    args.push(format!(
+        "Compression={}",
+        if profile.options.compression {
+            "yes"
+        } else {
+            "no"
+        }
+    ));
+
     // SSH port
     args.push("-p".to_string());
     args.push(profile.port.to_string());
@@ -131,6 +146,31 @@ mod tests {
         args.windows(2)
             .find(|w| w[0] == "-o" && w[1].starts_with(prefix))
             .map(|w| w[1].as_str())
+    }
+
+    #[test]
+    fn a_tunnel_compresses_its_channel_by_default() {
+        // The WebSocket layer refuses to deflate a loopback peer because it
+        // assumes this. If the default ever flips, a tunnelled terminal stream
+        // crosses the link uncompressed and nothing else notices.
+        assert_eq!(
+            find_option(&build_ssh_args(&base_profile()), "Compression="),
+            Some("Compression=yes")
+        );
+    }
+
+    #[test]
+    fn compression_off_is_said_out_loud_rather_than_omitted() {
+        let mut profile = base_profile();
+        profile.options.compression = false;
+
+        // Not "absent": ssh would then read `Compression` from the user's
+        // ssh_config, and the operator who turned it off here would get it back
+        // from a file this app never saw.
+        assert_eq!(
+            find_option(&build_ssh_args(&profile), "Compression="),
+            Some("Compression=no")
+        );
     }
 
     #[test]

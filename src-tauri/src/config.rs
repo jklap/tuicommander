@@ -700,10 +700,12 @@ pub(crate) struct AppConfig {
     pub(crate) ide: String,
     /// Absolute path to the one ego executable this host may launch for ACP.
     ///
-    /// The only place the ACP process authority comes from. It is deliberately
-    /// not reachable over IPC or HTTP: a caller supplies a working directory
-    /// and nothing else, so no request can choose which binary runs. Empty
-    /// means ACP is not configured here and every connect is refused.
+    /// The only place the ACP process authority comes from. No ACP command
+    /// carries it: a caller supplies a working directory and nothing else, so
+    /// no connect request can choose which binary runs. It is configuration —
+    /// edited in Settings and written through `save_config` like every other
+    /// field here. Empty means ACP is not configured on this host and every
+    /// connect is refused.
     #[serde(default)]
     pub(crate) ego_executable: String,
     /// Default font size for new terminals
@@ -798,18 +800,11 @@ pub(crate) struct AppConfig {
     /// Default issue filter mode: "assigned", "created", "mentioned", "all", or "disabled"
     #[serde(default = "default_issue_filter")]
     pub(crate) issue_filter: String,
-    /// Master toggle for experimental features
+    /// Master toggle for experimental features. Its three AI sub-flags went with
+    /// the embedded engine (#784-0aec); what it still gates is the SSH Tunnels
+    /// panel.
     #[serde(default)]
     pub(crate) experimental_features_enabled: bool,
-    /// Sub-flag: AI Chat panel, shortcuts, and palette entry
-    #[serde(default)]
-    pub(crate) ai_chat_enabled: bool,
-    /// Sub-flag: AI Triage (diff classification)
-    #[serde(default)]
-    pub(crate) ai_triage_enabled: bool,
-    /// Sub-flag: AI Watchers (terminal event watchers)
-    #[serde(default)]
-    pub(crate) ai_watchers_enabled: bool,
     /// Sub-flag: reflow scrollback history on column resize. Keeps scrollback
     /// readable when side panels temporarily narrow the terminal, without
     /// affecting cursor-addressed TUIs on the visible screen.
@@ -839,15 +834,6 @@ pub(crate) struct AppConfig {
     /// Frontend-gated.
     #[serde(default = "default_true")]
     pub(crate) block_folding_enabled: bool,
-    /// Expose `ai_terminal_*` tools to external MCP. Default off: they need a
-    /// per-session filesystem sandbox only the internal agent loop creates.
-    ///
-    /// Read at three sites (`merged_tool_definitions`, `searchable_tool_definitions`,
-    /// `handle_mcp_tool_call` dispatch). This flag has NO live-reload semantics:
-    /// a client may see a tools-list snapshot before a toggle and a dispatch-time
-    /// rejection after. Coordinate those call sites if live reload is ever added.
-    #[serde(default)]
-    pub(crate) ai_terminal_mcp_enabled: bool,
     /// Content index pre-warm strategy: "active_and_switch" (default), "active_only", "all_sequential"
     #[serde(default = "default_index_strategy")]
     pub(crate) index_strategy: String,
@@ -1004,29 +990,18 @@ impl Default for AppConfig {
             collapse_tools: false,
             issue_filter: default_issue_filter(),
             experimental_features_enabled: false,
-            ai_chat_enabled: false,
-            ai_triage_enabled: false,
-            ai_watchers_enabled: false,
             scrollback_reflow: true,
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
             show_block_timestamps: true,
             show_scrollbar_marks: true,
             block_folding_enabled: true,
-            ai_terminal_mcp_enabled: false,
             index_strategy: default_index_strategy(),
             index_memory_budget_mb: default_index_memory_budget_mb(),
             standby_timeout_minutes: default_standby_timeout(),
             custom_launchers: Vec::new(),
             inline_blame_enabled: true,
         }
-    }
-}
-
-impl AppConfig {
-    #[allow(dead_code)]
-    pub(crate) fn is_experimental_enabled(&self, sub_flag: bool) -> bool {
-        self.experimental_features_enabled && sub_flag
     }
 }
 
@@ -1136,8 +1111,6 @@ pub(crate) struct UIPrefsConfig {
     pub(crate) references_panel_visible: bool,
     #[serde(default)]
     pub(crate) ai_chat_panel_visible: bool,
-    #[serde(default)]
-    pub(crate) ai_triage_panel_visible: bool,
     /// File browser listing: "flat" or "tree".
     #[serde(default = "default_file_browser_view_mode")]
     pub(crate) file_browser_view_mode: String,
@@ -1186,7 +1159,6 @@ impl Default for UIPrefsConfig {
             outline_panel_visible: false,
             references_panel_visible: false,
             ai_chat_panel_visible: false,
-            ai_triage_panel_visible: false,
             file_browser_view_mode: default_file_browser_view_mode(),
             diff_panel_width: default_panel_width(),
             markdown_panel_width: default_panel_width(),
@@ -1458,16 +1430,6 @@ pub(crate) struct PromptLibraryConfig {
 }
 
 // ---------------------------------------------------------------------------
-// AiPromptsConfig — customizable system prompts for internal AI services
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub(crate) struct AiPromptsConfig {
-    #[serde(default)]
-    pub(crate) diff_triage_system_prompt: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // AgentsConfig — per-agent run configurations
 // ---------------------------------------------------------------------------
 
@@ -1543,7 +1505,6 @@ const KEYBINDINGS_FILE: &str = "keybindings.json";
 const PANE_LAYOUT_FILE: &str = "pane-layout.json";
 const AGENTS_CONFIG_FILE: &str = "agents.json";
 const ACTIVITY_FILE: &str = "activity.json";
-const AI_PROMPTS_FILE: &str = "ai-prompts.json";
 
 // App config
 
@@ -3619,18 +3580,6 @@ pub(crate) fn save_agents_config(config: AgentsConfig) -> Result<(), String> {
     file.save(&config)
 }
 
-// AI prompts
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn load_ai_prompts() -> AiPromptsConfig {
-    load_json_config(AI_PROMPTS_FILE)
-}
-
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn save_ai_prompts(config: AiPromptsConfig) -> Result<(), String> {
-    let file: ConfigFile<AiPromptsConfig> = ConfigFile::new(AI_PROMPTS_FILE);
-    file.save(&config)
-}
-
 // ---------------------------------------------------------------------------
 // Note images — save/delete/get for Ideas panel image attachments
 // ---------------------------------------------------------------------------
@@ -4111,6 +4060,55 @@ mod tests {
         );
     }
 
+    /// Deleting the embedded AI engine (#784-0aec) removed `ai_chat_enabled`,
+    /// `ai_triage_enabled` and `ai_watchers_enabled` from `AppConfig`. Every
+    /// `config.json` written before that upgrade still carries them, so the
+    /// load path has to ignore them rather than fail — `AppConfig` has no
+    /// `deny_unknown_fields`, and this test is what holds that open. Note the
+    /// failure mode it guards: a rejected parse does not surface as an error,
+    /// it silently moves the user's file aside and writes defaults over it.
+    ///
+    /// The document below carries `shell`, `font_family`, `font_size` and
+    /// `theme` because those four fields carry no `#[serde(default)]` and are
+    /// therefore mandatory. That is a separate defect — a config.json missing
+    /// any of them is discarded the same silent way — and this test deliberately
+    /// does not exercise it, so a failure here can only mean the removed keys
+    /// were rejected.
+    #[test]
+    #[serial_test::serial]
+    fn a_config_written_before_the_ai_engine_was_deleted_still_loads() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = dir.path().join(APP_CONFIG_FILE);
+        fs::write(
+            &path,
+            r#"{
+                "shell": null,
+                "font_family": "Menlo",
+                "font_size": 17,
+                "theme": "dark",
+                "experimental_features_enabled": true,
+                "ai_chat_enabled": true,
+                "ai_triage_enabled": true,
+                "ai_watchers_enabled": true
+            }"#,
+        )
+        .unwrap();
+
+        let loaded = load_app_config();
+
+        assert_eq!(loaded.font_size, 17, "the surviving keys must be read");
+        assert!(
+            loaded.experimental_features_enabled,
+            "experimental_features_enabled outlived its three AI sub-flags"
+        );
+        assert!(
+            corrupt_backups(dir.path()).is_empty(),
+            "the removed keys must be ignored, not treated as a corrupt document"
+        );
+    }
+
     #[test]
     fn app_config_round_trip() {
         let dir = TempDir::new().unwrap();
@@ -4174,11 +4172,7 @@ mod tests {
             collapse_tools: true,
             issue_filter: "assigned".to_string(),
             experimental_features_enabled: false,
-            ai_chat_enabled: false,
-            ai_triage_enabled: false,
-            ai_watchers_enabled: false,
             scrollback_reflow: true,
-            ai_terminal_mcp_enabled: false,
             index_strategy: "active_and_switch".to_string(),
             index_memory_budget_mb: default_index_memory_budget_mb(),
             cursor_style: "bar".to_string(),
@@ -4650,7 +4644,6 @@ mod tests {
             outline_panel_visible: true,
             references_panel_visible: false,
             ai_chat_panel_visible: false,
-            ai_triage_panel_visible: true,
             file_browser_view_mode: "tree".to_string(),
             diff_panel_width: 500,
             markdown_panel_width: 450,
@@ -4685,7 +4678,6 @@ mod tests {
         assert!(loaded.outline_panel_visible);
         assert!(!loaded.references_panel_visible);
         assert!(!loaded.ai_chat_panel_visible);
-        assert!(loaded.ai_triage_panel_visible);
         assert_eq!(loaded.file_browser_view_mode, "tree");
     }
 
@@ -4701,13 +4693,12 @@ mod tests {
     /// back out of `load_ui_prefs`. Serde drops unknown keys silently, so a
     /// field the frontend sends and the struct does not declare is discarded
     /// without an error anywhere: the panel simply never survives a restart.
-    /// These five were in exactly that state.
+    /// These were in exactly that state.
     #[test]
     fn ui_prefs_keeps_every_panel_field_the_frontend_sends() {
         let sent = r#"{
             "outline_panel_visible": true,
             "references_panel_visible": true,
-            "ai_triage_panel_visible": true,
             "ai_chat_panel_visible": true,
             "file_browser_view_mode": "tree"
         }"#;
@@ -4717,7 +4708,6 @@ mod tests {
         for key in [
             "outline_panel_visible",
             "references_panel_visible",
-            "ai_triage_panel_visible",
             "ai_chat_panel_visible",
         ] {
             assert_eq!(
@@ -4740,7 +4730,6 @@ mod tests {
         let loaded: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
         assert!(!loaded.outline_panel_visible);
         assert!(!loaded.references_panel_visible);
-        assert!(!loaded.ai_triage_panel_visible);
         assert!(!loaded.ai_chat_panel_visible);
         assert_eq!(loaded.file_browser_view_mode, "flat");
     }
@@ -4804,28 +4793,6 @@ mod tests {
         assert_eq!(loaded.prompts.len(), 1);
         assert_eq!(loaded.prompts[0].id, "abc");
         assert!(loaded.prompts[0].pinned);
-    }
-
-    #[test]
-    fn ai_prompts_round_trip() {
-        let dir = TempDir::new().unwrap();
-        let cfg = AiPromptsConfig {
-            diff_triage_system_prompt: Some("Custom triage prompt".to_string()),
-        };
-        let loaded: AiPromptsConfig = round_trip_in_dir(dir.path(), "ai-prompts.json", &cfg);
-        assert_eq!(
-            loaded.diff_triage_system_prompt.as_deref(),
-            Some("Custom triage prompt")
-        );
-    }
-
-    #[test]
-    fn ai_prompts_empty_file_returns_default() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("ai-prompts.json"), "{}").unwrap();
-        let loaded: AiPromptsConfig =
-            round_trip_in_dir(dir.path(), "ai-prompts.json", &AiPromptsConfig::default());
-        assert!(loaded.diff_triage_system_prompt.is_none());
     }
 
     #[test]
@@ -5873,17 +5840,6 @@ mod tests {
             resolve_setup_script_from(&settings, &defaults, "/repo"),
             Some("yarn install".to_string()),
         );
-    }
-
-    #[test]
-    fn is_experimental_enabled_gates_on_parent() {
-        let mut cfg = AppConfig::default();
-        assert!(!cfg.is_experimental_enabled(true));
-        assert!(!cfg.is_experimental_enabled(false));
-
-        cfg.experimental_features_enabled = true;
-        assert!(cfg.is_experimental_enabled(true));
-        assert!(!cfg.is_experimental_enabled(false));
     }
 
     // --- Vault-backed secrets: failure must never look like absence (#488-5576) ---

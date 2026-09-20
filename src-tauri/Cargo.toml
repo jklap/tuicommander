@@ -200,11 +200,29 @@ hex = "0.4"
 ring = "0.17"
 dirs = "6"
 tauri-plugin-dialog = { version = "2.7", optional = true }
+# Direct, because the file pickers must run inside OUR main-thread closure — see
+# native_dialog.rs. Version and features are copied from tauri-plugin-dialog's own
+# rfd dependency on purpose: a mismatch forks the lockfile into two rfd builds.
+rfd = { version = "0.16", default-features = false, features = [
+    "common-controls-v6",
+], optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
 whisper-rs = { version = "0.16", optional = true }
 cpal = { version = "0.17.3", optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
-reqwest = { version = "0.13", features = ["stream", "json", "form"] }
+# gzip/brotli: the daemon compresses every response above 860 bytes
+# (`CompressionLayer` in mcp_http), but only for a client that advertises the
+# encoding. A browser does it unasked; reqwest does not, so without these two
+# features every backend-to-daemon call — and the event stream this backend
+# mirrors from it — crosses the network uncompressed.
+reqwest = { version = "0.13", features = ["stream", "json", "form", "query", "gzip", "brotli"] }
+# The WebSocket half of the same problem. `CompressionLayer` is an HTTP layer and
+# never sees a WS frame, and tungstenite 0.30 — the implementation behind both
+# `axum::extract::ws` and the tunnel's client — has no permessage-deflate at all,
+# so the terminal stream crossed a remote link uncompressed. Already in the tree
+# under `async-compression`; named here because `mcp_http::ws_compression` uses
+# it directly, per frame, with a retained window (#794-832e).
+flate2 = "1.1"
 futures-util = "0.3"
 axum = { version = "0.8", features = ["ws"] }
 async-stream = "0.3"
@@ -248,7 +266,6 @@ anyhow = "1"
 oauth2 = "5"
 bm25 = "2.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-genai = "0.6.0-beta.11"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
@@ -265,6 +282,7 @@ desktop = [
     "dep:tauri-build",
     "dep:tauri-plugin-opener",
     "dep:tauri-plugin-dialog",
+    "dep:rfd",
     "dep:tauri-plugin-single-instance",
     "dep:tauri-plugin-window-state",
     "dep:tauri-plugin-updater",
@@ -324,6 +342,11 @@ vte = { path = "patches/vte" }
 wayland-scanner = { path = "patches/wayland-scanner" }
 
 [dev-dependencies]
+# `full` does not include `test-util`, and `start_paused` needs it. It used to
+# arrive transitively through a dependency of the embedded AI engine; deleting
+# that engine (#784-0aec) made the suite stop compiling, so it is declared here
+# where the tests that use it can see why.
+tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 serial_test = "3"
 mockito = "1"

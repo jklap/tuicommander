@@ -88,14 +88,24 @@ fn detect_claude_code_client(client_name: Option<&str>) -> bool {
     client_name.is_some_and(|n| n.contains("claude") || n.contains("tuic-bridge"))
 }
 
+/// Two clients take the collapsed surface whatever `collapse_tools` says, for
+/// two unrelated reasons.
+///
 /// Grok accepts exactly one `__` delimiter in a qualified MCP tool id. TUIC's
 /// upstream names would become `tuicommander__upstream__tool` after Grok adds
 /// the server namespace, so expose the existing meta-tool surface for that
 /// client instead of letting it silently discard every proxied tool.
+///
+/// ego pays for the catalogue on every model call: it captures one immutable
+/// tool list per generation and sends every definition with every request,
+/// while `/mcp` proxies 200+ upstream tools on a normal day. Measured
+/// 2026-09-13 at 190 tools: 35.104 tokens per turn against 615 collapsed, and
+/// flat as upstreams grow. Everything stays reachable through `call_tool`; the
+/// cost is one extra round trip before the first use of an unfamiliar tool.
 fn client_requires_meta_tools(client_name: Option<&str>) -> bool {
     client_name
         .map(str::to_ascii_lowercase)
-        .is_some_and(|name| name.starts_with("grok-shell-"))
+        .is_some_and(|name| name.starts_with("grok-shell-") || name == "ego")
 }
 
 /// Detect Claude Code from the User-Agent header when the MCP clientInfo is
@@ -1082,17 +1092,17 @@ const AGENT_ACTIONS: &str =
 const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
-const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
+const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 
-/// Full MCP tool definitions — 8 base native tools + all `ai_terminal_*` tools.
+/// Full MCP tool definitions — the one native tool family.
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
 /// route through [`filtered_native_tools`] to honour `disabled_native_tools`
-/// and `ai_terminal_mcp_enabled`. Leaking the raw list to external clients
-/// exposes tool metadata for gated tools.
+/// and `progress_tracking`. Leaking the raw list to external clients exposes
+/// tool metadata for gated tools.
 fn native_tool_definitions() -> serde_json::Value {
-    let mut defs = serde_json::json!([
+    let defs = serde_json::json!([
         {
             "name": "session",
             "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts three forms of the same address: the PTY id, the tuic_session, or the alias (e.g. tu-1).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
@@ -1197,12 +1207,10 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "config",
-            "description": "Read or write app configuration.\n\nActions (pass as 'action' parameter):\n- get: Returns app config (shell, font, theme, etc.). Password hash is stripped.\n- save: Persists configuration. Requires config object. Partial updates OK.\n- list_ai_prompts: Lists AI services with custom/default status.\n- load_ai_prompt: Returns prompt for a service (requires 'service' param). Includes prompt, default_prompt, is_custom.\n- save_ai_prompt: Sets custom prompt for a service (requires 'service' + 'prompt' params, null/empty resets to default). Localhost only.\n- list_prompts: Lists saved smart prompts (id, label, pinned — no text).\n- load_prompt: Returns full prompt entry by id (requires 'id' param).\n- save_prompt: Upserts a prompt by id (requires 'id', 'label', 'text'; optional 'pinned'). Localhost only.",
+            "description": "Read or write app configuration.\n\nActions (pass as 'action' parameter):\n- get: Returns app config (shell, font, theme, etc.). Password hash is stripped.\n- save: Persists configuration. Requires config object. Partial updates OK.\n- list_prompts: Lists saved smart prompts (id, label, pinned — no text).\n- load_prompt: Returns full prompt entry by id (requires 'id' param).\n- save_prompt: Upserts a prompt by id (requires 'id', 'label', 'text'; optional 'pinned'). Localhost only.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt" },
+                "action": { "type": "string", "description": "One of: get, save, list_prompts, load_prompt, save_prompt" },
                 "config": { "type": "object", "description": "Config fields to save (action=save)" },
-                "service": { "type": "string", "description": "AI service name (action=load_ai_prompt, save_ai_prompt). Currently: diff_triage" },
-                "prompt": { "type": "string", "description": "Custom prompt text (action=save_ai_prompt). Null or empty resets to default." },
                 "id": { "type": "string", "description": "Prompt id (action=load_prompt, save_prompt)" },
                 "label": { "type": "string", "description": "Prompt label (action=save_prompt)" },
                 "text": { "type": "string", "description": "Prompt text (action=save_prompt)" },
@@ -1222,12 +1230,6 @@ fn native_tool_definitions() -> serde_json::Value {
             }, "required": ["action"] }
         }
     ]);
-
-    // Append ai_terminal_* tools (external MCP exposure of agent terminal tools).
-    // Callers filter these out when `config.ai_terminal_mcp_enabled` is false.
-    if let Some(arr) = defs.as_array_mut() {
-        arr.extend(super::ai_terminal::tool_definitions());
-    }
 
     // Guard invariant: native tool names must never contain "__" — that prefix
     // is the routing discriminator for upstream proxy tools.
@@ -1344,15 +1346,15 @@ fn resolve_allowed_upstreams(
 }
 
 /// Apply the two config-driven filters (`disabled_native_tools`,
-/// `ai_terminal_mcp_enabled`) to the full native tool list. Centralised so
+/// `progress_tracking`) to the full native tool list. Centralised so
 /// every listing/search path uses the same rules — adding a future config
 /// flag means editing one place instead of chasing duplicated closures.
 fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
-    let (disabled, ai_terminal_mcp_enabled, progress_tracking) = {
+    let (disabled, progress_tracking) = {
         let cfg = state.config.read();
         let disabled: std::collections::HashSet<String> =
             cfg.disabled_native_tools.iter().cloned().collect();
-        (disabled, cfg.ai_terminal_mcp_enabled, cfg.progress_tracking)
+        (disabled, cfg.progress_tracking)
     };
     native_tool_definitions()
         .as_array()
@@ -1361,9 +1363,6 @@ fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
         .into_iter()
         .filter(|t| {
             let name = t["name"].as_str().unwrap_or("");
-            if !ai_terminal_mcp_enabled && super::ai_terminal::is_ai_terminal_tool(name) {
-                return false;
-            }
             // The global half of `progress_tracking`. It is deliberately the
             // global one and not the effective per-agent value: this list also
             // feeds `searchable_tool_definitions`, which builds ONE cached index
@@ -1379,13 +1378,22 @@ fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Resolve which surface a caller gets, then build it.
+///
+/// A stateless caller has no session meta to read `requires_meta_tools` from,
+/// so it says who it is in this request's `_meta` instead — that name arrives
+/// as `stateless_client_name`. The session lookup stays authoritative when
+/// there is a session: a legacy client that recorded its name at `initialize`
+/// does not repeat it per request, and must not lose collapsing because of it.
 fn merged_tool_definitions(
     state: &Arc<AppState>,
     mcp_session_id: Option<&str>,
+    stateless_client_name: Option<&str>,
 ) -> serde_json::Value {
     let force_meta_tools = mcp_session_id
         .and_then(|sid| state.mcp.sessions.get(sid))
-        .is_some_and(|meta| meta.requires_meta_tools);
+        .map(|meta| meta.requires_meta_tools)
+        .unwrap_or_else(|| client_requires_meta_tools(stateless_client_name));
     merged_tool_definitions_for_mode(state, mcp_session_id, force_meta_tools)
 }
 
@@ -1893,18 +1901,8 @@ async fn handle_mcp_tool_call_with_context(
         "call_tool" => {
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
-        n if super::ai_terminal::is_ai_terminal_tool(n) => {
-            if !state.config.read().ai_terminal_mcp_enabled {
-                return serde_json::json!({
-                    "error": format!(
-                        "Tool '{n}' is disabled. Enable `ai_terminal_mcp_enabled` in config to expose ai_terminal_* tools to external MCP clients."
-                    )
-                });
-            }
-            super::ai_terminal::handle(state, n, args).await
-        }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, repo, ui, plugin_dev_guide, config, debug, search_tools, get_tool_schema, call_tool, ai_terminal_*", name
+            "Unknown tool '{}'. Available: session, agent, task, repo, progress, ui, plugin_dev_guide, config, debug, search_tools, get_tool_schema, call_tool", name
         )}),
     }
 }
@@ -2889,7 +2887,10 @@ fn handle_session(
                 if let Some(since) = args["since_cursor"].as_u64().map(|v| v as usize) {
                     let (log_lines, new_cursor) = buf.lines_since_owned(since, limit);
                     let data: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
-                    let data = data.join("\n");
+                    // Redaction applies to all three reads below — delta, absolute
+                    // and raw ring. `format=raw` keeps ANSI; it is not an opt-out
+                    // of redaction, and `data_length` reports what was returned.
+                    let data = crate::redaction::redact_secrets(&data.join("\n"));
                     let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                     insert_optional_value(
                         response
@@ -2918,7 +2919,7 @@ fn handle_session(
                 if args["from_line"].is_null() {
                     all_lines.extend(screen);
                 }
-                let data = all_lines.join("\n");
+                let data = crate::redaction::redact_secrets(&all_lines.join("\n"));
                 let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                 insert_optional_value(
                     response
@@ -2939,7 +2940,7 @@ fn handle_session(
                 }
             };
             let (bytes, total_written) = ring.lock().read_last(limit);
-            let data = String::from_utf8_lossy(&bytes).to_string();
+            let data = crate::redaction::redact_secrets(&String::from_utf8_lossy(&bytes));
             let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
             insert_optional_value(
                 response
@@ -4935,60 +4936,6 @@ fn handle_config(
                 Err(e) => serde_json::json!({"error": e}),
             }
         }
-        "list_ai_prompts" => {
-            let config = crate::config::load_ai_prompts();
-            serde_json::json!({
-                "services": [{
-                    "name": "diff_triage",
-                    "description": "System prompt for diff triage LLM classification",
-                    "is_custom": config.diff_triage_system_prompt.is_some(),
-                }]
-            })
-        }
-        "load_ai_prompt" => {
-            let service = match require_string(args, "service") {
-                Ok(s) => s,
-                Err(e) => return e,
-            };
-            let config = crate::config::load_ai_prompts();
-            match service {
-                "diff_triage" => {
-                    let default_prompt = crate::diff_triage::default_system_prompt();
-                    serde_json::json!({
-                        "service": "diff_triage",
-                        "prompt": config.diff_triage_system_prompt.as_deref().unwrap_or(default_prompt),
-                        "default_prompt": default_prompt,
-                        "is_custom": config.diff_triage_system_prompt.is_some(),
-                    })
-                }
-                _ => serde_json::json!({"error": format!("Unknown AI service: {service}")}),
-            }
-        }
-        "save_ai_prompt" => {
-            if !addr.ip().is_loopback() {
-                return serde_json::json!({"error": "AI prompt save is restricted to localhost connections"});
-            }
-            let service = match require_string(args, "service") {
-                Ok(s) => s,
-                Err(e) => return e,
-            };
-            match service {
-                "diff_triage" => {
-                    let prompt = args
-                        .get("prompt")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.trim().is_empty())
-                        .map(|s| s.to_string());
-                    let mut config = crate::config::load_ai_prompts();
-                    config.diff_triage_system_prompt = prompt;
-                    match crate::config::save_ai_prompts(config) {
-                        Ok(()) => serde_json::json!({"ok": true}),
-                        Err(e) => serde_json::json!({"error": e}),
-                    }
-                }
-                _ => serde_json::json!({"error": format!("Unknown AI service: {service}")}),
-            }
-        }
         "list_prompts" => {
             let lib = crate::config::load_prompt_library();
             serde_json::json!({
@@ -5304,11 +5251,23 @@ fn resolve_mcp_origin_repo_path(
                 .get(tuic)
                 .and_then(|p| p.project.clone())
                 .or_else(|| {
+                    // Resolution, not equality: `sessions` is keyed by the UUID
+                    // `create_pty` minted, while a peer is keyed by its
+                    // `$TUIC_SESSION`. The two are the same value only for a
+                    // spawn-registered child, so reading `sessions` under the
+                    // peer id answered "no cwd" for every hand-opened tab — and
+                    // `progress` then refused the report as `project_required`
+                    // with the cwd sitting in the map under the other key.
                     state
-                        .session_maps
-                        .sessions
-                        .get(tuic)
-                        .and_then(|s| s.lock().cwd.clone())
+                        .live_pty_for_peer(tuic)
+                        .and_then(|pty| {
+                            state
+                                .session_maps
+                                .sessions
+                                .get(&pty)
+                                .map(|s| s.lock().cwd.clone())
+                        })
+                        .flatten()
                 })
         })
         .or_else(|| {
@@ -5775,9 +5734,55 @@ const MCP_SESSION_HEADER: &str = "mcp-session-id";
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2026-07-28", "2025-11-25", "2025-03-26"];
 
 /// Answered when the client asks for a revision we do not implement, or sends
-/// none at all. This endpoint is the legacy 2025-11-25 transport, so that is the
+/// none at all. `initialize` is the legacy 2025-11-25 transport, so that is the
 /// revision it can promise — not the newest entry in the supported list.
 const DEFAULT_PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[1];
+
+/// The stateless revision: no `initialize`, no session id, and every list
+/// result carries its own cache envelope. ego pins it as a const and cannot
+/// fall back, so it is the revision that decides whether ego works at all.
+const MODERN_PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[0];
+
+/// Where a stateless client puts its identity, once per request.
+const CLIENT_INFO_META_KEY: &str = "io.modelcontextprotocol/clientInfo";
+
+/// Where a stateless client names the revision it is speaking, once per
+/// request. The `MCP-Protocol-Version` header carries the same value; a client
+/// may send either, so both are read.
+const PROTOCOL_VERSION_META_KEY: &str = "io.modelcontextprotocol/protocolVersion";
+
+/// The header a client puts its revision in on every request after the
+/// handshake.
+const MCP_PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";
+
+/// Where the server puts its own, in a `DiscoverResult`. The modern result has
+/// no top-level `serverInfo` field — it travels in `_meta` (rmcp 3.1.4
+/// `DiscoverResult::set_server_info`).
+const SERVER_INFO_META_KEY: &str = "io.modelcontextprotocol/serverInfo";
+
+/// The client name carried by a single request's `_meta`.
+///
+/// The legacy lifecycle records the name once at `initialize` and looks it up
+/// by session id afterwards. A stateless caller has no session to look up, so
+/// every request that wants to know who is asking reads it from here.
+fn request_meta_client_name(body: &serde_json::Value) -> Option<&str> {
+    body["params"]["_meta"][CLIENT_INFO_META_KEY]["name"].as_str()
+}
+
+/// Whether this one request is on the stateless 2026-07-28 lifecycle.
+///
+/// There is no session to remember the answer in — that is the whole point of
+/// the revision — so it is re-read per request from the header, falling back to
+/// the `_meta` key. A caller that names neither is legacy: the revision governs
+/// the *shape* of what we answer, so guessing "modern" would send cache fields
+/// to a client whose deserializer never asked for them.
+fn request_is_modern_lifecycle(headers: &HeaderMap, body: &serde_json::Value) -> bool {
+    headers
+        .get(MCP_PROTOCOL_VERSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .or_else(|| body["params"]["_meta"][PROTOCOL_VERSION_META_KEY].as_str())
+        .is_some_and(|version| version == MODERN_PROTOCOL_VERSION)
+}
 
 /// Agree on a protocol revision: the client's own when we support it, otherwise
 /// [`DEFAULT_PROTOCOL_VERSION`]. Echoing an unsupported version back would be a
@@ -5932,6 +5937,53 @@ pub(super) async fn mcp_post(
                 .into_response()
         }
 
+        // The modern (2026-07-28) lifecycle's whole handshake. One request, one
+        // response, no session: rmcp's `Discover` mode treats a JSON-RPC error
+        // here as a hard failure rather than a cue to try `initialize`, so this
+        // arm answering is the difference between every tool reaching the
+        // client and none of them.
+        // The modern lifecycle: no `initialize`, no `notifications/initialized`,
+        // no session id, and a `_meta` block carrying the client's identity on
+        // every request. Deliberately a *second* entry point rather than a
+        // replacement — Claude Code and every existing client speak the legacy
+        // lifecycle and must keep working, while ego pins the modern revision as
+        // a const and has no fallback, so one endpoint has to answer both.
+        "server/discover" => {
+            let client_name = request_meta_client_name(&body);
+            let effective_collapse =
+                state.config.read().collapse_tools || client_requires_meta_tools(client_name);
+            let instructions =
+                build_mcp_instructions_for_mode(&state, client_name, effective_collapse);
+
+            // Shape and casing are rmcp 3.1.4's `DiscoverResult`, which is what
+            // the client deserializes into. `ttlMs: 0` with `cacheScope:
+            // private` says "do not cache this": the tool surface moves with
+            // upstream connects and config toggles, so a cached discovery would
+            // go stale within one session.
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "resultType": "complete",
+                    "supportedVersions": SUPPORTED_PROTOCOL_VERSIONS,
+                    "capabilities": {
+                        "tools": { "listChanged": true },
+                        "experimental": { "claude/channel": {} }
+                    },
+                    "instructions": instructions,
+                    "ttlMs": 0,
+                    "cacheScope": "private",
+                    "_meta": {
+                        SERVER_INFO_META_KEY: {
+                            "name": "tuicommander",
+                            "version": env!("CARGO_PKG_VERSION")
+                        }
+                    }
+                }
+            }))
+            .into_response()
+        }
+
         "notifications/initialized" => StatusCode::ACCEPTED.into_response(),
 
         // Standard MCP liveness request. The bridge uses this instead of
@@ -5983,11 +6035,28 @@ pub(super) async fn mcp_post(
                 .upstream_registry
                 .await_initial_settle(std::time::Duration::from_secs(3))
                 .await;
-            let tools = merged_tool_definitions(&state, list_session_id);
+            let tools =
+                merged_tool_definitions(&state, list_session_id, request_meta_client_name(&body));
+            let mut result = serde_json::json!({ "tools": tools });
+            // 2026-07-28 makes a list result a *cache* entry: `resultType`
+            // says the page is the whole list, and `ttlMs`/`cacheScope` say
+            // how long it may be held. ego refuses to admit a server whose
+            // `tools/list` omits any of the three — measured 2026-09-19, the
+            // handshake and the list both succeeded and `session/new` still
+            // answered "the supplied MCP servers could not be admitted"
+            // (#783-3c1b). Same values as `server/discover`: the tool surface
+            // moves with upstream connects and config toggles, so nothing here
+            // is cacheable. Withheld from the legacy revision, which has no
+            // such fields and no reader for them.
+            if request_is_modern_lifecycle(&headers, &body) {
+                result["resultType"] = serde_json::json!("complete");
+                result["ttlMs"] = serde_json::json!(0);
+                result["cacheScope"] = serde_json::json!("private");
+            }
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": { "tools": tools }
+                "result": result
             });
             let mut resp = Json(response).into_response();
             if let Some(sid) = headers
@@ -9116,7 +9185,7 @@ mod tests {
     fn the_task_tool_is_listed_and_searchable() {
         let state = test_state();
 
-        let listed = merged_tool_definitions(&state, None);
+        let listed = merged_tool_definitions(&state, None, None);
         assert!(
             listed
                 .as_array()
@@ -11891,8 +11960,18 @@ mod tests {
         assert_eq!(names, expected);
     }
 
+    /// Criterion 2 of story 789-f6ed: exactly one tool family is registered.
+    ///
+    /// This list used to carry 13 `ai_terminal_*` tools after `debug`. They
+    /// overlapped this family without being equivalent, and six of them needed
+    /// a filesystem sandbox only the embedded agent loop creates - so they
+    /// refused every external caller before dispatch. The comparison behind the
+    /// deletion is `plans/ego-integration/tool-family-comparison.md`.
+    ///
+    /// These names are a public contract: they appear in users' ego rule files,
+    /// so renaming one silently stops a user's policy from matching.
     #[test]
-    fn native_tool_definitions_returns_base_plus_ai_terminal_tools() {
+    fn native_tool_definitions_are_the_one_surviving_family() {
         let defs = native_tool_definitions();
         let names = tool_names(&defs);
         assert_eq!(
@@ -11907,21 +11986,8 @@ mod tests {
                 "plugin_dev_guide",
                 "config",
                 "debug",
-                "ai_terminal_read_screen",
-                "ai_terminal_send_input",
-                "ai_terminal_send_key",
-                "ai_terminal_wait_for",
-                "ai_terminal_get_state",
-                "ai_terminal_get_context",
-                "ai_terminal_read_file",
-                "ai_terminal_write_file",
-                "ai_terminal_edit_file",
-                "ai_terminal_list_files",
-                "ai_terminal_search_files",
-                "ai_terminal_run_command",
-                "ai_terminal_drive_agent",
             ],
-            "native_tool_definitions must return 9 base tools + 13 ai_terminal_* tools in order"
+            "native_tool_definitions must return exactly the one family, in order"
         );
     }
 
@@ -12265,11 +12331,8 @@ mod tests {
     fn merged_tools_collapse_false_returns_all_native_tools() {
         let state = test_state();
         assert!(!state.config.read().collapse_tools);
-        // ai_terminal_* tools are gated behind `ai_terminal_mcp_enabled`; enable
-        // it so `merged_tool_definitions` returns the full `native_tool_definitions`.
-        state.config.write().ai_terminal_mcp_enabled = true;
 
-        let merged = merged_tool_definitions(&state, None);
+        let merged = merged_tool_definitions(&state, None, None);
         let names = tool_names(&merged);
 
         let native = tool_names(&native_tool_definitions());
@@ -12283,20 +12346,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn merged_tools_hide_ai_terminal_when_flag_disabled() {
+    /// The deleted family must not linger as a hidden-but-dispatchable name.
+    /// It was reachable by name whenever `ai_terminal_mcp_enabled` was on, so a
+    /// caller that had the flag set needs a clear refusal rather than silence.
+    #[tokio::test]
+    async fn a_deleted_ai_terminal_tool_is_now_an_unknown_tool() {
         let state = test_state();
-        assert!(!state.config.read().ai_terminal_mcp_enabled);
-
-        let merged = merged_tool_definitions(&state, None);
-        let names = tool_names(&merged);
-
-        for name in &names {
-            assert!(
-                !super::super::ai_terminal::is_ai_terminal_tool(name),
-                "ai_terminal tool {name} must be hidden when ai_terminal_mcp_enabled=false"
-            );
-        }
+        let result = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:0".parse().unwrap(),
+            "ai_terminal_read_screen",
+            &serde_json::json!({ "session_id": "whatever" }),
+            None,
+        )
+        .await;
+        let error = result["error"].as_str().unwrap_or_default();
+        assert!(
+            error.starts_with("Unknown tool 'ai_terminal_read_screen'"),
+            "expected an unknown-tool refusal, got: {result}"
+        );
+        assert!(
+            !error.contains("ai_terminal_*"),
+            "the refusal must not advertise the family it just deleted: {error}"
+        );
     }
 
     #[test]
@@ -12304,7 +12376,7 @@ mod tests {
         let state = test_state();
         state.config.write().collapse_tools = true;
 
-        let merged = merged_tool_definitions(&state, None);
+        let merged = merged_tool_definitions(&state, None, None);
         let names = tool_names(&merged);
 
         assert_eq!(names.len(), 4);
@@ -12330,7 +12402,7 @@ mod tests {
             },
         );
 
-        let merged = merged_tool_definitions(&state, Some("grok-session"));
+        let merged = merged_tool_definitions(&state, Some("grok-session"), None);
         assert_eq!(
             tool_names(&merged),
             vec!["search_tools", "get_tool_schema", "call_tool", "progress"]
@@ -12349,8 +12421,362 @@ mod tests {
         assert!(!client_requires_meta_tools(None));
     }
 
+    /// The exact request `ego acp` 0.1.0 sends, captured off the wire against a
+    /// logging HTTP server on 2026-09-19. It is one request and there is no
+    /// second one: rmcp's `Discover` lifecycle does not fall back to
+    /// `initialize`, so whatever this answers is the whole handshake.
+    const EGO_SERVER_DISCOVER: &str = include_str!("fixtures/ego_server_discover.json");
+
+    /// The `tools/list` ego sends straight after `server/discover`, captured
+    /// off the same wire. It is the second and last request of the admission
+    /// sequence: whatever this answers decides whether `session/new` opens.
+    const EGO_TOOLS_LIST: &str = include_str!("fixtures/ego_tools_list.json");
+
+    async fn server_discover_result(
+        state: &Arc<AppState>,
+        request: serde_json::Value,
+    ) -> serde_json::Value {
+        let response = mcp_post(
+            State(state.clone()),
+            ConnectInfo("127.0.0.1:0".parse().unwrap()),
+            HeaderMap::new(),
+            Json(request),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers().get(MCP_SESSION_HEADER).is_none(),
+            "the stateless lifecycle mints no session id"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("discover body");
+        serde_json::from_slice::<serde_json::Value>(&body).expect("discover json")
+    }
+
+    /// Replaces `unsupported_server_discover_is_the_deliberate_fallback_boundary`.
+    ///
+    /// That test pinned `-32601` as a deliberate boundary, and it was — while
+    /// `initialize` was the only lifecycle we served. It flipped because ego
+    /// pins `2026-07-28`, sends `server/discover` and nothing else: under
+    /// rmcp's `Discover` mode a JSON-RPC error is a hard failure, not a signal
+    /// to try `initialize`, so `-32601` meant zero TUIC tools reached ego and
+    /// `session/new` was refused outright (story 788-843d).
     #[tokio::test]
-    async fn unsupported_server_discover_is_the_deliberate_fallback_boundary() {
+    async fn server_discover_serves_the_modern_stateless_lifecycle() {
+        let result = server_discover_result(
+            &test_state(),
+            serde_json::from_str(EGO_SERVER_DISCOVER).expect("ego fixture parses"),
+        )
+        .await;
+
+        assert_eq!(result["id"], 0, "the fixture's own request id comes back");
+        let discover = &result["result"];
+        // Field names and casing are rmcp 3.1.4's `DiscoverResult`; ego
+        // deserializes into that type, so a rename here is a silent handshake
+        // failure rather than a test failure.
+        assert_eq!(discover["resultType"], "complete");
+        assert_eq!(discover["ttlMs"], 0);
+        assert_eq!(discover["cacheScope"], "private");
+        assert_eq!(
+            discover["_meta"]["io.modelcontextprotocol/serverInfo"],
+            serde_json::json!({
+                "name": "tuicommander",
+                "version": env!("CARGO_PKG_VERSION")
+            })
+        );
+        assert!(
+            discover["instructions"]
+                .as_str()
+                .is_some_and(|text| text.contains("TUICommander")),
+            "discovery carries the instructions initialize used to"
+        );
+
+        let advertised: Vec<&str> = discover["supportedVersions"]
+            .as_array()
+            .expect("supportedVersions is an array")
+            .iter()
+            .map(|version| version.as_str().expect("version is a string"))
+            .collect();
+        assert!(
+            advertised.contains(&MODERN_PROTOCOL_VERSION),
+            "ego selects from this list and accepts nothing but {MODERN_PROTOCOL_VERSION}: {advertised:?}"
+        );
+        assert_eq!(advertised, SUPPORTED_PROTOCOL_VERSIONS);
+
+        // The tool surface is declared here as a capability; ego reads it to
+        // decide whether to call `tools/list` at all (`inventory` skips the
+        // call when `capabilities.tools` is absent).
+        assert_eq!(discover["capabilities"]["tools"]["listChanged"], true);
+    }
+
+    async fn tools_list_result(
+        state: &Arc<AppState>,
+        headers: HeaderMap,
+        request: serde_json::Value,
+    ) -> serde_json::Value {
+        let response = mcp_post(
+            State(state.clone()),
+            ConnectInfo("127.0.0.1:0".parse().unwrap()),
+            headers,
+            Json(request),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("tools/list body");
+        serde_json::from_slice::<serde_json::Value>(&body).expect("tools/list json")
+    }
+
+    /// A 2026-07-28 list result is a cache entry, not a bare array, and ego
+    /// enforces every field of the envelope before it admits the server.
+    ///
+    /// Measured 2026-09-19 against real ego 0.1.0 (#783-3c1b): `server/discover`
+    /// answered, `tools/list` answered with all nine tools, and `session/new`
+    /// still failed with "the supplied MCP servers could not be admitted" —
+    /// because the result carried `tools` and nothing else. Injecting these
+    /// three fields in a proxy, and changing nothing else, opened the session.
+    /// So this is not schema tidiness: without it ego reaches TUICommander,
+    /// reads its whole tool surface, and then throws it away.
+    #[tokio::test]
+    async fn modern_tools_list_carries_the_cache_envelope_ego_admits_on() {
+        let result = tools_list_result(
+            &test_state(),
+            HeaderMap::new(),
+            serde_json::from_str(EGO_TOOLS_LIST).expect("ego fixture parses"),
+        )
+        .await;
+
+        let list = &result["result"];
+        assert!(
+            list["tools"].as_array().is_some_and(|t| !t.is_empty()),
+            "the envelope is worthless without the tools it wraps"
+        );
+        // Field names and casing are rmcp 3.1.4's `ListToolsResult`; ego
+        // deserializes into that type, so a rename here is a silent admission
+        // failure rather than a test failure.
+        assert_eq!(list["resultType"], "complete");
+        assert_eq!(list["ttlMs"], 0);
+        assert_eq!(list["cacheScope"], "private");
+    }
+
+    /// The header carries the same claim as the `_meta` key, and a client that
+    /// completed a modern handshake sends only the header afterwards.
+    #[tokio::test]
+    async fn the_protocol_version_header_selects_the_modern_list_shape() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            MODERN_PROTOCOL_VERSION.parse().unwrap(),
+        );
+
+        let result = tools_list_result(
+            &test_state(),
+            headers,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
+        )
+        .await;
+
+        assert_eq!(result["result"]["resultType"], "complete");
+    }
+
+    /// The legacy revision has no cache envelope and no reader for one. Claude
+    /// Code is the client that matters here and it speaks 2025-11-25, so the
+    /// fields ego needs must not follow it home.
+    #[tokio::test]
+    async fn the_legacy_list_result_gains_no_cache_fields() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            DEFAULT_PROTOCOL_VERSION.parse().unwrap(),
+        );
+
+        for (label, headers) in [
+            ("legacy header", headers),
+            ("no version at all", HeaderMap::new()),
+        ] {
+            let result = tools_list_result(
+                &test_state(),
+                headers,
+                serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}),
+            )
+            .await;
+
+            let list = &result["result"];
+            assert!(
+                list["tools"].as_array().is_some_and(|t| !t.is_empty()),
+                "{label}: the legacy client still gets its tools"
+            );
+            for field in ["resultType", "ttlMs", "cacheScope"] {
+                assert!(
+                    list.get(field).is_none(),
+                    "{label}: {field} is a 2026-07-28 field and must not reach a legacy client"
+                );
+            }
+        }
+    }
+
+    /// The modern lifecycle has no `initialize`, so client identity arrives in
+    /// `_meta` on every request. Collapsing keys off that name exactly as it
+    /// keys off the name `initialize` used to record.
+    #[tokio::test]
+    async fn server_discover_reads_client_identity_from_request_meta() {
+        let state = test_state();
+        let collapsed = server_discover_result(
+            &state,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": { "_meta": {
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "grok-shell-tuicommander",
+                        "version": "1.0.0"
+                    }
+                }}
+            }),
+        )
+        .await;
+        // A request that names no client is the baseline: every stateless
+        // caller reaches the same arm, so the name in `_meta` is the only
+        // thing that can move the answer.
+        let plain = server_discover_result(
+            &state,
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "server/discover" }),
+        )
+        .await;
+
+        let collapsed_text = collapsed["result"]["instructions"]
+            .as_str()
+            .expect("instructions");
+        let plain_text = plain["result"]["instructions"]
+            .as_str()
+            .expect("instructions");
+        assert_ne!(
+            collapsed_text, plain_text,
+            "a client that needs meta-tools must not be handed the direct-tool instructions"
+        );
+        assert!(collapsed_text.contains("call_tool"));
+    }
+
+    /// Criterion: lazy loading and collapsing still apply on the new lifecycle.
+    /// `tools/list` already served stateless callers; what it could not do was
+    /// see a client that never sent `initialize`.
+    #[tokio::test]
+    async fn stateless_tools_list_collapses_for_a_meta_tool_client() {
+        let state = test_state();
+        let list = |client: Option<&'static str>| {
+            let state = state.clone();
+            async move {
+                let params = client.map(|name| {
+                    serde_json::json!({ "_meta": {
+                        "io.modelcontextprotocol/clientInfo": { "name": name, "version": "1.0.0" }
+                    }})
+                });
+                let mut request = serde_json::json!({
+                    "jsonrpc": "2.0", "id": 2, "method": "tools/list"
+                });
+                if let Some(params) = params {
+                    request["params"] = params;
+                }
+                let response = mcp_post(
+                    State(state),
+                    ConnectInfo("127.0.0.1:0".parse().unwrap()),
+                    HeaderMap::new(),
+                    Json(request),
+                )
+                .await
+                .into_response();
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("tools/list body");
+                serde_json::from_slice::<serde_json::Value>(&body).expect("tools/list json")
+            }
+        };
+
+        let collapsed = list(Some("grok-shell-tuicommander")).await;
+        let names: Vec<&str> = collapsed["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert!(
+            names.contains(&"call_tool"),
+            "collapsed surface must reach a stateless client too: {names:?}"
+        );
+
+        let direct = list(None).await;
+        let direct_names: Vec<&str> = direct["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+        assert!(
+            !direct_names.contains(&"call_tool"),
+            "a client that asked for nothing still gets the direct surface: {direct_names:?}"
+        );
+    }
+
+    /// The token decision this story owns: what crosses `/mcp` to ego.
+    ///
+    /// ego captures one immutable catalogue per generation and ships every
+    /// definition on every model call, and `/mcp` also proxies upstream
+    /// servers — 200+ tools on a normal day. So ego takes the collapsed
+    /// surface: three meta-tools, `progress` direct, every native and upstream
+    /// tool still reachable through `call_tool` but absent from the catalogue.
+    #[tokio::test]
+    async fn ego_discovers_the_collapsed_catalogue() {
+        let state = test_state();
+        let discover: serde_json::Value =
+            serde_json::from_str(EGO_SERVER_DISCOVER).expect("ego fixture");
+        let client_meta = discover["params"]["_meta"].clone();
+
+        let response = mcp_post(
+            State(state),
+            ConnectInfo("127.0.0.1:0".parse().unwrap()),
+            HeaderMap::new(),
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": { "_meta": client_meta }
+            })),
+        )
+        .await
+        .into_response();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("tools/list body");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("tools/list json");
+        let names: Vec<&str> = parsed["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect();
+
+        for meta_tool in META_TOOL_NAMES {
+            assert!(
+                names.contains(&meta_tool),
+                "ego must get the meta-tool surface: {names:?}"
+            );
+        }
+        assert!(
+            !names.contains(&"session") && !names.contains(&"repo"),
+            "no native definition may enter ego's per-call catalogue: {names:?}"
+        );
+    }
+
+    /// An unknown method is still `-32601`. Serving one new method must not
+    /// turn the fallback arm into a catch-all that answers anything.
+    #[tokio::test]
+    async fn an_unknown_method_is_still_method_not_found() {
         let response = mcp_post(
             State(test_state()),
             ConnectInfo("127.0.0.1:0".parse().unwrap()),
@@ -12358,15 +12784,7 @@ mod tests {
             Json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 7,
-                "method": "server/discover",
-                "params": {
-                    "_meta": {
-                        "io.modelcontextprotocol/clientInfo": {
-                            "name": "probe-client",
-                            "version": "1.0.0"
-                        }
-                    }
-                }
+                "method": "server/undiscover"
             })),
         )
         .await
@@ -12381,7 +12799,7 @@ mod tests {
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": 7,
-                "error": { "code": -32601, "message": "Method not found: server/discover" }
+                "error": { "code": -32601, "message": "Method not found: server/undiscover" }
             })
         );
     }
@@ -12397,12 +12815,12 @@ mod tests {
     fn collapse_tools_payload_size_meets_reduction_target() {
         let state = test_state();
 
-        let baseline = serde_json::to_vec(&merged_tool_definitions(&state, None))
+        let baseline = serde_json::to_vec(&merged_tool_definitions(&state, None, None))
             .expect("serialize baseline")
             .len();
 
         state.config.write().collapse_tools = true;
-        let collapsed = serde_json::to_vec(&merged_tool_definitions(&state, None))
+        let collapsed = serde_json::to_vec(&merged_tool_definitions(&state, None, None))
             .expect("serialize collapsed")
             .len();
 
@@ -12422,7 +12840,7 @@ mod tests {
         state.config.write().collapse_tools = true;
         state.config.write().disabled_native_tools = vec!["progress".to_string()];
 
-        let merged = merged_tool_definitions(&state, None);
+        let merged = merged_tool_definitions(&state, None, None);
         assert_eq!(tool_names(&merged).len(), 3);
         assert_eq!(
             tool_names(&merged),
@@ -12497,9 +12915,8 @@ mod tests {
     #[test]
     fn search_tools_returns_ranked_results_for_session_query() {
         let state = test_state();
-        // Query targets the PTY multiplexer specifically — distinguishes
-        // `session` from the ai_terminal_* observation tools that also
-        // mention "terminal".
+        // Query targets the PTY multiplexer specifically, so the ranking is
+        // asserted against a phrase only `session` describes.
         let r = handle_search_tools(
             &state,
             &serde_json::json!({ "query": "PTY multiplexer tmux pane lifecycle" }),
@@ -13671,13 +14088,10 @@ mod tests {
     }
 
     /// After `rebuild_tool_search_index`, the cache contains every native
-    /// tool from `native_tool_definitions()` (when `ai_terminal_mcp_enabled`).
+    /// tool from `native_tool_definitions()`.
     #[test]
     fn rebuild_tool_search_index_populates_all_native_tools() {
         let state = test_state();
-        // ai_terminal_* tools are gated behind `ai_terminal_mcp_enabled`. Enable
-        // the flag and rebuild so the index matches the full native tool set.
-        state.config.write().ai_terminal_mcp_enabled = true;
         rebuild_tool_search_index(&state);
         let idx = state.mcp.tool_search_index.read();
         let native_count = native_tool_definitions().as_array().unwrap().len();
@@ -13938,6 +14352,38 @@ mod tests {
             }
             other => panic!("Expected UiTab, got {:?}", other),
         }
+    }
+
+    /// A hand-opened tab registers under its `$TUIC_SESSION`, while its PTY is
+    /// keyed by the UUID `create_pty` minted. The resolver must bridge the two:
+    /// looking `sessions` up under the peer id finds nothing, which is how
+    /// `progress` came to refuse every report from a tab the user opened
+    /// himself with `project_required` — peer `tu-5`, cwd
+    /// `/Users/stefano.straus/Gits/personal/tuicommander`, observed 2026-09-20.
+    #[cfg(unix)]
+    #[test]
+    fn origin_repo_path_resolves_a_pty_keyed_differently_from_the_peer() {
+        let state = test_state();
+        let mcp_sid = "mcp-hand-opened-tab";
+        let tuic = "91136da9-2b9c-4c7f-95a1-d615454ba760";
+        let pty_key = "1c052428-3a90-4e6c-8c6b-e7e311c546f3";
+
+        crate::state::tests_support::insert_dummy_session(&state, pty_key);
+        crate::state::tests_support::set_session_cwd(&state, pty_key, "/Gits/personal/delta");
+        state
+            .session_maps
+            .live_pty_by_tuic_session
+            .insert(tuic.to_string(), pty_key.to_string());
+        state
+            .mcp
+            .to_session
+            .insert(mcp_sid.to_string(), tuic.to_string());
+
+        assert_eq!(
+            resolve_mcp_origin_repo_path(&state, Some(mcp_sid)).as_deref(),
+            Some("/Gits/personal/delta"),
+            "the peer's live PTY holds the cwd under its own key — resolve it, do not assume the keys match"
+        );
     }
 
     #[test]
@@ -14382,6 +14828,58 @@ mod tests {
                 .contains("hello from the crypt"),
             "Expected tombstoned output in clean response: {clean_res}"
         );
+    }
+
+    /// Criterion 3 of story 789-f6ed: secret redaction survives the deletion of
+    /// the `ai_terminal_*` family.
+    ///
+    /// `ai_terminal_read_screen` redacted; `session action=output` did not, and
+    /// it is the screen read every MCP client uses — Claude Code included. So
+    /// this is not a protection being preserved, it is one being extended to
+    /// the path that never had it. Both formats are asserted: `raw` exists to
+    /// keep ANSI, not to opt out of redaction.
+    #[test]
+    fn session_output_redacts_a_secret_on_the_terminal() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        let state = test_state();
+        let sid = "redaction-session".to_string();
+        let secret = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+        let line = format!("export GITHUB_TOKEN={secret}");
+
+        let mut ring = OutputRingBuffer::new(4096);
+        ring.write(format!("{line}\n").as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+
+        let mut vt = VtLogBuffer::new(24, 80, 100);
+        vt.process(format!("{line}\r\n").as_bytes());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+
+        for format in ["clean", "raw"] {
+            let mut args = serde_json::json!({ "action": "output", "session_id": sid });
+            if format == "raw" {
+                args["format"] = serde_json::json!("raw");
+            }
+            let response = handle_session(&state, &args, None);
+            let data = response["data"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{format}: no data in {response}"));
+            assert!(
+                !data.contains(secret),
+                "{format} output leaked the token: {data}"
+            );
+            assert!(
+                data.contains("[REDACTED]"),
+                "{format} output must say it redacted something: {data}"
+            );
+        }
     }
 
     #[test]
@@ -16892,142 +17390,6 @@ mod tests {
 
     fn remote_addr() -> SocketAddr {
         "192.168.1.10:9999".parse().unwrap()
-    }
-
-    #[test]
-    fn config_list_ai_prompts_returns_services() {
-        let state = test_state();
-        let r = handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({"action": "list_ai_prompts"}),
-        );
-        let services = r["services"].as_array().unwrap();
-        assert_eq!(services.len(), 1);
-        assert_eq!(services[0]["name"], "diff_triage");
-    }
-
-    #[test]
-    fn config_load_ai_prompt_returns_default_when_no_custom() {
-        let state = test_state();
-        let _guard = crate::config::set_config_dir_override(
-            std::env::temp_dir().join("test-ai-prompts-load"),
-        );
-        let r = handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "load_ai_prompt", "service": "diff_triage"
-            }),
-        );
-        assert_eq!(r["is_custom"], false);
-        assert_eq!(r["service"], "diff_triage");
-        assert!(r["prompt"].as_str().unwrap().len() > 10);
-        assert_eq!(r["prompt"], r["default_prompt"]);
-    }
-
-    #[test]
-    fn config_load_ai_prompt_unknown_service_errors() {
-        let state = test_state();
-        let r = handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "load_ai_prompt", "service": "nonexistent"
-            }),
-        );
-        assert!(r["error"].as_str().unwrap().contains("Unknown"));
-    }
-
-    #[test]
-    fn config_save_ai_prompt_round_trip() {
-        let state = test_state();
-        let dir = std::env::temp_dir().join("test-ai-prompts-save");
-        let _ = std::fs::create_dir_all(&dir);
-        let _guard = crate::config::set_config_dir_override(dir);
-
-        let save_r = handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom prompt"
-            }),
-        );
-        assert_eq!(save_r["ok"], true);
-
-        let load_r = handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "load_ai_prompt", "service": "diff_triage"
-            }),
-        );
-        assert_eq!(load_r["is_custom"], true);
-        assert_eq!(load_r["prompt"], "Custom prompt");
-    }
-
-    #[test]
-    fn config_save_ai_prompt_empty_resets_to_default() {
-        let state = test_state();
-        let dir = std::env::temp_dir().join("test-ai-prompts-reset");
-        let _ = std::fs::create_dir_all(&dir);
-        let _guard = crate::config::set_config_dir_override(dir);
-
-        handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom"
-            }),
-        );
-        handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "save_ai_prompt", "service": "diff_triage", "prompt": ""
-            }),
-        );
-
-        let r = handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "load_ai_prompt", "service": "diff_triage"
-            }),
-        );
-        assert_eq!(r["is_custom"], false);
-    }
-
-    #[test]
-    fn config_save_ai_prompt_blocked_from_remote() {
-        let state = test_state();
-        let r = handle_config(
-            &state,
-            remote_addr(),
-            &serde_json::json!({
-                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Hack"
-            }),
-        );
-        assert!(r["error"].as_str().unwrap().contains("localhost"));
-    }
-
-    #[test]
-    fn config_save_ai_prompt_preserves_other_fields() {
-        let state = test_state();
-        let dir = std::env::temp_dir().join("test-ai-prompts-preserve");
-        let _ = std::fs::create_dir_all(&dir);
-        let _guard = crate::config::set_config_dir_override(dir);
-
-        handle_config(
-            &state,
-            localhost(),
-            &serde_json::json!({
-                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom"
-            }),
-        );
-
-        let config = crate::config::load_ai_prompts();
-        assert_eq!(config.diff_triage_system_prompt.as_deref(), Some("Custom"));
     }
 
     #[test]

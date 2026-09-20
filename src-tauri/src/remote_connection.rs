@@ -174,6 +174,89 @@ pub(crate) fn upsert_remote_connection(
     RemoteConnectionStore::save(data_dir, &connections).map_err(|e| e.to_string())
 }
 
+/// How long the token exchange may take. The daemon answers from memory, so the
+/// only thing this waits for is the network (and, on the SSH transport, a tunnel
+/// that has already reported connected).
+const TOKEN_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Store (or, on an empty value, forget) the Basic Auth password for a
+/// connection. The secret goes to the credential vault, never to
+/// `connections.json` — that file is plain JSON on disk and is read by the
+/// `/config/remote-connections` route.
+pub(crate) fn set_connection_password(id: &str, password: &str) -> Result<(), String> {
+    if password.is_empty() {
+        return crate::credentials::delete(crate::credentials::Credential::RemoteConnection(id));
+    }
+    crate::credentials::set(
+        crate::credentials::Credential::RemoteConnection(id),
+        password,
+    )
+}
+
+pub(crate) fn connection_password_exists(id: &str) -> Result<bool, String> {
+    crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
+        .map(|v| v.is_some())
+}
+
+/// Trade the stored Basic Auth credentials for the daemon's session token.
+///
+/// A WebSocket upgrade cannot carry an `Authorization` header and the daemon
+/// serves `Access-Control-Allow-Origin: *`, which forbids credentialed cookies,
+/// so `?token=` is the only credential the whole client can use uniformly. The
+/// exchange runs here rather than in the WebView so the password never leaves
+/// the backend.
+///
+/// The token lives in the daemon's memory and changes on every restart, so the
+/// caller re-runs this on every connect and never persists the result.
+pub(crate) async fn fetch_connection_token(
+    id: &str,
+    base_url: &str,
+    username: &str,
+) -> Result<String, String> {
+    let password = crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))?
+        .ok_or_else(|| "No password stored for this connection".to_string())?;
+    request_session_token(base_url, username, &password).await
+}
+
+/// The HTTP half of [`fetch_connection_token`], split out so the failure modes
+/// that matter — a rejected password, an older daemon with no such route — are
+/// testable without an interactive keyring.
+async fn request_session_token(
+    base_url: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, String> {
+    let url = format!("{}/api/auth/session-token", base_url.trim_end_matches('/'));
+    let response = reqwest::Client::new()
+        .get(&url)
+        .basic_auth(username, Some(password))
+        .timeout(TOKEN_FETCH_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| format!("Token request to {url} failed: {e}"))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Authentication rejected by the remote daemon".to_string());
+    }
+    if !status.is_success() {
+        return Err(format!("Remote daemon answered {status} for {url}"));
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Malformed token response: {e}"))?;
+    let token = body
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if token.is_empty() {
+        // An older daemon has no such route and the request fell through to an
+        // SPA shell or an empty body; say so instead of handing back "".
+        return Err("Remote daemon returned no session token — is it running a build with /api/auth/session-token?".to_string());
+    }
+    Ok(token.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -206,7 +289,32 @@ pub async fn delete_remote_connection(
     let mut connections =
         RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
     connections.retain(|c| c.id != id);
-    RemoteConnectionStore::save(&state.data_dir, &connections).map_err(|e| e.to_string())
+    RemoteConnectionStore::save(&state.data_dir, &connections).map_err(|e| e.to_string())?;
+    // The vault entry outlives connections.json unless this runs: the id is a
+    // fresh UUID every time, so a forgotten secret is unreachable and permanent.
+    set_connection_password(&id, "")
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn set_remote_connection_password(id: String, password: String) -> Result<(), String> {
+    set_connection_password(&id, &password)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn remote_connection_password_exists(id: String) -> Result<bool, String> {
+    connection_password_exists(&id)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn fetch_remote_connection_token(
+    id: String,
+    base_url: String,
+    username: String,
+) -> Result<String, String> {
+    fetch_connection_token(&id, &base_url, &username).await
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +426,116 @@ mod tests {
     fn new_direct_enabled() {
         let conn = RemoteConnection::new_direct("d", "http://x", "u");
         assert!(conn.enabled);
+    }
+
+    // --- Story 781-9652: the password lives in the vault, never on disk -------
+
+    /// `connections.json` is plain JSON that `GET /config/remote-connections`
+    /// serves to any authenticated caller. A password field added to
+    /// `RemoteConnection` would be published by both, silently — this is the
+    /// guard that fails first.
+    #[test]
+    fn serialized_connection_carries_no_secret() {
+        let conn = RemoteConnection::new_direct("office", "http://office:9877", "bob");
+        let value: serde_json::Value = serde_json::to_value(&conn).unwrap();
+        let keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            ["id", "name", "transport", "auth_username", "enabled"],
+            "connections.json gained a field — if it holds a secret, it must go to the vault instead"
+        );
+        assert!(!serde_json::to_string(&conn).unwrap().contains("password"));
+    }
+
+    #[tokio::test]
+    async fn session_token_request_reads_the_token_field() {
+        let mut server = mockito::Server::new_async().await;
+        let route = server
+            .mock("GET", "/api/auth/session-token")
+            // Basic dm9tOnMzY3JldA== is "vom:s3cret" — proof the credential is
+            // sent as a header on this one call, before anything moves to ?token=.
+            .match_header("authorization", "Basic dm9tOnMzY3JldA==")
+            .with_status(200)
+            .with_body(r#"{"token":"tok-abc"}"#)
+            .create_async()
+            .await;
+
+        let token = request_session_token(&server.url(), "vom", "s3cret")
+            .await
+            .unwrap();
+
+        assert_eq!(token, "tok-abc");
+        route.assert_async().await;
+    }
+
+    /// A wrong password and an unreachable daemon need different fixes, so 401
+    /// must not be reported as a generic upstream failure.
+    #[tokio::test]
+    async fn session_token_request_names_a_rejected_password() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/auth/session-token")
+            .with_status(401)
+            .with_body("Scan the QR code or authenticate with Basic Auth")
+            .create_async()
+            .await;
+
+        let err = request_session_token(&server.url(), "vom", "wrong")
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.contains("Authentication rejected"),
+            "expected a rejection, got: {err}"
+        );
+    }
+
+    /// A daemon older than this route has no handler for it: the request falls
+    /// through to something without a `token` field. Handing back "" would make
+    /// every later call 401 with no explanation.
+    #[tokio::test]
+    async fn session_token_request_rejects_a_response_without_a_token() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/auth/session-token")
+            .with_status(200)
+            .with_body(r#"{"ok":true}"#)
+            .create_async()
+            .await;
+
+        let err = request_session_token(&server.url(), "vom", "s3cret")
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.contains("no session token"),
+            "expected a missing-token error, got: {err}"
+        );
+    }
+
+    /// The base URL comes from a user-typed field; a trailing slash there would
+    /// otherwise produce `//api/auth/session-token`, which axum does not match.
+    #[tokio::test]
+    async fn session_token_request_tolerates_a_trailing_slash() {
+        let mut server = mockito::Server::new_async().await;
+        let route = server
+            .mock("GET", "/api/auth/session-token")
+            .with_status(200)
+            .with_body(r#"{"token":"tok-abc"}"#)
+            .create_async()
+            .await;
+
+        let token = request_session_token(&format!("{}/", server.url()), "vom", "s3cret")
+            .await
+            .unwrap();
+
+        assert_eq!(token, "tok-abc");
+        route.assert_async().await;
     }
 
     #[test]

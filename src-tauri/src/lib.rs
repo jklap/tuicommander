@@ -15,14 +15,13 @@ pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
-pub(crate) mod ai_chat;
-pub(crate) mod ai_chat_registry;
 pub mod app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 pub(crate) mod chrome;
 pub(crate) mod claude_usage;
 pub(crate) mod cli;
+pub(crate) mod cli_usage_rpc;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
@@ -32,8 +31,8 @@ pub(crate) mod cpu_watchdog;
 pub(crate) mod credentials;
 #[cfg(feature = "desktop")]
 mod dictation;
-pub(crate) mod diff_triage;
 pub(crate) mod dir_watcher;
+pub(crate) mod ego_cli;
 pub(crate) mod error_classification;
 pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
@@ -53,10 +52,10 @@ pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
 mod global_hotkey;
 pub(crate) mod grid_gate;
+pub(crate) mod grok_usage;
 pub(crate) mod improvement_scan;
 mod input_line_buffer;
 pub(crate) mod jsonc_edit;
-pub(crate) mod llm_api;
 pub(crate) mod mcp_http;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
 pub(crate) mod mcp_oauth;
@@ -71,6 +70,8 @@ pub(crate) mod mdkb_daemon;
 pub(crate) mod memory_report;
 #[cfg(feature = "desktop")]
 mod menu;
+#[cfg(feature = "desktop")]
+mod native_dialog;
 #[cfg(feature = "desktop")]
 mod native_drag;
 #[cfg(feature = "desktop")]
@@ -87,19 +88,22 @@ pub(crate) mod plugin_fs;
 pub(crate) mod plugin_http;
 pub(crate) mod plugin_pty;
 pub(crate) mod plugins;
+pub(crate) mod pr_review;
 #[cfg(feature = "desktop")]
 mod press_and_hold;
 pub(crate) mod process_env;
 pub(crate) mod progress;
 pub(crate) mod prompt;
-pub(crate) mod provider_registry;
 pub(crate) mod pty;
 pub(crate) mod pty_capture;
 pub(crate) mod push;
+pub(crate) mod redaction;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
+pub(crate) mod remote_mirror;
+pub(crate) mod remote_runtime;
 pub(crate) mod repo_watcher;
 mod shell_integration;
 #[cfg(feature = "desktop")]
@@ -258,7 +262,7 @@ async fn load_config(app: tauri::AppHandle) -> config::AppConfig {
 
 #[cfg(feature = "desktop")]
 mod boot_commands {
-    use super::{config, provider_registry};
+    use super::config;
 
     async fn load_boot_file<T, F>(name: &'static str, loader: F) -> Result<T, String>
     where
@@ -319,16 +323,6 @@ mod boot_commands {
     #[tauri::command(rename = "load_agents_config")]
     pub(super) async fn load_agents_config_async() -> Result<config::AgentsConfig, String> {
         load_boot_file("agent config", config::load_agents_config).await
-    }
-
-    #[tauri::command(rename = "load_provider_registry")]
-    pub(super) async fn load_provider_registry_async()
-    -> Result<provider_registry::ProviderRegistry, String> {
-        load_boot_file(
-            "provider registry",
-            provider_registry::load_provider_registry,
-        )
-        .await
     }
 }
 
@@ -1230,6 +1224,55 @@ fn boot_repo_paths(repositories: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+/// Which repos to pre-warm a content index for at boot, in order.
+///
+/// - `active_only` / `active_and_switch`: the active repo, if it is known.
+/// - `all_sequential`: every known repo, active first.
+///
+/// Pure, and shared by both boot paths on purpose. The desktop spawns the warm
+/// loop through Tauri's runtime and the daemon through tokio's, but *which*
+/// repos get an index must not be able to differ between them: a repo that is
+/// never warmed on the daemon is a repo cross-repo search skips forever, since
+/// `search_content_all` reports it pending and deliberately starts no build.
+fn repos_to_prewarm(
+    mut known: Vec<String>,
+    active: Option<String>,
+    index_strategy: &str,
+) -> Vec<String> {
+    if known.is_empty() {
+        return Vec::new();
+    }
+    match index_strategy {
+        "all_sequential" => {
+            if let Some(ref active) = active
+                && let Some(pos) = known.iter().position(|p| p == active)
+            {
+                known.swap(0, pos);
+            }
+            known
+        }
+        _ => match active {
+            Some(active) if known.contains(&active) => vec![active],
+            _ => Vec::new(),
+        },
+    }
+}
+
+/// Build the content index of each repo in turn, one at a time.
+///
+/// The two second delay keeps the first build off the boot path, where it would
+/// compete with the window (desktop) or the socket bind (daemon).
+async fn prewarm_content_indices(state: Arc<AppState>, repos: Vec<String>) {
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    for repo in repos {
+        let index_arc = crate::content_index::ensure_index(&state, &repo);
+        while !index_arc.read().is_ready() {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+    tracing::info!("content index pre-warm complete");
+}
+
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1610,7 +1653,7 @@ pub fn run() {
             // (inotify) notify emulates recursion with a per-directory walk, so
             // registration is not free there (see issue #82 / repo_watcher.rs).
             let repos_json = config::load_repositories();
-            let mut known_repo_paths = boot_repo_paths(&repos_json);
+            let known_repo_paths = boot_repo_paths(&repos_json);
             for repo_path in &known_repo_paths {
                 if let Err(e) = repo_watcher::start_watching(repo_path, app_state) {
                     app_logger::log_via_state(
@@ -1635,64 +1678,39 @@ pub fn run() {
             // off the window path and under its own timeout.
             crate::github_auth::spawn_deferred_token_resolution(Arc::clone(app_state));
 
-            // Pre-warm content indices based on index_strategy setting:
-            // - "active_only": only the active repo at boot
-            // - "active_and_switch": active repo at boot, others on repo switch (default)
-            // - "all_sequential": all repos sequentially
-            // Global semaphore in AppState (capacity 1) serialises concurrent builds.
-            if !known_repo_paths.is_empty() {
-                let active_repo = repos_json
+            // Pre-warm content indices per the `index_strategy` setting. The
+            // global semaphore in AppState (capacity 1) serialises the builds.
+            let repos_to_warm = repos_to_prewarm(
+                known_repo_paths,
+                repos_json
                     .get("activeRepoPath")
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_owned());
-
-                let repos_to_warm = match index_strategy.as_str() {
-                    "all_sequential" => {
-                        if let Some(ref active) = active_repo
-                            && let Some(pos) = known_repo_paths.iter().position(|p| p == active)
-                        {
-                            known_repo_paths.swap(0, pos);
-                        }
-                        known_repo_paths
-                    }
-                    _ => {
-                        // active_only and active_and_switch: only pre-warm the active repo
-                        if let Some(active) = active_repo {
-                            if known_repo_paths.contains(&active) {
-                                vec![active]
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                };
-
-                if !repos_to_warm.is_empty() {
-                    let state_for_prewarm = Arc::clone(app_state);
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        for repo in repos_to_warm {
-                            let index_arc =
-                                crate::content_index::ensure_index(&state_for_prewarm, &repo);
-                            while !index_arc.read().is_ready() {
-                                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                            }
-                        }
-                        tracing::info!("content index pre-warm complete");
-                    });
-                }
+                    .map(|s| s.to_owned()),
+                &index_strategy,
+            );
+            if !repos_to_warm.is_empty() {
+                let state_for_prewarm = Arc::clone(app_state);
+                tauri::async_runtime::spawn(prewarm_content_indices(
+                    state_for_prewarm,
+                    repos_to_warm,
+                ));
             }
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             generators::generate_value,
+            native_dialog::pick_path,
             native_drag::start_native_drag,
             remote_connection::list_remote_connections,
             remote_connection::save_remote_connection,
             remote_connection::delete_remote_connection,
+            remote_connection::set_remote_connection_password,
+            remote_connection::remote_connection_password_exists,
+            remote_connection::fetch_remote_connection_token,
+            remote_runtime::connect_remote_connection,
+            remote_runtime::disconnect_remote_connection,
+            remote_runtime::remote_connection_statuses,
             open_secondary_window,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,
@@ -1721,8 +1739,6 @@ pub fn run() {
             git::get_changed_files,
             git::get_file_diff,
             git::get_gutter_changes,
-            diff_triage::run_diff_triage,
-            diff_triage::run_pr_review,
             git::get_recent_commits,
             list_markdown_files,
             read_file,
@@ -1838,10 +1854,11 @@ pub fn run() {
             github::create_issue,
             github::post_pr_review,
             github::get_merged_prs,
+            pr_review::run_pr_review,
             changelog::generate_changelog,
-            conflict_assist::start_conflict_assist,
             improvement_scan::run_improvement_scan,
             improvement_scan::create_issue_from_proposal,
+            conflict_assist::start_conflict_assist,
             github::fetch_ci_failure_logs,
             github::get_all_issues,
             github::get_issue_detail,
@@ -1943,8 +1960,6 @@ pub fn run() {
             config::save_pane_layout,
             boot_commands::load_prompt_library_async,
             config::save_prompt_library,
-            config::load_ai_prompts,
-            config::save_ai_prompts,
             boot_commands::load_notes_async,
             config::save_notes,
             config::save_note_image,
@@ -1975,43 +1990,6 @@ pub fn run() {
             prompt::resolve_prompt_variables,
             smart_prompt::execute_headless_prompt,
             smart_prompt::execute_shell_script,
-            boot_commands::load_provider_registry_async,
-            provider_registry::save_provider_registry,
-            provider_registry::get_provider_api_key_exists,
-            provider_registry::save_provider_api_key,
-            provider_registry::delete_provider_api_key,
-            provider_registry::test_slot_connection,
-            provider_registry::check_ollama_models,
-            llm_api::execute_api_prompt,
-            ai_chat::load_ai_chat_config,
-            ai_chat::save_ai_chat_config,
-            ai_chat::list_conversations,
-            ai_chat::load_conversation,
-            ai_chat::save_conversation,
-            ai_chat::delete_conversation,
-            ai_chat::new_conversation_id,
-            ai_chat_registry::chat_subscribe,
-            ai_chat_registry::chat_unsubscribe,
-            ai_agent::commands::start_conversation,
-            ai_agent::commands::cancel_conversation,
-            ai_agent::commands::pause_conversation,
-            ai_agent::commands::resume_conversation,
-            ai_agent::commands::approve_conversation_action,
-            ai_agent::commands::agent_loop_status,
-            ai_agent::commands::get_session_knowledge,
-            ai_agent::commands::toggle_ai_suggestions,
-            ai_agent::commands::get_ai_suggestions_enabled,
-            ai_agent::commands::list_knowledge_sessions,
-            ai_agent::commands::get_knowledge_session_detail,
-            ai_agent::commands::load_scheduler_config,
-            ai_agent::commands::save_scheduler_config,
-            ai_agent::commands::watcher_create,
-            ai_agent::commands::watcher_list,
-            ai_agent::commands::watcher_delete,
-            ai_agent::commands::watcher_toggle,
-            ai_agent::commands::watcher_attach,
-            ai_agent::commands::watcher_detach,
-            ai_agent::commands::watcher_update,
             repo_watcher::start_repo_watcher,
             repo_watcher::stop_repo_watcher,
             repo_watcher::set_hot_repos,
@@ -2072,6 +2050,7 @@ pub fn run() {
             claude_usage::get_claude_project_list,
             codex_usage::get_codex_usage_api,
             codex_usage::get_codex_usage_stats,
+            grok_usage::get_grok_usage_api,
             terminal_grid::set_terminal_theme_colors,
             screenshot_response,
             mcp_confirm_response,
@@ -2118,7 +2097,10 @@ pub fn run() {
             acp_commands::acp_session_compact,
             acp_commands::acp_pending_interactions,
             acp_commands::acp_respond_permission,
-            acp_commands::acp_respond_elicitation
+            acp_commands::acp_respond_elicitation,
+            acp_commands::acp_one_shot_prompt,
+            ego_cli::ego_providers,
+            ego_cli::ego_set_default_model
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2219,23 +2201,6 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     #[cfg(feature = "desktop")]
     webview_recovery::spawn(state.clone());
     ai_agent::knowledge::spawn_persist_task(state.clone());
-    // Only spawns the 30s tick loop if ai-cron.json has an enabled job — most
-    // installs never touch scheduling, and previously this ticked (and
-    // re-read the config from disk) forever regardless (#672-c1a3).
-    // save_scheduler_config starts/stops it as jobs are added/removed later.
-    ai_agent::scheduler::ensure_running(state);
-    {
-        let watcher_state = state.clone();
-        let engine = Arc::new(ai_agent::watcher::WatcherEngine::new(watcher_state));
-        if state.ai.watcher_engine.set(Arc::clone(&engine)).is_err() {
-            tracing::error!(
-                "WatcherEngine already initialized — duplicate spawn_background_tasks call"
-            );
-        }
-        tokio::spawn(async move {
-            engine.run().await;
-        });
-    }
 }
 
 /// Interactive CLI to set username + password for headless auth.
@@ -2411,6 +2376,52 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Background tasks the `tuic-remote` daemon runs.
+///
+/// The daemon is a whole machine, not a session server: it holds the repos, the
+/// PTYs and the agents, so nearly everything `spawn_background_tasks` gives the
+/// desktop it needs too. What it deliberately does not run is named below with
+/// the reason, and `the_daemon_decides_on_every_desktop_background_task` fails
+/// if a task is added to `spawn_background_tasks` and not decided on here
+/// (#793-23a5).
+#[cfg(not(feature = "desktop"))]
+fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
+    AppState::spawn_session_state_accumulator(state.clone());
+    AppState::spawn_acp_notice_pump(state.clone());
+    pty::spawn_tombstone_sweeper(state.clone());
+    // The agents run here, so the argv/env snapshot session discovery reads is
+    // this process's to keep — no snapshot, no resume after a restart.
+    pty::spawn_process_snapshot_refresher(state.clone());
+    // A remote client reports tab visibility over `/sessions/{id}/visible`, so
+    // parking an idle hidden session is as correct here as on the desktop.
+    #[cfg(unix)]
+    pty::spawn_standby_checker(state.clone());
+    content_index::spawn_content_index_updater(state.clone());
+    mcp_http::mcp_transport::spawn_tool_search_index_updater(state.clone());
+    crate::mcp_proxy::registry::UpstreamRegistry::spawn_health_checker(Arc::clone(
+        &state.mcp.upstream_registry,
+    ));
+    drop(
+        state
+            .mcp
+            .oauth_flow_manager
+            .spawn_cleanup_task(state.mcp.upstream_registry.clone()),
+    );
+    // The daemon is precisely where nobody can watch a CPU spike happen.
+    cpu_watchdog::spawn(state.clone());
+    mcp_http::spawn_maintenance_sweep(state);
+
+    // Deliberately NOT started on the daemon:
+    //
+    // - `webview_recovery::spawn` — `#[cfg(feature = "desktop")]`, so it does
+    //   not exist in this build. There is no WebView whose document can be lost.
+    // - `ai_agent::knowledge::spawn_persist_task` — `build_remote_router`
+    //   serves no route that exposes command knowledge. Deleting the embedded
+    //   AI engine (#784-0aec) took its last reader too, so the desktop build
+    //   keeps recording while nothing consumes it yet; the daemon has no reason
+    //   to write files no one asks it for.
+}
+
 /// Run the tuic-remote server — a slim variant of `run_headless()`.
 ///
 /// Differences from `run_headless()`:
@@ -2473,11 +2484,58 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     state.wire_event_bus();
     crate::github_auth::spawn_deferred_token_resolution(state.clone());
 
-    // Only the two tasks required for session management — no scheduler,
-    // watcher engine, content index, knowledge persist, or tool search index.
-    AppState::spawn_session_state_accumulator(state.clone());
-    AppState::spawn_acp_notice_pump(state.clone());
-    pty::spawn_tombstone_sweeper(state.clone());
+    spawn_daemon_background_tasks(&state);
+
+    // The bridge reaches this process over the local IPC socket, and an agent on
+    // this machine can only find the socket if it is listening. Awaited: the
+    // configs written below name a bridge that must have something to connect to.
+    mcp_http::spawn_ipc_listener(&state, true).await;
+    agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
+
+    // Watch and pre-warm the repos this machine holds. Cross-repo content search
+    // never starts a build of its own, so without this the daemon answers every
+    // such query with "pending" for as long as it runs.
+    let repos_json = config::load_repositories();
+    let known_repo_paths = boot_repo_paths(&repos_json);
+    for repo_path in &known_repo_paths {
+        if let Err(e) = repo_watcher::start_watching(repo_path, &state) {
+            tracing::warn!(source = "remote", repo = %repo_path, "Failed to watch repo: {e}");
+        }
+    }
+    let repos_to_warm = repos_to_prewarm(
+        known_repo_paths,
+        repos_json
+            .get("activeRepoPath")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned()),
+        &app_config.index_strategy,
+    );
+    if !repos_to_warm.is_empty() {
+        tokio::spawn(prewarm_content_indices(state.clone(), repos_to_warm));
+    }
+
+    // Upstream MCP servers are per-machine configuration (#792-c255), so the
+    // machine that holds them is the one that must connect them. Spawned, not
+    // awaited: registration is fast but a dead upstream must not delay the bind.
+    let auto_state = state.clone();
+    let settle_guard = auto_state.clone();
+    let auto_handle = tokio::spawn(async move {
+        crate::mcp_upstream_config::auto_connect_saved_upstreams(&auto_state).await;
+    });
+    // Recover the settle latch if the auto-connect task panics: nothing else
+    // releases it, and a waiter would park for the life of the daemon.
+    tokio::spawn(async move {
+        if let Err(e) = auto_handle.await {
+            tracing::error!(
+                source = "mcp_upstream",
+                "auto_connect_saved_upstreams task failed: {e}"
+            );
+            settle_guard
+                .mcp
+                .upstream_registry
+                .mark_initial_connect_complete();
+        }
+    });
 
     let tls_config = match &app_config.services.tls {
         config::TlsConfig::Manual {
@@ -2541,6 +2599,164 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    /// The body of one function, read out of this file's own source.
+    fn fn_body(source: &str, signature: &str) -> String {
+        source
+            .split(signature)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{signature} must exist"))
+            .split("\n}\n")
+            .next()
+            .expect("function body")
+            .to_string()
+    }
+
+    /// Names of the background tasks a function body starts.
+    ///
+    /// Derived from the source rather than listed, so a task added tomorrow is
+    /// picked up without anyone remembering to update a list here. Three shapes
+    /// are counted: a `spawn_*` call, a bare `module::spawn(` (the module names
+    /// the task), and the engine types that are spawned by hand. Nothing
+    /// matches the third shape today — `WatcherEngine` was its only case and it
+    /// went with the embedded AI engine (#784-0aec) — so it is kept for the
+    /// next hand-spawned engine rather than dropped, which is why the test
+    /// anchors on one name per shape it can still see.
+    fn background_task_names(body: &str) -> Vec<String> {
+        let tokens: Vec<String> = body
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string())
+            .collect();
+        let mut names = Vec::new();
+        for (index, token) in tokens.iter().enumerate() {
+            let name = if token.starts_with("spawn_") {
+                token.clone()
+            } else if token == "spawn" {
+                match tokens.get(index.wrapping_sub(1)) {
+                    // `tokio::spawn` is the spawner, not a task.
+                    Some(module) if module != "tokio" && index > 0 => module.clone(),
+                    _ => continue,
+                }
+            } else if token == "ensure_running" || token.ends_with("Engine") {
+                token.clone()
+            } else {
+                continue;
+            };
+            // The spawner functions name themselves in their own log lines.
+            if name.ends_with("_background_tasks") {
+                continue;
+            }
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// Every background task the desktop spawns must be decided on for the
+    /// daemon: started there, or named in the "Deliberately NOT started" block
+    /// with the reason it must not be. Before #793-23a5 the daemon ran three of
+    /// twelve and said so only in a comment that listed no names, so content
+    /// indexing, the tool search index and scheduling were missing with nothing
+    /// to notice it.
+    #[test]
+    fn the_daemon_decides_on_every_desktop_background_task() {
+        let source = include_str!("lib.rs");
+        let desktop = fn_body(source, "fn spawn_background_tasks(state: &Arc<AppState>) {");
+        let daemon = fn_body(
+            source,
+            "fn spawn_daemon_background_tasks(state: &Arc<AppState>) {",
+        );
+
+        let expected = background_task_names(&desktop);
+        // Anchors, not a count. The scanner failing open makes this test pass
+        // by finding nothing, so it has to prove it still matches — but the
+        // number of tasks is not a durable fact: it was twelve before
+        // #784-0aec deleted the scheduler and the watcher engine, and a count
+        // pinned here breaks on the next legitimate add or remove while
+        // asserting nothing about whether the scanner works. One name per
+        // shape the scanner recognises does assert that.
+        for (name, shape) in [
+            ("spawn_cleanup_task", "a `spawn_*` call"),
+            ("cpu_watchdog", "a bare `module::spawn(`"),
+        ] {
+            assert!(
+                expected.iter().any(|n| n == name),
+                "the scanner no longer matches {shape} — `{name}` is in \
+                 spawn_background_tasks but not in {expected:?}"
+            );
+        }
+        for name in expected {
+            assert!(
+                daemon.contains(&name),
+                "`{name}` runs on the desktop but the daemon neither starts it nor says why not"
+            );
+        }
+    }
+
+    /// The daemon must actually serve MCP, not merely write configs that point
+    /// at it. `tuic-bridge` speaks HTTP over the local IPC socket and has no
+    /// other transport, so an agent on a daemon without that listener finds a
+    /// configured server it can never reach.
+    #[test]
+    fn the_daemon_listens_on_ipc_before_it_writes_bridge_configs() {
+        let source = include_str!("lib.rs");
+        let body = fn_body(source, "pub async fn run_remote(port: u16)");
+        let listener = body
+            .find("spawn_ipc_listener")
+            .expect("run_remote must start the IPC listener the bridge connects to");
+        let configs = body
+            .find("ensure_mcp_configs")
+            .expect("run_remote must install the bridge configs for this machine's agents");
+        assert!(
+            listener < configs,
+            "the socket must be listening before a config names the bridge that connects to it"
+        );
+    }
+
+    /// Cross-repo content search skips a repo whose index does not exist and
+    /// deliberately starts no build — the warm strategy owns that. The daemon
+    /// ran neither, so `/fs/search-content-all` answered "pending" for every
+    /// repo for as long as the process lived: empty results that never resolve.
+    #[test]
+    fn the_daemon_warms_and_watches_the_repos_it_holds() {
+        let body = fn_body(include_str!("lib.rs"), "pub async fn run_remote(port: u16)");
+        for call in [
+            "repo_watcher::start_watching",
+            "repos_to_prewarm",
+            "prewarm_content_indices",
+        ] {
+            assert!(
+                body.contains(call),
+                "run_remote must call {call} — without it the machine's repos have no index"
+            );
+        }
+    }
+
+    #[test]
+    fn prewarm_follows_the_index_strategy() {
+        let known = || vec!["/a".to_string(), "/b".to_string(), "/c".to_string()];
+
+        // Default strategies warm the active repo and nothing else.
+        assert_eq!(
+            repos_to_prewarm(known(), Some("/b".to_string()), "active_and_switch"),
+            vec!["/b".to_string()]
+        );
+        assert_eq!(
+            repos_to_prewarm(known(), Some("/b".to_string()), "active_only"),
+            vec!["/b".to_string()]
+        );
+        // An active repo that is not registered (or parked) warms nothing.
+        assert!(repos_to_prewarm(known(), Some("/gone".to_string()), "active_only").is_empty());
+        assert!(repos_to_prewarm(known(), None, "active_and_switch").is_empty());
+        // `all_sequential` warms every repo, active first so it is ready first.
+        assert_eq!(
+            repos_to_prewarm(known(), Some("/c".to_string()), "all_sequential"),
+            vec!["/c".to_string(), "/b".to_string(), "/a".to_string()]
+        );
+        assert!(repos_to_prewarm(Vec::new(), Some("/a".to_string()), "all_sequential").is_empty());
+    }
+
     #[test]
     fn relay_does_not_own_a_second_tokio_runtime() {
         let source = include_str!("lib.rs");
@@ -2599,7 +2815,6 @@ mod tests {
             "load_activity",
             "load_keybindings",
             "load_agents_config",
-            "load_provider_registry",
         ] {
             assert!(
                 source.contains(&format!("pub(super) async fn {command}_async(")),

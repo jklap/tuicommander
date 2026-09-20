@@ -899,7 +899,9 @@ impl ConnectionActor {
                     self.journal.append(
                         Some(session_id),
                         None,
-                        AcpClientEvent::AttachmentState(AcpAttachmentState::Detached),
+                        AcpClientEvent::AttachmentState {
+                            state: AcpAttachmentState::Detached,
+                        },
                     );
                 }
                 let _ = reply.send(outcome);
@@ -969,7 +971,9 @@ impl ConnectionActor {
         self.journal.append(
             Some(notification.session_id),
             turn_id,
-            AcpClientEvent::SessionUpdate(Box::new(notification.update)),
+            AcpClientEvent::SessionUpdate {
+                update: Box::new(notification.update),
+            },
         );
     }
 
@@ -1237,7 +1241,7 @@ impl ConnectionActor {
             self.journal.append(
                 Some(session_id.clone()),
                 turn_id,
-                AcpClientEvent::AttachmentState(state),
+                AcpClientEvent::AttachmentState { state },
             );
         }
         let _ = reply.send(outcome);
@@ -1296,7 +1300,9 @@ impl ConnectionActor {
             // tell a host the turn ended in a way it did not.
             Err(_) => {
                 attachment.active_turn = None;
-                AcpClientEvent::AttachmentState(AcpAttachmentState::Idle)
+                AcpClientEvent::AttachmentState {
+                    state: AcpAttachmentState::Idle,
+                }
             }
         };
         self.publish();
@@ -1327,7 +1333,9 @@ impl ConnectionActor {
         self.journal.append(
             Some(attachment.session_id.clone()),
             None,
-            AcpClientEvent::AttachmentState(AcpAttachmentState::Idle),
+            AcpClientEvent::AttachmentState {
+                state: AcpAttachmentState::Idle,
+            },
         );
         attachment
     }
@@ -1363,9 +1371,14 @@ impl ConnectionActor {
     /// touch. `mcp_servers` rides the same baseline requests and had no gate at
     /// all, so a caller could hand an agent with `mcpCapabilities.http == false`
     /// a set of HTTP tools, get a session back, and never be told the agent has
-    /// none of them. Stdio is refused for the same reason `mcp_stdio` publishes
-    /// `ExcludedByContract`: this client does not carry stdio servers, and
-    /// forwarding them anyway made the snapshot and the behaviour disagree.
+    /// none of them.
+    ///
+    /// Stdio is the one transport with nothing to check on the agent's side: v1
+    /// publishes no `mcpCapabilities.stdio`, so it is baseline and the gate
+    /// reads what this client carries instead. That is safe only because the
+    /// list is replaced with our own entry before it reaches here — a stdio
+    /// server is a command line the agent runs, so the property that matters is
+    /// whose, not which transport.
     fn require_authority(&self, authority: &AcpSessionAuthority) -> Result<(), AcpClientError> {
         if !authority.additional_directories.is_empty() {
             self.require(AcpOperation::AdditionalDirectories)?;

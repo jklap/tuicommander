@@ -162,6 +162,12 @@ pub(super) async fn repo_merged_prs(
     )
 }
 
+/// The three ego-driven repo features, restored on ACP by story 795-320b.
+///
+/// They sit here rather than under an `/ai/` prefix because the prefix belonged
+/// to the embedded engine that story 784 deleted. Nothing about these is
+/// desktop-only any more either: the work happens in an ego process reached over
+/// ACP, so `tuic-remote` serves them too.
 pub(super) async fn repo_generate_changelog(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ChangelogQuery>,
@@ -171,6 +177,48 @@ pub(super) async fn repo_generate_changelog(
     }
     upstream_json_result(
         crate::changelog::generate_changelog_impl(&q.path, q.since_tag.as_deref(), &state).await,
+    )
+}
+
+pub(super) async fn repo_pr_review(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::PrReviewRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::pr_review::run_pr_review_impl(body.repo_path, body.pr_number, &state).await,
+    )
+}
+
+pub(super) async fn repo_improvement_scan(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::ImprovementScanRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::improvement_scan::run_improvement_scan_impl(body.repo_path, body.focus, &state)
+            .await,
+    )
+}
+
+pub(super) async fn repo_create_issue_from_proposal(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::CreateIssueFromProposalRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::improvement_scan::create_issue_from_proposal_impl(
+            &body.repo_path,
+            &body.proposal,
+            &state,
+        )
+        .await,
     )
 }
 

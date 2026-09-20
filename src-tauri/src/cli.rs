@@ -235,7 +235,10 @@ mod tests {
 
     #[test]
     fn test_expand_tilde_home_prefix() {
-        let home = dirs::home_dir().expect("home directory").display().to_string();
+        let home = dirs::home_dir()
+            .expect("home directory")
+            .display()
+            .to_string();
         assert_eq!(expand_tilde("~/foo/bar"), format!("{home}/foo/bar"));
         assert_eq!(expand_tilde("~"), home);
     }

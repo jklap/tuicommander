@@ -21,11 +21,6 @@ pub(crate) fn host_shell() -> (&'static str, &'static str) {
     }
 }
 
-/// Print the working directory.
-pub(crate) fn print_cwd_script() -> &'static str {
-    if cfg!(windows) { "cd" } else { "pwd" }
-}
-
 /// Print a file's contents.
 pub(crate) fn print_file_script(path: &str) -> String {
     if cfg!(windows) {
@@ -51,11 +46,6 @@ pub(crate) fn print_var_script(key: &str) -> String {
     } else {
         format!("echo \"${key}\"")
     }
-}
-
-/// The variable that holds the user's home directory.
-pub(crate) fn home_var() -> &'static str {
-    if cfg!(windows) { "USERPROFILE" } else { "HOME" }
 }
 
 /// The program and arguments that sleep longer than any timeout a test sets.
