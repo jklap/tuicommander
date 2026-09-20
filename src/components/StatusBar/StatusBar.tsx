@@ -19,6 +19,7 @@ import { appLogger } from "../../stores/appLogger";
 import { dictationStore } from "../../stores/dictation";
 import { ideasStore } from "../../stores/ideas";
 import { rateLimitStore } from "../../stores/ratelimit";
+import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { statusBarTicker } from "../../stores/statusBarTicker";
@@ -221,6 +222,24 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 		setShowPrDetailPopover(true);
 	};
 
+	/**
+	 * Remote machines that hold at least one registered repository and are not
+	 * currently connected. A machine with no repos is not reported: not being
+	 * connected to it is the normal resting state and says nothing is wrong.
+	 */
+	const unreachableMachines = createMemo(() => {
+		const states = remoteConnectionsStore.getConnections();
+		const withRepos = new Set(
+			repositoriesStore
+				.getAllReposOrdered()
+				.map((r) => r.connectionId)
+				.filter((id): id is string => !!id),
+		);
+		return Object.values(states)
+			.filter((c) => withRepos.has(c.connection.id) && c.status !== "connected")
+			.map((c) => c.connection.name);
+	});
+
 	return (
 		<div id="status-bar" class={s.bar}>
 			{/* Left section */}
@@ -330,6 +349,21 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					}}
 				</Show>
 			</div>
+
+			{/* Remote machines holding registered repos that are not answering.
+			    Without this the only symptom is every operation on those repos
+			    failing one by one, with the real cause buried in Settings. */}
+			<Show when={unreachableMachines().length > 0}>
+				<div
+					class={s.remoteOffline}
+					title={t(
+						"statusBar.remoteOfflineHint",
+						"Open Settings → Remote Machines to reconnect. Repositories on these machines cannot be read.",
+					)}
+				>
+					{t("statusBar.remoteOffline", "Offline:")} {unreachableMachines().join(", ")}
+				</div>
+			</Show>
 
 			{/* GitHub PR + CI badges */}
 			<Show when={activePrData()}>

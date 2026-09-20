@@ -448,3 +448,17 @@
     animation: none;
   }
 }
+
+/* A remote machine holding registered repos is not answering. Deliberately in
+   the status bar and not only in Settings: the user must be able to see the
+   cause without going looking for it. */
+.remoteOffline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--error);
+  white-space: nowrap;
+  cursor: default;
+}

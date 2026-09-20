@@ -14,6 +14,7 @@ export { effectiveMergeMethod };
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
+import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
@@ -744,6 +745,42 @@ export const RepoSection: Component<{
 	});
 	const ghBadgeCount = createMemo(() => myPrsCount() + otherCount());
 
+	/**
+	 * The badge on a remote repo reports its machine's live state, not just the
+	 * fact that it is remote. An unreachable machine makes every operation on
+	 * this repo fail, and that cause has to be visible where the repo is — not
+	 * only in Settings, which is where it used to be the only place to find it.
+	 */
+	const remoteConnState = createMemo(() =>
+		props.repo.connectionId ? remoteConnectionsStore.getConnectionState(props.repo.connectionId) : undefined,
+	);
+	const remoteBadgeLabel = createMemo(() => {
+		const status = remoteConnState()?.status;
+		if (status === "connected") return "remote";
+		if (status === "connecting") return "connecting…";
+		return "offline";
+	});
+	const remoteBadgeStatusClass = createMemo(() => {
+		const status = remoteConnState()?.status;
+		if (status === "connected") return undefined;
+		if (status === "connecting") return s.remoteBadgeConnecting;
+		return s.remoteBadgeError;
+	});
+	const remoteBadgeTitle = createMemo(() => {
+		const state = remoteConnState();
+		if (!state) return "This repository lives on a remote machine.";
+		if (state.status === "connected") return `On ${state.connection.name}.`;
+		const reason =
+			state.status === "unauthenticated"
+				? "rejected these credentials"
+				: state.status === "connecting"
+					? "is still connecting"
+					: state.status === "error"
+						? "is not answering"
+						: "is not connected";
+		return `${state.connection.name} ${reason}. Reconnect in Settings → Remote Machines.`;
+	});
+
 	const repoMenuItems = (): ContextMenuItem[] => {
 		const items: ContextMenuItem[] = [{ label: "Repo Settings", action: () => props.onSettings() }];
 
@@ -849,7 +886,9 @@ export const RepoSection: Component<{
 						{props.repo.displayName}
 					</span>
 					<Show when={props.repo.connectionId}>
-						<span class={s.remoteBadge}>remote</span>
+						<span class={cx(s.remoteBadge, remoteBadgeStatusClass())} title={remoteBadgeTitle()}>
+							{remoteBadgeLabel()}
+						</span>
 					</Show>
 					<div class={cx(s.repoActions, ghBadgeCount() > 0 && s.repoActionsWithBadge)}>
 						<Show when={ghBadgeCount() > 0}>
