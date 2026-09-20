@@ -233,6 +233,22 @@ const App: Component = () => {
 		repoPathPromptResolve = null;
 	};
 
+	/** Which machine the remote repo picker is browsing; null when it is closed. */
+	const [remotePickerConnectionId, setRemotePickerConnectionId] = createSignal<string | null>(null);
+	let remotePickerResolve: ((value: string | null) => void) | null = null;
+
+	/** Open the remote browser and resolve with the absolute path picked on that machine. */
+	const pickRemoteRepoPath = (connectionId: string): Promise<string | null> =>
+		new Promise((resolve) => {
+			remotePickerResolve = resolve;
+			setRemotePickerConnectionId(connectionId);
+		});
+	const resolveRemotePicker = (value: string | null) => {
+		setRemotePickerConnectionId(null);
+		remotePickerResolve?.(value);
+		remotePickerResolve = null;
+	};
+
 	// Arbitrary path prompt — powers "Open Path…" to route files to the viewer/editor
 	// and folders into the file browser.
 	const [openPathPromptVisible, setOpenPathPromptVisible] = createSignal(false);
@@ -294,6 +310,7 @@ const App: Component = () => {
 		dialogs: {
 			...dialogs,
 			promptRepoPath,
+			pickRemoteRepoPath,
 			confirmOrphanCleanup: dialogs.confirmOrphanCleanup,
 			confirmRemoveLockedWorktree: dialogs.confirmRemoveLockedWorktree,
 			confirmDirtyWorktreeCleanup: dialogs.confirmDirtyWorktreeCleanup,
@@ -1071,6 +1088,8 @@ const App: Component = () => {
 					resolveOpenPath: resolveOpenPathPrompt,
 					repoPathVisible: repoPathPromptVisible,
 					resolveRepoPath: resolveRepoPathPrompt,
+					remotePickerConnectionId,
+					resolveRemotePicker,
 				}}
 				confirmations={{
 					dialogState: dialogs.dialogState,
