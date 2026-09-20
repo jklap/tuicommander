@@ -136,13 +136,13 @@ export function useRepository() {
 	/** Fresh backend preflight used immediately before removal. */
 	async function getWorkspaceLifecycle(repoPath: string, workspaceId: string): Promise<WorkspaceLifecycleStatus> {
 		const status = await invoke<{
-			dirty: boolean | null;
+			dirty_files: number | null;
 			commit_status: WorkspaceLifecycleStatus["commitStatus"];
 			removal_safety: WorkspaceLifecycleStatus["removalSafety"];
 			error?: string;
 		}>("get_workspace_lifecycle", { repoPath, workspaceId });
 		return {
-			dirty: status.dirty,
+			dirtyFiles: status.dirty_files,
 			commitStatus: status.commit_status,
 			removalSafety: status.removal_safety,
 			error: status.error,
@@ -344,7 +344,7 @@ export function useRepository() {
 		workspace_statuses: Record<
 			string,
 			{
-				dirty: boolean | null;
+				dirty_files: number | null;
 				commit_status: import("../stores/workspaceIdentity").WorkspaceCommitStatus;
 				removal_safety: import("../stores/workspaceIdentity").WorkspaceRemovalSafety;
 				error?: string;

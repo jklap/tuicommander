@@ -7,7 +7,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
 
 interface WorkspaceLifecycleResponse {
-	dirty: boolean | null;
+	dirty_files: number | null;
 	commit_status: import("../../stores/workspaceIdentity").WorkspaceCommitStatus;
 	removal_safety: import("../../stores/workspaceIdentity").WorkspaceRemovalSafety;
 	error?: string;
@@ -394,7 +394,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 							repositoriesStore.setWorkspace(repoPath, workspaceId, {
 								isMerged: lifecycle.commit_status === "merged",
 								lifecycleStatus: {
-									dirty: lifecycle.dirty,
+									dirtyFiles: lifecycle.dirty_files,
 									commitStatus: lifecycle.commit_status,
 									removalSafety: lifecycle.removal_safety,
 									error: lifecycle.error,

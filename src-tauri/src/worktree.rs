@@ -413,6 +413,11 @@ pub(crate) fn create_worktree_with_stale_recovery(
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WorkspaceCommitStatus {
     Unmerged,
+    /// HEAD is the default branch's tip: this workspace has no commits of its
+    /// own, so it was never merged. Kept apart from `Merged` because both
+    /// satisfy `merge-base --is-ancestor` and only one of them describes a
+    /// history that happened.
+    InSync,
     Merged,
     Unknown,
 }
@@ -429,18 +434,29 @@ pub(crate) enum WorkspaceRemovalSafety {
 /// workspace. Optional fields mean inspection failed; unknown is never zero.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct WorkspaceLifecycleStatus {
-    pub(crate) dirty: Option<bool>,
+    /// How many files removal would discard — staged, unstaged and untracked
+    /// alike. A count rather than a flag because "dirty" tells the user nothing
+    /// about what is at stake, and this number is exactly what removal loses.
+    pub(crate) dirty_files: Option<usize>,
     pub(crate) commit_status: WorkspaceCommitStatus,
     pub(crate) removal_safety: WorkspaceRemovalSafety,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
 }
 
-fn dirty_at(path: &Path) -> Result<bool, String> {
+fn rev_at(path: &Path, spec: &str) -> Result<String, String> {
+    git_cmd(path)
+        .args(["rev-parse", spec])
+        .run()
+        .map(|out| out.stdout.trim().to_string())
+        .map_err(|e| format!("could not resolve {spec}: {e}"))
+}
+
+fn dirty_files_at(path: &Path) -> Result<usize, String> {
     git_cmd(path)
         .args(["status", "--porcelain", "--untracked-files=all"])
         .run()
-        .map(|out| !out.stdout.trim().is_empty())
+        .map(|out| out.stdout.lines().filter(|l| !l.trim().is_empty()).count())
         .map_err(|e| format!("could not check the workspace for uncommitted changes: {e}"))
 }
 
@@ -450,7 +466,8 @@ pub(crate) fn inspect_workspace_lifecycle(
 ) -> WorkspaceLifecycleStatus {
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
         let workspace = resolve_any_workspace(base_repo, workspace_id)?;
-        let dirty = dirty_at(Path::new(&workspace.path))?;
+        let dirty_files = dirty_files_at(Path::new(&workspace.path))?;
+        let dirty = dirty_files > 0;
         let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
         let ancestry = git_cmd(Path::new(&workspace.path))
             .args(["merge-base", "--is-ancestor", "HEAD", &default_branch])
@@ -466,13 +483,22 @@ pub(crate) fn inspect_workspace_lifecycle(
                 ));
             }
         };
+        // `--is-ancestor` answers "no commit here is outside the default
+        // branch", which is true of two different histories: a branch whose own
+        // commits were merged, and a branch that never had a commit at all.
+        // Reporting the second as merged states an event that never happened,
+        // so ask whether HEAD *is* the tip and separate them.
+        let workspace_path = Path::new(&workspace.path);
+        let commit_status = if !merged {
+            WorkspaceCommitStatus::Unmerged
+        } else if rev_at(workspace_path, "HEAD")? == rev_at(workspace_path, &default_branch)? {
+            WorkspaceCommitStatus::InSync
+        } else {
+            WorkspaceCommitStatus::Merged
+        };
         Ok(WorkspaceLifecycleStatus {
-            dirty: Some(dirty),
-            commit_status: if merged {
-                WorkspaceCommitStatus::Merged
-            } else {
-                WorkspaceCommitStatus::Unmerged
-            },
+            dirty_files: Some(dirty_files),
+            commit_status,
             removal_safety: if dirty {
                 WorkspaceRemovalSafety::RequiresForce
             } else {
@@ -483,7 +509,7 @@ pub(crate) fn inspect_workspace_lifecycle(
     })();
 
     inspected.unwrap_or_else(|error| WorkspaceLifecycleStatus {
-        dirty: None,
+        dirty_files: None,
         commit_status: WorkspaceCommitStatus::Unknown,
         removal_safety: WorkspaceRemovalSafety::Unknown,
         error: Some(error),
@@ -1977,9 +2003,9 @@ pub(crate) fn worktree_dirtiness(base_repo: &Path, workspace_id: &str) -> Worktr
         Err(error) => return WorktreeDirtiness::Unknown(error),
     };
 
-    match dirty_at(&path) {
-        Ok(false) => WorktreeDirtiness::Clean,
-        Ok(true) => WorktreeDirtiness::Dirty,
+    match dirty_files_at(&path) {
+        Ok(0) => WorktreeDirtiness::Clean,
+        Ok(_) => WorktreeDirtiness::Dirty,
         Err(e) => WorktreeDirtiness::Unknown(e),
     }
 }
@@ -5031,5 +5057,128 @@ branch refs/heads/feat
                 .contains("linked worktree")
         );
         assert_eq!(payload["warm_artifacts"]["warmed_directories"], 0);
+    }
+
+    /// Add a linked worktree on a new branch and return its path.
+    fn add_worktree(repo: &Path, branch: &str) -> PathBuf {
+        let path = repo.parent().expect("parent").join(branch);
+        git_cmd(repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                &path.to_string_lossy(),
+                "HEAD",
+            ])
+            .run()
+            .expect("git worktree add");
+        path
+    }
+
+    fn commit_file(dir: &Path, name: &str, body: &str) {
+        fs::write(dir.join(name), body).expect("write file");
+        git_cmd(dir).args(["add", "."]).run().expect("git add");
+        git_cmd(dir)
+            .args(["commit", "-m", name])
+            .run()
+            .expect("git commit");
+    }
+
+    /// A branch sitting exactly on the default branch's tip never merged
+    /// anything: it has no commits of its own. `--is-ancestor` is satisfied
+    /// here and by a genuinely merged branch alike, and reporting both as
+    /// merged told Boss that a worktree holding 429 uncommitted lines had
+    /// nothing to lose.
+    #[test]
+    fn a_workspace_on_the_default_tip_is_in_sync_not_merged() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_worktree(&repo, "untouched");
+
+        let status = inspect_workspace_lifecycle(&repo, "untouched");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+        assert_eq!(status.dirty_files, Some(0));
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    /// The other side of the same ancestor check: HEAD is behind the tip, so
+    /// every commit it carries is already in the default branch.
+    #[test]
+    fn a_workspace_behind_the_default_tip_is_merged() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "trails");
+        commit_file(&repo, "moved-on.txt", "default branch advanced\n");
+
+        let status = inspect_workspace_lifecycle(&repo, "trails");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.dirty_files, Some(0));
+        assert!(worktree.exists());
+    }
+
+    #[test]
+    fn a_workspace_with_its_own_commit_is_unmerged() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "diverged");
+        commit_file(&worktree, "own.txt", "only here\n");
+
+        let status = inspect_workspace_lifecycle(&repo, "diverged");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    /// Dirtiness is orthogonal to the commit verdict, and that is exactly why
+    /// the verdict must never be read as "nothing would be lost": the removal
+    /// discards these files, and no commit check can see them.
+    #[test]
+    fn uncommitted_files_make_removal_unsafe_whatever_the_commit_verdict_says() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "dirty-and-in-sync");
+        fs::write(worktree.join("untracked.txt"), "not committed\n").expect("untracked file");
+        fs::write(worktree.join("README.md"), "edited\n").expect("modified file");
+
+        let status = inspect_workspace_lifecycle(&repo, "dirty-and-in-sync");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
+        // The count, not a flag: both files are lost by a removal, and one
+        // tracked edit plus one untracked file must read as two.
+        assert_eq!(status.dirty_files, Some(2));
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
+    }
+
+    #[test]
+    fn an_unresolvable_workspace_reports_unknown_with_the_reason() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+
+        let status = inspect_workspace_lifecycle(&repo, "never-created");
+
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Unknown);
+        assert_eq!(status.dirty_files, None);
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Unknown);
+        assert!(
+            status
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("never-created")),
+            "the reason must name the workspace: {:?}",
+            status.error
+        );
+    }
+
+    /// The serialized spellings are the contract the sidebar's label table
+    /// reads; renaming a variant silently turns a badge into dead code.
+    #[test]
+    fn commit_status_serializes_as_the_frontend_spells_it() {
+        let spellings = [
+            (WorkspaceCommitStatus::Unmerged, "unmerged"),
+            (WorkspaceCommitStatus::InSync, "in_sync"),
+            (WorkspaceCommitStatus::Merged, "merged"),
+            (WorkspaceCommitStatus::Unknown, "unknown"),
+        ];
+        for (status, expected) in spellings {
+            assert_eq!(serde_json::to_value(status).expect("serialize"), expected);
+        }
     }
 }

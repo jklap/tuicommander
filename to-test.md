@@ -8,6 +8,20 @@
 
 # To Test
 
+## Workspace badge: file count instead of "Dirty", `in_sync` instead of "Merged" (2026-09-20) — **Rust, needs a `make dev` restart**
+
+The sidebar called a worktree "Merged" while it held 24 uncommitted files. The
+backend verdict now separates `in_sync` (HEAD is the default branch's tip, so
+nothing was ever merged) from `merged`, and reports `dirty_files` — the count a
+removal discards — instead of a `dirty` flag. **Until the restart the frontend
+reads `dirty_files` off an old backend that does not send it, so every count is
+0 and the old `merged` verdict still shows.**
+
+- [ ] After the restart, the `feat/sqlite-viewer-plugin` row must read `24 dirty` (or whatever `git status --porcelain -uall | wc -l` says in that worktree), not `Merged`.
+- [ ] No `main` row anywhere in the sidebar carries a lifecycle badge, however dirty. Main is not removable from that list, so the badge has nothing to warn about.
+- [ ] A worktree with commits of its own, all merged into the default branch, and a clean tree still reads `Merged`.
+- [ ] Removing a worktree with uncommitted files: the confirm dialog must name the count ("N uncommitted files will be discarded"), not the word dirty.
+
 ## Notification sound teardown (2026-09-20) — **Rust, needs a `make dev` restart**
 
 - [ ] In Settings → Notifications, play each Test sound through the output device that previously crackled. The tone must end cleanly, with no relay-like click after its release. The source now reaches an exact zero sample and feeds 100 ms of silence before closing, but only the real CoreAudio device can verify the hardware-buffer teardown.

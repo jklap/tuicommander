@@ -333,10 +333,15 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
 											<Show when={wt.isMain}>
 												<span class={s.mainBadge}>main</span>
 											</Show>
-											<Show when={wt.lifecycleStatus?.dirty}>
-												<span class={s.dirtyBadge} title="Staged, unstaged, or untracked files exist">
-													Dirty
-												</span>
+											<Show when={wt.lifecycleStatus?.dirtyFiles}>
+												{(lost) => (
+													<span
+														class={s.dirtyBadge}
+														title={`${lost()} staged, unstaged or untracked file${lost() === 1 ? "" : "s"} would be discarded by removing this worktree`}
+													>
+														{lost()} dirty
+													</span>
+												)}
 											</Show>
 											<Show
 												when={
