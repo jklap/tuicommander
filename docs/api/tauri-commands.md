@@ -532,7 +532,7 @@ JavaScript `String.slice` semantics for ASCII, accented text, and non-BMP emoji.
 | `mdkb_outline` | `repo_path, file_path` | `Vec<OutlineSymbol>` | Get symbol outline (functions, types) for a file |
 | `mdkb_goto_definition` | `repo_path, file_path, line, col?` | `DefinitionLocation?` | Find definition of symbol at position |
 | `mdkb_references` | `repo_path, symbol_name` | `Vec<ReferenceLocation>` | Find all callers of a symbol via code_graph |
-| `mdkb_code_find` | `repo_path, name, kind?` | `Vec<OutlineSymbol>` | Exact symbol lookup by name, optionally filtered by kind |
+| `mdkb_code_find` | `repo_path, name, kind?` | `CodeFindResult` | Exact symbol lookup by name, optionally filtered by kind. `symbols` is capped by mdkb; `total` is the unclamped match count and `capped` says whether rows were held back (both `null` when mdkb sent no count) |
 | `install_mdkb` | — | `String` | Download and install mdkb binary |
 | `uninstall_mdkb` | — | `()` | Remove mdkb binary (errors for homebrew/cargo installs) |
 
