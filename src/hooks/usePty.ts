@@ -1,17 +1,21 @@
 import { appLogger } from "../stores/appLogger";
-import { isTauri, rpc } from "../transport";
+import { isTauri, owningConnectionFor, rpc } from "../transport";
 import type { OrchestratorStats, PtyConfig } from "../types";
 import { clearShellFamilyCache, getShellFamily, sendCommand as sendCommandUtil } from "../utils/sendCommand";
 import { browserCreatedSessions } from "./useAppInit";
 
-/** Pre-generate a session id for browser-mode creates and register it locally
- *  BEFORE the create RPC. The backend's `session-created` event is delivered to
- *  the browser over SSE, which can arrive before the RPC's HTTP response — so
+/** Pre-generate a session id for creates that travel over HTTP and register it
+ *  locally BEFORE the create RPC. The backend's `session-created` event is
+ *  delivered over SSE, which can arrive before the RPC's HTTP response — so
  *  registering the id up front closes that race window and the echo is dropped
  *  by the `session-created` listener instead of spawning a duplicate "PTY:" tab.
- *  Desktop (Tauri) has no such echo race, so the backend mints the id there. */
-function preRegisterBrowserSessionId(): string | undefined {
-	if (isTauri()) return undefined;
+ *
+ *  The desktop over Tauri IPC has no such echo race, but a desktop create for a
+ *  REMOTE repo is routed to that machine's daemon and does, which is why the
+ *  predicate is "not local", not "not Tauri" — the same one `rpc()` uses to
+ *  decide whether `write_pty` needs its per-session queue. */
+function preRegisterBrowserSessionId(command: string, args: Record<string, unknown>): string | undefined {
+	if (isTauri() && !owningConnectionFor(command, args)) return undefined;
 	const id = crypto.randomUUID();
 	browserCreatedSessions.add(id);
 	return id;
@@ -104,7 +108,7 @@ export function usePty() {
 
 	/** Create a new PTY session */
 	async function createSession(config: PtyConfig): Promise<string> {
-		const requestedId = preRegisterBrowserSessionId();
+		const requestedId = preRegisterBrowserSessionId("create_pty", { config });
 		const sessionId = await rpc<string>("create_pty", {
 			config: requestedId ? { ...config, session_id: requestedId } : config,
 		});
@@ -117,7 +121,10 @@ export function usePty() {
 		ptyConfig: PtyConfig,
 		worktreeConfig: WorktreeConfig,
 	): Promise<WorktreeResult> {
-		const requestedId = preRegisterBrowserSessionId();
+		const requestedId = preRegisterBrowserSessionId("create_pty_with_worktree", {
+			pty_config: ptyConfig,
+			worktree_config: worktreeConfig,
+		});
 		const result = await rpc<WorktreeResult>("create_pty_with_worktree", {
 			pty_config: requestedId ? { ...ptyConfig, session_id: requestedId } : ptyConfig,
 			worktree_config: worktreeConfig,

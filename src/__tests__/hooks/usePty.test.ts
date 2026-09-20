@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
+import { setRemoteBaseUrlLookup, setRepoConnectionLookup } from "../../transportRuntime";
 import { mockInvoke } from "../mocks/tauri";
 
 describe("usePty", () => {
@@ -98,6 +99,58 @@ describe("usePty", () => {
 			expect(sentBody.branch_name).toBe("feat-x");
 			expect(sentBody.config.session_id).toBeTruthy();
 			expect(browserCreatedSessions.has(result.session_id)).toBe(true);
+		});
+	});
+
+	// A desktop create for a repo registered against a remote machine travels over
+	// HTTP to that machine's daemon, so it has the same `session-created` echo race
+	// browser mode has. Without pre-registration the echo is adopted as a second
+	// tab — the user sees one shell open as "shell 1" plus "PTY: Session N", both
+	// bound to the one PTY that actually exists on the remote host.
+	describe("createSession() on the desktop, routed to a remote machine", () => {
+		const REMOTE_CWD = "/home/stefano/omi-local-stack";
+		let fetchMock: ReturnType<typeof vi.fn>;
+		const realFetch = globalThis.fetch;
+
+		beforeEach(() => {
+			setRepoConnectionLookup((path) => (path.startsWith(REMOTE_CWD) ? "conn-mac-mint" : undefined));
+			setRemoteBaseUrlLookup((id) => (id === "conn-mac-mint" ? "http://mac-mint:9877" : undefined));
+			fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+				const body = JSON.parse((init?.body as string) ?? "{}");
+				// `create_pty`'s mapper flattens the config into the request body.
+				return new Response(JSON.stringify({ session_id: body.session_id ?? "backend-id" }), {
+					status: 201,
+					headers: { "content-type": "application/json" },
+				});
+			});
+			globalThis.fetch = fetchMock as unknown as typeof fetch;
+		});
+
+		afterEach(() => {
+			setRepoConnectionLookup(() => undefined);
+			setRemoteBaseUrlLookup(() => undefined);
+			globalThis.fetch = realFetch;
+		});
+
+		it("pre-registers the session id even though isTauri() is true", async () => {
+			const sessionId = await pty.createSession({ cwd: REMOTE_CWD, rows: 24, cols: 80, shell: null });
+
+			// The request really left for mac-mint, carrying a client-minted id...
+			expect(String(fetchMock.mock.calls[0][0])).toContain("mac-mint");
+			const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+			expect(sentBody.session_id).toBeTruthy();
+			// ...and that id is known locally before the daemon can echo it back.
+			expect(browserCreatedSessions.has(sentBody.session_id)).toBe(true);
+			expect(sessionId).toBe(sentBody.session_id);
+		});
+
+		it("still lets the backend mint the id for a local repo", async () => {
+			mockInvoke.mockResolvedValueOnce("sess-local");
+			await pty.createSession({ cwd: "/Users/stefano/local-repo", rows: 24, cols: 80, shell: null });
+
+			expect(fetchMock).not.toHaveBeenCalled();
+			const [, sentArgs] = mockInvoke.mock.calls[0];
+			expect(sentArgs.config.session_id).toBeUndefined();
 		});
 	});
 
