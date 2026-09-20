@@ -2030,6 +2030,7 @@ pub fn run() {
             plugin_fs::plugin_read_file,
             plugin_fs::plugin_read_files,
             plugin_fs::plugin_read_file_base64,
+            plugin_fs::plugin_write_file_base64,
             plugin_fs::plugin_list_directory,
             plugin_fs::plugin_read_file_tail,
             plugin_fs::plugin_write_file,

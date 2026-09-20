@@ -2389,3 +2389,17 @@ restart, not before.
       the PTY map under the peer's `$TUIC_SESSION`, which only matches for a
       spawned child. The same fix also gives `ui action=tab` and `ui
       action=toast` the right repo badge in those tabs.
+## SQLite Viewer plugin host primitives — needs a `make dev` restart (#797-a4bd)
+
+- [x] Open a `.db` fixture from the File Browser and confirm the themed object
+      list, row page, index inspector, and query console render without a stale
+      dirty badge. _(verified in an isolated `sqlite-viewer-920` instance;
+      screenshot: `.screenshots/sqlite-viewer-plugin.png`)_
+- [ ] Exercise the per-column filter and visual query-plan buttons through the UI,
+      then enable editing on a primary-key table, change a scalar cell, save,
+      reopen the file, and confirm the persisted value. _(The exact SQL filter,
+      explain, edit, export, and reopen path is runtime-tested; UI automation was
+      stopped after MacControl switched same-name windows/coordinate spaces.)_
+- [x] Close and reopen the SQLite tab and confirm a fresh iframe/database viewer
+      is created. _(verified in the isolated instance; pending-load cleanup is
+      also covered by `main.test.js`.)_

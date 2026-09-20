@@ -23,6 +23,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **SQLite databases open in a self-contained plugin viewer.** The registry's
+  SQLite Viewer claims `.db`, `.sqlite`, `.sqlite3`, `.db3`, and `.s3db` files
+  and shows tables, views, schema, indexes, per-column filters, sortable native
+  SQL pages, configurable page sizes, bounded read-only SQL, CSV copy, and visual
+  query plans. Tables with primary keys support explicit inline editing and an
+  atomic save back to the source file; encrypted/SQLCipher input gets a clear
+  unsupported-format diagnostic.
+  Its pinned sql.js JavaScript and WebAssembly ship inside the plugin: there is
+  no CDN request, system SQLite dependency, or SQLite-specific host API. The
+  engine and database live in the panel iframe and are released with the tab.
+  Generic plugin APIs now accept optional bounded binary read/write budgets, can
+  transfer `ArrayBuffer` ownership through `PanelHandle.send`, and serve `.wasm`
+  assets with the standard MIME type. Existing binary reads retain their 10 MiB
+  default; the host ceiling for an explicit budget is 512 MiB.
+
 - **PR review, changelog generation and the improvement scan are back, on ego.**
   All three went with the embedded engine and all three now run as one unattended
   ego turn: the whole input goes inline, ego is offered no TUICommander tools, and

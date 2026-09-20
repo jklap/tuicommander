@@ -424,12 +424,7 @@ pub fn register_plugin_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::B
         match std::fs::read(&file_path) {
             Ok(data) => {
                 // Determine MIME type from extension
-                let mime = match file_path.extension().and_then(|e| e.to_str()) {
-                    Some("js" | "mjs") => "application/javascript",
-                    Some("json") => "application/json",
-                    Some("css") => "text/css",
-                    _ => "application/octet-stream",
-                };
+                let mime = plugin_asset_mime(&file_path);
 
                 Response::builder()
                     .status(StatusCode::OK)
@@ -446,6 +441,16 @@ pub fn register_plugin_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::B
                 .unwrap(),
         }
     })
+}
+
+fn plugin_asset_mime(path: &Path) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("js" | "mjs") => "application/javascript",
+        Some("json") => "application/json",
+        Some("css") => "text/css",
+        Some("wasm") => "application/wasm",
+        _ => "application/octet-stream",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1511,6 +1516,18 @@ mod tests {
         let result = resolve_plugin_path("/my-plugin/dist/bundle.js");
         assert!(result.is_some());
         assert!(result.unwrap().ends_with("my-plugin/dist/bundle.js"));
+    }
+
+    #[test]
+    fn plugin_protocol_serves_webassembly_with_its_standard_mime_type() {
+        assert_eq!(
+            plugin_asset_mime(Path::new("sqlite-viewer/vendor/sql-wasm.wasm")),
+            "application/wasm"
+        );
+        assert_eq!(
+            plugin_asset_mime(Path::new("sqlite-viewer/vendor/sql-wasm.js")),
+            "application/javascript"
+        );
     }
 
     // -- Manifest validation --

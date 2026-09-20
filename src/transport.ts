@@ -1830,10 +1830,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 	plugin_read_file_base64: {
-		map: (_args, p) => ({
-			method: "GET",
-			path: `/api/plugins/${p("pluginId")}/fs/read-base64?path=${p("path")}`,
-		}),
+		map: (args, p) => {
+			let path = `/api/plugins/${p("pluginId")}/fs/read-base64?path=${p("path")}`;
+			if (args.maxBytes != null) path += `&maxBytes=${p("maxBytes")}`;
+			return { method: "GET", path };
+		},
 	},
 	plugin_read_file_tail: {
 		map: (_args, p) => ({
@@ -1854,6 +1855,17 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: `/api/plugins/${p("pluginId")}/fs/write`,
 			body: { path: args.path, content: args.content },
+		}),
+	},
+	plugin_write_file_base64: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/fs/write-base64`,
+			body: {
+				path: args.path,
+				content: args.content,
+				...(args.maxBytes != null ? { maxBytes: args.maxBytes } : {}),
+			},
 		}),
 	},
 	plugin_rename_path: {
