@@ -6,6 +6,7 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 
 ## Tests
 
+- **Test only the changed behavior.** Routine validation MUST use the narrowest test filters that cover the production code, protocol surface, fixtures, or test support changed by the task. Do not run full-crate, full-app, full-tree, or unrelated suites merely for reassurance; they waste shared build time and obscure relevant evidence. Expand beyond targeted tests only when a documented gate explicitly requires it, targeted evidence proves a cross-cutting risk, or Boss explicitly asks for the broader run.
 - Tests are the spec. When a test fails after a code change, investigate BOTH sides before deciding which to fix.
 - **Finding a story partially implemented does NOT mean it's done.** When you pick up a story and discover the feature already exists, verify EVERY part of the story is honored — each acceptance criterion, edge case, and requirement — before marking it complete. Never assume the whole story is satisfied just because one part is implemented. Check each criterion against the code and prove it, or the story isn't done.
 - `to-test.md` tracks features awaiting manual testing — add items there for minor features.

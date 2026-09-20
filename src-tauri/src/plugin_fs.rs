@@ -16,6 +16,11 @@ use tauri::{AppHandle, Emitter, State};
 /// Maximum file size readable via plugin_read_file (10 MB).
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Largest binary payload a plugin may explicitly request in one read.
+/// Binary reads cross IPC/HTTP as Base64 and are commonly decoded into a
+/// second WebView buffer, so the host still needs an upper stability bound.
+const MAX_BINARY_FILE_SIZE: u64 = 512 * 1024 * 1024;
+
 /// Maximum number of files one plugin_read_files request may ask for. Bounds how
 /// long a single batch can hold a blocking thread; a directory larger than this
 /// is a paging problem, not a batching one.
@@ -136,10 +141,24 @@ pub async fn plugin_read_files(
 #[tauri::command]
 pub async fn plugin_read_file_base64(
     path: String,
+    max_bytes: Option<u64>,
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<String, String> {
-    plugin_read_file_base64_impl(&state, path, plugin_id).await
+    plugin_read_file_base64_impl(&state, path, max_bytes, plugin_id).await
+}
+
+/// Atomically write raw Base64 bytes within `$HOME`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn plugin_write_file_base64(
+    path: String,
+    content: String,
+    max_bytes: Option<u64>,
+    plugin_id: String,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<(), String> {
+    plugin_write_file_base64_impl(&state, path, content, max_bytes, plugin_id).await
 }
 
 /// Run a blocking filesystem closure on Tokio's blocking pool, flattening the
@@ -240,33 +259,79 @@ pub(crate) async fn plugin_read_files_impl(
 pub(crate) async fn plugin_read_file_base64_impl(
     state: &std::sync::Arc<crate::AppState>,
     path: String,
+    max_bytes: Option<u64>,
     plugin_id: String,
 ) -> Result<String, String> {
     crate::plugins::check_plugin_capability(state, &plugin_id, "fs:read")?;
-    spawn_blocking_fs(move || {
-        use base64::Engine;
+    let limit = binary_read_limit(max_bytes)?;
+    spawn_blocking_fs(move || read_binary_base64_capped(&path, limit)).await
+}
 
-        let canonical = validate_within_home(&path)?;
+fn binary_read_limit(requested: Option<u64>) -> Result<u64, String> {
+    match requested {
+        None => Ok(MAX_FILE_SIZE),
+        Some(0) => Err("maxBytes must be greater than zero".into()),
+        Some(bytes) => Ok(bytes.min(MAX_BINARY_FILE_SIZE)),
+    }
+}
 
-        let metadata =
-            std::fs::metadata(&canonical).map_err(|e| format!("Failed to stat file: {e}"))?;
+fn read_binary_base64_capped(path: &str, max_bytes: u64) -> Result<String, String> {
+    use base64::Engine;
 
-        if !metadata.is_file() {
-            return Err("Path is not a file".into());
-        }
+    let canonical = validate_within_home(path)?;
+    let metadata =
+        std::fs::metadata(&canonical).map_err(|e| format!("Failed to stat file: {e}"))?;
 
-        if metadata.len() > MAX_FILE_SIZE {
-            return Err(format!(
-                "File exceeds maximum size ({} bytes > {} bytes)",
-                metadata.len(),
-                MAX_FILE_SIZE
-            ));
-        }
+    if !metadata.is_file() {
+        return Err("Path is not a file".into());
+    }
 
-        let bytes = std::fs::read(&canonical).map_err(|e| format!("Failed to read file: {e}"))?;
-        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
-    })
-    .await
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "File exceeds maximum size ({} bytes > {} bytes)",
+            metadata.len(),
+            max_bytes
+        ));
+    }
+
+    let bytes = std::fs::read(&canonical).map_err(|e| format!("Failed to read file: {e}"))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+pub(crate) async fn plugin_write_file_base64_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    path: String,
+    content: String,
+    max_bytes: Option<u64>,
+    plugin_id: String,
+) -> Result<(), String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:write")?;
+    let limit = binary_read_limit(max_bytes)?;
+    spawn_blocking_fs(move || write_binary_base64_capped(&path, &content, limit)).await
+}
+
+fn write_binary_base64_capped(path: &str, content: &str, max_bytes: u64) -> Result<(), String> {
+    use base64::Engine;
+
+    let maximum_encoded_len = max_bytes.div_ceil(3).saturating_mul(4);
+    if content.len() as u64 > maximum_encoded_len {
+        return Err(format!(
+            "Content exceeds maximum size (encoded payload > {max_bytes} decoded bytes)"
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(content)
+        .map_err(|e| format!("Invalid Base64 content: {e}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "Content exceeds maximum size ({} bytes > {} bytes)",
+            bytes.len(),
+            max_bytes
+        ));
+    }
+
+    let target = validate_write_target(path)?;
+    crate::fs::atomic_write(&target, &bytes).map_err(|e| format!("Failed to write file: {e}"))
 }
 
 /// List filenames in a directory, optionally filtered by a glob pattern.
@@ -646,42 +711,46 @@ async fn plugin_write_file_inner(path: String, content: String) -> Result<(), St
     }
 
     spawn_blocking_fs(move || {
-        let file_path = PathBuf::from(&path);
-        if !file_path.is_absolute() {
-            return Err("Path must be absolute".into());
-        }
-
-        let home = effective_home_dir()?;
-
-        if file_path.exists() {
-            let canonical = file_path
-                .canonicalize()
-                .map_err(|e| format!("Failed to resolve path: {e}"))?;
-            if !canonical.starts_with(&home) {
-                return Err("Path must be within the user's home directory".into());
-            }
-            if canonical.is_dir() {
-                return Err("Cannot overwrite a directory".into());
-            }
-        } else {
-            let parent = file_path
-                .parent()
-                .ok_or("Cannot determine parent directory")?;
-            if !parent.exists() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create parent directories: {e}"))?;
-            }
-            let canonical_parent = parent
-                .canonicalize()
-                .map_err(|e| format!("Failed to resolve parent path: {e}"))?;
-            if !canonical_parent.starts_with(&home) {
-                return Err("Path must be within the user's home directory".into());
-            }
-        }
-
+        let file_path = validate_write_target(&path)?;
         std::fs::write(&file_path, &content).map_err(|e| format!("Failed to write file: {e}"))
     })
     .await
+}
+
+fn validate_write_target(path: &str) -> Result<PathBuf, String> {
+    let file_path = PathBuf::from(path);
+    if !file_path.is_absolute() {
+        return Err("Path must be absolute".into());
+    }
+
+    let home = effective_home_dir()?;
+    if file_path.exists() {
+        let canonical = file_path
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve path: {e}"))?;
+        if !canonical.starts_with(&home) {
+            return Err("Path must be within the user's home directory".into());
+        }
+        if canonical.is_dir() {
+            return Err("Cannot overwrite a directory".into());
+        }
+        return Ok(canonical);
+    }
+
+    let parent = file_path
+        .parent()
+        .ok_or("Cannot determine parent directory")?;
+    if !parent.exists() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create parent directories: {e}"))?;
+    }
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve parent path: {e}"))?;
+    if !canonical_parent.starts_with(&home) {
+        return Err("Path must be within the user's home directory".into());
+    }
+    Ok(file_path)
 }
 
 /// Rename/move a file within $HOME.
@@ -1871,6 +1940,71 @@ mod tests {
             read,
             vec![Some("aaaaaa".to_string()), None, Some("c".to_string())]
         );
+    }
+
+    #[test]
+    fn binary_read_limit_preserves_default_and_clamps_custom_budget() {
+        assert_eq!(binary_read_limit(None).unwrap(), MAX_FILE_SIZE);
+        assert_eq!(binary_read_limit(Some(42)).unwrap(), 42);
+        assert_eq!(
+            binary_read_limit(Some(MAX_BINARY_FILE_SIZE + 1)).unwrap(),
+            MAX_BINARY_FILE_SIZE
+        );
+    }
+
+    #[test]
+    fn binary_read_limit_rejects_zero() {
+        assert_eq!(
+            binary_read_limit(Some(0)).unwrap_err(),
+            "maxBytes must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn binary_read_uses_the_requested_budget() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        let dir = temp_dir_in_home();
+        let file = dir.path().join("database.sqlite");
+        std::fs::write(&file, b"SQLite format 3\0payload").unwrap();
+
+        let error = read_binary_base64_capped(file.to_str().unwrap(), 8).unwrap_err();
+
+        assert!(error.contains("File exceeds maximum size"), "got: {error}");
+        assert!(read_binary_base64_capped(file.to_str().unwrap(), 64).is_ok());
+    }
+
+    #[test]
+    fn binary_write_decodes_and_atomically_replaces_the_target() {
+        use base64::Engine;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = set_home_dir_override(tmp.path().to_path_buf());
+        let target = tmp.path().join("database.sqlite");
+        std::fs::write(&target, b"old").unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"SQLite format 3\0new");
+
+        write_binary_base64_capped(target.to_str().unwrap(), &encoded, 64).unwrap();
+
+        assert_eq!(std::fs::read(target).unwrap(), b"SQLite format 3\0new");
+    }
+
+    #[test]
+    fn binary_write_rejects_invalid_or_oversized_base64() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = set_home_dir_override(tmp.path().to_path_buf());
+        let target = tmp.path().join("database.sqlite");
+
+        assert!(
+            write_binary_base64_capped(target.to_str().unwrap(), "not base64", 64)
+                .unwrap_err()
+                .contains("Invalid Base64")
+        );
+        assert!(
+            write_binary_base64_capped(target.to_str().unwrap(), "QUJDRA==", 3)
+                .unwrap_err()
+                .contains("maximum size")
+        );
+        assert!(!target.exists());
     }
 
     #[test]

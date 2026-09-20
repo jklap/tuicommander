@@ -44,6 +44,7 @@
 /api/plugins/x/fs/rename
 /api/plugins/x/fs/tail
 /api/plugins/x/fs/write
+/api/plugins/x/fs/write-base64
 /api/plugins/x/http
 /api/plugins/x/pty/output
 /api/plugins/x/readme

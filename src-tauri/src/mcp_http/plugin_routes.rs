@@ -23,6 +23,13 @@ pub(super) struct FsReadQuery {
     pub path: String,
 }
 
+#[derive(Deserialize)]
+pub(super) struct FsReadBase64Query {
+    pub path: String,
+    #[serde(rename = "maxBytes")]
+    pub max_bytes: Option<u64>,
+}
+
 pub(super) async fn plugin_fs_read(
     State(state): State<Arc<AppState>>,
     AxumPath(plugin_id): AxumPath<String>,
@@ -49,9 +56,12 @@ pub(super) async fn plugin_fs_read_batch(
 pub(super) async fn plugin_fs_read_base64(
     State(state): State<Arc<AppState>>,
     AxumPath(plugin_id): AxumPath<String>,
-    Query(q): Query<FsReadQuery>,
+    Query(q): Query<FsReadBase64Query>,
 ) -> Response {
-    json_result(crate::plugin_fs::plugin_read_file_base64_impl(&state, q.path, plugin_id).await)
+    json_result(
+        crate::plugin_fs::plugin_read_file_base64_impl(&state, q.path, q.max_bytes, plugin_id)
+            .await,
+    )
 }
 
 #[derive(Deserialize)]
@@ -98,6 +108,14 @@ pub(super) struct FsWriteBody {
     pub content: String,
 }
 
+#[derive(Deserialize)]
+pub(super) struct FsWriteBase64Body {
+    pub path: String,
+    pub content: String,
+    #[serde(default, rename = "maxBytes")]
+    pub max_bytes: Option<u64>,
+}
+
 pub(super) async fn plugin_fs_write(
     State(state): State<Arc<AppState>>,
     AxumPath(plugin_id): AxumPath<String>,
@@ -105,6 +123,23 @@ pub(super) async fn plugin_fs_write(
 ) -> Response {
     json_result(
         crate::plugin_fs::plugin_write_file_impl(&state, body.path, body.content, plugin_id).await,
+    )
+}
+
+pub(super) async fn plugin_fs_write_base64(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<FsWriteBase64Body>,
+) -> Response {
+    json_result(
+        crate::plugin_fs::plugin_write_file_base64_impl(
+            &state,
+            body.path,
+            body.content,
+            body.max_bytes,
+            plugin_id,
+        )
+        .await,
     )
 }
 

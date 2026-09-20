@@ -70,7 +70,7 @@ function createPluginRegistry() {
 	// Panel message bridge: tabId → onMessage callback from plugin
 	const panelMessageHandlers = new Map<string, (data: unknown) => void>();
 	// Panel message bridge: tabId → send function (set by PluginPanel component)
-	const panelSendChannels = new Map<string, (data: unknown) => void>();
+	const panelSendChannels = new Map<string, (data: unknown, transfer?: Transferable[]) => void>();
 	// Panel visibility: tabId → is its tab the one on screen (set by PluginPanel).
 	// A plugin that rebuilds its board on a filesystem event has no other way to
 	// tell that it is rendering into a tab behind display:none.
@@ -623,9 +623,13 @@ function createPluginRegistry() {
 				return invoke<(string | null)[]>("plugin_read_files", { paths: absolutePaths, pluginId });
 			},
 
-			async readFileBase64(absolutePath: string): Promise<string> {
+			async readFileBase64(absolutePath: string, options?: { maxBytes?: number }): Promise<string> {
 				requireCapability(pluginId, capabilities, "fs:read");
-				return invoke<string>("plugin_read_file_base64", { path: absolutePath, pluginId });
+				return invoke<string>("plugin_read_file_base64", {
+					path: absolutePath,
+					maxBytes: options?.maxBytes,
+					pluginId,
+				});
 			},
 
 			async readFileTail(absolutePath: string, maxBytes: number): Promise<string> {
@@ -646,6 +650,16 @@ function createPluginRegistry() {
 			async writeFile(absolutePath: string, content: string): Promise<void> {
 				requireCapability(pluginId, capabilities, "fs:write");
 				await invoke("plugin_write_file", { path: absolutePath, content, pluginId });
+			},
+
+			async writeFileBase64(absolutePath: string, content: string, options?: { maxBytes?: number }): Promise<void> {
+				requireCapability(pluginId, capabilities, "fs:write");
+				await invoke("plugin_write_file_base64", {
+					path: absolutePath,
+					content,
+					maxBytes: options?.maxBytes,
+					pluginId,
+				});
 			},
 
 			async renamePath(from: string, to: string): Promise<void> {
@@ -761,9 +775,9 @@ function createPluginRegistry() {
 					close() {
 						mdTabsStore.remove(tabId);
 					},
-					send(data: unknown) {
+					send(data: unknown, transfer?: Transferable[]) {
 						const sender = panelSendChannels.get(tabId);
-						if (sender) sender(data);
+						if (sender) sender(data, transfer);
 					},
 				};
 			},
@@ -1130,7 +1144,7 @@ function createPluginRegistry() {
 	}
 
 	/** Register a send channel for a panel (called by PluginPanel component on mount) */
-	function registerPanelSendChannel(tabId: string, sender: (data: unknown) => void): void {
+	function registerPanelSendChannel(tabId: string, sender: (data: unknown, transfer?: Transferable[]) => void): void {
 		panelSendChannels.set(tabId, sender);
 	}
 

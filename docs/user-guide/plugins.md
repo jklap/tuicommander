@@ -13,7 +13,7 @@ TUICommander has an Obsidian-style plugin system. Plugins can watch terminal out
 
 An "Update available" badge appears when a newer version exists in the registry.
 
-Registry plugins include file viewers such as **DOCX Preview**, which opens Word `.docx`/`.dotx` files from the File Browser as an HTML preview tab, and **XLSX Preview**, which opens Excel `.xlsx`/`.xlsm`/`.xlsb`/`.xls` and OpenDocument `.ods` spreadsheets as a sortable table per sheet.
+Registry plugins include file viewers such as **DOCX Preview**, which opens Word `.docx`/`.dotx` files from the File Browser as an HTML preview tab; **XLSX Preview**, which opens Excel and OpenDocument spreadsheets as sortable tables; and **SQLite Viewer**, which browses schema and indexes, filters and paginates rows, explains read-only queries, copies CSV, and explicitly edits primary-key tables for `.db`, `.sqlite`, `.sqlite3`, `.db3`, and `.s3db` files. SQLite Viewer bundles its JavaScript and WebAssembly engine, makes no CDN request, and releases its live database engine when the viewer tab closes. Stock sql.js cannot open SQLCipher-encrypted databases; the viewer reports that case instead of prompting for an unusable key.
 
 ### From a ZIP File
 

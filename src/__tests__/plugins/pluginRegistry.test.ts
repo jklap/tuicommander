@@ -1732,6 +1732,7 @@ describe("PluginHost — fs:write capability gating", () => {
 			[],
 		);
 		await expect(host!.writeFile("/home/user/test.txt", "content")).rejects.toThrow(PluginCapabilityError);
+		await expect(host!.writeFileBase64("/home/user/test.db", "U1FMaXRl")).rejects.toThrow(PluginCapabilityError);
 	});
 
 	it("external plugin with fs:write can call writeFile", async () => {
@@ -1754,10 +1755,17 @@ describe("PluginHost — fs:write capability gating", () => {
 			["fs:write"],
 		);
 		await host!.writeFile("/home/user/test.txt", "hello");
+		await host!.writeFileBase64("/home/user/test.db", "U1FMaXRl", { maxBytes: 2048 });
 		const { invoke } = await import("../../invoke");
 		expect(invoke).toHaveBeenCalledWith("plugin_write_file", {
 			path: "/home/user/test.txt",
 			content: "hello",
+			pluginId: "ext",
+		});
+		expect(invoke).toHaveBeenCalledWith("plugin_write_file_base64", {
+			path: "/home/user/test.db",
+			content: "U1FMaXRl",
+			maxBytes: 2048,
 			pluginId: "ext",
 		});
 	});
@@ -1974,7 +1982,23 @@ describe("PluginHost — panel message bridge", () => {
 		pluginRegistry.registerPanelSendChannel(handle!.tabId, sender);
 		handle!.send({ type: "response", ok: true });
 		expect(sender).toHaveBeenCalledOnce();
-		expect(sender).toHaveBeenCalledWith({ type: "response", ok: true });
+		expect(sender).toHaveBeenCalledWith({ type: "response", ok: true }, undefined);
+	});
+
+	it("send() forwards transferable ownership to the panel channel", () => {
+		let handle: ReturnType<PluginHost["openPanel"]> | null = null;
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				handle = host.openPanel({ id: "test", title: "Test", html: "<h1>hi</h1>" });
+			}),
+		);
+		const sender = vi.fn();
+		const buffer = new ArrayBuffer(8);
+		pluginRegistry.registerPanelSendChannel(handle!.tabId, sender);
+
+		handle!.send({ type: "database", buffer }, [buffer]);
+
+		expect(sender).toHaveBeenCalledWith({ type: "database", buffer }, [buffer]);
 	});
 
 	it("send() is a no-op when no send channel registered", () => {

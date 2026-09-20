@@ -258,7 +258,7 @@ ContextMenuAction targets: `"terminal"`, `"branch"`, `"repo"`, `"tab"`. ContextM
 
 SidebarPanelHandle: `{ setItems(items), setBadge(text), dispose() }`. SidebarItem: `{ id, label, subtitle?, icon?, iconColor?, onClick?, contextMenu?: [{ label, action, disabled? }] }`. Panels appear below branches in the sidebar, scoped per-repo. Badge shows a counter pill on the header.
 
-PanelHandle: `{ tabId, update(html), close(), send(data) }` — HTML rendered in sandboxed iframe with automatic base stylesheet + CSS theme variable injection. Write minimal plugin-specific CSS only (see Panel CSS Design Strategy above). Use `onMessage` callback to receive messages from iframe, `send()` to post messages back. Every iframe also receives the TUIC SDK (`window.tuic`) — use `tuic.open(path, {pinned?})` to open markdown files, `tuic.edit(path, {line?})` to open files in the code editor, `tuic.terminal(repoPath)` to open terminals, or `<a href="tuic://open/path">` / `<a href="tuic://edit/path?line=10">` links for automatic interception. Paths must be within a known repo.
+PanelHandle: `{ tabId, update(html), close(), send(data, transfer?) }` — HTML rendered in sandboxed iframe with automatic base stylesheet + CSS theme variable injection. Write minimal plugin-specific CSS only (see Panel CSS Design Strategy above). Use `onMessage` callback to receive messages from iframe, `send()` to post messages back. Pass an optional `Transferable[]` to transfer ownership of large buffers instead of copying them. Every iframe also receives the TUIC SDK (`window.tuic`) — use `tuic.open(path, {pinned?})` to open markdown files, `tuic.edit(path, {line?})` to open files in the code editor, `tuic.terminal(repoPath)` to open terminals, or `<a href="tuic://open/path">` / `<a href="tuic://edit/path?line=10">` links for automatic interception. Paths must be within a known repo.
 
 `registerDashboard({ label?, icon?, open })`: Register a one-click entry point shown as a **Dashboard** button in *Settings → Plugins*. The host closes the Settings panel automatically before calling `open()`. A plugin may only register one dashboard; second calls replace the first. Pair this with the `.dashboard` style guide above.
 
@@ -281,8 +281,14 @@ const projectDir = await host.getClaudeProjectDir("/Users/me/my-project");  // r
 // Read a file (max 10 MB, UTF-8)
 const content = await host.readFile(`${projectDir}/conversation.jsonl`);  // requires "fs:read"
 
-// Read a binary file as base64 (max 10 MB)
+// Read a binary file as base64 (10 MiB default; positive per-call maxBytes,
+// clamped by the host to 512 MiB)
 const encoded = await host.readFileBase64("/Users/me/Documents/spec.docx");  // requires "fs:read"
+const database = await host.readFileBase64("/Users/me/data.sqlite", { maxBytes: 256 * 1024 * 1024 });
+
+// Atomically replace a binary file from Base64 (10 MiB default; custom maxBytes
+// is clamped to 512 MiB)
+await host.writeFileBase64("/Users/me/data.sqlite", encodedDatabase, { maxBytes: 256 * 1024 * 1024 });  // requires "fs:write"
 
 // Read last N bytes of a file (skip partial first line)
 const tail = await host.readFileTail("/Users/me/.claude/hud-tracking.jsonl", 512 * 1024);  // requires "fs:read"

@@ -513,13 +513,27 @@ const found = names
   .filter((entry) => entry.content != null);
 ```
 
-#### `host.readFileBase64(absolutePath) -> Promise<string>`
+#### `host.readFileBase64(absolutePath, options?) -> Promise<string>`
 
-Read a file's raw bytes and return them as a base64 string. Maximum file size: 10 MB. Use this for binary previews such as `.docx`, images, or archives. **Requires `"fs:read"` capability.**
+Read a file's raw bytes and return them as a base64 string. The default maximum is 10 MiB. A plugin may request a positive per-call `options.maxBytes`; the host clamps it to 512 MiB to bound the Base64 and decoded-buffer memory peak. Use this for binary previews such as `.docx`, images, archives, or bounded in-memory database snapshots. **Requires `"fs:read"` capability.**
 
 ```typescript
 const encoded = await host.readFileBase64("/Users/me/Documents/spec.docx");
 const bytes = Uint8Array.from(atob(encoded), (ch) => ch.charCodeAt(0));
+
+const database = await host.readFileBase64("/Users/me/data.sqlite", {
+  maxBytes: 256 * 1024 * 1024,
+});
+```
+
+#### `host.writeFileBase64(absolutePath, content, options?) -> Promise<void>`
+
+Atomically replace a file with bytes supplied as Base64. The default maximum is 10 MiB; a positive `options.maxBytes` is clamped to the 512 MiB host ceiling. The complete decoded payload is validated before the temporary file is atomically renamed over the destination. **Requires `"fs:write"` capability.**
+
+```typescript
+await host.writeFileBase64("/Users/me/data.sqlite", encodedDatabase, {
+  maxBytes: 256 * 1024 * 1024,
+});
 ```
 
 #### `host.listDirectory(path, pattern?, options?) -> Promise<string[]>`
@@ -729,6 +743,10 @@ if (!panel.update("<html><body><h1>Updated</h1></body></html>")) panel = null;
 
 // Send a message to the iframe at any time
 panel.send({ type: "refresh", items: [...] });
+
+// Transfer ownership of large buffers instead of copying them. The sender's
+// buffer is detached after postMessage succeeds.
+panel.send({ type: "database", buffer }, [buffer]);
 
 // Close the panel
 panel.close();
@@ -1265,10 +1283,10 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `net:http` | `host.httpFetch()` | Can make HTTP requests (scoped to `allowedUrls`) |
 | `invoke:read_file` | `host.invoke("read_file", ...)` | Can read files on disk |
 | `invoke:list_markdown_files` | `host.invoke("list_markdown_files", ...)` | Can list directory contents |
-| `fs:read` | `host.readFile()`, `host.readFiles()`, `host.readFileBase64()`, `host.readFileTail()` | Can read files within `$HOME` (10 MB limit) |
+| `fs:read` | `host.readFile()`, `host.readFiles()`, `host.readFileBase64()`, `host.readFileTail()` | Can read files within `$HOME` (10 MiB default; binary reads may request up to the 512 MiB host ceiling) |
 | `fs:list` | `host.listDirectory()` | Can list directory contents within `$HOME` |
 | `fs:watch` | `host.watchPath()` | Can watch filesystem paths within `$HOME` for changes |
-| `fs:write` | `host.writeFile()` | Can write files within `$HOME` (10 MB limit) |
+| `fs:write` | `host.writeFile()`, `host.writeFileBase64()` | Can atomically write files within `$HOME` (10 MiB default; binary writes may request up to the 512 MiB host ceiling) |
 | `fs:rename` | `host.renamePath()` | Can rename/move files within `$HOME` |
 | `fs:scan` | `host.scanBuildArtifacts()` | Can recursively scan registered repos for build-artifact directories (read-only; ignores `.gitignore`) |
 | `fs:delete` | `host.deleteBuildArtifact()`, `host.trimBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`), or remove just its intermediates |
