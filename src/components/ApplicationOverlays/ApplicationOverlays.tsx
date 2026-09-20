@@ -4,6 +4,7 @@ import type { useConfirmDialog } from "../../hooks/useConfirmDialog";
 import type { FolderDropRequest } from "../../hooks/useFileDrop";
 import type { useGitOperations } from "../../hooks/useGitOperations";
 import { invoke } from "../../invoke";
+import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -22,6 +23,7 @@ import { ProcessManagerModal } from "../ProcessManagerModal/ProcessManagerModal"
 import { PromptDialog } from "../PromptDialog";
 import qd from "../QuitDialog/QuitDialog.module.css";
 import { RemoteQrDialog } from "../RemoteQrDialog";
+import { RemoteRepoPicker } from "../RemoteRepoPicker";
 import { RenameBranchDialog } from "../RenameBranchDialog";
 import { RunCommandDialog } from "../RunCommandDialog";
 import type { SettingsContext } from "../SettingsPanel";
@@ -74,6 +76,9 @@ interface PromptOverlaysContract {
 	resolveOpenPath: (value: string | null) => void;
 	repoPathVisible: Accessor<boolean>;
 	resolveRepoPath: (value: string | null) => void;
+	/** The machine the remote repo picker is browsing, or null when it is closed. */
+	remotePickerConnectionId: Accessor<string | null>;
+	resolveRemotePicker: (value: string | null) => void;
 }
 
 interface ConfirmationOverlaysContract {
@@ -317,6 +322,19 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 				onClose={() => props.prompts.resolveRepoPath(null)}
 				onConfirm={props.prompts.resolveRepoPath}
 			/>
+			<Show when={props.prompts.remotePickerConnectionId()}>
+				{(connectionId) => (
+					<RemoteRepoPicker
+						visible={true}
+						connectionId={connectionId()}
+						connectionName={
+							remoteConnectionsStore.getConnections()[connectionId()]?.connection.name ?? connectionId()
+						}
+						onClose={() => props.prompts.resolveRemotePicker(null)}
+						onConfirm={props.prompts.resolveRemotePicker}
+					/>
+				)}
+			</Show>
 			<ConfirmationOverlays contract={props.confirmations} />
 			<Show when={props.utilities.processManagerVisible()}>
 				<ProcessManagerModal onClose={props.utilities.closeProcessManager} />

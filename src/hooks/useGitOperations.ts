@@ -140,6 +140,16 @@ export interface GitOperationsDeps {
 		reportGitError?: (title: string, detail: string, offerRetry?: boolean) => Promise<boolean>;
 		/** Browser mode only: show an in-app text-input dialog to enter a repo path */
 		promptRepoPath?: () => Promise<string | null>;
+		/**
+		 * Browse a connected machine's filesystem and return an absolute path on it.
+		 *
+		 * The local flow uses the OS file dialog, which enumerates the local disk
+		 * through the OS and cannot be aimed at another machine. Mounting the remote
+		 * host does not rescue it either: the dialog would then hand back the local
+		 * mount point, not the path the daemon knows, so the repo would be registered
+		 * under a path that does not exist on the machine meant to serve it.
+		 */
+		pickRemoteRepoPath?: (connectionId: string) => Promise<string | null>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	createNewTerminal: () => Promise<string | undefined>;
@@ -413,8 +423,12 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	};
 
 	const handleAddRemoteRepo = async (connectionId: string) => {
-		// Prompt for remote path
-		const input = await deps.dialogs.promptRepoPath?.();
+		// Browse the machine when a picker is wired; fall back to typing the path,
+		// which is all this flow ever had and still the only option under a test
+		// double that provides no picker.
+		const input = deps.dialogs.pickRemoteRepoPath
+			? await deps.dialogs.pickRemoteRepoPath(connectionId)
+			: await deps.dialogs.promptRepoPath?.();
 		if (!input?.trim()) return;
 		const remotePath = input.trim();
 
