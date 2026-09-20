@@ -51,7 +51,7 @@ export interface GitOperationsDeps {
 			workspace_statuses: Record<
 				string,
 				{
-					dirty: boolean | null;
+					dirty_files: number | null;
 					commit_status: import("../stores/workspaceIdentity").WorkspaceCommitStatus;
 					removal_safety: import("../stores/workspaceIdentity").WorkspaceRemovalSafety;
 					error?: string;

@@ -1007,61 +1007,149 @@ describe("Sidebar", () => {
 			expect(stats).toBeNull();
 		});
 
-		it("explains the Dirty lifecycle badge with a WebView tooltip", () => {
+		/** One workspace row carrying a lifecycle verdict. */
+		function renderLifecycle(workspace: Record<string, unknown>) {
 			setRepos({
 				"/repo1": makeRepo({
+					activeWorkspaceId: "feature",
 					workspaces: {
-						main: {
-							branchName: "main",
-							isMain: true,
-							worktreePath: null,
+						feature: {
+							workspaceId: "feature",
+							branchName: "feature",
+							isMain: false,
+							worktreePath: "/repo1__wt/feature",
 							terminals: [],
 							additions: 0,
 							deletions: 0,
-							lifecycleStatus: {
-								dirty: true,
-								commitStatus: "unmerged",
-								removalSafety: "requires_force",
-							},
+							...workspace,
 						},
 					},
 				}),
 			});
-			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			return render(() => <Sidebar {...defaultProps()} />).container;
+		}
+
+		/** The badge answers one question — what would removing this workspace
+		 *  lose? Every combination is enumerated because the two inputs are
+		 *  independent: the commit verdict never looked at uncommitted files, and
+		 *  a workspace sitting on the default tip never merged anything. Reading
+		 *  either as "nothing to lose" is how a worktree holding 24 uncommitted
+		 *  files came to be labelled Merged. */
+		const lifecycleMatrix: Array<{
+			commitStatus: string;
+			dirtyFiles: number | null;
+			lines: number;
+			removalSafety: string;
+			expected: string | null;
+		}> = [
+			{ commitStatus: "unknown", dirtyFiles: null, lines: 0, removalSafety: "unknown", expected: "Unknown" },
+			{ commitStatus: "in_sync", dirtyFiles: 24, lines: 0, removalSafety: "requires_force", expected: "24 dirty" },
+			{ commitStatus: "merged", dirtyFiles: 24, lines: 0, removalSafety: "requires_force", expected: "24 dirty" },
+			{ commitStatus: "unmerged", dirtyFiles: 1, lines: 0, removalSafety: "requires_force", expected: "1 dirty" },
+			// Tracked lines are already on the row: a second chip repeated the
+			// same warning, which is what made the sidebar unreadable.
+			{ commitStatus: "in_sync", dirtyFiles: 24, lines: 429, removalSafety: "requires_force", expected: null },
+			{ commitStatus: "merged", dirtyFiles: 24, lines: 429, removalSafety: "requires_force", expected: null },
+			{ commitStatus: "merged", dirtyFiles: 0, lines: 0, removalSafety: "safe", expected: "Merged" },
+			{ commitStatus: "in_sync", dirtyFiles: 0, lines: 0, removalSafety: "safe", expected: null },
+			{ commitStatus: "unmerged", dirtyFiles: 0, lines: 0, removalSafety: "safe", expected: null },
+		];
+
+		for (const row of lifecycleMatrix) {
+			it(`labels ${row.commitStatus} with ${row.dirtyFiles} uncommitted files and ${row.lines} tracked lines as ${row.expected ?? "no badge"}`, () => {
+				const container = renderLifecycle({
+					additions: row.lines,
+					deletions: 0,
+					lifecycleStatus: {
+						dirtyFiles: row.dirtyFiles,
+						commitStatus: row.commitStatus,
+						removalSafety: row.removalSafety,
+					},
+				});
+				expect(container.querySelector(".lifecycleBadge")?.textContent ?? null).toBe(row.expected);
+			});
+		}
+
+		it("counts the files a removal would discard instead of calling the tree dirty", () => {
+			const container = renderLifecycle({
+				lifecycleStatus: { dirtyFiles: 24, commitStatus: "in_sync", removalSafety: "requires_force" },
+			});
 			const badge = container.querySelector(".lifecycleBadge");
-			expect(badge?.textContent).toBe("Dirty");
-			expect(badge?.getAttribute("data-tooltip")).toContain("staged, unstaged, or untracked files");
+			expect(badge?.textContent).toBe("24 dirty");
+			expect(badge?.getAttribute("data-tooltip")).toContain("24 uncommitted files");
+			expect(badge?.getAttribute("data-tooltip")).toContain("discarded by removing this workspace");
 			expect(badge?.getAttribute("data-tooltip-pos")).toBe("bottom");
 			expect(badge?.getAttribute("title")).toBeNull();
 		});
 
-		it("explains the Unknown lifecycle badge and includes the inspection error", () => {
-			setRepos({
-				"/repo1": makeRepo({
-					workspaces: {
-						main: {
-							branchName: "main",
-							isMain: true,
-							worktreePath: null,
-							terminals: [],
-							additions: 0,
-							deletions: 0,
-							lifecycleStatus: {
-								dirty: null,
-								commitStatus: "unknown",
-								removalSafety: "unknown",
-								error: "git status failed",
-							},
-						},
-					},
-				}),
+		/** When the stats chip takes the row, the count is not dropped — it moves
+		 *  into that chip's tooltip, so the answer is still one hover away. */
+		it("carries the file count in the stats tooltip when the stats chip is shown", () => {
+			const container = renderLifecycle({
+				additions: 429,
+				deletions: 90,
+				lifecycleStatus: { dirtyFiles: 25, commitStatus: "in_sync", removalSafety: "requires_force" },
 			});
-			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			const badge = container.querySelector(".lifecycleBadge");
-			expect(badge?.textContent).toBe("Unknown");
-			expect(badge?.getAttribute("data-tooltip")).toBe(
+			expect(container.querySelector(".lifecycleBadge")).toBeNull();
+			expect(container.querySelector(".branchStats")?.getAttribute("title")).toBe(
+				"Tracked line changes: +429 -90 — 25 uncommitted files",
+			);
+		});
+
+		/** The PR badge takes the row's one chip slot the same way the stats chip
+		 *  does — a row carrying `#256 Review` plus `1 dirty` is the two-chip
+		 *  crowding this rule exists to stop. */
+		it("carries the file count in the PR badge tooltip when a PR badge is shown", () => {
+			mockGetPrStatus.mockReturnValue({ state: "OPEN", number: 256, title: "Test", url: "https://example.com" });
+			const container = renderLifecycle({
+				lifecycleStatus: { dirtyFiles: 1, commitStatus: "in_sync", removalSafety: "requires_force" },
+			});
+			expect(container.querySelector(".lifecycleBadge")).toBeNull();
+			expect(container.querySelector(".prBadge")?.getAttribute("title")).toBe("PR #256 — 1 uncommitted file");
+		});
+
+		it("explains the Unknown lifecycle badge and includes the inspection error", () => {
+			const container = renderLifecycle({
+				lifecycleStatus: {
+					dirtyFiles: null,
+					commitStatus: "unknown",
+					removalSafety: "unknown",
+					error: "git status failed",
+				},
+			});
+			expect(container.querySelector(".lifecycleBadge")?.getAttribute("data-tooltip")).toBe(
 				"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked. git status failed",
 			);
+		});
+
+		/** A main checkout is not removable from this list, so the whole question
+		 *  the badge answers is moot — and answering it anyway put a badge on
+		 *  nearly every repository in the sidebar. */
+		it("never badges a main checkout, however dirty or merged it is", () => {
+			for (const lifecycleStatus of [
+				{ dirtyFiles: 12, commitStatus: "in_sync", removalSafety: "requires_force" },
+				{ dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" },
+				{ dirtyFiles: null, commitStatus: "unknown", removalSafety: "unknown" },
+			]) {
+				setRepos({
+					"/repo1": makeRepo({
+						workspaces: {
+							main: {
+								workspaceId: "main",
+								branchName: "main",
+								isMain: true,
+								worktreePath: null,
+								terminals: [],
+								additions: 0,
+								deletions: 0,
+								lifecycleStatus,
+							},
+						},
+					}),
+				});
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				expect(container.querySelector(".lifecycleBadge")).toBeNull();
+			}
 		});
 
 		it("shows StatsBadge when only additions > 0", () => {

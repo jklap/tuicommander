@@ -112,7 +112,7 @@ describe("useGitOperations", () => {
 			.mockResolvedValue({ success: true, stashed: false, previous_branch: "main", new_branch: "feature" }),
 		runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
 		getWorkspaceLifecycle: vi.fn().mockResolvedValue({
-			dirty: false,
+			dirtyFiles: 0,
 			commitStatus: "unmerged",
 			removalSafety: "safe",
 		}),
@@ -1752,12 +1752,12 @@ describe("useGitOperations", () => {
 				last_commit_ts: { "feature-a": 1700000000, "feature-b": 1700000000 },
 				workspace_statuses: {
 					"feature-a": {
-						dirty: false,
+						dirty_files: 0,
 						commit_status: "unmerged",
 						removal_safety: "safe",
 					},
 					"feature-b": {
-						dirty: false,
+						dirty_files: 0,
 						commit_status: "merged",
 						removal_safety: "safe",
 					},
@@ -1873,7 +1873,7 @@ describe("useGitOperations", () => {
 
 		it("blocks removal when lifecycle safety is unknown", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
-				dirty: null,
+				dirtyFiles: null,
 				commitStatus: "unknown",
 				removalSafety: "unknown",
 				error: "parent ref unavailable",
@@ -1890,7 +1890,7 @@ describe("useGitOperations", () => {
 
 		it("passes force only after confirming destructive state", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
-				dirty: true,
+				dirtyFiles: 2,
 				commitStatus: "unmerged",
 				removalSafety: "requires_force",
 			});

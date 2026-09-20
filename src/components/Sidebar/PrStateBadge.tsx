@@ -31,6 +31,9 @@ export const PrStateBadge: Component<{
 	ciPassed?: number;
 	ciFailed?: number;
 	ciPending?: number;
+	/** Files a removal would discard. This badge takes the row's one chip slot,
+	 *  so it carries the warning the lifecycle chip would have shown. */
+	dirtyFiles?: number;
 }> = (props) => {
 	const badge = (): { label: string; cls: string } => {
 		const withNumber = (state: string) => `#${props.prNumber} ${state}`;
@@ -45,7 +48,7 @@ export const PrStateBadge: Component<{
 			return { label: withNumber("Changes Req."), cls: "changes-requested" };
 		}
 		if (props.reviewDecision === "REVIEW_REQUIRED") {
-			return { label: withNumber("Review Req."), cls: "review-required" };
+			return { label: withNumber("Review"), cls: "review-required" };
 		}
 		if ((props.ciPending ?? 0) > 0) return { label: withNumber("CI Running"), cls: "ci-pending" };
 		if (props.mergeable === "MERGEABLE" && props.reviewDecision === "APPROVED") {
@@ -55,7 +58,12 @@ export const PrStateBadge: Component<{
 	};
 
 	return (
-		<span class={cx(s.prBadge, PR_BADGE_CLASSES[badge().cls])} title={`PR #${props.prNumber}`}>
+		<span
+			class={cx(s.prBadge, PR_BADGE_CLASSES[badge().cls])}
+			title={`PR #${props.prNumber}${
+				props.dirtyFiles ? ` — ${props.dirtyFiles} uncommitted file${props.dirtyFiles === 1 ? "" : "s"}` : ""
+			}`}
+		>
 			{badge().label}
 		</span>
 	);

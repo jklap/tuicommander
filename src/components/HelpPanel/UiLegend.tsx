@@ -112,7 +112,7 @@ const PR_BADGE_LEGEND: BadgeEntry[] = [
 	{ label: "Conflicts", description: "Merge conflicts", bg: "var(--error)", fg: "#000", pulsing: true },
 	{ label: "CI Failed", description: "CI checks failed", bg: "var(--error)", fg: "#000" },
 	{ label: "Changes Req.", description: "Changes requested", bg: "#d29922", fg: "#000" },
-	{ label: "Review Req.", description: "Awaiting review", bg: "transparent", fg: "#d29922", border: "#d29922" },
+	{ label: "Review", description: "Awaiting review", bg: "transparent", fg: "#d29922", border: "#d29922" },
 	{
 		label: "CI Running",
 		description: "CI in progress",

@@ -18,12 +18,18 @@ export type WorkspaceKind =
 	/** A linked git worktree: refs and objects shared with the parent. */
 	| "worktree";
 
-export type WorkspaceCommitStatus = "unmerged" | "merged" | "unknown";
+/** `in_sync` = HEAD is the default branch's tip, so the workspace has no commits
+ *  of its own and was never merged. Both it and `merged` satisfy the backend's
+ *  `merge-base --is-ancestor` check; only `merged` describes commits that were
+ *  actually integrated. */
+export type WorkspaceCommitStatus = "unmerged" | "in_sync" | "merged" | "unknown";
 export type WorkspaceRemovalSafety = "safe" | "requires_force" | "unknown";
 
 /** Backend-authored Git lifecycle verdict for one exact workspace id. */
 export interface WorkspaceLifecycleStatus {
-	dirty: boolean | null;
+	/** Files a removal would discard — staged, unstaged and untracked. `null`
+	 *  when the inspection failed; never confuse that with 0. */
+	dirtyFiles: number | null;
 	commitStatus: WorkspaceCommitStatus;
 	removalSafety: WorkspaceRemovalSafety;
 	error?: string;

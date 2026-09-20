@@ -671,7 +671,7 @@ Returns `{ "worktree_paths": { "branch": "/path", ... }, "merged_branches": ["br
 GET /repo/diff-stats/batch?path=/path/to/repo
 ```
 
-Returns `{ "diff_stats": { "/path": { "additions": N, "deletions": N }, ... }, "last_commit_ts": { "branch": N, ... }, "workspace_statuses": { "workspace-id": { "dirty": true, "commit_status": "unmerged", "removal_safety": "requires_force" } } }`. Slow path — computes per-worktree diff stats, timestamps, and lifecycle verdicts. Lifecycle entries are keyed by workspace id, never branch name.
+Returns `{ "diff_stats": { "/path": { "additions": N, "deletions": N }, ... }, "last_commit_ts": { "branch": N, ... }, "workspace_statuses": { "workspace-id": { "dirty_files": 24, "commit_status": "unmerged", "removal_safety": "requires_force" } } }`. Slow path — computes per-worktree diff stats, timestamps, and lifecycle verdicts. Lifecycle entries are keyed by workspace id, never branch name.
 
 ### Local Branches
 
@@ -1675,8 +1675,12 @@ use the returned id for later calls.
 GET /worktrees/lifecycle?repoPath=/path&workspaceId=feature-x~a1b2c3d4
 ```
 
-Returns a fresh `{ dirty, commit_status, removal_safety, error? }` verdict for
-one exact workspace. `commit_status` is `unmerged`, `merged`, or `unknown`.
+Returns a fresh `{ dirty_files, commit_status, removal_safety, error? }` verdict
+for one exact workspace. `dirty_files` counts the staged, unstaged and untracked
+files a removal would discard; `null` means the inspection failed and is not the
+same answer as `0`. `commit_status` is `unmerged`, `in_sync`, `merged`, or
+`unknown` — `in_sync` is HEAD sitting on the default branch's tip, which
+satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
 safe. This is the HTTP twin of `get_workspace_lifecycle`.

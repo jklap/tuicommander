@@ -147,12 +147,17 @@ function compactStat(value: number): string {
 export const StatsBadge: Component<{
 	additions: number;
 	deletions: number;
+	/** Files a removal would discard. Carried in the tooltip rather than a chip
+	 *  of its own: a second chip on the same row said the same thing twice. */
+	dirtyFiles?: number;
 	onClick?: (e: MouseEvent | KeyboardEvent) => void;
 }> = (props) => (
 	<Show when={props.additions > 0 || props.deletions > 0}>
 		<div
 			class={s.branchStats}
-			title={`Tracked line changes: +${props.additions} -${props.deletions}`}
+			title={`Tracked line changes: +${props.additions} -${props.deletions}${
+				props.dirtyFiles ? ` — ${props.dirtyFiles} uncommitted file${props.dirtyFiles === 1 ? "" : "s"}` : ""
+			}`}
 			role={props.onClick ? "button" : undefined}
 			tabIndex={props.onClick ? 0 : undefined}
 			onClick={props.onClick}
@@ -479,12 +484,28 @@ export const BranchItem: Component<{
 						</span>
 					</Show>
 				</div>
-				<Show when={props.branch.lifecycleStatus}>
+				{/* The badge answers one question — what would removing this workspace
+				    lose? A main checkout is never removed here, so it gets no badge at
+				    all: "Dirty" on every main row was noise about a risk that does not
+				    exist. */}
+				<Show when={!props.branch.isMain && props.branch.lifecycleStatus}>
 					{(status) => {
+						const lostFiles = () => status().dirtyFiles ?? 0;
 						const label = () => {
-							if (status().dirty && !(props.branch.additions + props.branch.deletions)) return "Dirty";
-							if (status().commitStatus === "merged" && !props.branch.isMain) return "Merged";
 							if (status().commitStatus === "unknown") return "Unknown";
+							// Uncommitted files outrank the commit verdict, which reads commits
+							// only: "Merged" over them claims nothing would be lost while removal
+							// discards every one. The count earns a chip only when the stats chip
+							// is absent — with both, one row carried the same warning twice — and
+							// otherwise rides that chip's tooltip.
+							if (lostFiles() > 0) {
+								// One chip per row. Where the stats chip or the PR badge already
+								// holds it, the count rides their tooltip instead of stacking a
+								// second chip next to them.
+								const otherChip = props.branch.additions + props.branch.deletions > 0 || !!pr();
+								return otherChip ? null : `${lostFiles()} dirty`;
+							}
+							if (status().commitStatus === "merged") return "Merged";
 							return null;
 						};
 						const tooltip = () => {
@@ -493,14 +514,18 @@ export const BranchItem: Component<{
 									"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
 								return status().error ? `${explanation} ${status().error}` : explanation;
 							}
-							if (label() === "Dirty") {
-								return "Uncommitted changes: staged, unstaged, or untracked files. Removing this worktree requires confirmation.";
+							if (lostFiles() > 0) {
+								return `${lostFiles()} uncommitted file${lostFiles() === 1 ? "" : "s"} (staged, unstaged or untracked) would be discarded by removing this workspace.`;
 							}
-							const workingTree = status().dirty ? "Dirty working tree" : "Clean working tree";
-							const commitState = status().commitStatus === "merged" ? "HEAD is merged" : "HEAD remains in the parent";
+							const commitState =
+								status().commitStatus === "merged"
+									? "HEAD is merged"
+									: status().commitStatus === "in_sync"
+										? "HEAD is the default branch tip — no commits of its own"
+										: "HEAD remains in the parent";
 							const removal =
 								status().removalSafety === "safe" ? "safe to remove" : "destructive confirmation required";
-							return `${workingTree}; ${commitState}; ${removal}`;
+							return `Clean working tree; ${commitState}; ${removal}`;
 						};
 						return (
 							<Show when={label()}>
@@ -540,12 +565,14 @@ export const BranchItem: Component<{
 							ciPassed={checks()?.passed}
 							ciFailed={checks()?.failed}
 							ciPending={checks()?.pending}
+							dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
 						/>
 					</span>
 				</Show>
 				<StatsBadge
 					additions={props.branch.additions}
 					deletions={props.branch.deletions}
+					dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
 					onClick={
 						props.onShowChanges
 							? (e) => {

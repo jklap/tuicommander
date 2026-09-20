@@ -153,7 +153,7 @@ describe("useConfirmDialog", () => {
 			const promise = dialog.confirmRemoveWorktree(
 				"feature-x",
 				{
-					dirty: false,
+					dirtyFiles: 0,
 					commitStatus: "unmerged",
 					removalSafety: "safe",
 				},
@@ -178,14 +178,16 @@ describe("useConfirmDialog", () => {
 			const promise = dialog.confirmRemoveWorktree(
 				"feature-y",
 				{
-					dirty: true,
+					dirtyFiles: 3,
 					commitStatus: "unmerged",
 					removalSafety: "requires_force",
 				},
 				true,
 			);
 			expect(dialog.dialogState()?.title).toBe("Destroy workspace state?");
-			expect(dialog.dialogState()?.message).toContain("uncommitted files will be discarded");
+			// The count, not the adjective: "dirty" never told the user what a
+			// removal costs, and this dialog is the last stop before it happens.
+			expect(dialog.dialogState()?.message).toContain("3 uncommitted files will be discarded");
 			dialog.handleClose();
 			expect(await promise).toBe(false);
 		});

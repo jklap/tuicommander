@@ -107,11 +107,14 @@ export function useConfirmDialog() {
 		status: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
 		deleteBranch: boolean,
 	): Promise<boolean> {
-		const dirty = status.dirty ? "dirty — uncommitted files will be discarded" : "clean";
+		const lost = status.dirtyFiles ?? 0;
+		const dirty = lost > 0 ? `${lost} uncommitted file${lost === 1 ? "" : "s"} will be discarded` : "clean";
 		const commits =
 			status.commitStatus === "merged"
 				? "HEAD is merged into the default branch"
-				: "commits remain in the parent repository";
+				: status.commitStatus === "in_sync"
+					? "HEAD is the default branch tip — no commits of its own"
+					: "commits remain in the parent repository";
 		const branchAction = deleteBranch
 			? "Git will safely delete the local branch; if it is unmerged, the branch is kept."
 			: "The local branch will be kept.";
