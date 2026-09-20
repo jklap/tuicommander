@@ -18,8 +18,14 @@ pub(super) struct VersionResponse {
     pub git_hash: &'static str,
 }
 
-#[derive(Serialize)]
-pub(super) struct SessionInfo {
+/// One row of the session list, on every transport.
+///
+/// `Deserialize` because a mirrored row comes back from a remote daemon's own
+/// `GET /sessions` (#791-055e), and `serde(default)` because that daemon skips
+/// every field it has nothing to say about.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct SessionInfo {
     pub session_id: String,
     pub cwd: Option<String>,
     pub worktree_path: Option<String>,
@@ -33,6 +39,10 @@ pub(super) struct SessionInfo {
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,
+    /// Which remote connection this session runs on; absent for a local one.
+    /// The caller needs it to tell two machines' sessions apart in one list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +99,10 @@ pub(super) struct OutputQuery {
     pub format: Option<String>,
     /// Starting offset for log-mode WebSocket catch-up (skip lines already fetched via HTTP).
     pub offset: Option<usize>,
+    /// Content encoding the client can decode on the stream WebSocket. Only
+    /// `deflate` is offered; anything else, including absent, leaves the frames
+    /// in the original untagged framing. See `mcp_http::ws_compression`.
+    pub compress: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +141,35 @@ pub(super) struct ConflictAssistRequest {
     pub repo_path: String,
     #[serde(rename = "prNumber")]
     pub pr_number: i64,
+}
+
+/// `POST /repo/pr-review` — the same pair as a conflict assist, kept separate
+/// so neither route grows a field the other one has to ignore.
+#[derive(Deserialize)]
+pub(super) struct PrReviewRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "prNumber")]
+    pub pr_number: i64,
+}
+
+/// `POST /repo/improvement-scan`.
+#[derive(Deserialize)]
+pub(super) struct ImprovementScanRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub focus: crate::improvement_scan::ImprovementFocus,
+}
+
+/// `POST /repo/create-issue-from-proposal`.
+///
+/// The proposal travels whole rather than by id: nothing on this side stores a
+/// scan, so an id would name a thing only the caller has.
+#[derive(Deserialize)]
+pub(super) struct CreateIssueFromProposalRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub proposal: crate::improvement_scan::ImprovementProposal,
 }
 
 #[derive(Deserialize)]
@@ -942,4 +985,16 @@ pub(super) struct GitUpdateFromBaseRequest {
     #[serde(rename = "branchName")]
     pub branch_name: String,
     pub strategy: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RemoteConnectionPasswordRequest {
+    pub password: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RemoteConnectionTokenRequest {
+    #[serde(rename = "baseUrl")]
+    pub base_url: String,
+    pub username: String,
 }

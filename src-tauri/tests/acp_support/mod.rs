@@ -114,7 +114,7 @@ pub fn text(body: &str) -> v1::ContentBlock {
 /// The text of an agent message chunk, or `None` for anything else.
 #[must_use]
 pub fn chunk(envelope: &AcpEventEnvelope) -> Option<String> {
-    let AcpClientEvent::SessionUpdate(update) = &envelope.event else {
+    let AcpClientEvent::SessionUpdate { update } = &envelope.event else {
         return None;
     };
     let v1::SessionUpdate::AgentMessageChunk(chunk) = &**update else {

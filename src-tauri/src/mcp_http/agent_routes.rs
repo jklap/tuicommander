@@ -150,38 +150,6 @@ pub(super) async fn execute_headless_prompt_http(
     }
 }
 
-pub(super) async fn execute_api_prompt_http(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<Extension<Authenticated>>,
-    Json(body): Json<serde_json::Value>,
-) -> Response {
-    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
-        return resp.into_response();
-    }
-    let system_prompt = body
-        .get("systemPrompt")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let content = match body
-        .get("content")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-    {
-        Some(c) => c.to_string(),
-        None => {
-            return (StatusCode::BAD_REQUEST, "missing required field 'content'").into_response();
-        }
-    };
-    let timeout_ms = body
-        .get("timeoutMs")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(60_000);
-    match crate::llm_api::execute_api_prompt(system_prompt, content, timeout_ms).await {
-        Ok(output) => Json(output).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    }
-}
-
 pub(super) async fn verify_agent_session_http(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
@@ -529,33 +497,6 @@ mod tests {
         // empty body yields 400 from the validator, not 403.
         let resp =
             execute_headless_prompt_http(ConnectInfo(lan()), authed(), Json(serde_json::json!({})))
-                .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn execute_api_prompt_http_rejects_unauthenticated_non_loopback() {
-        let resp = execute_api_prompt_http(
-            ConnectInfo(lan()),
-            None,
-            Json(serde_json::json!({ "content": "hello" })),
-        )
-        .await;
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[tokio::test]
-    async fn execute_api_prompt_http_loopback_passes_guard() {
-        let resp =
-            execute_api_prompt_http(ConnectInfo(loopback()), None, Json(serde_json::json!({})))
-                .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn execute_api_prompt_http_authenticated_remote_passes_guard() {
-        let resp =
-            execute_api_prompt_http(ConnectInfo(lan()), authed(), Json(serde_json::json!({})))
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }

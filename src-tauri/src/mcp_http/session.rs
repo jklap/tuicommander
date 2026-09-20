@@ -3,12 +3,13 @@ use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VT_LOG_BUFFER_CAPACITY};
 use crate::{AppState, MAX_CONCURRENT_SESSIONS, OutputRingBuffer, PtySession};
 use axum::Json;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::StreamExt;
 use parking_lot::Mutex;
 use portable_pty::PtySize;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "desktop")]
@@ -16,6 +17,7 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use super::types::*;
+use super::ws_compression::{WsCompression, WsFrameSender};
 
 /// Standard 404 response for missing sessions.
 fn session_not_found() -> (StatusCode, Json<serde_json::Value>) {
@@ -55,17 +57,20 @@ pub(super) async fn app_version() -> Json<super::types::VersionResponse> {
     })
 }
 
-pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
-    let sessions: Vec<SessionInfo> = state
+/// Every PTY session this machine runs, as session-list rows.
+///
+/// One builder for both transports: `GET /sessions` and the `list_active_sessions`
+/// Tauri command return the same rows, so a mirrored remote row (#791-055e) lands
+/// in both lists the same way.
+pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
+    state
         .session_maps
         .sessions
         .iter()
         .map(|entry| {
             let session_id = entry.key().clone();
             let session = entry.value().lock();
-            let session_state = state.session_state_with_shell(&session_id);
             SessionInfo {
-                session_id: session_id.clone(),
                 cwd: session.cwd.clone(),
                 worktree_path: session
                     .worktree
@@ -80,11 +85,23 @@ pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Ve
                     .pty_descriptions
                     .get(&session_id)
                     .map(|value| value.value().clone()),
-                state: session_state,
+                state: state.session_state_with_shell(&session_id),
+                connection_id: None,
+                session_id,
             }
         })
-        .collect();
-    Json(sessions)
+        .collect()
+}
+
+/// Local rows plus one row per session a connected remote machine runs.
+pub(crate) fn session_rows_including_remote(state: &AppState) -> Vec<SessionInfo> {
+    let mut rows = local_session_rows(state);
+    rows.extend(crate::remote_mirror::mirrored_rows(state));
+    rows
+}
+
+pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
+    Json(session_rows_including_remote(&state))
 }
 
 pub(super) async fn write_to_session(
@@ -1092,29 +1109,38 @@ pub(super) async fn create_session_with_worktree(
 
 /// WebSocket upgrade handler for streaming PTY output.
 /// Bidirectional: server sends PTY output, client sends PTY input.
-/// Supports `?format=text` to strip ANSI, `?format=log` for VT100 log lines.
+/// Supports `?format=text` to strip ANSI, `?format=log` for VT100 log lines,
+/// and `?compress=deflate` to compress the frames (`mcp_http::ws_compression`).
 pub(super) async fn ws_stream(
     ws: WebSocketUpgrade,
     Path(id): Path<String>,
     Query(query): Query<OutputQuery>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
 ) -> Response {
     if !state.session_maps.sessions.contains_key(&id) {
         return StatusCode::NOT_FOUND.into_response();
     }
     let format = query.format.as_deref().unwrap_or("raw");
+    // A loopback peer is either genuinely on this machine — no link to save —
+    // or arriving through the SSH tunnel, whose own `Compression=yes` already
+    // deflated the channel. Either way, deflating here would burn CPU twice for
+    // nothing, so the decision is the peer's address and not the request alone.
+    let compression = WsCompression::negotiate(query.compress.as_deref(), &addr);
 
     if format == "grid" {
         return ws
             .write_buffer_size(64 * 1024)
             .max_write_buffer_size(256 * 1024)
-            .on_upgrade(move |socket| handle_ws_grid_session(socket, id, state));
+            .on_upgrade(move |socket| handle_ws_grid_session(socket, id, state, compression));
     }
 
     // format=text and format=log both serve clean VtLogBuffer rows (no strip_ansi).
     let log_mode = format == "log" || format == "text";
     let initial_offset = query.offset;
-    ws.on_upgrade(move |socket| handle_ws_session(socket, id, state, log_mode, initial_offset))
+    ws.on_upgrade(move |socket| {
+        handle_ws_session(socket, id, state, log_mode, initial_offset, compression)
+    })
 }
 
 /// Handle a WebSocket connection for a PTY session.
@@ -1134,8 +1160,10 @@ async fn handle_ws_session(
     state: Arc<AppState>,
     log_mode: bool,
     initial_offset: Option<usize>,
+    compression: WsCompression,
 ) {
-    let (mut ws_sender, mut ws_receiver) = socket.split();
+    let (ws_sender, mut ws_receiver) = socket.split();
+    let mut ws_sender = WsFrameSender::new(ws_sender, compression);
 
     if log_mode {
         // Log/text mode: stream clean VtLogBuffer rows, no raw PTY chunks
@@ -1189,13 +1217,7 @@ async fn handle_ws_session(
             if !text.is_empty() {
                 let frame =
                     serde_json::json!({"type": "output", "data": text, "total_written": total});
-                if futures_util::SinkExt::send(
-                    &mut ws_sender,
-                    Message::Text(frame.to_string().into()),
-                )
-                .await
-                .is_err()
-                {
+                if ws_sender.text(&frame.to_string()).await.is_err() {
                     // Client disconnected during catch-up. It was already
                     // registered above, so reap it here — this path never
                     // reaches the purge at the end of the read loop.
@@ -1215,10 +1237,7 @@ async fn handle_ws_session(
                 data = rx.recv() => {
                     let Some(data) = data else { break };
                     let frame = serde_json::json!({"type": "output", "data": data});
-                    if futures_util::SinkExt::send(
-                        &mut ws_sender,
-                        Message::Text(frame.to_string().into()),
-                    ).await.is_err() {
+                    if ws_sender.text(&frame.to_string()).await.is_err() {
                         break;
                     }
                 }
@@ -1257,10 +1276,7 @@ async fn handle_ws_session(
                                 }
                                 _ => continue,
                             };
-                            if futures_util::SinkExt::send(
-                                &mut ws_sender,
-                                Message::Text(payload.to_string().into()),
-                            ).await.is_err() {
+                            if ws_sender.text(&payload.to_string()).await.is_err() {
                                 break;
                             }
                         }
@@ -1307,7 +1323,7 @@ async fn handle_ws_session(
 /// lines every 200 ms and batches them as `{"type":"log","lines":[...],"offset":N}`.
 /// The client can still send PTY input (written as-is to the PTY).
 async fn handle_ws_log_session(
-    mut ws_sender: futures_util::stream::SplitSink<WebSocket, Message>,
+    mut ws_sender: WsFrameSender,
     mut ws_receiver: futures_util::stream::SplitStream<WebSocket>,
     session_id: String,
     state: Arc<AppState>,
@@ -1337,9 +1353,7 @@ async fn handle_ws_log_session(
                 (total, frame)
             }; // lock released here
             if let Some(frame_str) = catchup_frame {
-                let _ =
-                    futures_util::SinkExt::send(&mut ws_sender, Message::Text(frame_str.into()))
-                        .await;
+                let _ = ws_sender.text(&frame_str).await;
             }
             total
         } else {
@@ -1361,11 +1375,7 @@ async fn handle_ws_log_session(
         if let Some(current) = state_poll.session_state_with_shell(&sid_poll) {
             let frame = serde_json::json!({"type": "state", "state": &current});
             prev_state = Some(current);
-            let _ = futures_util::SinkExt::send(
-                &mut ws_sender,
-                Message::Text(frame.to_string().into()),
-            )
-            .await;
+            let _ = ws_sender.text(&frame.to_string()).await;
         }
 
         loop {
@@ -1419,13 +1429,7 @@ async fn handle_ws_log_session(
             {
                 let frame = serde_json::json!({"type": "state", "state": &current});
                 prev_state = Some(current);
-                if futures_util::SinkExt::send(
-                    &mut ws_sender,
-                    Message::Text(frame.to_string().into()),
-                )
-                .await
-                .is_err()
-                {
+                if ws_sender.text(&frame.to_string()).await.is_err() {
                     break;
                 }
             }
@@ -1462,13 +1466,7 @@ async fn handle_ws_log_session(
                             frame["input_line"] = serde_json::json!(il);
                         }
                     }
-                    if futures_util::SinkExt::send(
-                        &mut ws_sender,
-                        Message::Text(frame.to_string().into()),
-                    )
-                    .await
-                    .is_err()
-                    {
+                    if ws_sender.text(&frame.to_string()).await.is_err() {
                         break;
                     }
                     if !lines.is_empty() {
@@ -1572,14 +1570,20 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
 /// On connect, sends a full frame (all rows marked dirty). Subsequent frames
 /// are delta-based (only changed rows). Client sends text messages for
 /// commands (e.g. `{"type":"ack"}`) and binary messages for PTY input.
-async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Arc<AppState>) {
-    let (mut ws_sender, mut ws_receiver) = socket.split();
+async fn handle_ws_grid_session(
+    socket: WebSocket,
+    session_id: String,
+    state: Arc<AppState>,
+    compression: WsCompression,
+) {
+    let (ws_sender, mut ws_receiver) = socket.split();
+    let mut ws_sender = WsFrameSender::new(ws_sender, compression);
 
     // Subscribe to the grid watch channel (newest-frame-wins for slow clients).
     let mut frame_rx = match state.grid.watch.get(&session_id) {
         Some(tx) => tx.subscribe(),
         None => {
-            let _ = futures_util::SinkExt::send(&mut ws_sender, Message::Close(None)).await;
+            let _ = ws_sender.close().await;
             return;
         }
     };
@@ -1593,9 +1597,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
     // so this connect does not cost the desktop channel its next frame.
     let initial_frame = full_frame_for_single_client(&state, &session_id);
     if let Some(frame) = initial_frame
-        && futures_util::SinkExt::send(&mut ws_sender, Message::Binary(frame.into()))
-            .await
-            .is_err()
+        && ws_sender.binary(frame).await.is_err()
     {
         return;
     }
@@ -1639,14 +1641,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
                         frame
                     };
                     last_seq = seq;
-                    if !frame.is_empty()
-                        && futures_util::SinkExt::send(
-                            &mut ws_sender,
-                            Message::Binary(frame.into()),
-                        )
-                        .await
-                        .is_err()
-                    {
+                    if !frame.is_empty() && ws_sender.binary(frame).await.is_err() {
                         break;
                     }
                 }
@@ -1654,10 +1649,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
                     match result {
                         Ok(event) => {
                             let Some(payload) = grid_ws_frame(&event) else { continue };
-                            if futures_util::SinkExt::send(
-                                &mut ws_sender,
-                                Message::Text(payload.to_string().into()),
-                            ).await.is_err() {
+                            if ws_sender.text(&payload.to_string()).await.is_err() {
                                 break;
                             }
                         }
@@ -2317,9 +2309,7 @@ mod tests {
             .pending_injections
             .entry(session_id.to_string())
             .or_default()
-            .push_back(crate::state::PendingInjection::notice(
-                "queued message",
-            ));
+            .push_back(crate::state::PendingInjection::notice("queued message"));
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

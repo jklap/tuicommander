@@ -125,7 +125,7 @@ async fn a_connection_wakes_a_host_on_ready_on_a_question_and_on_settling() {
     .await;
     let updates = seen
         .iter()
-        .filter(|event| matches!(event.event, AcpClientEvent::SessionUpdate(_)))
+        .filter(|event| matches!(event.event, AcpClientEvent::SessionUpdate { .. }))
         .count();
     assert!(
         updates >= 2,

@@ -433,3 +433,92 @@ async fn a_settled_connection_refuses_session_work_as_transport_closed() {
         .expect_err("a settled connection carries no session");
     assert_eq!(error.code, AcpClientErrorCode::TransportClosed);
 }
+
+// ---------------------------------------------------------------------------
+// The one MCP server a session is given
+// ---------------------------------------------------------------------------
+
+/// The port the scenarios above expect in the synthesised address.
+///
+/// Any bound port would do — nothing listens on it during the test, because
+/// what is under test is the entry the client writes, not what answers it.
+const BRIDGE: &str = "/opt/tuic/tuic-bridge";
+
+/// Every session carries TUICommander, and carries nothing a caller named.
+///
+/// Both halves of plan §4.5 in one scenario, because they are one rule: the
+/// list is built here from the bridge this process ships, so the intruder below
+/// is not filtered out of it — it is never consulted. `session/load` is in the
+/// same scenario for the same reason `start_attach` shares a body with
+/// `start_new_session`: an entry synthesised for one and forgotten for the
+/// other is a session that can reach nothing, found only by a person.
+///
+/// The intruder is an HTTP entry on purpose: replacement has to hold for a
+/// transport the grant no longer uses, or the test would pass on a list that
+/// merely filtered by shape.
+#[tokio::test]
+async fn every_session_carries_this_process_and_nothing_a_caller_named() {
+    let fixture = Fixture::with("session-new-tuic-mcp");
+    fixture
+        .manager
+        .set_bridge_binary(Some(std::path::PathBuf::from(BRIDGE)));
+    let connection = fixture.connect().await;
+
+    let intruder = AcpSessionAuthority {
+        cwd: fixture.root(),
+        additional_directories: Vec::new(),
+        mcp_servers: vec![v1::McpServer::Http(v1::McpServerHttp::new(
+            "intruder",
+            "http://intruder.example/mcp",
+        ))],
+    };
+
+    fixture
+        .manager
+        .new_session(connection.connection_id, intruder.clone())
+        .await
+        .expect("session/new");
+
+    fixture
+        .manager
+        .attach(
+            connection.connection_id,
+            AcpAttachKind::Load,
+            session(FORKED),
+            intruder,
+        )
+        .await
+        .expect("session/load");
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}
+
+/// No bridge means no entry, rather than a command that cannot run.
+///
+/// This used to be the default install rather than an edge case: the entry was
+/// built from a TCP port, the listener starts only when remote access is
+/// enabled, and remote access is off by default — so an ordinary session
+/// reached no TUICommander tools at all. Over the bridge the socket is always
+/// there, and this is what it says it is: an install missing its own sidecar.
+#[tokio::test]
+async fn no_bridge_leaves_the_session_with_no_mcp_server() {
+    let fixture = Fixture::with("session-new-no-port");
+    fixture.manager.set_bridge_binary(None);
+    let connection = fixture.connect().await;
+
+    fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .expect("session/new");
+
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+}

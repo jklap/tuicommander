@@ -1,13 +1,11 @@
 mod acp_routes;
 mod agent_routes;
-mod ai_routes;
-mod ai_stream;
-pub(crate) mod ai_terminal;
 pub(crate) mod auth;
 mod claude_routes;
 mod config_routes;
 #[cfg(feature = "desktop")]
 mod dictation_routes;
+mod ego_routes;
 mod fs_routes;
 mod git_routes;
 mod github_routes;
@@ -16,14 +14,15 @@ mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
-mod session;
+pub(crate) mod session;
 pub(crate) mod sse_routes;
 mod static_files;
 #[cfg(feature = "desktop")]
 mod system_routes;
-mod types;
+pub(crate) mod types;
 mod watcher_routes;
 mod worktree_routes;
+mod ws_compression;
 
 use crate::AppState;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -624,11 +623,13 @@ const API_PREFIXES: &[&str] = &[
     "debug",
     "diagnostics",
     "dictation",
+    "ego",
     "events",
     "exec",
     "fs",
     "generators",
     "github",
+    "grok",
     "health",
     "logs",
     "mcp",
@@ -709,6 +710,13 @@ fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
+        // Shared on purpose: this is how a remote client escapes the header-only
+        // Basic Auth it cannot put on a WebSocket upgrade. Registered on
+        // `build_router` alone it would be 404 on the very daemon that needs it.
+        .route(
+            "/api/auth/session-token",
+            get(config_routes::get_session_token),
+        )
         // Progress. Shared, not desktop-only: the store is a SQLite file in the
         // app config directory and every handler calls `crate::progress::*`,
         // which needs no WebView and no Tauri. These lived in `build_router`
@@ -1040,6 +1048,8 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Codex usage (same ticker, different agent)
         .route("/codex/usage", get(claude_routes::codex_usage_api))
         .route("/codex/stats", get(claude_routes::codex_usage_stats))
+        // Grok usage (provider-owned ACP billing extension)
+        .route("/grok/usage", get(claude_routes::grok_usage_api))
         // Recent commits / git panel
         .route(
             "/repo/recent-commits",
@@ -1125,6 +1135,12 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // whole point of the client, and the binary it may launch comes from
         // this host's configuration rather than from any request.
         .nest("/acp", acp_routes::acp_routes())
+        // ego's own command line, for the configuration ACP does not carry:
+        // which model a run defaults to, and whether a provider has a
+        // credential. Every route here starts a process, so every route here
+        // takes the spawn guard — unlike `/acp`, where only the two routes that
+        // launch ego do.
+        .nest("/ego", ego_routes::ego_routes())
 }
 
 /// Body of `POST /mcp/confirm-response`.
@@ -1257,6 +1273,15 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/repo/changelog",
             get(github_routes::repo_generate_changelog),
         )
+        .route("/repo/pr-review", post(github_routes::repo_pr_review))
+        .route(
+            "/repo/improvement-scan",
+            post(github_routes::repo_improvement_scan),
+        )
+        .route(
+            "/repo/create-issue-from-proposal",
+            post(github_routes::repo_create_issue_from_proposal),
+        )
         .route(
             "/repo/conflict-assist",
             post(github_routes::repo_conflict_assist),
@@ -1339,79 +1364,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/github/bindings/remove",
             post(github_routes::github_unbind_repo),
-        )
-        // AI watchers (story 070 RPC parity) — CRUD; fires surface as SessionCreated SSE
-        .route(
-            "/ai/watchers",
-            get(ai_routes::watcher_list_http).post(ai_routes::watcher_create_http),
-        )
-        .route("/ai/watchers/update", post(ai_routes::watcher_update_http))
-        .route("/ai/watchers/delete", post(ai_routes::watcher_delete_http))
-        .route("/ai/watchers/toggle", post(ai_routes::watcher_toggle_http))
-        .route("/ai/watchers/attach", post(ai_routes::watcher_attach_http))
-        .route("/ai/watchers/detach", post(ai_routes::watcher_detach_http))
-        // AI chat (story 069 RPC slice) — config + conversation CRUD
-        .route(
-            "/ai/chat/config",
-            get(ai_routes::ai_chat_config_get).put(ai_routes::ai_chat_config_put),
-        )
-        .route(
-            "/ai/chat/conversations",
-            get(ai_routes::list_conversations_http),
-        )
-        .route(
-            "/ai/chat/conversation",
-            get(ai_routes::load_conversation_http).post(ai_routes::save_conversation_http),
-        )
-        .route(
-            "/ai/chat/conversation/delete",
-            post(ai_routes::delete_conversation_http),
-        )
-        .route("/ai/chat/new-id", post(ai_routes::new_conversation_id_http))
-        // Chat registry stream — dedicated per-chat WS (event-bridge plan Step 4).
-        .route("/ai/chat/{chat_id}/stream", get(ai_stream::chat_ws))
-        // AI agent loop control + knowledge + scheduler (story 068 RPC slice)
-        .route(
-            "/ai/conversation/cancel",
-            post(ai_routes::cancel_conversation_http),
-        )
-        .route(
-            "/ai/conversation/pause",
-            post(ai_routes::pause_conversation_http),
-        )
-        .route(
-            "/ai/conversation/resume",
-            post(ai_routes::resume_conversation_http),
-        )
-        .route(
-            "/ai/conversation/approve",
-            post(ai_routes::approve_conversation_action_http),
-        )
-        // Conversation token stream — dedicated per-session WS (event-bridge
-        // plan Step 3). NOT on the global bus: high-frequency token stream.
-        .route(
-            "/ai/conversation/{session_id}/stream",
-            get(ai_stream::conversation_ws),
-        )
-        .route(
-            "/ai/session-knowledge",
-            get(ai_routes::get_session_knowledge_http),
-        )
-        .route(
-            "/ai/suggestions/toggle",
-            post(ai_routes::toggle_ai_suggestions_http),
-        )
-        .route(
-            "/ai/knowledge/sessions",
-            post(ai_routes::list_knowledge_sessions_http),
-        )
-        .route(
-            "/ai/knowledge/session",
-            get(ai_routes::get_knowledge_session_detail_http),
-        )
-        .route(
-            "/ai/scheduler/config",
-            get(ai_routes::scheduler_config_get).put(ai_routes::scheduler_config_put),
         )
         // Config
         .route(
@@ -1524,10 +1476,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(config_routes::get_prompt_library).put(config_routes::put_prompt_library),
         )
         .route(
-            "/config/ai-prompts",
-            get(config_routes::get_ai_prompts_http).put(config_routes::put_ai_prompts_http),
-        )
-        .route(
             "/config/activity",
             get(config_routes::get_activity).put(config_routes::put_activity),
         )
@@ -1550,34 +1498,30 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 .put(config_routes::put_agent_native_status_signals),
         )
         .route(
-            "/config/provider-registry",
-            get(config_routes::get_provider_registry).put(config_routes::put_provider_registry),
-        )
-        // Provider API keys (keyring-proxied) + slot/ollama checks — story 072
-        .route(
-            "/config/provider-key/exists",
-            get(config_routes::provider_key_exists_http),
-        )
-        .route(
-            "/config/provider-key",
-            post(config_routes::save_provider_key_http)
-                .delete(config_routes::delete_provider_key_http),
-        )
-        .route(
-            "/config/slot-test",
-            post(config_routes::test_slot_connection_http),
-        )
-        .route(
-            "/config/ollama-models",
-            post(config_routes::check_ollama_models_http),
-        )
-        .route(
             "/config/remote-connections",
             get(config_routes::get_remote_connections).put(config_routes::put_remote_connection),
         )
         .route(
             "/config/remote-connections/{id}",
             delete(config_routes::delete_remote_connection),
+        )
+        .route(
+            "/config/remote-connections/{id}/password",
+            put(config_routes::put_remote_connection_password)
+                .get(config_routes::get_remote_connection_password_exists),
+        )
+        .route(
+            "/config/remote-connections/{id}/token",
+            post(config_routes::post_remote_connection_token),
+        )
+        .route(
+            "/config/remote-connections/status",
+            get(config_routes::get_remote_connection_statuses),
+        )
+        .route(
+            "/config/remote-connections/{id}/connect",
+            post(config_routes::post_remote_connection_connect)
+                .delete(config_routes::delete_remote_connection_connect),
         )
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
@@ -1610,10 +1554,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/prompt/execute-headless",
             post(agent_routes::execute_headless_prompt_http),
-        )
-        .route(
-            "/prompt/execute-api",
-            post(agent_routes::execute_api_prompt_http),
         )
         // File browser — desktop gets the large (250 MB) editor read cap; the
         // remote router down-scopes these two paths to the standard-cap handlers.
@@ -1767,23 +1707,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/github/resolve-repos",
             post(github_routes::github_resolve_repos),
         );
-
-    // Diff triage trigger (event-bridge plan Step 2) — desktop-only: the triage
-    // LLM pipeline needs the desktop providers. Progress streams over `/events`.
-    #[cfg(feature = "desktop")]
-    let routes = routes.route("/ai/triage/run", post(ai_routes::run_diff_triage_http));
-    #[cfg(feature = "desktop")]
-    let routes = routes.route("/ai/review/pr", post(ai_routes::run_pr_review_http));
-    #[cfg(feature = "desktop")]
-    let routes = routes.route(
-        "/ai/improvements/scan",
-        post(ai_routes::run_improvement_scan_http),
-    );
-    #[cfg(feature = "desktop")]
-    let routes = routes.route(
-        "/repo/create-issue-from-proposal",
-        post(ai_routes::create_issue_from_proposal_http),
-    );
 
     // Dictation — desktop-only: `crate::dictation` owns the audio capture and
     // the whisper model, both gated on the `desktop` feature.
@@ -1982,6 +1905,216 @@ fn evict_peers_for_reaped_mcp_session(
     (removed, retained)
 }
 
+/// Spawn the once-a-minute maintenance sweep: reap idle MCP protocol sessions
+/// and the peer identities they carried, expired auth rate-limit entries and
+/// expired task handles.
+///
+/// Not a desktop convenience. A `tuic-remote` daemon authenticates every TCP
+/// request, so its rate-limit map grows with every scanner that finds the port,
+/// and it now holds MCP sessions of its own — without this sweep both grow for
+/// as long as the process lives (#793-23a5).
+pub(crate) fn spawn_maintenance_sweep(state: &Arc<AppState>) {
+    let reaper_state = state.clone();
+    tokio::spawn(async move {
+        const MCP_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let now = std::time::Instant::now();
+            let reaped: Vec<String> = reaper_state
+                .mcp
+                .sessions
+                .iter()
+                .filter(|e| now.duration_since(e.value().last_activity) >= MCP_SESSION_TTL)
+                .map(|e| e.key().clone())
+                .collect();
+            for sid in &reaped {
+                tracing::warn!("MCP session reaped (idle ≥1h): {sid}");
+                reaper_state.mcp.sessions.remove(sid);
+                // Clean up peer agents whose MCP session was reaped. An
+                // identity that is still addressable outlives the transport
+                // that carried it.
+                let (_removed, retained) = evict_peers_for_reaped_mcp_session(&reaper_state, sid);
+                if !retained.is_empty() {
+                    tracing::info!(
+                        "MCP session {sid} reaped, {} peer identity/identities kept addressable: {}",
+                        retained.len(),
+                        retained.join(", ")
+                    );
+                }
+            }
+            // Evict orphaned inboxes for peers that no longer exist
+            if !reaped.is_empty() {
+                let known_tuic: std::collections::HashSet<String> = reaper_state
+                    .peer_agents
+                    .iter()
+                    .map(|e| e.key().clone())
+                    .collect();
+                reaper_state
+                    .agent_inbox
+                    .retain(|tuic, _| known_tuic.contains(tuic));
+            }
+
+            // Sweep expired auth rate-limit entries so the map can't grow
+            // unbounded for IPs that fail once and never return (scanners,
+            // IPv6 rotation). Window is read fresh each pass so runtime
+            // config changes take effect on the next sweep.
+            let rl_window = reaper_state
+                .config
+                .read()
+                .services
+                .auth
+                .auth_rate_limit_window_secs;
+            let evicted =
+                auth::sweep_expired_rate_limits(&reaper_state.auth_rate_limits, rl_window);
+            if evicted > 0 {
+                tracing::debug!(
+                    source = "auth",
+                    evicted,
+                    "Swept expired auth rate-limit entries"
+                );
+            }
+
+            // Drop tasks past their TTL on the same pass — a task handle
+            // outlives its protocol session, so it needs its own sweep, but
+            // not its own timer.
+            let reaped_tasks = reaper_state.tasks.reap_expired();
+            if reaped_tasks > 0 {
+                tracing::debug!(
+                    source = "tasks",
+                    reaped = reaped_tasks,
+                    "Reaped expired tasks"
+                );
+            }
+        }
+    });
+}
+
+/// Spawn the local IPC listener: a Unix domain socket on unix, a named pipe on
+/// Windows. Always on, never authenticated — the OS user is the boundary.
+///
+/// This is the only way `tuic-bridge` reaches the process. An agent running on
+/// this machine spawns the bridge as a stdio child and the bridge speaks HTTP
+/// over this socket, so a process without it hosts agents that have no
+/// `tuicommander` MCP server at all — which is what `tuic-remote` did before
+/// #793-23a5. It serves the loopback router, not the remote one: the caller is
+/// a local child process, so it gets the same surface a desktop agent gets.
+pub(crate) async fn spawn_ipc_listener(state: &Arc<AppState>, mcp_enabled: bool) {
+    // --- Unix socket listener (always on, no auth) ---
+    #[cfg(unix)]
+    {
+        let sock = resolve_socket_path();
+
+        if let Some(parent) = sock.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            tracing::warn!(source = "mcp_http", path = %parent.display(), "Failed to create socket parent dir: {e}");
+        }
+
+        // Bind the socket. Remove stale file first (left by a crashed previous run).
+        // resolve_socket_path() already verified the primary socket is not live,
+        // so remove_file here only cleans up stale/dead sockets.
+        const MAX_BIND_ATTEMPTS: u8 = 3;
+        async fn bind_unix_socket(
+            sock: &std::path::Path,
+        ) -> Result<tokio::net::UnixListener, std::io::Error> {
+            let mut last_err = std::io::Error::other("no bind attempts");
+            for attempt in 0..MAX_BIND_ATTEMPTS {
+                let _ = std::fs::remove_file(sock);
+                match tokio::net::UnixListener::bind(sock) {
+                    Ok(uds) => return Ok(uds),
+                    Err(e) => {
+                        tracing::warn!(source = "mcp_http", attempt, path = %sock.display(), "Unix socket bind failed: {e}");
+                        last_err = e;
+                        if attempt + 1 < MAX_BIND_ATTEMPTS {
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                    }
+                }
+            }
+            Err(last_err)
+        }
+
+        match bind_unix_socket(&sock).await {
+            Err(e) => {
+                tracing::error!(source = "mcp_http", path = %sock.display(), "Failed to bind Unix socket after retries: {e}");
+            }
+            Ok(initial_uds) => {
+                tracing::info!(source = "mcp_http", path = %sock.display(), "Unix socket listening");
+                *state.bound_socket_path.write() = sock.clone();
+                // Watchdog task: if axum::serve() returns unexpectedly, rebind
+                // and restart. No shutdown signal — this task runs until the
+                // process exits.
+                let watchdog_state = state.clone();
+                tokio::spawn(async move {
+                    let mut uds = initial_uds;
+                    loop {
+                        let app = build_router(watchdog_state.clone(), false, mcp_enabled);
+                        let app =
+                            app.layer(axum::middleware::from_fn(inject_localhost_connect_info));
+                        match axum::serve(uds, app.into_make_service()).await {
+                            Err(e) => tracing::error!(
+                                source = "mcp_http",
+                                "Unix socket server error: {e}"
+                            ),
+                            Ok(()) => tracing::warn!(
+                                source = "mcp_http",
+                                "Unix socket server exited cleanly (unexpected)"
+                            ),
+                        }
+                        // Unexpected exit — rebind and restart.
+                        tracing::warn!(source = "mcp_http", path = %sock.display(), "Unix socket server stopped unexpectedly, restarting…");
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        match bind_unix_socket(&sock).await {
+                            Ok(new_uds) => {
+                                tracing::info!(source = "mcp_http", path = %sock.display(), "Unix socket rebound successfully");
+                                uds = new_uds;
+                            }
+                            Err(e) => {
+                                tracing::error!(source = "mcp_http", path = %sock.display(), "Unix socket rebind failed permanently ({e}) — MCP bridge will be unavailable");
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    // --- Windows named pipe listener (always on, no auth) ---
+    #[cfg(windows)]
+    {
+        match NamedPipeListener::new() {
+            Ok(pipe) => {
+                tracing::info!(
+                    source = "mcp_http",
+                    pipe = PIPE_NAME,
+                    "Named pipe listening"
+                );
+                let app = build_router(state.clone(), false, mcp_enabled);
+                let app = app.layer(axum::middleware::from_fn(inject_localhost_connect_info));
+                tokio::spawn(async move {
+                    match axum::serve(pipe, app.into_make_service()).await {
+                        Err(e) => {
+                            tracing::error!(source = "mcp_http", "Named pipe server error: {e}")
+                        }
+                        Ok(()) => tracing::warn!(
+                            source = "mcp_http",
+                            "Named pipe server exited cleanly (unexpected)"
+                        ),
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::error!(
+                    source = "mcp_http",
+                    pipe = PIPE_NAME,
+                    "Failed to create named pipe: {e}"
+                );
+            }
+        }
+    }
+}
+
 /// Start IPC + TCP listeners. Returns `true` if TCP bound successfully (or
 /// wasn't requested). Returns `false` only when `remote_enabled` is true and
 /// TCP bind failed on all port attempts.
@@ -2020,81 +2153,8 @@ pub async fn start_server(
     if first_start {
         crate::pty::spawn_process_snapshot_refresher(Arc::clone(&state));
 
-        // Spawn MCP session reaper: evicts stale protocol sessions every 60s (1h TTL)
-        let reaper_state = state.clone();
-        tokio::spawn(async move {
-            const MCP_SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                let now = std::time::Instant::now();
-                let reaped: Vec<String> = reaper_state
-                    .mcp
-                    .sessions
-                    .iter()
-                    .filter(|e| now.duration_since(e.value().last_activity) >= MCP_SESSION_TTL)
-                    .map(|e| e.key().clone())
-                    .collect();
-                for sid in &reaped {
-                    tracing::warn!("MCP session reaped (idle ≥1h): {sid}");
-                    reaper_state.mcp.sessions.remove(sid);
-                    // Clean up peer agents whose MCP session was reaped. An
-                    // identity that is still addressable outlives the transport
-                    // that carried it.
-                    let (_removed, retained) =
-                        evict_peers_for_reaped_mcp_session(&reaper_state, sid);
-                    if !retained.is_empty() {
-                        tracing::info!(
-                            "MCP session {sid} reaped, {} peer identity/identities kept addressable: {}",
-                            retained.len(),
-                            retained.join(", ")
-                        );
-                    }
-                }
-                // Evict orphaned inboxes for peers that no longer exist
-                if !reaped.is_empty() {
-                    let known_tuic: std::collections::HashSet<String> = reaper_state
-                        .peer_agents
-                        .iter()
-                        .map(|e| e.key().clone())
-                        .collect();
-                    reaper_state
-                        .agent_inbox
-                        .retain(|tuic, _| known_tuic.contains(tuic));
-                }
-
-                // Sweep expired auth rate-limit entries so the map can't grow
-                // unbounded for IPs that fail once and never return (scanners,
-                // IPv6 rotation). Window is read fresh each pass so runtime
-                // config changes take effect on the next sweep.
-                let rl_window = reaper_state
-                    .config
-                    .read()
-                    .services
-                    .auth
-                    .auth_rate_limit_window_secs;
-                let evicted =
-                    auth::sweep_expired_rate_limits(&reaper_state.auth_rate_limits, rl_window);
-                if evicted > 0 {
-                    tracing::debug!(
-                        source = "auth",
-                        evicted,
-                        "Swept expired auth rate-limit entries"
-                    );
-                }
-
-                // Drop tasks past their TTL on the same pass — a task handle
-                // outlives its protocol session, so it needs its own sweep, but
-                // not its own timer.
-                let reaped_tasks = reaper_state.tasks.reap_expired();
-                if reaped_tasks > 0 {
-                    tracing::debug!(
-                        source = "tasks",
-                        reaped = reaped_tasks,
-                        "Reaped expired tasks"
-                    );
-                }
-            }
-        });
+        // Reap idle MCP sessions, expired rate limits and expired tasks every 60s.
+        spawn_maintenance_sweep(&state);
 
         // Spawn upstream health checker: pings Ready upstreams every 60s
         crate::mcp_proxy::registry::UpstreamRegistry::spawn_health_checker(Arc::clone(
@@ -2105,120 +2165,7 @@ pub async fn start_server(
         #[cfg(unix)]
         crate::pty::spawn_standby_checker(Arc::clone(&state));
 
-        // --- Unix socket listener (always on, no auth) ---
-        #[cfg(unix)]
-        {
-            let sock = resolve_socket_path();
-
-            if let Some(parent) = sock.parent()
-                && let Err(e) = std::fs::create_dir_all(parent)
-            {
-                tracing::warn!(source = "mcp_http", path = %parent.display(), "Failed to create socket parent dir: {e}");
-            }
-
-            // Bind the socket. Remove stale file first (left by a crashed previous run).
-            // resolve_socket_path() already verified the primary socket is not live,
-            // so remove_file here only cleans up stale/dead sockets.
-            const MAX_BIND_ATTEMPTS: u8 = 3;
-            async fn bind_unix_socket(
-                sock: &std::path::Path,
-            ) -> Result<tokio::net::UnixListener, std::io::Error> {
-                let mut last_err = std::io::Error::other("no bind attempts");
-                for attempt in 0..MAX_BIND_ATTEMPTS {
-                    let _ = std::fs::remove_file(sock);
-                    match tokio::net::UnixListener::bind(sock) {
-                        Ok(uds) => return Ok(uds),
-                        Err(e) => {
-                            tracing::warn!(source = "mcp_http", attempt, path = %sock.display(), "Unix socket bind failed: {e}");
-                            last_err = e;
-                            if attempt + 1 < MAX_BIND_ATTEMPTS {
-                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                            }
-                        }
-                    }
-                }
-                Err(last_err)
-            }
-
-            match bind_unix_socket(&sock).await {
-                Err(e) => {
-                    tracing::error!(source = "mcp_http", path = %sock.display(), "Failed to bind Unix socket after retries: {e}");
-                }
-                Ok(initial_uds) => {
-                    tracing::info!(source = "mcp_http", path = %sock.display(), "Unix socket listening");
-                    *state.bound_socket_path.write() = sock.clone();
-                    // Watchdog task: if axum::serve() returns unexpectedly, rebind
-                    // and restart. No shutdown signal — this task runs until the
-                    // process exits.
-                    let watchdog_state = state.clone();
-                    tokio::spawn(async move {
-                        let mut uds = initial_uds;
-                        loop {
-                            let app = build_router(watchdog_state.clone(), false, mcp_enabled);
-                            let app =
-                                app.layer(axum::middleware::from_fn(inject_localhost_connect_info));
-                            match axum::serve(uds, app.into_make_service()).await {
-                                Err(e) => tracing::error!(
-                                    source = "mcp_http",
-                                    "Unix socket server error: {e}"
-                                ),
-                                Ok(()) => tracing::warn!(
-                                    source = "mcp_http",
-                                    "Unix socket server exited cleanly (unexpected)"
-                                ),
-                            }
-                            // Unexpected exit — rebind and restart.
-                            tracing::warn!(source = "mcp_http", path = %sock.display(), "Unix socket server stopped unexpectedly, restarting…");
-                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                            match bind_unix_socket(&sock).await {
-                                Ok(new_uds) => {
-                                    tracing::info!(source = "mcp_http", path = %sock.display(), "Unix socket rebound successfully");
-                                    uds = new_uds;
-                                }
-                                Err(e) => {
-                                    tracing::error!(source = "mcp_http", path = %sock.display(), "Unix socket rebind failed permanently ({e}) — MCP bridge will be unavailable");
-                                    break;
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-        }
-
-        // --- Windows named pipe listener (always on, no auth) ---
-        #[cfg(windows)]
-        {
-            match NamedPipeListener::new() {
-                Ok(pipe) => {
-                    tracing::info!(
-                        source = "mcp_http",
-                        pipe = PIPE_NAME,
-                        "Named pipe listening"
-                    );
-                    let app = build_router(state.clone(), false, mcp_enabled);
-                    let app = app.layer(axum::middleware::from_fn(inject_localhost_connect_info));
-                    tokio::spawn(async move {
-                        match axum::serve(pipe, app.into_make_service()).await {
-                            Err(e) => {
-                                tracing::error!(source = "mcp_http", "Named pipe server error: {e}")
-                            }
-                            Ok(()) => tracing::warn!(
-                                source = "mcp_http",
-                                "Named pipe server exited cleanly (unexpected)"
-                            ),
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!(
-                        source = "mcp_http",
-                        pipe = PIPE_NAME,
-                        "Failed to create named pipe: {e}"
-                    );
-                }
-            }
-        }
+        spawn_ipc_listener(&state, mcp_enabled).await;
     }
 
     // --- TCP listener (only for remote access with auth) ---
@@ -2636,6 +2583,10 @@ mod tests {
         // false-fail a GET probe). Path params are filled with a placeholder segment.
         let must_exist = [
             "/api/version",
+            // The remote client's only way onto a WebSocket: it trades Basic
+            // Auth for the session token here, so the remote router must carry
+            // it. `build_router` alone is exactly the Progress mistake below.
+            "/api/auth/session-token",
             "/sessions",
             "/sessions/x/write",
             "/sessions/x/output",
@@ -2671,6 +2622,7 @@ mod tests {
             "/claude/projects",
             "/codex/usage",
             "/codex/stats",
+            "/grok/usage",
             "/terminal/theme-colors",
             "/system/local-ip",
             "/acp/connections",
@@ -2705,8 +2657,7 @@ mod tests {
             "/github/resolve-repo",
             "/repo/github",
             "/repo/prs",
-            "/ai/watchers",
-            "/ai/chat/conversations",
+            "/dictation/status",
             "/config",
             "/config/themes",
             "/mcp/status",
@@ -2776,7 +2727,7 @@ mod tests {
     ///
     /// We probe `build_router`, not `shared_routes()`: COMMAND_TABLE is the
     /// desktop frontend's mapping and includes desktop-only families (`/config`,
-    /// `/plugins`, `/github`, `/ai/watchers`) that only `build_router`
+    /// `/plugins`, `/github`, `/dictation`) that only `build_router`
     /// registers, so probing the shared subset alone would false-fail on every
     /// one of them. The remote router's narrower surface is already pinned by
     /// `shared_routes_surface_is_locked_and_desktop_only_excluded`.
@@ -2846,10 +2797,8 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         for path in [
-            "/ai/triage/run",
             "/dictation/status",
             "/github/accounts",
-            "/repo/create-issue-from-proposal",
             "/system/check-update",
         ] {
             let resp = app
@@ -2881,6 +2830,38 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json, serde_json::json!([]));
+    }
+
+    /// A session running on a connected remote machine is one row of this list,
+    /// tagged with the connection that owns it — the one field that tells it
+    /// apart from a local row (#791-055e). The Tauri `list_active_sessions`
+    /// answers from the same builder.
+    #[tokio::test]
+    async fn list_sessions_carries_a_mirrored_remote_session_and_names_its_machine() {
+        let state = test_state();
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            "vps",
+            vec![crate::mcp_http::types::SessionInfo {
+                session_id: "vps-sess".into(),
+                display_name: Some("claude on the vps".into()),
+                ..Default::default()
+            }],
+        );
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(Request::get("/sessions").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json.as_array().expect("an array").len(), 1);
+        assert_eq!(json[0]["session_id"], "vps-sess");
+        assert_eq!(json[0]["connection_id"], "vps");
+        assert_eq!(json[0]["display_name"], "claude on the vps");
     }
 
     #[tokio::test]
@@ -3008,6 +2989,63 @@ mod tests {
                 .is_some_and(|message| message.contains("was added concurrently"))
         );
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
+    }
+
+    /// A remote client cannot put an `Authorization` header on a WebSocket
+    /// upgrade, so it trades Basic Auth for the session token once and then
+    /// uses `?token=`. The trade must itself be authenticated: a public address
+    /// with no credentials gets 401, never the token.
+    #[tokio::test]
+    async fn session_token_route_trades_basic_auth_for_the_token() {
+        use axum::http::header;
+        use base64::Engine;
+
+        let state = test_state();
+        let hash = bcrypt::hash("hunter2", 4).unwrap();
+        {
+            let mut cfg = state.config.write();
+            cfg.services.auth.username = "boss".to_string();
+            cfg.services.auth.password_hash = hash;
+        }
+        *state.session_token.write() = "the-live-token".to_string();
+
+        let remote =
+            || axum::extract::ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 5], 51234)));
+        let app = build_router(state, true, true);
+
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::get("/api/auth/session-token")
+                    .extension(remote())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+        let credentials =
+            base64::engine::general_purpose::STANDARD.encode(format!("boss:{}", "hunter2"));
+        let authenticated = app
+            .oneshot(
+                Request::get("/api/auth/session-token")
+                    .header(header::AUTHORIZATION, format!("Basic {credentials}"))
+                    .extension(remote())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authenticated.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(authenticated.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            json.pointer("/token").and_then(serde_json::Value::as_str),
+            Some("the-live-token")
+        );
     }
 
     #[tokio::test]
@@ -3833,7 +3871,6 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_tools_list() {
         let state = test_state();
-        state.config.write().ai_terminal_mcp_enabled = true;
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -3856,9 +3893,11 @@ mod tests {
         assert!(names.contains(&"plugin_dev_guide"));
         assert!(names.contains(&"config"));
         assert!(names.contains(&"debug"));
-        assert!(names.contains(&"ai_terminal_read_screen"));
-        assert!(names.contains(&"ai_terminal_send_input"));
-        // Count = base native tools + ai_terminal_* tools (may grow over time)
+        // One family only: the ai_terminal_* tools were deleted in 789-f6ed.
+        assert!(
+            !names.iter().any(|n| n.starts_with("ai_terminal_")),
+            "a second tool family is registered again: {names:?}"
+        );
         assert_eq!(tools.len(), names.len());
     }
 
@@ -3905,7 +3944,6 @@ mod tests {
     async fn test_mcp_tools_list_respects_disabled_native_tools() {
         let state = test_state();
         state.config.write().disabled_native_tools = vec!["debug".to_string()];
-        state.config.write().ai_terminal_mcp_enabled = true;
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -3934,16 +3972,35 @@ mod tests {
         assert!(names.contains(&"session"));
     }
 
+    /// The count this used to assert (`>= 13`) was sized when a second tool
+    /// family shared the list, and it asserted nothing about which tools are
+    /// there. Names are the durable fact; the exact ordered list is pinned by
+    /// `native_tool_definitions_are_the_one_surviving_family`.
     #[test]
-    fn test_mcp_tool_definitions_count() {
+    fn test_mcp_tool_definitions_carry_every_core_tool() {
         let tools = mcp_transport::test_mcp_tool_definitions();
-        let arr = tools.as_array().unwrap();
-        // Must have at least the core tools (session, agent, repo, ui, config, debug, plugin_dev_guide)
-        assert!(
-            arr.len() >= 13,
-            "expected at least 13 tools, got {}",
-            arr.len()
-        );
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        for core in [
+            "session",
+            "agent",
+            "task",
+            "repo",
+            "progress",
+            "ui",
+            "config",
+            "debug",
+            "plugin_dev_guide",
+        ] {
+            assert!(
+                names.contains(&core),
+                "core tool {core} is missing: {names:?}"
+            );
+        }
     }
 
     #[test]
@@ -4711,7 +4768,7 @@ mod tests {
             result["error"]
                 .as_str()
                 .unwrap()
-                .contains("session, agent, repo, ui")
+                .contains("session, agent, task, repo, progress, ui")
         );
     }
 
@@ -5606,7 +5663,6 @@ mod tests {
     #[tokio::test]
     async fn test_tools_list_no_upstream_returns_native_only() {
         let state = test_state();
-        state.config.write().ai_terminal_mcp_enabled = true;
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0", "id": 1,
@@ -5633,7 +5689,6 @@ mod tests {
         assert!(names.contains(&"plugin_dev_guide"));
         assert!(names.contains(&"config"));
         assert!(names.contains(&"debug"));
-        assert!(names.contains(&"ai_terminal_read_screen"));
     }
 
     /// tools/call with upstream-prefixed name returns error (no upstream registered).

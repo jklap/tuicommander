@@ -38,6 +38,19 @@ pub struct ProfileOptions {
     pub server_alive_interval: u16,
     pub server_alive_count_max: u16,
     pub strict_host_key_checking: StrictHostKeyChecking,
+    /// `ssh -C`. On by default, and the reason the WebSocket layer refuses to
+    /// deflate a loopback peer: a tunnelled client reaches this machine through
+    /// the local ssh process, so its address is loopback and its link is
+    /// already compressed here. Turn it off for a link that is fast and a CPU
+    /// that is not — a tunnel to another machine on the same LAN.
+    #[serde(default = "compression_on")]
+    pub compression: bool,
+}
+
+/// Serde's default for a profile written before this field existed. Matching
+/// `ProfileOptions::default` so an old profile and a new one behave the same.
+fn compression_on() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +143,7 @@ impl Default for ProfileOptions {
             server_alive_interval: 15,
             server_alive_count_max: 3,
             strict_host_key_checking: StrictHostKeyChecking::Yes,
+            compression: compression_on(),
         }
     }
 }
@@ -140,6 +154,23 @@ mod tests {
 
     fn make_profile() -> TunnelProfile {
         TunnelProfile::new("my-tunnel", "example.com", "alice")
+    }
+
+    #[test]
+    fn a_profile_written_before_compression_existed_still_compresses() {
+        // Every profile already on disk lacks the key. Deserializing it to
+        // `false` would silently stop compressing the tunnels Boss already has,
+        // which is the opposite of what adding the option was for.
+        let options: ProfileOptions = toml::from_str(
+            r#"
+            server_alive_interval = 15
+            server_alive_count_max = 3
+            strict_host_key_checking = "Yes"
+            "#,
+        )
+        .expect("an old profile must still parse");
+
+        assert!(options.compression);
     }
 
     #[test]

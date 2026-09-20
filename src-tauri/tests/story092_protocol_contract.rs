@@ -88,12 +88,14 @@ fn initialize_response_becomes_an_immutable_full_capability_snapshot() {
     assert!(snapshot.load && snapshot.list && snapshot.resume && snapshot.fork);
     assert!(snapshot.delete && snapshot.close && snapshot.prompt_image);
     assert!(snapshot.prompt_embedded_context && snapshot.mcp_http && snapshot.mcp_sse);
-    assert!(!snapshot.mcp_stdio);
+    // Stdio does not move with the recorded response either, and for a sharper
+    // reason than form elicitation: v1's `mcpCapabilities` has no `stdio` field
+    // to record. Stdio is the protocol baseline, so this is a fact about what
+    // this client carries — one server, its own bridge (#796-7fa3) — and it read
+    // `false` only while it carried none.
+    assert!(snapshot.mcp_stdio);
     assert!(!snapshot.client_boolean_config);
-    assert_eq!(
-        snapshot.availability(AcpOperation::McpStdio).reason,
-        Some(AcpUnavailableReason::ExcludedByContract)
-    );
+    assert_eq!(snapshot.availability(AcpOperation::McpStdio).reason, None);
     // Form elicitation reads as available because this client now seats an
     // `elicitation/create` and lets a person answer it. It is a fact about
     // this side, so it does not move with the recorded response above.

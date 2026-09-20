@@ -266,6 +266,20 @@ jobs:
           RUSTFLAGS: ${{ startsWith(matrix.platform, 'ubuntu') && matrix.target != 'aarch64-unknown-linux-gnu' && '-C link-arg=-fuse-ld=mold' || '' }}
         run: cargo build --release --no-default-features --bin tuic-remote --target ${{ matrix.target }}
 
+      # The daemon writes an MCP config for every agent on its machine, and that
+      # config names `tuic-bridge`. Shipping the daemon without it configured
+      # agents to run a binary that was never published for their platform
+      # (#793-23a5). Its own crate, three small dependencies — it costs seconds.
+      - name: Build tuic-bridge
+        working-directory: src-tauri
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+          CARGO_INCREMENTAL: "0"
+          CARGO_PROFILE_RELEASE_STRIP: 'true'
+          RUSTFLAGS: ${{ startsWith(matrix.platform, 'ubuntu') && matrix.target != 'aarch64-unknown-linux-gnu' && '-C link-arg=-fuse-ld=mold' || '' }}
+        run: cargo build --release --package tuic-bridge --target ${{ matrix.target }}
+
       - name: Check named-instance CLI contract (Unix)
         # The Linux ARM artifact is cross-compiled on x64 and cannot run here.
         if: matrix.platform != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
@@ -370,10 +384,15 @@ jobs:
         run: |
           VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
           TAG="v${VERSION}"
-          ASSET="tuic-remote-${{ matrix.target }}${{ matrix.ext }}"
-          cp "src-tauri/target/${{ matrix.target }}/release/tuic-remote${{ matrix.ext }}" "$ASSET"
+          ASSETS=""
+          for BIN in tuic-remote tuic-bridge; do
+            ASSET="${BIN}-${{ matrix.target }}${{ matrix.ext }}"
+            cp "src-tauri/target/${{ matrix.target }}/release/${BIN}${{ matrix.ext }}" "$ASSET"
+            ASSETS="$ASSETS $ASSET"
+          done
           for i in $(seq 1 20); do
-            gh release upload "${TAG}" "$ASSET" --clobber && exit 0
+            # shellcheck disable=SC2086 — the asset names carry no spaces.
+            gh release upload "${TAG}" $ASSETS --clobber && exit 0
             echo "Release not found yet, waiting 30s... (attempt $i/20)"
             sleep 30
           done

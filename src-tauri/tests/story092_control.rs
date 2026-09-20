@@ -59,7 +59,7 @@ fn current(options: &[v1::SessionConfigOption], id: &str) -> Option<String> {
 fn states(seen: &[AcpEventEnvelope]) -> Vec<AcpAttachmentState> {
     seen.iter()
         .filter_map(|event| match event.event {
-            AcpClientEvent::AttachmentState(state) => Some(state),
+            AcpClientEvent::AttachmentState { state } => Some(state),
             _ => None,
         })
         .collect()

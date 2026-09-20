@@ -29,6 +29,10 @@ pub(super) async fn codex_usage_stats() -> Response {
     json_result(crate::codex_usage::get_codex_usage_stats().await)
 }
 
+pub(super) async fn grok_usage_api() -> Response {
+    json_result(crate::grok_usage::get_grok_usage_api().await)
+}
+
 pub(super) async fn claude_usage_timeline(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ClaudeTimelineQuery>,

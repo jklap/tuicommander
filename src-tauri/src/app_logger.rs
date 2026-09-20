@@ -70,6 +70,48 @@ fn resolve_audience(explicit: Option<String>, source: &str) -> String {
     }
 }
 
+/// The target `tracing_log` gives every record it converts from the `log`
+/// facade. The bridge emits bridged records against one static callsite per
+/// level, and that callsite's target is this literal; the record's real target,
+/// module path, file and line travel as fields instead.
+const BRIDGED_LOG_TARGET: &str = "log";
+const BRIDGED_LOG_TARGET_FIELD: &str = "log.target";
+const BRIDGED_LOG_MODULE_FIELD: &str = "log.module_path";
+
+/// Classify an event that arrived over the `log` -> `tracing` bridge, giving
+/// the source to file it under and the audience it belongs to.
+///
+/// TUICommander's own code never calls the `log` facade — every emitter of ours
+/// calls `tracing` and names its own `source` — so a bridged record is by
+/// definition a dependency's internal telemetry and is `diagnostic` however
+/// loud its level. Without this it was neither: the source read as the literal
+/// `"log"`, which is useless to filter on, and `resolve_audience` defaulted it
+/// to `"user"`. A TLS-intercepting middlebox on the network therefore reached
+/// the user as an unbroken flood of "TUICommander errors" from
+/// `rustls_platform_verifier`, one per registry retry, naming nothing anyone
+/// could act on — while the line that *is* actionable ("Upstream '<x>' request
+/// failed") is ours and already carries its own source and audience.
+///
+/// `tracing_subscriber::fmt` unpacks the same fields before printing, which is
+/// why stderr showed the real module all along and the ring buffer did not.
+fn bridged_log_classification(
+    target: &str,
+    extra: Option<&std::collections::BTreeMap<String, String>>,
+) -> Option<(String, String)> {
+    if target != BRIDGED_LOG_TARGET {
+        return None;
+    }
+    let source = extra
+        .and_then(|fields| {
+            fields
+                .get(BRIDGED_LOG_TARGET_FIELD)
+                .or_else(|| fields.get(BRIDGED_LOG_MODULE_FIELD))
+        })
+        .map(String::as_str)
+        .unwrap_or(BRIDGED_LOG_TARGET);
+    Some((source.to_string(), "diagnostic".to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Ring buffer
 // ---------------------------------------------------------------------------
@@ -252,9 +294,16 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RingBufferLayer {
             _ => "debug",
         };
 
+        let bridged = bridged_log_classification(event.metadata().target(), visitor.extra.as_ref());
+        let (bridged_source, bridged_audience) = match bridged {
+            Some((source, audience)) => (Some(source), Some(audience)),
+            None => (None, None),
+        };
+
         let source = visitor
             .source
             .take()
+            .or(bridged_source)
             .unwrap_or_else(|| event.metadata().target().to_string());
 
         let message = visitor.message.take().unwrap_or_default();
@@ -263,7 +312,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for RingBufferLayer {
         }
 
         let data_json = visitor.data_json();
-        let audience = visitor.audience.take();
+        let audience = visitor.audience.take().or(bridged_audience);
         let mut buf = self.buffer.lock();
         buf.push_with_audience(level.to_string(), source, message, data_json, audience);
     }
@@ -836,6 +885,88 @@ mod tests {
             Some("diagnostic".into()),
         );
         assert_eq!(buf.get_entries(0)[0].audience, "diagnostic");
+    }
+
+    // ---- The `log` -> `tracing` bridge ----
+
+    /// The fields `tracing_log` attaches to the record below, verbatim from a
+    /// `rustls_platform_verifier` rejection observed on 2026-09-19 — a TLS
+    /// middlebox on the network serving a self-signed certificate. One ERROR
+    /// per retry, forever, and none of it is about TUICommander.
+    fn tls_verifier_record() -> std::collections::BTreeMap<String, String> {
+        [
+            (
+                "log.target",
+                "rustls_platform_verifier::verification::apple",
+            ),
+            (
+                "log.module_path",
+                "rustls_platform_verifier::verification::apple",
+            ),
+            ("log.file", "src/verification/apple.rs"),
+            ("log.line", "199"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn a_bridged_log_record_is_filed_under_its_real_module_as_diagnostic() {
+        let extra = tls_verifier_record();
+        let (source, audience) = bridged_log_classification(BRIDGED_LOG_TARGET, Some(&extra))
+            .expect("a record on the bridge target is bridged");
+
+        assert_eq!(source, "rustls_platform_verifier::verification::apple");
+        assert_eq!(audience, "diagnostic");
+        // And the audience survives the push: it is explicit, so the source
+        // (not a DIAGNOSTIC_SOURCES member) cannot pull it back to "user".
+        let mut buf = LogRingBuffer::new(10);
+        buf.push_with_audience(
+            "error".into(),
+            source,
+            "failed to verify TLS certificate".into(),
+            None,
+            Some(audience),
+        );
+        assert_eq!(buf.get_entries(0)[0].audience, "diagnostic");
+    }
+
+    #[test]
+    fn a_bridged_record_without_a_target_field_falls_back_to_its_module_path() {
+        let extra: std::collections::BTreeMap<String, String> = [(
+            "log.module_path".to_string(),
+            "some_crate::inner".to_string(),
+        )]
+        .into_iter()
+        .collect();
+
+        let (source, audience) = bridged_log_classification(BRIDGED_LOG_TARGET, Some(&extra))
+            .expect("a record on the bridge target is bridged");
+        assert_eq!(source, "some_crate::inner");
+        assert_eq!(audience, "diagnostic");
+    }
+
+    #[test]
+    fn a_bridged_record_with_no_fields_at_all_is_still_diagnostic() {
+        let (source, audience) = bridged_log_classification(BRIDGED_LOG_TARGET, None)
+            .expect("a record on the bridge target is bridged");
+        // Nothing better to call it, but the audience is the load-bearing half.
+        assert_eq!(source, BRIDGED_LOG_TARGET);
+        assert_eq!(audience, "diagnostic");
+    }
+
+    #[test]
+    fn our_own_events_are_never_reclassified_by_the_bridge() {
+        // The line the user CAN act on when the TLS flood happens. It is ours,
+        // it names its own source, and it must keep the audience it chose.
+        let extra: std::collections::BTreeMap<String, String> =
+            [("upstream".to_string(), "slack".to_string())]
+                .into_iter()
+                .collect();
+        assert!(bridged_log_classification("mcp_registry", Some(&extra)).is_none());
+        // Not even a crate whose own target happens to start with "log".
+        assert!(bridged_log_classification("logging_utils", Some(&extra)).is_none());
     }
 
     #[test]

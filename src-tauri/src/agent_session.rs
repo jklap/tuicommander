@@ -1151,8 +1151,7 @@ mod tests {
     fn test_claude_project_dir_returns_path_with_slug() {
         if let Ok(result) = claude_project_dir("/Users/foo/bar".to_string(), None) {
             assert!(
-                crate::test_support::slashed(&result)
-                    .ends_with("/.claude/projects/-Users-foo-bar"),
+                crate::test_support::slashed(&result).ends_with("/.claude/projects/-Users-foo-bar"),
                 "unexpected path: {result}"
             );
         }

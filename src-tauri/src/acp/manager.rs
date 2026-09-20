@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -28,6 +28,7 @@ use super::{
     AcpInteractionSettlement, AcpNotice, AcpPendingInteraction, AcpReconnectRequest,
     AcpSessionAuthority, AcpTurnId, EgoAcpConfig, EgoCompactRequest, EgoCompactResponse,
     EgoHoldRequest, EgoHoldResponse, build_initialize_request, capability_snapshot, launch_spec,
+    tuicommander_mcp_server,
 };
 
 const INITIAL_GENERATION: u64 = 1;
@@ -70,6 +71,15 @@ pub struct AcpClientManager {
     connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
     next_generation: AtomicU64,
     notices: broadcast::Sender<AcpNotice>,
+    /// The bridge binary an ego session is handed as its one MCP server, or
+    /// `None` when this install has none to point at.
+    ///
+    /// Held here rather than resolved per session because the answer cannot
+    /// change while the process runs — it is a file beside our own executable —
+    /// and because a test needs to name it. Resolving it inside `granted` made
+    /// the session wire shape depend on whether the machine running the suite
+    /// happened to have a `tuic-bridge` on its `PATH`.
+    bridge: Mutex<Option<PathBuf>>,
 }
 
 impl Default for AcpClientManager {
@@ -114,7 +124,36 @@ impl AcpClientManager {
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_generation: AtomicU64::new(INITIAL_GENERATION),
             notices,
+            bridge: Mutex::new(crate::agent_mcp::locate_bridge_binary()),
         }
+    }
+
+    /// Name the bridge binary sessions are given.
+    ///
+    /// Exists for the tests that assert the session wire shape: what they are
+    /// checking is the entry this process builds, and that must not turn on
+    /// whether the machine running the suite has a `tuic-bridge` installed.
+    pub fn set_bridge_binary(&self, bridge: Option<PathBuf>) {
+        *self.bridge.lock() = bridge;
+    }
+
+    /// Replace whatever a caller put in `mcp_servers` with what this process
+    /// actually serves.
+    ///
+    /// Replace rather than extend, and here rather than at each route: the
+    /// session routes are reachable from a browser and take no spawn guard, so
+    /// a list a body could contribute to would let whoever sends one point ego
+    /// at any endpoint it liked. `deny_unknown_fields` refuses such a body one
+    /// layer up; this is the layer that makes a Rust caller unable to do it
+    /// either.
+    fn granted(&self, mut authority: AcpSessionAuthority) -> AcpSessionAuthority {
+        authority.mcp_servers = tuicommander_mcp_server(
+            self.bridge.lock().clone(),
+            crate::app_instance::current_app_instance().named_id(),
+        )
+        .into_iter()
+        .collect();
+        authority
     }
 
     /// Wake signals for every connection this manager holds.
@@ -195,7 +234,9 @@ impl AcpClientManager {
         journal.append(
             None,
             None,
-            AcpClientEvent::ConnectionState(AcpConnectionState::Ready),
+            AcpClientEvent::ConnectionState {
+                state: AcpConnectionState::Ready,
+            },
         );
         let (earliest_sequence, latest_sequence) = journal.bounds();
         let snapshot = AcpConnectionSnapshot {
@@ -254,6 +295,32 @@ impl AcpClientManager {
         connection_id: AcpConnectionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        let authority = self.granted(authority);
+        self.dispatch(connection_id, |reply| Command::NewSession {
+            authority,
+            reply,
+        })
+        .await
+    }
+
+    /// Open a session with no host tools, for a turn nobody is watching.
+    ///
+    /// The only difference from [`new_session`](Self::new_session) is what the
+    /// session may reach. Every attended session is given TUICommander's own
+    /// MCP server, which is how ego drives terminals and repositories; granting
+    /// that to a turn with no one at the keyboard to approve a single call is
+    /// an authority nobody asked for. So the list is emptied here rather than
+    /// filled by `granted`, and it is emptied rather than left to the caller:
+    /// a caller that could choose would be a caller that could choose wrong.
+    ///
+    /// Ego's own tools are still ego's to offer. `acp::oneshot` refuses each
+    /// one as it is asked for.
+    pub async fn new_unattended_session(
+        &self,
+        connection_id: AcpConnectionId,
+        authority: AcpSessionAuthority,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        let authority = unattended(authority);
         self.dispatch(connection_id, |reply| Command::NewSession {
             authority,
             reply,
@@ -272,6 +339,7 @@ impl AcpClientManager {
         session_id: v1::SessionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::Attach {
             kind,
             session_id,
@@ -898,7 +966,7 @@ fn settle_connection(
     // settled is the most recent of them and must survive its own settlement.
     forget_stale_settled(&mut connections);
     drop(connections);
-    journal.append(None, None, AcpClientEvent::ConnectionState(state));
+    journal.append(None, None, AcpClientEvent::ConnectionState { state });
 }
 
 async fn canonical_executable(path: &Path) -> Result<std::path::PathBuf, AcpClientError> {
@@ -934,4 +1002,57 @@ async fn canonical_root(path: &Path) -> Result<std::path::PathBuf, AcpClientErro
         ));
     }
     Ok(root)
+}
+
+/// The counterpart of [`AcpClientManager::granted`] for a turn nobody watches:
+/// whatever the caller brought, the session gets no MCP server.
+///
+/// A free function rather than two lines inside the method so the one rule this
+/// story rests on can be asserted without a live connection.
+fn unattended(authority: AcpSessionAuthority) -> AcpSessionAuthority {
+    AcpSessionAuthority {
+        mcp_servers: Vec::new(),
+        ..authority
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn an_unattended_session_is_given_no_mcp_server() {
+        let authority = AcpSessionAuthority {
+            cwd: PathBuf::from("/repo"),
+            additional_directories: vec![PathBuf::from("/repo/docs")],
+            // The real one, built the way `granted` builds it — an invented
+            // server would prove only that some list was emptied.
+            mcp_servers: tuicommander_mcp_server(
+                Some(PathBuf::from("/opt/tuic/tuic-bridge")),
+                None,
+            )
+            .into_iter()
+            .collect(),
+        };
+        assert_eq!(
+            authority.mcp_servers.len(),
+            1,
+            "the fixture is the real grant"
+        );
+
+        let unattended = unattended(authority);
+
+        // The whole authority of this mode. A turn with nobody at the keyboard
+        // cannot be given the server that drives terminals and repositories,
+        // whatever the caller asked for.
+        assert!(unattended.mcp_servers.is_empty());
+        // And nothing else moves: the directories are what the prompt runs on.
+        assert_eq!(unattended.cwd, PathBuf::from("/repo"));
+        assert_eq!(
+            unattended.additional_directories,
+            vec![PathBuf::from("/repo/docs")]
+        );
+    }
 }

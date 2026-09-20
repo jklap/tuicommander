@@ -395,3 +395,19 @@ pub(crate) async fn acp_respond_elicitation(
         .respond_elicitation(connection_id, request_id, action)
         .await
 }
+
+/// One ego turn with nobody watching, for a Smart Prompt in `api` mode.
+///
+/// The odd one out on this surface: it takes no connection id because it owns
+/// the whole lifetime — launch, one turn, shutdown. A caller cannot hand it a
+/// connection the AI Chat panel is using, and it cannot leave one behind.
+/// Everything it does is in [`crate::acp::oneshot`]; this is only the door.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn acp_one_shot_prompt(
+    state: State<'_, Arc<AppState>>,
+    root: PathBuf,
+    prompt: String,
+) -> Result<crate::acp::oneshot::EgoTurn, AcpClientError> {
+    crate::acp::oneshot::run_prompt(&state, root, prompt).await
+}

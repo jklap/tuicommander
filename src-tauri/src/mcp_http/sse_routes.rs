@@ -247,7 +247,16 @@ fn allows(filter: &Option<Vec<String>>, event_name: &str) -> bool {
 }
 
 /// Extract the normalized event type name (matches SSE `event:` field).
-fn event_type_name(event: &AppEvent) -> &'static str {
+///
+/// Borrowed rather than `&'static str`: a mirrored event carries the far
+/// daemon's own name, so the name is data rather than a constant.
+/// Let another module's test check what name an event leaves this machine under.
+#[cfg(test)]
+pub(crate) fn event_type_name_for_test(event: &AppEvent) -> &str {
+    event_type_name(event)
+}
+
+fn event_type_name(event: &AppEvent) -> &str {
     match event {
         AppEvent::HeadChanged { .. } => "head-changed",
         AppEvent::RepoChanged { .. } => "repo-changed",
@@ -278,13 +287,16 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::GitHubTransition { .. } => "github-transition",
         AppEvent::GitHubIssuesUpdate { .. } => "github-issues-update",
         AppEvent::CloseHtmlTabs { .. } => "close-html-tabs",
-        AppEvent::ScheduledJobCompleted { .. } => "scheduled-job-completed",
-        AppEvent::DiffTriageProgress { .. } => "triage-progress",
-        AppEvent::ReviewProgress { .. } => "review-progress",
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
         AppEvent::ProgressRecorded { .. } => "progress-recorded",
+        AppEvent::ReviewProgress { .. } => "review-progress",
         AppEvent::ProposalsReady { .. } => "proposals-ready",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
+        AppEvent::RemoteConnectionStatusChanged { .. } => "remote-connection-status",
+        // Not "remote-mirrored": a client must not be able to tell a mirrored
+        // event from a local one, and a `?types=` filter has to match the name
+        // the client asked for.
+        AppEvent::RemoteMirrored { event, .. } => event,
     }
 }
 
@@ -459,35 +471,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::CloseHtmlTabs { tab_ids } => {
             serde_json::json!({ "tab_ids": tab_ids })
         }
-        AppEvent::ScheduledJobCompleted {
-            job_id,
-            goal,
-            timed_out,
-        } => {
-            serde_json::json!({ "job_id": job_id, "goal": goal, "timed_out": timed_out })
-        }
-        AppEvent::DiffTriageProgress {
-            repo_path,
-            summary,
-            files,
-            phase,
-            done,
-            llm_used,
-            llm_model,
-        } => {
-            serde_json::json!({
-                "repo_path": repo_path,
-                "summary": summary,
-                "files": files,
-                "phase": phase,
-                "done": done,
-                "llm_used": llm_used,
-                "llm_model": llm_model,
-            })
-        }
-        AppEvent::ReviewProgress { repo_path, payload }
-        | AppEvent::ConflictAssistStatus { repo_path, payload }
+        AppEvent::ConflictAssistStatus { repo_path, payload }
         | AppEvent::ProgressRecorded { repo_path, payload }
+        | AppEvent::ReviewProgress { repo_path, payload }
         | AppEvent::ProposalsReady { repo_path, payload } => {
             serde_json::json!({ "repo_path": repo_path, "payload": payload })
         }
@@ -496,6 +482,11 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             // two transports cannot drift into two shapes for one thing.
             crate::state::session_state_payload(session_id, state)
         }
+        // Already the shape the desktop window emit carries: the publisher builds
+        // it once and hands the same value to both transports.
+        AppEvent::RemoteConnectionStatusChanged { payload } => payload.clone(),
+        // The daemon's own body, untouched.
+        AppEvent::RemoteMirrored { payload, .. } => payload.clone(),
     }
 }
 
@@ -701,26 +692,37 @@ mod tests {
         );
     }
 
-    /// The three GitHub Ops lifecycle events share a `{repo_path, payload}` shape.
+    /// The GitHub Ops lifecycle events share a `{repo_path, payload}` shape.
     /// Each must map to its own SSE `event:` name and round-trip the payload
     /// verbatim so browser/PWA clients receive the same data as desktop.
+    ///
+    /// Two of the three original cases (`review-progress`, `proposals-ready`)
+    /// went with the embedded engine that produced them (#784-0aec); the arm
+    /// they shared is what this still guards.
     #[test]
     fn ops_lifecycle_events_have_distinct_names_and_passthrough_payload() {
         let payload = serde_json::json!({ "pr_number": 42, "phase": "done", "done": true });
         let cases: Vec<(AppEvent, &str)> = vec![
-            (
-                AppEvent::ReviewProgress {
-                    repo_path: "/repo".into(),
-                    payload: payload.clone(),
-                },
-                "review-progress",
-            ),
             (
                 AppEvent::ConflictAssistStatus {
                     repo_path: "/repo".into(),
                     payload: payload.clone(),
                 },
                 "conflict-assist-status",
+            ),
+            (
+                AppEvent::ProgressRecorded {
+                    repo_path: "/repo".into(),
+                    payload: payload.clone(),
+                },
+                "progress-recorded",
+            ),
+            (
+                AppEvent::ReviewProgress {
+                    repo_path: "/repo".into(),
+                    payload: payload.clone(),
+                },
+                "review-progress",
             ),
             (
                 AppEvent::ProposalsReady {
@@ -792,27 +794,6 @@ mod tests {
         // Not flattened: the frontend reads `payload.state.*`, exactly as it
         // reads `session.state.*` from the polled snapshot it replaces.
         assert!(body.get("awaiting_input").is_none());
-    }
-
-    #[test]
-    fn triage_progress_payload_is_flat_not_wrapped() {
-        let event = AppEvent::DiffTriageProgress {
-            repo_path: "/repo".into(),
-            summary: Some("s".into()),
-            files: vec![],
-            phase: "done".into(),
-            done: true,
-            llm_used: true,
-            llm_model: Some("m".into()),
-        };
-        assert_eq!(event_type_name(&event), "triage-progress");
-        let body = event_payload(&event);
-        // Working-tree triage keeps its flat shape (not the {repo_path,payload}
-        // envelope) — existing panel consumers depend on it.
-        assert_eq!(body["repo_path"], "/repo");
-        assert_eq!(body["phase"], "done");
-        assert_eq!(body["done"], true);
-        assert!(body.get("payload").is_none());
     }
 
     /// An ACP wake signal reaches a browser unchanged.
