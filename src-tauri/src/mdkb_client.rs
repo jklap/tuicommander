@@ -22,15 +22,46 @@ pub struct MdkbSymbol {
     pub scope_context: Option<String>,
 }
 
-/// `code_find`'s envelope. `total` is the unclamped match count, so a capped
-/// `symbols` cannot be mistaken for the whole set.
+/// `code_find`'s envelope on the wire.
+///
+/// Both counts are optional because a daemon that does not send them is a
+/// different fact from one that sends zero, and the two must not collapse: an
+/// absent `total` means "mdkb did not say how many there were", never "there
+/// were as many as arrived".
 ///
 /// `cfg(unix)` because only the socket client decodes it; the Windows stub
 /// answers without ever talking to a daemon.
 #[cfg(unix)]
 #[derive(Debug, Deserialize)]
 struct CodeFindResponse {
+    #[serde(default)]
+    total: Option<u32>,
+    #[serde(default)]
+    showing: Option<u32>,
     symbols: Vec<MdkbSymbol>,
+}
+
+/// What `code_find` found, and how much of it this is.
+///
+/// mdkb caps the rows at `limit.unwrap_or(50)` and ships `total` precisely so a
+/// capped list cannot read as the whole set. This client used to parse that
+/// count and throw it away, so fifty matches out of three hundred reached the
+/// UI looking exactly like fifty out of fifty, and raising the cap upstream
+/// would have changed a displayed number with no shape change to notice.
+///
+/// `total` is NOT `symbols.len()`. `None` means mdkb sent no count.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MdkbFindResult {
+    pub symbols: Vec<MdkbSymbol>,
+    pub total: Option<u32>,
+}
+
+impl MdkbFindResult {
+    /// Whether mdkb held rows back. `None` when it did not say — a caller that
+    /// must render a count has to show that it does not know one.
+    pub fn capped(&self) -> Option<bool> {
+        self.total.map(|total| total as usize > self.symbols.len())
+    }
 }
 
 // Unix sockets are not available on Windows
@@ -97,8 +128,8 @@ mod platform {
             _root: &str,
             _name: &str,
             _kind: Option<&str>,
-        ) -> Result<Vec<MdkbSymbol>> {
-            Ok(vec![])
+        ) -> Result<MdkbFindResult> {
+            Ok(MdkbFindResult::default())
         }
     }
 }
@@ -345,7 +376,7 @@ mod platform {
             root: &str,
             name: &str,
             kind: Option<&str>,
-        ) -> Result<Vec<MdkbSymbol>> {
+        ) -> Result<MdkbFindResult> {
             let mut params = json!({ "root": root, "name": name });
             if let Some(k) = kind {
                 params["kind"] = json!(k);
@@ -356,7 +387,22 @@ mod platform {
             // array: the row cap means `total` has to travel with the rows.
             let found: CodeFindResponse =
                 serde_json::from_str(&text).context("mdkb: parse code_find response")?;
-            Ok(found.symbols)
+            // `showing` must describe the rows that actually arrived. When it
+            // does not, this is not the envelope this client understands, and
+            // guessing which of the two numbers to believe would put a wrong
+            // count on screen. Say so instead.
+            if let Some(showing) = found.showing {
+                if showing as usize != found.symbols.len() {
+                    bail!(
+                        "mdkb: code_find reported showing={showing} but sent {} rows",
+                        found.symbols.len()
+                    );
+                }
+            }
+            Ok(MdkbFindResult {
+                symbols: found.symbols,
+                total: found.total,
+            })
         }
     }
 }
@@ -548,10 +594,57 @@ pub(crate) mod tests {
         // swallows the error as "no results" — a silent, total blind spot.
         let (path, _server) = spawn_mock_server().await;
         let mut client = connect_to_mock(&path).await;
-        let symbols = client.code_find("/repo", "foo", None).await.unwrap();
-        assert_eq!(symbols.len(), 1, "envelope rows must be unwrapped");
-        assert_eq!(symbols[0].name, "foo");
-        assert_eq!(symbols[0].file_path, "src/main.rs");
+        let found = client.code_find("/repo", "foo", None).await.unwrap();
+        assert_eq!(found.symbols.len(), 1, "envelope rows must be unwrapped");
+        assert_eq!(found.symbols[0].name, "foo");
+        assert_eq!(found.symbols[0].file_path, "src/main.rs");
+    }
+
+    /// The mock answers `total: 7` with one row: a capped list. That count must
+    /// survive the parse, or the UI shows one match where there are seven.
+    #[tokio::test]
+    async fn a_capped_code_find_list_does_not_read_as_the_whole_set() {
+        let (path, _server) = spawn_mock_server().await;
+        let mut client = connect_to_mock(&path).await;
+        let found = client.code_find("/repo", "foo", None).await.unwrap();
+
+        assert_eq!(found.total, Some(7), "the unclamped count must survive");
+        assert_eq!(
+            found.capped(),
+            Some(true),
+            "one row out of seven matches is a capped list"
+        );
+    }
+
+    /// The other half of the same fact: a list that is complete must say so.
+    /// Without this, `capped()` could return `Some(true)` always and the test
+    /// above would still pass.
+    #[tokio::test]
+    async fn a_complete_code_find_list_is_not_reported_as_capped() {
+        let complete = MdkbFindResult {
+            symbols: vec![MdkbSymbol {
+                name: "foo".into(),
+                kind: "Function".into(),
+                file_path: "src/main.rs".into(),
+                line_start: 4,
+                line_end: Some(8),
+                signature: None,
+                scope_context: None,
+            }],
+            total: Some(1),
+        };
+        assert_eq!(complete.capped(), Some(false));
+    }
+
+    /// A daemon that sends no count leaves the question open. Answering it with
+    /// the row count would be the same lie in a quieter voice.
+    #[tokio::test]
+    async fn a_missing_total_is_unknown_not_complete() {
+        let silent = MdkbFindResult {
+            symbols: vec![],
+            total: None,
+        };
+        assert_eq!(silent.capped(), None);
     }
 
     #[tokio::test]
@@ -660,5 +753,121 @@ pub(crate) mod tests {
         if let Err(err) = result {
             assert!(err.to_string().contains("mdkb: connect"));
         }
+    }
+
+    /// The mdkb binary this machine would actually talk to, or `None`.
+    ///
+    /// Same order the app uses: whatever is on `PATH` first, then the usual
+    /// install location.
+    fn installed_mdkb() -> Option<PathBuf> {
+        if let Ok(out) = std::process::Command::new("sh")
+            .args(["-c", "command -v mdkb"])
+            .output()
+            && out.status.success()
+        {
+            let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        let fallback = dirs::home_dir()?.join(".local/bin/mdkb");
+        fallback.is_file().then_some(fallback)
+    }
+
+    /// mdkb reports symbol lines **0-based**, and `editor_line` adds one.
+    ///
+    /// Every other test around that conversion asserts the SHIFT — that TUIC
+    /// adds one — which stays true whatever mdkb does. If mdkb ever normalised
+    /// `symbol_to_json`'s `line_start` to 1-based, every outline click and
+    /// go-to-definition would land one line late and this repo's suite would
+    /// stay green. This test asserts the SOURCE instead: it runs the installed
+    /// mdkb over a fixture whose symbol sits on a known line and reads back
+    /// what mdkb calls that line.
+    ///
+    /// The daemon it spawns is fully isolated — its own `HOME`, so its own
+    /// `~/.mdkb`, pid file and sockets. It cannot see or disturb the daemon the
+    /// developer is using.
+    ///
+    /// When mdkb is not installed the contract cannot be exercised and the test
+    /// says so on stderr rather than asserting anything. That is a real gap: CI
+    /// runners have no mdkb, so upstream breakage is caught on a developer
+    /// machine, not in CI. Wiring mdkb into CI would close it.
+    #[tokio::test]
+    async fn mdkb_reports_symbol_lines_zero_based() {
+        let Some(mdkb) = installed_mdkb() else {
+            eprintln!(
+                "mdkb_reports_symbol_lines_zero_based: mdkb is not installed, \
+                 so the 0-based line contract went UNCHECKED on this machine"
+            );
+            return;
+        };
+
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let home = tmp.path().join("home");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(home.join(".mdkb")).expect("home");
+        std::fs::create_dir_all(repo.join("src")).expect("repo");
+        // Four comment lines, then the symbol. Human line 5, mdkb line 4.
+        std::fs::write(
+            repo.join("src/lib.rs"),
+            "// 1\n// 2\n// 3\n// 4\npub fn zonk_harvest() {}\n",
+        )
+        .expect("fixture");
+        std::fs::write(
+            home.join(".mdkb/daemon.toml"),
+            format!("whitelist_dirs = [\"{}\"]\n", tmp.path().display()),
+        )
+        .expect("daemon config");
+
+        let run = |args: &[&str]| {
+            std::process::Command::new(&mdkb)
+                .args(args)
+                .current_dir(&repo)
+                .env("HOME", &home)
+                .output()
+                .expect("run mdkb")
+        };
+        run(&["init"]);
+        run(&["code", "index"]);
+        run(&["serve", "--daemon", "--global", "--detach"]);
+
+        let sock = home.join(".mdkb/daemon-hook.sock");
+        let mut stream = None;
+        for _ in 0..50 {
+            if let Ok(s) = UnixStream::connect(&sock).await {
+                stream = Some(s);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let symbols = match stream {
+            Some(stream) => {
+                let mut client = MdkbClient::from_stream(stream, Duration::from_secs(30));
+                client
+                    .symbols_in_file(&repo.to_string_lossy(), "src/lib.rs")
+                    .await
+            }
+            None => Err(anyhow::anyhow!("the isolated daemon never opened {sock:?}")),
+        };
+        // Stop the daemon before asserting, so a failure does not leak it.
+        std::process::Command::new(&mdkb)
+            .args(["daemon", "stop"])
+            .env("HOME", &home)
+            .output()
+            .ok();
+
+        let symbols = symbols.expect("symbols_in_file");
+        let found = symbols
+            .iter()
+            .find(|s| s.name == "zonk_harvest")
+            .unwrap_or_else(|| panic!("mdkb indexed no zonk_harvest: {symbols:?}"));
+        assert_eq!(
+            found.line_start, 4,
+            "mdkb must report `pub fn zonk_harvest` — written on human line 5 — \
+             as line_start 4. It said {}. If mdkb now counts from 1, \
+             `mdkb_commands::editor_line` must stop adding one, or every jump \
+             lands a line late.",
+            found.line_start
+        );
     }
 }

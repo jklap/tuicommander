@@ -148,14 +148,28 @@ pub async fn mdkb_references(
     Ok(to_reference_locations(symbols.unwrap_or_default()))
 }
 
+/// A `code_find` answer, with the count that says whether it is the whole one.
+///
+/// `symbols` alone cannot carry that: mdkb caps the rows, so a list of fifty is
+/// fifty of fifty or fifty of three hundred and the rows look identical either
+/// way. `total` is what mdkb matched before the cap, `None` when mdkb sent no
+/// count — which a caller must render as "unknown", not as `symbols.length`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeFindResult {
+    pub symbols: Vec<OutlineSymbol>,
+    pub total: Option<u32>,
+    pub capped: Option<bool>,
+}
+
 #[tauri::command]
 pub async fn mdkb_code_find(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     name: String,
     kind: Option<String>,
-) -> Result<Vec<OutlineSymbol>, String> {
-    let symbols = with_client(
+) -> Result<CodeFindResult, String> {
+    let found = with_client(
         &state.mdkb_daemon,
         "mdkb_code_find",
         |mut client| async move {
@@ -163,13 +177,15 @@ pub async fn mdkb_code_find(
             (client, result)
         },
     )
-    .await;
+    .await
+    .unwrap_or_default();
 
-    Ok(symbols
-        .unwrap_or_default()
-        .into_iter()
-        .map(OutlineSymbol::from)
-        .collect())
+    let capped = found.capped();
+    Ok(CodeFindResult {
+        symbols: found.symbols.into_iter().map(OutlineSymbol::from).collect(),
+        total: found.total,
+        capped,
+    })
 }
 
 #[tauri::command]
