@@ -40,6 +40,7 @@ authors and communities behind each project.
 | mime_guess | 2.0.5 | MIT |
 | notify | 8.2.0 | CC0-1.0 |
 | oauth2 | 5.0.0 | MIT OR Apache-2.0 |
+| ort | 2.0.0-rc.13 | MIT OR Apache-2.0 |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
 | portable-pty | 0.9.0 | MIT |
 | rand | 0.10.0 | MIT OR Apache-2.0 |
@@ -47,6 +48,8 @@ authors and communities behind each project.
 | reqwest | 0.13.2 | MIT OR Apache-2.0 |
 | rodio | 0.20.1 | MIT OR Apache-2.0 |
 | rustls | 0.23.37 | Apache-2.0 OR ISC OR MIT |
+| safetensors | 0.6.2 | Apache-2.0 |
+| sentencepiece-model | 0.1.4 | BSD-2-Clause |
 | serde | 1.0.228 | MIT OR Apache-2.0 |
 | serde_json | 1.0.149 | MIT OR Apache-2.0 |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 |
@@ -61,6 +64,7 @@ authors and communities behind each project.
 | tauri-plugin-single-instance | 2.4.1 | Apache-2.0 OR MIT |
 | tauri-plugin-updater | 2.10.1 | Apache-2.0 OR MIT |
 | tauri-plugin-window-state | 2.4.1 | Apache-2.0 OR MIT |
+| tokenizers | 0.22.2 | Apache-2.0 |
 | tokio | 1.51.1 | MIT |
 | tokio-tungstenite | 0.28.0 | MIT |
 | tower-http | 0.6.8 | MIT |
@@ -156,15 +160,51 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 | License | Count |
 |---------|-------|
 | MIT | 55 |
-| MIT OR Apache-2.0 | 48 |
-| Apache-2.0 | 2 |
+| MIT OR Apache-2.0 | 49 |
+| Apache-2.0 | 4 |
 | Unlicense OR MIT | 4 |
 | Unlicense | 3 |
 | Apache-2.0 OR ISC OR MIT | 1 |
 | Zlib OR Apache-2.0 OR MIT | 1 |
 | MPL-2.0 | 1 |
 | MPL-2.0 OR Apache-2.0 | 1 |
+| BSD-2-Clause | 1 |
 | CC0-1.0 | 1 |
 
 All dependencies use OSI-approved or public-domain-equivalent licenses compatible
 with commercial and open-source distribution.
+
+---
+
+## Downloaded Model Assets
+
+These are **not** shipped with TUICommander and are **not** in this repository.
+They are downloaded to the user's machine on request, into the dictation models
+directory, and each keeps the license of whoever published it. The notices below
+are reproduced because some of those licenses require attribution wherever the
+work is used.
+
+### Speech synthesis — Pocket TTS
+
+Spoken replies are rendered by **Pocket TTS**, by **Kyutai**, licensed
+**CC-BY-4.0** (<https://creativecommons.org/licenses/by/4.0/>). The per-language
+bundles TUICommander downloads are ONNX exports of the
+`kyutai/pocket-tts-without-voice-cloning` weights, together with their
+SentencePiece tokenizer and speaker embeddings. No changes are made to the
+weights; TUICommander supplies only the runtime that reads them.
+
+CC-BY-4.0 permits commercial use and redistribution and requires that this
+attribution travel with the work.
+
+### Speech synthesis — ONNX Runtime
+
+Those bundles are executed by **ONNX Runtime**, by **Microsoft**, licensed
+**MIT**. It is loaded from a shared library downloaded beside the models rather
+than linked into the application, so it is not a build-time dependency of this
+repository.
+
+### Transcription — Whisper
+
+Dictation transcribes with **Whisper** models by **OpenAI**, licensed **MIT**,
+in the GGML conversions published by ggerganov. The library that runs them,
+`whisper-rs`, is listed under the Rust dependencies above.

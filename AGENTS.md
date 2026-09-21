@@ -19,34 +19,37 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
   5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
   Only use `[HUMAN]` when the item genuinely requires real hardware (audio, IME, touch), multi-app interaction (drag to Finder, global hotkey from another app), or timing-sensitive observation that none of the above can capture. When code-verifying, change `[HUMAN]` to `[x]` with a `_(verified: file:line explanation)_` annotation. When code reveals the description is wrong, change to `[ ]` with a `_(NOTE: ...)_` correction.
 
-## The suite skips 16 tests on purpose — classify them, never pin the count
+## The suite skips every test it cannot run on purpose — classify them, never pin the count
 
-`cargo nextest run --lib` reports 16 skipped. All 16 are `#[ignore]`, each with a
-reason string. None is a `cfg` exclusion and none is a filter artifact, so the
-skips are not missing coverage and not a harness defect: `4605 run, 16 skipped`
-is a **complete** result for what an unattended run can execute.
+`cargo nextest run --lib` reports a handful of skips. Every one is `#[ignore]`
+with a reason string. None is a `cfg` exclusion and none is a filter artifact,
+so the skips are not missing coverage and not a harness defect: `N run, M
+skipped` is a **complete** result for what an unattended run can execute.
 
-| Category | Count | Precondition an unattended run cannot meet |
-|---|---|---|
-| Environment | 9 | interactive Keychain (×4), network + GitHub token (×2), authenticated `gh` CLI, downloaded whisper model, real `openpty` |
-| Corpus-driven | 4 | `TUIC_CAPTURE_CORPUS`, `TUIC_DAMAGE_CORPUS`, `TUIC_REPLAY_FILE`, plus 744-138c's evidence capture |
-| Benchmark | 3 | `bench_chunk_path_replay`, `tunnels::audit::tests::bulk_insert_performance`, `mcp_http::ws_compression::measurement::level_six_is_the_knee_of_the_curve` |
+| Category | Precondition an unattended run cannot meet |
+|---|---|
+| Environment | interactive Keychain (×4), network + GitHub token (×2), authenticated `gh` CLI, a downloaded whisper model, a downloaded Pocket TTS bundle (×3, `TUIC_POCKET_BUNDLE_DIR`), real `openpty` |
+| Corpus-driven | `TUIC_CAPTURE_CORPUS`, `TUIC_DAMAGE_CORPUS`, `TUIC_REPLAY_FILE`, plus 744-138c's evidence capture |
+| Benchmark | `bench_chunk_path_replay`, `tunnels::audit::tests::bulk_insert_performance`, `mcp_http::ws_compression::measurement::level_six_is_the_knee_of_the_curve` |
+
+The per-category counts are deliberately not written down — see "Never assert
+the skip count" below. On 2026-09-21 the three categories held 12, 4 and 3.
 
 **`dump_committed_tcap_fixture_event_sequences_744` is not a pass/fail test.** It
 is an evidence-capture harness for story 744-138c and the comment above it says
 so. Un-ignoring it during a tidy-up of ignored tests is the failure to avoid.
 
 **Re-derive the classification; do not trust a count.** Counting `#[ignore]`
-attributes in the source happens to give 16 today, which is the right answer for
-the wrong reason — it counts one mechanism and cannot see the other two. This
-does discriminate:
+attributes in the source happens to give the right answer for the wrong reason —
+it counts one mechanism and cannot see the other two. This does discriminate:
 
 ```
-cargo nextest list --lib --run-ignored all   ->  4621
-cargo nextest list --lib                     ->  4605
+cargo nextest list --lib --run-ignored all   ->  4851
+cargo nextest list --lib                     ->  4832
 ```
 
-The delta is 16 and the set difference *is* the 16 names. A `cfg`-excluded test
+The delta is the skip count and the set difference *is* those names (19 on
+2026-09-21). A `cfg`-excluded test
 is absent from **both** lists, so the delta would not close if any were excluded
 that way; a filtered skip would move the second number alone.
 `--run-ignored ignored-only` is stronger still: it lists the set instead of
@@ -69,10 +72,11 @@ afternoon as agents land tests in a shared tree (5170 → 5171 → 5172 → 5173
 2026-09-13, all benign), which is exactly why the re-derivation method belongs
 here and the numbers do not.
 
-`--no-default-features` reports 14, one fewer, because `mod dictation` is
-`#[cfg(feature = "desktop")]` (`lib.rs`) and its ignored test does not exist in
-that build — absent rather than skipped. No `#[ignore]` anywhere is
-`cfg`-conditional, so nothing else moves between the two configurations.
+`--no-default-features` reports four fewer, because `mod dictation` is
+`#[cfg(feature = "desktop")]` (`lib.rs`) and its four ignored tests — one
+whisper, three Pocket TTS — do not exist in that build: absent rather than
+skipped. No `#[ignore]` anywhere is `cfg`-conditional, so nothing else moves
+between the two configurations.
 
 ## Which timing assertions are load-bearing
 
