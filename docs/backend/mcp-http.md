@@ -837,7 +837,7 @@ say what was measured, not what the list costs today.
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `voice` | speak, stop, status | Enabled |
 | `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
-| `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
+| `debug` | agent_detection, explain_state, logs, sessions, invoke_js, help | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
 

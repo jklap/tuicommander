@@ -1039,6 +1039,7 @@
 	"tabBar.designModeHostNotice": "Chrome opened on the host machine.",
 	"tabBar.designModeStopped": "Design Mode stopped",
 	"tabBar.designModeTitle": "Design Mode",
+	"tabBar.explainState": "Explain State…",
 	"tabBar.moveToWorktree": "Move to Worktree",
 	"tabBar.newTab": "New Tab",
 	"tabBar.openInBrowser": "Open in Browser",
