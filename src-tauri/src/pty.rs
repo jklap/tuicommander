@@ -77,6 +77,85 @@ const WATCHER_BATCH_CAP: usize = 256 * 1024;
 /// first pulse.
 const ACTIVITY_PULSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// The ONLY way to announce a new session. Every creation path calls this —
+/// `create_pty`/`create_pty_with_worktree` (`pty/commands.rs`),
+/// `register_pty_session` (`mcp_http::session`, itself shared by
+/// `spawn_pty_session`, the HTTP agent-spawn route, and MCP `agent
+/// action=spawn` — the latter publishes bus-only for a print-mode spawn), and
+/// `agent::spawn_agent`.
+///
+/// It must be the FIRST session-scoped announcement for a new id: anything
+/// else (`assign_term_alias`, an accent color, an initial rename) goes after.
+///
+/// `agent_type` MUST be the exact same value the caller's own
+/// `session_states` insert used (see `apply_event_to_session_state`'s
+/// `SessionCreated` arm, `state.rs`, which unconditionally overwrites
+/// `agent_type` from this event on the entry it just created/updated) — a
+/// caller that presets `agent_type` locally and then emits `None` here wipes
+/// its own preset.
+pub(crate) fn emit_session_created(
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<String>,
+    agent_type: Option<String>,
+    display_name: Option<String>,
+    parent_session: Option<String>,
+) {
+    state.emit_dual(session_created_event(
+        state,
+        session_id,
+        cwd,
+        agent_type,
+        display_name,
+        parent_session,
+    ));
+}
+
+/// The `SessionCreated` event for `session_id`, carrying the live TUIC identity
+/// bound to that PTY (`tuic_session`) so a new tab can match its caller's
+/// worktree declaration without a reconnect. Bus-only publishers (MCP print-mode
+/// spawns) build the same event through here, so both shapes stay identical.
+pub(crate) fn session_created_event(
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<String>,
+    agent_type: Option<String>,
+    display_name: Option<String>,
+    parent_session: Option<String>,
+) -> crate::state::AppEvent {
+    crate::state::AppEvent::SessionCreated {
+        session_id: session_id.to_string(),
+        tuic_session: crate::mcp_http::session::live_tuic_sessions_by_pty(state).remove(session_id),
+        cwd,
+        agent_type,
+        display_name,
+        parent_session,
+    }
+}
+
+/// The ONLY way to announce a closed session. Every close path calls this —
+/// `close_pty_core`, `kill_pty_core`, `cleanup_session`, and the reader
+/// thread's own EOF handling.
+///
+/// Reads `agent_type` from `session_states` BEFORE building/sending the
+/// event, not after: the accumulator's own `SessionClosed` arm removes that
+/// entry the moment this event is applied, so a read that happens after
+/// `emit_dual` returns can already find nothing there. This ordering is what
+/// fixes the historical case where the reader-thread's EOF path "usually"
+/// reported `agent_type: None`.
+pub(crate) fn emit_session_closed(state: &AppState, session_id: &str, reason: &str) {
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| s.agent_type.clone());
+    state.emit_dual(crate::state::AppEvent::SessionClosed {
+        session_id: session_id.to_string(),
+        reason: reason.to_string(),
+        agent_type,
+    });
+}
+
 /// Tell this session's frontends that output is flowing. Payload-free by design
 /// — see [`ACTIVITY_PULSE_WINDOW`].
 ///
@@ -5120,26 +5199,7 @@ pub(crate) fn spawn_reader_thread(
                 );
             }
             tracing::info!(source = "pty", session_id = %session_id, "Session closed: process exited");
-            state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-                session_id: session_id.clone(),
-                reason: "process_exit".to_string(),
-            });
-            #[cfg(feature = "desktop")]
-            if let Some(app) = state.app_handle.read().as_ref() {
-                let agent_type = state
-                    .session_maps
-                    .session_states
-                    .get(&session_id)
-                    .and_then(|s| s.agent_type.clone());
-                let _ = app.emit(
-                    "session-closed",
-                    serde_json::json!({
-                        "session_id": session_id,
-                        "reason": "process_exit",
-                        "agent_type": agent_type,
-                    }),
-                );
-            }
+            emit_session_closed(&state, &session_id, "process_exit");
 
             mark_session_exited(&session_id, &state);
         })); // end catch_unwind

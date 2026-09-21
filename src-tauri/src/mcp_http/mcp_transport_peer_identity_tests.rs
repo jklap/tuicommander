@@ -106,7 +106,7 @@ fn replacement_pty_cleanup_reconnect_restores_surviving_parent_identity() {
         None,
         "replacement spawn overwrites the original binding",
     );
-    crate::pty::cleanup_session("replacement", &state);
+    crate::pty::cleanup_session("replacement", &state, "closed");
     drop(replacement);
     assert!(state.session_maps.sessions.contains_key("surviving-parent"));
     assert!(state.live_pty_for_peer(TEST_UUID_A).is_none());

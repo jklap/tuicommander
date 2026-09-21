@@ -66,6 +66,9 @@ pub(crate) fn ensure_live(state: &Arc<AppState>, reference: &str) -> Result<Stri
             alias: record.alias.clone(),
             startup_command: command,
             agent_type: record.agent_type.clone(),
+            // The frontend restores the suspended tab's name, as before.
+            display_name: None,
+            display_name_is_custom: false,
         },
     )
     .map_err(|(_, Json(error))| error.to_string())?;

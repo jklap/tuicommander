@@ -11124,7 +11124,7 @@ mod tests {
             .unwrap();
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
-        crate::pty::cleanup_session("ended-upload", &state);
+        crate::pty::cleanup_session("ended-upload", &state, "closed");
         assert!(
             !path.exists(),
             "ending the session removes fresh attachments too"
@@ -11290,7 +11290,7 @@ mod tests {
         let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let path = std::path::Path::new(reply["path"].as_str().unwrap());
         assert_eq!(std::fs::read(path).unwrap(), b"nested bytes");
-        crate::pty::cleanup_session("nested-upload", &state);
+        crate::pty::cleanup_session("nested-upload", &state, "closed");
         assert_eq!(std::fs::read(legacy).unwrap(), b"user bytes");
         assert_eq!(std::fs::read(exclude).unwrap(), before);
         assert!(!path.exists());

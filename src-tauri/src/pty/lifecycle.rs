@@ -4227,8 +4227,13 @@ fn release_pty_session(session_id: &str, session: PtySession) {
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 #[cfg(test)]
-pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
+pub(crate) fn cleanup_session(session_id: &str, state: &AppState, reason: &str) {
     flush_open_intent_before_session_removal(session_id, state);
+    // Before `remove_live_session_state`, same ordering requirement as
+    // `close_pty_core`/`kill_pty_core`: that call reaps
+    // `state.pty_event_channels`, and emitting after it would silently drop
+    // the session-scoped WS "closed" frame.
+    emit_session_closed(state, session_id, reason);
     remove_pty_session(session_id, state);
     crate::attachments::cleanup_session(&state.data_dir, "pty", session_id);
     remove_live_session_state(session_id, state);
@@ -5089,6 +5094,15 @@ pub(crate) fn close_pty_core_with_reason(
             .insert(session_id.to_string(), status.exit_code() as i32);
     }
 
+    // Announce the close BEFORE tombstone_transient_cleanup: it removes
+    // `state.pty_event_channels` (via `remove_live_session_state`), so
+    // emitting after it means `emit_pty_event` finds no per-session channel
+    // and the session-scoped WS `"closed"` frame is silently never
+    // delivered — see `mcp_http::session::close_session`'s doc comment on
+    // this exact hazard. `reason` above is the log cause; the wire reason of
+    // a requested close is always `closed`.
+    emit_session_closed(state, session_id, "closed");
+
     // Preserve output_buffers, vt_log_buffers, last_output_ms, exit_codes.
     // Tombstone sweeper reaps them after TOMBSTONE_TTL_MS.
     tombstone_transient_cleanup(session_id, state);
@@ -5152,6 +5166,11 @@ pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
             .exit_codes
             .insert(session_id.to_string(), status.exit_code() as i32);
     }
+
+    // See `close_pty_core`'s identical comment: must precede
+    // `tombstone_transient_cleanup`, which reaps the per-session WS channel
+    // this emit needs to deliver the session-scoped "closed" frame.
+    emit_session_closed(state, session_id, "killed");
 
     tombstone_transient_cleanup(session_id, state);
     release_pty_session(session_id, session);
