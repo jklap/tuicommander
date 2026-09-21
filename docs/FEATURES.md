@@ -2095,6 +2095,26 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Catches known failure patterns: IPC flush loops, content-index CPU saturation, a blocked or dead WebView main thread (missed heartbeats — *not* grid frames outstanding, which a hidden terminal produces on purpose by never acking), FD/thread leaks, and sleep/wake false-idle cascades
 - Backend: `src-tauri/src/cpu_watchdog.rs`
 
+### 20.12 Session State Explain
+- Read-only troubleshooting dump for "why is this session's status badge what it is" — a badge
+  showing idle while genuinely working, or working after it already finished, is a regular
+  occurrence as agents change their output over time
+- Reports the four-layer chain that produces the visible badge: the held ranked evidence per
+  axis (busy/idle/awaiting), whether the arbiter would flip the shell state right now
+  (`decide_now`), which rung of the `agent_state` ladder won (`agent_state_rung`), and the
+  frontend's own badge computation — flagging when the two disagree outside a documented
+  carve-out
+- **Decision trail**: an always-on, 64-entry ring recording every evidence-recorder call,
+  including *rejected* attempts and exactly what outranked them — the single most useful field
+  for tracking down a stuck badge, and previously invisible since the rejection `bool` was
+  discarded everywhere it was returned
+- Surfaced identically on all three transports (desktop command, `GET /sessions/{id}/explain-state`,
+  MCP `debug action=explain_state`) from one shared assembler
+- Frontend: an "Explain state" modal reachable from the Activity Dashboard row and the terminal
+  tab context menu, with a copy-as-JSON button
+- Backend: `src-tauri/src/pty/explain.rs`, `src-tauri/src/pty.rs` (`DecisionTrail`), full design
+  in `docs/backend/pty.md`'s "Session State Explain" section
+
 ## 21. CLI Companion (`tuic`)
 
 ### 21.1 Overview

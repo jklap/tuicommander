@@ -326,6 +326,22 @@ GET /sessions/:id/foreground
 
 Returns the foreground process info for a session.
 
+### Explain State
+
+```
+GET /sessions/:id/explain-state
+```
+
+Read-only troubleshooting dump for why a session's status badge is what it is: the ranked
+evidence held per axis (busy/idle/awaiting), whether the arbiter would flip the shell state
+right now (`decide_now`), which rung of the `agent_state` ladder produced the visible state,
+screen/silence-timer bookkeeping, the last `Notification`-sourced classification, and an
+always-on decision trail — including rejected evidence attempts and what outranked them. `404`
+with `{"error": "session not found", "session_id": ...}` if the session doesn't exist. Shares
+`pty/explain.rs::explain_session_state_impl` with the desktop `explain_session_state` Tauri
+command and the MCP `debug action=explain_state` tool — see `docs/backend/pty.md`'s "Session
+state explain" section for the full payload shape.
+
 ### PTY / Terminal Read State
 
 ```

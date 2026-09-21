@@ -24,6 +24,12 @@ mod commands;
 #[cfg(feature = "desktop")]
 pub(crate) use commands::*;
 
+// Not desktop-gated: shared by both the (desktop-only) Tauri command in
+// `commands.rs` and the HTTP route in `mcp_http/session.rs`, which compiles
+// regardless of the `desktop` feature.
+mod explain;
+pub(crate) use explain::*;
+
 /// Get the platform-appropriate default shell when no override is configured.
 pub(crate) fn default_shell() -> String {
     #[cfg(windows)]
@@ -1427,6 +1433,167 @@ fn decide(
     }
 }
 
+/// What kind of evidence-recorder call a [`TrailEntry`] describes. Distinct
+/// from [`EvidenceRank`] (which axis, how strong) — this is which recorder
+/// was invoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrailKind {
+    /// `record_busy`.
+    Busy,
+    /// `record_idle`, or `force_idle` (`forced` distinguishes the two).
+    Idle,
+    /// A one-shot busy-evidence clear (the `evidence.busy = None` sites) —
+    /// not itself rank-gated, so always `accepted: true`, no `outranked_by`.
+    ClearBusy,
+    /// `clear_idle` — drops idle evidence without recording busy.
+    ClearIdle,
+    /// `record_awaiting`.
+    Awaiting,
+    /// `clear_awaiting` — not itself rank-gated, always `accepted: true`.
+    ClearAwaiting,
+    /// `note_user_submission`'s turn boundary. Carries no rank/source of its
+    /// own; a reader segments the trail into turns by this marker instead of
+    /// a plumbed epoch (deliberately not added — see `DecisionTrail`'s doc
+    /// comment).
+    UserSubmit,
+}
+
+/// One entry in a [`DecisionTrail`]. Every field is `Copy`, so a push never
+/// allocates. `rank`/`source` are `None` only for `ClearBusy`/`UserSubmit`,
+/// which carry no evidence of their own.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TrailEntry {
+    pub(crate) at: std::time::Instant,
+    pub(crate) kind: TrailKind,
+    pub(crate) rank: Option<EvidenceRank>,
+    pub(crate) source: Option<&'static str>,
+    /// Whether the recorder accepted this attempt. Always `true` for
+    /// `force_idle` (bypasses the gate by design) and for the non-rank-gated
+    /// kinds; `record_busy`/`record_idle` can be `false`.
+    pub(crate) accepted: bool,
+    /// True when this `Idle` entry came from `force_idle` rather than the
+    /// gated `record_idle`. Always `false` for other kinds.
+    pub(crate) forced: bool,
+    /// The `(rank, source)` of the opposite-verdict evidence that rejected
+    /// this attempt, when `accepted` is `false`. This is the single most
+    /// useful field in the trail: a rejection is otherwise invisible, since
+    /// every pre-existing call site discarded `record_busy`/`record_idle`'s
+    /// returned `bool`.
+    pub(crate) outranked_by: Option<(EvidenceRank, &'static str)>,
+}
+
+/// Fixed capacity of a [`DecisionTrail`] ring: ~48 bytes/entry, so 64 entries
+/// is a few KB per session, bounded by `MAX_CONCURRENT_SESSIONS`.
+const TRAIL_CAPACITY: usize = 64;
+
+/// A bounded, always-on ring of the last [`TRAIL_CAPACITY`] evidence-recorder
+/// calls a session's [`SilenceState`] made — including REJECTED attempts,
+/// which `record_busy`/`record_idle`'s `bool` return makes invisible today
+/// (every call site before this discarded it). This is exactly what a "why is
+/// this session in the wrong state" dump needs: what was attempted, at what
+/// rank, and — when rejected — what outranked it.
+///
+/// Lives here, as a sibling field of `SilenceState::evidence`, NOT inside
+/// `TurnEvidence` itself: `TurnEvidence` is `Clone`d to escape the lock on the
+/// PTY reader's hot path (`apply_working_evidence`, and the reader chunk path
+/// — once per chunk), and today that clone is ~4 words of `Copy` data. A ring
+/// inside it would deep-copy several KB on every chunk. `SilenceState` itself
+/// is only ever reached behind its own mutex, so a push here costs one write
+/// no existing caller wasn't already paying for — no extra lock, no
+/// allocation (every field of `TrailEntry` is `Copy`).
+///
+/// Always-on by design, not gated behind a runtime toggle: a badge is
+/// reported wrong *after* it's already stuck, so a trail you'd have to
+/// enable first would be empty exactly when it's needed.
+///
+/// Carries no turn/session id: the recorders that push here (`SilenceState`
+/// methods and their callers) have no epoch in scope, and plumbing one
+/// through every call site was evaluated and rejected in favor of a `Copy`
+/// ring plus a `UserSubmit` marker entry at the real turn boundary
+/// (`note_user_submission`) — a reader segments the trail by that marker
+/// instead. Do not "fix" this by threading an epoch through every recorder.
+#[derive(Debug, Clone)]
+pub(crate) struct DecisionTrail(std::collections::VecDeque<TrailEntry>);
+
+impl DecisionTrail {
+    fn new() -> Self {
+        Self(std::collections::VecDeque::with_capacity(TRAIL_CAPACITY))
+    }
+
+    /// Collapses an exact repeat of the immediately-previous outcome (same
+    /// `kind`/`rank`/`source`/`accepted`/`forced`/`outranked_by` — `at` is
+    /// deliberately excluded from the comparison, see below) into that same
+    /// entry instead of pushing a new one.
+    ///
+    /// Without this, a no-op call floods the bounded ring with duplicate
+    /// noise on the PTY reader's hot path: `note_busy_evidence()`'s
+    /// `clear_idle()` call fires on every "working"/"real activity" chunk
+    /// regardless of whether there was any idle evidence to clear, and
+    /// `record_busy` re-affirms the identical (rank, source) on every chunk
+    /// of a long streaming turn. Confirmed by review: either alone can evict
+    /// the entire 64-entry ring within under a second of active output,
+    /// wiping out the one rejected-evidence entry ("outranked_by") someone
+    /// opened the dump specifically to find — exactly the failure mode this
+    /// trail exists to prevent.
+    ///
+    /// A repeat keeps the FIRST occurrence's `at`, not the latest — so its
+    /// reported age answers "how long has this been true", not "when was it
+    /// last redundantly re-recorded", which matches every other timestamp in
+    /// this payload (e.g. `Evidence.at` has the identical "preserved across
+    /// repeats" behavior in `record_idle`/`force_idle` for the same reason).
+    fn push(&mut self, entry: TrailEntry) {
+        if let Some(last) = self.0.back()
+            && last.kind == entry.kind
+            && last.rank == entry.rank
+            && last.source == entry.source
+            && last.accepted == entry.accepted
+            && last.forced == entry.forced
+            && last.outranked_by == entry.outranked_by
+        {
+            return;
+        }
+        if self.0.len() == TRAIL_CAPACITY {
+            self.0.pop_front();
+        }
+        self.0.push_back(entry);
+    }
+
+    /// Snapshot for the state-explain payload, oldest first.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = &TrailEntry> {
+        self.0.iter()
+    }
+}
+
+impl Default for DecisionTrail {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The last `Notification`-sourced `state=awaiting` classification this
+/// session made — the same five values `process_chunk` already logs via
+/// `tracing::debug!` ("Notification-sourced state=awaiting classified"), just
+/// also kept for query instead of log-only. `notification_type` needs an
+/// owned `String` (unlike the `&'static str` sources elsewhere in this file),
+/// so this is deliberately NOT part of `DecisionTrail`'s `Copy` ring — a
+/// `Notification` hook fire is rare, so one small allocation here is fine, as
+/// long as it never rides the per-chunk path (it doesn't: this is written
+/// only from the one call site that already computes all five values).
+#[derive(Debug, Clone)]
+pub(crate) struct NotificationClassification {
+    pub(crate) at: std::time::Instant,
+    pub(crate) notification_type: Option<String>,
+    pub(crate) has_message: bool,
+    pub(crate) shell_already_idle: bool,
+    /// `Some(bool)` only when this fire actually produced a `Question` event
+    /// (`payload == "awaiting"`); mirrors the `confident` local already
+    /// logged at the call site.
+    pub(crate) confident: Option<bool>,
+    /// Whether the classification suppressed this fire outright (no event
+    /// reached state.rs's reducer at all).
+    pub(crate) suppressed: bool,
+}
+
 /// Shared state between the PTY reader thread and the silence-detection timer thread.
 #[derive(Clone)]
 pub(crate) struct SilenceState {
@@ -1533,6 +1700,13 @@ pub(crate) struct SilenceState {
     /// records `Evidence` here and is arbitrated by `decide()`, instead of
     /// each call site toggling its own subset of the old flags.
     evidence: TurnEvidence,
+    /// Always-on ring of evidence-recorder calls, including rejections. See
+    /// `DecisionTrail`'s doc comment for why it's a sibling of `evidence`
+    /// rather than a field inside it.
+    trail: DecisionTrail,
+    /// The last `Notification`-sourced `state=awaiting` classification, kept
+    /// for query. See `NotificationClassification`'s doc comment.
+    pub(crate) last_notification_classification: Option<NotificationClassification>,
     /// True only after OSC 7770 `state=` was observed (OSC 133 shell markers do
     /// not prove that an agent's configured hooks are actually running). This
     /// is session-lifetime latch metadata, not per-turn evidence — it never
@@ -1596,6 +1770,8 @@ impl SilenceState {
             declared_background_work: false,
             declared_background_work_turn_epoch: 0,
             evidence: TurnEvidence::default(),
+            trail: DecisionTrail::new(),
+            last_notification_classification: None,
             hook_state_seen: false,
             cached_screen_activity: AgentScreenActivity::Unknown,
             interrupt_requested_at: None,
@@ -1654,7 +1830,7 @@ impl SilenceState {
         } else {
             (EvidenceRank::Silence, "silence-timeout-agent")
         };
-        self.evidence.force_idle(rank, source);
+        self.force_idle(rank, source);
         Some(prior_idle_confirmed)
     }
 
@@ -1752,13 +1928,58 @@ impl SilenceState {
     /// `TurnEvidence::record_awaiting`. Exposed on `SilenceState` (rather than
     /// the `evidence` field, which stays private) so state.rs's PtyParsed
     /// dispatcher can share the same ranked model without pty.rs giving up
-    /// direct control of the busy/idle axis.
+    /// direct control of the busy/idle axis. Wrapped (like `record_busy`/
+    /// `record_idle`) to log a `DecisionTrail` entry, including rejections —
+    /// a rejected awaiting attempt (a low-confidence screen-scrape question
+    /// blocked by an already-held confident one) is exactly the kind of fact
+    /// the trail exists to surface, and this axis is the one this repo's own
+    /// AGENTS.md calls out repeatedly as the hardest to debug.
+    /// Shared constructor for every `DecisionTrail` push site, so the 7-field
+    /// `TrailEntry` literal (and the `at: Instant::now()` it always wants)
+    /// lives in exactly one place. Adding a field to `TrailEntry` only means
+    /// touching this one call, not each of the 8 sites that used to build it
+    /// inline (a review finding: a future field would otherwise silently
+    /// default/stale-out at any site the change missed).
+    fn push_trail(
+        &mut self,
+        kind: TrailKind,
+        rank: Option<EvidenceRank>,
+        source: Option<&'static str>,
+        accepted: bool,
+        forced: bool,
+        outranked_by: Option<(EvidenceRank, &'static str)>,
+    ) {
+        self.trail.push(TrailEntry {
+            at: std::time::Instant::now(),
+            kind,
+            rank,
+            source,
+            accepted,
+            forced,
+            outranked_by,
+        });
+    }
+
     pub(crate) fn record_awaiting(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
-        self.evidence.record_awaiting(rank, source)
+        let accepted = self.evidence.record_awaiting(rank, source);
+        let outranked_by = (!accepted)
+            .then(|| self.evidence.awaiting.filter(|a| a.rank > rank))
+            .flatten()
+            .map(|e| (e.rank, e.source));
+        self.push_trail(
+            TrailKind::Awaiting,
+            Some(rank),
+            Some(source),
+            accepted,
+            false,
+            outranked_by,
+        );
+        accepted
     }
 
     pub(crate) fn clear_awaiting(&mut self) {
         self.evidence.clear_awaiting();
+        self.push_trail(TrailKind::ClearAwaiting, None, None, true, false, None);
     }
 
     pub(crate) fn awaiting_rank(&self) -> Option<EvidenceRank> {
@@ -1779,6 +2000,79 @@ impl SilenceState {
         self.busy_source_is("user-submit")
     }
 
+    /// Wraps `TurnEvidence::record_busy`, appending a `DecisionTrail` entry —
+    /// including on rejection, which the bare `bool` return leaves invisible
+    /// to every existing call site. Every call to `evidence.record_busy` in
+    /// this module goes through this wrapper instead, so the trail can never
+    /// silently miss one.
+    fn record_busy(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
+        let accepted = self.evidence.record_busy(rank, source);
+        let outranked_by = (!accepted)
+            .then(|| {
+                self.evidence
+                    .idle
+                    .filter(|idle| idle.rank > rank)
+                    .or(self.evidence.busy.filter(|busy| busy.rank > rank))
+                    .map(|e| (e.rank, e.source))
+            })
+            .flatten();
+        self.push_trail(
+            TrailKind::Busy,
+            Some(rank),
+            Some(source),
+            accepted,
+            false,
+            outranked_by,
+        );
+        accepted
+    }
+
+    /// Wraps `TurnEvidence::record_idle` — see `record_busy` above.
+    fn record_idle(&mut self, rank: EvidenceRank, source: &'static str) -> bool {
+        let accepted = self.evidence.record_idle(rank, source);
+        let outranked_by = (!accepted)
+            .then(|| {
+                self.evidence
+                    .busy
+                    .filter(|busy| busy.rank > rank)
+                    .or(self.evidence.idle.filter(|idle| idle.rank > rank))
+                    .map(|e| (e.rank, e.source))
+            })
+            .flatten();
+        self.push_trail(
+            TrailKind::Idle,
+            Some(rank),
+            Some(source),
+            accepted,
+            false,
+            outranked_by,
+        );
+        accepted
+    }
+
+    /// Wraps `TurnEvidence::force_idle` — always accepted, bypasses the
+    /// rank gate by design, so `outranked_by` is always `None`.
+    fn force_idle(&mut self, rank: EvidenceRank, source: &'static str) -> Evidence {
+        let evidence = self.evidence.force_idle(rank, source);
+        self.push_trail(TrailKind::Idle, Some(rank), Some(source), true, true, None);
+        evidence
+    }
+
+    /// Wraps `TurnEvidence::clear_idle`.
+    fn clear_idle(&mut self) {
+        self.evidence.clear_idle();
+        self.push_trail(TrailKind::ClearIdle, None, None, true, false, None);
+    }
+
+    /// One-shot busy-evidence clear (the `evidence.busy = None` call sites),
+    /// recorded in the trail as `ClearBusy`. Callers already gate this on
+    /// their own condition (e.g. "was this busy evidence's source the one
+    /// this chunk just applied") — this only performs the clear and logs it.
+    fn clear_busy_evidence(&mut self) {
+        self.evidence.busy = None;
+        self.push_trail(TrailKind::ClearBusy, None, None, true, false, None);
+    }
+
     fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
         self.invalidate_injection_claim();
         self.hook_state_seen |= hook_state;
@@ -1795,7 +2089,7 @@ impl SilenceState {
                 } else {
                     EvidenceRank::Screen
                 };
-                self.evidence.record_busy(rank, source);
+                self.record_busy(rank, source);
                 self.last_status_line_at = Some(std::time::Instant::now());
             }
             SHELL_IDLE => {
@@ -1809,7 +2103,7 @@ impl SilenceState {
                 } else {
                     EvidenceRank::Screen
                 };
-                self.evidence.record_idle(rank, source);
+                self.record_idle(rank, source);
                 self.last_status_line_at = None;
                 self.interrupt_requested_at = None;
                 self.evidence.activity_seen = false;
@@ -1819,7 +2113,7 @@ impl SilenceState {
     }
 
     fn note_busy_evidence(&mut self) {
-        self.evidence.clear_idle();
+        self.clear_idle();
         self.screen_ready_pending_since = None;
     }
 
@@ -1874,8 +2168,7 @@ impl SilenceState {
         if since.elapsed() < AGENT_READY_CONFIRM {
             return false;
         }
-        self.evidence
-            .force_idle(EvidenceRank::Screen, "agent-ready-screen");
+        self.force_idle(EvidenceRank::Screen, "agent-ready-screen");
         self.last_status_line_at = None;
         self.interrupt_requested_at = None;
         self.evidence.activity_seen = false;
@@ -1887,8 +2180,7 @@ impl SilenceState {
             .interrupt_requested_at
             .is_some_and(|at| at.elapsed() < INTERRUPT_PENDING_TTL);
         if pending {
-            self.evidence
-                .force_idle(EvidenceRank::Screen, "interrupted-screen");
+            self.force_idle(EvidenceRank::Screen, "interrupted-screen");
             self.last_status_line_at = None;
             self.screen_ready_pending_since = None;
             self.interrupt_requested_at = None;
@@ -1917,9 +2209,12 @@ impl SilenceState {
         self.interrupt_requested_at = None;
         self.completion_declared = false;
         self.note_busy_evidence();
+        // The real turn boundary — the trail carries no epoch of its own (see
+        // `DecisionTrail`'s doc comment), so a reader segments it into turns
+        // by this marker instead.
+        self.push_trail(TrailKind::UserSubmit, None, None, true, false, None);
         if protocol_instrumented {
-            self.evidence
-                .record_busy(EvidenceRank::Protocol, "user-submit");
+            self.record_busy(EvidenceRank::Protocol, "user-submit");
             self.last_status_line_at = Some(std::time::Instant::now());
             self.evidence.activity_seen = false;
         }
@@ -1938,16 +2233,14 @@ impl SilenceState {
 
     #[cfg(test)]
     pub(crate) fn confirm_idle(&mut self) {
-        self.evidence
-            .force_idle(EvidenceRank::Protocol, "test-confirmed-idle");
+        self.force_idle(EvidenceRank::Protocol, "test-confirmed-idle");
     }
 
     /// Test-only: idle, but not confirmed (mirrors an agent silence-timeout
     /// with no ready-screen adapter — `idle_confirmed()` derives `false`).
     #[cfg(test)]
     pub(crate) fn force_idle_unconfirmed(&mut self) {
-        self.evidence
-            .force_idle(EvidenceRank::Silence, "silence-timeout-agent");
+        self.force_idle(EvidenceRank::Silence, "silence-timeout-agent");
     }
 
     /// Called by resize_pty when the terminal is resized.
@@ -3974,7 +4267,7 @@ fn apply_working_evidence(
         } else {
             EvidenceRank::Screen
         };
-        sl.evidence.record_busy(rank, source);
+        sl.record_busy(rank, source);
         (reopen, sl.evidence.clone())
     };
     if reopened_completion
@@ -4010,7 +4303,7 @@ fn apply_working_evidence(
         .busy
         .is_some_and(|busy| busy.source == source)
     {
-        silence.evidence.busy = None;
+        silence.clear_busy_evidence();
     }
 }
 
@@ -4772,9 +5065,7 @@ fn try_timer_idle_transition(
                     activity_source = "protocol-stale",
                     "authoritative busy signal became stale on a stable ready screen"
                 );
-                silence
-                    .evidence
-                    .force_idle(EvidenceRank::Process, "protocol-stale");
+                silence.force_idle(EvidenceRank::Process, "protocol-stale");
                 true
             }
             AgentScreenActivity::Ready => silence.note_ready_screen(),
@@ -4838,9 +5129,7 @@ fn try_timer_idle_transition(
             // `force_idle`, like the two screen adapters: the `else if` chain
             // above already decided this transition is allowed, so the generic
             // busy-rank gate in `record_idle` must not re-reject it.
-            silence
-                .evidence
-                .force_idle(EvidenceRank::Process, "process");
+            silence.force_idle(EvidenceRank::Process, "process");
         }
         if !screen_confirms_idle {
             // Silence-timeout evidence, forced in regardless of rank: the
@@ -4852,7 +5141,7 @@ fn try_timer_idle_transition(
             } else {
                 "silence-timeout-agent"
             };
-            silence.evidence.force_idle(EvidenceRank::Silence, source);
+            silence.force_idle(EvidenceRank::Silence, source);
         }
         let evidence = match decide(&silence.evidence, true, std::time::Instant::now()) {
             Some(Transition::ToIdle(evidence)) => Some(evidence),
@@ -6843,6 +7132,22 @@ impl ChunkProcessor {
                                     "Notification-sourced state=awaiting classified \
                                      (research: notification confidence)"
                                 );
+                                // Kept for query (state-explain), not just the log
+                                // line above — a rare fire, so one small
+                                // allocation here is fine; never on the per-chunk
+                                // path.
+                                if let Some(sl) = state.session_maps.silence_states.get(session_id)
+                                {
+                                    sl.lock().last_notification_classification =
+                                        Some(NotificationClassification {
+                                            at: std::time::Instant::now(),
+                                            notification_type,
+                                            has_message: notify_message.is_some(),
+                                            shell_already_idle,
+                                            confident,
+                                            suppressed: evt.is_none(),
+                                        });
+                                }
                             }
                             if let Some(evt) = evt {
                                 tuic_events.push(evt);
@@ -7760,7 +8065,7 @@ impl ChunkProcessor {
                     } else {
                         EvidenceRank::Screen
                     };
-                    sl.evidence.record_busy(rank, working_source);
+                    sl.record_busy(rank, working_source);
                     working_applied = true;
                 }
             }
@@ -7777,7 +8082,7 @@ impl ChunkProcessor {
                     } else {
                         "real-activity"
                     };
-                    sl.evidence.record_busy(EvidenceRank::Screen, source);
+                    sl.record_busy(EvidenceRank::Screen, source);
                 }
             }
             // SIGWINCH reflow repaints content rows for longer than the initial 1s
@@ -7876,7 +8181,7 @@ impl ChunkProcessor {
                     || busy.source == "spinner-active"
                     || busy.source == "real-activity"
             }) {
-                silence.evidence.busy = None;
+                silence.clear_busy_evidence();
             }
         }
 

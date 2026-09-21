@@ -227,6 +227,29 @@ When changing an agent's hook event map, adding/removing an OSC 7770 verb, or to
 | `plans/hook-lifecycle.html` (main checkout only, gitignored — NOT repo-root/tracked despite this table's other rows; confirmed absent from `git ls-files` 2026-09-15) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
 | `agent-signal-architecture.html` (repo root, tracked) | Per-agent signal matrix and the command-block/scrollbar-tick section — update if a hook map, block producer, or per-agent classifier changes |
 
+### Session state explain (troubleshooting dump for agent state detection)
+Cross-cutting: `pty.rs`'s ranked-evidence arbiter + `state.rs`'s `agent_state` ladder, all 3
+transports, and the frontend modal. When changing the `SessionStateExplain` payload shape, the
+decision trail, or the notification-classification record:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/pty.rs` | `TrailKind`/`TrailEntry`/`DecisionTrail` (the always-on rejection-visible ring, a sibling field of `SilenceState::evidence` — NOT inside `TurnEvidence`, which is `Clone`d on the PTY reader's hot path); `NotificationClassification`; the `SilenceState` wrapper methods (`record_busy`/`record_idle`/`force_idle`/`clear_idle`/`clear_busy_evidence`) every evidence-recorder call site must route through so the trail can't silently miss one |
+| `src-tauri/src/pty/explain.rs` | `SessionStateExplain` and its section structs (`AgentExplain`/`VisibleExplain`/`EvidenceExplain`/`ScreenExplain`/`SilenceExplain`/`NotificationExplain`/`TrailEntryExplain`), `explain_session_state_impl` — the one assembler both transports share. Never call `get_session_foreground_process_impl`/`detect_agent_screen_activity` from here (side effects); never re-derive the ladder (call `session_state_with_shell_detailed` instead) |
+| `src-tauri/src/state.rs` | `resolve_agent_state` (the extracted `agent_state` ladder — the single copy `session_state_with_shell_detailed` and the explain assembler both consult) and `session_state_with_shell_detailed`'s tuple shape |
+| `src-tauri/src/pty/commands.rs` + `src-tauri/src/lib.rs` | `explain_session_state` Tauri command + `invoke_handler!` registration |
+| `src-tauri/src/mcp_http/session.rs` + `src-tauri/src/mcp_http/mod.rs` | `explain_state` HTTP handler + the `/sessions/{id}/explain-state` route |
+| `src/transport.ts` + `src-tauri/src/mcp_http/command_table_paths.txt` | `explain_session_state` `COMMAND_TABLE` entry; regenerate the snapshot with `pnpm vitest run src/__tests__/transport.test.ts -u`, never hand-edit |
+| `src-tauri/src/mcp_http/mcp_transport.rs` | `DEBUG_ACTIONS`, the tool schema description, `handle_debug`'s `"explain_state"` arm, **and** `handle_debug_unified`'s dispatch/help map — both, or the unified path 404s an action `handle_debug` alone supports |
+| `src/components/StateExplainModal/` | `StateExplainModal.tsx` (payload rendering, the frontend-badge-disagreement banner via `effectiveActivityState`, copy-as-JSON via `writeClipboard` — never `navigator.clipboard` directly, see issue #101), `StateExplainHost.tsx` (mounted once in `ApplicationOverlays.tsx`, same shape as `PtyOpenUrlHost`/`McpConfirmHost`) |
+| `src/stores/stateExplain.ts` | The shared open/close signal both triggers (Activity Dashboard row button, `TabBar.tsx`'s tab context menu) call into |
+| `src/i18n/en.json` | Any new `tabBar.*`/UI label — `i18nKeyCollisions.test.ts` fails the build otherwise |
+| `docs/backend/pty.md` | "Session state explain" section — the four-layer chain (evidence → `SilenceState` bookkeeping → the ladder rung → the frontend badge) and the full payload shape |
+| `docs/api/tauri-commands.md` / `docs/api/http-api.md` | `explain_session_state` entry, beside `debug_agent_detection`/`get_session_foreground_process` |
+| `docs/backend/mcp-http.md` | Debug-actions table row (`explain_state`) |
+| `src-tauri/AGENTS.md` | "Agent state detection" section — how to read a dump, alongside the existing signal table/capture workflow |
+| `agent-signal-architecture.html` | Its "Investigation Playbook" — the new surface belongs there |
+
 ### MCP Tool Surface (native tools, upstream proxy, meta-tools)
 When changing the tool list, tool handlers, `disabled_native_tools`, upstream allow/deny filters, or the Speakeasy meta-tools:
 

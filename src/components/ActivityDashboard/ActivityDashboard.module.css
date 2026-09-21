@@ -219,6 +219,30 @@
   color: var(--fg-primary);
 }
 
+.explainBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: var(--font-xs);
+  line-height: 1;
+  padding: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.explainBtn:hover {
+  opacity: 1;
+  color: var(--fg-primary);
+  background: var(--bg-highlight);
+}
+
 /* Sub-rows: current task, last prompt, agent intent */
 .subRow {
   display: flex;

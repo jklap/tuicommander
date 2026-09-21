@@ -1511,7 +1511,7 @@ mod tests {
         MAX_OPEN_HERE_PATHS, Path, PathBuf, agent_send_parts, build_open_terminal_url,
         capture_query, disposable_roots, is_disposable_root, is_tmux_invocation, looks_like_uuid,
         match_session, resolve_open_here_paths, resolve_path, session_status, short_id, short_repo,
-        strip_verbatim, translate_keys, truncate, urlencod, without_flag,
+        strip_verbatim, translate_keys, truncate, urlencod,
     };
     use serde_json::json;
 

@@ -26,6 +26,7 @@ import { mdTabsStore, type PluginPanelTab } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
+import { stateExplainStore } from "../../stores/stateExplain";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
@@ -305,6 +306,11 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			},
 			{ label: "", separator: true, action: () => {} },
 			{ label: t("tabBar.renameTab", "Rename Tab"), action: () => setEditingId(id) },
+			{
+				label: t("tabBar.explainState", "Explain State…"),
+				action: () => stateExplainStore.open(id),
+				disabled: !hasSession || exited,
+			},
 			detached
 				? {
 						label: t("tabBar.reattachTab", "Reattach to Main Window"),

@@ -833,6 +833,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/foreground",
             get(session::get_foreground_process),
         )
+        .route("/sessions/{id}/explain-state", get(session::explain_state))
         .route("/sessions/{id}/shell-state", get(session::get_shell_state))
         .route(
             "/sessions/{id}/shell-family",

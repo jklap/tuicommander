@@ -586,7 +586,7 @@ Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by de
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
-| `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
+| `debug` | agent_detection, explain_state, logs, sessions, invoke_js, help | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
 

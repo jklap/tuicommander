@@ -853,6 +853,112 @@ a queue position would shift under the caller as the FIFO drains.
 
 **Agent detection:** `detectAgentForTerminal()` fires on shell-state transitions (immediate on idle, 500ms debounce on busy). A 30s fallback poll catches cold starts. This replaces the previous 3s polling interval, reducing syscalls ~30x.
 
+## Session State Explain
+
+A troubleshooting dump for "why is this session's status badge what it is" — a session
+regularly shows `idle` while genuinely working, or `working` after it already finished, because
+the causes shift over time (an agent changes what it prints, a hook stops firing, a screen
+adapter's glyph disappears), and until this feature there was no way to ask the running app why
+it reached its conclusion.
+
+The visible badge is the product of a **four-layer chain**, and the single most valuable thing
+the dump does is say which layer produced the visible answer:
+
+1. **Ranked evidence** — `EvidenceRank`/`Evidence`/`TurnEvidence`, arbitrated by `decide()`
+   (pty.rs). Decides busy vs. idle vs. awaiting for the current turn.
+2. **Session bookkeeping** — `SilenceState` (pty.rs): the hook latch (`hook_state_seen`), the
+   cached screen classification, epoch-scoped `completion_declared`/`declared_background_work`,
+   the silence timer. Decides what evidence is even allowed to be recorded.
+3. **The `agent_state` ladder** — `resolve_agent_state` (state.rs), called by
+   `session_state_with_shell_detailed` and shared verbatim with the explain assembler so the two
+   can never disagree. The seven-rung if/else that yields `agent_state`, tagged with which rung
+   won (`agent_state_rung`, e.g. `"shell_busy"`, `"background_work"`, `"no_agent_type"`).
+4. **The frontend badge** — `effectiveActivityState` (`src/utils/activitySnapshot.ts`). What the
+   sidebar dot / Activity Dashboard actually render — and it can deliberately disagree with layer
+   3 (e.g. `shellState==="idle" && backgroundWork` renders `"idle"` for a ready composer even
+   though `agent_state` is `"working"`).
+
+TUICommander has **no rule-manifest concept** — no versioned rule set, no remote manifest, no
+local-override shadowing. The equivalents reported instead: `hook_state_seen`/`hook_instrumented`
+for "lifecycle authority", `Evidence.source` for "matched rule", `has_ready_screen_adapter` for
+a structural coverage gap (false for `amp`/`cursor`/`droid` — those agents can never reach idle
+from a screen adapter alone).
+
+**The decision trail** (`DecisionTrail`/`TrailEntry`, pty.rs) is the part that doesn't exist
+anywhere else: an always-on, bounded (64-entry) ring on `SilenceState` recording every
+evidence-recorder call, **including rejected attempts** — `record_busy`/`record_idle` return a
+`bool` that every pre-existing call site discarded, so a rejection (weaker evidence arriving
+while stronger opposite-verdict evidence is already held) was previously invisible. Each trail
+entry has `outranked_by: Option<(rank, source)>` naming exactly what blocked it — this is usually
+the actual answer to "why didn't the badge update." Lives as a sibling field of
+`SilenceState::evidence`, not inside `TurnEvidence` itself: `TurnEvidence` is `Clone`d to escape
+the lock on the PTY reader's hot path (once per chunk), and a ring inside it would deep-copy
+several KB per chunk. A `TrailKind::UserSubmit` marker entry at the real turn boundary
+(`note_user_submission`) lets a reader segment the trail into turns; the trail deliberately
+carries no epoch of its own.
+
+**All three axes are covered, not just busy/idle.** `record_awaiting`/`clear_awaiting` push
+`TrailKind::Awaiting`/`ClearAwaiting` entries the same way `record_busy`/`record_idle` do — a
+rejected low-confidence screen-scraped question blocked by an already-held confident one is
+exactly the kind of fact this trail exists to surface, and the awaiting axis is the one this
+repo's own AGENTS.md calls out repeatedly as the hardest to debug.
+
+**`DecisionTrail::push` collapses an exact repeat of the immediately-previous entry** (same
+kind/rank/source/accepted/forced/outranked_by — `at` excluded from the comparison) into that
+same entry instead of pushing a new one. Without this, the bounded ring floods with duplicate
+no-op noise on the PTY reader's hot path: `note_busy_evidence()`'s `clear_idle()` call fires on
+essentially every "working"/"real activity" chunk of a busy streaming turn regardless of whether
+there was idle evidence to clear, and `record_busy` re-affirms identical evidence on every such
+chunk too. Either alone can evict the entire 64-entry ring within under a second of active
+output — wiping out the one rejected-evidence entry someone opened the dump specifically to
+find. A collapsed repeat keeps the *first* occurrence's timestamp, so its reported age answers
+"how long has this been true," not "when was it last redundantly re-recorded" (the same
+"preserve `at` across repeats" behavior `TurnEvidence::record_idle`/`force_idle` already have,
+for the identical reason). A genuinely different outcome right after a repeat still pushes a new
+entry — dedup only ever collapses an exact repeat, never a real transition.
+
+**Assembly** (`pty/explain.rs`, a child module of `pty` so it inherits `SilenceState`/
+`TurnEvidence`'s field privacy instead of needing its own accessor set): `explain_session_state_impl(state, session_id) -> Option<SessionStateExplain>`
+is read-only — it never mutates `session_states` as a side effect. Three functions that look
+like the obvious calls are deliberately NOT used: `get_session_foreground_process_impl` (mirrors
+`agent_type` as a side effect), `detect_agent_screen_activity` (bumps a counter a test asserts
+on, and a fresh classification isn't the one that produced the current state — `cached_screen_activity`
+is reported instead), and nothing re-derives the `agent_state` ladder (the shared
+`resolve_agent_state` is called instead). `decide()` IS re-run on the snapshotted evidence to
+produce `decide_now` — it's pure, so this is genuinely side-effect free, and `decide_now`
+disagreeing with `visible.shell_state` localizes a bug to a missed transition rather than bad
+evidence.
+
+**Payload shape** (`SessionStateExplain`, snake_case): `agent` (agent_type, agent_seen_running,
+hook_instrumented, hook_state_seen, has_ready_screen_adapter), `visible` (shell_state,
+agent_state, agent_state_rung, awaiting_input, background_work, declared_background_work, …),
+`evidence` (busy/idle/awaiting snapshots, activity_seen, idle_confirmed, decide_now), `screen`
+(cached_activity, skipped_by_protocol_authority, no_adapter_for_agent), `silence` (last_output,
+threshold, remaining_before_fire), `notification` (the last `NotificationClassification`, if
+any), `trail` (the ring, oldest first).
+
+**Surfaces** (IPC/HTTP parity, all sharing the one assembler): desktop `#[tauri::command]
+explain_session_state` (`pty/commands.rs`); `GET /sessions/{id}/explain-state`
+(`mcp_http/session.rs`); MCP `debug action=explain_state` (`mcp_http/mcp_transport.rs` — wired
+into **both** `handle_debug` and `handle_debug_unified`, since the unified dispatcher is what a
+real MCP client actually reaches); frontend `explain_session_state` `COMMAND_TABLE` entry
+(`src/transport.ts`) — a real route, not `INTENTIONALLY_UNMAPPED`, since "the badge on my phone
+says idle and it's working" is a browser/remote scenario.
+
+**Frontend**: `src/components/StateExplainModal/StateExplainModal.tsx` renders the payload
+section by section, calls the real `effectiveActivityState` on it (never reimplemented in Rust)
+and shows an explicit banner when the frontend badge disagrees with the backend `agent_state` in
+a way that isn't one of `effectiveActivityState`'s own documented carve-outs. Copy-as-JSON uses
+`writeClipboard`, never `navigator.clipboard` directly (a WKWebView-inside-a-modal bug, issue
+#101). `StateExplainHost.tsx` is mounted once in `ApplicationOverlays.tsx`, the same
+"no UI of its own, reads a shared signal" shape as `PtyOpenUrlHost`/`McpConfirmHost`; both
+triggers — the Activity Dashboard row's icon button and the terminal tab context menu's
+"Explain State…" item — just call `stateExplainStore.open(termId)` (`src/stores/stateExplain.ts`).
+
+**Live check** (no UI needed): `curl -s localhost:9877/sessions/<id>/explain-state | jq` against
+a worktree debug instance's HTTP port — see `src-tauri/AGENTS.md`'s "Test instance vs
+orchestrator instance" section for why `:9877`, not the orchestrator's `:14319`/`:9876`.
+
 ## Amber Tab Styling
 
 Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The tab bar applies an amber gradient background and amber bottom border (`rgba(251, 191, 36, ...)`) to visually distinguish remote-created sessions from locally spawned ones.

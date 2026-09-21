@@ -915,6 +915,25 @@ footer{ border-top:1px solid var(--rule); margin-top:64px; padding-top:24px; col
     7770</a> first if you haven't; this is the "what to actually go do" checklist.</p>
 
     <div class="reason">
+      <h4>0. Pull the live explain-state dump first</h4>
+      <p><code>GET /sessions/{id}/explain-state</code> (desktop: <code>explain_session_state</code>;
+      MCP: <code>debug action=explain_state</code>) is a structured, read-only snapshot of exactly
+      what produced the current badge — the held ranked evidence per axis, whether
+      <code>decide()</code> would flip the shell state right now, which rung of the
+      <code>agent_state</code> ladder won, the last <code>Notification</code> classification (the
+      exact tuple step 3's elevated-log line below reports, but queryable without restarting the
+      app with <code>RUST_LOG=debug</code>), and an always-on 64-entry decision trail —
+      <strong>including rejected evidence attempts and what outranked them</strong>. A rejection
+      (weaker evidence arriving while stronger opposite-verdict evidence is already held) is
+      usually the actual root cause and was previously invisible everywhere:
+      <code>record_busy</code>/<code>record_idle</code>'s <code>bool</code> return was discarded by
+      every call site until this feature. Full design in <code>docs/backend/pty.md</code>'s
+      "Session State Explain" section. Steps 1-4 below still apply when the trail doesn't explain
+      it — a rejection tells you a decision was wrong, not what the agent actually printed on
+      screen.</p>
+    </div>
+
+    <div class="reason">
       <h4>1. Get the facts before theorizing</h4>
       <p>Use the <code>tuicommander</code> MCP tools against the live TUICommander instance (never
       guess from memory): <code>session action=list</code> to find the stuck session, <code>session
