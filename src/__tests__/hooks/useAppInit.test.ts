@@ -990,6 +990,105 @@ describe("initApp", () => {
 		});
 	});
 
+	describe("listActiveSessions failure handling (B.7)", () => {
+		it("a failed initial fetch leaves existing terminals alone and skips eager adoption", async () => {
+			// Pre-existing terminal from BEFORE this initApp call — the exact
+			// state B.7 protects: a transient failure must not wipe it.
+			const preExistingId = terminalsStore.add({
+				sessionId: "pre-existing-session",
+				fontSize: 14,
+				name: "Pre-existing",
+				cwd: "/repo",
+				awaitingInput: null,
+			});
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+
+			await initApp(deps);
+
+			// Not wiped, and not clobbered by an eager (nonexistent) adopt pass.
+			expect(terminalsStore.get(preExistingId)?.sessionId).toBe("pre-existing-session");
+			expect(terminalsStore.get(preExistingId)?.name).toBe("Pre-existing");
+
+			// Drain the background retry loop (always-rejecting mock exhausts all
+			// three delays) so it doesn't leak a dangling promise into later tests.
+			await vi.advanceTimersByTimeAsync(1_000 + 3_000 + 9_000);
+		});
+
+		it("an authoritative empty list still clears stale terminals (distinct from the failure case)", async () => {
+			const staleId = terminalsStore.add({
+				sessionId: "stale-session",
+				fontSize: 14,
+				name: "Stale",
+				cwd: "/repo",
+				awaitingInput: null,
+			});
+
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+
+			await initApp(deps);
+
+			expect(terminalsStore.get(staleId)).toBeUndefined();
+		});
+
+		it("recovers via retry once listActiveSessions succeeds after an initial failure", async () => {
+			const preExistingId = terminalsStore.add({
+				sessionId: "will-be-replaced",
+				fontSize: 14,
+				name: "Pre-existing",
+				cwd: "/repo",
+				awaitingInput: null,
+			});
+
+			const listActiveSessions = vi
+				.fn()
+				.mockRejectedValueOnce(new Error("ECONNREFUSED"))
+				.mockResolvedValueOnce([{ session_id: "recovered-session", cwd: "/repo" }]);
+			const deps = createMockDeps({
+				pty: { listActiveSessions, close: vi.fn().mockResolvedValue(undefined) },
+			});
+
+			await initApp(deps);
+			// Immediately after init: the failure path, terminal left alone, no
+			// adoption yet.
+			expect(terminalsStore.get(preExistingId)?.sessionId).toBe("will-be-replaced");
+
+			// First retry delay (1s) — the mock now resolves.
+			await vi.advanceTimersByTimeAsync(1_000);
+
+			// The stale pre-existing terminal (no real backend session) is pruned,
+			// and the recovered session is adopted as a fresh tab.
+			expect(terminalsStore.get(preExistingId)).toBeUndefined();
+			const recoveredId = terminalsStore.getTerminalForSession("recovered-session");
+			expect(recoveredId).toBeTruthy();
+		});
+
+		it("toasts once all retries are exhausted", async () => {
+			const deps = createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			});
+
+			await initApp(deps);
+			// 1s + 3s + 9s
+			await vi.advanceTimersByTimeAsync(1_000 + 3_000 + 9_000);
+
+			expect(toastsStore.toasts.some((toast) => toast.level === "error")).toBe(true);
+		});
+	});
+
 	it("registers beforeunload handler to close PTY sessions", async () => {
 		const addListenerSpy = vi.spyOn(window, "addEventListener");
 		const deps = createMockDeps();
