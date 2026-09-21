@@ -158,7 +158,9 @@ interface WorkspaceState {
   };                               // derived, workspace-id keyed, never deletion authority
   lastCommitTs: number | null;     // Unix timestamp of last commit
   runCommand?: string;
-  savedTerminals?: SavedTerminal[];
+  savedTerminalsByClient?: Record<string, { savedAt: number; terminals: SavedTerminal[] }>;
+  // Per-client-instance snapshot (keyed by CLIENT_INSTANCE_ID), merged across clients rather
+  // than last-writer-wins. Read via savedTerminalsFor(workspace), never this field directly.
   ciAutoHeal?: { enabled: boolean; attempts: number; lastRunId?: number; healing?: boolean };
   layout?: TabLayout;              // Split layout persisted per-branch
 }
