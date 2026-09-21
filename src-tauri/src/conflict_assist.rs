@@ -32,7 +32,11 @@ pub(crate) struct ConflictAssistResult {
 }
 
 /// Dual-emit the conflict-assist lifecycle event (desktop window + event bus).
-#[cfg(feature = "desktop")]
+///
+/// Only the window emit is gated on the desktop feature — the same shape as
+/// `remote_runtime::publish`. `POST /repo/conflict-assist` is mounted
+/// unconditionally, so the headless build runs this lifecycle for a browser
+/// client that has nothing but `/events` to follow it on.
 fn emit_conflict_assist_status(
     state: &crate::AppState,
     repo_path: &str,
@@ -40,13 +44,14 @@ fn emit_conflict_assist_status(
     status: &str,
     conflicted_files: &[String],
 ) {
-    use tauri::Emitter;
     let payload = serde_json::json!({
         "pr_number": pr_number,
         "status": status,
         "conflicted_files": conflicted_files,
     });
+    #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().clone() {
+        use tauri::Emitter;
         let _ = app.emit(
             "conflict-assist-status",
             serde_json::json!({ "repo_path": repo_path, "payload": payload }),
@@ -58,16 +63,6 @@ fn emit_conflict_assist_status(
             repo_path: repo_path.to_string(),
             payload,
         });
-}
-
-#[cfg(not(feature = "desktop"))]
-fn emit_conflict_assist_status(
-    _state: &crate::AppState,
-    _repo_path: &str,
-    _pr_number: i64,
-    _status: &str,
-    _conflicted_files: &[String],
-) {
 }
 
 /// Fetch the PR base branch and decide what `git rebase` should target.
@@ -336,6 +331,30 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::process::Command;
+
+    /// The third of the three unconditionally-mounted repo routes, held to the
+    /// same rule: the window emit belongs to the desktop, the bus send belongs
+    /// to every build. A headless client watching `/events` is the only reader
+    /// this event has.
+    #[test]
+    fn conflict_assist_status_reaches_the_bus_on_every_build() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+
+        emit_conflict_assist_status(&state, "/repo", 7, "conflicts", &["src/lib.rs".to_string()]);
+
+        match events
+            .try_recv()
+            .expect("the conflict-assist status reaches the event bus")
+        {
+            crate::state::AppEvent::ConflictAssistStatus { repo_path, payload } => {
+                assert_eq!(repo_path, "/repo");
+                assert_eq!(payload["pr_number"], 7);
+                assert_eq!(payload["status"], "conflicts");
+            }
+            other => panic!("expected ConflictAssistStatus, got {other:?}"),
+        }
+    }
 
     /// Fetch bound for the tests below.
     ///
