@@ -21,6 +21,10 @@ TUICommander includes local voice-to-text using Whisper AI. All processing happe
 
 The hotkey works globally — even when TUICommander is not focused.
 
+Pauses do not discard preceding speech from the live preview. Streaming passes
+non-zero audio windows through the same speech gates used by the final
+transcription; the final pass processes the complete retained recording.
+
 ## Models
 
 | Model | Size | Quality |

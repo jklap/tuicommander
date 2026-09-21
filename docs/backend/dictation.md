@@ -13,8 +13,8 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `commands.rs` | Tauri command handlers |
 | `model.rs` | Whisper model download and management |
 | `transcribe.rs` | `Transcriber` trait + `WhisperTranscriber` implementation via whisper-rs |
-| `streaming.rs` | Streaming transcription loop with adaptive windows and VAD |
-| `vad.rs` | Voice Activity Detection (energy-based, ported from whisper.cpp) |
+| `streaming.rs` | Streaming transcription loop with adaptive windows and shared speech gates |
+| `vad.rs` | Tail-silence detector (energy-based, ported from whisper.cpp; not a whole-window speech gate) |
 | `corrections.rs` | Post-processing text corrections |
 
 ## Tauri Commands
@@ -98,7 +98,7 @@ start_dictation()
     │       ├── Poll audio buffer (50ms interval)
     │       ├── Accumulate in step_buf
     │       ├── When step_buf >= window size:
-    │       │       ├── VAD check → skip if silence
+    │       │       ├── Skip all-zero window; otherwise use shared speech gates
     │       │       ├── Build window: [keep_tail | step_buf]
     │       │       ├── whisper_full(window)
     │       │       └── Send partial via mpsc::channel
@@ -129,7 +129,13 @@ Frontend injects text into focus target
 
 ## VAD (Voice Activity Detection)
 
-Ported from whisper.cpp `common.cpp` `vad_simple()`:
+The legacy `vad_simple` helper detects a quiet **tail**, not an entirely silent
+window. Streaming must not use it to discard a complete window: a short phrase
+followed by a pause still contains speech. Streaming skips only all-zero windows
+and passes other audio to the transcriber's shared RMS and speech-confidence
+gates. The complete retained recording still goes through the final pass.
+
+The tail detector is ported from whisper.cpp `common.cpp` `vad_simple()`:
 
 - **Algorithm:** Compare absolute energy of last `last_ms` (1000ms) vs entire buffer
 - **High-pass filter:** First-order RC at 100Hz removes ambient noise (HVAC, fans)
