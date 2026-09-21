@@ -328,6 +328,10 @@ pub struct Disarmed {
     pub session_id: String,
     /// Voice-owned queue ids to cancel. Only ever entries this mode enqueued.
     pub cancel_ids: Vec<u64>,
+    /// The entry hint's queue id, when this arm sent one. `None` means the
+    /// model was never told this conversation began, so it is owed no notice
+    /// that it ended. Also present in `cancel_ids`.
+    pub entry_hint: Option<u64>,
     /// A transcript was waiting out its hold-back and never reached the queue.
     pub discarded_pending: bool,
     /// An utterance was open or a transcription was in flight.
@@ -545,6 +549,13 @@ pub struct HandsFree {
     /// cleared on arm and on disarm — a reply must never be spoken in the
     /// language of a conversation that has ended.
     turn_language: Option<String>,
+    /// The queue id of this arm's entry hint, when one was sent.
+    ///
+    /// Also in `owned`, so a disarm cancels it like any other voice entry. Kept
+    /// separately because the exit hint is owed only to a model that read the
+    /// entry hint, and after the cancel this id is the only way to ask whether
+    /// it did.
+    entry_hint: Option<u64>,
 }
 
 impl HandsFree {
@@ -559,6 +570,7 @@ impl HandsFree {
             last_error: None,
             activation: Activation::default(),
             turn_language: None,
+            entry_hint: None,
         }
     }
 
@@ -637,6 +649,9 @@ impl HandsFree {
         // is nothing to borrow and inheriting the last conversation's language
         // is how a new user is answered in the previous one's.
         self.turn_language = None;
+        // Nothing has been said to the model about this conversation yet, so
+        // nothing is owed to it when the conversation ends.
+        self.entry_hint = None;
         Ok(self.generation)
     }
 
@@ -752,6 +767,19 @@ impl HandsFree {
         }
     }
 
+    /// Record the queue id the Compose FIFO gave this arm's entry hint.
+    ///
+    /// Owned like any other voice entry, so a disarm pulls it back out of the
+    /// queue if the composer has not typed it yet. The phase is deliberately
+    /// left alone: the phase describes what the *user's* speech is doing, and a
+    /// mode that has heard nothing yet is still `Waiting`.
+    pub fn note_hint_enqueued(&mut self, generation: u64, id: u64) {
+        if generation == self.generation && self.binding.is_some() {
+            self.owned.push(id);
+            self.entry_hint = Some(id);
+        }
+    }
+
     /// Queue ids this mode still owns.
     pub fn owned_ids(&self) -> &[u64] {
         &self.owned
@@ -783,6 +811,7 @@ impl HandsFree {
             generation: self.generation,
             session_id,
             cancel_ids: std::mem::take(&mut self.owned),
+            entry_hint: self.entry_hint.take(),
             discarded_pending: self.pending.take().is_some(),
             discarded_capture,
             reason: reason.clone(),
@@ -894,6 +923,85 @@ pub fn deliver_due(
         }
         Err(error) => Some(Err(error)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Telling the model the mode changed (821-842a)
+// ---------------------------------------------------------------------------
+
+/// What the model is told when a hands-free conversation opens.
+///
+/// It names the two things the model cannot observe: that the words arriving
+/// from now on were spoken rather than typed, and that it has a way to answer
+/// out loud. Without the second half the `voice` tool is listed and never used,
+/// because a model with no reason to speak writes text.
+///
+/// One line, for the reason [`compose_entry`] gives: the queue types this into
+/// a terminal and submits it, and a newline in the middle submits half of it.
+pub const MODE_ENTRY_HINT: &str = "Hands-free voice is now on for this terminal: what arrives from \
+     here on was spoken out loud, and you can answer out loud with the voice tool (call it with \
+     action \"speak\"). Keep spoken replies short enough to listen to.";
+
+/// What the model is told when the conversation ends.
+///
+/// Sent only to a model that read the entry hint — see [`deliver_exit_hint`].
+/// Its whole job is to undo that one, so it must not describe a capability or
+/// imply anything is still listening.
+pub const MODE_EXIT_HINT: &str = "Hands-free voice is off for this terminal. The voice tool can no \
+     longer speak here, so reply as text from now on.";
+
+/// Tell the bound model that a hands-free conversation just opened.
+///
+/// Through the Compose FIFO like everything else — so it queues behind whatever
+/// the terminal is already doing, waits out a busy agent or an open dialog the
+/// same way, and lands in the session the mode bound to rather than in whatever
+/// tab the user has since focused. `None` when nothing is armed.
+///
+/// The caller decides whether the user asked for this at all; the mode only
+/// remembers that it was sent.
+pub fn deliver_entry_hint(
+    mode: &mut HandsFree,
+    queue: &dyn VoiceQueue,
+) -> Option<Result<u64, String>> {
+    let binding = mode.binding()?;
+    let session_id = binding.session_id.clone();
+    let generation = mode.generation();
+    match queue.enqueue(&session_id, MODE_ENTRY_HINT, generation) {
+        Ok(id) => {
+            mode.note_hint_enqueued(generation, id);
+            Some(Ok(id))
+        }
+        Err(error) => Some(Err(error)),
+    }
+}
+
+/// Tell the model the conversation ended — but only if it heard it begin.
+///
+/// The cancellation is the evidence. An entry hint still parked when the mode
+/// disarmed has just been pulled back out of the FIFO, so the model never read
+/// it: an exit hint after that would be the only thing it ever heard about a
+/// mode it never had, which is the contradictory pair criterion 3 forbids. An
+/// entry hint the composer had already typed cannot be retracted, so the model
+/// believes it can speak and has to be told otherwise.
+///
+/// Not owned by anything. The mode that enqueued it is gone, and a later disarm
+/// must not be able to cancel the notice that the previous one ended — a rapid
+/// arm/disarm pair therefore leaves the FIFO holding "off" then "on", in the
+/// order they happened.
+///
+/// A target that has gone away refuses the enqueue, which is reported rather
+/// than swallowed: there is nobody left to tell, and that is not a failure of
+/// this call.
+pub fn deliver_exit_hint(
+    queue: &dyn VoiceQueue,
+    disarmed: &Disarmed,
+    cancellation: &VoiceCancellation,
+) -> Option<Result<u64, String>> {
+    let hint = disarmed.entry_hint?;
+    if !cancellation.already_delivered.contains(&hint) {
+        return None;
+    }
+    Some(queue.enqueue(&disarmed.session_id, MODE_EXIT_HINT, disarmed.generation))
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,6 +1348,12 @@ pub fn spawn_runtime(
                             cancellation.cancelled,
                             cancellation.already_delivered
                         );
+                        // Every reason this loop ends for is one the user did
+                        // not ask for — a closed target, a lost owner, a dead
+                        // microphone — so a model that was told the mode began
+                        // has to be told it ended here too, not only on the
+                        // manual path in `commands::disarm_hands_free`.
+                        report_exit_hint(&PtyVoiceQueue(&state), &disarmed, &cancellation);
                         break;
                     }
                     Tick::Running {
@@ -1275,6 +1389,29 @@ fn disarmed_or_not_armed(disarmed: Option<Disarmed>) -> Tick {
     match disarmed {
         Some(disarmed) => Tick::Disarmed(disarmed),
         None => Tick::NotArmed,
+    }
+}
+
+/// [`deliver_exit_hint`] with the outcome logged instead of returned.
+///
+/// The two disarm paths — the user's and this loop's — both want the notice
+/// sent and neither has anybody to hand a failure to: by the time it is sent
+/// the mode is already gone.
+pub(super) fn report_exit_hint(
+    queue: &dyn VoiceQueue,
+    disarmed: &Disarmed,
+    cancellation: &VoiceCancellation,
+) {
+    match deliver_exit_hint(queue, disarmed, cancellation) {
+        Some(Ok(id)) => tracing::info!(
+            source = "dictation",
+            "Hands-free end notice queued as Compose entry {id}"
+        ),
+        Some(Err(error)) => tracing::info!(
+            source = "dictation",
+            "Hands-free end notice not delivered: {error}"
+        ),
+        None => {}
     }
 }
 
@@ -1958,6 +2095,193 @@ mod tests {
         assert_eq!(outcome, Err("Session is not running an agent".to_string()));
         assert!(mode.owned_ids().is_empty());
         assert!(queue.enqueued.borrow().is_empty());
+    }
+
+    // --- Telling the model the mode changed (821-842a) --------------------
+
+    /// The model cannot see a microphone open. If nothing says so, the `voice`
+    /// tool is listed and never called, because a model with no reason to
+    /// speak writes text.
+    #[test]
+    fn a_new_conversation_tells_the_model_it_can_answer_out_loud() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        let sent = deliver_entry_hint(&mut mode, &queue).expect("armed");
+
+        assert_eq!(sent, Ok(1));
+        assert_eq!(
+            queue.enqueued.borrow().as_slice(),
+            [(
+                "target".to_string(),
+                MODE_ENTRY_HINT.to_string(),
+                generation,
+                1
+            )],
+            "the notice goes through the Compose FIFO like every other entry"
+        );
+        assert_eq!(
+            mode.owned_ids(),
+            [1],
+            "an unread notice must be cancellable like any other voice entry"
+        );
+        assert_eq!(
+            *mode.phase(),
+            Phase::Waiting,
+            "a notice is not speech; the phase still describes what the user is doing"
+        );
+    }
+
+    /// The queue types an entry into a terminal and submits it. A second line
+    /// submits the first half of a sentence and leaves the rest as a command.
+    #[test]
+    fn neither_notice_can_submit_half_of_itself() {
+        for notice in [MODE_ENTRY_HINT, MODE_EXIT_HINT] {
+            assert!(
+                !notice.contains('\n') && !notice.contains('\r'),
+                "a notice must be one line: {notice:?}"
+            );
+            assert!(!notice.trim().is_empty());
+        }
+        assert!(
+            MODE_ENTRY_HINT.contains("voice tool"),
+            "the entry notice exists to name the capability"
+        );
+        assert!(
+            !MODE_EXIT_HINT.contains("voice tool can speak"),
+            "the exit notice may not read as an offer"
+        );
+    }
+
+    /// Criterion 3, the contradictory pair: a notice the composer never typed
+    /// is pulled back out, and nothing may be queued to undo something the
+    /// model never read.
+    #[test]
+    fn a_start_notice_the_model_never_read_is_cancelled_and_not_contradicted() {
+        let mut mode = armed();
+        let queue = FakeQueue::default();
+        deliver_entry_hint(&mut mode, &queue).expect("armed");
+
+        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
+        let cancellation = cancel_disarmed(&queue, &disarmed);
+
+        assert_eq!(cancellation.cancelled, [1]);
+        assert_eq!(
+            deliver_exit_hint(&queue, &disarmed, &cancellation),
+            None,
+            "an end notice would be the only thing the model ever heard about the mode"
+        );
+        assert_eq!(
+            queue.enqueued.borrow().len(),
+            1,
+            "nothing new may reach the queue"
+        );
+    }
+
+    /// The other half: once the composer has typed it, nothing can take it
+    /// back, so the model believes it can speak until it is told otherwise.
+    #[test]
+    fn a_start_notice_the_model_read_is_undone_when_the_conversation_ends() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+        deliver_entry_hint(&mut mode, &queue).expect("armed");
+        queue.mark_delivered(1);
+
+        let disarmed = mode.disarm(DisarmReason::TargetClosed).expect("armed");
+        let cancellation = cancel_disarmed(&queue, &disarmed);
+        let sent = deliver_exit_hint(&queue, &disarmed, &cancellation).expect("the model was told");
+
+        assert_eq!(sent, Ok(2));
+        assert_eq!(
+            queue.enqueued.borrow().last(),
+            Some(&(
+                "target".to_string(),
+                MODE_EXIT_HINT.to_string(),
+                generation,
+                2
+            ))
+        );
+    }
+
+    /// The setting is off, so nothing was ever sent — and an end notice on its
+    /// own is worse than silence.
+    #[test]
+    fn a_conversation_the_model_was_never_told_about_ends_quietly() {
+        let mut mode = armed();
+        let queue = FakeQueue::default();
+
+        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
+        let cancellation = cancel_disarmed(&queue, &disarmed);
+
+        assert_eq!(disarmed.entry_hint, None);
+        assert_eq!(deliver_exit_hint(&queue, &disarmed, &cancellation), None);
+        assert!(queue.enqueued.borrow().is_empty());
+    }
+
+    /// Criterion 3's other half: whatever the user does with the hotkey, what
+    /// the model ends up holding matches the mode it is in, in the order the
+    /// changes happened — never two "on"s and never an "off" it cannot place.
+    #[test]
+    fn rapid_arming_leaves_the_model_holding_off_then_on_in_that_order() {
+        let mut mode = armed();
+        let queue = FakeQueue::default();
+        deliver_entry_hint(&mut mode, &queue).expect("armed");
+        queue.mark_delivered(1);
+        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
+        let cancellation = cancel_disarmed(&queue, &disarmed);
+        deliver_exit_hint(&queue, &disarmed, &cancellation).expect("the model was told");
+
+        mode.arm("target", "desktop", true).expect("re-arm");
+        deliver_entry_hint(&mut mode, &queue).expect("armed again");
+
+        let texts: Vec<String> = queue
+            .enqueued
+            .borrow()
+            .iter()
+            .map(|(_, text, _, _)| text.clone())
+            .collect();
+        assert_eq!(
+            texts,
+            [MODE_ENTRY_HINT, MODE_EXIT_HINT, MODE_ENTRY_HINT],
+            "the FIFO must read as the history of the mode, with no repeated state"
+        );
+        assert_eq!(
+            mode.owned_ids(),
+            [3],
+            "the new conversation owns its own notice and nothing from the old one"
+        );
+    }
+
+    /// A late arrival cannot announce a conversation that is not happening.
+    #[test]
+    fn nothing_is_announced_for_a_mode_that_is_not_armed() {
+        let mut mode = HandsFree::new(1_500);
+        let queue = FakeQueue::default();
+
+        assert!(deliver_entry_hint(&mut mode, &queue).is_none());
+        assert!(queue.enqueued.borrow().is_empty());
+    }
+
+    /// A refused notice owns nothing, and — because the model never read it —
+    /// buys no end notice either.
+    #[test]
+    fn a_refused_start_notice_owns_nothing_and_is_never_undone() {
+        let mut mode = armed();
+        let queue = FakeQueue::default();
+        *queue.fail.borrow_mut() = Some("Session is not running an agent".to_string());
+
+        let sent = deliver_entry_hint(&mut mode, &queue).expect("armed");
+
+        assert_eq!(sent, Err("Session is not running an agent".to_string()));
+        assert!(mode.owned_ids().is_empty());
+        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
+        assert_eq!(disarmed.entry_hint, None);
+        assert_eq!(
+            deliver_exit_hint(&queue, &disarmed, &VoiceCancellation::default()),
+            None
+        );
     }
 
     // --- The real Compose queue -------------------------------------------

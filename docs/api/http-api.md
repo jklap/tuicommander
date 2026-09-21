@@ -1554,6 +1554,16 @@ wire and identical on both transports:
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
 
+Arming and disarming also tell the bound model so, unless
+`hands_free_notify_model` is `false` in the dictation config (it defaults to
+`true`; `DictationConfig` is snake_case on the wire, unlike the two structs
+above). The notice is an ordinary Compose entry, so it appears in `queuedIds`
+until the composer types it, and a disarm that arrives first cancels it — in
+which case no end notice is sent, because the model never read the start one.
+`error` carries the reason when the queue refuses a notice; arming still
+succeeds. Turning the setting off never leaves speech running: a disarm revokes
+it either way.
+
 ## Desktop Integration Endpoints
 
 Desktop-only, like the three commands they mirror: the relay client, the audio

@@ -1121,6 +1121,13 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - A language TUICommander transcribes but ships no voice for is **named, never substituted**: the status says which bundle is missing instead of answering in a language the user is not speaking.
 - Changing the language **stops the reply written for the previous one** mid-sentence. Changing any other dictation setting leaves the voice alone.
 
+### 9.10 The model is told when you start and stop talking
+- **Notify model when hands-free changes** (on by default): arming tells the agent that what arrives from now on was spoken and that it can answer out loud; disarming tells it to go back to text.
+- Both notices go through the **Compose queue** like anything else — they wait out a busy agent or an open dialog, and they land in the terminal the conversation was armed for, not in whatever tab you focused since.
+- Change your mind before the agent reads the start notice and it is **withdrawn**, with no stop notice behind it. What the agent ends up holding always matches the mode you are actually in.
+- Turning the option off silences both notices and **nothing else**: disarming still stops the voice, drops queued audio and refuses late replies.
+- **Push-to-talk is untouched.** Holding the hotkey never starts continuous listening, never uses the activation phrase, never makes speech available and never notifies anyone.
+
 ---
 
 ## 10. Prompt Library

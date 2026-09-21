@@ -1232,7 +1232,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "voice",
-            "description": "Speak a reply out loud, when the user is talking to you hands-free.\n\nOnly works while the user has armed hands-free dictation for YOUR terminal: speech belongs to that conversation, not to the application. Call action=status first — if available is false, the reason says why and you must reply in text as usual. Nothing here replaces your normal reply; speaking is in addition to it.\n\nYou do not choose the language or the voice. Both belong to the conversation: the voice is the one for the language the user is speaking, reported as status.language, and it will happily pronounce text in any other language badly. Write the reply in status.language — the same language the hands-free entry told you to answer in.\n\nAccepting a reply is NOT the same as the user hearing it. action=speak returns an utterance_id in state 'queued'; rendering takes seconds and the user can talk over it at any moment. Poll action=status with that utterance_id to learn the outcome: 'finished' means it was heard to the end, 'interrupted' means the user started talking (normal, not an error), 'failed' means it was never audible.\n\nActions:\n- speak: Queue one spoken reply. Requires text (max 2000 characters). Optional turn: the turn you are answering, from an earlier status or from the hands-free notice. Supply it — a reply written for a turn the user has already talked over is then refused instead of spoken over whatever they said next. Omitting it means 'right now'. Returns {utterance_id, state, turn}.\n- stop: Stop talking immediately and drop anything queued. Opens a new turn. Use it when you realise the reply in progress is wrong.\n- status: {available, unavailable_reason, session_id, language, turn, voice, queued, rendering, speaking, last_error}. Optional utterance_id adds {utterance: {utterance_id, state, error?}} for that one reply; a reply too old to remember comes back as state 'unknown'.",
+            "description": "Speak a reply out loud, when the user is talking to you hands-free.\n\nOnly works while the user has armed hands-free dictation for YOUR terminal: speech belongs to that conversation, not to the application. Call action=status first — if available is false, the reason says why and you must reply in text as usual. Nothing here replaces your normal reply; speaking is in addition to it.\n\nThe conversation announces itself. Arming sends you a line saying hands-free voice is now on for this terminal; ending it sends one saying it is off. Both come from TUICommander rather than from the user, and the second is final — after it this tool reports available false and you reply in text again. The user can turn those notices off, so their absence is not proof either way: action=status is.\n\nYou do not choose the language or the voice. Both belong to the conversation: the voice is the one for the language the user is speaking, reported as status.language, and it will happily pronounce text in any other language badly. Write the reply in status.language — the same language the hands-free entry told you to answer in.\n\nAccepting a reply is NOT the same as the user hearing it. action=speak returns an utterance_id in state 'queued'; rendering takes seconds and the user can talk over it at any moment. Poll action=status with that utterance_id to learn the outcome: 'finished' means it was heard to the end, 'interrupted' means the user started talking (normal, not an error), 'failed' means it was never audible.\n\nActions:\n- speak: Queue one spoken reply. Requires text (max 2000 characters). Optional turn: the turn you are answering, from an earlier status or from the hands-free notice. Supply it — a reply written for a turn the user has already talked over is then refused instead of spoken over whatever they said next. Omitting it means 'right now'. Returns {utterance_id, state, turn}.\n- stop: Stop talking immediately and drop anything queued. Opens a new turn. Use it when you realise the reply in progress is wrong.\n- status: {available, unavailable_reason, session_id, language, turn, voice, queued, rendering, speaking, last_error}. Optional utterance_id adds {utterance: {utterance_id, state, error?}} for that one reply; a reply too old to remember comes back as state 'unknown'.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: speak, stop, status" },
                 "text": { "type": "string", "description": "What to say, max 2000 characters (action=speak, required)" },
@@ -7781,6 +7781,25 @@ mod tests {
         assert!(
             description.contains("status.language"),
             "the one field it must write its reply in has to be named: {description}"
+        );
+    }
+
+    /// The two notices arrive as ordinary terminal input, indistinguishable
+    /// from something the user typed unless the tool says whose they are. A
+    /// model that reads "hands-free voice is off" as the user's own words can
+    /// answer it instead of obeying it.
+    #[test]
+    fn the_voice_tool_places_the_notices_the_model_will_receive() {
+        let definition = native_tool_named("voice");
+        let description = definition["description"].as_str().expect("description");
+
+        assert!(
+            description.contains("come from TUICommander rather than from the user"),
+            "a notice with no stated author is just more user input: {description}"
+        );
+        assert!(
+            description.contains("The user can turn those notices off"),
+            "silence must not be readable as 'hands-free is off': {description}"
         );
     }
 

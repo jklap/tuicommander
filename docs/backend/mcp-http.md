@@ -651,6 +651,16 @@ the two would disagree the first time the user switched languages. The
 description says so as well as the schema preventing it, because a model that is
 merely blocked writes its reply in English and wonders why it sounds Italian.
 
+The description also **places the two mode notices** the model will receive
+(`MODE_ENTRY_HINT` and `MODE_EXIT_HINT`, see
+[dictation.md](dictation.md#telling-the-model-the-mode-changed-821-842a)). They
+arrive as ordinary terminal input, indistinguishable from something the user
+typed, so the tool says whose they are and that the end notice is final —
+otherwise a model can answer "hands-free voice is off" instead of obeying it. It
+also says the user can turn them off, so their **absence is not** evidence that
+nothing is armed; `action=status` is.
+`the_voice_tool_places_the_notices_the_model_will_receive` pins both sentences.
+
 This table is generated from the same `*_ACTIONS` constants the schemas use, and
 `every_documented_action_constant_matches_schema_and_description` keeps the three
 in step: the constant, the `action` enum in the schema, and a documenting line in

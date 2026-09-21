@@ -3048,3 +3048,42 @@ model must never answer in a language the user is not speaking.
 - [ ] In the armed terminal's Claude Code, `voice action=status` must report
       `language`, and the tool schema must offer no way to pass a language or a
       voice.
+
+## The model is told when hands-free starts and stops (story `821-842a`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+Automated coverage is in place for the mechanism: the notice reaches the Compose
+FIFO of the bound session, a notice the agent never read is withdrawn instead of
+contradicted, both disarm paths send the end notice, the setting turns both off,
+and push-to-talk sends neither. What no test here can check is whether a real
+model **acts** on them — that is the whole point of the feature, and it needs a
+live agent and Boss's judgement.
+
+Run every item against a throwaway tab in the worktree build, never Boss's live
+sessions. Settings > Dictation now carries **Notify model when hands-free
+changes** (on by default).
+
+- [ ] Arm hands-free on a Claude tab. The tab must receive a line saying voice
+      is on for this terminal, submitted as its own turn. Then say something
+      ordinary and read the reply: the agent should either call the voice tool
+      or explain why it cannot — **not** ignore the notice.
+- [ ] Disarm. The tab must receive the "voice is off, reply as text" line, and
+      the next thing you type must be answered in text with no voice attempt.
+- [ ] **Rapid arm/disarm while the agent is busy.** Arm and disarm again within
+      a second or two while the agent is mid-task. The start notice must
+      disappear from the Compose queue and **no** stop notice may appear — the
+      agent must end up with neither line, not with a lone "voice is off".
+- [ ] Arm, wait for the agent to read the start notice, then close the bound
+      tab. The runtime disarms itself; confirm the log shows the end notice was
+      attempted and reports honestly that the target was gone.
+- [ ] Turn the setting off, arm and disarm. Neither line may appear anywhere.
+      Then, still with it off, arm and check that speech itself still works
+      (`voice action=status` must report `available: true` once a language is
+      known) — the setting must silence the notices and nothing else.
+- [ ] Arm with the setting **on**, let the agent read the start notice, then
+      turn the setting off in Settings while still armed, then disarm. The stop
+      notice must still be sent: the agent was already told voice was on.
+- [ ] Hold the push-to-talk hotkey and dictate a sentence. No notice of either
+      kind may appear, the hands-free badge must stay off, and `voice
+      action=status` must still report `available: false`.
+- [ ] **[VISUAL]** Settings > Dictation: the new toggle must sit with the other
+      dictation toggles and its hint must read clearly at the panel's width.

@@ -100,7 +100,7 @@ own identity so the binding can be checked — see "Who may speak" below.
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase` and `speech_command`). Writes the whole document — see "Configuration persistence" |
+| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model` and `speech_command`). Writes the whole document — see "Configuration persistence" |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -347,6 +347,61 @@ an answer ended; the anchor is worth revisiting there. Interrupting playback is
 that story's work and belongs *upstream* of this gate — stopping a speaker is
 not new model input — but whatever stops playback, the words that follow are new
 model input and stay gated whenever a phrase is configured.
+
+### Telling the model the mode changed (821-842a)
+
+A model cannot see a microphone open. The `voice` tool is listed whether or not
+anything is armed, and a model with no reason to speak writes text — so without
+a notice the feature ships a voice nobody ever hears. Two constants in
+`continuous.rs` carry it:
+
+| Constant | Sent when | Says |
+|---|---|---|
+| `MODE_ENTRY_HINT` | `arm_hands_free_with`, before the runtime starts | what arrives from now on was spoken, and the `voice` tool can answer out loud |
+| `MODE_EXIT_HINT` | both disarm paths | the tool can no longer speak here; reply as text |
+
+`hands_free_notify_model` (default **true**) controls both. Off sends neither
+and changes nothing else — in particular, a disarm still revokes speech, because
+that is a fact about this machine rather than a message to a model.
+
+Five rules, and each of them is a test:
+
+- **The Compose FIFO, like everything else.** `deliver_entry_hint` goes through
+  `VoiceQueue::enqueue`, so a notice queues behind whatever the terminal is
+  doing, waits out the busy/dialog gate, and lands in the session the mode bound
+  to rather than in whatever tab the user has since focused. It is one line, for
+  the reason `compose_entry` gives: the queue types an entry and submits it, and
+  a newline submits half of it.
+- **A parked notice is owned, so it is cancellable.** `note_hint_enqueued`
+  records the id in `owned` and in `entry_hint`, so a disarm pulls it back out
+  of the FIFO like any other voice entry. It does **not** move the phase: the
+  phase describes what the user's speech is doing, and nothing has been said.
+- **The exit notice is owed only to a model that read the entry notice.** The
+  evidence is the cancellation: an id reported `cancelled` was pulled back
+  before the composer typed it, so the model never read it and an exit notice
+  after it would be the only thing it ever heard about a mode it never had. An
+  id reported `already_delivered` cannot be retracted, so the model believes it
+  can speak and has to be told otherwise. That is `deliver_exit_hint`, and it is
+  why a rapid arm/disarm leaves no contradictory pair.
+- **Driven by what this arm sent, never by the setting as it now reads.** A user
+  who turns the notices off mid-conversation has changed what the *next* arm
+  says; a model already holding "you can answer out loud" still gets its exit
+  notice. `disarm_hands_free` therefore never re-reads the config.
+- **Both disarm paths, not just the user's.** `report_exit_hint` is called from
+  `disarm_hands_free` and from the runtime thread's `Tick::Disarmed` arm, so a
+  closed target, a lost owner and a dead microphone all end the model's
+  expectation too. A target that has gone away refuses the enqueue; that is
+  reported, not swallowed — there is nobody left to tell.
+
+A refused entry notice does not fail the arm. The microphone works and the
+Compose queue works for ordinary turns; the reason lands in
+`HandsFreeStatus::error` via `note_send_failed`, and the mode owns nothing, so
+no exit notice follows either.
+
+Push-to-talk shares none of this. It never calls `arm_hands_free`, so it opens
+no VAD runtime, reads no activation phrase, makes no speech available and sends
+no notice — asserted at the surface in
+`push_to_talk_alone_arms_nothing_and_tells_the_model_nothing`.
 
 ### Configuration persistence
 

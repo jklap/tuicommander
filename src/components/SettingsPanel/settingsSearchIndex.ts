@@ -190,6 +190,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "dictation.longPressLabel",
 	},
 	{ tab: "dictation", section: "Dictation Settings", label: "Auto-send", labelKey: "dictation.autoSendLabel" },
+	{
+		tab: "dictation",
+		section: "Dictation Settings",
+		label: "Notify model when hands-free changes",
+		labelKey: "dictation.notifyModelLabel",
+	},
 	{ tab: "dictation", section: "Dictation Settings", label: "Language", labelKey: "dictation.languageLabel" },
 	{ tab: "dictation", section: "Dictation Settings", label: "Microphone", labelKey: "dictation.microphoneLabel" },
 	{

@@ -18,6 +18,8 @@ interface DictationConfig {
 	hands_free_hold_back_ms: number;
 	/** Hands-free activation phrase; empty means ungated. No UI control. */
 	hands_free_activation_phrase: string;
+	/** Tell the bound model when hands-free starts and stops. On by default. */
+	hands_free_notify_model: boolean;
 	/** A user-supplied speech engine as argv; empty means the bundled one. No UI control. */
 	speech_command: string[];
 }
@@ -115,6 +117,14 @@ interface DictationStoreState {
 	devices: AudioDevice[];
 	longPressMs: number;
 	autoSend: boolean;
+	/**
+	 * Whether arming and disarming hands-free tell the bound model so.
+	 *
+	 * Defaults to true, mirroring the Rust default: the voice tool is offered
+	 * whether or not this is set, and a model with no reason to speak answers
+	 * in text.
+	 */
+	notifyModelOnHandsFree: boolean;
 	rmsThreshold: number;
 	noSpeechThreshold: number;
 	capturingHotkey: boolean;
@@ -152,6 +162,7 @@ function createDictationStore() {
 		devices: [],
 		longPressMs: 400,
 		autoSend: false,
+		notifyModelOnHandsFree: true,
 		rmsThreshold: DEFAULT_RMS_THRESHOLD,
 		noSpeechThreshold: DEFAULT_NO_SPEECH_THRESHOLD,
 		capturingHotkey: false,
@@ -204,6 +215,7 @@ function createDictationStore() {
 					selectedDevice: config.device ?? null,
 					longPressMs: config.long_press_ms ?? 400,
 					autoSend: config.auto_send ?? false,
+					notifyModelOnHandsFree: config.hands_free_notify_model ?? true,
 					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
 					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
 				});
@@ -237,6 +249,7 @@ function createDictationStore() {
 					device: partial.device !== undefined ? partial.device : state.selectedDevice,
 					long_press_ms: partial.long_press_ms ?? state.longPressMs,
 					auto_send: partial.auto_send ?? state.autoSend,
+					hands_free_notify_model: partial.hands_free_notify_model ?? state.notifyModelOnHandsFree,
 					rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
 					no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
 				};
@@ -250,6 +263,8 @@ function createDictationStore() {
 				if (partial.device !== undefined) storeUpdate.selectedDevice = partial.device;
 				if (partial.long_press_ms !== undefined) storeUpdate.longPressMs = partial.long_press_ms;
 				if (partial.auto_send !== undefined) storeUpdate.autoSend = partial.auto_send;
+				if (partial.hands_free_notify_model !== undefined)
+					storeUpdate.notifyModelOnHandsFree = partial.hands_free_notify_model;
 				if (partial.rms_threshold !== undefined) storeUpdate.rmsThreshold = partial.rms_threshold;
 				if (partial.no_speech_threshold !== undefined) storeUpdate.noSpeechThreshold = partial.no_speech_threshold;
 				setState(storeUpdate);
@@ -272,6 +287,10 @@ function createDictationStore() {
 
 		setLongPressMs(value: number): void {
 			actions.saveConfig({ long_press_ms: value });
+		},
+
+		setNotifyModelOnHandsFree(value: boolean): void {
+			actions.saveConfig({ hands_free_notify_model: value });
 		},
 
 		setAutoSend(value: boolean): void {
