@@ -72,6 +72,7 @@ pub(super) fn complete_schema(tool: &mut Value) {
                     "worktree_lifecycle",
                     "worktree_create",
                     "worktree_remove",
+                    "worktree_setup_status",
                     "orphan_cleanup_answer",
                     "branch_delete",
                     "progress_list",
@@ -82,7 +83,12 @@ pub(super) fn complete_schema(tool: &mut Value) {
             );
             required(&["set_settings"], &["settings"]);
             required(
-                &["branch_integration", "worktree_lifecycle", "branch_delete"],
+                &[
+                    "branch_integration",
+                    "worktree_lifecycle",
+                    "worktree_setup_status",
+                    "branch_delete",
+                ],
                 &["branch"],
             );
             required(&["orphan_cleanup_answer"], &["decision"]);
