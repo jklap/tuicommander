@@ -165,9 +165,17 @@ pub(super) async fn repo_merged_prs(
 /// The three ego-driven repo features, restored on ACP by story 795-320b.
 ///
 /// They sit here rather than under an `/ai/` prefix because the prefix belonged
-/// to the embedded engine that story 784 deleted. Nothing about these is
-/// desktop-only any more either: the work happens in an ego process reached over
-/// ACP, so `tuic-remote` serves them too.
+/// to the embedded engine that story 784 deleted.
+///
+/// Which servers answer them is not what "desktop-only" would suggest, and the
+/// distinction is between two *binaries*, not two features. They are mounted in
+/// `build_router`, so the desktop app and `run_headless` both serve them —
+/// nothing here needs a window, since the work happens in an ego process
+/// reached over ACP. They are **not** in `shared_routes`, so
+/// `build_remote_router` does not carry them and the `tuic-remote` daemon
+/// answers 404. Moving them is a decision about the remote surface, not a
+/// tidy-up: check `shared_routes_surface_is_locked_and_desktop_only_excluded`
+/// and its `must_exist` list before assuming either way (#810-4986).
 pub(super) async fn repo_generate_changelog(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ChangelogQuery>,
