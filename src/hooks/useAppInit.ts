@@ -363,6 +363,101 @@ function stopSettingsSync(): void {
 }
 
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
+/** One entry of `deps.pty.listActiveSessions()`'s result. */
+type ActiveSessionEntry = Awaited<ReturnType<AppInitDeps["pty"]["listActiveSessions"]>>[number];
+
+/**
+ * Adopt (or reconcile) every surviving PTY session into the store — the core
+ * of B.7's fix. Extracted so the init path and its retry-after-failure path
+ * run the exact same logic instead of two copies that can drift.
+ *
+ * `baseline` is a snapshot of each already-known terminal's shell-state
+ * revision, taken BEFORE this call — it lets a session-created event that
+ * inserted the terminal while this list was in flight win over a stale shell
+ * snapshot from the list itself. See the call site for how it's built.
+ *
+ * `is_remote` records launch provenance; only `connection_id` identifies
+ * execution on another machine. `findSaved` resolves the restart snapshot
+ * entry (by PTY id, then stable TUIC identity) whose font and frontend id
+ * the adopted tab keeps.
+ */
+function applySessionList(
+	sessions: ActiveSessionEntry[],
+	baseline: Map<string, { terminalId: string; shellStateRevision: number }>,
+	deps: AppInitDeps,
+	findSaved: (session: ActiveSessionEntry) => SavedTerminal | undefined,
+): void {
+	if (sessions.length === 0) return;
+	appLogger.info("app", `PTY reconnect: found ${sessions.length} surviving session(s)`);
+	for (const session of sessions) {
+		const existingId = terminalsStore.getTerminalForSession(session.session_id);
+		const saved = findSaved(session);
+		const id =
+			existingId ??
+			terminalsStore.add(
+				{
+					sessionId: session.session_id,
+					fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
+					name: session.display_name || terminalsStore.nextDefaultName(),
+					nameIsCustom: session.display_name_is_custom ?? false,
+					ptyDescription: session.pty_description ?? null,
+					isRemote: Boolean(session.connection_id),
+					isExternallyCreated: session.is_remote ?? false,
+					agentType: parseAgentType(session.state?.agent_type),
+					cwd: session.cwd,
+					awaitingInput: null,
+					agentSessionId: saved?.agentSessionId ?? null,
+					agentLaunchCommand: saved?.agentLaunchCommand ?? null,
+				},
+				saved?.frontendId,
+			);
+		// A session-created event can insert this terminal while the surviving-session
+		// request is pending. Reconcile its independent lifecycle fields too, but do
+		// not let the older shell snapshot overwrite a newer shell-state event.
+		const sessionBaseline = baseline.get(session.session_id);
+		const currentRevision = terminalsStore.getShellStateRevision(id);
+		const canApplySnapshotShell =
+			!existingId ||
+			(sessionBaseline
+				? sessionBaseline.terminalId === existingId && sessionBaseline.shellStateRevision === currentRevision
+				: currentRevision === 0);
+		terminalsStore.update(id, {
+			...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
+			isRemote: Boolean(session.connection_id),
+			...(session.is_remote !== undefined ? { isExternallyCreated: session.is_remote } : {}),
+			...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
+			// Only the row survives a reload, and only the backend knows where the
+			// name came from: every OSC/intent title is synced back as non-custom.
+			nameFromSpawn: session.display_name_from_spawn === true,
+			parentSession: session.parent_session ?? null,
+			placementPath: null,
+			...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
+			...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
+			// The Context bar mounts once intent or prompt is known. Waiting for the
+			// lifecycle sync shows it after the terminal has measured, and the
+			// transient taller PTY height duplicates the agent's rows in history.
+			// The snapshot is complete, as in useAgentPolling: absence retracts.
+			agentIntent: session.state?.agent_intent ?? null,
+			lastPrompt: session.state?.last_prompt ?? null,
+			ptyDescription: session.pty_description ?? null,
+			...(session.alias ? { alias: session.alias } : {}),
+			agentState: session.state?.agent_state ?? null,
+			awaitingInput: session.state?.awaiting_input === true ? "question" : null,
+			awaitingInputConfident: session.state?.question_confident === true,
+			backgroundWork: session.state?.background_work ?? false,
+			lastActivityAt: session.state?.last_activity_ms ?? null,
+			declaredBackgroundWork: session.state?.declared_background_work ?? false,
+		});
+		if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
+
+		assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
+	}
+	terminalsStore.setActive(terminalsStore.getIds()[0]);
+}
+
+/** Bounded retry delays for a failed initial `listActiveSessions` call (B.7). */
+const SESSION_LIST_RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
+
 export async function initApp(deps: AppInitDeps) {
 	const settingsGeneration = ++settingsSyncGeneration;
 	stopSettingsSync();
@@ -849,6 +944,8 @@ export async function initApp(deps: AppInitDeps) {
 	const savedByTuic = new Map(
 		savedTabs.filter(({ tab }) => tab.tuicSession).map((entry) => [entry.tab.tuicSession, entry.tab]),
 	);
+	const findSaved = (session: ActiveSessionEntry): SavedTerminal | undefined =>
+		savedBySession.get(session.session_id) ?? savedByTuic.get(session.tuic_session);
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<SessionCreatedPayload>("session-created", (event) => {
@@ -1241,87 +1338,78 @@ export async function initApp(deps: AppInitDeps) {
 			survivingSessionBaseline.set(terminal.sessionId, { terminalId, shellStateRevision });
 		}
 	}
-	let survivingSessions: Awaited<ReturnType<typeof deps.pty.listActiveSessions>> = [];
+	// Tri-state: distinguish "call succeeded, authoritative list (possibly
+	// empty)" from "call failed, unknown state" (B.7). Only the former may run
+	// the removal loop below — on failure, `survivingSessions` staying `[]`
+	// must NOT be read as "authoritatively zero sessions", or a network blip
+	// or auth failure wipes every pre-init terminal for nothing.
+	let survivingSessions: ActiveSessionEntry[] = [];
+	let sessionListFetchFailed = false;
 	try {
 		survivingSessions = await deps.pty.listActiveSessions();
 	} catch (err) {
-		appLogger.warn("app", "Failed to list active sessions (server unreachable or auth failure)", err);
+		sessionListFetchFailed = true;
+		appLogger.error("app", "Failed to list active sessions (server unreachable or auth failure)", err);
 	}
 
-	// Clear only terminal IDs that existed before initialization. A session-created
-	// event may have added a valid remote tab while listActiveSessions was pending.
-	for (const id of preInitTerminalIds) {
-		terminalsStore.remove(id);
-	}
-
-	// Re-adopt surviving PTY sessions or start fresh. `is_remote` records launch
-	// provenance; only `connection_id` identifies execution on another machine.
-	if (survivingSessions.length > 0) {
-		appLogger.info("app", `PTY reconnect: found ${survivingSessions.length} surviving session(s)`);
-		for (const session of survivingSessions) {
-			const existingId = terminalsStore.getTerminalForSession(session.session_id);
-			const saved = savedBySession.get(session.session_id) ?? savedByTuic.get(session.tuic_session);
-			const id =
-				existingId ??
-				terminalsStore.add(
-					{
-						sessionId: session.session_id,
-						fontSize: saved?.fontSize ?? deps.getDefaultFontSize(),
-						name: session.display_name || terminalsStore.nextDefaultName(),
-						nameIsCustom: session.display_name_is_custom ?? false,
-						ptyDescription: session.pty_description ?? null,
-						isRemote: Boolean(session.connection_id),
-						isExternallyCreated: session.is_remote ?? false,
-						agentType: parseAgentType(session.state?.agent_type),
-						cwd: session.cwd,
-						awaitingInput: null,
-						agentSessionId: saved?.agentSessionId ?? null,
-						agentLaunchCommand: saved?.agentLaunchCommand ?? null,
-					},
-					saved?.frontendId,
-				);
-			// A session-created event can insert this terminal while the surviving-session
-			// request is pending. Reconcile its independent lifecycle fields too, but do
-			// not let the older shell snapshot overwrite a newer shell-state event.
-			const baseline = survivingSessionBaseline.get(session.session_id);
-			const currentRevision = terminalsStore.getShellStateRevision(id);
-			const canApplySnapshotShell =
-				!existingId ||
-				(baseline
-					? baseline.terminalId === existingId && baseline.shellStateRevision === currentRevision
-					: currentRevision === 0);
-			terminalsStore.update(id, {
-				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
-				isRemote: Boolean(session.connection_id),
-				...(session.is_remote !== undefined ? { isExternallyCreated: session.is_remote } : {}),
-				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
-				// Only the row survives a reload, and only the backend knows where the
-				// name came from: every OSC/intent title is synced back as non-custom.
-				nameFromSpawn: session.display_name_from_spawn === true,
-				parentSession: session.parent_session ?? null,
-				placementPath: null,
-				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
-				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
-				// The Context bar mounts once intent or prompt is known. Waiting for the
-				// lifecycle sync shows it after the terminal has measured, and the
-				// transient taller PTY height duplicates the agent's rows in history.
-				// The snapshot is complete, as in useAgentPolling: absence retracts.
-				agentIntent: session.state?.agent_intent ?? null,
-				lastPrompt: session.state?.last_prompt ?? null,
-				ptyDescription: session.pty_description ?? null,
-				...(session.alias ? { alias: session.alias } : {}),
-				agentState: session.state?.agent_state ?? null,
-				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
-				awaitingInputConfident: session.state?.question_confident === true,
-				backgroundWork: session.state?.background_work ?? false,
-				lastActivityAt: session.state?.last_activity_ms ?? null,
-				declaredBackgroundWork: session.state?.declared_background_work ?? false,
-			});
-			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
-
-			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
+	if (!sessionListFetchFailed) {
+		// Clear only terminal IDs that existed before initialization. A session-created
+		// event may have added a valid remote tab while listActiveSessions was pending.
+		for (const id of preInitTerminalIds) {
+			terminalsStore.remove(id);
 		}
-		terminalsStore.setActive(terminalsStore.getIds()[0]);
+		applySessionList(survivingSessions, survivingSessionBaseline, deps, findSaved);
+	} else {
+		// Leave every pre-init terminal untouched and skip the eager
+		// adopt-and-place loop entirely — there is nothing authoritative to
+		// adopt from yet. Still place any surviving terminal that already has
+		// a sessionId: normalizeLoadedRepo already blanked branch.terminals on
+		// hydrate, so without this it would be created but unreachable until
+		// a retry succeeds (which, per B.6, now lands in the Global Workspace
+		// rather than being silently dropped either way).
+		for (const terminalId of preInitTerminalIds) {
+			const terminal = terminalsStore.get(terminalId);
+			if (terminal?.sessionId) {
+				assignSessionToRepoBranch(
+					terminal.sessionId,
+					terminalId,
+					terminal.cwd ?? null,
+					deps.registerRepo,
+					deps.refreshAllBranchStats,
+				);
+			}
+		}
+
+		// Bounded retry: on first success, run the EXACT same adopt-and-prune
+		// logic the init path runs above, so a transient blip self-heals
+		// without a manual reload. Not a fresh call to initApp — this project
+		// stays within the current one, and later init steps (repo/branch
+		// restore, polling) have already run by the time a delayed retry
+		// lands, so this only recovers TAB EXISTENCE, not the cosmetic
+		// active-terminal-in-branch selection those later steps performed.
+		void (async () => {
+			for (const delayMs of SESSION_LIST_RETRY_DELAYS_MS) {
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+				try {
+					const retrySessions = await deps.pty.listActiveSessions();
+					// Same unconditional removal the immediate-success path uses —
+					// an authoritative list finally arrived, so every pre-init id
+					// (including one the immediate-failure fallback above
+					// provisionally re-placed) is superseded by what this fresh
+					// list actually confirms.
+					for (const id of preInitTerminalIds) {
+						terminalsStore.remove(id);
+					}
+					applySessionList(retrySessions, survivingSessionBaseline, deps, findSaved);
+					appLogger.info("app", `PTY reconnect recovered after a retry (${delayMs}ms)`);
+					return;
+				} catch (err) {
+					appLogger.warn("app", `Retry of listActiveSessions failed (waited ${delayMs}ms)`, err);
+				}
+			}
+			appLogger.error("app", "Failed to list active sessions after all retries — giving up");
+			toastsStore.add("Couldn't reach the backend", "Some terminal tabs may be missing until you reload.", "error");
+		})();
 	}
 
 	// A suspended tab has no live PTY to discover, even without live siblings.

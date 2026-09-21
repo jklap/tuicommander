@@ -70,6 +70,7 @@ describe("worktree placement lifecycle regressions", () => {
 		await testInScopeAsync(async () => {
 			const repo = repositoriesStore.get(REPO);
 			if (!repo) throw new Error("fixture repository missing");
+			// Per-client snapshot (B.5, savedTerminalsByClient); a `test` client key.
 			repositoriesStore.setWorkspace(REPO, "feature", {
 				savedTerminalsByClient: {
 					[CLIENT_INSTANCE_ID]: {
