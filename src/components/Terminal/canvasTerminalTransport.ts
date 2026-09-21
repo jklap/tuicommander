@@ -2,7 +2,7 @@ import { appLogger } from "../../stores/appLogger";
 import { isTauri, rpc } from "../../transport";
 import { getRemoteBaseUrl, withRemoteToken } from "../../transportRuntime";
 import { isPerfDebug } from "../../utils/perfDebug";
-import { canDecodeDeflate, decodeTaggedFrame } from "./wsFrameCodec";
+import { canDecodeDeflate, DEFLATE_SUBPROTOCOL, decodeTaggedFrame } from "./wsFrameCodec";
 
 export interface TerminalTransport {
 	subscribe(onFrame: (data: ArrayBuffer) => void): Promise<void>;
@@ -219,8 +219,8 @@ export class WsTransport implements TerminalTransport {
 		// runtime with the platform inflate can read the answer. Asking for an
 		// encoding we cannot decode would break the terminal rather than slow
 		// it down, so both have to hold.
-		const compressed = Boolean(this.connectionId) && canDecodeDeflate();
-		const query = compressed ? "format=grid&compress=deflate" : "format=grid";
+		const asksForCompression = Boolean(this.connectionId) && canDecodeDeflate();
+		const query = asksForCompression ? "format=grid&compress=deflate" : "format=grid";
 		if (this.connectionId) {
 			if (!remoteBaseUrl) {
 				// Not connected, or connected but unauthenticated: there is no URL to
@@ -245,7 +245,11 @@ export class WsTransport implements TerminalTransport {
 		// unexpected drop and reconnects a socket nobody tracks, and its onmessage
 		// feeds deltas from an older stream into the same row map — an old delta
 		// landing after a newer full frame paints stale rows with no error.
-		const ws = new WebSocket(url);
+		// The subprotocol is offered alongside the query parameter, and it is the
+		// half that comes back: the server selects it only when it is going to tag
+		// its frames. A server that predates the parameter answers with neither,
+		// and `compressed` below stays false.
+		const ws = asksForCompression ? new WebSocket(url, [DEFLATE_SUBPROTOCOL]) : new WebSocket(url);
 		this.ws = ws;
 		ws.binaryType = "arraybuffer";
 		// Inflating a frame is asynchronous, and grid frames are DELTAS: one
@@ -254,6 +258,9 @@ export class WsTransport implements TerminalTransport {
 		// included, so their order relative to the deltas is the order the
 		// server sent them in.
 		let pending: Promise<void> = Promise.resolve();
+		// Set in onopen, which the WebSocket spec fires before any message event
+		// on the same socket — so no frame is ever read against the wrong framing.
+		let compressed = false;
 		ws.onmessage = (e) => {
 			if (this.ws !== ws) return;
 			if (!compressed) {
@@ -306,7 +313,15 @@ export class WsTransport implements TerminalTransport {
 			}, delay);
 		};
 		await new Promise<void>((resolve, reject) => {
-			ws.onopen = () => resolve();
+			ws.onopen = () => {
+				compressed = ws.protocol === DEFLATE_SUBPROTOCOL;
+				if (asksForCompression && !compressed) {
+					appLogger.debug("terminal", "WsTransport asked for compression and the server did not take it", {
+						sessionId: this.sessionId,
+					});
+				}
+				resolve();
+			};
 			ws.onerror = () => reject(new Error("WebSocket connection failed"));
 		});
 	}

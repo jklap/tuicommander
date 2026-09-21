@@ -2643,3 +2643,27 @@ call fits inside the router's bound.
 - [ ] Press Connect on a remote machine and navigate away immediately. The
       machine must still reach `connected` (or `error`) — never stay stuck on
       `connecting`, which used to make every later Connect a silent no-op.
+
+## Terminal stream compression is acknowledged, not assumed (#805-f52e)
+
+Rust and frontend — the Rust half needs a `make dev` restart (or `make build`).
+
+The browser used to decide every frame was tagged from its own request alone. A
+daemon that predates `?compress=deflate` ignores it and sends untagged frames,
+and the client then read the first byte of a grid row as a tag. The server now
+selects the `tuic.deflate` subprotocol when it is going to tag, and the client
+reads `ws.protocol` in `onopen` before the first frame.
+
+- [ ] Open a terminal on a remote machine over a **direct** (non-tunnel) link.
+      It renders normally, and DevTools shows the stream socket with
+      `Sec-WebSocket-Protocol: tuic.deflate` on the 101.
+- [ ] Open a terminal on the same machine (local session). The socket asks for
+      nothing: no `compress=deflate` in the URL and no subprotocol on the 101.
+- [ ] Point a current build at an **older** `tuic-remote` (one without this
+      commit). The terminal must render correctly — untagged framing — and the
+      app log must carry "asked for compression and the server did not take it"
+      rather than "could not decode a compressed frame" once per frame.
+- [ ] Open a terminal through an **SSH tunnel**. The frames must be tagged but
+      never deflated (`ssh -C` already compressed the channel), which is the
+      `::ffff:127.0.0.1` case the canonical-address fix covers. Check CPU on the
+      daemon stays flat while an agent repaints.

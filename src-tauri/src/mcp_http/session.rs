@@ -17,7 +17,7 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use super::types::*;
-use super::ws_compression::{WsCompression, WsFrameSender};
+use super::ws_compression::{DEFLATE_SUBPROTOCOL, WsCompression, WsFrameSender};
 
 /// Standard 404 response for missing sessions.
 fn session_not_found() -> (StatusCode, Json<serde_json::Value>) {
@@ -1111,7 +1111,8 @@ pub(super) async fn create_session_with_worktree(
 /// WebSocket upgrade handler for streaming PTY output.
 /// Bidirectional: server sends PTY output, client sends PTY input.
 /// Supports `?format=text` to strip ANSI, `?format=log` for VT100 log lines,
-/// and `?compress=deflate` to compress the frames (`mcp_http::ws_compression`).
+/// and `?compress=deflate` to compress the frames (`mcp_http::ws_compression`),
+/// which is acknowledged by selecting the `tuic.deflate` subprotocol.
 pub(super) async fn ws_stream(
     ws: WebSocketUpgrade,
     Path(id): Path<String>,
@@ -1128,6 +1129,15 @@ pub(super) async fn ws_stream(
     // deflated the channel. Either way, deflating here would burn CPU twice for
     // nothing, so the decision is the peer's address and not the request alone.
     let compression = WsCompression::negotiate(query.compress.as_deref(), &addr);
+    // Say so on the handshake. `protocols` selects the subprotocol only when the
+    // client offered it, so this header appears exactly when both halves agree —
+    // which is what lets a client tell this server from an older one that
+    // ignored `?compress=deflate` and is still sending untagged frames.
+    let ws = if compression.is_tagged() {
+        ws.protocols([DEFLATE_SUBPROTOCOL])
+    } else {
+        ws
+    };
 
     if format == "grid" {
         return ws
@@ -2137,6 +2147,116 @@ pub(super) async fn get_session_shell_family(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One WebSocket handshake, start to finish, against a real socket.
+    ///
+    /// `oneshot` cannot reach this: `WebSocketUpgrade` reads hyper's `OnUpgrade`
+    /// out of the request extensions, which only a served connection puts there,
+    /// and rejects the request without it. So the only way to see whether the
+    /// response actually carries the subprotocol is to speak HTTP at a listener.
+    #[cfg(unix)]
+    async fn handshake_response_head(query: &str, offer_subprotocol: bool) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let state = super::super::tests::test_state();
+        let session_id = "ws-subprotocol-handshake";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let app = super::super::build_router(state, false, true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let addr = listener.local_addr().expect("the port just bound");
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+
+        let mut stream = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("connect to the test server");
+        let offer = if offer_subprotocol {
+            format!("Sec-WebSocket-Protocol: {DEFLATE_SUBPROTOCOL}\r\n")
+        } else {
+            String::new()
+        };
+        // A fixed key: the handshake's own accept value is not what this test is
+        // about, and a random one would only make the request harder to read.
+        let request = format!(
+            "GET /sessions/{session_id}/stream?{query} HTTP/1.1\r\n\
+             Host: {addr}\r\n\
+             Connection: Upgrade\r\n\
+             Upgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             {offer}\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .expect("write the upgrade request");
+
+        // Read until the blank line: everything after it is WebSocket frames,
+        // and reading to EOF would block until the handler gives up.
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                stream.read_exact(&mut byte),
+            )
+            .await
+            {
+                Ok(Ok(_)) => head.push(byte[0]),
+                other => panic!("the server did not finish its response head: {other:?}"),
+            }
+        }
+        server.abort();
+        String::from_utf8(head).expect("an HTTP response head is ASCII")
+    }
+
+    /// **The acknowledgement, on the wire.** A client cannot tell a tagging
+    /// server from one that ignored `?compress=deflate` by looking at its own
+    /// request, and guessing wrong strips the first byte off every grid frame.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_tagging_server_names_the_subprotocol_in_its_handshake() {
+        let head = handshake_response_head("format=grid&compress=deflate", true).await;
+
+        assert!(
+            head.starts_with("HTTP/1.1 101"),
+            "the upgrade must succeed: {head}"
+        );
+        assert!(
+            head.to_ascii_lowercase()
+                .contains(&format!("sec-websocket-protocol: {DEFLATE_SUBPROTOCOL}")),
+            "a tagged socket must say so on the handshake: {head}"
+        );
+    }
+
+    /// The other half, and the one that keeps an untagged socket readable: a
+    /// client that offers the subprotocol but does not ask for compression gets
+    /// the original framing, so the server must not claim otherwise.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_untagged_socket_selects_no_subprotocol() {
+        let head = handshake_response_head("format=grid", true).await;
+
+        assert!(
+            head.starts_with("HTTP/1.1 101"),
+            "the upgrade must succeed: {head}"
+        );
+        assert!(
+            !head
+                .to_ascii_lowercase()
+                .contains("sec-websocket-protocol:"),
+            "an untagged socket must not claim a subprotocol: {head}"
+        );
+    }
+
     // Production builds a grid through `AppState::new_vt_log_buffer` so it picks
     // up the config; tests that only exercise the grid construct it directly.
     use crate::state::VtLogBuffer;

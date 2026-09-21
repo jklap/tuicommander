@@ -11,6 +11,17 @@
  * original framing and this module is never called.
  */
 
+/**
+ * The subprotocol this client offers when it asks for compression, and the only
+ * thing that tells it the request was heard.
+ *
+ * Must match `mcp_http::ws_compression::DEFLATE_SUBPROTOCOL`. A server that does
+ * not know it leaves `ws.protocol` empty, and a browser fails a socket whose
+ * server selects a subprotocol that was never offered — so there is no third
+ * answer to get wrong.
+ */
+export const DEFLATE_SUBPROTOCOL = "tuic.deflate";
+
 /** Must match `mcp_http::ws_compression::FrameTag` value for value. */
 export const FRAME_TAG = {
 	binary: 0x00,
