@@ -1124,11 +1124,6 @@ needs to re-run this: `command -v` still finds none of `amp`, `cursor`,
   ×18) and confirm the highlight lands on the occurrence you selected, and that
   selecting across an existing highlight hides "Add comment". The offsets are asserted
   in `tweakComments.test.ts`; where the highlight is *drawn* is not.
-- [ ] [HUMAN] Run a real Claude turn with `tuic-voice` enabled: only prose is spoken —
-  never a `Bash`, a path, a diff line, or anything at or below the input box — and the
-  first sentence starts before the turn ends. Every filter stage is a heuristic and no
-  real agent turn has ever been replayed through it. Turn on "Log every dropped line"
-  and read `GET :9876/logs` for whichever rule misfired.
 - [ ] [HUMAN] Boss's call: **Trim** the real `src-tauri/target` row in Build Cleaner. It
   is 58 GiB and a Trim forces a full rebuild of the running dev app, so no agent may
   run it. Trim against other repos' `target/` is covered.
