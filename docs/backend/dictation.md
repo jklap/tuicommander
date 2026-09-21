@@ -838,12 +838,38 @@ work on Windows at all; four of our five patches exist for that, and the fifth
 for a macOS link failure. They are listed, with the exact symptom each one fixes,
 in the `[patch.crates-io]` comment in `src-tauri/Cargo.toml`.
 
-**Building on Windows needs a short `CARGO_TARGET_DIR`.** This is an environment
-constraint, not something a patch can fix: abseil's
-`hashtablez_sampler_force_weak_definition.cc` resolves one character past
-`MAX_PATH` (260) from the meson build directory under a normal target path, and
-`cl` reports it as `C1083: Cannot open source file` for a file that is plainly
-there. `set CARGO_TARGET_DIR=C:\t` before the build.
+#### Build prerequisites
 
-The build also needs `meson` and `ninja` on `PATH`, and fetches abseil-cpp from
-github.com while it runs.
+Every platform needs **meson**, **ninja**, a C++20 compiler and **libclang**
+(for bindgen) on `PATH`, plus network access: the meson wrap fetches
+abseil-cpp 20240722.0 from github.com while the build runs. None of this
+reaches `tuic-remote` — `cargo tree --no-default-features -i
+webrtc-audio-processing` matches no packages, so the headless binary needs
+neither meson nor ninja.
+
+| Platform | Extra | Why |
+|---|---|---|
+| Windows | `set CARGO_TARGET_DIR=C:\t` | abseil's `hashtablez_sampler_force_weak_definition.cc` resolves one character past `MAX_PATH` (260) from the meson build directory under a normal target path. `cl` reports it as `C1083: Cannot open source file` for a file that is plainly there. Not fixable by a patch — it is a path-length limit. |
+| Linux | a libclang with its builtin headers (`clang-devel`, not the pip `libclang` wheel) | The wheel ships `libclang.so` and no resource directory, so bindgen fails on `'stddef.h' file not found`. Recoverable with `BINDGEN_EXTRA_CLANG_ARGS=-I/usr/lib/gcc/<triple>/<ver>/include`. |
+| macOS | — | Xcode's clang and a brew meson are enough. |
+
+**Do not `tar` the fork on a Mac without `COPYFILE_DISABLE=1`.** bsdtar writes
+an AppleDouble `._abseil-cpp.wrap` beside the real one, meson globs `*.wrap`,
+and the build dies with `UnicodeDecodeError: 'utf-8' codec can't decode byte
+0xa3` — a message that points at the wrap file rather than at the sidecar.
+
+#### Packaging evidence
+
+A probe that builds the fork, links it, and asserts the canceller measurably
+changes a 440 Hz capture frame:
+
+| Platform | Toolchain | Result |
+|---|---|---|
+| macOS 27 (arm64) | Xcode clang, meson 1.12.0 | `PROBE OK` |
+| Windows 10.0.26200 (x86_64) | VS 2022 BuildTools 14.44.35207, meson 1.12.0 | `PROBE OK` |
+| RHEL 9.4 (x86_64) | gcc 11, meson 1.11.2 | `PROBE OK` |
+
+Linux is not a formality here: patch 3 replaced the pkg-config abseil lookup
+with an unconditional vendored subproject, and Linux is the one platform that
+*has* a system abseil for pkg-config to find. It is therefore the platform
+that patch most plausibly broke, and the only one upstream CI covered.
