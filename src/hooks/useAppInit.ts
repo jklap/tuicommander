@@ -22,15 +22,19 @@ import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
-import { isTauri, subscribeEvents } from "../transport";
+import { subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
-/** Track PTY sessions created by the browser client so we only close our own on unload */
-export const browserCreatedSessions = new Set<string>();
+/** PTY sessions created by THIS client (desktop or browser). Since B.4 removed
+ *  the `beforeunload` auto-close, this set's only remaining purpose is to
+ *  drop the create-echo for a session this client is itself mid-creating —
+ *  never "sessions we might kill" (nothing in this file kills a session on
+ *  unload anymore, on either transport). */
+export const locallyCreatedSessions = new Set<string>();
 
 /** Remote (MCP) sessionId → termId. Persists even after Terminal.tsx nulls sessionId
  *  on exit, so the session-closed listener can find the tab to auto-remove. */
@@ -306,22 +310,33 @@ export async function initApp(deps: AppInitDeps) {
 		uiStore.flushSave();
 		paneLayoutStore.flushSave();
 
-		// 1. Snapshot terminal metadata per repo/branch before closing
+		// Snapshot terminal metadata per repo/branch before closing.
+		//
+		// This handler used to also close every PTY session this browser
+		// client created (`for (const sid of ...) deps.pty.close(sid)`).
+		// Removed (B.4): `beforeunload` fires on a plain page refresh (F5)
+		// exactly like a real tab close, and `deps.pty.close` is a REAL kill
+		// of the shared backend PTY process — there is no such thing as a
+		// client-local "detach." A browser-created session is byte-identical
+		// to a desktop-created one once it exists (`is_remote` is the only
+		// structural difference), and persistent PTYs surviving a client
+		// disconnect is the explicit point of the remote/PWA feature. On
+		// reload the client re-adopts live sessions via `listActiveSessions`
+		// (see the init path below) rather than re-spawning, so nothing
+		// leaks by leaving this out — and the deliberate "close this tab"
+		// user action still kills the session on both transports via its own
+		// explicit call to `deps.pty.close`.
+		//
+		// Rejected alternatives: closing only "empty/unused" sessions
+		// (unknowable client-side — a fresh agent tab that hasn't printed
+		// yet is exactly the one that must not be killed); an
+		// `ephemeral: true` opt-in flag (new wire surface for a behavior
+		// nobody asked for, needs backend liveness tracking that doesn't
+		// exist); a user-facing setting (a footgun either default is wrong
+		// for someone).
 		const snapshots = collectTerminalSnapshots();
 		if (snapshots.size > 0) {
 			repositoriesStore.snapshotTerminals(snapshots);
-		}
-
-		// 2. Close PTY sessions — but NOT in Tauri mode during webview reloads
-		// (Vite HMR, manual reload). The Rust backend survives the reload and
-		// list_active_sessions will re-adopt the surviving sessions on re-init.
-		// In Tauri, real quit is handled by the close-requested handler which
-		// calls app.exit() — beforeunload during quit is a no-op for PTY cleanup.
-		if (!isTauri()) {
-			// Browser only closes sessions it created — leave Tauri-created ones alive
-			for (const sid of browserCreatedSessions) {
-				deps.pty.close(sid).catch(() => {});
-			}
 		}
 	});
 
@@ -601,8 +616,10 @@ export async function initApp(deps: AppInitDeps) {
 		(event) => {
 			const { session_id, cwd, agent_type, display_name } = event.payload;
 			const parsedAgentType = parseAgentType(agent_type);
-			// Skip if this session was created by the local browser client or is already tracked
-			if (browserCreatedSessions.has(session_id)) return;
+			// Skip if this session was created by this client itself (either
+			// transport — see `locallyCreatedSessions`'s doc comment) or is
+			// already tracked.
+			if (locallyCreatedSessions.has(session_id)) return;
 			const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
 			if (existing) return;
 
@@ -672,7 +689,16 @@ export async function initApp(deps: AppInitDeps) {
 	listen<{ session_id: string; display_name?: string | null; is_custom: boolean }>("session-renamed", (event) => {
 		const { session_id, display_name, is_custom } = event.payload;
 		const termId = terminalsStore.getTerminalForSession(session_id);
-		if (termId) terminalsStore.update(termId, { name: display_name ?? "", nameIsCustom: is_custom });
+		if (!termId) return;
+		// A `null` display_name means "no name set", not "set to empty string" —
+		// coercing it to `""` here used to echo an empty name straight back to
+		// the backend (terminalsStore.update()'s own echo guard fires on any
+		// `name` key), destroying that "no name set" state for good. Only
+		// include `name` when there's a real value; always update nameIsCustom.
+		terminalsStore.update(termId, {
+			...(display_name != null ? { name: display_name } : {}),
+			nameIsCustom: is_custom,
+		});
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
 	// The tmux compatibility shim's `set-option ... window-style|
@@ -823,15 +849,21 @@ export async function initApp(deps: AppInitDeps) {
 		terminalsStore.update(termId, { shellState: "exited", sessionId: null });
 
 		// Agent-spawned sessions get a shorter grace period — they finish their task
-		// and can be cleaned up faster than manually-opened remote sessions.
-		const autoCloseMs = agent_type ? AGENT_TAB_AUTOCLOSE_MS : REMOTE_TAB_AUTOCLOSE_MS;
+		// and can be cleaned up faster than manually-opened remote sessions. Keyed
+		// off the PARSED type, not the raw field's truthiness — an unrecognized
+		// agent name string must not accidentally pick the short timer.
+		const autoCloseMs = parsedAgentType != null ? AGENT_TAB_AUTOCLOSE_MS : REMOTE_TAB_AUTOCLOSE_MS;
 
 		appLogger.info("app", `Remote session closed: ${session_id} — tab ${termId} auto-close in ${autoCloseMs}ms`);
 
-		// Countdown in the tab name so the user sees when it will vanish
+		// Countdown in the tab name so the user sees when it will vanish. `{
+		// echo: false }`: this is cosmetic-only display text, never the
+		// session's real display name — previously this relied on `sessionId`
+		// already being nulled above to implicitly suppress the echo, which
+		// broke silently if that write's ordering ever changed.
 		const baseName = t0?.name ?? termId;
 		let remaining = Math.round(autoCloseMs / 1000);
-		terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` });
+		terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
 		const ticker = setInterval(() => {
 			remaining--;
 			const t = terminalsStore.get(termId);
@@ -839,7 +871,7 @@ export async function initApp(deps: AppInitDeps) {
 				clearInterval(ticker);
 				return;
 			}
-			terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` });
+			terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
 		}, 1000);
 
 		setTimeout(() => {

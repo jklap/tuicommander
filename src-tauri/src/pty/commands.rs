@@ -13,7 +13,18 @@ pub(crate) async fn create_pty(
     state: State<'_, Arc<AppState>>,
     config: PtyConfig,
 ) -> Result<String, String> {
-    let session_id = Uuid::new_v4().to_string();
+    // Honor a client-provided id when it is non-empty and not already taken —
+    // the desktop-transport twin of the browser pre-registration race fix in
+    // `mcp_http::session::spawn_pty_session`. Without this, once
+    // `create_pty` starts announcing `SessionCreated` (see the emit at the
+    // end of this function), a Tauri `app.emit` delivered before this
+    // `invoke()` call resolves could otherwise spawn a duplicate tab.
+    let session_id = match config.session_id.as_deref() {
+        Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(id) => {
+            id.to_string()
+        }
+        _ => Uuid::new_v4().to_string(),
+    };
 
     let shell = resolve_shell(config.shell.clone());
 
@@ -81,6 +92,15 @@ pub(crate) async fn create_pty(
         .try_clone_reader()
         .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
+    // Captured before `config.cwd`/`config.agent_type`/`config.display_name`
+    // move into the session struct / `SessionState` insert below —
+    // `emit_session_created` at the end of this function needs the same
+    // values those inserts used, or it clobbers its own preset (see that
+    // function's doc comment).
+    let created_cwd = config.cwd.clone();
+    let created_agent_type = config.agent_type.clone();
+    let created_display_name = config.display_name.clone();
+
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(
@@ -92,8 +112,8 @@ pub(crate) async fn create_pty(
             paused: paused.clone(),
             worktree: None,
             cwd: config.cwd,
-            display_name: None,
-            display_name_is_custom: false,
+            display_name: config.display_name,
+            display_name_is_custom: config.display_name_is_custom,
             is_remote: false,
             shell: shell.clone(),
         }),
@@ -157,6 +177,17 @@ pub(crate) async fn create_pty(
         .session_states
         .insert(session_id.clone(), ss);
 
+    // Announce BEFORE the reader thread starts, so no client can see this
+    // session's first output before `session-created` — the ordering bug
+    // flagged in `mcp_http::session::spawn_pty_session`'s own history.
+    emit_session_created(
+        &state,
+        &session_id,
+        created_cwd,
+        created_agent_type,
+        created_display_name,
+    );
+
     spawn_reader_thread(
         reader,
         paused,
@@ -198,8 +229,15 @@ pub(crate) async fn create_pty_with_worktree(
     };
     let worktree_path = worktree.path.clone();
 
-    // Wrap PTY creation so we can clean up the worktree on failure.
-    let session_id = Uuid::new_v4().to_string();
+    // Wrap PTY creation so we can clean up the worktree on failure. Honor a
+    // client-provided id the same way `create_pty` does — see that
+    // function's identical comment for why.
+    let session_id = match pty_config.session_id.as_deref() {
+        Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(id) => {
+            id.to_string()
+        }
+        _ => Uuid::new_v4().to_string(),
+    };
     let rows = pty_config.rows.max(24);
     let cols = pty_config.cols.max(80);
     let shell = resolve_shell(pty_config.shell.clone());
@@ -269,6 +307,13 @@ pub(crate) async fn create_pty_with_worktree(
     let branch = worktree.branch.clone();
     let worktree_cwd = Some(worktree.path.to_string_lossy().to_string());
 
+    // Captured before `worktree_cwd`/`pty_config.agent_type`/
+    // `pty_config.display_name` move into the `PtySession`/`SessionState`
+    // inserts below — see `create_pty`'s identical comment.
+    let created_cwd = worktree_cwd.clone();
+    let created_agent_type = pty_config.agent_type.clone();
+    let created_display_name = pty_config.display_name.clone();
+
     // Lock the worktree for this session so a bare `git worktree remove` (or a
     // removal that skips the live-session gate for some other reason) refuses
     // by default. Defense in depth — the primary gate is the live-session check
@@ -286,8 +331,8 @@ pub(crate) async fn create_pty_with_worktree(
             paused: paused.clone(),
             worktree: Some(worktree),
             cwd: worktree_cwd,
-            display_name: None,
-            display_name_is_custom: false,
+            display_name: pty_config.display_name,
+            display_name_is_custom: pty_config.display_name_is_custom,
             is_remote: false,
             shell,
         }),
@@ -331,6 +376,16 @@ pub(crate) async fn create_pty_with_worktree(
         .session_maps
         .session_states
         .insert(session_id.clone(), ss);
+
+    // Announce BEFORE the reader thread starts — see `create_pty`'s
+    // identical comment.
+    emit_session_created(
+        &state,
+        &session_id,
+        created_cwd,
+        created_agent_type,
+        created_display_name,
+    );
 
     spawn_reader_thread(
         reader,
@@ -575,7 +630,7 @@ pub(crate) async fn close_pty(
         // the worktree (already detached from `state.sessions` by `close_pty_core`)
         // is simply left in place — same as any other failed cleanup here, which
         // has always been warn-only.
-        if let Some(worktree) = close_pty_core(&state, &session_id, cleanup_worktree)
+        if let Some(worktree) = close_pty_core(&state, &session_id, cleanup_worktree, "closed")
             && let Err(e) = remove_worktree_internal(&worktree, crate::worktree::RemovalMode::Safe)
         {
             tracing::warn!("Failed to cleanup worktree: {e}");
@@ -770,54 +825,12 @@ pub(crate) fn set_session_name(
     name: Option<String>,
     is_custom: Option<bool>,
 ) -> Result<(), String> {
-    let entry = state
-        .session_maps
-        .sessions
-        .get(&session_id)
-        .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    let (display_name, is_custom, changed) = {
-        let mut session = entry.lock();
-        let next_is_custom = is_custom.unwrap_or(true);
-        let changed =
-            session.display_name != name || session.display_name_is_custom != next_is_custom;
-        session.display_name = name;
-        session.display_name_is_custom = next_is_custom;
-        (
-            session.display_name.clone(),
-            session.display_name_is_custom,
-            changed,
-        )
-    };
-    drop(entry);
-    if !changed {
-        // The frontend's `TerminalsStore.update()` echoes any `name`/`nameIsCustom`
-        // change back here (so a reconnect can tell a user-protected rename from a
-        // transient OSC one) — including changes that originated from this very
-        // command's own emit below. Without this no-op guard, that echo is
-        // indistinguishable from a real rename and re-emits `session-renamed`,
-        // which the frontend's `session-renamed` listener feeds straight back into
-        // `update()`, which echoes again — an unbounded ping-pong for every OSC
-        // title change and every tmux `select-pane -T` call, not just a one-off.
-        return Ok(());
+    if !state.session_maps.sessions.contains_key(&session_id) {
+        return Err(format!("Session not found: {session_id}"));
     }
-    // Same gap and same fix as the HTTP twin (mcp_http/session.rs's
-    // set_session_name): without this emit, a rename was invisible until the
-    // client's next full GET /sessions, which never happens again after init.
-    state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
-        session_id: session_id.clone(),
-        display_name: display_name.clone(),
-        is_custom,
-    });
-    if let Some(app) = state.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-renamed",
-            serde_json::json!({
-                "session_id": session_id,
-                "display_name": display_name,
-                "is_custom": is_custom,
-            }),
-        );
-    }
+    // Storage + no-op guard + dual-emit now live once on `AppState` — see
+    // `set_session_display_name`'s doc comment.
+    state.set_session_display_name(&session_id, name, is_custom.unwrap_or(true));
     Ok(())
 }
 

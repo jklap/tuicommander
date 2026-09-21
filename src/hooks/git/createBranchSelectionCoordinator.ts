@@ -77,6 +77,15 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// backend's `is_valid_uuid` prompt-injection guard.
 			tuicSession: randomId(""),
 		});
+		// This only sets the LOCAL flag — it never echoes to the backend on its
+		// own (the store's echo guard requires a `name` key alongside it). That
+		// used to leave a branch-label rename unprotected against a later
+		// client's OSC/tmux rename, since the backend never learned it was
+		// custom. Fixed via Terminal.tsx's `createSession` call, which now
+		// reads this same `nameIsCustom` (and `name`) off the store and sends
+		// both as `display_name`/`display_name_is_custom` at creation time —
+		// so this flag is already correct by the time the session is actually
+		// spawned, with no second round trip needed here.
 		if (label) terminalsStore.update(id, { nameIsCustom: true });
 
 		batch(() => {

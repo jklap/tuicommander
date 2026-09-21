@@ -9,8 +9,6 @@ use portable_pty::{CommandBuilder, PtySize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(feature = "desktop")]
-use tauri::Emitter;
 use uuid::Uuid;
 
 use super::guards::{Authenticated, require_local_or_auth};
@@ -432,23 +430,14 @@ pub(super) async fn spawn_agent_session(
         cols,
         body.agent_type.clone(),
         None,
+        true,
     );
 
-    #[cfg(feature = "desktop")]
-    let state_ref = state.clone();
+    // `register_pty_session` above already announced on both transports,
+    // carrying the real `agent_type` — previously this route's separate
+    // desktop-half emit dropped it (always sent `null`), even though the
+    // bus half had it.
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);
-
-    #[cfg(feature = "desktop")]
-    if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "cwd": body.cwd,
-                "display_name": null,
-            }),
-        );
-    }
 
     (
         StatusCode::CREATED,

@@ -692,6 +692,7 @@ mod tests {
             AppEvent::SessionClosed {
                 session_id: "s1".to_string(),
                 reason: "exit".to_string(),
+                agent_type: None,
             },
             AppEvent::RepoChanged {
                 repo_path: "/repo".to_string(),

@@ -699,8 +699,11 @@ function createTerminalsStore() {
 			}
 		},
 
-		/** Update terminal data */
-		update(id: string, data: Partial<TerminalState>): void {
+		/** Update terminal data. `{ echo: false }` suppresses the name/accent-color
+		 *  echo-back to the backend below, for a purely cosmetic local write (the
+		 *  auto-close countdown's "(5s)" suffix) that must never become the
+		 *  session's real display name. */
+		update(id: string, data: Partial<TerminalState>, options?: { echo?: boolean }): void {
 			if (!state.terminals[id]) {
 				appLogger.warn("terminal", `update(${id}) — terminal not in store, ignoring`);
 				return;
@@ -767,30 +770,38 @@ function createTerminalsStore() {
 			// unchanged rename, but this guard avoids the round trip in the first
 			// place rather than relying solely on that backstop.
 			const nextIsCustom = state.terminals[id]?.nameIsCustom ?? false;
-			if ("name" in data && (data.name !== prevName || nextIsCustom !== prevIsCustom)) {
-				const sessionId = state.terminals[id]?.sessionId;
-				if (sessionId) {
-					rpc("set_session_name", {
-						sessionId,
-						name: data.name ?? null,
-						isCustom: nextIsCustom,
-					}).catch(() => {});
-				}
-			}
-			// Same echo-guard shape as the name sync above, for the same reason:
-			// the backend's `session-accent-color-changed` event (tmux
-			// `set-option ... *-border-style`) flows through this same
-			// `update()`, and echoing it straight back unconditionally would
-			// re-trigger the backend's own emit — the exact ping-pong class of
-			// bug the name guard exists to prevent.
 			const nextAccentColor = state.terminals[id]?.accentColor ?? null;
-			if ("accentColor" in data && nextAccentColor !== prevAccentColor) {
-				const sessionId = state.terminals[id]?.sessionId;
-				if (sessionId) {
-					rpc("set_session_accent_color", {
-						sessionId,
-						color: nextAccentColor,
-					}).catch(() => {});
+			// `{ echo: false }` skips both echoes below entirely — for a write
+			// that must never round-trip to the backend regardless of whether it
+			// "changed" (the auto-close countdown's cosmetic "(5s)" name suffix
+			// is the motivating case: relying on `sessionId` already being
+			// nulled first to suppress the echo was fragile — any reordering of
+			// that write relative to this one broke it silently).
+			if (options?.echo !== false) {
+				if ("name" in data && (data.name !== prevName || nextIsCustom !== prevIsCustom)) {
+					const sessionId = state.terminals[id]?.sessionId;
+					if (sessionId) {
+						rpc("set_session_name", {
+							sessionId,
+							name: data.name ?? null,
+							isCustom: nextIsCustom,
+						}).catch(() => {});
+					}
+				}
+				// Same echo-guard shape as the name sync above, for the same reason:
+				// the backend's `session-accent-color-changed` event (tmux
+				// `set-option ... *-border-style`) flows through this same
+				// `update()`, and echoing it straight back unconditionally would
+				// re-trigger the backend's own emit — the exact ping-pong class of
+				// bug the name guard exists to prevent.
+				if ("accentColor" in data && nextAccentColor !== prevAccentColor) {
+					const sessionId = state.terminals[id]?.sessionId;
+					if (sessionId) {
+						rpc("set_session_accent_color", {
+							sessionId,
+							color: nextAccentColor,
+						}).catch(() => {});
+					}
 				}
 			}
 		},

@@ -55,6 +55,14 @@ pub(super) struct CreateSessionRequest {
     /// name and meaning as `PtyConfig::alias` on the Tauri IPC side — a restored
     /// tab keeps the address other agents already know.
     pub alias: Option<String>,
+    /// The creator's chosen initial tab name, propagated once at creation so
+    /// every other client displays the exact same string. Same field name and
+    /// meaning as `PtyConfig::display_name` on the Tauri IPC side.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Same field name and meaning as `PtyConfig::display_name_is_custom`.
+    #[serde(default)]
+    pub display_name_is_custom: bool,
 }
 
 #[derive(Deserialize)]

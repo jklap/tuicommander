@@ -10,7 +10,7 @@ vi.mock("../../transport", async (importOriginal) => ({
 
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
-import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { type AppInitDeps, initApp, locallyCreatedSessions } from "../../hooks/useAppInit";
 import { activityStore } from "../../stores/activityStore";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { mdTabsStore } from "../../stores/mdTabs";
@@ -1034,7 +1034,7 @@ describe("initApp", () => {
 		expect(deps.setQuitDialogVisible).not.toHaveBeenCalled();
 	});
 
-	it("beforeunload closes browser-created PTY sessions", async () => {
+	it("beforeunload never closes a PTY session, on either transport (B.4)", async () => {
 		const closeSpy = vi.fn().mockResolvedValue(undefined);
 		const deps = createMockDeps({
 			pty: {
@@ -1044,19 +1044,22 @@ describe("initApp", () => {
 		});
 
 		await initApp(deps);
+		locallyCreatedSessions.add("sess-1");
 
-		// Register sess-1 as browser-created (beforeunload only closes these)
-		browserCreatedSessions.add("sess-1");
-
-		// Temporarily disable Tauri flag — beforeunload only closes in browser mode
+		// Browser transport: a plain page refresh (F5) fires this exact event —
+		// it must not kill the shared backend PTY the tab created.
 		const saved = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
 		delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
-
 		window.dispatchEvent(new Event("beforeunload"));
-		expect(closeSpy).toHaveBeenCalledWith("sess-1");
-
+		expect(closeSpy).not.toHaveBeenCalled();
 		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = saved;
-		browserCreatedSessions.delete("sess-1");
+
+		// Desktop transport: same event, same non-effect — a webview reload
+		// (Vite HMR, manual reload) must not kill live sessions either.
+		window.dispatchEvent(new Event("beforeunload"));
+		expect(closeSpy).not.toHaveBeenCalled();
+
+		locallyCreatedSessions.delete("sess-1");
 	});
 
 	it("removes splash screen after hydration", async () => {

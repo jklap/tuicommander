@@ -35,6 +35,7 @@ mod dictation;
 pub(crate) mod diff_triage;
 pub(crate) mod dir_watcher;
 pub(crate) mod error_classification;
+pub(crate) mod event_wire;
 #[cfg(feature = "desktop")]
 mod finder_service;
 pub(crate) mod frontend_liveness;
@@ -2963,6 +2964,8 @@ fn build_connect_url(scheme: &str, host: &str, port: u16, token: &str) -> String
 /// Spawn background tasks shared by both desktop and headless modes.
 fn spawn_background_tasks(state: &Arc<AppState>) {
     AppState::spawn_session_state_accumulator(state.clone());
+    #[cfg(feature = "desktop")]
+    AppState::spawn_desktop_event_bridge(state.clone());
     AppState::spawn_acp_notice_pump(state.clone());
     drop(
         state
