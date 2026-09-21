@@ -17,6 +17,7 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `vad.rs` | Tail-silence detector (energy-based, ported from whisper.cpp; not a whole-window speech gate) |
 | `corrections.rs` | Post-processing text corrections |
 | `continuous.rs` | Hands-free mode: utterance segmentation and session-bound delivery |
+| `speaker.rs` | The reply queue: `Speaker` (bounded, generation-stamped), the `Output` port and its rodio adapter |
 | `speech.rs` | The speech port: `Speech`, `SpeechAudio`, `SpeechError`, `SpeechCancel`, `budget_seconds` — no engine named |
 | `speech/pocket/` | The Pocket TTS adapter: `pocket.rs` (the port impl), `bundle.rs` (manifest + streaming state), `tokenizer.rs` (SentencePiece Unigram), `engine.rs` (the four ONNX graphs) |
 | `speech/external.rs` | The bring-your-own-engine adapter: a configured command plus a RIFF/WAVE reader |
@@ -663,3 +664,80 @@ one does become argv.
 
 Stereo is mixed down to mono rather than refused. `WAVE_FORMAT_EXTENSIBLE`
 headers are read through to the encoding inside them.
+
+## Speaking the replies (`speaker.rs`)
+
+`Speaker` is a bounded queue and one render thread between the model's text and
+the speaker. It carries the same generation counter the hands-free state
+machine uses for turns, and it exists for one case: **a reply can finish
+rendering after the turn it answers is over.**
+
+```text
+  say(generation, text)
+       │
+       ▼
+  [queue]  <= MAX_QUEUED (4); a reply whose generation is over never reaches an engine
+       │
+       ▼
+  synthesis   holds a SpeechCancel; both adapters check it as they go
+       │
+       ▼
+  generation checked again   <-- finished, correct audio is discarded here
+       │
+       ▼
+  output.play()
+```
+
+Three checks, because a reply can go stale at three moments and only the last
+of them has audio to throw away. Cancellation covers the first two; nothing
+can cancel a request that already returned.
+
+### What `hush` guarantees
+
+`Speaker::hush()` is what the user talking over the reply calls. It bumps the
+generation, clears the queue, cancels the in-flight request and stops the
+device, then returns the new generation. It does the device stop **outside**
+the state lock and never waits on the render thread, so its cost is an atomic
+store rather than the remainder of an utterance.
+
+The render thread plays **while holding the state lock**, on purpose. Released
+between the generation check and the `play`, an interruption landing in that
+window would bump the generation, stop an idle device, and then have the stale
+audio appended behind it. `play` only queues a buffer, so `hush` waits on the
+order of a mixer append.
+
+Two `hush` calls are two turns. That is not an accident of the counter: two
+interruptions in a row *are* two turns, and a reply addressed to the first one
+is no more current than a reply addressed to the turn before it.
+
+### Failures are reported, never retried in place
+
+| What happens | What the queue does |
+|---|---|
+| the engine cannot render (missing bundle, bad voice) | records the message in `SpeakerStatus.last_error`, drops the reply, takes the next one |
+| the device refuses the audio | same, and the render thread stays alive |
+| the engine returns `Cancelled` | nothing — somebody asked for that |
+| a fifth reply is queued | refused as `SpeakError::Full` while the queue is still short enough to drain |
+| a reply arrives for a turn that is over | refused as `SpeakError::Stale`, before any engine is called |
+| the `Speaker` is dropped | shutdown flag, queue cleared, in-flight request cancelled, device stopped, worker joined |
+
+`last_error` is cleared by the next reply that plays, so the UI cannot show a
+problem that is over.
+
+### The engine's own sample rate reaches the device
+
+`DeviceOutput` passes `SpeechAudio::sample_rate` straight through and lets
+rodio resample to whatever the device wants. Pocket TTS renders at 24 kHz; a
+user-supplied command renders at whatever its engine likes, and assuming a rate
+here would pitch-shift every external engine. A zero rate or an empty buffer is
+rejected before the buffer is built, because `SamplesBuffer::new` **panics** on
+a zero rate and a panic on the render thread would take the queue down with no
+message.
+
+### Echo cancellation is not in this file
+
+Deciding *when* to interrupt means hearing the user over the speaker, which is
+acoustic echo cancellation. Whoever detects near-end speech calls `hush`; this
+module has no microphone and no opinion. The split is deliberate — the queue's
+correctness is provable without audio hardware, and an audio-hardware test
+cannot prove the queue.
