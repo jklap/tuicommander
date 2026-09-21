@@ -3885,35 +3885,19 @@ fn handle_session(
             }
             // Uses the same tombstone path as the Tauri close_pty command so
             // post-mortem MCP reads keep returning final output + exit code.
-            // Idempotent: returns ok even if session was already tombstoned.
+            // Idempotent: returns ok even if session was already tombstoned —
+            // `close_pty_core_with_reason` itself emits `session-closed` on
+            // both transports (via `emit_session_closed`) only when it
+            // actually found and closed a live session; a repeat close of an
+            // already-tombstoned session emits nothing, which is correct —
+            // the reader thread's EOF-driven close (or a previous call to
+            // this same branch) already announced it once.
             let reason = if args.get("reason").and_then(|v| v.as_str()) == Some(IDLE_CLOSE_REASON) {
                 IDLE_CLOSE_REASON
             } else {
                 "close_requested"
             };
-            let existed = crate::pty::close_pty_core_with_reason(state, session_id, false, reason)
-                .is_some()
-                || state.grid.vt_log_buffers.contains_key(session_id);
-            if existed {
-                // Notify frontend and SSE consumers so the tab is removed from
-                // the UI. Without this the reader thread's EOF-driven
-                // session-closed event may never fire (the cloned reader fd
-                // keeps the pty master alive after close_pty_core drops it).
-                state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-                    session_id: session_id.to_string(),
-                    reason: "closed".to_string(),
-                });
-                #[cfg(feature = "desktop")]
-                if let Some(app) = state.app_handle.read().as_ref() {
-                    let _ = app.emit(
-                        "session-closed",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "reason": "closed",
-                        }),
-                    );
-                }
-            }
+            crate::pty::close_pty_core_with_reason(state, session_id, false, reason);
             // SIMP-1: drain HTML tabs registered by this session and emit close.
             emit_close_html_tabs(state.as_ref(), session_id);
             serde_json::json!({"ok": true})
@@ -3950,20 +3934,8 @@ fn handle_session(
                 return serde_json::json!({"error": "Cannot kill own session. Use exit to terminate yourself."});
             }
             if crate::pty::kill_pty_core(state, session_id) {
-                state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-                    session_id: session_id.to_string(),
-                    reason: "killed".to_string(),
-                });
-                #[cfg(feature = "desktop")]
-                if let Some(app) = state.app_handle.read().as_ref() {
-                    let _ = app.emit(
-                        "session-closed",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "reason": "killed",
-                        }),
-                    );
-                }
+                // `kill_pty_core` itself emits `session-closed` on both
+                // transports now — see its doc comment.
                 // SIMP-1: drain HTML tabs registered by this session and emit close.
                 emit_close_html_tabs(state, session_id);
                 serde_json::json!({"ok": true})
@@ -5164,10 +5136,16 @@ fn handle_agent_with_parent_cwd(
             // bus event, SSE arm and desktop emit; until then the tag shows only
             // after a reload for a caller that spawns before it registers.
             let published_parent = spawn_parent.clone().filter(|p| !is_pending_parent(p));
+            // A print-mode (non-interactive, one-shot) spawn deliberately
+            // never shows up as a desktop tab — read before
+            // `register_pty_session` so that suppression can be passed
+            // through instead of hand-duplicated here.
+            let print_mode = args["print_mode"].as_bool().unwrap_or(false);
             // Buffers, alias, metrics, grid watch and the session-created
             // broadcast, sharing one helper with session::spawn_pty_session so the
             // VT screen can only ever be built at the geometry the PTY was opened
-            // with.
+            // with. The bus half always fires; the desktop half is gated on
+            // `!print_mode` — see this helper's own doc comment.
             super::session::register_pty_session(
                 state,
                 &session_id,
@@ -5189,27 +5167,8 @@ fn handle_agent_with_parent_cwd(
                 effective_agent_type.clone(),
                 None,
                 published_parent.clone(),
+                !print_mode,
             );
-            let cwd_str = effective_cwd.clone();
-
-            #[cfg(feature = "desktop")]
-            {
-                let print_mode = args["print_mode"].as_bool().unwrap_or(false);
-                let app_handle = state.app_handle.read().clone();
-                if !print_mode && let Some(ref app) = app_handle {
-                    let agent_type_val = effective_agent_type.as_deref();
-                    let _ = app.emit(
-                        "session-created",
-                        serde_json::json!({
-                            "session_id": session_id,
-                            "cwd": cwd_str,
-                            "agent_type": agent_type_val,
-                            "display_name": requested_name,
-                            "parent_session": published_parent,
-                        }),
-                    );
-                }
-            }
             state.set_pty_description(&session_id, pty_description);
             if skip_trust_dialog && effective_agent_type.as_deref() == Some("claude") {
                 state.managed_trust_dialogs.insert(session_id.clone());

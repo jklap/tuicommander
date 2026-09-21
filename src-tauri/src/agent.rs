@@ -1396,7 +1396,13 @@ pub(crate) async fn spawn_agent(
         detect_claude_binary().await?
     };
 
-    let session_id = Uuid::new_v4().to_string();
+    // Honor a client-provided id — see `create_pty`'s identical comment.
+    let session_id = match pty_config.session_id.as_deref() {
+        Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(id) => {
+            id.to_string()
+        }
+        _ => Uuid::new_v4().to_string(),
+    };
 
     let spawn_binary_path = binary_path.clone();
     let spawn_agent_config = agent_config.clone();
@@ -1501,6 +1507,13 @@ pub(crate) async fn spawn_agent(
         .session_states
         .insert(session_id.clone(), session_state);
 
+    // Captured before `agent_config.cwd`/`pty_config.display_name` move into
+    // the `PtySession` struct below — `emit_session_created` at the end of
+    // this function needs the same values.
+    let created_cwd = agent_config.cwd.clone().or_else(|| pty_config.cwd.clone());
+    let created_agent_type = agent_config.agent_type.clone();
+    let created_display_name = pty_config.display_name.clone();
+
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(
@@ -1512,8 +1525,8 @@ pub(crate) async fn spawn_agent(
             paused: paused.clone(),
             worktree: None,
             cwd: agent_config.cwd.clone(),
-            display_name: None,
-            display_name_is_custom: false,
+            display_name: pty_config.display_name.clone(),
+            display_name_is_custom: pty_config.display_name_is_custom,
             display_name_from_spawn: false,
             is_remote: false,
             shell: binary_path.clone(),
@@ -1538,6 +1551,19 @@ pub(crate) async fn spawn_agent(
         .session_maps
         .last_output_ms
         .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
+
+    // Announce on both transports before the reader thread starts — this
+    // desktop command previously emitted nothing at all, on either
+    // transport (found while auditing every `SessionCreated` producer for
+    // IPC/HTTP parity; not one of the sites the original audit named).
+    crate::pty::emit_session_created(
+        &state,
+        &session_id,
+        created_cwd,
+        created_agent_type,
+        created_display_name,
+        None,
+    );
 
     spawn_reader_thread(
         reader,

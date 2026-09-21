@@ -33,13 +33,22 @@ export interface PtyConfig {
 	 *  Rust so a restored tab keeps the address other agents already know; a
 	 *  malformed or taken value is ignored and a fresh alias is generated. */
 	alias?: string | null;
-	/** Client-provided PTY session id (browser mode only). Generated and locally
-	 *  registered before the create RPC so the `session-created` SSE echo is
-	 *  recognized as locally-created and does not spawn a duplicate "PTY:" tab. */
+	/** Client-provided PTY session id, on both transports. Generated and
+	 *  locally registered before the create RPC so a `session-created` echo
+	 *  (SSE for a browser client, or a desktop `app.emit` delivered before
+	 *  `invoke()` resolves) is recognized as locally-created and does not
+	 *  spawn a duplicate "PTY:" tab. */
 	session_id?: string;
 	/** Seed the new PTY with `tuic_session`'s saved scrollback, if any exists.
 	 *  A no-op when nothing was saved for it — safe to pass on every create. */
 	restore_scrollback?: boolean;
+	/** The creator's chosen initial tab name, propagated once at creation so
+	 *  every other client displays the exact same string instead of
+	 *  independently inventing its own default. */
+	display_name?: string | null;
+	/** Whether `display_name` above is a user's explicit rename rather than a
+	 *  frontend-computed default. */
+	display_name_is_custom?: boolean;
 }
 
 /** PTY exit event data */
