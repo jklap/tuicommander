@@ -66,19 +66,25 @@ describe("worktree placement lifecycle regressions", () => {
 		await testInScopeAsync(async () => {
 			const repo = repositoriesStore.get(REPO);
 			if (!repo) throw new Error("fixture repository missing");
+			// Per-client snapshot (B.5, savedTerminalsByClient); a `test` client key.
 			repositoriesStore.setWorkspace(REPO, "feature", {
-				savedTerminals: [
-					{
-						name: "Codex",
-						cwd: REPO,
-						fontSize: 14,
-						agentType: "codex",
-						agentSessionId: null,
-						tuicSession: "stable-peer",
-						agentLaunchCommand: null,
-						suspended: true,
+				savedTerminalsByClient: {
+					test: {
+						savedAt: Date.now(),
+						terminals: [
+							{
+								name: "Codex",
+								cwd: REPO,
+								fontSize: 14,
+								agentType: "codex",
+								agentSessionId: null,
+								tuicSession: "stable-peer",
+								agentLaunchCommand: null,
+								suspended: true,
+							},
+						],
 					},
-				],
+				},
 			});
 			const persisted = JSON.parse(
 				JSON.stringify({

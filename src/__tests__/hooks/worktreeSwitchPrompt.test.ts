@@ -254,7 +254,12 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 			};
 			handlers.get("session-worktree-declared")?.(event);
 			repositoriesStore.setWorkspace(REPO, BRANCH, {
-				savedTerminals: [{ name: "Caller", cwd: REPO, fontSize: 14, agentType: "codex", tuicSession: "stable-caller" }],
+				savedTerminalsByClient: {
+					test: {
+						savedAt: Date.now(),
+						terminals: [{ name: "Caller", cwd: REPO, fontSize: 14, agentType: "codex", tuicSession: "stable-caller" }],
+					},
+				},
 			});
 			handlers.get("session-worktree-declared")?.(event);
 			const { reconcileTerminalOwnership } = await import("../../stores/terminalOwnership");
@@ -271,7 +276,9 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 			vi.useRealTimers();
 			expect(terminalsStore.get(creator)?.cwd).toBe(REPO);
 			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH].terminals).toEqual([creator]);
-			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH].savedTerminals).toHaveLength(1);
+			const { savedTerminalsFor } = await import("../../stores/workspaceIdentity");
+			const workspace = repositoriesStore.get(REPO)?.workspaces[BRANCH];
+			expect(workspace && savedTerminalsFor(workspace)).toHaveLength(1);
 			expect(repositoriesStore.findOwnerForTerminal(sibling)?.workspaceId).toBe("main");
 			expect(repositoriesStore.get(REPO)?.activeWorkspaceId).toBe("main");
 			expect(activityStore.getForSection("worktrees")).toHaveLength(0);
