@@ -547,7 +547,7 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: `/sessions/${args.sessionId}/visible`,
-			body: { visible: args.visible },
+			body: { visible: args.visible, viewer_id: args.viewerId },
 		}),
 	},
 	focus_session: {

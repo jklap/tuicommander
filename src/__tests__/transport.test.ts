@@ -239,6 +239,9 @@ describe("transport", () => {
 		/** JSON keys the `/events` SSE arm sends for `AppEvent::RepoChanged`
 		 *  (the payload builder lives in `event_wire.rs`, shared with `emit_dual`). */
 		function ssePayloadKeys(): string[] {
+			// Moved out of mcp_http/sse_routes.rs into event_wire.rs (Phase 0 of
+			// the desktop-http-parity plan) so AppState::emit_dual could call it
+			// without depending on mcp_http.
 			const source = readRepoFile("src-tauri/src/event_wire.rs");
 			const arm = source.match(/AppEvent::RepoChanged \{[^}]*\} => \{\s*serde_json::json!\(\{([^}]*)\}\)/);
 			expect(arm, "RepoChanged SSE arm not found — the extractor is stale").not.toBeNull();
@@ -1386,10 +1389,10 @@ describe("transport", () => {
 		});
 
 		it("maps set_session_visible to POST /sessions/{id}/visible", () => {
-			const result = mapCommandToHttp("set_session_visible", { sessionId: "s1", visible: false });
+			const result = mapCommandToHttp("set_session_visible", { sessionId: "s1", visible: false, viewerId: "c1" });
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/sessions/s1/visible");
-			expect(result.body).toEqual({ visible: false });
+			expect(result.body).toEqual({ visible: false, viewer_id: "c1" });
 		});
 
 		it("maps get_process_stats to GET /process/stats", () => {
