@@ -66,7 +66,15 @@ export interface WorkspaceState {
 	lifecycleStatus?: WorkspaceLifecycleStatus;
 	lastCommitTs: number | null; // Unix timestamp of last commit on this branch
 	runCommand?: string; // Saved run command for this workspace
-	savedTerminals?: SavedTerminal[]; // Persisted terminal metadata for session restore
+	/** Persisted terminal metadata for session restore, keyed by the writing
+	 *  client's `CLIENT_INSTANCE_ID` (`stores/clientInstance.ts`) so two
+	 *  clients' restart-recovery snapshots merge instead of one clobbering
+	 *  the other on every 30s save (B.5). A legacy flat array (pre-migration)
+	 *  is folded into a `"legacy"` key by `normalizeLoadedRepo`. Read through
+	 *  `savedTerminalsFor()`, never directly — a bare `Object.values()` here
+	 *  loses the "which client, how stale" information that TTL eviction and
+	 *  per-key merge both need. */
+	savedTerminalsByClient?: Record<string, { savedAt: number; terminals: SavedTerminal[] }>;
 	/** CI auto-heal: when enabled, CI failures trigger automatic agent fix cycles */
 	ciAutoHeal?: { enabled: boolean; attempts: number; lastRunId?: number; healing?: boolean };
 	/** Whether the terminal tab list is expanded under this workspace row */
@@ -202,6 +210,50 @@ function randomSuffix(): string {
  * label, not data: `takenIds` is what makes the result unique, and the caller
  * must read `branchName` when it wants the branch.
  */
+/** A `savedTerminalsByClient` entry older than this is dropped on load — a
+ *  client that hasn't run in a week almost certainly isn't coming back with
+ *  the exact same terminal set, and an unbounded map would otherwise keep
+ *  growing by one key per distinct browser/install that ever opened this
+ *  repo. */
+export const SAVED_TERMINALS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The restorable terminal set for a workspace, across every client that has
+ * saved one — B.5's fix for the restart-recovery snapshot being a single
+ * flat array every open client overwrote every 30s, so whichever client
+ * saved last silently discarded every other client's terminal set.
+ *
+ * Union of every (non-stale) client's own saved array, deduped only on
+ * `tuicSession` when present (the one field in `SavedTerminal` that is
+ * actually a stable cross-restart identity — two clients that both saved a
+ * snapshot containing the same `tuicSession` are describing the same tab,
+ * not two different ones). Entries with no `tuicSession` are never deduped
+ * against each other; restoring a rare duplicate is a far smaller cost than
+ * dropping a tab that turns out not to have been a duplicate.
+ */
+export function savedTerminalsFor(workspace: WorkspaceState): SavedTerminal[] {
+	const byClient = workspace.savedTerminalsByClient;
+	if (!byClient) return [];
+	const now = Date.now();
+	const seenSessions = new Set<string>();
+	const result: SavedTerminal[] = [];
+	// Newest-saved client first, so when two clients' snapshots do collide on
+	// the same `tuicSession`, the fresher one wins.
+	const entries = Object.values(byClient)
+		.filter((entry) => now - entry.savedAt <= SAVED_TERMINALS_TTL_MS)
+		.sort((a, b) => b.savedAt - a.savedAt);
+	for (const entry of entries) {
+		for (const terminal of entry.terminals) {
+			if (terminal.tuicSession) {
+				if (seenSessions.has(terminal.tuicSession)) continue;
+				seenSessions.add(terminal.tuicSession);
+			}
+			result.push(terminal);
+		}
+	}
+	return result;
+}
+
 export function generateWorkspaceId(branchName: string, takenIds: readonly WorkspaceId[]): WorkspaceId {
 	const stem = sanitizeForId(branchName);
 	const taken = new Set(takenIds);
