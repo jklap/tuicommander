@@ -2,6 +2,7 @@ pub mod audio;
 pub mod commands;
 pub mod continuous;
 pub mod corrections;
+pub mod echo;
 pub mod fn_key_monitor;
 pub mod model;
 pub mod permission;
@@ -47,6 +48,15 @@ pub struct DictationState {
     /// Liveness of the desktop audio endpoint. Cleared when that endpoint is
     /// released, which is how the runtime learns its owner is gone.
     pub hands_free_owner_alive: Arc<AtomicBool>,
+    /// Acoustic echo cancellation, shared by the two threads that must agree
+    /// about it: the hands-free runtime cleans capture with it, and the reply
+    /// queue's [`echo::FarEndTap`] tells it what is being played.
+    ///
+    /// One instance for the life of the app rather than one per arm. The
+    /// canceller's delay estimator is state worth keeping — rebuilding it every
+    /// time the mode is armed would make the first second of every session the
+    /// worst one.
+    pub echo: Arc<Mutex<echo::EchoGuard>>,
 }
 
 impl DictationState {
@@ -66,6 +76,7 @@ impl DictationState {
             hands_free_runtime: Mutex::new(None),
             hands_free_audio: Mutex::new(None),
             hands_free_owner_alive: Arc::new(AtomicBool::new(false)),
+            echo: Arc::new(Mutex::new(echo::install())),
         }
     }
 

@@ -74,6 +74,7 @@ authors and communities behind each project.
 | uuid | 1.23.0 | Apache-2.0 OR MIT |
 | vt100 | 0.16.2 | MIT |
 | web-push-native | 0.4.0 | MIT OR Apache-2.0 |
+| webrtc-audio-processing | 2.1.0 | BSD-3-Clause |
 | whisper-rs | 0.16.0 | Unlicense |
 | zip | 8.5.1 | MIT |
 
@@ -169,10 +170,42 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 | MPL-2.0 | 1 |
 | MPL-2.0 OR Apache-2.0 | 1 |
 | BSD-2-Clause | 1 |
+| BSD-3-Clause | 1 |
 | CC0-1.0 | 1 |
 
 All dependencies use OSI-approved or public-domain-equivalent licenses compatible
 with commercial and open-source distribution.
+
+---
+
+## Statically Linked Native Code
+
+Unlike the crates above, these are C++ sources compiled into the application
+binary at build time. They are redistributed in binary form, so their notices
+travel with every release.
+
+### Acoustic echo cancellation — WebRTC Audio Processing
+
+Hands-free dictation subtracts the application's own spoken replies from the
+microphone signal using the **WebRTC audio processing module**, by **Google**,
+licensed **BSD-3-Clause**. It reaches the build through the
+`webrtc-audio-processing` crate with its `bundled` feature, which compiles the
+vendored WebRTC sources rather than looking for a system library. The full
+license text is at `src-tauri/patches/webrtc-audio-processing-sys/COPYING`.
+
+We maintain a fork of `webrtc-audio-processing-sys` at
+`src-tauri/patches/webrtc-audio-processing-sys/`. The changes are to the build
+script and the meson configuration only — no WebRTC source file is modified —
+and each one is listed with its symptom in the `[patch.crates-io]` comment in
+`src-tauri/Cargo.toml`.
+
+### Abseil
+
+That build compiles **Abseil**, by **Google**, licensed **Apache-2.0**, as a
+meson subproject (`abseil-cpp` 20240722.0, fetched from
+<https://github.com/abseil/abseil-cpp> during the build). It is a dependency of
+the WebRTC sources above, unmodified, and is linked statically into the same
+binary.
 
 ---
 

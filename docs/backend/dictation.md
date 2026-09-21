@@ -21,6 +21,8 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `speech.rs` | The speech port: `Speech`, `SpeechAudio`, `SpeechError`, `SpeechCancel`, `budget_seconds` — no engine named |
 | `speech/pocket/` | The Pocket TTS adapter: `pocket.rs` (the port impl), `bundle.rs` (manifest + streaming state), `tokenizer.rs` (SentencePiece Unigram), `engine.rs` (the four ONNX graphs) |
 | `speech/external.rs` | The bring-your-own-engine adapter: a configured command plus a RIFF/WAVE reader |
+| `echo.rs` | Acoustic echo cancellation: the `Canceller` port, the `FarEnd` pacing buffer and `EchoGuard` |
+| `echo/webrtc.rs` | The WebRTC AEC3 adapter |
 
 ## Tauri Commands
 
@@ -740,4 +742,108 @@ Deciding *when* to interrupt means hearing the user over the speaker, which is
 acoustic echo cancellation. Whoever detects near-end speech calls `hush`; this
 module has no microphone and no opinion. The split is deliberate — the queue's
 correctness is provable without audio hardware, and an audio-hardware test
-cannot prove the queue.
+cannot prove the queue. It lives in `echo.rs`, below.
+
+## Hearing the user over our own voice (`echo.rs`)
+
+The microphone hears the speaker. Left alone, the energy VAD in `continuous.rs`
+opens a turn on the reply the application is speaking, transcribes it, and
+answers itself. Muting capture while speaking would stop that and would also
+stop the user interrupting, which is the one thing hands-free has to get right,
+so the capture stream stays open and the echo is subtracted from it instead.
+
+```
+speaker::render_loop ──note_rendered(SpeechAudio)──┐
+                                                   v
+                                              ┌─────────┐
+                                              │ FarEnd  │  16 kHz, ≤2 s
+                                              └────┬────┘
+                                                   │ take(n), padded with silence
+ capture (mono 16 kHz) ──clean(&[f32])──> EchoGuard┴──> Canceller ──> cleaned capture
+                                          10 ms frames          │        │
+                                          remainder carried     │        v
+                                                                │   segmenter.push
+                                          hush ──note_stopped───┘
+```
+
+### The two streams must arrive in step
+
+A canceller subtracts a delayed, filtered copy of the **far end** (what we
+played) from the **near end** (what the microphone heard). It can only do that
+if it is fed both at the same pace: one 10 ms frame of each, in turn.
+
+Our two sources do not behave that way. Capture arrives in small chunks as the
+device produces them, while `speaker.rs` hands over a whole rendered utterance
+at once — seconds of audio in one call, before a single sample of it has left
+the speaker. Pushing that straight into a canceller would put it seconds ahead
+of the microphone, and it would subtract nothing.
+
+`FarEnd` is the buffer that fixes the pace: the reply goes in whole and comes
+out only as fast as capture is consumed, padded with silence whenever nothing is
+playing. Alignment is therefore by **sample count**, not by wall clock, and the
+residual offset — the device's own output latency — is what the canceller's
+delay estimator is for. `note_stopped` (called on `hush`) clears the buffer,
+because audio that will never be heard must never be subtracted.
+
+The buffer is bounded at two seconds. It is only reached when playback and
+capture are out of step — the mode was disarmed mid-reply, or the device stopped
+delivering — and the oldest samples are dropped, counted in `dropped_far_end()`.
+Holding more would not improve cancellation: audio that old no longer
+corresponds to anything the microphone is about to hear.
+
+### Everything runs at 16 kHz
+
+Not a preference. `audio.rs` already converts capture to mono 16 kHz for
+Whisper, and 16 kHz is one of the rates the WebRTC APM accepts, so the near end
+needs no conversion at all. The far end is whatever the speech engine rendered —
+24 kHz for Pocket TTS, anything at all for a user-supplied command — and is
+resampled on the way in. That resampling is **linear**, not the nearest-neighbour
+`audio.rs` uses for Whisper: a canceller subtracts a waveform, and
+nearest-neighbour's step artefacts are error it would have to model.
+
+### The port exists so the pacing is provable without hardware
+
+| Adapter | What it is for |
+|---|---|
+| `webrtc::WebRtc` | The real one: WebRTC AEC3, one instance, 10 ms frames |
+| `PassThrough` | No cancellation. A build without a canceller, and the tests for everything in `EchoGuard` that is not the subtraction itself |
+
+`PassThrough` is not a silent fallback — whoever installs it owns saying so. It
+exists because a hands-free mode that refuses to arm is worse than one that
+cannot be interrupted over the speaker: headphones still work.
+
+AEC3 runs with `stream_delay_ms: None`, so it estimates the offset itself. We
+could not supply an honest number anyway: the far end is handed over when the
+reply is *rendered*, and how long the OS and the device then hold it before it
+reaches the air is not something this process is told. One consequence worth
+knowing — the estimator has to converge, so the first fraction of a second of a
+reply is cancelled poorly or not at all.
+
+The render frame is **analyzed, never processed**. The APM offers to filter the
+playback stream too; by the time we see it that audio is already on its way to
+the device, so any change to our copy would be a change nobody hears while the
+microphone still hears the original.
+
+Noise suppression, gain control and high-pass filtering are all left off. The
+same capture stream feeds Whisper, which was trained on speech that has not been
+gated or gain-ridden.
+
+### The fork this needs (`patches/webrtc-audio-processing-sys/`)
+
+`webrtc-audio-processing` 2.1.0 is used with the `bundled` feature — it
+statically links the APM rather than looking for a system library, because there
+is one on Linux, a brew-only one on macOS, and none at all on Windows. Upstream
+CI runs `ubuntu-latest` and `macos-latest` only, and the `bundled` build does not
+work on Windows at all; four of our five patches exist for that, and the fifth
+for a macOS link failure. They are listed, with the exact symptom each one fixes,
+in the `[patch.crates-io]` comment in `src-tauri/Cargo.toml`.
+
+**Building on Windows needs a short `CARGO_TARGET_DIR`.** This is an environment
+constraint, not something a patch can fix: abseil's
+`hashtablez_sampler_force_weak_definition.cc` resolves one character past
+`MAX_PATH` (260) from the meson build directory under a normal target path, and
+`cl` reports it as `C1083: Cannot open source file` for a file that is plainly
+there. `set CARGO_TARGET_DIR=C:\t` before the build.
+
+The build also needs `meson` and `ninja` on `PATH`, and fetches abseil-cpp from
+github.com while it runs.
