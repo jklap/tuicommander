@@ -117,6 +117,60 @@ pub(super) async fn delete_speech_asset_http(
     ))
 }
 
+/// `turn` is optional on the wire and on IPC: omitting it means "the turn that
+/// is current now", which is what a caller answering immediately wants.
+#[derive(serde::Deserialize)]
+pub(super) struct SpeakRequest {
+    pub text: String,
+    #[serde(default)]
+    pub turn: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct SpeechStatusQuery {
+    #[serde(default)]
+    pub utterance: Option<String>,
+}
+
+pub(super) async fn speak_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SpeakRequest>,
+) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::speak_reply(
+        dictation, body.text, body.turn,
+    ))
+}
+
+pub(super) async fn stop_speech_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::stop_speech(dictation))
+}
+
+pub(super) async fn get_speech_status_http(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<SpeechStatusQuery>,
+) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    Json(dictation::commands::get_speech_status(
+        dictation,
+        query.utterance,
+    ))
+    .into_response()
+}
+
 pub(super) async fn start_dictation_http(State(state): State<Arc<AppState>>) -> Response {
     let app_handle = state.app_handle.read().clone();
     let Some(app) = app_handle else {

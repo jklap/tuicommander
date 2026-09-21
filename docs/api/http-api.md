@@ -1462,6 +1462,10 @@ POST /dictation/speech/assets/cancel    { "asset": "..." }
                                                     -> "<cancellation message>"
 POST /dictation/speech/assets/delete    { "asset": "..." }
                                                     -> "<deletion message>"
+POST /dictation/speech/speak     { "text": "...", "turn": 3 }
+                                                    -> SpokenReply
+POST /dictation/speech/stop                         -> SpeechStatus
+GET  /dictation/speech/status?utterance=7           -> SpeechStatus
 POST /dictation/start                               -> null
 POST /dictation/stop                                -> TranscribeResponse
 GET  /dictation/corrections                         -> { "<from>": "<to>", ... }
@@ -1486,6 +1490,30 @@ a `400`-shaped error string rather than a path or a URL built from what the
 caller sent. `download` is minutes long and streams nothing back — progress is
 a desktop `speech-download-progress` event today and is **not** yet on
 `/events`, which is recorded as a deferral at the emit site.
+
+### Spoken replies
+
+The three speech routes are the browser/remote half of `speak_reply`,
+`stop_speech` and `get_speech_status`, and carry the identical payloads — the
+same store code reads both transports.
+
+`POST /dictation/speech/speak` takes `{ text, turn? }` and answers
+`SpokenReply { utteranceId, state, error?, turn }`. `state` is what the queue
+knows at that instant, which is `"queued"` and never `"finished"`: accepting a
+reply is not the user hearing it. Poll `GET /dictation/speech/status?utterance=`
+with the id to learn the outcome — `finished`, `interrupted` (normal, the user
+talked over it) or `failed`. An id the conversation no longer remembers comes
+back as `"unknown"`, which is a different answer from "you asked about nothing".
+
+`turn` is optional and refuses a reply written for a turn the user has already
+talked over; omitting it means "now". `POST /dictation/speech/stop` stops
+immediately, drops the queue and opens a new turn, returning the `SpeechStatus`
+so the caller learns that turn.
+
+All three are answerable at any time: with nothing armed, or with no working
+voice, `status` reports `available: false` and names the reason rather than
+failing. State changes are **not** pushed on `/events` yet — the deferral is
+recorded at the would-be emit site in `dictation::commands::speak`.
 
 ### Hands-free
 

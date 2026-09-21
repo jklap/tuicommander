@@ -1094,6 +1094,7 @@ const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
+const VOICE_ACTIONS: &str = "speak, stop, status";
 
 /// Full MCP tool definitions — the one native tool family.
 ///
@@ -1227,6 +1228,16 @@ fn native_tool_definitions() -> serde_json::Value {
                 "source": { "type": "string", "description": "Log source filter (action=logs)" },
                 "script": { "type": "string", "description": "JavaScript to execute in the WebView (action=invoke_js). The ONLY global is window.__TUIC__ — call action=help for the full API list. Example: return window.__TUIC__.terminals()" },
                 "limit": { "type": "integer", "description": "Max entries (action=logs, default 50)" }
+            }, "required": ["action"] }
+        },
+        {
+            "name": "voice",
+            "description": "Speak a reply out loud, when the user is talking to you hands-free.\n\nOnly works while the user has armed hands-free dictation for YOUR terminal: speech belongs to that conversation, not to the application. Call action=status first — if available is false, the reason says why and you must reply in text as usual. Nothing here replaces your normal reply; speaking is in addition to it.\n\nAccepting a reply is NOT the same as the user hearing it. action=speak returns an utterance_id in state 'queued'; rendering takes seconds and the user can talk over it at any moment. Poll action=status with that utterance_id to learn the outcome: 'finished' means it was heard to the end, 'interrupted' means the user started talking (normal, not an error), 'failed' means it was never audible.\n\nActions:\n- speak: Queue one spoken reply. Requires text (max 2000 characters). Optional turn: the turn you are answering, from an earlier status or from the hands-free notice. Supply it — a reply written for a turn the user has already talked over is then refused instead of spoken over whatever they said next. Omitting it means 'right now'. Returns {utterance_id, state, turn}.\n- stop: Stop talking immediately and drop anything queued. Opens a new turn. Use it when you realise the reply in progress is wrong.\n- status: {available, unavailable_reason, session_id, turn, voice, queued, rendering, speaking, last_error}. Optional utterance_id adds {utterance: {utterance_id, state, error?}} for that one reply; a reply too old to remember comes back as state 'unknown'.",
+            "inputSchema": { "type": "object", "properties": {
+                "action": { "type": "string", "description": "One of: speak, stop, status" },
+                "text": { "type": "string", "description": "What to say, max 2000 characters (action=speak, required)" },
+                "turn": { "type": "integer", "description": "The turn this reply answers (action=speak, optional but recommended)" },
+                "utterance_id": { "type": "string", "description": "A reply returned by action=speak (action=status, optional)" }
             }, "required": ["action"] }
         }
     ]);
@@ -1907,13 +1918,21 @@ async fn handle_mcp_tool_call_with_context(
             run_blocking_handler(move || handle_config(&state, addr, &args)).await
         }
         "debug" => handle_debug_unified(state, addr, args),
+        // Blocking pool: `speak` builds nothing, but `status` reaps a finished
+        // hands-free runtime, which joins a thread.
+        "voice" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || handle_voice(&state, &args, sid.as_deref())).await
+        }
         "search_tools" => handle_search_tools(state, args),
         "get_tool_schema" => handle_get_tool_schema(state, args),
         "call_tool" => {
             handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
         }
         _ => serde_json::json!({"error": format!(
-            "Unknown tool '{}'. Available: session, agent, task, repo, progress, ui, plugin_dev_guide, config, debug, search_tools, get_tool_schema, call_tool", name
+            "Unknown tool '{}'. Available: session, agent, task, repo, progress, ui, plugin_dev_guide, config, debug, voice, search_tools, get_tool_schema, call_tool", name
         )}),
     }
 }
@@ -5330,6 +5349,94 @@ fn resolve_mcp_origin_agent_type(
         .and_then(|entry| entry.agent_type.clone())
 }
 
+/// Speak into the conversation this caller is the target of.
+///
+/// The binding is the whole security property, and it is checked in
+/// `dictation::commands` rather than here: a model may drive only the
+/// hands-free conversation armed for its own terminal. What this function
+/// contributes is the *identity* — an unbound caller has no terminal, so it
+/// can never match a binding and is told speech is unavailable rather than
+/// being allowed to speak into whichever conversation happens to be armed.
+#[cfg(feature = "desktop")]
+fn handle_voice(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    use crate::dictation::{DictationState, commands as dictation};
+    use tauri::Manager;
+
+    let action = match require_action(args, "voice", VOICE_ACTIONS) {
+        Ok(action) => action,
+        Err(error) => return error,
+    };
+
+    // Identity first, before the app is even consulted. No session header means
+    // no terminal, which means no conversation — and that answer does not
+    // depend on how far along startup is. Saying so here also keeps the caller
+    // off the owner's own control surface: that path exists for the user's UI,
+    // and handing it to a model would let any MCP client speak into somebody
+    // else's conversation.
+    let Some(caller) = resolve_mcp_origin_session(state, mcp_session_id) else {
+        return serde_json::json!({"error":
+            "This connection is not bound to a terminal, so there is no conversation to speak into"
+        });
+    };
+    let caller = dictation::Caller::Model(&caller);
+
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return serde_json::json!({"error": "TUICommander is still starting up"});
+    };
+    let dictation_state = app.state::<DictationState>();
+
+    match action {
+        "speak" => {
+            let Some(text) = args["text"].as_str() else {
+                return serde_json::json!({"error": "Missing 'text' for action=speak"});
+            };
+            let turn = args["turn"].as_u64();
+            match dictation::speak(&dictation_state, caller, text, turn) {
+                Ok(reply) => to_json_or_error(reply),
+                Err(error) => serde_json::json!({"error": error}),
+            }
+        }
+        "stop" => match dictation::stop_speaking(&dictation_state, caller) {
+            Ok(status) => to_json_or_error(status),
+            Err(error) => serde_json::json!({"error": error}),
+        },
+        // Status answers whether this caller *could* speak, so it checks the
+        // binding too: a model bound elsewhere must be told it is not the
+        // target rather than shown another conversation's queue.
+        "status" => match dictation::speech_status_for(
+            &dictation_state,
+            caller,
+            args["utterance_id"].as_str(),
+        ) {
+            Ok(status) => to_json_or_error(status),
+            Err(error) => serde_json::json!({"error": error}),
+        },
+        other => serde_json::json!({"error": format!(
+            "Unknown voice action '{other}'. Available: {VOICE_ACTIONS}"
+        )}),
+    }
+}
+
+/// Voice needs a microphone, a speaker and the dictation stack, none of which
+/// the headless binary builds. Reported as unavailable rather than as an
+/// unknown tool, so a model reads one consistent reason on both builds.
+#[cfg(not(feature = "desktop"))]
+fn handle_voice(
+    _state: &Arc<AppState>,
+    _args: &serde_json::Value,
+    _mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "available": false,
+        "unavailable_reason": "This TUICommander build has no audio support",
+    })
+}
+
 async fn handle_progress(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -7479,6 +7586,171 @@ mod tests {
                 .unwrap()
                 .contains(UPSTREAM_TOOL_RESULT_MARKER),
             "the private marker must not leak through the collapsed path"
+        );
+    }
+
+    // --- the voice tool (817-f67c) ---
+
+    fn native_tool_named(name: &str) -> serde_json::Value {
+        native_tool_definitions()
+            .as_array()
+            .expect("the definitions are an array")
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("no native tool named {name}"))
+            .clone()
+    }
+
+    /// The text a native tool handler produced, out of the JSON-RPC envelope.
+    fn tool_call_text(body: &serde_json::Value) -> String {
+        body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no tool text in {body}"))
+            .to_string()
+    }
+
+    /// Discovery must work on the surface the client is already looking at.
+    ///
+    /// `notifications/tools/list_changed` is not a mechanism we can rely on —
+    /// Claude Code does not refetch on it — so arming cannot be what makes the
+    /// tool appear. It is always in the list, always in the search corpus and
+    /// always fetchable by name; whether it can *do* anything is an answer the
+    /// tool itself gives.
+    #[tokio::test]
+    async fn voice_is_discoverable_by_list_search_and_name_without_a_list_change() {
+        let state = test_state();
+        spawn_tool_search_index_updater(Arc::clone(&state));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let definition = native_tool_named("voice");
+        assert_eq!(
+            definition["inputSchema"]["required"],
+            serde_json::json!(["action"])
+        );
+        for action in ["speak", "stop", "status"] {
+            assert!(
+                definition["inputSchema"]["properties"]["action"]["description"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains(action),
+                "the action list must name {action}"
+            );
+        }
+
+        let found = handle_search_tools(
+            &state,
+            &serde_json::json!({"query": "speak a reply out loud to the user", "limit": 5}),
+        );
+        let names: Vec<&str> = found["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .filter_map(|entry| entry["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"voice"),
+            "a model describing what it wants must find the tool: {names:?}"
+        );
+
+        let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name": "voice"}));
+        assert_eq!(schema["inputSchema"], definition["inputSchema"]);
+    }
+
+    /// The collapsed path must carry the caller's identity, not just its
+    /// arguments. If `mcp-session-id` were dropped on the way through
+    /// `call_tool`, a bound model would be treated as unbound — and, worse, a
+    /// future handler that fell back to the owner would let any client speak
+    /// into whichever conversation happened to be armed.
+    #[tokio::test]
+    async fn voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths() {
+        let state = test_state();
+
+        let unbound_direct = tool_call_text(
+            &post_test_tool_call(
+                Arc::clone(&state),
+                "mcp-voice-unbound",
+                "voice",
+                serde_json::json!({"action": "status"}),
+            )
+            .await,
+        );
+        let unbound_collapsed = tool_call_text(
+            &post_test_tool_call(
+                Arc::clone(&state),
+                "mcp-voice-unbound",
+                "call_tool",
+                serde_json::json!({
+                    "tool_name": "voice",
+                    "arguments": {"action": "status"}
+                }),
+            )
+            .await,
+        );
+        assert!(
+            unbound_direct.contains("not bound to a terminal"),
+            "an unbound caller must be refused, not served: {unbound_direct}"
+        );
+        assert_eq!(
+            unbound_direct, unbound_collapsed,
+            "both paths reach the same handler with the same identity"
+        );
+
+        // Bind the same MCP connection to a terminal. Both paths must now get
+        // past the identity gate and fail on something else entirely.
+        state
+            .mcp
+            .to_session
+            .insert("mcp-voice-bound".to_string(), "tuic-session".to_string());
+        let bound_direct = tool_call_text(
+            &post_test_tool_call(
+                Arc::clone(&state),
+                "mcp-voice-bound",
+                "voice",
+                serde_json::json!({"action": "status"}),
+            )
+            .await,
+        );
+        let bound_collapsed = tool_call_text(
+            &post_test_tool_call(
+                state,
+                "mcp-voice-bound",
+                "call_tool",
+                serde_json::json!({
+                    "tool_name": "voice",
+                    "arguments": {"action": "status"}
+                }),
+            )
+            .await,
+        );
+        assert!(
+            !bound_direct.contains("not bound to a terminal"),
+            "a bound caller must pass the identity gate: {bound_direct}"
+        );
+        assert_eq!(bound_direct, bound_collapsed);
+    }
+
+    /// The description is the only instruction a model gets, and the one thing
+    /// it must not get wrong is that a queued reply is not a spoken one.
+    #[test]
+    fn the_voice_tool_tells_a_model_that_acceptance_is_not_audibility() {
+        let description = native_tool_named("voice")["description"]
+            .as_str()
+            .expect("description")
+            .to_string();
+
+        assert!(
+            description.contains("NOT the same as the user hearing it"),
+            "the acceptance/audibility distinction must be stated: {description}"
+        );
+        for outcome in ["finished", "interrupted", "failed", "utterance_id"] {
+            assert!(
+                description.contains(outcome),
+                "a model polling for an outcome must be told about {outcome}"
+            );
+        }
+        assert!(
+            description.contains("available is false"),
+            "the tool exists whether or not it can speak, so it must say how to tell"
         );
     }
 
@@ -12096,6 +12368,7 @@ mod tests {
                 "plugin_dev_guide",
                 "config",
                 "debug",
+                "voice",
             ],
             "native_tool_definitions must return exactly the one family, in order"
         );
@@ -14298,13 +14571,14 @@ mod tests {
         // `debug` is the one exemption: its description points at `action=help`,
         // which returns the full usage guide, so duplicating five action bullets
         // into a tool that is disabled by default would buy nothing.
-        let cases: [(&str, &str, bool); 7] = [
+        let cases: [(&str, &str, bool); 8] = [
             ("session", SESSION_ACTIONS, true),
             ("agent", AGENT_ACTIONS, true),
             ("task", TASK_ACTIONS, true),
             ("repo", REPO_ACTIONS, true),
             ("ui", UI_ACTIONS, true),
             ("config", CONFIG_ACTIONS, true),
+            ("voice", VOICE_ACTIONS, true),
             ("debug", DEBUG_ACTIONS, false),
         ];
 

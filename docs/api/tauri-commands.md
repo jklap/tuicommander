@@ -431,6 +431,9 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `download_speech_asset` | `asset` | `String` | Download and install, verifying every pinned sha256. `asset` is an id from the catalogue allowlist |
 | `cancel_speech_download` | `asset` | `String` | Abandon a download in flight |
 | `delete_speech_asset` | `asset` | `String` | Unload the engine, then remove the files |
+| `speak_reply` | `text`, `turn?` | `SpokenReply` | Queue one spoken reply, max 2000 characters. Returns `state: "queued"` — never `"finished"`; poll `get_speech_status` with the id. `turn` refuses a reply written for a turn the user talked over |
+| `stop_speech` | -- | `SpeechStatus` | Stop now, drop the queue, open a new turn. Returns the status so the caller learns that turn |
+| `get_speech_status` | `utterance?` | `SpeechStatus` | Whether anything can be spoken, and optionally what became of one reply. An id no longer remembered reports `state: "unknown"` |
 | `get_correction_map` | -- | `HashMap<String,String>` | Load corrections |
 | `set_correction_map` | `map` | `()` | Save corrections |
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |

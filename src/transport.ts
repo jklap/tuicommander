@@ -125,6 +125,22 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	delete_speech_asset: {
 		map: (args) => ({ method: "POST", path: "/dictation/speech/assets/delete", body: { asset: args.asset } }),
 	},
+	speak_reply: {
+		map: (args) => ({
+			method: "POST",
+			path: "/dictation/speech/speak",
+			body: { text: args.text, turn: args.turn },
+		}),
+	},
+	stop_speech: { map: () => ({ method: "POST", path: "/dictation/speech/stop" }) },
+	get_speech_status: {
+		map: (args) => ({
+			method: "GET",
+			path: args.utterance
+				? `/dictation/speech/status?utterance=${encodeURIComponent(String(args.utterance))}`
+				: "/dictation/speech/status",
+		}),
+	},
 	start_dictation: { map: () => ({ method: "POST", path: "/dictation/start" }) },
 	stop_dictation_and_transcribe: { map: () => ({ method: "POST", path: "/dictation/stop" }) },
 	get_correction_map: { map: () => ({ method: "GET", path: "/dictation/corrections" }) },

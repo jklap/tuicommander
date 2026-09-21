@@ -866,6 +866,21 @@ impl TargetProbe for PtyTargetProbe<'_> {
 /// cpal reports through a callback the capture owner cannot return from.
 pub const DEVICE_SILENCE_TIMEOUT_MS: u64 = 5_000;
 
+/// Whatever is speaking for us, and can be told to stop.
+///
+/// A port rather than the reply queue itself, for the same reason as
+/// [`VoiceEndpoint`]: this loop must stay testable without an audio device or a
+/// loaded synthesis graph, and barge-in is a rule about *when* to interrupt,
+/// not about what interrupting does.
+pub trait Interruptible: Send + Sync {
+    /// Stop talking now and open a new turn.
+    ///
+    /// Called from the capture loop on the tick where the user starts speaking,
+    /// so it must not block: anything it waits for delays the next chunk of the
+    /// user's own voice.
+    fn hush(&self);
+}
+
 /// Everything the loop carries between ticks.
 pub struct Capture {
     segmenter: Segmenter,
@@ -876,6 +891,10 @@ pub struct Capture {
     /// Shared with the reply queue, which is the other half of the pair — see
     /// [`echo`](super::echo).
     echo: std::sync::Arc<parking_lot::Mutex<super::echo::EchoGuard>>,
+    /// Interrupted when the user talks over a reply. `None` for a conversation
+    /// armed without a voice, which is ordinary dictation and has nothing to
+    /// interrupt.
+    speaker: Option<std::sync::Arc<dyn Interruptible>>,
 }
 
 impl Capture {
@@ -884,12 +903,14 @@ impl Capture {
         device_silence_timeout_ms: u64,
         now_ms: u64,
         echo: std::sync::Arc<parking_lot::Mutex<super::echo::EchoGuard>>,
+        speaker: Option<std::sync::Arc<dyn Interruptible>>,
     ) -> Self {
         Self {
             segmenter: Segmenter::new(config),
             last_audio_ms: now_ms,
             device_silence_timeout_ms,
             echo,
+            speaker,
         }
     }
 
@@ -970,17 +991,23 @@ pub fn tick(
     // question about the device.
     let samples = capture.echo.lock().clean(&samples);
 
-    // DEFERRED (2026-09-21) — the other half of barge-in: on the tick where the
-    // segmenter starts capturing, whatever is speaking should be hushed, so the
-    // user talking over a reply ends it. The cleaned capture above is what makes
-    // that edge trustworthy — it is now the user and not us. It is not wired
-    // because nothing constructs a `speaker::Speaker` yet: it needs a loaded
-    // speech engine, which arrives with the MCP capability (#817-f67c) and the
-    // Dictation UI (#818-2a29). Wiring a port here now would mean a production
-    // adapter that does nothing. Land it with the first of those two, using the
-    // false->true transition of `segmenter.is_capturing()` — `hush` opens a new
-    // turn on every call, so a level trigger would open one per tick.
+    // The other half of barge-in. Read before the push, because the edge is
+    // what matters: `hush` opens a new turn on every call, so a level trigger
+    // would open one per tick and refuse every reply the model wrote for the
+    // turn in progress.
+    let was_capturing = capture.segmenter.is_capturing();
     let closed = capture.segmenter.push(&samples);
+    // Started talking. The cleaned capture above is what makes this edge
+    // trustworthy: whatever opened the gate is the user and not us, so the
+    // reply in flight is something they chose to talk over. A whole utterance
+    // that opened and closed inside one chunk counts too — the gate is shut
+    // again by now, but somebody still spoke.
+    if !was_capturing
+        && (capture.segmenter.is_capturing() || !closed.is_empty())
+        && let Some(speaker) = capture.speaker.as_ref()
+    {
+        speaker.hush();
+    }
     if closed.is_empty() && capture.segmenter.is_capturing() {
         mode.lock().note_capturing();
     }
@@ -1087,6 +1114,7 @@ pub fn spawn_runtime(
     mut endpoint: Box<dyn VoiceEndpoint>,
     config: SegmenterConfig,
     echo: std::sync::Arc<parking_lot::Mutex<super::echo::EchoGuard>>,
+    speaker: Option<std::sync::Arc<dyn Interruptible>>,
 ) -> HandsFreeRuntime {
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_clone = stop.clone();
@@ -1094,7 +1122,7 @@ pub fn spawn_runtime(
         .name("hands-free-dictation".into())
         .spawn(move || {
             let started = std::time::Instant::now();
-            let mut capture = Capture::new(config, DEVICE_SILENCE_TIMEOUT_MS, 0, echo);
+            let mut capture = Capture::new(config, DEVICE_SILENCE_TIMEOUT_MS, 0, echo, speaker);
             loop {
                 if stop_clone.load(std::sync::atomic::Ordering::Acquire) {
                     break;
@@ -2000,7 +2028,35 @@ mod tests {
     }
 
     fn runtime_capture() -> Capture {
-        Capture::new(test_config(), 5_000, 0, echo_guard())
+        Capture::new(test_config(), 5_000, 0, echo_guard(), None)
+    }
+
+    /// A reply queue that only records being told to stop.
+    #[derive(Default)]
+    struct CountingSpeaker(std::sync::atomic::AtomicUsize);
+
+    impl CountingSpeaker {
+        fn hushes(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    impl Interruptible for CountingSpeaker {
+        fn hush(&self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    fn capture_with_a_voice() -> (Capture, std::sync::Arc<CountingSpeaker>) {
+        let speaker = std::sync::Arc::new(CountingSpeaker::default());
+        let capture = Capture::new(
+            test_config(),
+            5_000,
+            0,
+            echo_guard(),
+            Some(speaker.clone() as std::sync::Arc<dyn Interruptible>),
+        );
+        (capture, speaker)
     }
 
     /// A guard with no canceller: capture comes back exactly as it arrived,
@@ -2037,7 +2093,108 @@ mod tests {
         let echo = std::sync::Arc::new(parking_lot::Mutex::new(
             super::super::echo::EchoGuard::new(Box::new(Subtract)),
         ));
-        (Capture::new(test_config(), 5_000, 0, echo.clone()), echo)
+        (
+            Capture::new(test_config(), 5_000, 0, echo.clone(), None),
+            echo,
+        )
+    }
+
+    /// Barge-in. Answering is only conversational if the user can cut it off:
+    /// without this they have to sit through a sentence they have already
+    /// decided against, and their own words land in the turn after it.
+    #[test]
+    fn the_user_starting_to_talk_stops_the_reply_in_progress() {
+        let mode = armed_shared();
+        let (mut capture, speaker) = capture_with_a_voice();
+        let mut endpoint = FakeEndpoint::new("actually, no");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        endpoint.feed(silence(200));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        assert_eq!(
+            speaker.hushes(),
+            0,
+            "a quiet room must not interrupt the reply"
+        );
+
+        endpoint.feed(speech(500));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 400);
+        assert_eq!(
+            speaker.hushes(),
+            1,
+            "the reply was talked over and survived"
+        );
+    }
+
+    /// `hush` opens a new turn on every call, so a level trigger would open one
+    /// per 50 ms tick — and every reply the model wrote for the turn in
+    /// progress would then be refused as stale while the user was still
+    /// speaking one sentence.
+    #[test]
+    fn a_reply_is_interrupted_once_per_turn_not_once_per_tick() {
+        let mode = armed_shared();
+        let (mut capture, speaker) = capture_with_a_voice();
+        let mut endpoint = FakeEndpoint::new("one long sentence");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        for tick_ms in [100, 400, 700, 1_000] {
+            endpoint.feed(speech(300));
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, tick_ms);
+        }
+
+        assert!(
+            capture.segmenter.is_capturing(),
+            "the test needs one utterance that is still open"
+        );
+        assert_eq!(speaker.hushes(), 1);
+    }
+
+    /// The edge is only trustworthy because the canceller runs before it. Our
+    /// own reply coming back through the microphone would otherwise interrupt
+    /// itself on the first word — the one failure that makes speaking useless
+    /// rather than merely imperfect.
+    #[test]
+    fn our_own_reply_heard_by_the_microphone_does_not_interrupt_itself() {
+        let mode = armed_shared();
+        let speaker = std::sync::Arc::new(CountingSpeaker::default());
+        let echo = std::sync::Arc::new(parking_lot::Mutex::new(
+            super::super::echo::EchoGuard::new(Box::new(Subtract)),
+        ));
+        let mut capture = Capture::new(
+            test_config(),
+            5_000,
+            0,
+            echo.clone(),
+            Some(speaker.clone() as std::sync::Arc<dyn Interruptible>),
+        );
+        let mut endpoint = FakeEndpoint::new("the words we just said");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let reply = speech(500);
+        echo.lock()
+            .note_rendered(&crate::dictation::speech::SpeechAudio {
+                samples: reply.clone(),
+                sample_rate: SAMPLE_RATE,
+            });
+        endpoint.feed(reply);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+
+        assert_eq!(
+            speaker.hushes(),
+            0,
+            "the reply interrupted itself as soon as the microphone heard it"
+        );
+
+        // The other half: the same audio, with nothing subtracting it, is a
+        // user and must interrupt. Otherwise this proves only that silence is
+        // silent.
+        let (mut capture, speaker) = capture_with_a_voice();
+        endpoint.feed(speech(500));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 200);
+        assert_eq!(speaker.hushes(), 1);
     }
 
     /// The failure the echo path exists to stop: the microphone hears the reply

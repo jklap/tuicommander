@@ -113,6 +113,9 @@ impl PocketSpeech {
         }
     }
 
+    /// Where this language's files live. Only the tests ask — production code
+    /// reaches the files through the methods that use them.
+    #[cfg(test)]
     pub fn bundle_dir(&self) -> &Path {
         &self.dir
     }
@@ -173,12 +176,6 @@ impl PocketSpeech {
         // the slot is empty.
         let engine = self.engine.lock().take();
         drop(engine);
-    }
-
-    /// Whether the graphs are resident. For a caller reporting memory, and for
-    /// the tests that prove [`PocketSpeech::unload`] released them.
-    pub fn is_loaded(&self) -> bool {
-        self.engine.lock().is_some()
     }
 }
 

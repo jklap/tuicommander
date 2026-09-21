@@ -63,6 +63,14 @@ pub struct DictationState {
     /// replacing a language against speaking it, which only works if both
     /// sides go through the same instance.
     pub speech: Arc<speech::library::SpeechLibrary>,
+    /// The reply queue for the armed conversation.
+    ///
+    /// `None` whenever hands-free is not armed, and that is the answer the
+    /// voice capability gives a model that calls it then: speech belongs to a
+    /// conversation, not to the application. Built on arm because it needs a
+    /// loaded engine and an open audio device, both of which are worth holding
+    /// only while somebody is listening.
+    pub speaker: Mutex<Option<speaker::Armed>>,
 }
 
 impl DictationState {
@@ -84,6 +92,7 @@ impl DictationState {
             hands_free_owner_alive: Arc::new(AtomicBool::new(false)),
             echo: Arc::new(Mutex::new(echo::install())),
             speech: Arc::new(speech::library::SpeechLibrary::new()),
+            speaker: Mutex::new(None),
         }
     }
 
@@ -102,6 +111,11 @@ impl DictationState {
             .disarm(continuous::DisarmReason::OwnerDisconnected);
         *self.hands_free_runtime.lock() = None;
         *self.hands_free_audio.lock() = None;
+        // 0b. Stop talking. Before the engine goes away below: dropping the
+        //     queue cancels the reply in flight, and an `ort::Session` freed
+        //     under a thread still rendering from it is undefined rather than
+        //     merely abrupt.
+        *self.speaker.lock() = None;
         // 1. Stop audio capture (upstream source)
         *self.audio.lock() = None;
         // 2. Stop + join the streaming thread (Drop impl signals stop flag)
