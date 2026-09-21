@@ -1146,7 +1146,7 @@ re-derived later.
 - Max 3 delivered attempts per block cycle, then stops and logs a warning; log-fetch and terminal-delivery failures do not consume the budget
 - Enabling while already blocked kicks off a heal immediately
 - Attempt counter visible in PR detail popover
-- Status tracked per-branch in `BranchState.ciAutoHeal`
+- Status tracked per-branch in `WorkspaceState.ciAutoHeal`
 
 ### 8.6 PR Notifications
 - Types: Merged, Closed, Conflicts, CI Failed, Changes Requested, Ready
