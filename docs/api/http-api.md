@@ -485,13 +485,27 @@ The WebSocket half needs its own mechanism because `CompressionLayer` is an HTTP
 layer and never sees a WebSocket frame, and tungstenite 0.30 — behind both
 `axum::extract::ws` and the tunnel's client — has no permessage-deflate.
 
-**Negotiation.** `?compress=deflate` on the upgrade. It is the only value offered;
-anything else, including absent, leaves the socket in the framing described above,
-byte for byte, so a client that does not know about this option is unaffected. The
-server refuses to deflate for a **loopback peer** even when it asks — a browser on
-this machine has no link, and an SSH-tunnelled client arrives through the local ssh
-process, whose channel `Compression=yes` already deflated. Such a socket still gets
-the tagged framing it asked for, with every tag saying identity.
+**Negotiation.** `?compress=deflate` on the upgrade, plus `tuic.deflate` in
+`Sec-WebSocket-Protocol`. It is the only value offered; anything else, including
+absent, leaves the socket in the framing described above, byte for byte, so a
+client that does not know about this option is unaffected. The server refuses to
+deflate for a **loopback peer** even when it asks — a browser on this machine has
+no link, and an SSH-tunnelled client arrives through the local ssh process, whose
+channel `Compression=yes` already deflated. A loopback peer is decided on the
+**canonical** address, so the `::ffff:127.0.0.1` an IPv4 client wears on the
+dual-stack `[::]` listener counts as local. Such a socket still gets the tagged
+framing it asked for, with every tag saying identity.
+
+**The acceptance is on the handshake, not inferred.** A server that is going to
+tag its frames selects the `tuic.deflate` subprotocol, which RFC 6455 lets it do
+only for a subprotocol the client offered. A client reads `ws.protocol` in
+`onopen` — before any frame can arrive — and uses the tagged framing only when it
+reads that value back. Against a server that predates the option, the parameter
+and the offer are both ignored, no subprotocol comes back, and the client reads
+the original framing. Inferring acceptance from the request alone is what this
+replaces: an untagged grid frame beginning `0x01` fails to inflate, one beginning
+`0x00` reaches the renderer a byte short, and a JSON frame arrives as a string
+the tag decoder throws on.
 
 **Framing.** On a negotiated socket every frame is a **binary** WebSocket message
 whose first byte names the rest. Text travels as binary because deflate output is

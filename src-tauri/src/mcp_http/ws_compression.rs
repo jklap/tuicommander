@@ -18,6 +18,12 @@
 //!   `?compress=deflate` on the upgrade. A client written against the old
 //!   framing keeps working, byte for byte, and there is nothing to negotiate
 //!   badly.
+//! - **The answer is on the handshake, not inferred from the question.** A
+//!   server that tags its frames selects the [`DEFLATE_SUBPROTOCOL`], which RFC
+//!   6455 lets it do only for a subprotocol the client offered. A client that
+//!   asked and reads no subprotocol back is talking to a server that never heard
+//!   of the query parameter, and reads the old framing — rather than stripping a
+//!   tag byte that is really the first byte of a grid row.
 //! - **A local peer never pays.** A desktop terminal on the same machine has no
 //!   link to save, so a loopback socket is refused compression even if it asks.
 //!   The refusal is visible rather than silent: the frames are still tagged, and
@@ -56,6 +62,14 @@ pub(super) enum FrameTag {
     /// UTF-8 payload, raw deflate.
     TextDeflate = 0x03,
 }
+
+/// The subprotocol a tagging server selects, and the client's only proof that
+/// its request was heard.
+///
+/// Must match `wsFrameCodec.ts`'s `DEFLATE_SUBPROTOCOL`. The name is ours rather
+/// than `permessage-deflate`: that one names RFC 7692, which this stack does not
+/// implement and a proxy could reasonably act on.
+pub(super) const DEFLATE_SUBPROTOCOL: &str = "tuic.deflate";
 
 /// How hard to try: deflate's default, level 6.
 ///
@@ -100,7 +114,12 @@ impl WsCompression {
             // the client asked for something this server does not have, and the
             // honest answer is the framing it did not ask for rather than a
             // closed socket.
-            Some("deflate") if peer.ip().is_loopback() => Self::LoopbackIdentity,
+            // `to_canonical` first: an IPv4 client reaching the dual-stack `[::]`
+            // listener is presented as `::ffff:127.0.0.1`, which is not
+            // `is_loopback` in its own right. Reading that as remote deflates
+            // every frame of a tunnelled session whose ssh channel already
+            // compressed it — the exact double cost this arm exists to avoid.
+            Some("deflate") if peer.ip().to_canonical().is_loopback() => Self::LoopbackIdentity,
             Some("deflate") => Self::Deflate,
             _ => Self::Off,
         }
@@ -307,9 +326,19 @@ mod tests {
     /// matters: a browser on `localhost` reaches this server over `::1` as
     /// often as over `127.0.0.1`, and treating that as remote would deflate
     /// every frame of every local session for a link that is not there.
+    ///
+    /// `::ffff:127.0.0.1` is the same row a third time: the listener binds
+    /// `[::]`, so an IPv4 peer — the tunnel's own ssh process included — arrives
+    /// wearing an IPv4-mapped IPv6 address that `Ipv6Addr::is_loopback` says
+    /// nothing about.
     #[test]
     fn a_peer_is_local_or_it_is_not() {
-        for local in ["127.0.0.1:1", "127.9.9.9:1", "[::1]:1"] {
+        for local in [
+            "127.0.0.1:1",
+            "127.9.9.9:1",
+            "[::1]:1",
+            "[::ffff:127.0.0.1]:1",
+        ] {
             let peer = local.parse().expect("a literal address");
             assert_eq!(
                 WsCompression::negotiate(Some("deflate"), &peer),
@@ -317,7 +346,12 @@ mod tests {
                 "{local} is on this machine"
             );
         }
-        for far in ["100.64.1.42:1", "192.168.1.5:1", "[fd7a:115c::1]:1"] {
+        for far in [
+            "100.64.1.42:1",
+            "192.168.1.5:1",
+            "[fd7a:115c::1]:1",
+            "[::ffff:100.64.1.42]:1",
+        ] {
             let peer = far.parse().expect("a literal address");
             assert_eq!(
                 WsCompression::negotiate(Some("deflate"), &peer),
@@ -339,6 +373,15 @@ mod tests {
         // able to read the answer — but never deflated.
         assert_eq!(tag_of(&frame), FrameTag::Binary as u8);
         assert_eq!(&frame[1..], &payload[..]);
+
+        // The text half of the same promise. A JSON payload large enough to
+        // deflate still goes out as it was, and the bytes after the tag are the
+        // string — so the client's `TextDecoder` over `frame[1..]` reads it back
+        // without an inflate step that would have nothing to do.
+        let text = String::from_utf8(compressible(64 * 1024)).expect("ascii");
+        let frame = encode_text(mode, &text).expect("a socket that asked is tagged");
+        assert_eq!(tag_of(&frame), FrameTag::Text as u8);
+        assert_eq!(&frame[1..], text.as_bytes());
     }
 
     #[test]
@@ -396,21 +439,39 @@ mod tests {
         assert_eq!(tag_of(&large), FrameTag::TextDeflate as u8);
     }
 
-    #[test]
-    fn what_comes_out_is_what_went_in() {
+    /// Inflate one deflated frame the way the browser does: over `frame[1..]`,
+    /// as a raw deflate block with no zlib wrapper.
+    fn inflated(frame: &[u8]) -> Vec<u8> {
         use flate2::read::DeflateDecoder;
         use std::io::Read;
 
+        let mut out = Vec::new();
+        DeflateDecoder::new(&frame[1..])
+            .read_to_end(&mut out)
+            .expect("a raw deflate block the browser's DecompressionStream also reads");
+        out
+    }
+
+    /// Both deflating tags, because they are two encoders as far as a reader is
+    /// concerned: `TextDeflate` is the one whose output has to survive being
+    /// turned back into a `String`, and asserting only on bytes would not say
+    /// that it does.
+    #[test]
+    fn what_comes_out_is_what_went_in() {
         let mode = WsCompression::negotiate(Some("deflate"), &remote());
+
         let payload = compressible(64 * 1024);
         let frame = encode_binary(mode, &payload).expect("negotiated");
+        assert_eq!(tag_of(&frame), FrameTag::BinaryDeflate as u8);
+        assert_eq!(inflated(&frame), payload);
 
-        let mut round_tripped = Vec::new();
-        DeflateDecoder::new(&frame[1..])
-            .read_to_end(&mut round_tripped)
-            .expect("a raw deflate block the browser's DecompressionStream also reads");
-
-        assert_eq!(round_tripped, payload);
+        let text = String::from_utf8(compressible(64 * 1024)).expect("ascii");
+        let frame = encode_text(mode, &text).expect("negotiated");
+        assert_eq!(tag_of(&frame), FrameTag::TextDeflate as u8);
+        assert_eq!(
+            String::from_utf8(inflated(&frame)).expect("text survives its encoding"),
+            text
+        );
     }
 }
 

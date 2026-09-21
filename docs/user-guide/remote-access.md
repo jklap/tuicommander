@@ -45,7 +45,10 @@ nothing and pays nothing, and a client reaching the daemon through an SSH tunnel
 is compressed by the tunnel instead (see **Compression** under SSH Tunnels below),
 never twice. Nothing to configure: the client decides from whether the session
 belongs to a remote connection. An older browser that cannot inflate simply reads
-the uncompressed stream. The exact framing is in
+the uncompressed stream, and so does a new browser talking to a daemon too old to
+compress — the daemon has to accept the request on the handshake before the
+browser uses it, so the two can never disagree about what is on the wire. The
+exact framing is in
 [`docs/api/http-api.md`](../api/http-api.md).
 
 ## Security

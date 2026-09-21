@@ -360,11 +360,11 @@ When changing what a remote WebSocket puts on the wire, or which peers pay for i
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/mcp_http/ws_compression.rs` | The negotiation, the frame tags, the level, and the measurement the level and the stateless choice were made on |
-| `src-tauri/src/mcp_http/session.rs` | `ws_stream` reads `?compress=` and the peer address; all three handlers send through `WsFrameSender` |
+| `src-tauri/src/mcp_http/ws_compression.rs` | The negotiation, `DEFLATE_SUBPROTOCOL`, the frame tags, the level, and the measurement the level and the stateless choice were made on |
+| `src-tauri/src/mcp_http/session.rs` | `ws_stream` reads `?compress=` and the peer address, and selects the subprotocol when the mode is tagged; all three handlers send through `WsFrameSender` |
 | `src-tauri/src/mcp_http/types.rs` | `OutputQuery::compress` |
-| `src/components/Terminal/wsFrameCodec.ts` | The client half — the tag values must match `FrameTag` literal for literal |
-| `src/components/Terminal/canvasTerminalTransport.ts` | Who asks for the encoding, and the chain keeping inflated deltas in order |
+| `src/components/Terminal/wsFrameCodec.ts` | The client half — the tag values must match `FrameTag` literal for literal, and `DEFLATE_SUBPROTOCOL` must match its Rust twin |
+| `src/components/Terminal/canvasTerminalTransport.ts` | Who asks for the encoding, who reads the acceptance off `ws.protocol` in `onopen`, and the chain keeping inflated deltas in order |
 | `src-tauri/src/tunnels/profile.rs` / `command.rs` | `ProfileOptions::compression` → `ssh -C`; the WebSocket's loopback refusal assumes this is on |
 | `docs/api/http-api.md` | "WebSocket compress=deflate" — the table of what is compressed by what |
 | `docs/user-guide/remote-access.md` | What a user is told about it |

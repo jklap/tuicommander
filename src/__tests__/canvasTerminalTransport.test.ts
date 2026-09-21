@@ -29,7 +29,7 @@ import {
 	toBinaryPayload,
 	WsTransport,
 } from "../components/Terminal/canvasTerminalTransport";
-import { FRAME_TAG } from "../components/Terminal/wsFrameCodec";
+import { DEFLATE_SUBPROTOCOL, FRAME_TAG } from "../components/Terminal/wsFrameCodec";
 import { isTauri } from "../transport";
 import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../transportRuntime";
 
@@ -228,16 +228,30 @@ describe("canvasTerminalTransport", () => {
 	describe("WsTransport", () => {
 		let wsInstances: MockWebSocket[];
 
+		/**
+		 * A server's answer to the subprotocol offer, for the next socket opened.
+		 *
+		 * `"accept"` is a server that tags its frames, `"ignore"` one that predates
+		 * the negotiation and sends the original framing. Nothing else is
+		 * reachable: a browser fails a socket whose server names a subprotocol the
+		 * client never offered.
+		 */
+		let serverAnswer: "accept" | "ignore" = "accept";
+
 		class MockWebSocket {
 			static lastUrl = "";
+			static lastProtocols: string[] | undefined;
 			binaryType = "";
+			protocol = "";
 			onmessage: ((e: { data: unknown }) => void) | null = null;
 			onclose: (() => void) | null = null;
 			onopen: (() => void) | null = null;
 			onerror: ((e: unknown) => void) | null = null;
 			close = vi.fn();
-			constructor(url: string) {
+			constructor(url: string, protocols?: string[]) {
 				MockWebSocket.lastUrl = url;
+				MockWebSocket.lastProtocols = protocols;
+				if (serverAnswer === "accept") this.protocol = protocols?.[0] ?? "";
 				wsInstances.push(this);
 			}
 		}
@@ -245,6 +259,8 @@ describe("canvasTerminalTransport", () => {
 		beforeEach(() => {
 			vi.useFakeTimers();
 			wsInstances = [];
+			serverAnswer = "accept";
+			MockWebSocket.lastProtocols = undefined;
 			(globalThis as Record<string, unknown>).WebSocket = MockWebSocket as unknown as typeof WebSocket;
 		});
 
@@ -260,6 +276,9 @@ describe("canvasTerminalTransport", () => {
 
 			expect(MockWebSocket.lastUrl).toContain("/sessions/sess-42/stream?format=grid");
 			expect(wsInstances[0].binaryType).toBe("arraybuffer");
+			// A local terminal has no link to save, so it neither asks nor offers —
+			// and the server has nothing to acknowledge.
+			expect(MockWebSocket.lastProtocols).toBeUndefined();
 		});
 
 		// `ack_terminal_frame` is desktop-only (INTENTIONALLY_UNMAPPED): calling it
@@ -453,6 +472,36 @@ describe("canvasTerminalTransport", () => {
 				await subscribed;
 
 				expect(MockWebSocket.lastUrl).toContain("compress=deflate");
+				// And offers the subprotocol, which is the half the server answers.
+				// Without the offer a server that tags its frames cannot say so, and
+				// RFC 6455 forbids it selecting one that was not offered.
+				expect(MockWebSocket.lastProtocols).toEqual([DEFLATE_SUBPROTOCOL]);
+			});
+
+			// The failure this negotiation exists for. An older daemon ignores the
+			// query parameter and sends the frames untouched; a client that assumed
+			// its own request was granted reads the first byte of a grid row as a
+			// tag — 0x01 fails to inflate, 0x00 hands the renderer a frame one byte
+			// short, and a JSON frame arrives as a string the decoder throws on.
+			it("falls back to untagged framing against a server that does not compress", async () => {
+				serverAnswer = "ignore";
+				const onFrame = vi.fn();
+				const handler = vi.fn();
+				const transport = new WsTransport("sess-9", "conn-1");
+				const subscribed = transport.subscribe(onFrame);
+				wsInstances[0].onopen!();
+				await subscribed;
+				await transport.onEvent("cwd", handler);
+
+				// Bytes as the old server sends them: no tag, and a leading 0x01 that
+				// a tag reader would have taken for "deflated".
+				const grid = new Uint8Array([1, 2, 3]).buffer;
+				wsInstances[0].onmessage!({ data: grid });
+				wsInstances[0].onmessage!({ data: JSON.stringify({ type: "cwd", cwd: "/tmp/work" }) });
+
+				// Synchronous, because the untagged path has nothing to inflate.
+				expect(onFrame).toHaveBeenCalledWith(grid);
+				expect(handler).toHaveBeenCalledWith({ cwd: "/tmp/work" });
 			});
 
 			it("reads a deflated grid frame back to the bytes the server serialised", async () => {
