@@ -210,6 +210,24 @@ tauri-plugin-single-instance = { version = "2", optional = true }
 whisper-rs = { version = "0.16", optional = true }
 cpal = { version = "0.17.3", optional = true }
 rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
+# Speech synthesis (dictation::speech::pocket). `load-dynamic` on purpose: the
+# default `download-binaries` fetches onnxruntime during the build and then has
+# to be bundled into the app on three platforms. The speech model is a
+# download-on-demand asset anyway, so the runtime library travels with it and a
+# missing one is a typed `ModelUnavailable` instead of a build-time network call.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic"], optional = true }
+# The Pocket TTS bundles ship a SentencePiece Unigram tokenizer. Read the model
+# proto here and run the Viterbi through `tokenizers`: the C++ `sentencepiece`
+# crate statically links protobuf 3.14 while onnxruntime links 3.21, and the two
+# abort the process on first use.
+sentencepiece-model = { version = "0.1", optional = true }
+# `fancy-regex` rather than the default `onig`: the Unigram model needs neither,
+# but the crate insists on one of the two, and onig is a C library to build.
+tokenizers = { version = "0.22", default-features = false, features = [
+    "fancy-regex",
+], optional = true }
+# Voice states are safetensors files, keyed `module/key`.
+safetensors = { version = "0.6", optional = true }
 # gzip/brotli: the daemon compresses every response above 860 bytes
 # (`CompressionLayer` in mcp_http), but only for a client that advertises the
 # encoding. A browser does it unasked; reqwest does not, so without these two
@@ -294,6 +312,10 @@ desktop = [
     "dep:whisper-rs",
     "dep:cpal",
     "dep:rodio",
+    "dep:ort",
+    "dep:sentencepiece-model",
+    "dep:tokenizers",
+    "dep:safetensors",
     "dep:objc2",
     "dep:objc2-foundation",
     "dep:objc2-app-kit",
