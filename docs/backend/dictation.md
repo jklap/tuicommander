@@ -206,6 +206,66 @@ disarm can never clear a human's Compose command, a peer notice or an exit hint.
 Ids that already left the queue come back in `already_delivered` rather than
 being reported as cancelled — the composer has them and nothing can retract them.
 
+### The runtime that drives it
+
+The state machines above are inert. `spawn_runtime` starts the thread that feeds
+them: it wakes every `POLL_INTERVAL_MS` (50 ms) and calls `tick`, which is the
+whole capture -> segment -> transcribe -> hold-back -> enqueue path in one
+clock-free function. `tick` takes `now_ms` from the driver, so every test drives
+the real production path with a fake clock instead of sleeping.
+
+One tick, in order:
+
+1. read the binding; if the mode is not armed, do nothing;
+2. `TargetProbe::accepts` — a session that has gone away disarms with
+   `TargetClosed`;
+3. `VoiceEndpoint::connected` — a released audio owner disarms with
+   `OwnerDisconnected`;
+4. `VoiceEndpoint::drain` — an error disarms with `DeviceFailed` carrying the
+   device's own message, and a stream that returns no samples at all for
+   `DEVICE_SILENCE_TIMEOUT_MS` (5 s) disarms the same way. A silent *room* still
+   delivers samples, so this catches a dead device rather than a quiet one;
+5. push the samples through the `Segmenter`;
+6. for each closed utterance: mark transcribing, read the generation, **release
+   the mode lock**, transcribe, re-acquire and offer the transcript. The lock is
+   deliberately not held across inference, which is what lets a manual abort
+   land mid-transcription and reject the result that arrives after it;
+7. `deliver_due` — enqueue whatever the hold-back has now cleared.
+
+Three details that are load-bearing rather than incidental:
+
+- **Never lock the mode in a `match` scrutinee.** `parking_lot` is not
+  reentrant and a temporary in the scrutinee lives for the whole `match`, so
+  `match deliver_due(&mut mode.lock(), ..)` deadlocks the runtime — and every
+  status poll behind it — the first time the queue refuses a delivery. Bind the
+  result in its own statement.
+- A refused delivery is **not** a disarm: `note_send_failed` records the message
+  and returns the mode to `Waiting`, still armed.
+- `HandsFreeRuntime` stops and joins its thread on `Drop`, so dropping it out of
+  `DictationState` is the only shutdown handshake there is.
+
+### The desktop endpoint, and the one that does not exist yet
+
+`VoiceEndpoint` is the port: a microphone plus a recogniser. Today there is
+exactly one adapter, `DesktopVoiceEndpoint` (`commands.rs`), and `arm` accepts
+only the owner `DESKTOP_OWNER` (`"desktop"`). Any other owner is refused with
+`Audio endpoint '<owner>' is not available on this build` — the browser/remote
+endpoint is story 818 and is deliberately absent rather than stubbed, so a remote
+client cannot silently be served Boss's local microphone.
+
+The desktop adapter shares push-to-talk's transcriber `Arc` (loading a second
+multi-gigabyte Whisper model would be absurd) and its permission and model
+helpers, but **not** its capture. `cpal::Stream` is `!Send`, so the capture stays
+in `DictationState::hands_free_audio` — a slot distinct from `audio`, which is
+push-to-talk's — and only the sample buffer handle crosses to the worker thread.
+The two modes therefore cannot arm or stop each other. Because the runtime thread
+cannot drop a `!Send` stream, a runtime that disarmed itself is reaped on the
+next `hands_free_status` poll, which is where the device is actually released.
+
+`DictationState::shutdown` clears the owner flag and disarms with
+`OwnerDisconnected` itself before dropping the runtime, rather than relying on
+the thread noticing — the thread may already be parked on its way out.
+
 ## Speech gates
 
 Whisper transcribes whatever it is given. On room noise it invents subtitle
