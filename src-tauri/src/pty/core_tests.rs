@@ -13674,7 +13674,7 @@ fn cleanup_session_clears_transient_session_maps() {
         .pty_accent_colors
         .insert(sid.to_string(), "blue".to_string());
 
-    cleanup_session(sid, &state);
+    cleanup_session(sid, &state, "closed");
 
     assert!(!state.session_maps.output_buffers.contains_key(sid));
     assert!(!state.grid.vt_log_buffers.contains_key(sid));

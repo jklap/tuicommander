@@ -236,9 +236,10 @@ describe("transport", () => {
 			return [...struct![1].matchAll(/pub (\w+):/g)].map((m) => m[1]).sort();
 		}
 
-		/** JSON keys the `/events` SSE arm sends for `AppEvent::RepoChanged`. */
+		/** JSON keys the `/events` SSE arm sends for `AppEvent::RepoChanged`
+		 *  (the payload builder lives in `event_wire.rs`, shared with `emit_dual`). */
 		function ssePayloadKeys(): string[] {
-			const source = readRepoFile("src-tauri/src/mcp_http/sse_routes.rs");
+			const source = readRepoFile("src-tauri/src/event_wire.rs");
 			const arm = source.match(/AppEvent::RepoChanged \{[^}]*\} => \{\s*serde_json::json!\(\{([^}]*)\}\)/);
 			expect(arm, "RepoChanged SSE arm not found — the extractor is stale").not.toBeNull();
 			return [...arm![1].matchAll(/"(\w+)":/g)].map((m) => m[1]).sort();

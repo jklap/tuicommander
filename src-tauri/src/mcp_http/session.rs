@@ -430,18 +430,21 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
     }
 }
 
+/// Storage, the unchanged-value no-op guard, and the dual emit all live in
+/// `AppState::set_session_display_name` — this handler (and its Tauri-command
+/// twin, `pty/commands.rs`'s `set_session_name`) is only the existence check
+/// plus argument extraction. The two used to independently hand-duplicate all
+/// of that (~55 lines each), which is the same shape `set_pty_accent_color`
+/// already fixed for accent color.
 pub(super) async fn set_session_name(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Json(body): Json<SetNameRequest>,
 ) -> impl IntoResponse {
-    let entry = match state.session_maps.sessions.get(&session_id) {
-        Some(e) => e,
-        None => return session_not_found(),
-    };
-    entry
-        .lock()
-        .set_display_name(body.name, body.is_custom.unwrap_or(true));
+    if !state.session_maps.sessions.contains_key(&session_id) {
+        return session_not_found();
+    }
+    state.set_session_display_name(&session_id, body.name, body.is_custom.unwrap_or(true));
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -643,31 +646,15 @@ pub(super) async fn close_session(
     if state.session_maps.sessions.contains_key(&session_id) {
         // Send Ctrl+C then cleanup
         let _ = write_pty_input_bytes(&state, &session_id, &[0x03]);
-        // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
-        // this session's per-session PTY channel, so the closed frame must be emitted
-        // while the channel still exists. broadcast keeps the buffered frame available
-        // to live subscribers even after the sender is dropped, so they drain the
-        // "closed" frame and THEN see the channel close (no lost close notification).
         tracing::info!(source = "session", session_id = %session_id, "Session closed: explicit close");
-        state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-            session_id: session_id.clone(),
-            reason: "explicit_close".to_string(),
-        });
-        #[cfg(feature = "desktop")]
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "session-closed",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "reason": "explicit_close",
-                }),
-            );
-        }
-
+        // `cleanup_session` itself emits `session-closed` on both transports
+        // (via `emit_session_closed`) BEFORE it reaps the per-session PTY
+        // channel — see that function's doc comment for why the ordering
+        // matters.
         let cleanup_session_id = session_id.clone();
         let cleanup_state = state.clone();
         if let Err(error) = tokio::task::spawn_blocking(move || {
-            crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
+            crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state, "explicit_close");
         })
         .await
         {
@@ -709,6 +696,7 @@ pub(super) fn register_pty_session(
     agent_type: Option<String>,
     requested_alias: Option<&str>,
     parent_session: Option<String>,
+    announce_on_desktop: bool,
 ) {
     let cwd = session.cwd.clone();
     let display_name = session.display_name.clone();
@@ -742,19 +730,38 @@ pub(super) fn register_pty_session(
         .watch
         .insert(session_id.to_string(), crate::grid_watch::new_grid_watch());
 
-    // Broadcast to SSE/WebSocket consumers before the reader thread starts.
-    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
-        session_id: session_id.to_string(),
-        cwd,
-        agent_type,
-        display_name,
-        parent_session,
-    });
-    // After `SessionCreated`: on the bus a consumer learns that a session exists
-    // before an event about it. That ordering holds on the bus only — the desktop
-    // `term-alias-assigned` window emit fires here, before either caller's desktop
-    // `session-created`, and the UI relies on `terminalsStore.applyAlias`
-    // retaining an alias for a session it has not bound yet.
+    // Announce before the reader thread starts, and before any other
+    // session-scoped announcement (the alias below): `SessionCreated` must be
+    // the first event a subscriber sees for a new id, on both transports.
+    //
+    // The desktop half is conditional on `announce_on_desktop`: MCP `agent
+    // action=spawn` (the one caller that passes `false` for a print-mode
+    // spawn) deliberately never shows a non-interactive, one-shot spawn as a
+    // desktop tab — that suppression predates this shared helper and must
+    // survive it. The other callers (`spawn_pty_session`, the HTTP
+    // agent-spawn route) always pass `true`: previously each hand-wrote its
+    // own desktop emit, and each one drifted (dropped `cwd` or `agent_type`)
+    // in a different way.
+    if announce_on_desktop {
+        crate::pty::emit_session_created(
+            state,
+            session_id,
+            cwd,
+            agent_type,
+            display_name,
+            parent_session,
+        );
+    } else {
+        state.emit_pty_event(crate::state::AppEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            cwd,
+            agent_type,
+            display_name,
+            parent_session,
+        });
+    }
+    // After `SessionCreated`, on both transports now that the desktop half of
+    // both rides `emit_dual`.
     state.assign_term_alias(session_id, requested_alias);
 }
 
@@ -770,6 +777,11 @@ pub(super) fn register_pty_session(
 pub(super) struct RequestedIdentity {
     pub session_id: Option<String>,
     pub alias: Option<String>,
+    /// The creator's chosen initial tab name, propagated once at creation —
+    /// see `PtyConfig::display_name`'s doc comment (the desktop-transport
+    /// twin of this field).
+    pub display_name: Option<String>,
+    pub display_name_is_custom: bool,
 }
 
 pub(super) fn spawn_pty_session(
@@ -871,8 +883,8 @@ pub(super) fn spawn_pty_session(
             worktree,
             initial_cwd: cwd.clone(),
             cwd: cwd.clone(),
-            display_name: None,
-            display_name_is_custom: false,
+            display_name: requested.display_name,
+            display_name_is_custom: requested.display_name_is_custom,
             display_name_from_spawn: false,
             is_remote: true,
             shell: shell.clone(),
@@ -882,23 +894,14 @@ pub(super) fn spawn_pty_session(
         None,
         requested.alias.as_deref(),
         None,
+        true,
     );
 
-    #[cfg(feature = "desktop")]
-    let state_ref = state.clone();
+    // `register_pty_session` above already announced on both transports —
+    // no separate desktop-half emit needed here (previously this block fired
+    // its own, AFTER the reader thread had already started, unlike every
+    // other creation path).
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);
-
-    #[cfg(feature = "desktop")]
-    if let Some(app) = state_ref.app_handle.read().as_ref() {
-        let _ = app.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "cwd": cwd,
-                "display_name": null,
-            }),
-        );
-    }
 
     Ok(session_id)
 }
@@ -935,6 +938,8 @@ pub(super) async fn create_session(
             RequestedIdentity {
                 session_id: body.session_id,
                 alias: body.alias,
+                display_name: body.display_name,
+                display_name_is_custom: body.display_name_is_custom,
             },
         )
     })
@@ -1341,6 +1346,8 @@ pub(super) async fn create_session_with_worktree(
             RequestedIdentity {
                 session_id: body.config.session_id,
                 alias: body.config.alias,
+                display_name: body.config.display_name,
+                display_name_is_custom: body.config.display_name_is_custom,
             },
         )
     })
@@ -1617,8 +1624,8 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PluginWatcherLines { session_id: sid, lines } => {
                                     serde_json::json!({"type": "watcher-lines", "session_id": sid, "lines": lines})
                                 }
-                                crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
-                                    serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
+                                crate::state::AppEvent::SessionClosed { session_id: sid, reason, agent_type } => {
+                                    serde_json::json!({"type": "closed", "session_id": sid, "reason": reason, "agent_type": agent_type})
                                 }
                                 crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
                                     serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
@@ -1894,8 +1901,9 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
         crate::state::AppEvent::SessionClosed {
             session_id: sid,
             reason,
+            agent_type,
         } => {
-            serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
+            serde_json::json!({"type": "closed", "session_id": sid, "reason": reason, "agent_type": agent_type})
         }
         crate::state::AppEvent::PtyDescriptionChanged {
             session_id: sid,
@@ -4701,6 +4709,8 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("client-provided-id".to_string()),
                 alias: None,
+                display_name: None,
+                display_name_is_custom: false,
             },
         );
         // PTY unavailable in CI — skip gracefully
@@ -4729,6 +4739,8 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("dup-id".to_string()),
                 alias: None,
+                display_name: None,
+                display_name_is_custom: false,
             },
         ) {
             Ok(id) => id,
@@ -4745,6 +4757,8 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("dup-id".to_string()),
                 alias: None,
+                display_name: None,
+                display_name_is_custom: false,
             },
         )
         .expect("second spawn should succeed with a fresh id");
@@ -4771,6 +4785,7 @@ mod tests {
             super::RequestedIdentity {
                 session_id: Some("aliased-row".to_string()),
                 alias: Some("tu-7".to_string()),
+                ..Default::default()
             },
         ) {
             Ok(id) => id,
@@ -4951,6 +4966,8 @@ mod tests {
                     cwd: None,
                     session_id: None,
                     alias: None,
+                    display_name: None,
+                    display_name_is_custom: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "warm-test-branch".to_string(),
@@ -5056,6 +5073,8 @@ mod tests {
                     cwd: None,
                     session_id: None,
                     alias: None,
+                    display_name: None,
+                    display_name_is_custom: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "sync-test-branch".to_string(),
