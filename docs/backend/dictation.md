@@ -64,7 +64,7 @@ Both transports serialize the same structs, camelCase on the wire:
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`) |
+| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms` and `hands_free_activation_phrase`). Writes the whole document — see "Configuration persistence" |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -265,6 +265,55 @@ next `hands_free_status` poll, which is where the device is actually released.
 `DictationState::shutdown` clears the owner flag and disarms with
 `OwnerDisconnected` itself before dropping the runtime, rather than relying on
 the thread noticing — the thread may already be parked on its way out.
+
+### The activation phrase
+
+`hands_free_activation_phrase` is optional. Empty, every recognised utterance is
+a turn. Set, it must open each new turn, and three properties are the contract:
+
+- **It is local.** Whisper runs on this machine on every utterance *before* the
+  gate sees anything — the gate reads text, not audio. A phrase does not reduce
+  what is recognised; it reduces what is submitted.
+- **It gates new model input, never the microphone.** The match sits in
+  `HandsFree::accept_transcript`, after transcription and before the send slot.
+  A rejected transcript never enters that slot, and `poll_send` is the only
+  thing `deliver_due` can hand to the Compose FIFO — which is the module's only
+  exit. "It never reaches PTY, ACP or MCP" is therefore structural, not a check
+  repeated per call site.
+- **It bounds a conversation, not a sentence.** One accepted turn opens
+  `ACTIVATION_WINDOW_MS` (15s) in which follow-ups need no phrase. Every
+  accepted turn restarts it; every disarm — manual, target closed, owner
+  disconnected, capture failure — closes it, so a fresh arm is always gated.
+
+Matching is on **complete leading words**, where a word is a maximal run of
+alphanumeric characters. Case and punctuation therefore never decide a match
+(`"Attività, Tuic!"` matches `attività tuic`), Unicode case folding handles
+Italian accents, and a longer word that merely starts with the phrase is a
+different word rather than a prefix — `Tuicommander` does not match `tuic`. A
+phrase heard mid-sentence does not activate: it must lead. The phrase is
+stripped from what is submitted, including when it is repeated inside an open
+window, so a model never reads it. Spoken alone, it opens the window and submits
+nothing.
+
+The window is anchored on **acceptance, not on the model's reply**: this module
+enqueues and observes nothing coming back, which is what keeps the Compose FIFO
+its only exit. A user who waits out a long answer will need the phrase again.
+Story 816-cbbf adds spoken playback and is the first caller that will know when
+an answer ended; the anchor is worth revisiting there. Interrupting playback is
+that story's work and belongs *upstream* of this gate — stopping a speaker is
+not new model input — but whatever stops playback, the words that follow are new
+model input and stay gated whenever a phrase is configured.
+
+### Configuration persistence
+
+`set_dictation_config` writes the whole document, and every hands-free field
+carries `#[serde(default)]` so a config written before the field existed still
+loads. A payload that omits a field therefore **silently resets it** rather than
+failing. Any caller that rebuilds a `DictationConfig` must carry every field:
+load-modify-save, never build-from-scratch. `dictationStore.saveConfig` reads
+the stored config and overrides only the fields the UI owns, and
+`src/__tests__/stores/dictation.test.ts` drives that field list off this crate's
+struct so a newly added field is covered by whoever adds it.
 
 ## Speech gates
 

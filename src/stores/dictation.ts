@@ -14,6 +14,10 @@ interface DictationConfig {
 	auto_send: boolean;
 	rms_threshold: number;
 	no_speech_threshold: number;
+	/** Hands-free hold-back before a transcript is enqueued. No UI control. */
+	hands_free_hold_back_ms: number;
+	/** Hands-free activation phrase; empty means ungated. No UI control. */
+	hands_free_activation_phrase: string;
 }
 
 /** Whisper's own no_speech_thold default, mirrored from `transcribe.rs`. */
@@ -206,20 +210,34 @@ function createDictationStore() {
 			}
 		},
 
-		/** Save a single config field to disk via Rust */
+		/**
+		 * Save a single config field to disk via Rust.
+		 *
+		 * Load-modify-save, not build-from-scratch. `set_dictation_config`
+		 * writes the whole document and every hands-free field carries
+		 * `#[serde(default)]` so an older config still loads — which means a
+		 * payload that omits a field silently resets it instead of failing.
+		 * Rebuilding this object from store state therefore erased every
+		 * setting the UI has no control for. Spread the stored config first and
+		 * override only the fields this surface owns.
+		 */
 		async saveConfig(partial: Partial<DictationConfig>): Promise<void> {
-			const config: DictationConfig = {
-				enabled: partial.enabled ?? state.enabled,
-				hotkey: partial.hotkey ?? state.hotkey,
-				language: partial.language ?? state.language,
-				model: partial.model ?? state.selectedModel,
-				device: partial.device !== undefined ? partial.device : state.selectedDevice,
-				long_press_ms: partial.long_press_ms ?? state.longPressMs,
-				auto_send: partial.auto_send ?? state.autoSend,
-				rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
-				no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
-			};
 			try {
+				// A save that cannot read first is abandoned: writing a config
+				// assembled from defaults is how the fields below got lost.
+				const stored = await invoke<DictationConfig>("get_dictation_config");
+				const config: DictationConfig = {
+					...stored,
+					enabled: partial.enabled ?? state.enabled,
+					hotkey: partial.hotkey ?? state.hotkey,
+					language: partial.language ?? state.language,
+					model: partial.model ?? state.selectedModel,
+					device: partial.device !== undefined ? partial.device : state.selectedDevice,
+					long_press_ms: partial.long_press_ms ?? state.longPressMs,
+					auto_send: partial.auto_send ?? state.autoSend,
+					rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
+					no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
+				};
 				await invoke("set_dictation_config", { config });
 				// Map DictationConfig fields to DictationStoreState fields
 				const storeUpdate: Partial<DictationStoreState> = {};

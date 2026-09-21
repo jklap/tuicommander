@@ -16,6 +16,30 @@
 //! [`PtyVoiceQueue`], which appends to the existing Compose FIFO through
 //! `pty::enqueue_voice_command`. There is deliberately no other way out of this
 //! module — no PTY write, no `sendCommand`, no submit, no ACP prompt.
+//!
+//! # The activation phrase
+//!
+//! An optional setting decides whether a recognised utterance was addressed
+//! here at all. Three properties are the contract:
+//!
+//! * **It is local.** Whisper still runs on this machine on every utterance,
+//!   before the gate sees anything — the gate reads text, not audio. Gating
+//!   does not reduce what is recognised; it reduces what is *submitted*.
+//! * **It gates new model input, never the microphone.** A rejected transcript
+//!   is dropped at [`HandsFree::accept_transcript`], which is upstream of the
+//!   send slot, so it cannot reach the Compose FIFO — and the FIFO is the only
+//!   exit, which is what makes "it never reaches PTY, ACP or MCP" a structural
+//!   fact rather than a check that has to be repeated per call site.
+//! * **It bounds a conversation, not a sentence.** One accepted turn opens
+//!   [`ACTIVATION_WINDOW_MS`] in which follow-ups need no phrase, restarted by
+//!   each accepted turn and closed by every disarm.
+//!
+//! Interrupting spoken playback is story 816 and does not exist yet. When it
+//! does, barge-in is an *audio* concern — stopping the speaker is not new model
+//! input — so it belongs upstream of this gate and must not be wired through
+//! it. What this module already guarantees is the other half of that criterion:
+//! whatever stops playback, the words that follow are new model input and stay
+//! gated whenever a phrase is configured.
 
 use crate::state::{AppState, VoiceCancellation};
 
@@ -323,6 +347,12 @@ pub enum TranscriptOutcome {
     Empty,
     /// The mode is not armed; late results cannot resurrect it.
     NotArmed,
+    /// An activation phrase is configured, this turn did not begin with it and
+    /// no window was open. The speech was not addressed here, so it is dropped.
+    Rejected,
+    /// The transcript was the activation phrase and nothing else. The window is
+    /// open until `window_until_ms`; there is nothing to submit.
+    Activated { window_until_ms: u64 },
 }
 
 /// A transcript whose hold-back has expired, ready for the Compose queue.
@@ -339,6 +369,158 @@ struct PendingSend {
     send_at_ms: u64,
 }
 
+// ---------------------------------------------------------------------------
+// Activation phrase
+// ---------------------------------------------------------------------------
+
+/// How long one activated turn keeps the next one open.
+///
+/// Long enough to ask a follow-up without addressing the tool again, short
+/// enough that a microphone left armed after a conversation stops forwarding
+/// the room. Not a setting: Boss asked for the phrase, and a window length is a
+/// knob nobody has asked for yet. Every accepted turn restarts it, so the bound
+/// is on the pause between turns rather than on the conversation.
+///
+/// DEFERRED (2026-09-21) — the window is anchored on *acceptance*, not on the
+/// model's reply. A user who asks something, waits out a long answer and then
+/// speaks again will have to say the phrase a second time. Anchoring it on the
+/// reply needs a signal this module deliberately does not have: it enqueues and
+/// observes nothing coming back, which is what keeps the Compose FIFO its only
+/// exit. Story 816-cbbf adds spoken playback and is the first caller that will
+/// know when an answer ended; revisit the anchor there rather than teaching
+/// this module to watch agent state.
+pub const ACTIVATION_WINDOW_MS: u64 = 15_000;
+
+/// The local gate between a recognised transcript and the send slot.
+///
+/// It runs *after* whisper, on text, and decides whether the user was speaking
+/// to the tool at all. No configured phrase means no gate; a configured one
+/// must open every new turn.
+#[derive(Default)]
+struct Activation {
+    /// Lowercased words of the configured phrase. Empty means ungated.
+    phrase: Vec<String>,
+    window_ms: u64,
+    /// While set and not yet elapsed, a turn needs no phrase.
+    open_until_ms: Option<u64>,
+}
+
+/// What the gate decided about one transcript.
+enum Admission<'a> {
+    /// Nothing is configured; this is ordinary dictation.
+    Ungated,
+    /// Submit this, the phrase already removed if it carried one.
+    Accept(&'a str),
+    /// The phrase and nothing else: the window opened, there is nothing to say.
+    PhraseOnly { window_until_ms: u64 },
+    /// Not addressed here.
+    Rejected,
+}
+
+impl Activation {
+    fn set(&mut self, phrase: &str, window_ms: u64) {
+        self.phrase = phrase_words(phrase);
+        self.window_ms = window_ms;
+        self.open_until_ms = None;
+    }
+
+    /// Close the window. Every disarm calls this: the mode ending is the user
+    /// stopping addressing it, so the next arm must be gated again.
+    fn close(&mut self) {
+        self.open_until_ms = None;
+    }
+
+    fn admit<'a>(&mut self, text: &'a str, now_ms: u64) -> Admission<'a> {
+        if self.phrase.is_empty() {
+            return Admission::Ungated;
+        }
+        let open = self.open_until_ms.is_some_and(|until| now_ms < until);
+        // The phrase is stripped even inside an open window: saying it again is
+        // still addressing the tool, and the model may not read it either way.
+        match strip_leading_phrase(&self.phrase, text) {
+            Some(rest) => {
+                let window_until_ms = now_ms + self.window_ms;
+                self.open_until_ms = Some(window_until_ms);
+                if rest.is_empty() {
+                    Admission::PhraseOnly { window_until_ms }
+                } else {
+                    Admission::Accept(rest)
+                }
+            }
+            // A rejected turn does not extend the window; only speech that was
+            // addressed here can keep the conversation alive.
+            None if open => {
+                self.open_until_ms = Some(now_ms + self.window_ms);
+                Admission::Accept(text)
+            }
+            None => Admission::Rejected,
+        }
+    }
+}
+
+/// Split a configured phrase into the words a transcript must begin with.
+fn phrase_words(phrase: &str) -> Vec<String> {
+    leading_words(phrase, usize::MAX)
+        .into_iter()
+        .map(|range| phrase[range].to_lowercase())
+        .collect()
+}
+
+/// Byte ranges of the first `count` words in `text`.
+///
+/// A word is a maximal run of alphanumeric characters, so the punctuation and
+/// capitalisation a recogniser invents never decide a match, and a longer word
+/// that merely starts with the phrase is a different word rather than a prefix.
+fn leading_words(text: &str, count: usize) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = None;
+    for (index, character) in text.char_indices() {
+        match (character.is_alphanumeric(), start) {
+            (true, None) => start = Some(index),
+            (false, Some(from)) => {
+                ranges.push(from..index);
+                start = None;
+                if ranges.len() == count {
+                    return ranges;
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        ranges.push(from..text.len());
+    }
+    ranges
+}
+
+/// The text after a leading `phrase`, or `None` when it does not begin with it.
+///
+/// Only the separators between the phrase and the speech are removed: sentence
+/// punctuation, dashes and the *closing* half of a delimiter pair. An opening
+/// quote or bracket survives, because after the phrase it belongs to the speech
+/// rather than to the phrase, and this function may not edit what was said.
+fn strip_leading_phrase<'a>(phrase: &[String], text: &'a str) -> Option<&'a str> {
+    let words = leading_words(text, phrase.len());
+    if words.len() < phrase.len() {
+        return None;
+    }
+    if words
+        .iter()
+        .zip(phrase)
+        .any(|(range, expected)| text[range.clone()].to_lowercase() != *expected)
+    {
+        return None;
+    }
+    let end = words.last().map_or(0, |range| range.end);
+    Some(
+        text[end..]
+            .trim_start_matches(|character: char| {
+                character.is_whitespace() || ",.;:!?…–—»”’)]".contains(character)
+            })
+            .trim(),
+    )
+}
+
 /// The hands-free mode state machine.
 pub struct HandsFree {
     hold_back_ms: u64,
@@ -349,6 +531,7 @@ pub struct HandsFree {
     /// Queue ids this mode owns, in enqueue order.
     owned: Vec<u64>,
     last_error: Option<String>,
+    activation: Activation,
 }
 
 impl HandsFree {
@@ -361,6 +544,7 @@ impl HandsFree {
             pending: None,
             owned: Vec::new(),
             last_error: None,
+            activation: Activation::default(),
         }
     }
 
@@ -379,6 +563,17 @@ impl HandsFree {
     pub fn set_hold_back_ms(&mut self, hold_back_ms: u64) {
         if self.binding.is_none() {
             self.hold_back_ms = hold_back_ms;
+        }
+    }
+
+    /// Take the configured activation phrase. An empty one is no gate at all.
+    ///
+    /// Refused while armed for the same reason as the hold-back: the phrase is
+    /// the rule the user is currently speaking against, and moving it under a
+    /// live conversation would silently drop the next thing they say.
+    pub fn set_activation(&mut self, phrase: &str, window_ms: u64) {
+        if self.binding.is_none() {
+            self.activation.set(phrase, window_ms);
         }
     }
 
@@ -454,14 +649,30 @@ impl HandsFree {
         if generation != self.generation {
             return TranscriptOutcome::Stale;
         }
-        if text.trim().is_empty() {
+        let text = text.trim();
+        if text.is_empty() {
             self.phase = Phase::Waiting;
             return TranscriptOutcome::Empty;
         }
+        // The gate sits here on purpose: after the local recogniser, before the
+        // send slot. Everything past this point is on its way to a model, and
+        // the send slot is the only thing `poll_send` can hand to the queue.
+        let text = match self.activation.admit(text, now_ms) {
+            Admission::Ungated => text,
+            Admission::Accept(rest) => rest,
+            Admission::PhraseOnly { window_until_ms } => {
+                self.phase = Phase::Waiting;
+                return TranscriptOutcome::Activated { window_until_ms };
+            }
+            Admission::Rejected => {
+                self.phase = Phase::Waiting;
+                return TranscriptOutcome::Rejected;
+            }
+        };
         let send_at_ms = now_ms + self.hold_back_ms;
         self.pending = Some(PendingSend {
             generation,
-            text: text.trim().to_string(),
+            text: text.to_string(),
             send_at_ms,
         });
         self.phase = Phase::HoldingBack;
@@ -533,6 +744,10 @@ impl HandsFree {
             reason: reason.clone(),
         };
         self.binding = None;
+        // Every reason this machine can end for — the user's abort, a closed
+        // target, a lost owner, a dead microphone — is the user no longer
+        // addressing it. None of them may hand the next arm an open window.
+        self.activation.close();
         self.phase = match &reason {
             DisarmReason::DeviceFailed(message) => {
                 self.last_error = Some(message.clone());
@@ -751,7 +966,21 @@ pub fn tick(
         };
         match endpoint.transcribe(&utterance.audio) {
             Ok(text) => {
-                mode.lock().accept_transcript(generation, &text, now_ms);
+                let outcome = mode.lock().accept_transcript(generation, &text, now_ms);
+                // A dropped turn is otherwise indistinguishable from a deaf
+                // microphone. The text stays out of the log: speech the user
+                // did not address here is not ours to record either.
+                match outcome {
+                    TranscriptOutcome::Rejected => tracing::debug!(
+                        source = "dictation",
+                        "Hands-free turn dropped: it did not begin with the activation phrase"
+                    ),
+                    TranscriptOutcome::Activated { window_until_ms } => tracing::debug!(
+                        source = "dictation",
+                        "Hands-free activated; the next turn needs no phrase before {window_until_ms}ms"
+                    ),
+                    _ => {}
+                }
             }
             Err(error) => {
                 return disarmed_or_not_armed(mode.lock().note_device_failed(error));
@@ -1196,6 +1425,204 @@ mod tests {
         );
         assert_eq!(*mode.phase(), Phase::Waiting);
         assert!(mode.poll_send(u64::MAX).is_none());
+    }
+
+    // --- Activation phrase ------------------------------------------------
+
+    /// The window is 10s here so a test can state "inside" and "outside"
+    /// against round numbers rather than against the shipped default.
+    fn armed_with_phrase(phrase: &str) -> HandsFree {
+        let mut mode = HandsFree::new(1_500);
+        mode.set_activation(phrase, 10_000);
+        mode.arm("target", "desktop", true).expect("arm");
+        mode
+    }
+
+    /// The setting is optional, and an unset one may not turn dictation into a
+    /// feature that ignores the user.
+    #[test]
+    fn an_empty_activation_phrase_lets_every_turn_through() {
+        let mut mode = armed_with_phrase("");
+        let generation = mode.generation();
+
+        assert_eq!(
+            mode.accept_transcript(generation, "apri il file", 0),
+            TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
+        );
+        assert_eq!(mode.pending_text(), Some("apri il file"));
+    }
+
+    /// The phrase addresses the tool; the model must never see it.
+    #[test]
+    fn a_configured_phrase_gates_a_turn_and_is_stripped_from_what_is_sent() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+
+        assert_eq!(
+            mode.accept_transcript(generation, "Ciao Tuic, apri il file", 0),
+            TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
+        );
+        assert_eq!(mode.pending_text(), Some("apri il file"));
+    }
+
+    /// A recogniser decides capitalisation and punctuation on its own, and an
+    /// Italian phrase carries accents in both cases. None of that may decide
+    /// whether the user is heard.
+    #[test]
+    fn the_phrase_matches_across_case_italian_accents_and_punctuation() {
+        for spoken in [
+            "attività tuic che ore sono",
+            "ATTIVITÀ TUIC: che ore sono",
+            "Attività, Tuic! Che ore sono",
+            "  «Attività Tuic» — che ore sono  ",
+        ] {
+            let mut mode = armed_with_phrase("Attività Tuic");
+            let generation = mode.generation();
+
+            assert_eq!(
+                mode.accept_transcript(generation, spoken, 0),
+                TranscriptOutcome::HeldBack { send_at_ms: 1_500 },
+                "{spoken:?} must activate"
+            );
+            assert_eq!(
+                mode.pending_text().map(str::to_lowercase).as_deref(),
+                Some("che ore sono"),
+                "{spoken:?} must submit the speech without the phrase"
+            );
+        }
+    }
+
+    /// "Complete leading words" is the rule that keeps a homophone-rich name
+    /// from firing on everything that starts with it.
+    #[test]
+    fn a_longer_word_that_merely_starts_with_the_phrase_does_not_activate() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+
+        assert_eq!(
+            mode.accept_transcript(generation, "Ciao Tuicommander, cancella tutto", 0),
+            TranscriptOutcome::Rejected
+        );
+        assert!(mode.pending_text().is_none());
+        assert_eq!(*mode.phase(), Phase::Waiting);
+        assert!(mode.poll_send(u64::MAX).is_none());
+    }
+
+    /// The phrase opens a turn. Hearing it in the middle of a sentence means
+    /// the user was talking *about* it, to somebody else.
+    #[test]
+    fn a_phrase_that_is_not_leading_does_not_activate() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+
+        assert_eq!(
+            mode.accept_transcript(generation, "Per favore, ciao tuic, cancella tutto", 0),
+            TranscriptOutcome::Rejected
+        );
+        assert!(mode.pending_text().is_none());
+    }
+
+    /// Saying only the phrase is how a user opens a turn before knowing what
+    /// to ask. It must arm the window and submit nothing at all.
+    #[test]
+    fn the_phrase_alone_opens_the_window_without_sending_anything() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+
+        assert_eq!(
+            mode.accept_transcript(generation, "Ciao Tuic.", 0),
+            TranscriptOutcome::Activated {
+                window_until_ms: 10_000
+            }
+        );
+        assert!(mode.pending_text().is_none());
+        assert_eq!(*mode.phase(), Phase::Waiting);
+
+        assert_eq!(
+            mode.accept_transcript(generation, "apri il file", 1_000),
+            TranscriptOutcome::HeldBack { send_at_ms: 2_500 },
+            "the phrase must have opened the window for what follows"
+        );
+        assert_eq!(mode.pending_text(), Some("apri il file"));
+    }
+
+    /// A conversation is a sequence of turns. Repeating the phrase before each
+    /// one would make hands-free unusable.
+    #[test]
+    fn follow_up_speech_inside_the_window_needs_no_phrase() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "Ciao Tuic, apri il file", 0);
+        mode.poll_send(1_500).expect("first turn");
+
+        assert_eq!(
+            mode.accept_transcript(generation, "e adesso committa", 9_999),
+            TranscriptOutcome::HeldBack { send_at_ms: 11_499 }
+        );
+        assert_eq!(mode.pending_text(), Some("e adesso committa"));
+    }
+
+    /// The window is bounded so a microphone left armed after a conversation
+    /// stops forwarding the room.
+    #[test]
+    fn speech_after_the_window_expires_needs_the_phrase_again() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "Ciao Tuic, apri il file", 0);
+        mode.poll_send(1_500).expect("first turn");
+
+        assert_eq!(
+            mode.accept_transcript(generation, "passami il sale", 10_000),
+            TranscriptOutcome::Rejected,
+            "the window must not survive its own bound"
+        );
+        assert!(mode.pending_text().is_none());
+
+        assert_eq!(
+            mode.accept_transcript(generation, "Ciao Tuic, committa", 10_000),
+            TranscriptOutcome::HeldBack { send_at_ms: 11_500 },
+            "the phrase must still reopen it"
+        );
+        assert_eq!(mode.pending_text(), Some("committa"));
+    }
+
+    /// Every way the mode can end is a way the user stops addressing it. None
+    /// of them may hand the next arm a window that is already open.
+    #[test]
+    fn every_disarm_closes_the_activation_window() {
+        let closers: [(&str, fn(&mut HandsFree)); 4] = [
+            ("a manual abort", |mode| {
+                mode.disarm(DisarmReason::Manual);
+            }),
+            ("a closed target", |mode| {
+                mode.note_session_closed("target");
+            }),
+            ("a disconnected owner", |mode| {
+                mode.note_owner_disconnected("desktop");
+            }),
+            ("a capture failure", |mode| {
+                mode.note_device_failed("input device disappeared");
+            }),
+        ];
+
+        for (label, close) in closers {
+            let mut mode = armed_with_phrase("ciao tuic");
+            let generation = mode.generation();
+            assert!(matches!(
+                mode.accept_transcript(generation, "Ciao Tuic", 0),
+                TranscriptOutcome::Activated { .. }
+            ));
+
+            close(&mut mode);
+            mode.arm("target", "desktop", true).expect("re-arm");
+            let generation = mode.generation();
+
+            assert_eq!(
+                mode.accept_transcript(generation, "cancella tutto", 100),
+                TranscriptOutcome::Rejected,
+                "{label} must close the activation window"
+            );
+        }
     }
 
     #[test]
@@ -1914,5 +2341,49 @@ mod tests {
             Tick::NotArmed
         ));
         assert!(queue.enqueued.borrow().is_empty());
+    }
+
+    /// The gate against the real pass, not against `accept_transcript` alone:
+    /// unrelated speech is captured, segmented and transcribed — locally — and
+    /// then stops. Nothing reaches the only exit this module has.
+    ///
+    /// The transcribe count is the half that makes the rest meaningful. Without
+    /// it a broken capture would pass this test by never recognising anything.
+    #[test]
+    fn speech_without_the_activation_phrase_never_reaches_the_queue() {
+        let mode = {
+            let mut mode = HandsFree::new(1_000);
+            mode.set_activation("ciao tuic", 10_000);
+            mode.arm("target", "desktop", true).expect("arm");
+            parking_lot::Mutex::new(mode)
+        };
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("cancella tutto il repository");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let mut input = speech(500);
+        input.extend(silence(600));
+        endpoint.feed(input);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 5_000);
+
+        assert_eq!(
+            endpoint.calls.get(),
+            1,
+            "the utterance must still be recognised locally"
+        );
+        assert!(
+            mode.lock().pending_text().is_none(),
+            "a rejected transcript may not occupy the send slot"
+        );
+        assert!(
+            queue.enqueued.borrow().is_empty(),
+            "a rejected transcript may not reach the Compose queue"
+        );
+        assert!(
+            mode.lock().owned_ids().is_empty(),
+            "and it may not leave an entry behind to cancel"
+        );
     }
 }
