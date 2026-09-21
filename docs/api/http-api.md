@@ -3189,9 +3189,12 @@ serialization regressions cover these shared contracts.
 
 ### Terminal title notifications
 
-Raw, text and log `/sessions/{id}/stream` WebSockets carry OSC titles as
-`{"type":"title","title":"Claude Code"}` and title resets with `"title":""`.
-`GET /events` also carries `event: pty-title` with `{session_id,title}`. These are
+The backend applies OSC 0/2 titles to the tab name itself (`osc_title.rs`), so
+raw, text and log `/sessions/{id}/stream` WebSockets carry the resulting name as
+`{"type":"renamed","session_id":"…","name":"Claude Code","is_custom":false}`; a
+title reset, and the process exit, restore the captured base name the same way
+(the exit restore precedes the `exit` frame). `GET /events` carries the same
+change as `event: session-renamed` with `{session_id,name,is_custom}`. These are
 presentation events, independent of `activity` pulses and semantic lifecycle.
 Grid clients continue to receive binary rendering frames; terminal metadata
 consumers use the separate session event subscription.

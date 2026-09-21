@@ -1162,11 +1162,14 @@ post-write and keeps its existing per-request boundaries.
 ## Remote terminal metadata
 
 Desktop terminals owned by a remote connection subscribe to that daemon's
-`/sessions/{id}/stream` WebSocket for parsed events, activity, title and exit.
-Local desktop terminals retain IPC subscriptions. OSC 0/2 titles and resets
-are dual-emitted: `pty-title-{id}` carries the text on IPC, while `PtyTitle`
-reaches the per-session socket and `/events` (`pty-title`, `{session_id,title}`).
-A reset carries an empty string. Titles do not change semantic session activity
-and bypass the lossless state queue. Authoritative lifecycle snapshots and pushes
+`/sessions/{id}/stream` WebSocket for parsed events, activity, renames and exit.
+Local desktop terminals retain IPC subscriptions. OSC 0/2 titles are applied by
+the backend that owns the PTY (`osc_title.rs`: cleaning, the custom/spawn-name
+and agent-intent guards, the captured base restored on reset and on exit) and
+reach clients as `session-renamed` (desktop event, `/events` SSE, the
+per-session socket's `{"type":"renamed",...}` frame, and the remote mirror's
+window allowlist). The exit-time restore is emitted before `PtyExit`, so a tab
+hears it before it drops its session id. Renames do not change semantic session
+activity and bypass the lossless state queue. Authoritative lifecycle snapshots and pushes
 apply `agent_type` immediately, including removal when the shell returns; the
 30-second foreground probe remains a recovery/discovery path.

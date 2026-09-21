@@ -1604,9 +1604,6 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyParsed { parsed, .. } => {
                                     serde_json::json!({"type": "parsed", "event": parsed})
                                 }
-                                crate::state::AppEvent::PtyTitle { title, .. } => {
-                                    serde_json::json!({"type": "title", "title": title})
-                                }
                                 crate::state::AppEvent::PtyExit { session_id: sid } => {
                                     serde_json::json!({"type": "exit", "session_id": sid})
                                 }
@@ -1630,6 +1627,12 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
                                     serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
                                 }
+                                // A backend-applied tab name (OSC title via
+                                // `osc_title::apply_osc_title`, its exit-time
+                                // restore, tmux/MCP renames). On this per-session
+                                // socket a remote tab hears it in order with the
+                                // `exit` frame (the restore is emitted before
+                                // `PtyExit`).
                                 crate::state::AppEvent::SessionRenamed { session_id: sid, name, is_custom } => {
                                     serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom})
                                 }
@@ -1765,8 +1768,8 @@ async fn handle_ws_log_session(
                     // channel was reaped (session gone): exit instead of spinning on
                     // the immediately-ready error arm. Lagged is a transient skip.
                     match event {
-                        Ok(crate::state::AppEvent::PtyTitle { title, .. }) => {
-                            if ws_sender.text(&serde_json::json!({"type": "title", "title": title}).to_string()).await.is_err() {
+                        Ok(crate::state::AppEvent::SessionRenamed { session_id: sid, name, is_custom }) => {
+                            if ws_sender.text(&serde_json::json!({"type": "renamed", "session_id": sid, "name": name, "is_custom": is_custom}).to_string()).await.is_err() {
                                 break;
                             }
                             LoopAction::Skip
@@ -4441,6 +4444,12 @@ mod tests {
     }
 
     /// Catches: a title bus event never reaches raw/log/text WS consumers.
+    ///
+    /// Retargeted from main's `PtyTitle`/`{"type":"title"}` frame: the backend
+    /// now applies OSC titles itself (`osc_title.rs`) and a remote tab hears the
+    /// result as `{"type":"renamed"}`. What it pins is unchanged: the frame is
+    /// streamed without another output chunk, and an animated title does not
+    /// keep restarting the log batching deadline.
     #[cfg(unix)]
     #[tokio::test]
     async fn remote_title_crosses_live_ws_without_starving_log_output() {
@@ -4483,17 +4492,18 @@ mod tests {
             })
             .await
             .expect("WS subscriber setup");
-            for title in ["Claude Code", ""] {
-                state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+            for title in ["Claude Code", "shell"] {
+                state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
                     session_id: sid.into(),
-                    title: title.into(),
+                    name: title.into(),
+                    is_custom: false,
                 });
                 let received = tokio::time::timeout(std::time::Duration::from_secs(10), async {
                     loop {
                         let message = socket.next().await.unwrap().unwrap();
                         if let Ok(frame) =
                             serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
-                            && frame["type"] == "title"
+                            && frame["type"] == "renamed"
                         {
                             break frame;
                         }
@@ -4503,7 +4513,7 @@ mod tests {
                 .expect("title event must be streamed without another PTY output chunk");
                 assert_eq!(
                     received,
-                    serde_json::json!({"type": "title", "title": title})
+                    serde_json::json!({"type": "renamed", "session_id": sid, "name": title, "is_custom": false})
                 );
             }
 
@@ -4520,9 +4530,10 @@ mod tests {
                     let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
                     loop {
                         tick.tick().await;
-                        animated_state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                        animated_state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
                             session_id: sid.into(),
-                            title: "animated title".into(),
+                            name: "animated title".into(),
+                            is_custom: false,
                         });
                     }
                 });
