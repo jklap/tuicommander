@@ -2786,24 +2786,26 @@ Rust — needs a `make dev` restart. The hands-free mode has no UI control yet
       window. They must still arrive in order — `enqueue_user_command` now
       appends through a shared helper, and a reordering would show up here.
 
-## Kokoro native synthesis (#812-5cc4)
+## Pocket TTS speech synthesis (#823-c260)
 
-Rust and a new native build — needs a `make dev` restart, and the first build
-of `kokoro-rs` compiles espeak-ng, GGML and Highway (~7 minutes cold).
+Rust — needs a `make dev` restart. Nothing calls the port yet (playback is
+story 816), so the only way to reach it today is the bundle-backed tests:
 
-- [HUMAN] Listen to `.tmp/kokoro-eval/italian-phonetics.wav` and
-      `.tmp/kokoro-eval/italian-mixed.wav`, both `if_sara` at 24 kHz mono.
-      Intelligibility of Italian is the criterion and no test can judge it.
-      The first probes `gl`/`gn`, geminates, elision and a stressed final; the
-      second probes digits and English loanwords inside Italian, which is
-      where a phonemizer usually breaks. Regenerate either with
-      `cargo run -p kokoro-rs --example italian_probe -- .tmp/kokoro-eval`.
-- [ ] Windows and Linux lab machines: follow
-      `src-tauri/crates/kokoro-rs/PLATFORM-VERIFICATION.md` end to end. Only
-      macOS/arm64 has been built so far, and the symbol isolation uses a
-      different mechanism on each platform (version script on Linux,
-      `dllexport` on Windows), so a clean link on one proves nothing about the
-      others.
+```
+TUIC_POCKET_BUNDLE_DIR=<bundle> [TUIC_POCKET_VOICE=<voice>] \
+  cargo nextest run --lib --run-ignored ignored-only -E 'test(/dictation::speech::pocket/)'
+```
+
+- [HUMAN] Listen to `.tmp/kokoro-eval/ONNX/frase{1,2,3}-rust-int8.wav`, rendered
+      by this adapter, against the `-torch-fp32`, `-onnx-fp32` and `-onnx-int8`
+      sets from the evaluation. Two questions, one listening pass: does the Rust
+      port sound like the Italian that was approved, and is int8 (125 MB per
+      language) good enough against fp32 (400 MB)? The second answer decides what
+      the downloader in story 813 offers.
+- [ ] Windows and Linux: the adapter loads `onnxruntime.dll` / `libonnxruntime.so`
+      from beside the models by an explicit path. Only macOS/arm64 has been run,
+      and a missing library must still report `ModelUnavailable` rather than
+      taking the process down inside `ort`.
 
 ## Hands-free arm and disarm (#814-6d13)
 
