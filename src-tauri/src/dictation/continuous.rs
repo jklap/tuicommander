@@ -970,6 +970,16 @@ pub fn tick(
     // question about the device.
     let samples = capture.echo.lock().clean(&samples);
 
+    // DEFERRED (2026-09-21) — the other half of barge-in: on the tick where the
+    // segmenter starts capturing, whatever is speaking should be hushed, so the
+    // user talking over a reply ends it. The cleaned capture above is what makes
+    // that edge trustworthy — it is now the user and not us. It is not wired
+    // because nothing constructs a `speaker::Speaker` yet: it needs a loaded
+    // speech engine, which arrives with the MCP capability (#817-f67c) and the
+    // Dictation UI (#818-2a29). Wiring a port here now would mean a production
+    // adapter that does nothing. Land it with the first of those two, using the
+    // false->true transition of `segmenter.is_capturing()` — `hush` opens a new
+    // turn on every call, so a level trigger would open one per tick.
     let closed = capture.segmenter.push(&samples);
     if closed.is_empty() && capture.segmenter.is_capturing() {
         mode.lock().note_capturing();
