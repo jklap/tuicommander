@@ -1865,10 +1865,21 @@ and a question nobody answers is a turn that never ends.
 ```
 
 `declined` counts the questions refused. It is the only way to tell "ego had
-nothing to say" from "ego wanted a tool this mode cannot grant". The turn is
-abandoned after 300s, which is server-side and not a parameter — a timeout a
-request body could choose is a way to pin an ego process for as long as the
-sender likes.
+nothing to say" from "ego wanted a tool this mode cannot grant".
+
+Two budgets, both server-side and neither a parameter — a timeout a request body
+could choose is a way to pin an ego process for as long as the sender likes. The
+launch (`initialize`) gets 60s and the turn itself gets 240s, so the whole call
+is bounded by 300s and fits inside the router's 301s `REQUEST_TIMEOUT` with the
+same one-second margin the confirm handler keeps. It has to: the outer layer
+answers a bare 408, while these two answer a sentence naming what ran out.
+
+The work is not the caller's to cancel. The handler runs the turn on its own
+task and awaits the result, so a request that is dropped — by that outer
+timeout, or by a browser that navigates away — abandons the answer and not the
+turn: ego is still shut down and the connection still unregistered. Before
+#804-2ec8 the drop skipped the shutdown, and nothing else would ever have done
+it.
 
 ### Stream (WebSocket)
 

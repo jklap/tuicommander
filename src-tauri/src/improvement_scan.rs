@@ -219,7 +219,7 @@ pub(crate) fn proposal_issue_text(proposal: &ImprovementProposal) -> (String, St
 pub(crate) async fn run_improvement_scan_impl(
     repo_path: String,
     focus: ImprovementFocus,
-    state: &crate::AppState,
+    state: &std::sync::Arc<crate::AppState>,
 ) -> Result<ImprovementScanResult, String> {
     let status = crate::git::get_working_tree_status(repo_path.clone()).await?;
     let commits = tokio::task::spawn_blocking({

@@ -92,7 +92,7 @@ pub(crate) fn split_changelog_output(raw: &str) -> ChangelogResult {
 pub(crate) async fn generate_changelog_impl(
     repo_path: &str,
     since_tag: Option<&str>,
-    state: &crate::AppState,
+    state: &std::sync::Arc<crate::AppState>,
 ) -> Result<ChangelogResult, String> {
     let prs = crate::github::get_merged_prs_impl(repo_path, since_tag, state).await?;
     if prs.is_empty() {

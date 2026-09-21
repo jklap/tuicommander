@@ -67,6 +67,23 @@ const COMMAND_QUEUE: usize = 32;
 /// is confidently wrong about what the agent said.
 const UPDATE_QUEUE: usize = 4096;
 
+/// How long a freshly launched agent has to answer `initialize`.
+///
+/// Without it `connect` has no bound at all, and the shape that costs is not a
+/// crash: a process that starts and then says nothing keeps its pipe open, so
+/// there is no EOF to notice and the supervisor sits in `send_request` holding
+/// the child for the life of the app. Every caller above it inherits that —
+/// `/acp/one-shot` most of all, whose whole turn has to finish inside the
+/// router's `REQUEST_TIMEOUT`.
+///
+/// Sixty seconds is far above a real launch (ego answers in well under a
+/// second on a warm machine, a few seconds cold) and far below "never". The
+/// budget is enforced where it can act: inside the supervisor, around the
+/// `initialize` request itself, so expiry takes the ordinary initialization
+/// failure path that already stops the child — rather than at the caller,
+/// where dropping the future would leave the supervisor exactly as stuck.
+pub const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub struct AcpClientManager {
     connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
     next_generation: AtomicU64,
@@ -193,6 +210,23 @@ impl AcpClientManager {
         config: &EgoAcpConfig,
         request: AcpConnectRequest,
     ) -> Result<AcpConnectionSnapshot, AcpClientError> {
+        self.connect_within(config, request, INITIALIZE_TIMEOUT)
+            .await
+    }
+
+    /// [`connect`](Self::connect) with the initialize budget as a parameter.
+    ///
+    /// The deadline IS the subject for the test that proves a silent agent is
+    /// abandoned rather than held forever, and that test needs a bound it can
+    /// exceed in milliseconds. A `cfg(test)` constant would leave production
+    /// and the suite exercising different code (AGENTS.md, "Which timing
+    /// assertions are load-bearing").
+    pub async fn connect_within(
+        &self,
+        config: &EgoAcpConfig,
+        request: AcpConnectRequest,
+        initialize_timeout: std::time::Duration,
+    ) -> Result<AcpConnectionSnapshot, AcpClientError> {
         let executable = canonical_executable(&config.executable).await?;
         let root = canonical_root(&request.root).await?;
         let spec = launch_spec(&EgoAcpConfig { executable }, &root)?;
@@ -214,6 +248,7 @@ impl AcpClientManager {
             connection_id,
             generation,
             agent,
+            initialize_timeout,
             SupervisorWiring {
                 initialized: initialized_tx,
                 registered: registered_rx,
@@ -721,6 +756,7 @@ async fn supervise_connection(
     connection_id: AcpConnectionId,
     generation: u64,
     agent: AcpAgent,
+    initialize_timeout: std::time::Duration,
     wiring: SupervisorWiring,
     connections: Arc<Mutex<HashMap<AcpConnectionId, ConnectionHandle>>>,
 ) {
@@ -795,19 +831,36 @@ async fn supervise_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, move |connection: ConnectionTo<Agent>| async move {
-            let response = match connection
-                .send_request(build_initialize_request())
-                .block_task()
-                .await
-            {
-                Ok(response) => response,
-                Err(error) => {
+            // Budgeted here rather than at the caller, because only here can
+            // expiry do anything: returning from this closure ends the
+            // supervisor and stops the child, while a deadline outside would
+            // drop a future that is not holding the process.
+            let initialize = tokio::time::timeout(
+                initialize_timeout,
+                connection.send_request(build_initialize_request()).block_task(),
+            )
+            .await;
+            let response = match initialize {
+                Ok(Ok(response)) => response,
+                Ok(Err(error)) => {
                     let initialization_error = AcpClientError::initialization_failed(
                         connection_id,
                         format!("ACP initialization failed: {error}"),
                     );
                     let _ = initialized.send(Err(initialization_error));
                     return Err(error);
+                }
+                Err(_) => {
+                    // Alive and silent: no EOF will ever arrive, so this is the
+                    // only thing that ends the connection.
+                    let _ = initialized.send(Err(AcpClientError::initialization_failed(
+                        connection_id,
+                        format!(
+                            "the agent did not answer initialize within {}s",
+                            initialize_timeout.as_secs_f32()
+                        ),
+                    )));
+                    return Ok(SupervisorExit::NotReady);
                 }
             };
 

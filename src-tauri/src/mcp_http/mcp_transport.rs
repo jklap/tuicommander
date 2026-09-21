@@ -15550,6 +15550,21 @@ mod tests {
             crate::mcp_http::REQUEST_TIMEOUT,
             WAIT_EFFECTIVE_MAX_MS,
         );
+        // `/acp/one-shot` is the third, and the one whose deadline is a SUM.
+        // `TURN_TIMEOUT` bounds the turn only; the ego launch and `initialize`
+        // happen before it and are bounded by `INITIALIZE_TIMEOUT`. Comparing
+        // the turn alone is how the handler came to be able to overshoot: at
+        // 300s it already equalled the router, and every millisecond of launch
+        // pushed the total past it, so a slow turn answered a bare 408 instead
+        // of "ego did not finish the turn within Ns" (#804-2ec8).
+        let one_shot = crate::acp::INITIALIZE_TIMEOUT + crate::acp::oneshot::TURN_TIMEOUT;
+        assert!(
+            crate::mcp_http::REQUEST_TIMEOUT > one_shot,
+            "the router's outer timeout must clear the whole unattended turn, launch \
+             included: REQUEST_TIMEOUT={:?}, INITIALIZE_TIMEOUT + TURN_TIMEOUT={:?}",
+            crate::mcp_http::REQUEST_TIMEOUT,
+            one_shot,
+        );
     }
 
     /// Wait for `handle_confirm` to publish its request, and return the id.

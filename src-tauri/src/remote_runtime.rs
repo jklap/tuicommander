@@ -432,6 +432,27 @@ impl ConnectFailure {
 /// Idempotent while in flight: a second call on a connecting or connected
 /// connection is a no-op, so a double click cannot open two tunnels.
 pub(crate) async fn connect(state: &Arc<AppState>, id: &str) -> Result<(), String> {
+    // Run on its own task, so a caller that goes away cannot stop this halfway.
+    //
+    // `POST /config/remote-connections/{id}/connect` is awaited inside an axum
+    // handler under the router's `REQUEST_TIMEOUT`, which DROPS the handler
+    // future when it fires — and a browser that navigates away does the same.
+    // The claim below is already in the map by then, so the connection was left
+    // in `Connecting` with nothing running and nothing coming: the same claim
+    // then made every later connect a silent no-op, and the machine could not
+    // be brought up again without restarting the app.
+    let state = Arc::clone(state);
+    let id = id.to_string();
+    match tokio::spawn(async move { connect_inner(&state, &id).await }).await {
+        Ok(outcome) => outcome,
+        // Re-raised for the same reason as the unattended turn's: with the body
+        // inline a panic unwound through the caller, and "failed to connect" is
+        // the wrong sentence for a bug of ours.
+        Err(join) => std::panic::resume_unwind(join.into_panic()),
+    }
+}
+
+async fn connect_inner(state: &Arc<AppState>, id: &str) -> Result<(), String> {
     let connection = load_connection(state, id)?;
     let Some(connecting) = claim_for_connect(state, id) else {
         return Ok(());
@@ -1247,6 +1268,54 @@ mod tests {
             "password leaked into {published}"
         );
         teardown(&state, &id);
+    }
+
+    /// A caller that goes away must not strand a connection in `Connecting`.
+    ///
+    /// `POST .../connect` is awaited inside an axum handler under the router's
+    /// `REQUEST_TIMEOUT`, which drops the handler future when it fires, and a
+    /// browser that navigates away does the same. `claim_for_connect` has
+    /// already written `Connecting` by then, so the handshake stopped where it
+    /// stood and the claim stayed: every later connect saw `Connecting`,
+    /// returned `Ok(())` without doing anything, and the machine could not be
+    /// brought up again short of restarting the app.
+    ///
+    /// The 1 ms is the drop, not a budget on the handshake — `timeout` polls
+    /// the inner future before it sleeps, so the spawn always happens.
+    #[tokio::test]
+    async fn a_dropped_connect_does_not_strand_a_connection_in_connecting() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body("{}")
+            .create_async()
+            .await;
+        let _probe = server
+            .mock("GET", "/api/version")
+            .with_body("{}")
+            .create_async()
+            .await;
+
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+
+        tokio::time::timeout(Duration::from_millis(1), connect(&state, &id))
+            .await
+            .expect_err("the handshake must still be in flight when the caller is dropped");
+
+        // 5s is a hang bound: a handshake against a local mock takes
+        // milliseconds. What is asserted is that it finished at all.
+        for _ in 0..500 {
+            if state.remote.status_of(&id) == RemoteStatus::Connected {
+                teardown(&state, &id);
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "the dropped caller left the connection at {:?}",
+            state.remote.status_of(&id)
+        );
     }
 
     #[tokio::test]
