@@ -399,6 +399,18 @@ daemon without `tuic-bridge` beside it configures agents to run a binary that is
 not there; an agent then starts with no `tuicommander` tools at all — no
 `session`, no `repo`, no `progress`, no peer mail.
 
+The same miss silently strips ego's tools: an AI Chat session granted by a
+process that found no bridge gets an empty `mcpServers`, and the only symptom is
+ego answering that it cannot see terminals or repositories. Since #809-724c the
+process says so instead — one `warn` at startup naming every path it checked:
+
+```
+No tuic-bridge binary found, so ego sessions start with no MCP server and ego
+cannot see terminals or repositories. Checked: /opt/tuic/tuic-bridge, tuic-bridge
+```
+
+Read it with `curl 'http://127.0.0.1:9876/logs?level=warn'`.
+
 ### Setup
 
 Set a password before first use. Omit `--instance` to use the existing default

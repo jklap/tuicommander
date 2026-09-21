@@ -8,6 +8,14 @@
 
 # To Test
 
+## Protocol idle survives terminal animation (2026-09-21) — **Rust, needs a `make dev` restart**
+
+- [ ] After a rebuild/restart, finish a Codex turn in brainstorming with its idle
+      animation enabled. The terminal and session API must remain idle while the
+      animation runs. Submit another prompt: working must return immediately.
+- [ ] Finish a Claude turn: idle must survive ordinary redraws. A real active
+      phase from a blocking Stop hook must still report working.
+
 ## Ego reaches this instance and the collapsed tool surface (#802-4c43, 2026-09-21) — **Rust, needs a `make dev` restart**
 
 The ego MCP entry carried `TUIC_APP_INSTANCE`, which `tuic-bridge` never reads,
@@ -2703,3 +2711,53 @@ binary: `cargo build --bin tuic-remote --no-default-features`.
       `conflict-assist-status` frames must appear on the stream.
 - [ ] Desktop build, same three operations: unchanged. The window emit still
       fires, so nothing about the desktop panels may look different.
+
+## A registered remote machine comes up by itself and stays up
+
+Rust — needs a `make dev` restart.
+
+One task per connection now owns its whole lifecycle: bring it up, keep it up,
+retry while it is down. It replaces the heartbeat that was spawned only from the
+SUCCESS branch of a connect, which is why a machine whose first attempt failed
+sat in `error` until somebody pressed Connect — measured on mac-mint, answering
+200 throughout while the app showed it unreachable for forty minutes.
+
+- [ ] Start the app with a remote machine registered and REACHABLE, without
+      touching Settings. It must reach `connected` on its own, and the sidebar
+      badge must read `remote` rather than `offline`.
+- [ ] Start the app with the remote machine OFF. It must show `offline`, and the
+      backend must keep retrying — the wait doubles from 2s to a 60s ceiling.
+      `GET http://localhost:9876/logs?source=remote` shows one `Connecting` line
+      per attempt, spaced by a growing gap.
+- [ ] With the app running and the machine offline, turn the machine ON. It must
+      go `connected` by itself within one backoff window. No click.
+- [ ] Press Connect on a machine that is off. The button must report the failure
+      (that attempt's own error), AND the retry must continue afterwards.
+- [ ] Press Disconnect on a connected machine. It must stay disconnected —
+      watch it for longer than 60s. A retry that resurrects it is the bug the
+      generation counter exists to stop.
+- [ ] Disconnect, then Connect again immediately. The machine must come up, and
+      it must still retry if it later drops — the new supervisor must not have
+      been taken down with the retired one.
+- [ ] Give a machine the WRONG password and connect. It must land in
+      `unauthenticated` and STOP: no repeated attempts in the logs. Fix the
+      password, press Connect, and it must start again.
+- [ ] Delete a remote machine while it is retrying. Nothing may keep probing it,
+      and no entry for it may remain in the status bar.
+
+## The website names warm copy-on-write worktrees
+
+- [ ] `website/index.html`, "Git worktrees, fully managed": the second bullet
+      now names the copy-on-write warming that `docs/user-guide/worktrees.md`
+      documents. Checked at 1200px; check it on a phone width too.
+
+## A missing bridge says so (#809-724c)
+
+Rust — needs a `make dev` restart.
+
+- [ ] Move or rename `tuic-bridge` so it is neither beside the executable nor on
+      the resolved path, then start the app. `curl 'http://localhost:9876/logs?level=warn'`
+      must carry one line naming both checked paths and the symptom. Before this
+      commit there was nothing in the log at all.
+- [ ] Put it back and restart. That warning must NOT appear, and AI Chat must be
+      able to list terminals again.

@@ -346,11 +346,44 @@ const BRIDGE_NAME: &str = "tuic-bridge";
 /// release publishes `tuic-bridge-<target>`; the install instructions download
 /// it as `tuic-bridge`, which is the name this looks for.
 fn bridge_beside(dir: &std::path::Path) -> Option<PathBuf> {
-    #[cfg(not(windows))]
-    let candidate = dir.join(BRIDGE_NAME);
-    #[cfg(windows)]
-    let candidate = dir.join(format!("{BRIDGE_NAME}.exe"));
+    let candidate = bridge_path_in(dir);
     candidate.exists().then_some(candidate)
+}
+
+/// Where the bridge would sit in `dir`, whether or not anything is there.
+///
+/// Split out so the search and the report of a failed search cannot disagree
+/// about the file name — `.exe` on Windows, bare everywhere else.
+fn bridge_path_in(dir: &std::path::Path) -> PathBuf {
+    #[cfg(not(windows))]
+    {
+        dir.join(BRIDGE_NAME)
+    }
+    #[cfg(windows)]
+    {
+        dir.join(format!("{BRIDGE_NAME}.exe"))
+    }
+}
+
+/// Every path [`locate_bridge_binary`] stats, in the order it stats them.
+///
+/// For the warning a failed search logs. A report that named paths the search
+/// never tried would be worse than none: it sends the reader to put a file
+/// somewhere that still would not be found.
+///
+/// The second entry is `resolve_cli`'s answer, which is a well-known bin
+/// directory when one holds the binary and the bare name when none does. The
+/// bare name is kept rather than dropped, because it is literally what the
+/// search then stats — against the process's working directory.
+pub(crate) fn bridge_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        paths.push(bridge_path_in(dir));
+    }
+    paths.push(PathBuf::from(crate::cli::resolve_cli(BRIDGE_NAME)));
+    paths
 }
 
 /// The bridge binary, only when we can point at a file that exists.

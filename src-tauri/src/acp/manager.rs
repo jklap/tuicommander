@@ -142,6 +142,37 @@ enum SupervisorExit {
     ProtocolViolation,
 }
 
+/// What to say when there is no bridge binary to hand a session.
+///
+/// Built as a string rather than as tracing fields so the sentence can be
+/// asserted on. The paths come from `agent_mcp`'s own search, so the advice
+/// cannot name a directory the search never looked in.
+fn missing_bridge_warning() -> String {
+    let checked = crate::agent_mcp::bridge_search_paths()
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "No tuic-bridge binary found, so ego sessions start with no MCP server and ego \
+         cannot see terminals or repositories. Checked: {checked}"
+    )
+}
+
+/// Take a bridge binary, and say so when there is none.
+///
+/// A missing bridge is not an error anywhere below this line: `granted` hands
+/// the session an empty `mcp_servers` and every call still succeeds. The only
+/// symptom anybody ever sees is ego answering that it cannot see terminals or
+/// repositories — which reads as an ego fault, in the one place where nothing
+/// names the real cause. This is that place.
+fn note_bridge(bridge: Option<PathBuf>) -> Option<PathBuf> {
+    if bridge.is_none() {
+        tracing::warn!(source = "acp", "{}", missing_bridge_warning());
+    }
+    bridge
+}
+
 impl AcpClientManager {
     #[must_use]
     pub fn new() -> Self {
@@ -150,7 +181,7 @@ impl AcpClientManager {
             connections: Arc::new(Mutex::new(HashMap::new())),
             next_generation: AtomicU64::new(INITIAL_GENERATION),
             notices,
-            bridge: Mutex::new(crate::agent_mcp::locate_bridge_binary()),
+            bridge: Mutex::new(note_bridge(crate::agent_mcp::locate_bridge_binary())),
             socket: Mutex::new(None),
         }
     }
@@ -167,7 +198,7 @@ impl AcpClientManager {
     /// checking is the entry this process builds, and that must not turn on
     /// whether the machine running the suite has a `tuic-bridge` installed.
     pub fn set_bridge_binary(&self, bridge: Option<PathBuf>) {
-        *self.bridge.lock() = bridge;
+        *self.bridge.lock() = note_bridge(bridge);
     }
 
     /// Replace whatever a caller put in `mcp_servers` with what this process
@@ -1122,5 +1153,83 @@ mod tests {
             unattended.additional_directories,
             vec![PathBuf::from("/repo/docs")]
         );
+    }
+
+    /// A missing bridge degrades silently by design, so the warning is the only
+    /// thing standing between that design and an unanswerable bug report.
+    ///
+    /// Asserting the paths rather than the wording is the point: "ego cannot
+    /// see my terminals" is repaired by putting a file somewhere, and a message
+    /// that does not say where sends the reader to read this source instead.
+    #[test]
+    fn a_missing_bridge_names_the_paths_that_were_checked() {
+        let checked = crate::agent_mcp::bridge_search_paths();
+
+        // Stated here rather than read back from the list, because a test that
+        // only reads the list back cannot notice a candidate dropped from the
+        // search: the warning would still name everything the search tried,
+        // and the search would have stopped trying the one that matters. The
+        // sidecar beside the running executable IS the one that matters — it
+        // is where a release puts the bridge and where an unpacked
+        // `tuic-remote` finds it.
+        let exe = std::env::current_exe().expect("a running test has an executable");
+        let dir = exe.parent().expect("an executable sits in a directory");
+        #[cfg(not(windows))]
+        let sidecar = dir.join("tuic-bridge");
+        #[cfg(windows)]
+        let sidecar = dir.join("tuic-bridge.exe");
+        assert!(
+            checked.contains(&sidecar),
+            "the bridge beside the executable must be searched, and was not: {checked:?}"
+        );
+        assert!(
+            checked.len() > 1,
+            "the PATH fallback is searched too, and is the only candidate a \
+             person can install into without rebuilding: {checked:?}"
+        );
+
+        let warning = missing_bridge_warning();
+
+        for path in &checked {
+            assert!(
+                warning.contains(&path.display().to_string()),
+                "the warning must name every path the search tried, and it \
+                 did not name {}: {warning}",
+                path.display()
+            );
+        }
+        assert!(
+            warning.contains("cannot see terminals or repositories"),
+            "the warning must name the symptom a person actually reports: {warning}"
+        );
+    }
+
+    /// `note_bridge` is a pass-through, and has to stay one.
+    ///
+    /// It sits on the two writes to `bridge`, so anything it changed about the
+    /// value would change the wire shape of every session this process grants.
+    #[test]
+    fn noting_a_bridge_never_changes_it() {
+        let found = Some(PathBuf::from("/opt/tuic/tuic-bridge"));
+        assert_eq!(note_bridge(found.clone()), found);
+        assert_eq!(note_bridge(None), None);
+    }
+
+    /// The manager takes the note on construction, and again on every override.
+    ///
+    /// `set_bridge_binary(None)` is how a test pins the wire shape, and it is
+    /// also what a build with no bridge beside it ends up holding — the same
+    /// state, reached two ways, and both have to be reported.
+    #[test]
+    fn a_manager_told_it_has_no_bridge_holds_none() {
+        let manager = AcpClientManager::new();
+        manager.set_bridge_binary(Some(PathBuf::from("/opt/tuic/tuic-bridge")));
+        assert_eq!(
+            *manager.bridge.lock(),
+            Some(PathBuf::from("/opt/tuic/tuic-bridge"))
+        );
+
+        manager.set_bridge_binary(None);
+        assert_eq!(*manager.bridge.lock(), None);
     }
 }
