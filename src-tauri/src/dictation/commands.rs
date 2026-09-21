@@ -996,6 +996,7 @@ pub(crate) fn arm_hands_free_with(
         dictation.hands_free.clone(),
         endpoint,
         continuous::SegmenterConfig::default(),
+        dictation.echo.clone(),
     ));
     Ok(hands_free_status(dictation))
 }
@@ -1288,11 +1289,10 @@ mod tests {
     ) -> bool {
         let deadline = std::time::Instant::now() + window;
         while std::time::Instant::now() < deadline {
-            let present = state.pending_injections.get(session_id).is_some_and(|queue| {
-                queue
-                    .iter()
-                    .any(|entry| entry.voice_generation().is_some())
-            });
+            let present = state
+                .pending_injections
+                .get(session_id)
+                .is_some_and(|queue| queue.iter().any(|entry| entry.voice_generation().is_some()));
             if present {
                 return true;
             }

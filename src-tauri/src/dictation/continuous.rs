@@ -872,14 +872,24 @@ pub struct Capture {
     /// When audio last arrived, for the starvation rule above.
     last_audio_ms: u64,
     device_silence_timeout_ms: u64,
+    /// Our own voice, subtracted before the segmenter's VAD can hear it.
+    /// Shared with the reply queue, which is the other half of the pair — see
+    /// [`echo`](super::echo).
+    echo: std::sync::Arc<parking_lot::Mutex<super::echo::EchoGuard>>,
 }
 
 impl Capture {
-    pub fn new(config: SegmenterConfig, device_silence_timeout_ms: u64, now_ms: u64) -> Self {
+    pub fn new(
+        config: SegmenterConfig,
+        device_silence_timeout_ms: u64,
+        now_ms: u64,
+        echo: std::sync::Arc<parking_lot::Mutex<super::echo::EchoGuard>>,
+    ) -> Self {
         Self {
             segmenter: Segmenter::new(config),
             last_audio_ms: now_ms,
             device_silence_timeout_ms,
+            echo,
         }
     }
 
@@ -949,6 +959,16 @@ pub fn tick(
     } else {
         capture.last_audio_ms = now_ms;
     }
+
+    // Subtract our own replies before the segmenter's VAD can hear them.
+    // Without this the energy gate opens a turn on the audio we are speaking,
+    // transcribes it, and answers itself.
+    //
+    // Deliberately after the starvation rule above, not before it: the
+    // canceller works in whole 10 ms frames and carries the rest, so it can
+    // return nothing from a chunk that did arrive. "The device is dead" is a
+    // question about the device.
+    let samples = capture.echo.lock().clean(&samples);
 
     let closed = capture.segmenter.push(&samples);
     if closed.is_empty() && capture.segmenter.is_capturing() {
@@ -1056,6 +1076,7 @@ pub fn spawn_runtime(
     mode: std::sync::Arc<parking_lot::Mutex<HandsFree>>,
     mut endpoint: Box<dyn VoiceEndpoint>,
     config: SegmenterConfig,
+    echo: std::sync::Arc<parking_lot::Mutex<super::echo::EchoGuard>>,
 ) -> HandsFreeRuntime {
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_clone = stop.clone();
@@ -1063,7 +1084,7 @@ pub fn spawn_runtime(
         .name("hands-free-dictation".into())
         .spawn(move || {
             let started = std::time::Instant::now();
-            let mut capture = Capture::new(config, DEVICE_SILENCE_TIMEOUT_MS, 0);
+            let mut capture = Capture::new(config, DEVICE_SILENCE_TIMEOUT_MS, 0, echo);
             loop {
                 if stop_clone.load(std::sync::atomic::Ordering::Acquire) {
                     break;
@@ -1969,13 +1990,143 @@ mod tests {
     }
 
     fn runtime_capture() -> Capture {
-        Capture::new(test_config(), 5_000, 0)
+        Capture::new(test_config(), 5_000, 0, echo_guard())
+    }
+
+    /// A guard with no canceller: capture comes back exactly as it arrived,
+    /// which is what every test but the echo ones wants to reason about.
+    fn echo_guard() -> std::sync::Arc<parking_lot::Mutex<super::super::echo::EchoGuard>> {
+        std::sync::Arc::new(parking_lot::Mutex::new(super::super::echo::EchoGuard::new(
+            Box::new(super::super::echo::PassThrough),
+        )))
     }
 
     fn armed_shared() -> parking_lot::Mutex<HandsFree> {
         let mut mode = HandsFree::new(1_000);
         mode.arm("target", "desktop", true).expect("arm");
         parking_lot::Mutex::new(mode)
+    }
+
+    /// Subtracts exactly what it is told was played. A real canceller is
+    /// adaptive and never this clean; this one makes the question "did the
+    /// far end reach the capture path" answerable without audio hardware.
+    struct Subtract;
+
+    impl super::super::echo::Canceller for Subtract {
+        fn cancel(&mut self, far_end: &[f32], near_end: &mut [f32]) {
+            for (near, far) in near_end.iter_mut().zip(far_end) {
+                *near -= far;
+            }
+        }
+    }
+
+    fn cancelling_capture() -> (
+        Capture,
+        std::sync::Arc<parking_lot::Mutex<super::super::echo::EchoGuard>>,
+    ) {
+        let echo = std::sync::Arc::new(parking_lot::Mutex::new(
+            super::super::echo::EchoGuard::new(Box::new(Subtract)),
+        ));
+        (Capture::new(test_config(), 5_000, 0, echo.clone()), echo)
+    }
+
+    /// The failure the echo path exists to stop: the microphone hears the reply
+    /// we are speaking, the energy gate calls it an utterance, and the model is
+    /// handed its own words back.
+    #[test]
+    fn a_reply_coming_out_of_the_speaker_does_not_become_a_turn() {
+        let mode = armed_shared();
+        let (mut capture, echo) = cancelling_capture();
+        let mut endpoint = FakeEndpoint::new("the words we just said");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let reply = speech(500);
+        echo.lock()
+            .note_rendered(&crate::dictation::speech::SpeechAudio {
+                samples: reply.clone(),
+                sample_rate: SAMPLE_RATE,
+            });
+
+        // The microphone hears the reply and nothing else.
+        let mut heard = reply;
+        heard.extend(silence(600));
+        endpoint.feed(heard);
+
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 3_000);
+
+        assert_eq!(
+            endpoint.calls.get(),
+            0,
+            "our own voice was transcribed as if the user had spoken"
+        );
+        assert!(
+            queue.enqueued.borrow().is_empty(),
+            "the model was sent its own reply"
+        );
+        assert_eq!(*mode.lock().phase(), Phase::Waiting);
+    }
+
+    /// The other half of the pair. Without it the test above proves only that
+    /// silence is silent: the same audio, with nothing subtracting it, must
+    /// reach the queue.
+    #[test]
+    fn the_same_audio_with_nothing_subtracted_does_become_a_turn() {
+        let mode = armed_shared();
+        let (mut capture, _echo) = cancelling_capture();
+        let mut endpoint = FakeEndpoint::new("the words we just said");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        // Same capture, but nobody told the guard anything was played.
+        let mut heard = speech(500);
+        heard.extend(silence(600));
+        endpoint.feed(heard);
+
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 3_000);
+
+        assert_eq!(endpoint.calls.get(), 1, "the utterance was never segmented");
+        assert_eq!(
+            queue.enqueued.borrow().len(),
+            1,
+            "a real user's words must still get through"
+        );
+    }
+
+    /// Interruption clears the reference as well as the sound. Audio nobody is
+    /// going to hear must not be subtracted from the user talking over it.
+    #[test]
+    fn a_hushed_reply_stops_being_subtracted_from_what_the_user_says() {
+        let mode = armed_shared();
+        let (mut capture, echo) = cancelling_capture();
+        let mut endpoint = FakeEndpoint::new("stop");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let reply = speech(500);
+        echo.lock()
+            .note_rendered(&crate::dictation::speech::SpeechAudio {
+                samples: reply.clone(),
+                sample_rate: SAMPLE_RATE,
+            });
+        // The user interrupts: playback stops, so the rest of the reply is
+        // never heard and must stop being treated as reference.
+        echo.lock().note_stopped();
+
+        let mut heard = reply;
+        heard.extend(silence(600));
+        endpoint.feed(heard);
+
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 3_000);
+
+        assert_eq!(
+            queue.enqueued.borrow().len(),
+            1,
+            "the user was cancelled against a reply that was never played"
+        );
     }
 
     /// The whole point of the pass: audio in one end, a Compose-queue entry out
