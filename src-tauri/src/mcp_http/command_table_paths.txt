@@ -274,6 +274,7 @@
 /sessions/worktree
 /sessions/x
 /sessions/x/accent-color
+/sessions/x/explain-state
 /sessions/x/focus
 /sessions/x/foreground
 /sessions/x/has-foreground

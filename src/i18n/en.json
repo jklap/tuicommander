@@ -828,6 +828,7 @@
 	"tabBar.closeTab": "Close Tab",
 	"tabBar.copyPath": "Copy Path",
 	"tabBar.detachToWindow": "Detach to Window",
+	"tabBar.explainState": "Explain State…",
 	"tabBar.moveToWorktree": "Move to Worktree",
 	"tabBar.newTab": "New Tab",
 	"tabBar.openInBrowser": "Open in Browser",

@@ -426,6 +426,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { agent: string | null }).agent,
 		}),
 	},
+	explain_session_state: {
+		map: (args) => ({
+			method: "GET",
+			path: `/sessions/${args.sessionId}/explain-state`,
+		}),
+	},
 	get_pty_capture: {
 		map: () => ({ method: "GET", path: "/diagnostics/capture" }),
 	},

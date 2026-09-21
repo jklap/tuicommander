@@ -21,6 +21,7 @@ import { __resetModalStackForTest } from "../../stores/modalStack";
 function row(overrides: Partial<TerminalRow> = {}): TerminalRow {
 	return {
 		id: "t1",
+		sessionId: null,
 		name: "shell",
 		project: null,
 		projectColor: undefined,

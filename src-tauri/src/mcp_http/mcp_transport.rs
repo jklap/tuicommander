@@ -1246,7 +1246,7 @@ const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reop
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
-const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
+const DEBUG_ACTIONS: &str = "agent_detection, explain_state, logs, sessions, invoke_js, help";
 
 /// Build the `agent` tool's MCP definition. The strategic framing text (the
 /// opening line and the numbered orchestration walkthrough) is the part that
@@ -1530,8 +1530,8 @@ fn native_tool_definitions(prefer_spawning: bool, prefer_messaging: bool) -> ser
             "name": "debug",
             "description": "Diagnostics for TUICommander internals. action=help returns the full usage guide.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: agent_detection, logs, sessions, invoke_js, help" },
-                "session_id": { "type": "string", "description": "PTY session UUID (action=agent_detection, optional — omit for all)" },
+                "action": { "type": "string", "description": "One of: agent_detection, explain_state, logs, sessions, invoke_js, help" },
+                "session_id": { "type": "string", "description": "PTY session UUID (action=agent_detection, optional — omit for all; action=explain_state, required)" },
                 "level": { "type": "string", "description": "Log level filter: debug, info, warn, error (action=logs)" },
                 "source": { "type": "string", "description": "Log source filter (action=logs)" },
                 "script": { "type": "string", "description": "JavaScript to execute in the WebView (action=invoke_js). The ONLY global is window.__TUIC__ — call action=help for the full API list. Example: return window.__TUIC__.terminals()" },
@@ -5504,6 +5504,22 @@ fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::
             }).collect();
             serde_json::json!(results)
         }
+        "explain_state" => {
+            let Some(session_id) = args["session_id"].as_str() else {
+                return serde_json::json!({
+                    "error": "explain_state requires a session_id"
+                });
+            };
+            match crate::pty::explain_session_state_impl(state, session_id) {
+                Some(explain) => serde_json::to_value(explain).unwrap_or_else(
+                    |_| serde_json::json!({"error": "failed to serialize explain payload"}),
+                ),
+                None => serde_json::json!({
+                    "error": "session not found",
+                    "session_id": session_id
+                }),
+            }
+        }
         "logs" => {
             let level_filter = args["level"].as_str();
             let source_filter = args["source"].as_str();
@@ -6980,11 +6996,12 @@ fn handle_debug_unified(
             // Shared with the HTTP /debug/invoke_js route (see log_routes::eval_debug_script).
             super::log_routes::eval_debug_script(state, script)
         }
-        "agent_detection" | "logs" | "sessions" => handle_debug(state, args),
+        "agent_detection" | "explain_state" | "logs" | "sessions" => handle_debug(state, args),
         "help" => serde_json::json!({
             "actions": {
                 "help": "This guide.",
                 "agent_detection": "Agent detection pipeline diagnostics. Optional session_id (omit for all sessions).",
+                "explain_state": "Why a session's status badge is what it is — evidence, decision trail, ladder rung. Required session_id.",
                 "logs": "App log entries (info/warn/error mirrored from JS). Params: level, source, limit (default 50).",
                 "sessions": "All PTY sessions with pid, cwd, foreground process info.",
                 "invoke_js": "Execute JS in the main WebView (localhost only). Use `return expr` for output. Result + captured console output logged as source='eval_js'. Read via logs(source='eval_js', limit=1)."

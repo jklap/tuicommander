@@ -387,6 +387,28 @@ fn test_classify_agent_version_strip_does_not_overreach() {
     assert_eq!(classify_agent("postgres-16"), None);
 }
 
+/// `amp`/`cursor`/`droid` have NO ready-screen adapter and will latch busy
+/// forever on their long-lived foreground process (documented gap, checked
+/// 2026-09-07, tracked in `has_ready_screen_adapter`'s own doc comment). This
+/// was previously pinned only by 5 *positive* per-agent assertions; nothing
+/// asserted the negative side, which the state-explain feature's payload now
+/// surfaces as `no_adapter_for_agent`.
+#[test]
+fn has_ready_screen_adapter_false_for_agents_with_no_adapter() {
+    for agent in ["amp", "cursor", "droid"] {
+        assert!(
+            !has_ready_screen_adapter(Some(agent)),
+            "{agent} must have no ready-screen adapter (documented gap)"
+        );
+    }
+}
+
+#[test]
+fn has_ready_screen_adapter_false_for_none_and_unknown_agent() {
+    assert!(!has_ready_screen_adapter(None));
+    assert!(!has_ready_screen_adapter(Some("some-future-agent")));
+}
+
 /// The ready-screen adapter is the whole point of detecting the agent: grok
 /// runs as one long-lived foreground command, so OSC 133 marks the shell busy
 /// once and only the screen can take it back to idle.
@@ -568,12 +590,576 @@ fn classify_shell_unknown_for_other_binaries() {
     }
 }
 
+// --- TurnEvidence / EvidenceRank / decide() tests ---
+//
+// `record_busy`/`record_idle`/`record_awaiting`/`force_idle` are the rank-gate
+// primitives every busy/idle/awaiting transition routes through (#744-138c);
+// `decide()` is the sole arbiter reading the result. Both were previously
+// exercised only indirectly through `SilenceState` in integration-shaped
+// tests — no test asserted the `bool` a recorder returns, which is exactly
+// the rejection path the state-explain feature's decision trail needs to
+// report faithfully.
+
+#[test]
+fn record_busy_accepts_when_no_idle_or_busy_held() {
+    let mut ev = TurnEvidence::default();
+    assert!(ev.record_busy(EvidenceRank::Screen, "working-screen"));
+}
+
+#[test]
+fn record_busy_rejected_by_strictly_higher_idle() {
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Protocol, "hook-idle");
+    assert!(
+        !ev.record_busy(EvidenceRank::Screen, "working-screen"),
+        "a Screen-rank busy must not reopen a Protocol-rank idle turn"
+    );
+}
+
+#[test]
+fn record_busy_accepted_at_equal_rank_and_clears_idle() {
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Protocol, "hook-idle");
+    assert!(
+        ev.record_busy(EvidenceRank::Protocol, "hook-busy"),
+        "equal-rank busy must be accepted, not just strictly-higher"
+    );
+    assert!(
+        !ev.idle_confirmed(),
+        "busy must clear the held idle evidence"
+    );
+}
+
+#[test]
+fn record_busy_rejected_by_strictly_higher_busy_no_downgrade() {
+    let mut ev = TurnEvidence::default();
+    ev.record_busy(EvidenceRank::Protocol, "hook-busy");
+    assert!(
+        !ev.record_busy(EvidenceRank::Screen, "working-screen"),
+        "a weaker busy source must not downgrade already-held busy evidence"
+    );
+}
+
+#[test]
+fn record_idle_rejected_by_strictly_higher_busy() {
+    let mut ev = TurnEvidence::default();
+    ev.record_busy(EvidenceRank::Protocol, "hook-busy");
+    assert!(
+        !ev.record_idle(EvidenceRank::Screen, "agent-ready-screen"),
+        "a Screen-rank idle must not close a Protocol-rank busy turn"
+    );
+}
+
+#[test]
+fn record_idle_accepted_at_equal_rank_and_clears_busy() {
+    let mut ev = TurnEvidence::default();
+    ev.record_busy(EvidenceRank::Protocol, "hook-busy");
+    assert!(ev.record_idle(EvidenceRank::Protocol, "hook-idle"));
+    assert!(ev.idle_confirmed());
+}
+
+#[test]
+fn record_idle_preserves_at_across_repeated_same_rank_source() {
+    // The `AGENT_READY_CONFIRM` debounce clock: repeated observations of the
+    // identical (rank, source) must not reset the "since when" timestamp, or
+    // a ready screen that keeps repainting would never accumulate enough age
+    // to confirm.
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Screen, "agent-ready-screen");
+    let first_at = ev.idle.expect("idle evidence recorded").at;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    ev.record_idle(EvidenceRank::Screen, "agent-ready-screen");
+    let second_at = ev.idle.expect("idle evidence recorded").at;
+    assert_eq!(
+        first_at, second_at,
+        "repeated same (rank, source) idle observation must preserve its original `at`"
+    );
+}
+
+#[test]
+fn record_idle_new_source_at_same_rank_resets_at() {
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Screen, "agent-ready-screen");
+    let first_at = ev.idle.expect("idle evidence recorded").at;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    ev.record_idle(EvidenceRank::Screen, "interrupted-screen");
+    let second_at = ev.idle.expect("idle evidence recorded").at;
+    assert!(
+        second_at > first_at,
+        "a different source at the same rank is a new observation, not a repeat"
+    );
+}
+
+#[test]
+fn force_idle_bypasses_the_busy_rank_gate() {
+    let mut ev = TurnEvidence::default();
+    ev.record_busy(EvidenceRank::Protocol, "hook-busy");
+    let evidence = ev.force_idle(EvidenceRank::Screen, "restored-confirmed-idle");
+    assert_eq!(evidence.rank, EvidenceRank::Screen);
+    assert_eq!(evidence.source, "restored-confirmed-idle");
+    assert!(
+        ev.idle_confirmed(),
+        "force_idle must record idle unconditionally, bypassing record_idle's busy-rank gate"
+    );
+}
+
+#[test]
+fn force_idle_preserves_at_across_repeated_same_rank_source() {
+    let mut ev = TurnEvidence::default();
+    let first = ev.force_idle(EvidenceRank::Silence, "silence-timeout-agent");
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let second = ev.force_idle(EvidenceRank::Silence, "silence-timeout-agent");
+    assert_eq!(first.at, second.at);
+}
+
+#[test]
+fn clear_idle_drops_idle_without_recording_busy() {
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Screen, "agent-ready-screen");
+    ev.clear_idle();
+    assert!(!ev.idle_confirmed());
+    assert!(
+        ev.busy.is_none(),
+        "clear_idle must not record busy evidence"
+    );
+}
+
+#[test]
+fn record_awaiting_rejected_by_strictly_higher_rank() {
+    let mut ev = TurnEvidence::default();
+    ev.record_awaiting(EvidenceRank::Protocol, "hook-awaiting");
+    assert!(
+        !ev.record_awaiting(EvidenceRank::Screen, "footer-heuristic"),
+        "a low-confidence screen-scrape must not overwrite a confident protocol question"
+    );
+    assert_eq!(ev.awaiting_rank(), Some(EvidenceRank::Protocol));
+}
+
+#[test]
+fn record_awaiting_accepted_at_equal_rank_updates_source() {
+    let mut ev = TurnEvidence::default();
+    ev.record_awaiting(EvidenceRank::Protocol, "hook-awaiting");
+    assert!(
+        ev.record_awaiting(EvidenceRank::Protocol, "hook-awaiting-updated"),
+        "same-rank awaiting must update, not just strictly-higher"
+    );
+}
+
+#[test]
+fn clear_awaiting_drops_it_regardless_of_rank() {
+    let mut ev = TurnEvidence::default();
+    ev.record_awaiting(EvidenceRank::Protocol, "hook-awaiting");
+    ev.clear_awaiting();
+    assert_eq!(ev.awaiting_rank(), None);
+}
+
+#[test]
+fn idle_confirmed_true_for_silence_timeout_shell_at_silence_rank() {
+    // A plain (non-agent) shell's silence timeout IS confirmed idle — the one
+    // exception at `Silence` rank, which is otherwise the weakest evidence.
+    let mut ev = TurnEvidence::default();
+    ev.force_idle(EvidenceRank::Silence, "silence-timeout-shell");
+    assert!(
+        ev.idle_confirmed(),
+        "silence-timeout-shell at Silence rank must read as confirmed idle"
+    );
+}
+
+#[test]
+fn idle_confirmed_false_for_silence_timeout_agent_at_silence_rank() {
+    // An agent silence timeout with no screen confirmation is explicitly NOT
+    // confirmed (mirrors the pre-#744-138c `idle_confirmed`) — silence alone
+    // is not enough evidence for an agent, only for a plain shell.
+    let mut ev = TurnEvidence::default();
+    ev.force_idle(EvidenceRank::Silence, "silence-timeout-agent");
+    assert!(
+        !ev.idle_confirmed(),
+        "silence-timeout-agent at Silence rank must NOT read as confirmed idle"
+    );
+}
+
+#[test]
+fn idle_confirmed_true_for_any_source_above_silence_rank() {
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Screen, "agent-ready-screen");
+    assert!(ev.idle_confirmed());
+}
+
+#[test]
+fn idle_confirmed_false_with_no_idle_evidence() {
+    let ev = TurnEvidence::default();
+    assert!(!ev.idle_confirmed());
+}
+
+// --- decide() truth table ---
+//
+// The single arbiter every busy/idle transition site routes through
+// (pty.rs's `decide()`) had zero direct tests before this — only 4 production
+// call sites and one doc-comment mention. Pin its full 4-cell truth table.
+
+#[test]
+fn decide_returns_to_idle_when_shell_busy_and_idle_evidence_held() {
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Protocol, "hook-idle");
+    match decide(&ev, true, std::time::Instant::now()) {
+        Some(Transition::ToIdle(evidence)) => assert_eq!(evidence.source, "hook-idle"),
+        other => panic!("expected ToIdle, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_returns_none_when_shell_busy_and_no_idle_evidence() {
+    let ev = TurnEvidence::default();
+    assert!(decide(&ev, true, std::time::Instant::now()).is_none());
+}
+
+#[test]
+fn decide_returns_to_busy_when_shell_idle_and_busy_evidence_held() {
+    let mut ev = TurnEvidence::default();
+    ev.record_busy(EvidenceRank::Protocol, "hook-busy");
+    match decide(&ev, false, std::time::Instant::now()) {
+        Some(Transition::ToBusy(evidence)) => assert_eq!(evidence.source, "hook-busy"),
+        other => panic!("expected ToBusy, got {other:?}"),
+    }
+}
+
+#[test]
+fn decide_returns_none_when_shell_idle_and_no_busy_evidence() {
+    let ev = TurnEvidence::default();
+    assert!(decide(&ev, false, std::time::Instant::now()).is_none());
+}
+
+#[test]
+fn decide_ignores_busy_evidence_while_shell_already_busy() {
+    // decide() only ever proposes a transition AWAY from the current shell
+    // state — held busy evidence while the shell already reads busy must not
+    // produce a (redundant) ToBusy.
+    let mut ev = TurnEvidence::default();
+    ev.record_busy(EvidenceRank::Protocol, "hook-busy");
+    assert!(decide(&ev, true, std::time::Instant::now()).is_none());
+}
+
+#[test]
+fn decide_ignores_idle_evidence_while_shell_already_idle() {
+    let mut ev = TurnEvidence::default();
+    ev.record_idle(EvidenceRank::Protocol, "hook-idle");
+    assert!(decide(&ev, false, std::time::Instant::now()).is_none());
+}
+
 // --- SilenceState tests ---
 
 #[test]
 fn test_silence_state_no_pending_returns_none() {
     let mut s = SilenceState::new();
     assert!(s.check_silence().is_none());
+}
+
+// --- DecisionTrail tests (state-explain feature) ---
+//
+// The trail's single most valuable field is a REJECTED attempt's
+// `outranked_by` — otherwise invisible, since every pre-existing call site
+// discarded `record_busy`/`record_idle`'s returned `bool`. Reproduce the
+// actual failure mode a stuck badge comes from: a weak attempt rejected by
+// already-held stronger evidence.
+
+#[test]
+fn trail_records_a_rejected_busy_attempt_with_outranked_by() {
+    let mut s = SilenceState::new();
+    s.record_idle(EvidenceRank::Protocol, "hook-idle");
+    let accepted = s.record_busy(EvidenceRank::Screen, "working-screen");
+    assert!(
+        !accepted,
+        "Screen-rank busy must not reopen a Protocol-rank idle turn"
+    );
+
+    let last = s.trail.entries().last().expect("a trail entry was pushed");
+    assert_eq!(last.kind, TrailKind::Busy);
+    assert_eq!(last.rank, Some(EvidenceRank::Screen));
+    assert_eq!(last.source, Some("working-screen"));
+    assert!(!last.accepted);
+    assert_eq!(
+        last.outranked_by,
+        Some((EvidenceRank::Protocol, "hook-idle")),
+        "a rejection must name the evidence that outranked it"
+    );
+}
+
+/// Code-review-caught gap: `record_awaiting`/`clear_awaiting` were not
+/// wrapped with trail logging like their busy/idle siblings, so a rejected
+/// awaiting attempt — a low-confidence screen-scrape question blocked by an
+/// already-held confident one — never showed up in the trail at all.
+#[test]
+fn trail_records_a_rejected_awaiting_attempt_with_outranked_by() {
+    let mut s = SilenceState::new();
+    s.record_awaiting(EvidenceRank::Protocol, "hook-awaiting");
+    let accepted = s.record_awaiting(EvidenceRank::Screen, "footer-heuristic");
+    assert!(
+        !accepted,
+        "a low-confidence screen-scrape must not overwrite a confident protocol question"
+    );
+
+    let last = s.trail.entries().last().expect("a trail entry was pushed");
+    assert_eq!(last.kind, TrailKind::Awaiting);
+    assert_eq!(last.rank, Some(EvidenceRank::Screen));
+    assert_eq!(last.source, Some("footer-heuristic"));
+    assert!(!last.accepted);
+    assert_eq!(
+        last.outranked_by,
+        Some((EvidenceRank::Protocol, "hook-awaiting"))
+    );
+}
+
+#[test]
+fn trail_records_clear_awaiting() {
+    let mut s = SilenceState::new();
+    s.record_awaiting(EvidenceRank::Protocol, "hook-awaiting");
+    s.clear_awaiting();
+
+    let last = s.trail.entries().last().expect("a trail entry was pushed");
+    assert_eq!(last.kind, TrailKind::ClearAwaiting);
+    assert!(last.accepted);
+    assert_eq!(last.outranked_by, None);
+}
+
+#[test]
+fn trail_records_an_accepted_attempt_with_no_outranked_by() {
+    let mut s = SilenceState::new();
+    let accepted = s.record_busy(EvidenceRank::Protocol, "hook-busy");
+    assert!(accepted);
+
+    let last = s.trail.entries().last().expect("a trail entry was pushed");
+    assert!(last.accepted);
+    assert_eq!(last.outranked_by, None);
+}
+
+/// Regression for a real bug a review pass caught: `note_busy_evidence()`'s
+/// `clear_idle()` call (and repeated `record_busy` re-affirmation of the
+/// same evidence) fires on essentially every PTY chunk of a busy streaming
+/// turn, so without deduplication the bounded ring fills with identical
+/// no-op entries within a handful of calls — evicting the one rejected
+/// attempt someone opened the dump to find. A repeated identical outcome
+/// must collapse into the existing entry, not push a new one.
+#[test]
+fn trail_collapses_repeated_identical_clear_idle_into_one_entry() {
+    let mut s = SilenceState::new();
+    for _ in 0..10 {
+        s.clear_idle();
+    }
+    let entries: Vec<&TrailEntry> = s.trail.entries().collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "10 identical no-op clear_idle calls must collapse to a single trail entry"
+    );
+    assert_eq!(entries[0].kind, TrailKind::ClearIdle);
+}
+
+#[test]
+fn trail_collapses_repeated_identical_busy_reaffirmation_into_one_entry() {
+    let mut s = SilenceState::new();
+    for _ in 0..10 {
+        s.record_busy(EvidenceRank::Screen, "real-activity");
+    }
+    let entries: Vec<&TrailEntry> = s.trail.entries().collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "10 identical accepted busy re-affirmations must collapse to a single trail entry"
+    );
+}
+
+/// A rejection that keeps repeating (the same weak attempt blocked by the
+/// same held evidence, on every chunk) must ALSO collapse — repeating it 50
+/// times isn't more informative than showing it once, and it would
+/// otherwise flood the ring exactly like the accepted-evidence case above.
+#[test]
+fn trail_collapses_repeated_identical_rejection_into_one_entry() {
+    let mut s = SilenceState::new();
+    s.record_idle(EvidenceRank::Protocol, "hook-idle");
+    for _ in 0..10 {
+        s.record_busy(EvidenceRank::Screen, "working-screen");
+    }
+    let entries: Vec<&TrailEntry> = s.trail.entries().collect();
+    // One entry for the initial accepted idle, one for the (collapsed)
+    // repeated rejection.
+    assert_eq!(entries.len(), 2);
+    let rejection = entries.last().unwrap();
+    assert!(!rejection.accepted);
+    assert_eq!(
+        rejection.outranked_by,
+        Some((EvidenceRank::Protocol, "hook-idle"))
+    );
+}
+
+/// A genuinely DIFFERENT outcome right after a repeat must still push a new
+/// entry — dedup only collapses an exact repeat of the immediately
+/// preceding one, it must never suppress a real transition.
+#[test]
+fn trail_does_not_collapse_a_genuinely_different_outcome() {
+    let mut s = SilenceState::new();
+    s.record_busy(EvidenceRank::Screen, "real-activity");
+    s.record_busy(EvidenceRank::Screen, "real-activity"); // repeat, collapses
+    s.record_idle(EvidenceRank::Protocol, "hook-idle"); // genuinely different
+    let entries: Vec<&TrailEntry> = s.trail.entries().collect();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the real transition must not be swallowed by dedup"
+    );
+    assert_eq!(entries[0].kind, TrailKind::Busy);
+    assert_eq!(entries[1].kind, TrailKind::Idle);
+}
+
+#[test]
+fn trail_marks_force_idle_entries_as_forced() {
+    let mut s = SilenceState::new();
+    s.force_idle(EvidenceRank::Screen, "agent-ready-screen");
+
+    let last = s.trail.entries().last().expect("a trail entry was pushed");
+    assert_eq!(last.kind, TrailKind::Idle);
+    assert!(
+        last.forced,
+        "force_idle entries must be distinguishable from record_idle"
+    );
+    assert!(last.accepted, "force_idle always accepts");
+}
+
+#[test]
+fn trail_records_user_submit_as_a_turn_boundary_marker() {
+    let mut s = SilenceState::new();
+    s.note_user_submission(true);
+
+    let kinds: Vec<TrailKind> = s.trail.entries().map(|e| e.kind).collect();
+    assert!(
+        kinds.contains(&TrailKind::UserSubmit),
+        "note_user_submission must push a turn-boundary marker: {kinds:?}"
+    );
+}
+
+#[test]
+fn trail_ring_is_bounded_and_drops_oldest_first() {
+    let mut s = SilenceState::new();
+    // Push well past capacity with alternating busy/idle so every call is
+    // accepted (no rank gate blocks it) and therefore actually pushes.
+    for i in 0..(TRAIL_CAPACITY * 2) {
+        if i % 2 == 0 {
+            s.record_busy(EvidenceRank::Protocol, "hook-busy");
+        } else {
+            s.record_idle(EvidenceRank::Protocol, "hook-idle");
+        }
+    }
+    let entries: Vec<&TrailEntry> = s.trail.entries().collect();
+    assert_eq!(
+        entries.len(),
+        TRAIL_CAPACITY,
+        "ring must stay bounded at capacity"
+    );
+}
+
+// --- explain_session_state_impl tests (state-explain feature, Phase 3) ---
+
+#[test]
+fn explain_session_state_decide_now_matches_an_independent_decide_call() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "explain-test-session";
+
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            turn_epoch: 1,
+            ..Default::default()
+        },
+    );
+    state.session_maps.shell_states.insert(
+        session_id.into(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    let mut silence = SilenceState::new();
+    silence.record_idle(EvidenceRank::Protocol, "hook-idle");
+    let evidence_snapshot = silence.evidence.clone();
+    state.session_maps.silence_states.insert(
+        session_id.into(),
+        std::sync::Arc::new(parking_lot::Mutex::new(silence)),
+    );
+
+    let explain = explain_session_state_impl(&state, session_id)
+        .expect("explain_session_state_impl should find the session");
+
+    // Independent decide() call on the same evidence, for comparison — the
+    // whole point of `decide_now` is that it can never disagree with a
+    // fresh call against the same inputs.
+    let expected = match decide(&evidence_snapshot, true, std::time::Instant::now()) {
+        Some(Transition::ToBusy(_)) => Some("to_busy"),
+        Some(Transition::ToIdle(_)) => Some("to_idle"),
+        None => None,
+    };
+    assert_eq!(explain.evidence.decide_now, expected);
+    assert_eq!(explain.evidence.decide_now, Some("to_idle"));
+    assert_eq!(
+        explain.evidence.idle,
+        Some(EvidenceSnapshot {
+            rank: "protocol",
+            source: "hook-idle",
+            age_ms: explain.evidence.idle.as_ref().unwrap().age_ms,
+        })
+    );
+
+    // agent_state_rung must match session_state_with_shell_detailed's own
+    // answer for the identical inputs — the two must never disagree.
+    let (_, rung, ..) = state
+        .session_state_with_shell_detailed(session_id)
+        .expect("session_state_with_shell_detailed should find the session");
+    assert_eq!(explain.visible.agent_state_rung, rung);
+}
+
+#[test]
+fn explain_session_state_surfaces_a_rejected_trail_entry() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "explain-test-rejection";
+
+    state.session_maps.session_states.insert(
+        session_id.into(),
+        crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            ..Default::default()
+        },
+    );
+    state.session_maps.shell_states.insert(
+        session_id.into(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    let mut silence = SilenceState::new();
+    silence.record_idle(EvidenceRank::Protocol, "hook-idle");
+    silence.record_busy(EvidenceRank::Screen, "working-screen");
+    state.session_maps.silence_states.insert(
+        session_id.into(),
+        std::sync::Arc::new(parking_lot::Mutex::new(silence)),
+    );
+
+    let explain = explain_session_state_impl(&state, session_id)
+        .expect("explain_session_state_impl should find the session");
+
+    let rejected = explain
+        .trail
+        .iter()
+        .find(|e| !e.accepted)
+        .expect("the rejected busy attempt must appear in the trail");
+    assert_eq!(rejected.kind, "busy");
+    assert_eq!(rejected.source, Some("working-screen"));
+    assert_eq!(
+        rejected.outranked_by,
+        Some(RankedSource {
+            rank: "protocol",
+            source: "hook-idle",
+        })
+    );
+}
+
+#[test]
+fn explain_session_state_returns_none_for_an_unknown_session() {
+    let state = crate::state::tests_support::make_test_app_state();
+    assert!(explain_session_state_impl(&state, "no-such-session").is_none());
 }
 
 #[test]

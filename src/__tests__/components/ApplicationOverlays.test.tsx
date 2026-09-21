@@ -22,7 +22,15 @@ vi.mock("../../components/WhatsNewDialog/WhatsNewDialog", () => ({ WhatsNewDialo
 vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: { get: vi.fn() } }));
 vi.mock("../../stores/terminals", () => ({
-	terminalsStore: { getIds: vi.fn(() => []), get: vi.fn(), update: vi.fn() },
+	terminalsStore: {
+		getIds: vi.fn(() => []),
+		get: vi.fn(),
+		update: vi.fn(),
+		// `StateExplainHost` (mounted by `ApplicationOverlays`) pulls in
+		// `activitySnapshot.ts` -> `globalWorkspace.ts`, whose module-top-level
+		// `terminalsStore.onRemove(...)` call needs this to exist on the mock.
+		onRemove: vi.fn(() => () => {}),
+	},
 }));
 
 import { folderDropMessage, useQuitDialogKeyCapture } from "../../components/ApplicationOverlays/ApplicationOverlays";

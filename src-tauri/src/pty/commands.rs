@@ -723,6 +723,23 @@ pub(crate) fn debug_agent_detection(
     }
 }
 
+/// Explain why a session's status badge is what it is — a structured
+/// troubleshooting dump of the evidence, decision trail, and every input
+/// `session_state_with_shell_detailed`'s `agent_state` ladder consulted.
+/// Shares `explain_session_state_impl` verbatim with the HTTP route
+/// (`mcp_http/session.rs`'s `explain_state`) so the two transports can never
+/// disagree — see `pty/explain.rs`'s module doc comment for the full design.
+/// Read-only: unlike `get_session_foreground_process` above, this never
+/// mutates `session_states` as a side effect.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn explain_session_state(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Option<SessionStateExplain> {
+    explain_session_state_impl(&state, &session_id)
+}
+
 /// Get orchestrator stats
 #[cfg(feature = "desktop")]
 #[tauri::command]

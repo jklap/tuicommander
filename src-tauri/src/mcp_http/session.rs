@@ -876,6 +876,30 @@ pub(super) async fn get_foreground_process(
     }
 }
 
+/// Explain why a session's status badge is what it is. Shares
+/// `explain_session_state_impl` verbatim with the desktop IPC command
+/// (`pty::explain_session_state`) — see `pty/explain.rs`'s module doc
+/// comment. Read-only: unlike `get_foreground_process` above, this never
+/// mutates `session_states`, so it needs no such shared-impl warning about
+/// silently dropping a mutation — there isn't one to drop.
+pub(super) async fn explain_state(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    match crate::pty::explain_session_state_impl(&state, &session_id) {
+        Some(explain) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(explain).unwrap_or_else(
+                |_| serde_json::json!({"error": "failed to serialize explain payload"}),
+            )),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "session not found", "session_id": session_id})),
+        ),
+    }
+}
+
 // --- PTY/terminal read-state queries (browser/remote parity, story 062). ---
 // These mirror the desktop-only `#[tauri::command]`s in pty.rs by reading the
 // same AppState directly — the commands themselves are cfg'd out of the remote

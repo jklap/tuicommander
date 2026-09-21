@@ -618,6 +618,38 @@ pub(crate) fn session_state_payload(session_id: &str, state: &SessionState) -> s
     serde_json::json!({ "session_id": session_id, "state": state })
 }
 
+/// The `agent_state` ladder `session_state_with_shell` derives from its
+/// inputs — extracted into its own pure function so the state-explain
+/// feature's snapshot assembler can report the exact rung that produced the
+/// visible `agent_state` (the second element, e.g. `"shell_busy"`) without
+/// re-deriving this if/else a second time and risking the two callers
+/// disagreeing. `session_state_with_shell` keeps only the first element,
+/// exactly as before this extraction.
+pub(crate) fn resolve_agent_state(
+    agent_type: Option<&str>,
+    awaiting_input: bool,
+    has_choice_prompt: bool,
+    background_work: bool,
+    completion_declared: bool,
+    shell_state: Option<&str>,
+) -> (Option<&'static str>, &'static str) {
+    if agent_type.is_none() {
+        (None, "no_agent_type")
+    } else if awaiting_input || has_choice_prompt {
+        (Some("awaiting_input"), "awaiting_or_choice_prompt")
+    } else if background_work {
+        (Some("working"), "background_work")
+    } else if completion_declared {
+        (Some("completed"), "completion_declared")
+    } else if shell_state == Some("busy") {
+        (Some("working"), "shell_busy")
+    } else if shell_state == Some("idle") {
+        (Some("idle"), "shell_idle")
+    } else {
+        (Some("starting"), "fallthrough")
+    }
+}
+
 impl AppEvent {
     /// Session id for the PTY-scoped variants that are routed to a per-session
     /// channel in addition to the global bus. `None` for all other variants
@@ -4153,6 +4185,22 @@ impl AppState {
     /// Get a SessionState snapshot with shell_state from the PTY reader's state machine.
     /// Also expires stale rate limits based on retry_after_ms + timestamp.
     pub(crate) fn session_state_with_shell(&self, session_id: &str) -> Option<SessionState> {
+        self.session_state_with_shell_detailed(session_id)
+            .map(|(state, ..)| state)
+    }
+
+    /// Same as `session_state_with_shell`, but also returns the ladder rung
+    /// (`resolve_agent_state`'s second element) and the two locals it
+    /// consulted (`completion_declared`, `background_work`) that
+    /// `session_state_with_shell` computes but discards. The state-explain
+    /// snapshot assembler (`pty/explain.rs`) needs all three so it never
+    /// re-derives them and risks disagreeing with this method's own answer —
+    /// see `resolve_agent_state`'s doc comment for why the rung is returned
+    /// at all.
+    pub(crate) fn session_state_with_shell_detailed(
+        &self,
+        session_id: &str,
+    ) -> Option<(SessionState, &'static str, bool, bool)> {
         // Expire stale rate limits in-place before building the snapshot.
         if let Some(mut entry) = self.session_maps.session_states.get_mut(session_id)
             && entry.rate_limited
@@ -4211,22 +4259,16 @@ impl AppState {
         if completion_declared && !background_work {
             state.shell_state = Some("idle".to_string());
         }
-        state.agent_state = if state.agent_type.is_none() {
-            None
-        } else if state.awaiting_input || state.choice_prompt.is_some() {
-            Some("awaiting_input".to_string())
-        } else if background_work {
-            Some("working".to_string())
-        } else if completion_declared {
-            Some("completed".to_string())
-        } else if state.shell_state.as_deref() == Some("busy") {
-            Some("working".to_string())
-        } else if state.shell_state.as_deref() == Some("idle") {
-            Some("idle".to_string())
-        } else {
-            Some("starting".to_string())
-        };
-        Some(state)
+        let (agent_state, rung) = resolve_agent_state(
+            state.agent_type.as_deref(),
+            state.awaiting_input,
+            state.choice_prompt.is_some(),
+            background_work,
+            completion_declared,
+            state.shell_state.as_deref(),
+        );
+        state.agent_state = agent_state.map(str::to_string);
+        Some((state, rung, completion_declared, background_work))
     }
 
     /// Spawn a background task that turns ACP wake signals into `AppEvent`s.
@@ -9518,6 +9560,216 @@ mod tests {
             assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
             assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
         }
+    }
+
+    /// Direct table test of `resolve_agent_state` itself, pinning all 7
+    /// rungs and their precedence order at the source — the extracted
+    /// function's own callers (`session_state_with_shell` and, later, the
+    /// state-explain assembler) are exercised only through the
+    /// characterization tests below, which is indirect coverage of exactly
+    /// the kind Phase 0 flagged as a gap for the ladder before this
+    /// extraction existed.
+    #[test]
+    fn resolve_agent_state_ladder_table() {
+        // (agent_type, awaiting_input, has_choice_prompt, background_work,
+        //  completion_declared, shell_state) -> (agent_state, rung)
+        let cases: &[(
+            Option<&str>,
+            bool,
+            bool,
+            bool,
+            bool,
+            Option<&str>,
+            Option<&str>,
+            &str,
+        )] = &[
+            (
+                None,
+                false,
+                false,
+                false,
+                false,
+                Some("busy"),
+                None,
+                "no_agent_type",
+            ),
+            (
+                Some("claude"),
+                true,
+                false,
+                true,
+                false,
+                Some("busy"),
+                Some("awaiting_input"),
+                "awaiting_or_choice_prompt",
+            ),
+            (
+                Some("claude"),
+                false,
+                true,
+                false,
+                false,
+                Some("busy"),
+                Some("awaiting_input"),
+                "awaiting_or_choice_prompt",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                true,
+                true,
+                Some("busy"),
+                Some("working"),
+                "background_work",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                true,
+                Some("idle"),
+                Some("completed"),
+                "completion_declared",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                false,
+                Some("busy"),
+                Some("working"),
+                "shell_busy",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                false,
+                Some("idle"),
+                Some("idle"),
+                "shell_idle",
+            ),
+            (
+                Some("claude"),
+                false,
+                false,
+                false,
+                false,
+                None,
+                Some("starting"),
+                "fallthrough",
+            ),
+        ];
+        for (
+            agent_type,
+            awaiting_input,
+            has_choice_prompt,
+            background_work,
+            completion_declared,
+            shell_state,
+            expected_state,
+            expected_rung,
+        ) in cases
+        {
+            let (state, rung) = resolve_agent_state(
+                *agent_type,
+                *awaiting_input,
+                *has_choice_prompt,
+                *background_work,
+                *completion_declared,
+                *shell_state,
+            );
+            assert_eq!(
+                state, *expected_state,
+                "case {agent_type:?}/{awaiting_input}/{has_choice_prompt}/{background_work}/{completion_declared}/{shell_state:?}"
+            );
+            assert_eq!(rung, *expected_rung);
+        }
+    }
+
+    /// Characterization of `session_state_with_shell`'s full `agent_state`
+    /// ladder — written before the state-explain feature extracts this
+    /// if/else into a shared `resolve_agent_state` (so both callers keep
+    /// agreeing), and before that extraction, so a behavior change during it
+    /// shows up as a test failure rather than a silent drift. Existing tests
+    /// each pin one rung as a side effect of a different feature; this pins
+    /// the two rungs (no agent_type, and awaiting-beats-background_work
+    /// precedence) that had no direct coverage anywhere.
+    #[test]
+    fn test_agent_state_ladder_none_when_no_agent_type() {
+        let state = fresh_state();
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        // agent_type left at its `fresh_state` default of None.
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(
+            snapshot.agent_state, None,
+            "agent_state must stay None for a session with no detected/preset agent_type, \
+             regardless of shell activity"
+        );
+    }
+
+    #[test]
+    fn test_agent_state_ladder_awaiting_input_beats_background_work() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.awaiting_input = true;
+            session.background_work = true;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(
+            snapshot.agent_state.as_deref(),
+            Some("awaiting_input"),
+            "a pending question must outrank background work in the ladder's precedence"
+        );
+    }
+
+    #[test]
+    fn test_agent_state_ladder_choice_prompt_also_yields_awaiting_input() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.choice_prompt = Some(crate::output_parser::ChoicePromptPayload {
+                title: "Confirm".into(),
+                options: vec![
+                    crate::output_parser::ChoiceOption {
+                        key: "1".into(),
+                        label: "Yes".into(),
+                        highlighted: true,
+                        destructive: false,
+                        hint: None,
+                    },
+                    crate::output_parser::ChoiceOption {
+                        key: "2".into(),
+                        label: "No".into(),
+                        highlighted: false,
+                        destructive: true,
+                        hint: None,
+                    },
+                ],
+                dismiss_key: None,
+                amend_key: None,
+            });
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.agent_state.as_deref(), Some("awaiting_input"));
     }
 
     #[test]
