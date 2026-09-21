@@ -1455,6 +1455,13 @@ GET  /dictation/status                              -> DictationStatus
 GET  /dictation/models                              -> ModelInfo[]
 POST /dictation/models/download  { "model": "..." } -> "Downloaded to <path>"
 POST /dictation/models/delete    { "model": "..." } -> "<deletion message>"
+GET  /dictation/speech/assets                       -> SpeechAssetInfo[]
+POST /dictation/speech/assets/download  { "asset": "..." }
+                                                    -> "Installed to <path>"
+POST /dictation/speech/assets/cancel    { "asset": "..." }
+                                                    -> "<cancellation message>"
+POST /dictation/speech/assets/delete    { "asset": "..." }
+                                                    -> "<deletion message>"
 POST /dictation/start                               -> null
 POST /dictation/stop                                -> TranscribeResponse
 GET  /dictation/corrections                         -> { "<from>": "<to>", ... }
@@ -1472,6 +1479,13 @@ POST /dictation/hands-free/disarm                   -> HandsFreeDisarmed
 `POST /dictation/stop` stops the recording and transcribes it, returning
 `{ text, skip_reason?, duration_s }`. `PUT /dictation/config` takes the config
 object as the whole body, not wrapped in a field.
+
+The speech-asset routes take `asset`, an id from the catalogue in
+`dictation::speech::assets`. That is an allowlist, not a hint: an unknown id is
+a `400`-shaped error string rather than a path or a URL built from what the
+caller sent. `download` is minutes long and streams nothing back — progress is
+a desktop `speech-download-progress` event today and is **not** yet on
+`/events`, which is recorded as a deferral at the emit site.
 
 ### Hands-free
 

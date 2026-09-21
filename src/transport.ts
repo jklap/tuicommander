@@ -115,6 +115,16 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	delete_whisper_model: {
 		map: (args) => ({ method: "POST", path: "/dictation/models/delete", body: { model: args.model_name } }),
 	},
+	get_speech_assets: { map: () => ({ method: "GET", path: "/dictation/speech/assets" }) },
+	download_speech_asset: {
+		map: (args) => ({ method: "POST", path: "/dictation/speech/assets/download", body: { asset: args.asset } }),
+	},
+	cancel_speech_download: {
+		map: (args) => ({ method: "POST", path: "/dictation/speech/assets/cancel", body: { asset: args.asset } }),
+	},
+	delete_speech_asset: {
+		map: (args) => ({ method: "POST", path: "/dictation/speech/assets/delete", body: { asset: args.asset } }),
+	},
 	start_dictation: { map: () => ({ method: "POST", path: "/dictation/start" }) },
 	stop_dictation_and_transcribe: { map: () => ({ method: "POST", path: "/dictation/stop" }) },
 	get_correction_map: { map: () => ({ method: "GET", path: "/dictation/corrections" }) },
@@ -598,7 +608,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	terminal_get_selection_text: {
 		map: (args) => ({
 			method: "GET",
-			path: `/sessions/${args.sessionId}/terminal/selection-text?startRow=${args.startRow}&startCol=${args.startCol}&endRow=${args.endRow}&endCol=${args.endCol}`,
+			path: `/sessions/${args.sessionId}/terminal/selection-text?startRow=${args.startRow}&startCol=${args.startCol}&endRow=${args.endRow}&endCol=${args.endCol}${args.historyBase === undefined ? "" : `&historyBase=${args.historyBase}`}`,
 			transform: (data) => (data as { text: string }).text,
 		}),
 	},

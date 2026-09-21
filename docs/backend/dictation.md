@@ -21,6 +21,8 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `speech.rs` | The speech port: `Speech`, `SpeechAudio`, `SpeechError`, `SpeechCancel`, `budget_seconds` — no engine named |
 | `speech/pocket/` | The Pocket TTS adapter: `pocket.rs` (the port impl), `bundle.rs` (manifest + streaming state), `tokenizer.rs` (SentencePiece Unigram), `engine.rs` (the four ONNX graphs) |
 | `speech/external.rs` | The bring-your-own-engine adapter: a configured command plus a RIFF/WAVE reader |
+| `speech/assets.rs` | The pinned, allowlisted catalogue and its verifying downloader: `Asset`, `Fetch`, `status`, `stage`, `promote`, `remove` |
+| `speech/library.rs` | `SpeechLibrary`: one engine per language, loaded lazily, and the order that keeps installing from racing speaking |
 | `echo.rs` | Acoustic echo cancellation: the `Canceller` port, the `FarEnd` pacing buffer and `EchoGuard` |
 | `echo/webrtc.rs` | The WebRTC AEC3 adapter |
 
@@ -63,6 +65,19 @@ Both transports serialize the same structs, camelCase on the wire:
 | `get_model_info()` | List available Whisper models with download status |
 | `download_whisper_model(model_name)` | Download model (emits progress events) |
 | `delete_whisper_model(model_name)` | Delete a downloaded model |
+
+### Speech assets
+
+The catalogue is an allowlist: `asset` is an id from it, and an id that is not
+in it is refused before it can become a path or a URL. See "Where the bytes come
+from" below.
+
+| Command | Description |
+|---------|-------------|
+| `get_speech_assets()` | Every installable asset with its state: `absent`, `downloading`, `incomplete` (with the missing files named) or `ready` |
+| `download_speech_asset(asset)` | Download and install, verifying every sha256 (emits `speech-download-progress`) |
+| `cancel_speech_download(asset)` | Abandon a download in flight; succeeds with a note when there was none |
+| `delete_speech_asset(asset)` | Unload the engine, then remove the files |
 
 ### Configuration
 
@@ -540,6 +555,69 @@ directory, not a build artifact:
 The weights are Kyutai's, CC-BY-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
 Every absence is a typed `SpeechError::ModelUnavailable` naming the missing
 file, never a panic and never silence.
+
+### Where the bytes come from (`speech/assets.rs`)
+
+The catalogue is Rust, not a JSON file beside the binary, and that is the whole
+security property: a manifest the installer could rewrite is not an allowlist.
+Every file is named by a URL pinned to an immutable revision and checked against
+a sha256 written in the source, so an upstream that is compromised — or merely
+re-tagged — produces a refused install rather than a different model.
+
+| Part | Published by | Source | Pinned to |
+|---|---|---|---|
+| ONNX graphs, tokenizer, `bundle.json` | `KevinAHM/pocket-tts-onnx` (exports of Kyutai's weights) | Hugging Face | commit `58a6d00c` |
+| Speaker embeddings (voices) | Kyutai, **re-published by us** | TUICommander release | tag `speech-voices-v1` |
+| onnxruntime | Microsoft | GitHub release | `v1.23.0` |
+
+Two upstreams for one reason: `kyutai/pocket-tts` is a **gated** repository, so
+an application cannot download the voices on a user's behalf — not even their
+metadata is readable without a token. CC-BY-4.0 allows redistribution with
+attribution, so the embedding files (4.6 MB each, against 125 MB for a
+language) are re-published unmodified on our own release. The graphs are public
+and are not re-hosted.
+
+**onnxruntime is pinned at 1.23.0 rather than the newest release.** 1.24 dropped
+the macOS Intel and universal2 builds and TUICommander still ships for Intel
+Macs. `ort` 2.0.0-rc.13 needs API version 17 or later and 1.23 provides 23, so
+nothing is given up.
+
+Microsoft ships a whole SDK, of which one shared library is wanted. The member
+is found by rule, not by a hardcoded path: a regular file under a `lib/`
+component whose name starts with the platform stem and a dot. The trailing dot
+is what excludes `libonnxruntime_providers_shared.so`; the `lib/` component is
+what excludes `pkgconfig/libonnxruntime.pc`; "regular file" is what excludes the
+symlinks Linux uses for the unversioned name. macOS ships both
+`libonnxruntime.dylib` and `libonnxruntime.1.23.0.dylib` as real files, so an
+exact name is preferred rather than required — and two candidates with no exact
+match are refused rather than guessed between.
+
+### Installing is two steps, and the split is the point
+
+```text
+download and verify into .staging   <- no lock held; the engine may be speaking
+unload the engine for this language <- waits for the sentence in flight
+rename .staging into place          <- microseconds, nothing can speak
+next synthesis loads the new files  <- lazily, as it always did
+```
+
+The long part holds nothing; the part that excludes synthesis is a rename.
+`SpeechLibrary` (`speech/library.rs`) owns that order — `assets.rs` deliberately
+does not take the lock itself, so the two cannot be collapsed by accident.
+
+The old directory is removed *before* the new one is renamed in, which leaves a
+window where neither exists. That is the right way round: a crash inside it
+leaves the language absent, which the status query reports honestly and the user
+can fix by downloading again. The other order can leave a directory half
+belonging to each version, which passes every existence check and then fails
+somewhere inside onnxruntime.
+
+**Readiness is checked by size, not by hash.** The hash is verified once, while
+the bytes are arriving; re-reading 125 MB to answer a status query would make
+opening a settings panel cost a disk sweep. A file truncated after install still
+shows the wrong size, which is the failure this has to catch. The three states
+are distinct on purpose — `absent` offers a download, `incomplete` names what is
+missing, and only `ready` lets a language be used.
 
 ### `bundle.json` is the contract, not the code
 

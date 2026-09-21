@@ -220,21 +220,35 @@ work is used.
 ### Speech synthesis — Pocket TTS
 
 Spoken replies are rendered by **Pocket TTS**, by **Kyutai**, licensed
-**CC-BY-4.0** (<https://creativecommons.org/licenses/by/4.0/>). The per-language
-bundles TUICommander downloads are ONNX exports of the
-`kyutai/pocket-tts-without-voice-cloning` weights, together with their
-SentencePiece tokenizer and speaker embeddings. No changes are made to the
-weights; TUICommander supplies only the runtime that reads them.
-
+**CC-BY-4.0** (<https://creativecommons.org/licenses/by/4.0/>). No changes are
+made to the weights; TUICommander supplies only the runtime that reads them.
 CC-BY-4.0 permits commercial use and redistribution and requires that this
 attribution travel with the work.
 
+It arrives from two places, and the second one matters legally:
+
+| Part | Published by | Fetched from |
+|---|---|---|
+| Per-language ONNX graphs, SentencePiece tokenizer | Kevin Hill (`KevinAHM`), as ONNX exports of Kyutai's weights | `huggingface.co/KevinAHM/pocket-tts-onnx`, pinned to one commit |
+| Speaker embeddings (the voices) | Kyutai | **re-published by TUICommander**, see below |
+
+The voices live in `kyutai/pocket-tts`, which is a gated repository: reaching
+them needs an accepted licence and a Hugging Face token, which an application
+cannot supply on a user's behalf. CC-BY-4.0 allows redistribution with
+attribution, so TUICommander re-publishes the embedding files unmodified on its
+own release (`speech-voices-v1`) and downloads them from there. They remain
+Kyutai's work under CC-BY-4.0; this notice is the attribution that travels with
+them, and it is also attached to the release itself.
+
+Every file of both parts is pinned by sha256 in
+`src-tauri/src/dictation/speech/assets.rs` and verified before it is installed.
+
 ### Speech synthesis — ONNX Runtime
 
-Those bundles are executed by **ONNX Runtime**, by **Microsoft**, licensed
-**MIT**. It is loaded from a shared library downloaded beside the models rather
-than linked into the application, so it is not a build-time dependency of this
-repository.
+Those bundles are executed by **ONNX Runtime** 1.23.0, by **Microsoft**,
+licensed **MIT**. It is downloaded from Microsoft's own GitHub release and
+loaded from a shared library beside the models rather than linked into the
+application, so it is not a build-time dependency of this repository.
 
 ### Transcription — Whisper
 

@@ -470,6 +470,7 @@ describe("transport", () => {
 			it.each([
 				["get_dictation_status", {}, "GET", "/dictation/status"],
 				["get_model_info", {}, "GET", "/dictation/models"],
+				["get_speech_assets", {}, "GET", "/dictation/speech/assets"],
 				["start_dictation", {}, "POST", "/dictation/start"],
 				["stop_dictation_and_transcribe", {}, "POST", "/dictation/stop"],
 				["get_correction_map", {}, "GET", "/dictation/corrections"],
@@ -489,6 +490,31 @@ describe("transport", () => {
 			it.each([
 				["download_whisper_model", { model_name: "small" }, "POST", "/dictation/models/download", { model: "small" }],
 				["delete_whisper_model", { model_name: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
+				// The wire key is `asset` on both transports, unlike the whisper
+				// pair above where the IPC parameter is `model_name` and the body
+				// key is `model`. Keeping them the same here is deliberate: the
+				// mismatch above is a wart nobody should copy.
+				[
+					"download_speech_asset",
+					{ asset: "italian" },
+					"POST",
+					"/dictation/speech/assets/download",
+					{ asset: "italian" },
+				],
+				[
+					"cancel_speech_download",
+					{ asset: "italian" },
+					"POST",
+					"/dictation/speech/assets/cancel",
+					{ asset: "italian" },
+				],
+				[
+					"delete_speech_asset",
+					{ asset: "italian" },
+					"POST",
+					"/dictation/speech/assets/delete",
+					{ asset: "italian" },
+				],
 				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
 				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],
 				["set_dictation_config", { config: { enabled: true } }, "PUT", "/dictation/config", { enabled: true }],
@@ -711,6 +737,20 @@ describe("transport", () => {
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/sessions/s1/terminal/row-text?row=5");
 			expect(result.transform?.({ text: "hello" })).toBe("hello");
+		});
+
+		it("maps the selection history snapshot used to rebase rows after eviction", () => {
+			const result = mapCommandToHttp("terminal_get_selection_text", {
+				sessionId: "s1",
+				startRow: 1,
+				startCol: 2,
+				endRow: 3,
+				endCol: 4,
+				historyBase: 99,
+			});
+			expect(result.path).toBe(
+				"/sessions/s1/terminal/selection-text?startRow=1&startCol=2&endRow=3&endCol=4&historyBase=99",
+			);
 		});
 
 		it("maps terminal_get_lines to GET with transform", () => {

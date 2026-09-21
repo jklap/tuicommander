@@ -272,6 +272,10 @@ tauri-plugin-clipboard-manager = { version = "2", optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 drag = { version = "2.1", features = ["serde"], optional = true }
 zip = "8"
+# Microsoft ships onnxruntime as a .tgz everywhere except Windows, and the
+# speech downloader takes one shared library out of it (`dictation::speech::
+# assets`). Already in the tree transitively; named here because we read it.
+tar = "0.4"
 glob = "0.3"
 ignore = "0.4"
 grep-searcher = "0.1"

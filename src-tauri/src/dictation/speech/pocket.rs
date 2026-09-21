@@ -74,8 +74,9 @@ fn file_name(path: &Path) -> String {
 /// higher wanders off the voice.
 const DEFAULT_TEMPERATURE: f32 = 0.7;
 
-/// Where a bundle keeps its voices, relative to the bundle directory.
-const VOICES_SUBDIR: &str = "voices";
+/// Where a bundle keeps its voices, relative to the bundle directory. Declared
+/// by the catalogue, which is what puts them there.
+use super::assets::VOICES_SUBDIR;
 
 pub struct PocketSpeech {
     dir: PathBuf,
@@ -158,6 +159,27 @@ impl PocketSpeech {
     fn ensure_runtime(&self) -> Result<()> {
         load_runtime(&self.dir)
     }
+
+    /// Let go of the loaded graphs, waiting for any synthesis in flight.
+    ///
+    /// Taking the same lock [`Speech::synthesize`] holds is the whole
+    /// mechanism: when this returns, no onnxruntime session is mapping the
+    /// bundle's files, so the caller may replace or delete them. The next
+    /// synthesis loads whatever is there then.
+    pub fn unload(&self) {
+        // Taken under the lock, dropped outside it. Freeing about 125 MB of
+        // graphs is not instant, and a synthesis waiting on the slot is only
+        // going to reload anyway — there is nothing for it to race with once
+        // the slot is empty.
+        let engine = self.engine.lock().take();
+        drop(engine);
+    }
+
+    /// Whether the graphs are resident. For a caller reporting memory, and for
+    /// the tests that prove [`PocketSpeech::unload`] released them.
+    pub fn is_loaded(&self) -> bool {
+        self.engine.lock().is_some()
+    }
 }
 
 pub(super) fn load_runtime(bundle_dir: &Path) -> Result<()> {
@@ -186,15 +208,9 @@ pub(super) fn load_runtime(bundle_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-const fn library_name() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "libonnxruntime.dylib"
-    } else if cfg!(target_os = "windows") {
-        "onnxruntime.dll"
-    } else {
-        "libonnxruntime.so"
-    }
-}
+/// The library name the loader looks for. Declared by the catalogue, which is
+/// what installs it under that name — the two cannot be allowed to disagree.
+use super::assets::library_name;
 
 /// Where to load onnxruntime from.
 ///
@@ -212,7 +228,7 @@ fn resolve_runtime_library(bundle_dir: &Path, configured: Option<String>) -> Opt
     }
     let path = bundle_dir
         .parent()?
-        .join("onnxruntime")
+        .join(super::assets::RUNTIME_SUBDIR)
         .join(library_name());
     path.exists().then_some(path)
 }

@@ -2937,3 +2937,40 @@ Needs a `make dev` restart — the Rust backend does not hot-reload.
       look exactly like a working canceller until someone tried to interrupt.
 - [ ] Startup must not be visibly slower. `DictationState::new()` now builds one
       AEC3 instance for the life of the app, before any dictation is used.
+
+## Speech assets download and install (#813-e84b)
+
+Needs a `make dev` restart — the Rust backend does not hot-reload. There is no
+Dictation UI for these yet (#818-2a29), so drive them over HTTP.
+
+**The voices are not published yet.** `speech-voices-v1` does not exist, so the
+Italian download will fail on its last file with a 404 reported as a network
+error. Everything up to that point is real and worth checking; the voice item
+below stays open until the release is cut.
+
+- [ ] `curl localhost:9877/dictation/speech/assets` lists two assets,
+      `onnxruntime` and `italian`, both `"state": "absent"` on a clean machine.
+- [ ] `curl -X POST localhost:9877/dictation/speech/assets/download -H
+      'content-type: application/json' -d '{"asset":"onnxruntime"}'` downloads
+      42 MB, extracts one library, and answers `Installed to <path>`. The file
+      at `<config>/models/speech/onnxruntime/libonnxruntime.dylib` must be
+      about 74 MB — that is the library, not the 330-byte pkgconfig file beside
+      it in the archive. Re-query the list: `"state": "ready"`.
+- [ ] While that download runs, the same list must report
+      `"state": "downloading"` for it, and a second download of the same asset
+      must be refused rather than started.
+- [ ] `POST /dictation/speech/assets/cancel {"asset":"onnxruntime"}` mid-download
+      must stop it, and the list must go back to `absent` — not `incomplete`.
+      Nothing may be left under `<config>/models/speech/.staging/`.
+- [ ] `POST /dictation/speech/assets/delete {"asset":"onnxruntime"}` removes the
+      directory, and a second delete answers success rather than an error.
+- [ ] `{"asset":"italian"}` downloads about 125 MB into
+      `<config>/models/speech/italian/`. **Expected to fail today** on
+      `voices/giovanni.safetensors` with a 404 — check that the failure leaves
+      `state` at `absent` and no `.staging` directory behind, which is the
+      behaviour that matters.
+- [ ] _(blocked on the `speech-voices-v1` release)_ With the voice published,
+      the Italian download completes and the list reports `ready`.
+- [ ] Corrupting one installed file afterwards (`truncate -s 100
+      <config>/models/speech/italian/bundle.json`) must move the asset to
+      `"state": "incomplete"` with that file named in `missing` — never `ready`.

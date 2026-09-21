@@ -211,6 +211,10 @@ transports. Full request/response shapes: `docs/api/http-api.md`.
 | `GET` | `/dictation/models` | Whisper models with download state |
 | `POST` | `/dictation/models/download` | Download a whisper model |
 | `POST` | `/dictation/models/delete` | Delete a downloaded model |
+| `GET` | `/dictation/speech/assets` | Speech languages and the ONNX runtime, with install state |
+| `POST` | `/dictation/speech/assets/download` | Download and verify an asset from the pinned catalogue |
+| `POST` | `/dictation/speech/assets/cancel` | Abandon a download in flight |
+| `POST` | `/dictation/speech/assets/delete` | Unload the engine and remove the files |
 | `POST` | `/dictation/start` | Start recording |
 | `POST` | `/dictation/stop` | Stop recording and transcribe |
 | `GET`/`PUT` | `/dictation/corrections` | Read/replace the text-correction map |

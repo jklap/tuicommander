@@ -427,6 +427,10 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `get_model_info` | -- | `Vec<ModelInfo>` | Available models |
 | `download_whisper_model` | `model_name` | `String` | Download model |
 | `delete_whisper_model` | `model_name` | `String` | Delete model |
+| `get_speech_assets` | -- | `Vec<SpeechAssetInfo>` | Installable speech languages and the ONNX runtime, each `absent`/`downloading`/`incomplete`/`ready` |
+| `download_speech_asset` | `asset` | `String` | Download and install, verifying every pinned sha256. `asset` is an id from the catalogue allowlist |
+| `cancel_speech_download` | `asset` | `String` | Abandon a download in flight |
+| `delete_speech_asset` | `asset` | `String` | Unload the engine, then remove the files |
 | `get_correction_map` | -- | `HashMap<String,String>` | Load corrections |
 | `set_correction_map` | `map` | `()` | Save corrections |
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |

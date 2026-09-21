@@ -57,6 +57,12 @@ pub struct DictationState {
     /// time the mode is armed would make the first second of every session the
     /// worst one.
     pub echo: Arc<Mutex<echo::EchoGuard>>,
+    /// The downloadable speech assets, and the engines loaded from them.
+    ///
+    /// One for the app rather than one per reply: it is what serialises
+    /// replacing a language against speaking it, which only works if both
+    /// sides go through the same instance.
+    pub speech: Arc<speech::library::SpeechLibrary>,
 }
 
 impl DictationState {
@@ -77,6 +83,7 @@ impl DictationState {
             hands_free_audio: Mutex::new(None),
             hands_free_owner_alive: Arc::new(AtomicBool::new(false)),
             echo: Arc::new(Mutex::new(echo::install())),
+            speech: Arc::new(speech::library::SpeechLibrary::new()),
         }
     }
 
@@ -102,5 +109,10 @@ impl DictationState {
         *self.streaming.lock() = None;
         // 3. Now safe to drop the transcriber — no other Arc holders remain.
         *self.transcriber_arc.lock() = None;
+        // 4. Let go of the speech graphs. Separate from the transcriber and
+        //    last because it waits for any synthesis in flight: a reply being
+        //    spoken as the app closes finishes its sentence rather than being
+        //    cut off mid-word by a freed ONNX session.
+        self.speech.shutdown();
     }
 }

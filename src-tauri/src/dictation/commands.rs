@@ -1,5 +1,6 @@
 use super::{
-    DictationState, audio, continuous, corrections, model, permission, streaming, transcribe,
+    DictationState, audio, continuous, corrections, model, permission, speech, streaming,
+    transcribe,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -256,6 +257,157 @@ pub fn delete_whisper_model(
     // The model file is gone — its size and download state are cached.
     invalidate_model_snapshot();
     Ok(format!("Deleted {}", whisper_model.display_name()))
+}
+
+// ---------------------------------------------------------------------------
+// Speech assets — the voices and graphs behind spoken replies
+// ---------------------------------------------------------------------------
+
+/// What the settings panel needs to know about one downloadable asset.
+///
+/// `state` is a string rather than a bool pair because the four states are not
+/// independent: an asset cannot be both downloading and incomplete as far as
+/// the UI is concerned, and modelling them separately invites a panel that
+/// renders "not installed" over a running progress bar.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SpeechAssetInfo {
+    pub id: String,
+    pub display_name: String,
+    /// `"language"` or `"runtime"`.
+    pub kind: String,
+    /// The language this speaks, absent for the runtime library.
+    pub language: Option<String>,
+    pub voices: Vec<String>,
+    pub download_bytes: u64,
+    /// `"absent"`, `"downloading"`, `"incomplete"` or `"ready"`.
+    pub state: String,
+    /// Which files an incomplete asset is missing. Empty otherwise.
+    pub missing: Vec<String>,
+}
+
+fn describe(asset: &speech::assets::Asset, downloading: bool) -> SpeechAssetInfo {
+    use speech::assets::Status;
+    let (state, missing) = if downloading {
+        // Checked before the disk: a download in flight has a staging
+        // directory and an install directory that still holds the old version,
+        // so the on-disk answer would be the answer to a different question.
+        ("downloading".to_string(), Vec::new())
+    } else {
+        match speech::assets::status(asset) {
+            Status::Absent => ("absent".to_string(), Vec::new()),
+            Status::Ready => ("ready".to_string(), Vec::new()),
+            Status::Incomplete { missing } => ("incomplete".to_string(), missing),
+        }
+    };
+    SpeechAssetInfo {
+        id: asset.id.to_string(),
+        display_name: asset.display_name.to_string(),
+        kind: if asset.language().is_some() {
+            "language".to_string()
+        } else {
+            "runtime".to_string()
+        },
+        language: asset.language().map(str::to_string),
+        voices: asset.voices().iter().map(|v| (*v).to_string()).collect(),
+        download_bytes: asset.download_bytes(),
+        state,
+        missing,
+    }
+}
+
+/// Everything a user may install, and what state it is in.
+#[tauri::command]
+pub fn get_speech_assets(dictation: tauri::State<'_, DictationState>) -> Vec<SpeechAssetInfo> {
+    speech::assets::CATALOGUE
+        .iter()
+        .map(|asset| describe(asset, dictation.speech.is_downloading(asset.id)))
+        .collect()
+}
+
+/// Look an id up in the catalogue, refusing anything that is not in it.
+///
+/// This is the allowlist boundary: past here an id has become a `&'static
+/// Asset` with a pinned URL and a pinned hash, so nothing a caller sends can
+/// name a path or a host of its own.
+fn resolve_asset(id: &str) -> Result<&'static speech::assets::Asset, String> {
+    speech::assets::find(id).ok_or_else(|| format!("Unknown speech asset: {id}"))
+}
+
+#[tauri::command]
+pub async fn download_speech_asset(app: AppHandle, asset: String) -> Result<String, String> {
+    let target = resolve_asset(&asset)?;
+    // Cloned out of the managed state in its own scope: a `State` guard held
+    // across an await would make this future non-`Send`, and the download is
+    // minutes long.
+    let library = {
+        let dictation = app.state::<DictationState>();
+        Arc::clone(&dictation.speech)
+    };
+
+    let id = target.id.to_string();
+    let progress_app = app.clone();
+    let progress_id = id.clone();
+    let path = library
+        .install(target, move |downloaded, total| {
+            let _ = progress_app.emit(
+                SPEECH_DOWNLOAD_PROGRESS,
+                serde_json::json!({
+                    "asset": progress_id,
+                    "downloaded": downloaded,
+                    "total": total,
+                    "percent": if total > 0 { (downloaded as f64 / total as f64 * 100.0) as u32 } else { 0 },
+                }),
+            );
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(format!("Installed to {}", path.display()))
+}
+
+/// The event a download reports progress on.
+///
+// DEFERRED (2026-09-21) — this is a desktop-only `emit`, with no `/events` SSE
+// arm, so a browser or PWA client sees a download start and finish with
+// nothing in between. That matches `dictation-download-progress` beside it,
+// which has the same gap, so this is not a new hole — but the parity rule in
+// CLAUDE.md says a new push gets bridged, and this one is not.
+//
+// Not done here because bridging means a new `AppEvent` variant, and
+// `src-tauri/src/state.rs` is being edited by another agent right now; adding
+// a variant touches four exhaustive matches in a file I must not move under
+// them. Land it with the Dictation UI (#818-2a29), which is the first
+// consumer that will actually render the bar in browser mode, and bridge the
+// whisper event at the same time — they are one arm each and should not be
+// two commits.
+pub const SPEECH_DOWNLOAD_PROGRESS: &str = "speech-download-progress";
+
+#[tauri::command]
+pub fn cancel_speech_download(
+    dictation: tauri::State<'_, DictationState>,
+    asset: String,
+) -> Result<String, String> {
+    let target = resolve_asset(&asset)?;
+    if dictation.speech.cancel_download(target.id) {
+        Ok(format!("Cancelled {}", target.display_name))
+    } else {
+        // Not an error the user caused: a download that finished between the
+        // click and the command is the common way to get here.
+        Ok(format!("{} was not downloading", target.display_name))
+    }
+}
+
+#[tauri::command]
+pub fn delete_speech_asset(
+    dictation: tauri::State<'_, DictationState>,
+    asset: String,
+) -> Result<String, String> {
+    let target = resolve_asset(&asset)?;
+    dictation
+        .speech
+        .delete(target)
+        .map_err(|error| error.to_string())?;
+    Ok(format!("Deleted {}", target.display_name))
 }
 
 /// Start push-to-talk recording.
