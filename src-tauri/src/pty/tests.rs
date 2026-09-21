@@ -16110,10 +16110,10 @@ fn populate_unowned_session_maps(state: &crate::state::AppState, sid: &str) {
         sid.to_string(),
         Mutex::new(crate::ai_agent::knowledge::SessionKnowledge::new()),
     );
-    state
-        .session_maps
-        .session_visibility
-        .insert(sid.to_string(), true);
+    state.session_maps.session_visibility.insert(
+        sid.to_string(),
+        std::collections::HashMap::from([("test-viewer".to_string(), 0u64)]),
+    );
     state
         .ai
         .ai_suggestions_enabled

@@ -1401,11 +1401,14 @@ pub(crate) async fn set_session_visible(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     visible: bool,
+    viewer_id: Option<String>,
 ) -> Result<(), String> {
-    state
-        .session_maps
-        .session_visibility
-        .insert(session_id.clone(), visible);
+    let viewer_id = viewer_id.filter(|v| !v.is_empty());
+    state.set_session_visible(
+        &session_id,
+        viewer_id.as_deref().unwrap_or(crate::state::LEGACY_VIEWER_ID),
+        visible,
+    );
     #[cfg(unix)]
     if visible && let Err(e) = wake_session(&state, &session_id) {
         tracing::warn!(session_id, error = %e, "Wake on focus failed");

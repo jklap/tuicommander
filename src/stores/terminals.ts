@@ -5,6 +5,7 @@ import { rpc } from "../transport";
 import type { TerminalMatch } from "../types";
 import { isPerfDebug } from "../utils/perfDebug";
 import { appLogger } from "./appLogger";
+import { CLIENT_INSTANCE_ID } from "./clientInstance";
 import { settingsStore } from "./settings";
 import { activatePaneExclusively, registerPaneDeactivator, tabOrderingStore } from "./tabManager";
 
@@ -691,11 +692,18 @@ function createTerminalsStore() {
 				}
 				setState("activeId", id);
 			});
+			// viewerId (B.8): this client's own id, so a browser tab blurring a
+			// session cannot SIGSTOP it out from under the desktop app's own
+			// still-live view of the same session (or vice versa) — visibility
+			// is now per-viewer, "visible" means visible to ANY of them. See
+			// AppState::is_session_visible's doc comment.
 			if (prevId && prevId !== id) {
-				rpc("set_session_visible", { sessionId: prevId, visible: false }).catch(() => {});
+				rpc("set_session_visible", { sessionId: prevId, visible: false, viewerId: CLIENT_INSTANCE_ID }).catch(
+					() => {},
+				);
 			}
 			if (id) {
-				rpc("set_session_visible", { sessionId: id, visible: true }).catch(() => {});
+				rpc("set_session_visible", { sessionId: id, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
 			}
 		},
 
