@@ -1107,6 +1107,12 @@ pub struct DictationConfig {
     /// speech never leaves the machine.
     #[serde(default)]
     pub hands_free_activation_phrase: String,
+    /// A speech engine the user supplies, as argv rather than a shell line.
+    /// Empty means the bundled engine. See
+    /// [`speech::external`](crate::dictation::speech::external) for the
+    /// markers and for what it means that this runs as the user.
+    #[serde(default)]
+    pub speech_command: Vec<String>,
 }
 
 fn default_model() -> String {
@@ -1155,6 +1161,7 @@ impl Default for DictationConfig {
             no_speech_threshold: default_no_speech_threshold(),
             hands_free_hold_back_ms: default_hold_back_ms(),
             hands_free_activation_phrase: String::new(),
+            speech_command: Vec::new(),
         }
     }
 }

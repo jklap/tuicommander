@@ -19,6 +19,7 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `continuous.rs` | Hands-free mode: utterance segmentation and session-bound delivery |
 | `speech.rs` | The speech port: `Speech`, `SpeechAudio`, `SpeechError`, `SpeechCancel`, `budget_seconds` — no engine named |
 | `speech/pocket/` | The Pocket TTS adapter: `pocket.rs` (the port impl), `bundle.rs` (manifest + streaming state), `tokenizer.rs` (SentencePiece Unigram), `engine.rs` (the four ONNX graphs) |
+| `speech/external.rs` | The bring-your-own-engine adapter: a configured command plus a RIFF/WAVE reader |
 
 ## Tauri Commands
 
@@ -66,7 +67,7 @@ Both transports serialize the same structs, camelCase on the wire:
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms` and `hands_free_activation_phrase`). Writes the whole document — see "Configuration persistence" |
+| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase` and `speech_command`). Writes the whole document — see "Configuration persistence" |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -590,3 +591,75 @@ letting a chunk mint audio the input never warranted.
 An `ort::Session` is driven by `&mut` while the port hands out `&self`, so the
 engine sits behind a mutex and synthesis serialises. One spoken reply at a
 time is the actual requirement, not a limitation.
+
+## Bring your own engine (`speech/external.rs`)
+
+The bundled bundles cover English, French, German, Italian, Portuguese and
+Spanish. Japanese, Chinese, Korean and Russian are not among them, and no
+engine stays the best one for long. `speech_command` in the dictation config
+makes the engine a setting: TUICommander hands a command the text and a path
+to write, and reads the audio back through the same port the bundled adapter
+implements. Neither adapter knows the other exists.
+
+### The template
+
+The command is **argv, not a shell line**. Three markers say where the pieces
+go, and each is replaced inside the argument that holds it — so
+`--output={out}` works as well as `-o {out}`.
+
+| Marker | Meaning |
+|---|---|
+| `{out}` | the file the command must write. **Required** |
+| `{text}` | the text to speak. Omit it and the text goes to the command's stdin instead |
+| `{voice}` | the voice identifier, as the engine spells it |
+
+Japanese, with [piper](https://github.com/rhasspy/piper) — a language the
+bundled engine does not reach:
+
+```json
+"speech_command": [
+  "piper",
+  "--model", "/Users/me/voices/ja_JP-test-medium.onnx",
+  "--output_file", "{out}"
+]
+```
+
+piper reads its text on stdin, so there is no `{text}`. macOS `say` takes it
+as an argument and names its voices, so both markers appear:
+
+```json
+"speech_command": [
+  "say", "-v", "{voice}", "-o", "{out}",
+  "--data-format=LEF32@22050", "{text}"
+]
+```
+
+### It runs as you
+
+**The configured command runs as the user who is running TUICommander, with
+that user's environment, permissions and files** — exactly like a shell alias
+they wrote. Nothing here sandboxes it, and nothing here should: the point of
+the setting is to run an engine the application does not know about.
+
+What the application does guarantee is narrower and worth stating exactly:
+no shell is involved. The command is spawned directly, so the transcribed
+text is one argument (or stdin), never part of a line something parses. A
+sentence containing `;` or a backtick is a sentence. A `{voice}` that is not a
+plain identifier is rejected as `UnknownVoice` before spawning, because that
+one does become argv.
+
+### Failure is never silence
+
+| What the command does | What the port returns |
+|---|---|
+| is not installed | `ModelUnavailable` naming the program |
+| has no `{out}`, or none is configured | `ModelUnavailable` naming what is missing, before anything is spawned |
+| exits non-zero | `Failed` with the exit status and the tail of its stderr |
+| exits 0 and writes nothing, or an empty file | `Failed` — the silent success this exists to prevent |
+| writes something that is not 16-bit PCM or 32-bit float WAVE | `Failed` naming the encoding it did write |
+| does not finish in time | `Failed`, after being killed. The budget is 30 s or four times the audio the text justifies, whichever is larger — a cold engine loads a model before it says the first word |
+| is abandoned mid-run | `Cancelled`, within a poll interval, with the child killed and reaped |
+| returns more audio than the text can justify | `Runaway`, at the same ceiling the bundled adapter stops itself at |
+
+Stereo is mixed down to mono rather than refused. `WAVE_FORMAT_EXTENSIBLE`
+headers are read through to the encoding inside them.

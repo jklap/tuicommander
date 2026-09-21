@@ -39,6 +39,26 @@ pub(crate) fn touch_script(path: &str) -> String {
     }
 }
 
+/// Copy a file. `cmd` has no `cp`, and its `copy` announces the file count on
+/// stdout unless it is silenced.
+pub(crate) fn copy_file_script(source: &str, destination: &str) -> String {
+    if cfg!(windows) {
+        format!("copy /y {source} {destination} >nul")
+    } else {
+        format!("cp {source} {destination}")
+    }
+}
+
+/// Run one script and then another, in one command line. `cmd` separates with
+/// `&`; in `sh` that would background the first.
+pub(crate) fn chain(first: &str, second: &str) -> String {
+    if cfg!(windows) {
+        format!("{first}& {second}")
+    } else {
+        format!("{first}; {second}")
+    }
+}
+
 /// Print an environment variable, or nothing when it is unset.
 pub(crate) fn print_var_script(key: &str) -> String {
     if cfg!(windows) {
