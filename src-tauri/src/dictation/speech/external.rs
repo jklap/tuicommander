@@ -168,7 +168,9 @@ impl Speech for ExternalSpeech {
         let workspace = tempfile::Builder::new()
             .prefix("tuic-speech-")
             .tempdir()
-            .map_err(|e| SpeechError::Failed(format!("no temporary directory for the audio: {e}")))?;
+            .map_err(|e| {
+                SpeechError::Failed(format!("no temporary directory for the audio: {e}"))
+            })?;
         let out = workspace.path().join("speech.wav");
         let argv = self.argv(text, voice, &out)?;
         let program = argv[0].clone();
@@ -212,7 +214,9 @@ impl Speech for ExternalSpeech {
         });
 
         let status = wait_for(&mut child, cancel, self.timeout_for(text), &program)?;
-        let stderr = stderr.and_then(|handle| handle.join().ok()).unwrap_or_default();
+        let stderr = stderr
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default();
 
         if !status.success() {
             return Err(SpeechError::Failed(format!(
@@ -235,8 +239,8 @@ impl Speech for ExternalSpeech {
                 stderr_tail(&stderr),
             )));
         }
-        let audio = decode_wav(&bytes)
-            .map_err(|e| SpeechError::Failed(format!("{program} wrote {e}")))?;
+        let audio =
+            decode_wav(&bytes).map_err(|e| SpeechError::Failed(format!("{program} wrote {e}")))?;
 
         let budget = budget_seconds(text);
         if audio.duration_seconds() > budget {
@@ -266,7 +270,9 @@ fn wait_for(
             Ok(None) => {}
             Err(e) => {
                 stop(child);
-                return Err(SpeechError::Failed(format!("{program} could not be waited on: {e}")));
+                return Err(SpeechError::Failed(format!(
+                    "{program} could not be waited on: {e}"
+                )));
             }
         }
         if cancel.is_cancelled() {
@@ -492,7 +498,9 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{chain, copy_file_script, fail_with_stderr_script, host_shell, sleep_script, touch_script};
+    use crate::test_support::{
+        chain, copy_file_script, fail_with_stderr_script, host_shell, sleep_script, touch_script,
+    };
 
     /// A RIFF/WAVE file, built the way an engine would write one.
     fn wav(encoding: u16, bits: u16, channels: u16, rate: u32, payload: &[u8]) -> Vec<u8> {
@@ -549,13 +557,19 @@ mod tests {
             panic!("expected a setup error, got {error:?}");
         };
         assert_eq!(what, "speech command");
-        assert!(reason.contains("{out}"), "the reason must name what is missing: {reason}");
+        assert!(
+            reason.contains("{out}"),
+            "the reason must name what is missing: {reason}"
+        );
     }
 
     #[test]
     fn an_unconfigured_engine_says_so_rather_than_spawning_nothing() {
         let error = ExternalSpeech::new(Vec::new()).unwrap_err();
-        assert!(matches!(error, SpeechError::ModelUnavailable { .. }), "{error:?}");
+        assert!(
+            matches!(error, SpeechError::ModelUnavailable { .. }),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -565,7 +579,10 @@ mod tests {
         let SpeechError::ModelUnavailable { reason, .. } = error else {
             panic!("expected a setup error");
         };
-        assert!(reason.contains("markers belong in the arguments"), "{reason}");
+        assert!(
+            reason.contains("markers belong in the arguments"),
+            "{reason}"
+        );
     }
 
     #[test]
@@ -611,7 +628,8 @@ mod tests {
 
     #[test]
     fn a_voice_the_template_asks_for_is_a_name_not_another_argument() {
-        let engine = ExternalSpeech::new(template(&["say", "-v", "{voice}", "-o", "{out}"])).unwrap();
+        let engine =
+            ExternalSpeech::new(template(&["say", "-v", "{voice}", "-o", "{out}"])).unwrap();
 
         let error = engine
             .argv("Ciao", "alba --rate 500", Path::new("/tmp/speech.wav"))
@@ -626,7 +644,11 @@ mod tests {
         // the empty string a UI with no voice picker would send.
         let engine = ExternalSpeech::new(template(&["piper", "--output={out}"])).unwrap();
 
-        assert!(engine.argv("Ciao", "", Path::new("/tmp/speech.wav")).is_ok());
+        assert!(
+            engine
+                .argv("Ciao", "", Path::new("/tmp/speech.wav"))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -717,7 +739,10 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_audio_is_named_rather_than_played() {
-        assert_eq!(decode_wav(b"<!DOCTYPE html>").unwrap_err(), WavError::NotRiff);
+        assert_eq!(
+            decode_wav(b"<!DOCTYPE html>").unwrap_err(),
+            WavError::NotRiff
+        );
         assert_eq!(decode_wav(b"RIF").unwrap_err(), WavError::Truncated);
     }
 
@@ -727,13 +752,22 @@ mod tests {
         // rather than "failed".
         let error = decode_wav(&wav(1, 24, 1, 16_000, &[0; 9])).unwrap_err();
 
-        assert_eq!(error, WavError::Unsupported { format: 1, bits: 24 });
+        assert_eq!(
+            error,
+            WavError::Unsupported {
+                format: 1,
+                bits: 24
+            }
+        );
         assert!(error.to_string().contains("24-bit"), "{error}");
     }
 
     #[test]
     fn a_header_with_no_samples_behind_it_is_not_silence_to_play() {
-        assert_eq!(decode_wav(&wav(1, 16, 1, 16_000, &[])).unwrap_err(), WavError::Empty);
+        assert_eq!(
+            decode_wav(&wav(1, 16, 1, 16_000, &[])).unwrap_err(),
+            WavError::Empty
+        );
         assert_eq!(
             decode_wav(&wav(1, 16, 0, 16_000, &pcm16(&[1, 2]))).unwrap_err(),
             WavError::Silent("no channels")
@@ -804,7 +838,10 @@ mod tests {
         let SpeechError::Failed(reason) = error else {
             panic!("expected a failure, got {error:?}");
         };
-        assert!(reason.contains("model not found"), "the engine's own words: {reason}");
+        assert!(
+            reason.contains("model not found"),
+            "the engine's own words: {reason}"
+        );
         assert!(reason.contains('3'), "and its exit status: {reason}");
     }
 
@@ -812,7 +849,8 @@ mod tests {
     fn a_command_that_succeeds_without_writing_anything_is_still_a_failure() {
         // The silent success this criterion exists to prevent: exit 0, no audio.
         let (shell, flag) = host_shell();
-        let engine = ExternalSpeech::new(template(&[shell, flag, &touch_script(OUT_MARKER)])).unwrap();
+        let engine =
+            ExternalSpeech::new(template(&[shell, flag, &touch_script(OUT_MARKER)])).unwrap();
 
         let error = engine
             .synthesize("Ciao", "any", &SpeechCancel::new())
