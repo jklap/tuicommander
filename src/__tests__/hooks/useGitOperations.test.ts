@@ -332,10 +332,15 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [
-					{ name: "Terminal 1", cwd: "/repo/wt", fontSize: 14, agentType: "claude" },
-					{ name: "Agent", cwd: "/repo/wt", fontSize: 12, agentType: "claude" },
-				] } },
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [
+							{ name: "Terminal 1", cwd: "/repo/wt", fontSize: 14, agentType: "claude" },
+							{ name: "Agent", cwd: "/repo/wt", fontSize: 12, agentType: "claude" },
+						],
+					},
+				},
 			});
 
 			await gitOps.handleBranchSelect("/repo", "feature");
@@ -353,10 +358,15 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [
-					{ name: "Shell 1", cwd: "/repo/wt", fontSize: 14, agentType: null },
-					{ name: "Shell 2", cwd: "/repo/wt", fontSize: 12, agentType: null },
-				] } },
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [
+							{ name: "Shell 1", cwd: "/repo/wt", fontSize: 14, agentType: null },
+							{ name: "Shell 2", cwd: "/repo/wt", fontSize: 12, agentType: null },
+						],
+					},
+				},
 			});
 
 			await gitOps.handleBranchSelect("/repo", "feature");
@@ -374,7 +384,12 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [{ name: "My Terminal", cwd: "/custom/path", fontSize: 16, agentType: "claude" }] } },
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [{ name: "My Terminal", cwd: "/custom/path", fontSize: 16, agentType: "claude" }],
+					},
+				},
 			});
 
 			await gitOps.handleBranchSelect("/repo", "feature");
@@ -393,15 +408,20 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [
-					{
-						name: "Claude Agent",
-						cwd: "/repo/wt",
-						fontSize: 14,
-						agentType: "claude",
-						agentLaunchCommand: "claude --project /repo/wt --model opus",
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [
+							{
+								name: "Claude Agent",
+								cwd: "/repo/wt",
+								fontSize: 14,
+								agentType: "claude",
+								agentLaunchCommand: "claude --project /repo/wt --model opus",
+							},
+						],
 					},
-				] } },
+				},
 			});
 
 			await gitOps.handleBranchSelect("/repo", "feature");
@@ -421,10 +441,15 @@ describe("useGitOperations", () => {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
 				terminals: [oldTermId1, oldTermId2],
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [
-					{ name: "Term 1", cwd: "/repo/wt", fontSize: 14, agentType: null },
-					{ name: "Term 2", cwd: "/repo/wt", fontSize: 14, agentType: null },
-				] } },
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [
+							{ name: "Term 1", cwd: "/repo/wt", fontSize: 14, agentType: null },
+							{ name: "Term 2", cwd: "/repo/wt", fontSize: 14, agentType: null },
+						],
+					},
+				},
 			});
 
 			// Simulate a disk-restored pane layout referencing old terminal IDs
@@ -472,10 +497,15 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [
-					{ name: "Claude", cwd: "/repo/wt", fontSize: 14, agentType: "claude" },
-					{ name: "Plain", cwd: "/repo/wt", fontSize: 14, agentType: null },
-				] } },
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [
+							{ name: "Claude", cwd: "/repo/wt", fontSize: 14, agentType: "claude" },
+							{ name: "Plain", cwd: "/repo/wt", fontSize: 14, agentType: null },
+						],
+					},
+				},
 			});
 
 			await gitOps.handleBranchSelect("/repo", "feature");
@@ -494,7 +524,12 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", {
 				worktreePath: "/repo",
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [{ name: "Saved", cwd: "/repo", fontSize: 14, agentType: null }] } },
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [{ name: "Saved", cwd: "/repo", fontSize: 14, agentType: null }],
+					},
+				},
 			});
 
 			// Add a live terminal
@@ -631,7 +666,12 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/repo", "feature", {
 				worktreePath: "/repo/wt",
 				hadTerminals: true,
-				savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: [{ name: "Claude", cwd: "/repo/wt", fontSize: 14, agentType: "claude" }] } },
+				savedTerminalsByClient: {
+					"test-client": {
+						savedAt: Date.now(),
+						terminals: [{ name: "Claude", cwd: "/repo/wt", fontSize: 14, agentType: "claude" }],
+					},
+				},
 			});
 
 			// Fire two selects concurrently — the second must wait for the first

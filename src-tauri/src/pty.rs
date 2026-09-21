@@ -6231,6 +6231,7 @@ struct ChunkProcessor {
     /// `None` = not yet captured; `Some(None)` = captured, and the base was
     /// itself no name). Lives exactly as long as the PTY (this struct is
     /// constructed once per session), so it needs no teardown reap.
+    #[allow(clippy::option_option)] // deliberate 3-state disambiguation, see doc comment above
     osc_title_base: Option<Option<String>>,
     /// Reusable screen snapshot handed to the post-lock consumers
     /// (`parse_slash_menu`, `parse_choice_prompt`, the question-dedup absence
@@ -6995,10 +6996,15 @@ impl ChunkProcessor {
                         self.title_awaiting = false;
                     }
                     TermEvent::ClipboardStore(text) => {
-                        #[cfg(feature = "desktop")]
-                        if let Some(a) = state.app_handle.read().as_ref() {
-                            let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
-                        }
+                        // Was a suffixed desktop-only `app.emit` with no bus
+                        // arm at all (D.7) — a browser/PWA client never saw
+                        // an OSC 52 clipboard-store. Converted to the
+                        // unsuffixed `PtyClipboardStore` variant so it can
+                        // ride SSE/WS like every other session-scoped event.
+                        state.emit_dual(crate::state::AppEvent::PtyClipboardStore {
+                            session_id: session_id.to_string(),
+                            text: text.clone(),
+                        });
                     }
                     TermEvent::RequestFocus => {
                         if state.config.read().osc1337_focus_attention {
@@ -11333,7 +11339,6 @@ pub(crate) async fn spawn_session_for_agent(
             shell: shell.clone(),
         }),
     );
-    state.assign_term_alias(&session_id, None);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -11370,12 +11375,17 @@ pub(crate) async fn spawn_session_for_agent(
     // second `session_maps` lookup) — one call now carries the same values
     // on both transports.
     emit_session_created(
-        &state,
+        state,
         &session_id,
         created_cwd,
         None, // no agent_type input on this orchestrated-spawn path
         created_display_name,
     );
+    // Assigned AFTER SessionCreated (not before, as this used to read) — a
+    // subscriber must see SessionCreated as the first event for a brand-new
+    // session_id; TermAliasAssigned now also dual-emits (C.3) and would
+    // otherwise race ahead of it.
+    state.assign_term_alias(&session_id, None);
 
     spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
@@ -12007,18 +12017,14 @@ pub(crate) fn wake_all_standby(state: &AppState) -> usize {
     parked.len()
 }
 
+/// Was desktop-only with no bus arm — a browser/PWA client never saw the
+/// standby badge at all (D.3).
 #[cfg(unix)]
 fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
-    #[cfg(feature = "desktop")]
-    if let Some(ref app) = *state.app_handle.read() {
-        let _ = app.emit(
-            "session-standby",
-            serde_json::json!({
-                "session_id": session_id,
-                "standby": standby,
-            }),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::SessionStandby {
+        session_id: session_id.to_string(),
+        standby,
+    });
 }
 
 /// SIGKILL the foreground process group of a PTY session.
@@ -12647,6 +12653,9 @@ pub(crate) struct ActiveSessionInfo {
     /// alias on reload either.
     #[serde(skip_serializing_if = "Option::is_none")]
     alias: Option<String>,
+    /// See `mcp_http::types::SessionInfo::standby`'s doc comment.
+    #[serde(default)]
+    standby: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<crate::state::SessionState>,
 }
@@ -12722,6 +12731,13 @@ fn list_active_sessions_impl(state: &AppState) -> Vec<ActiveSessionInfo> {
                     .term_aliases
                     .get(entry.key())
                     .map(|value| value.value().clone()),
+                #[cfg(unix)]
+                standby: state
+                    .session_maps
+                    .standby_sessions
+                    .contains_key(entry.key()),
+                #[cfg(not(unix))]
+                standby: false,
                 state: state.session_state_with_shell(entry.key()),
             }
         })

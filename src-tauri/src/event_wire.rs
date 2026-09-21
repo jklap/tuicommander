@@ -532,4 +532,261 @@ mod tests {
         };
         assert_eq!(window_event_name(&event), Some("session-closed"));
     }
+
+    /// D.11 (part 1) — table-driven wire-contract pin for every event this
+    /// desktop↔HTTP-parity plan added or changed the payload of. Asserts the
+    /// exact SSE `event:` name AND the exact JSON key set — a name pinned
+    /// without its keys would let a payload field silently rename/disappear
+    /// with nothing red.
+    #[test]
+    fn new_and_changed_events_have_the_documented_name_and_payload_keys() {
+        fn payload_keys(event: &AppEvent) -> Vec<String> {
+            let mut keys: Vec<String> = match event_payload(event) {
+                serde_json::Value::Object(map) => map.keys().cloned().collect(),
+                other => panic!("expected an object payload, got {other:?}"),
+            };
+            keys.sort_unstable();
+            keys
+        }
+
+        let cases: Vec<(AppEvent, &str, Vec<&str>)> = vec![
+            (
+                AppEvent::SessionStandby {
+                    session_id: "s".into(),
+                    standby: true,
+                },
+                "session-standby",
+                vec!["session_id", "standby"],
+            ),
+            (
+                AppEvent::AiSuggestion {
+                    session_id: "s".into(),
+                    trigger_reason: "idle".into(),
+                    proposed_goal: "keep going".into(),
+                },
+                "ai-suggestion",
+                vec!["proposed_goal", "session_id", "trigger_reason"],
+            ),
+            (
+                AppEvent::WatcherStatusChanged {
+                    id: "r1".into(),
+                    status: "paused".into(),
+                    fire_count: 3,
+                    session_id: Some("s".into()),
+                },
+                "watcher-status",
+                vec!["fire_count", "id", "session_id", "status"],
+            ),
+            (AppEvent::ThemesChanged, "themes-changed", vec![]),
+            (
+                AppEvent::PtyClipboardStore {
+                    session_id: "s".into(),
+                    text: "clip".into(),
+                },
+                "pty-clipboard-store",
+                vec!["session_id", "text"],
+            ),
+            (
+                AppEvent::TermAliasAssigned {
+                    session_id: "s".into(),
+                    alias: "tc-1".into(),
+                },
+                "term-alias-assigned",
+                vec!["alias", "session_id"],
+            ),
+            (
+                AppEvent::SessionClosed {
+                    session_id: "s".into(),
+                    reason: "closed".into(),
+                    agent_type: Some("claude".into()),
+                },
+                "session-closed",
+                vec!["agent_type", "reason", "session_id"],
+            ),
+        ];
+
+        for (event, expected_name, expected_keys) in cases {
+            let mut expected_keys: Vec<String> =
+                expected_keys.into_iter().map(String::from).collect();
+            expected_keys.sort_unstable();
+            assert_eq!(
+                event_type_name(&event),
+                expected_name,
+                "name mismatch for {event:?}"
+            );
+            assert_eq!(
+                payload_keys(&event),
+                expected_keys,
+                "payload key set mismatch for {event:?}"
+            );
+        }
+    }
+
+    /// D.11 (part 2) — no hand-rolled second `app.emit(...)` for any event this
+    /// plan converged onto `AppState::emit_dual`. A future edit that re-adds a
+    /// one-off desktop emit for one of these (bypassing `emit_dual`, and so
+    /// silently reintroducing desktop/SSE payload drift) fails here instead of
+    /// waiting for a bug report.
+    #[test]
+    fn no_stray_app_emit_literal_for_events_converged_onto_emit_dual() {
+        const CONVERGED_EVENTS: &[&str] = &[
+            "session-created",
+            "session-closed",
+            "session-standby",
+            "ai-suggestion",
+            "watcher-status",
+            "themes-changed",
+            "pty-clipboard-store",
+            "term-alias-assigned",
+        ];
+        // `event_wire.rs` (this file) legitimately names every one of these in
+        // its own match arms/doc comments; `state.rs` owns `emit_dual` itself,
+        // which calls `app.emit(name, ...)` with a *variable*, not a literal,
+        // so it can never match this pattern anyway — excluded only to keep
+        // the failure list free of misleading noise if that ever changes.
+        const EXCLUDE_FILES: &[&str] = &["event_wire.rs", "state.rs"];
+
+        fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_rs_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_dir, &mut files);
+        assert!(
+            files.len() > 50,
+            "only found {} .rs files — the walk looks broken",
+            files.len()
+        );
+
+        let mut offenders = Vec::new();
+        for path in files {
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if EXCLUDE_FILES.contains(&file_name) {
+                continue;
+            }
+            let Ok(contents) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for name in CONVERGED_EVENTS {
+                let needle = format!(".emit(\"{name}\"");
+                if contents.contains(&needle) {
+                    offenders.push(format!("{}: {needle}", path.display()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "found a hand-rolled app.emit(...) literal for an event that must go through \
+             AppState::emit_dual: {offenders:#?}"
+        );
+    }
+
+    /// D.11 — listener-side sibling of the COMMAND_TABLE → router parity gate
+    /// (`mcp_http::tests::command_table_paths_all_hit_a_registered_route`).
+    /// `frontend_listen_event_names.txt` is generated by
+    /// `src/__tests__/transport.test.ts` ("frontend listener → SSE arm parity
+    /// (D.11)") from every bare-string `listen("name", ...)` call across the
+    /// whole frontend. Every name in it must either be a real
+    /// `event_type_name` output (this file's own match arms, above) or be
+    /// explicitly allowlisted here as desktop-only, with a reason — mirrors
+    /// that test's own `DESKTOP_ONLY_EVENTS` set, which this list must stay
+    /// in sync with (this test does not cross-check the two lists against
+    /// each other; the TS-side test already guards against a name being in
+    /// both).
+    #[test]
+    fn frontend_listen_event_names_all_have_an_sse_arm_or_are_allowlisted() {
+        const NAMES: &str = include_str!("mcp_http/frontend_listen_event_names.txt");
+        let names: Vec<&str> = NAMES
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        assert!(
+            names.len() > 30,
+            "frontend_listen_event_names.txt yielded only {} names — regenerate it with \
+             `pnpm vitest run src/__tests__/transport.test.ts -u`",
+            names.len()
+        );
+
+        // Every RHS string literal `event_type_name`'s match arms can produce,
+        // extracted from this file's own source rather than duplicated by hand
+        // — the two would otherwise be free to drift silently.
+        let source = include_str!("event_wire.rs");
+        let known: std::collections::HashSet<&str> = source
+            .lines()
+            .filter_map(|line| {
+                let idx = line.find("=> \"")?;
+                let rest = &line[idx + 4..];
+                let end = rest.find('"')?;
+                Some(&rest[..end])
+            })
+            .collect();
+        assert!(
+            known.len() > 30,
+            "known event_type_name output set looked too small: {known:?}"
+        );
+
+        const DESKTOP_ONLY_EVENTS: &[&str] = &[
+            // Native menu bridge — OS menu bar, host-only.
+            "ctrl-tab",
+            "menu-action",
+            "file-open",
+            // DOM-level custom key-combo events, synthesized from raw native
+            // keydown — never touch the backend at all.
+            "fn-key-down",
+            "fn-key-up",
+            "native-key-down",
+            // Dictation — desktop-only local Whisper pipeline.
+            "dictation-backend-info",
+            "dictation-download-progress",
+            "dictation-partial",
+            // Content search streaming (fs.rs) — deliberately desktop-only: the
+            // HTTP route computes the same result and returns it in the
+            // response body instead of streaming.
+            "content-search-batch",
+            "content-search-error",
+            // Detached secondary-window bridge — multi-window management is a
+            // desktop-only concept.
+            "panel-action",
+            "panel-resync-request",
+            "panel-window-closed",
+            // FloatingTerminal.tsx's window-to-window `emitTo("main", ...)` —
+            // pure desktop multi-window IPC, no backend involvement at all.
+            "reattach-terminal",
+            // Screenshot capture request (`ui action=screenshot`) — targets the
+            // desktop window directly via `AppHandle.emit`, no meaning for a
+            // headless/browser client.
+            "screenshot-request",
+            // OS sleep/wake notification — host-level power-management signal.
+            "system-wake",
+            // Deliberately desktop-only (D.9): an IMPERATIVE event
+            // (auto-executes an agent/prompt) — dual-emitting it would make a
+            // desktop window and an open browser tab both execute the same
+            // fire.
+            "watcher-fire",
+        ];
+
+        let orphaned: Vec<&str> = names
+            .into_iter()
+            .filter(|name| !known.contains(name) && !DESKTOP_ONLY_EVENTS.contains(name))
+            .collect();
+        assert!(
+            orphaned.is_empty(),
+            "frontend listens for these events with no event_type_name arm and no \
+             DESKTOP_ONLY_EVENTS allowlist entry: {orphaned:#?}\n\
+             Add an AppEvent variant + event_type_name arm (AGENTS.md → IPC/HTTP Parity), \
+             or allowlist it here with a reason."
+        );
+    }
 }

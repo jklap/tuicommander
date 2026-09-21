@@ -405,7 +405,10 @@ describe("repositoriesStore remote sync", () => {
 			// deliberately not the race this test is about.
 			store.setWorkspace("/repo", "main", {
 				savedTerminalsByClient: {
-					"this-window": { savedAt: Date.now(), terminals: [{ name: "mine", cwd: "/repo", fontSize: 14, agentType: null }] },
+					"this-window": {
+						savedAt: Date.now(),
+						terminals: [{ name: "mine", cwd: "/repo", fontSize: 14, agentType: null }],
+					},
 				},
 			});
 			await vi.advanceTimersByTimeAsync(500);

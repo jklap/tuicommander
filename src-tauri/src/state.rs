@@ -2560,10 +2560,10 @@ impl AppState {
     /// entirely, so only the broadcast arm ever sees it.
     pub(crate) fn emit_dual(&self, event: AppEvent) {
         #[cfg(feature = "desktop")]
-        if let Some(name) = crate::event_wire::window_event_name(&event) {
-            if let Some(app) = self.app_handle.read().as_ref() {
-                let _ = app.emit(name, crate::event_wire::event_payload(&event));
-            }
+        if let Some(name) = crate::event_wire::window_event_name(&event)
+            && let Some(app) = self.app_handle.read().as_ref()
+        {
+            let _ = app.emit(name, crate::event_wire::event_payload(&event));
         }
         if event.pty_session_id().is_some() {
             self.emit_pty_event(event); // per-session lane + per-session WS + bus
@@ -3857,15 +3857,15 @@ impl AppState {
         let id = self.knowledge_entry(session_id).lock().record(outcome);
         self.ai.knowledge_dirty.insert(session_id.to_string(), ());
 
-        #[cfg(feature = "desktop")]
+        // Was desktop-only with no bus arm (D.4) — a browser/PWA client never
+        // saw a proposed next goal at all.
         if let Some(suggestion) = suggestion {
-            use tauri::Emitter as _;
-            if let Some(ref app) = *self.app_handle.read() {
-                let _ = app.emit("ai-suggestion", &suggestion);
-            }
+            self.emit_dual(AppEvent::AiSuggestion {
+                session_id: suggestion.session_id,
+                trigger_reason: suggestion.trigger_reason,
+                proposed_goal: suggestion.proposed_goal,
+            });
         }
-        #[cfg(not(feature = "desktop"))]
-        let _ = suggestion;
 
         id
     }

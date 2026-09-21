@@ -368,10 +368,15 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setWorkspace("/repo", "main", {
-					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [
-						{ name: "T1", cwd: "/repo", fontSize: 14, agentType: null },
-						{ name: "T2", cwd: "/repo", fontSize: 14, agentType: null },
-					] } },
+					savedTerminalsByClient: {
+						[TEST_CLIENT_ID]: {
+							savedAt: Date.now(),
+							terminals: [
+								{ name: "T1", cwd: "/repo", fontSize: 14, agentType: null },
+								{ name: "T2", cwd: "/repo", fontSize: 14, agentType: null },
+							],
+						},
+					},
 				});
 				store.addTerminalToWorkspace("/repo", "main", "term-1");
 				store.addTerminalToWorkspace("/repo", "main", "term-2");
@@ -528,7 +533,12 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setWorkspace("/repo", "old", {
-					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [{ name: "T", cwd: "/repo", fontSize: 14, agentType: null }] } },
+					savedTerminalsByClient: {
+						[TEST_CLIENT_ID]: {
+							savedAt: Date.now(),
+							terminals: [{ name: "T", cwd: "/repo", fontSize: 14, agentType: null }],
+						},
+					},
 				});
 				store.setWorkspace("/repo", "new", {});
 
@@ -543,10 +553,20 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setWorkspace("/repo", "old", {
-					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [{ name: "Old", cwd: "/repo", fontSize: 14, agentType: null }] } },
+					savedTerminalsByClient: {
+						[TEST_CLIENT_ID]: {
+							savedAt: Date.now(),
+							terminals: [{ name: "Old", cwd: "/repo", fontSize: 14, agentType: null }],
+						},
+					},
 				});
 				store.setWorkspace("/repo", "new", {
-					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [{ name: "Existing", cwd: "/repo", fontSize: 14, agentType: null }] } },
+					savedTerminalsByClient: {
+						[TEST_CLIENT_ID]: {
+							savedAt: Date.now(),
+							terminals: [{ name: "Existing", cwd: "/repo", fontSize: 14, agentType: null }],
+						},
+					},
 				});
 
 				store.mergeWorkspaceState("/repo", "old", "new");
@@ -902,10 +922,15 @@ describe("repositoriesStore", () => {
 						displayName: "Repo",
 						workspaces: {
 							main: {
-								savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [
-									{ name: "t1", cwd: null, fontSize: 12, agentType: "fx" },
-									{ name: "t2", cwd: null, fontSize: 12, agentType: "claude" },
-								] } },
+								savedTerminalsByClient: {
+									[TEST_CLIENT_ID]: {
+										savedAt: Date.now(),
+										terminals: [
+											{ name: "t1", cwd: null, fontSize: 12, agentType: "fx" },
+											{ name: "t2", cwd: null, fontSize: 12, agentType: "claude" },
+										],
+									},
+								},
 							},
 						},
 					},

@@ -2202,6 +2202,135 @@ describe("transport", () => {
 		});
 	});
 
+	/**
+	 * D.11 — the listener-side sibling of the COMMAND_TABLE → router gate above,
+	 * same two-language snapshot+probe shape: here we extract every bare-string
+	 * `listen("name", ...)` call in the frontend and snapshot the name set; in
+	 * Rust, a test in `event_wire.rs` reads that snapshot and asserts every name
+	 * either has a real `event_type_name` arm (so it can reach SSE/WS) or is
+	 * explicitly allowlisted as desktop-only, with a reason.
+	 *
+	 * Deliberately excludes the suffixed per-session form
+	 * (`` listen(`pty-foo-${id}`) ``) — that shape is already covered by the
+	 * "per-session Tauri event parity" describe block above, which checks it
+	 * against `pty.rs`/`state.rs`/`terminal_grid.rs` directly rather than the
+	 * generic `event_type_name` map.
+	 */
+	describe("frontend listener → SSE arm parity (D.11)", () => {
+		/**
+		 * Event names with a real static `listen("name", ...)` call and NO
+		 * `AppEvent`/`event_type_name` arm — each needs a one-line reason, the
+		 * same discipline as `INTENTIONALLY_UNMAPPED` above. Every entry here
+		 * was confirmed (via a grep of `src-tauri/src/`) to have no
+		 * `AppEvent` variant backing it at all, not merely no *listener* on
+		 * the SSE side.
+		 */
+		const DESKTOP_ONLY_EVENTS: ReadonlySet<string> = new Set<string>([
+			// Native menu bridge (useNativeMenuBridge.ts) — OS menu bar, host-only.
+			"ctrl-tab",
+			"menu-action",
+			"file-open",
+			// DOM-level custom key-combo events (KeyComboCapture.tsx /
+			// useNativeKeyCombo.ts / useDictationHotkey.ts) — synthesized from raw
+			// native keydown, never touch the backend at all.
+			"fn-key-down",
+			"fn-key-up",
+			"native-key-down",
+			// Dictation (stores/dictation.ts) — desktop-only local Whisper pipeline.
+			"dictation-backend-info",
+			"dictation-download-progress",
+			"dictation-partial",
+			// Content search streaming (fs.rs) — deliberately desktop-only: the
+			// HTTP route computes the same result and returns it in the response
+			// body instead of streaming, so a browser client never needs this
+			// event (see contentSearch.ts's own doc comment).
+			"content-search-batch",
+			"content-search-error",
+			// Detached secondary-window bridge (useDetachedPanelBridge.ts /
+			// panelSync.ts) — multi-window management is a desktop-only concept
+			// (mirrors `INTENTIONALLY_UNMAPPED`'s "open_panel_window" et al.).
+			"panel-action",
+			"panel-resync-request",
+			"panel-window-closed",
+			// FloatingTerminal.tsx's window-to-window `emitTo("main", ...)` — pure
+			// desktop multi-window IPC, no backend involvement at all.
+			"reattach-terminal",
+			// Screenshot capture request (mcp_transport.rs's `ui action=screenshot`)
+			// — targets the desktop window directly via `AppHandle.emit`, answered
+			// by a native window screenshot; no meaning for a headless/browser client.
+			"screenshot-request",
+			// OS sleep/wake notification (useTerminalCompletionNotifications.ts) —
+			// host-level power-management signal, host-only.
+			"system-wake",
+			// `watcher-fire` is deliberately desktop-only (D.9): it is an
+			// IMPERATIVE event (auto-executes an agent/prompt), so dual-emitting it
+			// would make a desktop window and an open browser tab both execute the
+			// same fire. Do not add an `event_type_name` arm for this.
+			"watcher-fire",
+		]);
+
+		/** Every bare-string (non-template-literal) `listen("name", ...)` call across all of `src/`. */
+		function extractStaticListenEventNames(): Map<string, string[]> {
+			const found = new Map<string, string[]>();
+			const add = (name: string, path: string) => {
+				const where = found.get(name) ?? [];
+				where.push(path.replace(`${process.cwd()}/`, ""));
+				found.set(name, where);
+			};
+			for (const { path, source } of collectFrontendSources()) {
+				for (const match of source.matchAll(/\blisten(?:<[^>]*>)?\(\s*["']([a-zA-Z0-9_-]+)["']/g)) {
+					add(match[1], path);
+				}
+			}
+			return found;
+		}
+
+		it("finds a substantial number of listeners — guards the guard", () => {
+			// If the extractor silently stopped matching, every test below would
+			// pass vacuously for having found nothing to check.
+			expect(extractStaticListenEventNames().size).toBeGreaterThan(30);
+		});
+
+		it("every listened-for name is either a real AppEvent or explicitly allowlisted as desktop-only", () => {
+			const knownAppEventNames = new Set(
+				[...readRepoFile("src-tauri/src/event_wire.rs").matchAll(/=>\s*"([a-z0-9-]+)"/g)].map((m) => m[1]),
+			);
+			expect(knownAppEventNames.size).toBeGreaterThan(30);
+
+			const orphaned = [...extractStaticListenEventNames().entries()].filter(
+				([name]) => !knownAppEventNames.has(name) && !DESKTOP_ONLY_EVENTS.has(name),
+			);
+			expect(
+				orphaned.map(
+					([name, where]) =>
+						`"${name}" (listened in ${where.join(", ")}) — add an event_type_name arm, or allowlist it in DESKTOP_ONLY_EVENTS with a reason`,
+				),
+			).toEqual([]);
+		});
+
+		it("does not allowlist a name that already has a real AppEvent arm (would be contradictory)", () => {
+			const knownAppEventNames = new Set(
+				[...readRepoFile("src-tauri/src/event_wire.rs").matchAll(/=>\s*"([a-z0-9-]+)"/g)].map((m) => m[1]),
+			);
+			const contradictory = [...DESKTOP_ONLY_EVENTS].filter((name) => knownAppEventNames.has(name));
+			expect(contradictory).toEqual([]);
+		});
+
+		it("snapshots the name set the Rust parity test reads", async () => {
+			const names = [...extractStaticListenEventNames().keys()].sort();
+			expect(names.length).toBeGreaterThan(30);
+			const body = [
+				"# Generated by src/__tests__/transport.test.ts — do not edit by hand.",
+				'# Every bare-string listen("name", ...) call found across src/.',
+				"# Read by event_wire::tests::frontend_listen_event_names_all_have_an_sse_arm_or_are_allowlisted.",
+				"# Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u",
+				...names,
+				"",
+			].join("\n");
+			await expect(body).toMatchFileSnapshot("../../src-tauri/src/mcp_http/frontend_listen_event_names.txt");
+		});
+	});
+
 	describe("rpc()", () => {
 		const originalFetch = globalThis.fetch;
 		const originalTauri = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;

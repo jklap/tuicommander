@@ -1301,16 +1301,15 @@ function createRepositoriesStore() {
 				// client's own key — another client's saved set describes tabs it still
 				// has open, unaffected by what closed in this window.
 				const updated = state.repositories[repoPath]?.workspaces[workspaceId];
-				if (updated && updated.terminals.length === 0 && updated.savedTerminalsByClient?.[CLIENT_INSTANCE_ID]?.terminals.length) {
-					setState(
-						"repositories",
-						repoPath,
-						"workspaces",
-						workspaceId,
-						"savedTerminalsByClient",
-						CLIENT_INSTANCE_ID,
-						{ savedAt: Date.now(), terminals: [] },
-					);
+				if (
+					updated &&
+					updated.terminals.length === 0 &&
+					updated.savedTerminalsByClient?.[CLIENT_INSTANCE_ID]?.terminals.length
+				) {
+					setState("repositories", repoPath, "workspaces", workspaceId, "savedTerminalsByClient", CLIENT_INSTANCE_ID, {
+						savedAt: Date.now(),
+						terminals: [],
+					});
 				}
 			});
 			save();
