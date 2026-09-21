@@ -276,9 +276,6 @@ pub enum AppEvent {
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
     PtyCwd { session_id: String, cwd: String },
-    /// Terminal title set (or reset to empty) through OSC 0/2.
-    #[serde(rename = "pty-title")]
-    PtyTitle { session_id: String, title: String },
     #[serde(rename = "pty-bell")]
     PtyBell { session_id: String },
     /// A user-confirmed OSC 1337 `OpenURL` request — the frontend should open
@@ -914,7 +911,6 @@ impl AppEvent {
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
             | AppEvent::ShellAbandoned { session_id, .. }
-            | AppEvent::PtyTitle { session_id, .. }
             | AppEvent::PtyBell { session_id }
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
@@ -2927,9 +2923,11 @@ impl AppState {
     pub(crate) fn emit_pty_event(&self, event: AppEvent) {
         // State is authoritative and sticky, so it gets a lossless lane. The
         // broadcast copies remain best-effort transports for live consumers.
-        // Titles are presentation only; do not grow the lossless state lane
-        // for an agent that animates its OSC title.
-        if !matches!(&event, AppEvent::PtyTitle { .. }) {
+        // Tab names are presentation only; do not grow the lossless state
+        // lane for an agent that animates its OSC title (each distinct title
+        // is a `SessionRenamed` from `osc_title::apply_osc_title`, which the
+        // accumulator ignores anyway).
+        if !matches!(&event, AppEvent::SessionRenamed { .. }) {
             self.session_maps.session_state_events.send(event.clone());
         }
         if let Some(sid) = event.pty_session_id()
@@ -5756,7 +5754,7 @@ impl AppState {
             // answers the different question "are bytes flowing right now", which
             // is true throughout a `tail -f` that produces no semantic event at
             // all. Folding the two would silently redefine the mobile column.
-            AppEvent::PtyActivity { .. } | AppEvent::PtyTitle { .. } | AppEvent::PtyBell { .. } => {}
+            AppEvent::PtyActivity { .. } | AppEvent::PtyBell { .. } => {}
             // Shell-integration markers and the OSC 7 cwd are terminal-rendering
             // signals, not session state. The cwd that state cares about is
             // written straight onto the `sessions` entry at the emit site; this
@@ -8178,6 +8176,8 @@ mod tests {
     }
 
     /// Catches: title animation re-stamps semantic activity or enters the lossless state queue.
+    /// (Retargeted from main's `PtyTitle` event, deleted by the backend OSC-title
+    /// move: an animated title now reaches clients as `SessionRenamed`.)
     #[test]
     fn remote_title_keeps_semantic_activity_and_state_queue_unchanged() {
         let state = Arc::new(tests_support::make_test_app_state());
@@ -8189,14 +8189,18 @@ mod tests {
                 ..Default::default()
             },
         );
-        let event = AppEvent::PtyTitle {
+        let event = AppEvent::SessionRenamed {
             session_id: "title-session".into(),
-            title: "Claude Code".into(),
+            name: "Claude Code".into(),
+            is_custom: false,
         };
         let mut bus = state.event_bus.subscribe();
         let before = state.session_maps.session_state_events.depth();
         state.emit_pty_event(event.clone());
-        assert!(matches!(bus.try_recv().unwrap(), AppEvent::PtyTitle { .. }));
+        assert!(matches!(
+            bus.try_recv().unwrap(),
+            AppEvent::SessionRenamed { .. }
+        ));
         assert_eq!(state.session_maps.session_state_events.depth(), before);
         AppState::apply_event_to_session_state(&state, &event);
         let session = state

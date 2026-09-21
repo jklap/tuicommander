@@ -689,8 +689,9 @@ through the production input bookkeeping for scenario captures and enforces them
 addition to the 1342 golden trace. Failed or absent agents remain unverified;
 no synthetic external transcripts substitute for captures.
 
-OSC 0/2 title notifications use the terminal event path (`PtyTitle`), separately
-from parsed lifecycle events. Desktop remote tabs consume parsed events on the
+OSC 0/2 titles are applied to the tab name by `osc_title.rs` on the terminal
+event path and published as `session-renamed`, separately from parsed lifecycle
+events. Desktop remote tabs consume parsed events on the
 owning daemon's WebSocket instead of subscribing to local IPC. Identity comes
 from the authoritative backend `agent_type`, not from a title heuristic.
 

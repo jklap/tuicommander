@@ -16702,11 +16702,19 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
 }
 
 /// Catches: OSC titles only emit on AppHandle, leaving headless remote tabs named shell.
+///
+/// Retargeted from main's raw `PtyTitle` bus event (deleted when OSC-title
+/// policy moved to the backend, `osc_title.rs`): the parser path now publishes
+/// the cleaned name as `SessionRenamed` on the bus — the event a headless or
+/// remote client hears — and an OSC reset restores the captured base name.
+#[cfg(unix)]
 #[test]
 fn remote_title_parser_publishes_title_and_reset() {
     let state = crate::state::tests_support::make_test_app_state();
     let sid = "remote-title";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
     agent_session(&state, sid, SHELL_IDLE);
+    assert!(state.set_session_display_name(sid, Some("shell".into()), false));
     state
         .grid
         .vt_log_buffers
@@ -16716,16 +16724,21 @@ fn remote_title_parser_publishes_title_and_reset() {
     let mut events = state.event_bus.subscribe();
     processor.process_chunk("\x1b]0;Claude Code\x07", &silence, sid, &state);
     processor.process_chunk("\x1b]2;\x07", &silence, sid, &state);
-    let titles: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+    let names: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
-            crate::state::AppEvent::PtyTitle { session_id, title } => {
+            crate::state::AppEvent::SessionRenamed {
+                session_id,
+                name,
+                is_custom,
+            } => {
                 assert_eq!(session_id, sid);
-                Some(title)
+                assert!(!is_custom, "an OSC title is never a custom rename");
+                Some(name)
             }
             _ => None,
         })
         .collect();
-    assert_eq!(titles, vec!["Claude Code", ""]);
+    assert_eq!(names, vec!["Claude Code", "shell"]);
 }
 
 #[cfg(unix)]

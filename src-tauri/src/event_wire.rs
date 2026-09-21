@@ -26,7 +26,6 @@ pub(crate) fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyExit { .. } => "pty-exit",
         AppEvent::PtyActivity { .. } => "pty-activity",
         AppEvent::ShellAbandoned { .. } => "shell-abandoned",
-        AppEvent::PtyTitle { .. } => "pty-title",
         AppEvent::PtyBell { .. } => "pty-bell",
         AppEvent::SessionFocusRequested { .. } => "session-focus-requested",
         AppEvent::UiActionRequested { .. } => "ui-action-requested",
@@ -151,9 +150,6 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyExit { session_id } => {
             serde_json::json!({ "session_id": session_id })
-        }
-        AppEvent::PtyTitle { session_id, title } => {
-            serde_json::json!({ "session_id": session_id, "title": title })
         }
         AppEvent::PtyBell { session_id } => serde_json::json!({ "session_id": session_id }),
         AppEvent::ShellAbandoned {
@@ -514,7 +510,6 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
 pub(crate) fn window_event_name(event: &AppEvent) -> Option<&str> {
     match event {
         AppEvent::PtyActivity { .. }
-        | AppEvent::PtyTitle { .. }
         | AppEvent::PluginWatcherLines { .. }
         | AppEvent::PtyParsed { .. }
         | AppEvent::PtyOsc133 { .. }

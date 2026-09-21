@@ -952,7 +952,14 @@ export async function initApp(deps: AppInitDeps) {
 	// back does not emit, so this cannot loop.
 	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
 		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
-		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
+		// Backend-originated (OSC title via osc_title.rs, tmux, MCP): the backend
+		// already holds this name, so it must not be echoed back as a rename.
+		if (termId)
+			terminalsStore.update(
+				termId,
+				{ name: event.payload.name, nameIsCustom: event.payload.is_custom },
+				{ echo: false },
+			);
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
 	listen<{ record: SuspendedSession; __tuic_origin?: unknown }>("session-suspended", (event) => {
