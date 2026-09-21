@@ -22,6 +22,7 @@ import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
+import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { displayTask } from "../../utils/activitySnapshot";
@@ -646,7 +647,7 @@ export const BranchItem: Component<{
 	const handleDoubleClick = (e: MouseEvent) => {
 		e.stopPropagation();
 		if (props.branch.isMain || props.branch.isShell) {
-			if (props.branch.savedTerminals?.length) return;
+			if (savedTerminalsFor(props.branch).length > 0) return;
 			props.onAddTerminal();
 		} else {
 			props.onRename();

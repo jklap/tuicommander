@@ -42,7 +42,7 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 		repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
 		repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 			worktreePath: "/Gits/alpha",
-			savedTerminals: savedTerminals as never,
+			savedTerminalsByClient: { "test-client": { savedAt: Date.now(), terminals: savedTerminals as never } },
 		});
 		repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
 		await createBranchSelectionCoordinator({
