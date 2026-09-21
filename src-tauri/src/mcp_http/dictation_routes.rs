@@ -286,7 +286,17 @@ pub(super) async fn get_dictation_config_http() -> impl IntoResponse {
 }
 
 pub(super) async fn set_dictation_config_http(
+    State(state): State<Arc<AppState>>,
     Json(config): Json<dictation::commands::DictationConfig>,
 ) -> Response {
-    json_result(dictation::commands::set_dictation_config(config))
+    // The state is passed when the app has it, so a language changed from a
+    // browser cancels the reply being spoken on the desktop. Before startup
+    // finishes there is no conversation to cancel, and the file is still
+    // written — the setting is not lost, it simply has nothing live to affect.
+    let app_handle = state.app_handle.read();
+    let dictation = app_handle.as_ref().map(|app| app.state::<DictationState>());
+    json_result(dictation::commands::save_dictation_config(
+        config,
+        dictation.as_deref(),
+    ))
 }

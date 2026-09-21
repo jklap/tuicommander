@@ -264,15 +264,21 @@ struct Shared {
 
 /// A reply queue bound to one armed conversation.
 ///
-/// The voice rides along because it is decided once, when the conversation is
-/// armed, from the dictation language — not per reply and not by the caller.
-/// A model that could choose its own voice could choose its own language, and
-/// then the reply no longer matches what the user is speaking.
+/// The voice rides along because it is decided from the language of the
+/// conversation — not per reply and not by the caller. A model that could
+/// choose its own voice could choose its own language, and then the reply no
+/// longer matches what the user is speaking.
 pub struct Armed {
     pub speaker: Arc<Speaker>,
     /// Empty for a user-supplied engine, which names its own voices inside its
     /// command template.
     pub voice: String,
+    /// The two-letter code this voice was opened for, and the reason the whole
+    /// struct is replaceable rather than built once: under Auto the language is
+    /// whatever the user turned out to be speaking, and a conversation that
+    /// changes language needs a queue that changes with it. Empty for a
+    /// user-supplied engine, which is not language-specific.
+    pub language: String,
 }
 
 /// The queue. Dropping it stops everything.
@@ -413,16 +419,10 @@ impl Speaker {
     }
 }
 
-/// Barge-in: the capture loop interrupts the reply the moment the user starts
-/// talking over it. It wants nothing back — the new turn reaches a model
-/// through the voice capability's `turn`, not through this call.
-impl super::continuous::Interruptible for Speaker {
-    fn hush(&self) {
-        // Named, not `self.hush()`: the inherent method wins that lookup today,
-        // and a reader should not have to know that to see this is not a loop.
-        Speaker::hush(self);
-    }
-}
+// Barge-in does not reach this type directly. The capture loop holds the
+// *slot* — `commands::ArmedSpeaker` — because under Auto the queue it has to
+// interrupt is built on the first turn, long after the loop started, and a port
+// bound to one `Speaker` would be bound to a queue that did not exist yet.
 
 impl Drop for Speaker {
     fn drop(&mut self) {

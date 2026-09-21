@@ -357,10 +357,10 @@ mod tests {
             _gates: VoiceGates,
         ) -> Result<TranscribeResult, String> {
             self.call_count.fetch_add(1, Ordering::Relaxed);
-            Ok(TranscribeResult {
-                text: format!("{}samples", audio.len()),
-                skip_reason: None,
-            })
+            Ok(TranscribeResult::heard(
+                format!("{}samples", audio.len()),
+                Some("it".to_string()),
+            ))
         }
     }
 
@@ -374,10 +374,7 @@ mod tests {
             _language: Option<&str>,
             _gates: VoiceGates,
         ) -> Result<TranscribeResult, String> {
-            Ok(TranscribeResult {
-                text: String::new(),
-                skip_reason: Some("silence".to_string()),
-            })
+            Ok(TranscribeResult::skipped("silence"))
         }
     }
 

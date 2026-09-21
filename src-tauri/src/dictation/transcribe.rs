@@ -46,6 +46,52 @@ pub struct TranscribeResult {
     pub text: String,
     /// Human-readable reason when text is empty (None when transcription succeeded).
     pub skip_reason: Option<String>,
+    /// The language this was recognised as, as a two-letter code.
+    ///
+    /// The requested one when the caller named a language, and the one Whisper
+    /// chose when it asked for `auto` — the same field either way, because
+    /// everything downstream needs "what language is this turn", not "who
+    /// decided". `None` when nothing was transcribed, and when whisper reports
+    /// an id that maps to no code.
+    ///
+    /// There is no confidence with it. `whisper_full_lang_id_from_state` hands
+    /// back the id and nothing else, so an ambiguous detection is
+    /// indistinguishable from a certain one on this path; the probabilities
+    /// live behind `WhisperState::lang_detect`, which needs its own mel and
+    /// encoder pass and would double the cost of every utterance. Treat a
+    /// `Some` as "this is what whisper decided", not as "this is certainly the
+    /// language" — a caller that needs a threshold has to pay for that pass.
+    pub language: Option<String>,
+}
+
+impl TranscribeResult {
+    /// Nothing was transcribed, and here is why.
+    pub(super) fn skipped(reason: impl Into<String>) -> Self {
+        Self {
+            text: String::new(),
+            skip_reason: Some(reason.into()),
+            language: None,
+        }
+    }
+
+    /// Somebody said this, in this language.
+    pub(super) fn heard(text: String, language: Option<String>) -> Self {
+        Self {
+            text,
+            skip_reason: None,
+            language,
+        }
+    }
+}
+
+/// The language whisper used for the pass that just ran.
+///
+/// Reads the id off the state rather than echoing the requested language: with
+/// `auto` there is nothing to echo, and with a fixed language the two agree, so
+/// one source answers both cases.
+fn language_of_last_pass(state: &WhisperState) -> Option<String> {
+    let id = state.full_lang_id_from_state();
+    whisper_rs::get_lang_str(id).map(str::to_string)
 }
 
 /// The two thresholds that decide whether captured audio is speech at all.
@@ -242,20 +288,16 @@ impl Transcriber for WhisperTranscriber {
         gates: VoiceGates,
     ) -> Result<TranscribeResult, String> {
         if audio.is_empty() {
-            return Ok(TranscribeResult {
-                text: String::new(),
-                skip_reason: Some("no audio captured".to_string()),
-            });
+            return Ok(TranscribeResult::skipped("no audio captured"));
         }
 
         let duration_s = audio.len() as f64 / 16000.0;
 
         // Minimum 0.5s of audio (8000 samples at 16kHz)
         if audio.len() < 8000 {
-            return Ok(TranscribeResult {
-                text: String::new(),
-                skip_reason: Some(format!("too short ({duration_s:.1}s, need 0.5s)")),
-            });
+            return Ok(TranscribeResult::skipped(format!(
+                "too short ({duration_s:.1}s, need 0.5s)"
+            )));
         }
 
         // Reject silent/near-silent audio to prevent hallucinations.
@@ -263,10 +305,9 @@ impl Transcriber for WhisperTranscriber {
         let rms = (audio.iter().map(|s| s * s).sum::<f32>() / audio.len() as f32).sqrt();
         if rms < gates.rms_threshold {
             let floor = gates.rms_threshold;
-            return Ok(TranscribeResult {
-                text: String::new(),
-                skip_reason: Some(format!("no speech detected (RMS {rms:.6} < {floor:.6})")),
-            });
+            return Ok(TranscribeResult::skipped(format!(
+                "no speech detected (RMS {rms:.6} < {floor:.6})"
+            )));
         }
 
         let mut state = self.state.lock();
@@ -313,27 +354,23 @@ impl Transcriber for WhisperTranscriber {
             SegmentFilter::Speech(text) => text,
             SegmentFilter::AllNoSpeech(worst_no_speech) => {
                 let thold = gates.no_speech_threshold;
-                return Ok(TranscribeResult {
-                    text: String::new(),
-                    skip_reason: Some(format!(
-                        "no speech detected (no_speech {worst_no_speech:.2} > {thold:.2})"
-                    )),
-                });
+                return Ok(TranscribeResult::skipped(format!(
+                    "no speech detected (no_speech {worst_no_speech:.2} > {thold:.2})"
+                )));
             }
         };
 
         // Filter known hallucination phrases that Whisper produces on near-silence
         if is_hallucination(&result) {
-            return Ok(TranscribeResult {
-                text: String::new(),
-                skip_reason: Some(format!("filtered hallucination: \"{result}\"")),
-            });
+            return Ok(TranscribeResult::skipped(format!(
+                "filtered hallucination: \"{result}\""
+            )));
         }
 
-        Ok(TranscribeResult {
-            text: result,
-            skip_reason: None,
-        })
+        Ok(TranscribeResult::heard(
+            result,
+            language_of_last_pass(&state),
+        ))
     }
 }
 

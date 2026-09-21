@@ -1114,6 +1114,13 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Speech belongs to a conversation, not to the application. A model reaches it through the `voice` MCP tool and may drive only the conversation armed for its own terminal; a connection bound to no terminal is refused rather than allowed to speak into whichever conversation happens to be armed.
 - The `voice` tool is always listed, on every build, and answers `available: false` with a reason when it cannot speak — discovery does not depend on tool-list change notifications, which not every client acts on.
 
+### 9.9 One language, end to end
+- **The dictation language decides everything**: what Whisper transcribes, which language the model is told to answer in, and which voice speaks the answer. There is no separate speech language and the model cannot override it.
+- Every hands-free turn reaches the model as `<what you said> (reply in <Language>)`. It is part of the queued entry, so turning optional hints off does not remove it.
+- With **Auto**, the language is the one Whisper actually detected, and it is shown. Before the first turn there is none — spoken replies are unavailable and say so, rather than falling back to English.
+- A language TUICommander transcribes but ships no voice for is **named, never substituted**: the status says which bundle is missing instead of answering in a language the user is not speaking.
+- Changing the language **stops the reply written for the previous one** mid-sentence. Changing any other dictation setting leaves the voice alone.
+
 ---
 
 ## 10. Prompt Library

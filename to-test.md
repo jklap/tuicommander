@@ -3011,3 +3011,40 @@ Until then only the last two items are checkable.
 - [ ] In Claude Code connected to this build, `voice` must appear in the tool
       list on a fresh connection without any list-change notification, and
       `action=status` must answer rather than erroring.
+
+## One language, end to end (story `822-7d7a`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+The first four items need the `speech-voices-v1` release, for the same reason as
+the block above: without an installed bundle there is no voice to listen to. The
+rest are checkable now, and the point of every one of them is the same — the
+model must never answer in a language the user is not speaking.
+
+- [ ] Set Dictation language to **Italian**, arm hands-free, and say something in
+      Italian. The terminal entry must read `<what you said> (reply in Italian)`,
+      on one line, and the agent must answer **in Italian**. Instruction
+      delivery is not the proof: read the agent's reply.
+- [ ] With the same setup, listen to the spoken reply. It must be the Italian
+      voice reading Italian — not Italian text read by another language's voice,
+      and not an English sentence.
+- [ ] Set the language to **Auto** and disarm/re-arm. Before you say anything,
+      `curl 'localhost:9877/dictation/speech/status'` must answer
+      `available: false`, `language: ""` and a reason naming Auto. Nothing may be
+      spoken in this state.
+- [ ] Still on Auto, say something in Italian. `status` must then report
+      `language: "it"`, and the entry must carry `(reply in Italian)`. Say the
+      next turn in **English**: the entry must carry `(reply in English)` and the
+      agent must switch with it.
+- [ ] Set the language to **Korean** (transcribed, no voice bundle) and arm.
+      `status` must answer `available: false` with
+      `No speech bundle ships for language "ko"`. It must **not** fall back to
+      the Italian voice.
+- [ ] While a reply is being spoken, change the Dictation language in Settings.
+      The speaker must stop mid-sentence and `status` must report the new
+      language. Then change only the **RMS threshold** while another reply
+      plays: that one must keep playing to the end.
+- [ ] Turn the hands-free entry/exit hints **off** (story 821's setting, when it
+      lands) and repeat the first item. The `(reply in …)` requirement must still
+      be in the entry — it is not a hint.
+- [ ] In the armed terminal's Claude Code, `voice action=status` must report
+      `language`, and the tool schema must offer no way to pass a language or a
+      voice.

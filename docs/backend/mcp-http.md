@@ -642,6 +642,15 @@ collapsed paths reach the same handler with the same identity;
 `voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths` asserts
 both produce byte-identical answers, bound and unbound.
 
+The schema takes `action`, `text`, `turn` and `utterance_id` — **no language and
+no voice**, and `a_model_cannot_choose_the_language_or_the_voice_it_is_spoken_in`
+pins that list. Both come from the conversation: the dictation language when it
+names one, and what Whisper detected under `auto`, reported as
+`status.language`. A model that could pass either would be a second source, and
+the two would disagree the first time the user switched languages. The
+description says so as well as the schema preventing it, because a model that is
+merely blocked writes its reply in English and wonders why it sounds Italian.
+
 This table is generated from the same `*_ACTIONS` constants the schemas use, and
 `every_documented_action_constant_matches_schema_and_description` keeps the three
 in step: the constant, the `action` enum in the schema, and a documenting line in
