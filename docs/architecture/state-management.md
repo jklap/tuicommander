@@ -138,9 +138,9 @@ contributor meets first; it is not the full inventory.
 ```
 repositoriesStore
     │
-    ├── BranchState.terminals: string[]  ──references──> terminalsStore IDs
-    ├── BranchState.worktreePath         ──managed by──> worktree.rs
-    └── BranchState.additions/deletions  ──from──> git.rs (get_diff_stats)
+    ├── WorkspaceState.terminals: string[]  ──references──> terminalsStore IDs
+    ├── WorkspaceState.worktreePath         ──managed by──> worktree.rs
+    └── WorkspaceState.additions/deletions  ──from──> git.rs (get_diff_stats)
 
 terminalsStore
     │

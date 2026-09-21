@@ -2479,6 +2479,63 @@ mod tests {
         );
     }
 
+    /// Direct invariant test for the ordering fix documented in the root
+    /// `AGENTS.md` ("SessionCreated must be the first event..."): three
+    /// `mcp_transport.rs` tests caught this bug incidentally (each asserting
+    /// something else about their own call path), but none of them named the
+    /// invariant itself, so a future refactor of THOSE tests could silently
+    /// stop guarding it. This one exercises `register_pty_session` directly
+    /// and asserts nothing but ordering.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn register_pty_session_emits_session_created_before_term_alias_assigned() {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        let state = super::super::tests::test_state();
+        let session_id = "ordering-invariant-session";
+        let mut rx = state.event_bus.subscribe();
+
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let child = pair.slave.spawn_command(command).expect("spawn shell");
+        let writer = pair.master.take_writer().expect("writer");
+        let session = crate::state::PtySession {
+            writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
+            master: pair.master,
+            _child: child,
+            paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            worktree: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        };
+
+        register_pty_session(&state, session_id, session, 24, 80, None, None, true);
+
+        let mut seen = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            seen.push(crate::event_wire::event_type_name(&event).to_string());
+            if seen.len() >= 2 {
+                break;
+            }
+        }
+        assert_eq!(
+            seen,
+            vec!["session-created", "term-alias-assigned"],
+            "SessionCreated must precede TermAliasAssigned for a brand-new session"
+        );
+    }
+
     /// Regression for the tab-name-flapping bug: the frontend's `update()`
     /// echoes any `name`/`nameIsCustom` change back to `set_session_name`
     /// (so a reconnect can distinguish a user-protected rename from a

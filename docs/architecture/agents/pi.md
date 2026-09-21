@@ -73,8 +73,10 @@ glyph, repainted every 120ms while working:
 
 TUIC does **not** derive activity from this title: the screen adapter already owns the
 busy→idle transition, and a second path for the same transition is a race, not a safety net.
-The title only feeds the tab name, and `cleanOscTitle` strips the glyph **and** the `|` separator
-it sits on so every spinner frame collapses to one stable name (`π | tuicommander`).
+The title only feeds the tab name, and `osc_title::clean_osc_title` (moved to the Rust backend
+so it applies on every transport, not just desktop — see `src-tauri/src/osc_title.rs`) strips the
+glyph **and** the `|` separator it sits on so every spinner frame collapses to one stable name
+(`π | tuicommander`).
 
 ## Input
 
