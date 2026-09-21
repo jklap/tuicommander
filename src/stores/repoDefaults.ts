@@ -24,6 +24,7 @@ export interface RepoDefaults {
 	baseBranch: string;
 	copyIgnoredFiles: boolean;
 	copyUntrackedFiles: boolean;
+	warmIgnoredDirectories: boolean;
 	setupScript: string;
 	runScript: string;
 	archiveScript: string;
@@ -43,6 +44,10 @@ const INITIAL_DEFAULTS: RepoDefaults = {
 	baseBranch: "automatic",
 	copyIgnoredFiles: false,
 	copyUntrackedFiles: false,
+	// Pure opt-out (unlike the two copy toggles above): warming already always ran
+	// before this setting existed, so the default must stay `true` or every
+	// existing repo would silently lose warming the moment this ships.
+	warmIgnoredDirectories: true,
 	setupScript: "",
 	runScript: "",
 	archiveScript: "",
@@ -62,6 +67,7 @@ type RepoDefaultsConfig = {
 	base_branch?: string;
 	copy_ignored_files?: boolean;
 	copy_untracked_files?: boolean;
+	warm_ignored_directories?: boolean;
 	setup_script?: string;
 	run_script?: string;
 	archive_script?: string;
@@ -87,6 +93,7 @@ function createRepoDefaultsStore() {
 			baseBranch: loaded.base_branch ?? INITIAL_DEFAULTS.baseBranch,
 			copyIgnoredFiles: loaded.copy_ignored_files ?? INITIAL_DEFAULTS.copyIgnoredFiles,
 			copyUntrackedFiles: loaded.copy_untracked_files ?? INITIAL_DEFAULTS.copyUntrackedFiles,
+			warmIgnoredDirectories: loaded.warm_ignored_directories ?? INITIAL_DEFAULTS.warmIgnoredDirectories,
 			setupScript: loaded.setup_script ?? INITIAL_DEFAULTS.setupScript,
 			runScript: loaded.run_script ?? INITIAL_DEFAULTS.runScript,
 			archiveScript: loaded.archive_script ?? INITIAL_DEFAULTS.archiveScript,
@@ -109,6 +116,7 @@ function createRepoDefaultsStore() {
 			base_branch: state.baseBranch,
 			copy_ignored_files: state.copyIgnoredFiles,
 			copy_untracked_files: state.copyUntrackedFiles,
+			warm_ignored_directories: state.warmIgnoredDirectories,
 			setup_script: state.setupScript,
 			run_script: state.runScript,
 			archive_script: state.archiveScript,
@@ -167,6 +175,11 @@ function createRepoDefaultsStore() {
 
 		setCopyUntrackedFiles(value: boolean): void {
 			setState("copyUntrackedFiles", value);
+			save();
+		},
+
+		setWarmIgnoredDirectories(value: boolean): void {
+			setState("warmIgnoredDirectories", value);
 			save();
 		},
 
