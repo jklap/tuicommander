@@ -789,14 +789,16 @@ pub(crate) fn hands_free_status(dictation: &DictationState) -> HandsFreeStatus {
     }
 }
 
-/// Take the configured hold-back into the mode. A no-op while armed — see
-/// `HandsFree::set_hold_back_ms`.
-pub(crate) fn apply_hold_back_from_config(dictation: &DictationState) {
-    let hold_back_ms = get_dictation_config().hands_free_hold_back_ms;
-    dictation
-        .hands_free
-        .lock()
-        .set_hold_back_ms(hold_back_ms.into());
+/// Take the settings the mode reads into it, in one config load. Both are
+/// no-ops while armed — see `HandsFree::set_hold_back_ms`.
+pub(crate) fn apply_config_to_mode(dictation: &DictationState) {
+    let config = get_dictation_config();
+    let mut mode = dictation.hands_free.lock();
+    mode.set_hold_back_ms(config.hands_free_hold_back_ms.into());
+    mode.set_activation(
+        &config.hands_free_activation_phrase,
+        continuous::ACTIVATION_WINDOW_MS,
+    );
 }
 
 fn check_binding_field(value: &str, label: &str) -> Result<(), String> {
@@ -963,7 +965,7 @@ pub(crate) fn arm_hands_free_with(
     // already spent.
     let endpoint = open_endpoint(dictation, owner)?;
 
-    apply_hold_back_from_config(dictation);
+    apply_config_to_mode(dictation);
     let armed = dictation
         .hands_free
         .lock()
@@ -1098,6 +1100,13 @@ pub struct DictationConfig {
     /// config written before hands-free existed takes the default instead.
     #[serde(default = "default_hold_back_ms")]
     pub hands_free_hold_back_ms: u32,
+    /// Optional activation phrase for hands-free dictation. Empty means every
+    /// recognised utterance is a turn. Set, it must open each new turn: the
+    /// match runs locally on the whisper transcript and the phrase is removed
+    /// before anything is submitted, so a model never reads it and unrelated
+    /// speech never leaves the machine.
+    #[serde(default)]
+    pub hands_free_activation_phrase: String,
 }
 
 fn default_model() -> String {
@@ -1145,6 +1154,7 @@ impl Default for DictationConfig {
             rms_threshold: default_rms_threshold(),
             no_speech_threshold: default_no_speech_threshold(),
             hands_free_hold_back_ms: default_hold_back_ms(),
+            hands_free_activation_phrase: String::new(),
         }
     }
 }
@@ -1262,6 +1272,28 @@ mod tests {
         panic!("the hands-free runtime never parked a voice entry");
     }
 
+    /// Whether a voice entry turns up inside `window`. Used for the assertion
+    /// that none does; the caller measures the window rather than guessing it.
+    fn voice_entry_within(
+        state: &crate::state::AppState,
+        session_id: &str,
+        window: std::time::Duration,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + window;
+        while std::time::Instant::now() < deadline {
+            let present = state.pending_injections.get(session_id).is_some_and(|queue| {
+                queue
+                    .iter()
+                    .any(|entry| entry.voice_generation().is_some())
+            });
+            if present {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+
     /// Both halves of a binding are attacker-shaped input on the HTTP transport:
     /// a remote client names the session and the owner. Neither may be empty,
     /// and neither may be unbounded — the owner string is retained for as long
@@ -1371,7 +1403,7 @@ mod tests {
         .expect("config save");
         let dictation = DictationState::new();
 
-        apply_hold_back_from_config(&dictation);
+        apply_config_to_mode(&dictation);
 
         assert_eq!(hands_free_status(&dictation).hold_back_ms, 4_000);
     }
@@ -1389,6 +1421,76 @@ mod tests {
 
         assert_eq!(config.hands_free_hold_back_ms, default_hold_back_ms());
         assert!(config.hands_free_hold_back_ms > 0);
+        assert!(
+            config.hands_free_activation_phrase.is_empty(),
+            "an upgrade may not start gating speech the user never configured"
+        );
+    }
+
+    /// The activation phrase is a setting, and arming is what reads it. The
+    /// whole gate is dead code if this wiring is missing, which is exactly the
+    /// shape of a matcher with no caller.
+    #[cfg(unix)]
+    #[test]
+    fn a_configured_activation_phrase_decides_which_speech_reaches_the_queue() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        set_dictation_config(DictationConfig {
+            hands_free_activation_phrase: "ciao tuic".to_string(),
+            hands_free_hold_back_ms: 100,
+            ..Default::default()
+        })
+        .expect("config save");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-gate", crate::pty::SHELL_BUSY);
+        crate::test_support::insert_recording_session(&state, "voice-gate");
+
+        // The addressed half first, and timed: the gate decides in the same
+        // tick as the transcription, so how long an accepted turn takes to
+        // appear on this machine bounds how long a rejected one could.
+        let dictation = DictationState::new();
+        let armed = arm_hands_free_with(
+            &state,
+            &dictation,
+            "voice-gate",
+            "desktop",
+            &scripted_endpoint("Ciao Tuic, run the tests"),
+        )
+        .expect("arm");
+        let started = std::time::Instant::now();
+        let voice_id = wait_for_voice_entry(&state, "voice-gate", armed.hold_back_ms);
+        let accepted_in = started.elapsed();
+        let text = state
+            .pending_injections
+            .get("voice-gate")
+            .expect("queue")
+            .iter()
+            .find(|entry| entry.id() == voice_id)
+            .map(|entry| entry.text().to_string())
+            .expect("the queued entry");
+        assert_eq!(
+            text, "run the tests",
+            "the phrase addresses the tool and may not reach the model"
+        );
+        disarm_hands_free(&state, &dictation);
+
+        // The same pipeline, same session, unrelated speech: recognised
+        // locally, then dropped.
+        let dictation = DictationState::new();
+        arm_hands_free_with(
+            &state,
+            &dictation,
+            "voice-gate",
+            "desktop",
+            &scripted_endpoint("cancella tutto il repository"),
+        )
+        .expect("arm");
+        let window = (accepted_in * 5).max(std::time::Duration::from_secs(2));
+        assert!(
+            !voice_entry_within(&state, "voice-gate", window),
+            "speech without the activation phrase must not reach the Compose queue"
+        );
+        disarm_hands_free(&state, &dictation);
     }
 
     /// The whole feature, once, against a real session: arm binds, the status

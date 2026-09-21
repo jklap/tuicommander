@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
@@ -577,10 +579,15 @@ describe("dictationStore", () => {
 			mockInvoke.mockResolvedValueOnce(undefined);
 
 			await testInScopeAsync(async () => {
+				// The setters are fire-and-forget by design, and `saveConfig`
+				// now reads the stored config before writing it, so the save
+				// lands a microtask later rather than inside the call.
 				store.setEnabled(true);
-				expect(mockInvoke).toHaveBeenCalledWith(
-					"set_dictation_config",
-					expect.objectContaining({ config: expect.objectContaining({ enabled: true }) }),
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith(
+						"set_dictation_config",
+						expect.objectContaining({ config: expect.objectContaining({ enabled: true }) }),
+					),
 				);
 			});
 		});
@@ -592,9 +599,11 @@ describe("dictationStore", () => {
 
 			await testInScopeAsync(async () => {
 				store.setHotkey("F8");
-				expect(mockInvoke).toHaveBeenCalledWith(
-					"set_dictation_config",
-					expect.objectContaining({ config: expect.objectContaining({ hotkey: "F8" }) }),
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith(
+						"set_dictation_config",
+						expect.objectContaining({ config: expect.objectContaining({ hotkey: "F8" }) }),
+					),
 				);
 			});
 		});
@@ -617,9 +626,11 @@ describe("dictationStore", () => {
 
 			await testInScopeAsync(async () => {
 				store.setLanguage("fr");
-				expect(mockInvoke).toHaveBeenCalledWith(
-					"set_dictation_config",
-					expect.objectContaining({ config: expect.objectContaining({ language: "fr" }) }),
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith(
+						"set_dictation_config",
+						expect.objectContaining({ config: expect.objectContaining({ language: "fr" }) }),
+					),
 				);
 			});
 		});
@@ -631,9 +642,13 @@ describe("dictationStore", () => {
 
 			await testInScopeAsync(async () => {
 				store.setDevice("USB Microphone");
-				expect(mockInvoke).toHaveBeenCalledWith(
-					"set_dictation_config",
-					expect.objectContaining({ config: expect.objectContaining({ device: "USB Microphone" }) }),
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith(
+						"set_dictation_config",
+						expect.objectContaining({
+							config: expect.objectContaining({ device: "USB Microphone" }),
+						}),
+					),
 				);
 			});
 		});
@@ -643,9 +658,11 @@ describe("dictationStore", () => {
 
 			await testInScopeAsync(async () => {
 				store.setDevice(null);
-				expect(mockInvoke).toHaveBeenCalledWith(
-					"set_dictation_config",
-					expect.objectContaining({ config: expect.objectContaining({ device: null }) }),
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith(
+						"set_dictation_config",
+						expect.objectContaining({ config: expect.objectContaining({ device: null }) }),
+					),
 				);
 			});
 		});
@@ -659,6 +676,83 @@ describe("dictationStore", () => {
 			await testInScopeAsync(async () => {
 				await store.downloadModel("small");
 				expect(store.state.downloading).toBe(false);
+				consoleSpy.mockRestore();
+			});
+		});
+	});
+
+	/**
+	 * `set_dictation_config` takes the whole config object as its body and
+	 * `save` writes it wholesale, so a caller that rebuilds that object from a
+	 * hand-written list resets every field it forgot. Rust cannot refuse the
+	 * payload: every hands-free field carries `#[serde(default)]`, because a
+	 * config written before the field existed has to load. So a dropped field
+	 * is not an error anywhere — the setting just silently reverts.
+	 *
+	 * It has already happened twice. `hands_free_hold_back_ms` (814-6d13) has
+	 * been snapping back to its default since it was added, and
+	 * `hands_free_activation_phrase` (815-7c76) would have done the same, which
+	 * is worse: a gate the user configured and the UI quietly disarmed.
+	 *
+	 * The fix is the load-modify-save rule already recorded for `save_config`:
+	 * read the stored config, change only what this surface owns, write it
+	 * back. So the assertion is not "TypeScript lists the same fields as Rust"
+	 * — under load-modify-save it does not have to. It is the weaker and more
+	 * durable "a field the UI does not model survives a save", driven off the
+	 * Rust struct so the twelfth field is covered by the person who adds it
+	 * rather than by the person who later forgets it.
+	 */
+	describe("saveConfig() payload", () => {
+		/** Field names declared by `DictationConfig` in the Rust source. */
+		function rustConfigFields(): string[] {
+			const source = readFileSync(join(process.cwd(), "src-tauri/src/dictation/commands.rs"), "utf8");
+			const struct = source.match(/pub struct DictationConfig \{([\s\S]*?)\n\}/);
+			if (!struct) throw new Error("DictationConfig not found in commands.rs");
+			const fields = [...struct[1].matchAll(/^\s*pub ([a-z0-9_]+):/gm)].map((match) => match[1]);
+			if (fields.length === 0) throw new Error("DictationConfig parsed to zero fields");
+			return fields;
+		}
+
+		it("carries every field the Rust struct declares, including ones the UI never models", async () => {
+			const fields = rustConfigFields();
+			// The stored config as Rust would hand it back: every declared
+			// field present, each with a value this test can recognise again.
+			const stored = Object.fromEntries(fields.map((field) => [field, `stored:${field}`]));
+			mockInvoke.mockReset();
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(command === "get_dictation_config" ? stored : undefined),
+			);
+
+			await testInScopeAsync(async () => {
+				await store.saveConfig({ auto_send: true });
+
+				const call = mockInvoke.mock.calls.find(([name]) => name === "set_dictation_config");
+				if (!call) throw new Error("saveConfig must reach set_dictation_config");
+				const sent = (call[1] as { config: Record<string, unknown> }).config;
+
+				expect(Object.keys(sent).sort()).toEqual([...fields].sort());
+				expect(sent.auto_send, "the caller's own change must win").toBe(true);
+				expect(sent.hands_free_activation_phrase, "a field no UI control models must survive untouched").toBe(
+					"stored:hands_free_activation_phrase",
+				);
+				expect(sent.hands_free_hold_back_ms).toBe("stored:hands_free_hold_back_ms");
+			});
+		});
+
+		it("does not write a config it could not read first", async () => {
+			mockInvoke.mockReset();
+			mockInvoke.mockImplementation((command: string) =>
+				command === "get_dictation_config" ? Promise.reject(new Error("backend down")) : Promise.resolve(undefined),
+			);
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.saveConfig({ auto_send: true });
+
+				expect(
+					mockInvoke.mock.calls.some(([name]) => name === "set_dictation_config"),
+					"a failed load must abort the save, not write a config built from defaults",
+				).toBe(false);
 				consoleSpy.mockRestore();
 			});
 		});

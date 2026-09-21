@@ -2852,3 +2852,40 @@ and disarm before walking away.
       suite can see whether the OS actually released the device, and an armed
       mode that leaks the microphone after disarm is the failure that matters
       most here.
+
+## Hands-free activation phrase (#815-7c76)
+
+Rust — needs a `make dev` restart. **There is no UI control for the phrase**;
+`DictationSettings.tsx` has no field for it, so the only way to set one today is
+the config surface. A Dictation control belongs to story 818.
+
+- [ ] With `hands_free_activation_phrase` empty, arm and speak: every recognised
+      utterance must reach the Compose queue exactly as it did before this
+      story. An empty phrase must change nothing.
+- [ ] Set the phrase to `attività tuic`, then save something unrelated from the
+      Dictation settings UI — a hotkey, the language, the device. Re-read
+      `GET /dictation/config`: the phrase and `hands_free_hold_back_ms` must
+      **still be there**. This is the defect the store fix closes; before it,
+      every save from the UI silently reset both fields to their defaults.
+- [ ] Armed with that phrase, speak "che ore sono" alone: nothing must reach the
+      queue. Then "attività tuic che ore sono": the queue must receive
+      `che ore sono` with the phrase stripped. Then, within 15 seconds, speak a
+      bare follow-up: it must go through without the phrase. Wait past 15 seconds
+      and the phrase must be required again.
+- [ ] Say "tuicommander che ore sono" with the phrase set to `tuic`: it must NOT
+      activate. A longer word that merely starts with the phrase is a different
+      word, not a prefix match.
+- [ ] Disarm and re-arm while a window is open: the first utterance after the
+      fresh arm must need the phrase again. Every disarm closes the window.
+
+## Resume banner names the work
+
+- [ ] Leave an agent tab running with a declared `intent:` (or a typed prompt),
+      quit the app, reopen it and select that branch. The
+      "Agent session was active — click to resume" banner must now carry
+      `Intent: <...>` (or `Prompt: <...>` when no intent was declared), truncated
+      with an ellipsis and with the full text in the tooltip. A tab that never
+      had either must show the banner exactly as before.
+- [ ] The Context bar (`Show last prompt` setting) on the restored tab must show
+      the same restored values, and must be replaced by the live ones as soon as
+      the resumed agent declares a new intent or the user sends a prompt.
