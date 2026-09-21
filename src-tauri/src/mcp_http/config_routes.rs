@@ -656,7 +656,11 @@ pub(super) async fn delete_remote_connection(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    state.tunnel_manager.stop_if_running(&id);
+    // `stop_if_running(&id)` stood here and did nothing: the tunnel is keyed by
+    // the TunnelProfile's own UUID, not by the connection's, so the call could
+    // only ever miss. Teardown stops it by the id the runtime recorded, and
+    // takes the poll, the mirror, its rows and the session token with it.
+    crate::remote_runtime::teardown(&state, &id);
     let _guard = state.connections_lock.lock().await;
     let mut connections =
         match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
@@ -790,7 +794,7 @@ pub(super) async fn delete_remote_connection_connect(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    crate::remote_runtime::disconnect(&state, &id).await;
+    crate::remote_runtime::teardown(&state, &id);
     super::json_result(Ok::<_, String>(serde_json::json!({ "ok": true })))
 }
 
@@ -1021,6 +1025,66 @@ mod tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Deleting over HTTP must take the LIVE connection down, not just the record.
+    ///
+    /// `stop_if_running(&id)` stood in this handler and could only ever miss:
+    /// the tunnel is keyed by the `TunnelProfile`'s own UUID, never the
+    /// connection's. So a browser or remote client deleting a connected machine
+    /// left the status poll, the mirror task and an `ssh` child running against
+    /// a connection id that no longer named anything — with no way left to
+    /// address them. The desktop command had no teardown at all.
+    #[tokio::test]
+    async fn deleting_a_connection_over_http_tears_the_live_one_down() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let connection = crate::remote_connection::RemoteConnection::new_direct(
+            "vps",
+            "http://remote.invalid:9876",
+            "boss",
+        );
+        let id = connection.id.clone();
+        crate::remote_connection::RemoteConnectionStore::save(
+            &state.data_dir,
+            std::slice::from_ref(&connection),
+        )
+        .expect("seed the store the route is about to rewrite");
+
+        // The ssh binary does not exist on purpose: the manager records the
+        // tunnel before its child matters, which is all this test asks about.
+        let tunnel_id = state
+            .tunnel_manager
+            .start_with_binary_for_test(
+                crate::tunnels::profile::TunnelProfile::new("vps", "example.invalid", "boss"),
+                std::path::PathBuf::from("/nonexistent/ssh"),
+            )
+            .await
+            .expect("the manager records a tunnel before its ssh child matters");
+        state
+            .remote
+            .force_connected_for_test(&id, "http://remote.invalid:9876", Some("tok"));
+        state.remote.adopt_tunnel_for_test(&id, &tunnel_id);
+
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(Arc::clone(&state)),
+            Path(id.clone()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            state.tunnel_manager.list().is_empty(),
+            "the delete left a tunnel running: {:?}",
+            state.tunnel_manager.list()
+        );
+        assert!(
+            state.remote.snapshot().is_empty(),
+            "the delete left the runtime holding the connection: {:?}",
+            state.remote.snapshot()
+        );
     }
 
     #[tokio::test]

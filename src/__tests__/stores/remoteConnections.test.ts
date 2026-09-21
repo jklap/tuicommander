@@ -297,15 +297,21 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			expect(JSON.stringify(store.getConnections())).not.toContain("s3cret");
 		});
 
-		it("removing a live connection disconnects it first", async () => {
+		it("removing a live connection deletes it without a separate disconnect", async () => {
+			// The backend tears the connection down inside delete — poll, mirror,
+			// mirrored rows, tunnel and token — so a disconnect from here bought
+			// nothing, and it hid the fact that the HTTP delete route did none of
+			// it. The one thing that IS this process's to drop is the token cache.
 			push(connected);
+			expect(store.getToken("c1")).toBe("tok-abc");
+
 			await store.removeConnection("c1");
 
 			const commands = invokeMock.mock.calls.map((c) => c[0]);
-			expect(commands.indexOf("disconnect_remote_connection")).toBeLessThan(
-				commands.indexOf("delete_remote_connection"),
-			);
+			expect(commands).toContain("delete_remote_connection");
+			expect(commands).not.toContain("disconnect_remote_connection");
 			expect(store.getConnectionState("c1")).toBeUndefined();
+			expect(store.getToken("c1")).toBeUndefined();
 		});
 	});
 });

@@ -126,12 +126,36 @@ impl Entry {
 ///
 /// A connection absent from the map is `Disconnected` — the map holds what is
 /// happening, not what is configured. `connections.json` is the list.
-#[derive(Default)]
 pub(crate) struct RemoteRuntime {
     entries: DashMap<String, Entry>,
+    /// One client for every probe, seed and event stream this module makes.
+    ///
+    /// A `reqwest::Client` owns the connection pool; building one per call threw
+    /// the pool away each time, so every 5s heartbeat paid a fresh TCP and TLS
+    /// handshake against a daemon it had just talked to.
+    client: reqwest::Client,
+}
+
+impl Default for RemoteRuntime {
+    fn default() -> Self {
+        Self {
+            entries: DashMap::new(),
+            // No client-wide timeout on purpose: the probes set their own, and
+            // the mirror's `/events` stream is long-lived by design — a deadline
+            // here would cut it every time it succeeded.
+            client: reqwest::Client::builder().build().expect(
+                "the default HTTP client must build — Client::new panics on the same failure",
+            ),
+        }
+    }
 }
 
 impl RemoteRuntime {
+    /// The shared HTTP client. Cloning is an `Arc` bump, not a new pool.
+    pub(crate) fn http_client(&self) -> reqwest::Client {
+        self.client.clone()
+    }
+
     /// Every connection this runtime knows about, in no particular order.
     pub(crate) fn snapshot(&self) -> Vec<RemoteConnectionStatus> {
         self.entries
@@ -148,6 +172,23 @@ impl RemoteRuntime {
     /// Session token for a connected connection, or `None` when it needs none.
     pub(crate) fn token(&self, id: &str) -> Option<String> {
         self.entries.get(id).and_then(|e| e.snapshot(id).token)
+    }
+
+    /// Where the heartbeat sends its next probe, whatever the status.
+    ///
+    /// [`base_url`](Self::base_url) is the ROUTING answer and withholds the URL
+    /// unless the connection is connected — right for a caller about to send a
+    /// real call, wrong for the probe, which has to keep asking precisely while
+    /// the connection is broken. Reading the routing answer here is what made an
+    /// errored connection unable to notice that the daemon came back.
+    fn probe_base_url(&self, id: &str) -> Option<String> {
+        self.entries.get(id).and_then(|e| e.base_url.clone())
+    }
+
+    /// The credential the next probe signs with, whatever the status. Same
+    /// reason as [`probe_base_url`](Self::probe_base_url).
+    fn probe_token(&self, id: &str) -> Option<String> {
+        self.entries.get(id).and_then(|e| e.token.clone())
     }
 
     fn status_of(&self, id: &str) -> RemoteStatus {
@@ -170,6 +211,15 @@ impl RemoteRuntime {
                 ..Default::default()
             },
         );
+    }
+
+    /// Record the tunnel a connection owns, exactly as `resolve_base_url` does
+    /// once it has started one. Lets a test ask who stops it without standing up
+    /// an ssh server, and it must run AFTER `force_connected_for_test`, which
+    /// replaces the whole entry.
+    #[cfg(test)]
+    pub(crate) fn adopt_tunnel_for_test(&self, id: &str, tunnel_id: &str) {
+        self.entries.entry(id.to_string()).or_default().tunnel_id = Some(tunnel_id.to_string());
     }
 }
 
@@ -223,6 +273,20 @@ fn publish(state: &Arc<AppState>, status: &RemoteConnectionStatus) {
     let _ = payload;
 }
 
+/// What the daemon says when the credential is wrong, in the one place both
+/// callers read it from.
+const REJECTED_CREDENTIALS: &str =
+    "The remote daemon rejected these credentials — check the username and password.";
+
+/// Record a failure and retire whatever the connection was still showing.
+///
+/// The rows are announced closed as well as dropped, and that is the whole
+/// point: a badge is sticky by construction, so a mirrored session whose row
+/// simply stops being updated keeps rendering the state the machine was in when
+/// the link died — a remote tab frozen mid-question, with nothing on screen
+/// saying the answer can no longer reach it. `drop_connection` returns at once
+/// when there is nothing left to drop, so a connection that errors on every
+/// probe announces the closure once rather than every five seconds.
 fn set_error(state: &Arc<AppState>, id: &str, status: RemoteStatus, error: String) {
     tracing::warn!(source = "remote", connection = id, %error, "Remote connection failed");
     update(state, id, |e| {
@@ -230,15 +294,12 @@ fn set_error(state: &Arc<AppState>, id: &str, status: RemoteStatus, error: Strin
         e.token = None;
         e.error = Some(error);
     });
+    crate::remote_mirror::drop_connection(state, id);
 }
 
 // ---------------------------------------------------------------------------
 // Probes
 // ---------------------------------------------------------------------------
-
-fn http_client() -> reqwest::Client {
-    reqwest::Client::new()
-}
 
 /// What `/health` says about the daemon behind a base URL.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -252,9 +313,9 @@ struct Health {
 
 /// Read `/health` — the one route served without a credential — to learn the
 /// protocol version and prove the daemon is reachable at all.
-async fn read_health(base_url: &str) -> Result<Health, String> {
+async fn read_health(client: &reqwest::Client, base_url: &str) -> Result<Health, String> {
     let url = format!("{}/health", base_url.trim_end_matches('/'));
-    let response = http_client()
+    let response = client
         .get(&url)
         .timeout(PROBE_TIMEOUT)
         .send()
@@ -287,9 +348,13 @@ enum Probe {
 }
 
 /// Probe `/api/version`, which sits behind the auth middleware.
-async fn probe_authenticated(base_url: &str, token: Option<&str>) -> Probe {
+async fn probe_authenticated(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: Option<&str>,
+) -> Probe {
     let url = format!("{}/api/version", base_url.trim_end_matches('/'));
-    let mut request = http_client().get(&url).timeout(PROBE_TIMEOUT);
+    let mut request = client.get(&url).timeout(PROBE_TIMEOUT);
     if let Some(token) = token {
         request = request.query(&[("token", token)]);
     }
@@ -333,87 +398,157 @@ fn load_connection(state: &Arc<AppState>, id: &str) -> Result<RemoteConnection, 
         .ok_or_else(|| format!("Unknown remote connection {id}"))
 }
 
+/// A connect attempt that did not finish, and which state it leaves behind.
+///
+/// Carried rather than applied at each step so that every failure leaves through
+/// one door: the handshake has six ways to end badly and each one of them may be
+/// holding an SSH tunnel.
+struct ConnectFailure {
+    status: RemoteStatus,
+    message: String,
+}
+
+impl ConnectFailure {
+    /// The link, the daemon or the machine. Retrying may work.
+    fn error(message: String) -> Self {
+        Self {
+            status: RemoteStatus::Error,
+            message,
+        }
+    }
+
+    /// The credential. Retrying the same one will not work.
+    fn unauthenticated(message: String) -> Self {
+        Self {
+            status: RemoteStatus::Unauthenticated,
+            message,
+        }
+    }
+}
+
 /// Bring a connection up: resolve where it answers, prove it is reachable,
-/// authenticate, then start the status poll.
+/// authenticate, then start the status poll and the mirror.
 ///
 /// Idempotent while in flight: a second call on a connecting or connected
 /// connection is a no-op, so a double click cannot open two tunnels.
 pub(crate) async fn connect(state: &Arc<AppState>, id: &str) -> Result<(), String> {
     let connection = load_connection(state, id)?;
-    match state.remote.status_of(id) {
-        RemoteStatus::Connecting | RemoteStatus::Connected => return Ok(()),
-        _ => {}
-    }
-    update(state, id, |e| {
-        e.status = Some(RemoteStatus::Connecting);
-        e.error = None;
-    });
+    let Some(connecting) = claim_for_connect(state, id) else {
+        return Ok(());
+    };
+    publish(state, &connecting);
     tracing::info!(source = "remote", connection = id, name = %connection.name, "Connecting");
 
-    let base_url = match resolve_base_url(state, &connection).await {
-        Ok(url) => url,
-        Err(e) => {
-            set_error(state, id, RemoteStatus::Error, e.clone());
-            return Err(e);
+    match handshake(state, id, &connection).await {
+        Ok(token) => {
+            update(state, id, |e| {
+                e.status = Some(RemoteStatus::Connected);
+                e.token = token;
+                e.error = None;
+            });
+            spawn_status_poll(state, id.to_string());
+            spawn_mirror(state, id.to_string());
+            tracing::info!(source = "remote", connection = id, "Connected");
+            Ok(())
         }
-    };
+        Err(failure) => {
+            // Every failure lands here, and that is the whole reason the steps
+            // return a `ConnectFailure` instead of calling `set_error`
+            // themselves: on the SSH transport `resolve_base_url` has already
+            // started a tunnel by the time the health check, the token exchange
+            // or the probe can fail. Leaving it running meant the next attempt
+            // opened a SECOND one and orphaned the first — a `TunnelHandle` has
+            // no `Drop`, so its supervisor and its ssh child outlived every
+            // trace of the connection.
+            stop_tunnel(state, id);
+            set_error(state, id, failure.status, failure.message.clone());
+            Err(failure.message)
+        }
+    }
+}
+
+/// Move a connection to `Connecting`, or report that someone else already has.
+///
+/// The check and the transition share ONE `entry()` scope, so the shard lock
+/// holds across both. Read-then-write across two DashMap calls is a TOCTOU: two
+/// concurrent connects — a double click, or the UI and an auto-connect racing at
+/// startup — both read `Disconnected`, both wrote `Connecting`, and both went on
+/// to open a tunnel.
+///
+/// Returns the snapshot to announce, or `None` when the connection is already up
+/// or on its way.
+fn claim_for_connect(state: &Arc<AppState>, id: &str) -> Option<RemoteConnectionStatus> {
+    let mut entry = state.remote.entries.entry(id.to_string()).or_default();
+    if matches!(
+        entry.status,
+        Some(RemoteStatus::Connecting | RemoteStatus::Connected)
+    ) {
+        return None;
+    }
+    entry.status = Some(RemoteStatus::Connecting);
+    entry.error = None;
+    Some(entry.snapshot(id))
+}
+
+/// Resolve, prove, authenticate — everything between `Connecting` and
+/// `Connected`. Returns the session token, which is `None` when the daemon needs
+/// none.
+async fn handshake(
+    state: &Arc<AppState>,
+    id: &str,
+    connection: &RemoteConnection,
+) -> Result<Option<String>, ConnectFailure> {
+    let client = state.remote.http_client();
+
+    let base_url = resolve_base_url(state, connection)
+        .await
+        .map_err(ConnectFailure::error)?;
     update(state, id, |e| e.base_url = Some(base_url.clone()));
 
-    match read_health(&base_url).await {
-        Ok(health) => {
-            // A connection that resolves back to this very process mirrors every
-            // local event onto the bus that produced it, and both `/events` and
-            // the window emit repeat it — the origin marker stops the second hop,
-            // but nothing downstream can make sense of a machine mirroring
-            // itself. Refuse it where the user can still read why.
-            if health.instance_id.as_deref() == Some(crate::app_instance::instance_identity()) {
-                let msg = format!(
-                    "{base_url} is this very TUICommander instance — a machine cannot mirror itself. \
-                     Point this connection at another machine's daemon."
-                );
-                set_error(state, id, RemoteStatus::Error, msg.clone());
-                return Err(msg);
-            }
-            update(state, id, |e| e.protocol_version = health.protocol_version);
-        }
-        Err(e) => {
-            set_error(state, id, RemoteStatus::Error, e.clone());
-            return Err(e);
-        }
+    let health = read_health(&client, &base_url)
+        .await
+        .map_err(ConnectFailure::error)?;
+    // A connection that resolves back to this very process mirrors every local
+    // event onto the bus that produced it, and both `/events` and the window
+    // emit repeat it — the origin marker stops the second hop, but nothing
+    // downstream can make sense of a machine mirroring itself. Refuse it where
+    // the user can still read why.
+    if health.instance_id.as_deref() == Some(crate::app_instance::instance_identity()) {
+        return Err(ConnectFailure::error(format!(
+            "{base_url} is this very TUICommander instance — a machine cannot mirror itself. \
+             Point this connection at another machine's daemon."
+        )));
     }
+    update(state, id, |e| e.protocol_version = health.protocol_version);
 
-    let token = match authenticate(&connection, &base_url).await {
-        Ok(token) => token,
-        Err(e) => {
-            set_error(state, id, RemoteStatus::Unauthenticated, e.clone());
-            return Err(e);
-        }
-    };
+    let token = authenticate(connection, &base_url)
+        .await
+        .map_err(ConnectFailure::unauthenticated)?;
 
-    match probe_authenticated(&base_url, token.as_deref()).await {
-        Probe::Ok => {}
-        Probe::Rejected => {
-            let msg =
-                "The remote daemon rejected these credentials — check the username and password."
-                    .to_string();
-            set_error(state, id, RemoteStatus::Unauthenticated, msg.clone());
-            return Err(msg);
-        }
-        Probe::Failed(e) => {
-            set_error(state, id, RemoteStatus::Error, e.clone());
-            return Err(e);
-        }
+    match probe_authenticated(&client, &base_url, token.as_deref()).await {
+        Probe::Ok => Ok(token),
+        Probe::Rejected => Err(ConnectFailure::unauthenticated(
+            REJECTED_CREDENTIALS.to_string(),
+        )),
+        Probe::Failed(e) => Err(ConnectFailure::error(e)),
     }
+}
 
-    update(state, id, |e| {
-        e.status = Some(RemoteStatus::Connected);
-        e.token = token;
-        e.error = None;
-    });
-    spawn_status_poll(state, id.to_string());
-    spawn_mirror(state, id.to_string());
-    tracing::info!(source = "remote", connection = id, "Connected");
-    Ok(())
+/// Stop the tunnel this connection opened, by the id the tunnel manager knows it
+/// under, and forget it.
+///
+/// Taking the id out matters as much as stopping it: a second call must not ask
+/// the manager to stop a tunnel that a later attempt has since re-used the slot
+/// for.
+fn stop_tunnel(state: &Arc<AppState>, id: &str) {
+    let tunnel_id = state
+        .remote
+        .entries
+        .get_mut(id)
+        .and_then(|mut e| e.tunnel_id.take());
+    if let Some(tunnel_id) = tunnel_id {
+        state.tunnel_manager.stop_if_running(&tunnel_id);
+    }
 }
 
 /// Where the daemon answers.
@@ -494,40 +629,72 @@ async fn wait_for_tunnel(state: &Arc<AppState>, tunnel_id: &str) -> Result<(), S
     }
 }
 
-/// Take a connection down: stop the tasks, drop its sessions, forget the token,
-/// stop the tunnel.
-pub(crate) async fn disconnect(state: &Arc<AppState>, id: &str) {
-    let (poll, mirror, tunnel_id) = {
-        let mut entry = state.remote.entries.entry(id.to_string()).or_default();
-        (
-            entry.poll.take(),
-            entry.mirror.take(),
-            entry.tunnel_id.take(),
-        )
+/// Take a connection all the way down, from whatever state it is in.
+///
+/// **The one teardown path.** Disconnect and delete are the same four steps and
+/// used to be neither shared nor complete: the two delete handlers stopped a
+/// tunnel under the CONNECTION's id — which is not the tunnel's, so the call was
+/// a no-op — and left the poll, the mirror, the mirrored rows and a live session
+/// token running for a connection that no longer appeared anywhere. The
+/// frontend's pre-delete disconnect was the only thing holding that together,
+/// from the one caller that happened to remember it.
+///
+/// Idempotent and total. The entry is REMOVED rather than reset, because a
+/// connection absent from the map is already `Disconnected` by definition — a
+/// husk left behind is a status for a connection that may no longer be
+/// configured, and the reason `disconnect` on an unknown id used to conjure one
+/// and announce it.
+pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
+    let Some((_, mut entry)) = state.remote.entries.remove(id) else {
+        return;
     };
-    if let Some(poll) = poll {
+    if let Some(poll) = entry.poll.take() {
         poll.abort();
     }
     // Abort before dropping the rows: a frame still in flight would otherwise
     // re-seed the map we just cleared.
-    if let Some(mirror) = mirror {
+    if let Some(mirror) = entry.mirror.take() {
         mirror.abort();
     }
     crate::remote_mirror::drop_connection(state, id);
-    if let Some(tunnel_id) = tunnel_id {
+    if let Some(tunnel_id) = entry.tunnel_id.take() {
         state.tunnel_manager.stop_if_running(&tunnel_id);
     }
-    update(state, id, |e| {
-        e.status = Some(RemoteStatus::Disconnected);
-        e.base_url = None;
-        e.token = None;
-        e.protocol_version = None;
-        e.error = None;
-    });
-    tracing::info!(source = "remote", connection = id, "Disconnected");
+    // The entry is gone, so there is nothing left for `update` to diff against:
+    // the departure is announced by hand, and only when the connection was not
+    // already sitting at `Disconnected`.
+    if entry.snapshot(id).status != RemoteStatus::Disconnected {
+        publish(state, &Entry::default().snapshot(id));
+        tracing::info!(source = "remote", connection = id, "Disconnected");
+    }
 }
 
-/// Re-prove a connected connection every [`STATUS_POLL`].
+/// Whether the heartbeat keeps beating while a connection is in `status`.
+///
+/// **`Error` survives, and that is the decision this story made.** The loop used
+/// to return the moment the status left `Connected`, and nothing ever restarted
+/// it — so ONE probe that timed out ended the heartbeat for good. A five-second
+/// blip, a laptop lid, a tunnel that reconnected by itself: each cost a
+/// connection that was healthy again a second later, until a person noticed the
+/// red badge and pressed Connect. The probe is the only thing that can see the
+/// daemon come back, so it has to outlive the failure it reported, and a later
+/// `Probe::Ok` puts the connection back to `Connected` on its own.
+///
+/// The alternative — `set_error` tearing the connection down — was rejected for
+/// the same reason: it turns a transient fault into a manual reconnect, and it
+/// drops an SSH tunnel that was very likely still fine.
+///
+/// `Unauthenticated` does not survive, and that is not an inconsistency: the
+/// credential is wrong, re-sending it every five seconds only asks the daemon to
+/// rate-limit us, and `poll_once` already spends one re-authentication before it
+/// concludes that. `Disconnected` is how [`teardown`] stops this task even when
+/// the abort loses a race with the sleep.
+fn poll_survives(status: RemoteStatus) -> bool {
+    matches!(status, RemoteStatus::Connected | RemoteStatus::Error)
+}
+
+/// Re-prove a connection every [`STATUS_POLL`] for as long as
+/// [`poll_survives`] says it is worth asking.
 ///
 /// The daemon mints its token in memory and forgets it on restart, so ours goes
 /// stale while `/health` keeps answering 200. One re-authentication on a 401 is
@@ -545,7 +712,7 @@ fn spawn_status_poll(state: &Arc<AppState>, id: String) {
     let handle = tokio::spawn(async move {
         loop {
             tokio::time::sleep(STATUS_POLL).await;
-            if task_state.remote.status_of(&task_id) != RemoteStatus::Connected {
+            if !poll_survives(task_state.remote.status_of(&task_id)) {
                 return;
             }
             poll_once(&task_state, &task_id).await;
@@ -574,11 +741,13 @@ fn spawn_mirror(state: &Arc<AppState>, id: String) {
 }
 
 async fn poll_once(state: &Arc<AppState>, id: &str) {
-    let Some(base_url) = state.remote.base_url(id) else {
+    let Some(base_url) = state.remote.probe_base_url(id) else {
         return;
     };
-    let token = state.remote.token(id);
-    match probe_authenticated(&base_url, token.as_deref()).await {
+    let token = state.remote.probe_token(id);
+    match probe_authenticated(&state.remote.http_client(), &base_url, token.as_deref()).await {
+        // Also the recovery path: an errored connection whose daemon answers
+        // again is connected again, with no one having to press anything.
         Probe::Ok => update(state, id, |e| {
             e.status = Some(RemoteStatus::Connected);
             e.error = None;
@@ -606,7 +775,7 @@ async fn reauthenticate(state: &Arc<AppState>, id: &str, base_url: &str) {
             return;
         }
     };
-    match probe_authenticated(base_url, token.as_deref()).await {
+    match probe_authenticated(&state.remote.http_client(), base_url, token.as_deref()).await {
         Probe::Ok => update(state, id, |e| {
             e.status = Some(RemoteStatus::Connected);
             e.token = token;
@@ -616,8 +785,7 @@ async fn reauthenticate(state: &Arc<AppState>, id: &str, base_url: &str) {
             state,
             id,
             RemoteStatus::Unauthenticated,
-            "The remote daemon rejected these credentials — check the username and password."
-                .to_string(),
+            REJECTED_CREDENTIALS.to_string(),
         ),
         Probe::Failed(e) => set_error(state, id, RemoteStatus::Error, e),
     }
@@ -642,7 +810,7 @@ pub async fn disconnect_remote_connection(
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    disconnect(&state.inner().clone(), &id).await;
+    teardown(&state.inner().clone(), &id);
     Ok(())
 }
 
@@ -661,6 +829,13 @@ pub async fn remote_connection_statuses(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A client for the probe tests, which have no `AppState` to borrow one
+    /// from. The same builder the runtime uses, so a test cannot pass against a
+    /// client shaped differently from the real one.
+    fn test_client() -> reqwest::Client {
+        RemoteRuntime::default().http_client()
+    }
 
     #[test]
     fn a_connection_nobody_touched_is_disconnected() {
@@ -740,7 +915,7 @@ mod tests {
             .create_async()
             .await;
         assert_eq!(
-            read_health(&server.url()).await.unwrap(),
+            read_health(&test_client(), &server.url()).await.unwrap(),
             Health {
                 protocol_version: Some(4),
                 instance_id: Some("other-process".into()),
@@ -762,7 +937,13 @@ mod tests {
             .with_body(r#"{"protocol_version":1}"#)
             .create_async()
             .await;
-        assert_eq!(read_health(&server.url()).await.unwrap().instance_id, None);
+        assert_eq!(
+            read_health(&test_client(), &server.url())
+                .await
+                .unwrap()
+                .instance_id,
+            None
+        );
     }
 
     #[tokio::test]
@@ -773,7 +954,9 @@ mod tests {
             .with_status(503)
             .create_async()
             .await;
-        let error = read_health(&server.url()).await.unwrap_err();
+        let error = read_health(&test_client(), &server.url())
+            .await
+            .unwrap_err();
         assert!(error.contains("503"), "{error}");
     }
 
@@ -791,7 +974,7 @@ mod tests {
             .create_async()
             .await;
         assert_eq!(
-            probe_authenticated(&server.url(), Some("t ok")).await,
+            probe_authenticated(&test_client(), &server.url(), Some("t ok")).await,
             Probe::Ok
         );
         mock.assert_async().await;
@@ -806,7 +989,7 @@ mod tests {
             .create_async()
             .await;
         assert_eq!(
-            probe_authenticated(&server.url(), None).await,
+            probe_authenticated(&test_client(), &server.url(), None).await,
             Probe::Rejected
         );
 
@@ -816,7 +999,7 @@ mod tests {
             .with_status(500)
             .create_async()
             .await;
-        match probe_authenticated(&broken.url(), None).await {
+        match probe_authenticated(&test_client(), &broken.url(), None).await {
             Probe::Failed(e) => assert!(e.contains("500"), "{e}"),
             other => panic!("expected a failure, got {other:?}"),
         }
@@ -825,7 +1008,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreachable_daemon_names_itself_unreachable() {
         // Port 1 on loopback refuses immediately: no DNS, no timeout, no flake.
-        match probe_authenticated("http://127.0.0.1:1", None).await {
+        match probe_authenticated(&test_client(), "http://127.0.0.1:1", None).await {
             Probe::Failed(e) => assert!(e.contains("Unreachable"), "{e}"),
             other => panic!("expected a failure, got {other:?}"),
         }
@@ -869,6 +1052,39 @@ mod tests {
             }
         }
         seen
+    }
+
+    /// The sessions announced closed on the bus since the last drain, in order.
+    fn drain_closed_sessions(rx: &mut tokio::sync::broadcast::Receiver<AppEvent>) -> Vec<String> {
+        let mut seen = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::RemoteMirrored { event, payload, .. } = event
+                && event == "session-closed"
+            {
+                seen.push(payload["session_id"].as_str().unwrap_or("?").to_string());
+            }
+        }
+        seen
+    }
+
+    /// Put a real tunnel in the manager without needing one that works.
+    ///
+    /// The ssh binary does not exist, which is the point: `start_with_binary`
+    /// returns as soon as the supervision loop is spawned, so the entry lands in
+    /// the map and the test can ask who stops it.
+    async fn stand_up_a_tunnel(state: &Arc<AppState>) -> String {
+        state
+            .tunnel_manager
+            .start_with_binary_for_test(
+                crate::tunnels::profile::TunnelProfile::new(
+                    "remote connection vps",
+                    "example.invalid",
+                    "boss",
+                ),
+                PathBuf::from("/nonexistent/ssh"),
+            )
+            .await
+            .expect("the manager records a tunnel before its ssh child matters")
     }
 
     #[test]
@@ -916,7 +1132,7 @@ mod tests {
             Some(server.url().trim_end_matches('/'))
         );
         assert_eq!(state.remote.snapshot()[0].protocol_version, Some(4));
-        disconnect(&state, &id).await;
+        teardown(&state, &id);
     }
 
     /// A Direct connection aimed at this machine's own daemon mirrors every
@@ -1030,7 +1246,7 @@ mod tests {
             !published.contains("s3cret"),
             "password leaked into {published}"
         );
-        disconnect(&state, &id).await;
+        teardown(&state, &id);
     }
 
     #[tokio::test]
@@ -1061,17 +1277,299 @@ mod tests {
         connect(&state, &id).await.unwrap();
         let mut events = state.event_bus.subscribe();
 
-        disconnect(&state, &id).await;
+        teardown(&state, &id);
 
         assert_eq!(drain_statuses(&mut events), vec!["disconnected"]);
         assert!(state.remote.token(&id).is_none());
         assert!(state.remote.base_url(&id).is_none());
-        let entry = state.remote.entries.get(&id).unwrap();
         assert!(
-            entry.poll.is_none(),
-            "the poll task outlived the connection"
+            state.remote.entries.get(&id).is_none(),
+            "teardown removes the entry rather than resetting it — a husk is a \
+             status, a poll handle and a token for a connection that may not \
+             even be configured any more"
         );
-        assert!(entry.token.is_none(), "the token survived in the entry");
+    }
+
+    /// Teardown on an id nobody connected must not invent one.
+    ///
+    /// `disconnect` used to open the entry with `or_default()`, which CREATED it,
+    /// and then announced a `disconnected` status for a connection this process
+    /// had never heard of. Delete calls this, so every deletion of a
+    /// never-connected connection left a phantom behind.
+    #[tokio::test]
+    async fn tearing_down_a_connection_nobody_connected_conjures_nothing() {
+        let state = test_state();
+        let mut events = state.event_bus.subscribe();
+
+        teardown(&state, "never-seen");
+        teardown(&state, "never-seen");
+
+        assert!(
+            state.remote.snapshot().is_empty(),
+            "an unknown id left an entry behind: {:?}",
+            state.remote.snapshot()
+        );
+        assert!(
+            drain_statuses(&mut events).is_empty(),
+            "an unknown id was announced to every client"
+        );
+    }
+
+    /// A failed connect must not leave the tunnel it opened behind.
+    ///
+    /// `resolve_base_url` starts the SSH tunnel BEFORE the health check, the
+    /// token exchange and the probe, so any of those failing used to return with
+    /// the tunnel still running and its id still in the entry. The next attempt
+    /// started a second one — and `TunnelHandle` has no `Drop`, so the first
+    /// supervisor and its ssh child outlived every trace of the connection.
+    ///
+    /// Twice, because one attempt cannot tell a leak from a cleanup.
+    #[tokio::test]
+    async fn every_failed_connect_stops_the_tunnel_it_started() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_status(503)
+            .create_async()
+            .await;
+
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+
+        for attempt in 1..=2 {
+            let tunnel_id = stand_up_a_tunnel(&state).await;
+            // Exactly what `resolve_base_url` records on the SSH transport.
+            update(&state, &id, |e| e.tunnel_id = Some(tunnel_id.clone()));
+
+            connect(&state, &id)
+                .await
+                .expect_err("/health answered 503");
+
+            assert!(
+                state.tunnel_manager.list().is_empty(),
+                "attempt {attempt} left a tunnel running: {:?}",
+                state.tunnel_manager.list()
+            );
+            assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        }
+    }
+
+    /// Only one connect may claim a connection, and the claim is what says so.
+    ///
+    /// The check and the transition share one `entry()` scope so the shard lock
+    /// holds across both; read-then-write across two DashMap calls let two
+    /// concurrent connects both see `Disconnected` and both open a tunnel.
+    #[test]
+    fn only_one_connect_can_claim_a_connection() {
+        let state = test_state();
+
+        let first = claim_for_connect(&state, "vps").expect("a fresh connection is free");
+        assert_eq!(first.status, RemoteStatus::Connecting);
+        assert_eq!(
+            state.remote.status_of("vps"),
+            RemoteStatus::Connecting,
+            "the claim must land in the map, not only in the caller's hand"
+        );
+        assert!(
+            claim_for_connect(&state, "vps").is_none(),
+            "a second connect claimed a connection that is already coming up"
+        );
+
+        // A connected one is equally claimed, and a failed one is free again.
+        update(&state, "vps", |e| e.status = Some(RemoteStatus::Connected));
+        assert!(claim_for_connect(&state, "vps").is_none());
+        update(&state, "vps", |e| e.status = Some(RemoteStatus::Error));
+        assert!(
+            claim_for_connect(&state, "vps").is_some(),
+            "a connection that failed must be retryable"
+        );
+    }
+
+    /// Eight connects racing on real threads still produce one handshake.
+    ///
+    /// Probabilistic by nature — the window between the read and the write was
+    /// nanoseconds — but it cannot fail spuriously: `expect(1)` is what the
+    /// fixed code always does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_connects_run_one_handshake() {
+        let mut server = mockito::Server::new_async().await;
+        let health = server
+            .mock("GET", "/health")
+            .with_body("{}")
+            .expect(1)
+            .create_async()
+            .await;
+        let _probe = server
+            .mock("GET", "/api/version")
+            .with_body("{}")
+            .create_async()
+            .await;
+
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+
+        let mut racers = Vec::new();
+        for _ in 0..8 {
+            let state = Arc::clone(&state);
+            let id = id.clone();
+            racers.push(tokio::spawn(async move { connect(&state, &id).await }));
+        }
+        for racer in racers {
+            racer
+                .await
+                .unwrap()
+                .expect("a no-op connect is not an error");
+        }
+
+        health.assert_async().await;
+        teardown(&state, &id);
+    }
+
+    /// The heartbeat outlives the failure it reported.
+    ///
+    /// One probe that timed out used to end the poll for good, so a five-second
+    /// blip cost a connection that was healthy again a second later — until a
+    /// person noticed the red badge and pressed Connect.
+    #[test]
+    fn the_heartbeat_outlives_an_error_but_not_a_rejection() {
+        assert!(poll_survives(RemoteStatus::Connected));
+        assert!(
+            poll_survives(RemoteStatus::Error),
+            "nothing but the probe can see the daemon come back"
+        );
+        assert!(
+            !poll_survives(RemoteStatus::Unauthenticated),
+            "re-sending a credential the daemon refused only asks to be rate-limited"
+        );
+        assert!(
+            !poll_survives(RemoteStatus::Disconnected),
+            "an absent entry is how teardown stops this task"
+        );
+    }
+
+    /// An errored connection recovers by itself when the daemon answers again.
+    ///
+    /// Two things had to change for this: the poll survives `Error`, and it
+    /// reads the raw base URL rather than the routing one — which is withheld
+    /// unless connected, so the probe used to return before it sent anything.
+    #[tokio::test]
+    async fn an_errored_connection_recovers_without_anyone_pressing_connect() {
+        let mut server = mockito::Server::new_async().await;
+        let probe = server
+            .mock("GET", "/api/version")
+            .match_query(mockito::Matcher::Any)
+            .with_body("{}")
+            .create_async()
+            .await;
+
+        let state = test_state();
+        let id = direct_connection(&state, &server.url());
+        update(&state, &id, |e| {
+            e.status = Some(RemoteStatus::Error);
+            e.base_url = Some(server.url());
+            e.error = Some("Unreachable: the link went away".into());
+        });
+
+        poll_once(&state, &id).await;
+
+        probe.assert_async().await;
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Connected);
+        assert!(
+            state.remote.snapshot()[0].error.is_none(),
+            "the recovered connection still shows the error it recovered from"
+        );
+        assert_eq!(
+            state.remote.base_url(&id).as_deref(),
+            Some(server.url().as_str())
+        );
+    }
+
+    /// A connection that broke retires its badges, once.
+    ///
+    /// A mirrored row's badge is sticky by construction: a session whose row
+    /// stops being updated keeps rendering the state the machine was in when the
+    /// link died — a remote tab frozen mid-question. Two failing probes must
+    /// still announce one closure, not one every five seconds.
+    #[tokio::test]
+    async fn an_errored_connection_announces_its_sessions_closed_once() {
+        let state = test_state();
+        let id = direct_connection(&state, "http://127.0.0.1:1");
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            &id,
+            vec![crate::mcp_http::types::SessionInfo {
+                session_id: "s1".into(),
+                ..Default::default()
+            }],
+        );
+        update(&state, &id, |e| {
+            e.status = Some(RemoteStatus::Connected);
+            e.base_url = Some("http://127.0.0.1:1".into());
+        });
+        let mut events = state.event_bus.subscribe();
+
+        poll_once(&state, &id).await;
+        poll_once(&state, &id).await;
+
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        assert_eq!(
+            drain_closed_sessions(&mut events),
+            vec!["s1"],
+            "the badge must be retired exactly once"
+        );
+        assert!(crate::remote_mirror::mirrored_rows(&state).is_empty());
+    }
+
+    /// Two probes against one daemon share one TCP connection.
+    ///
+    /// `Client::new()` per call threw the connection pool away each time, so
+    /// every 5s heartbeat paid a fresh handshake against a daemon it had just
+    /// talked to. The counter is the only honest way to see it: the probe
+    /// answers identically either way.
+    #[tokio::test]
+    async fn the_probes_share_one_pooled_client() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepted);
+        let daemon = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut request = [0u8; 2048];
+                    // Empty bodies: nothing to drain means nothing that can stop
+                    // the connection going back to the pool.
+                    while matches!(socket.read(&mut request).await, Ok(n) if n > 0) {
+                        if socket
+                            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+
+        let runtime = RemoteRuntime::default();
+        let base = format!("http://{addr}");
+        for _ in 0..2 {
+            assert_eq!(
+                probe_authenticated(&runtime.http_client(), &base, None).await,
+                Probe::Ok
+            );
+        }
+
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            1,
+            "the second probe opened a second connection — the pool was thrown away"
+        );
+        daemon.abort();
     }
 
     #[tokio::test]
@@ -1100,7 +1598,7 @@ mod tests {
 
         health.assert_async().await;
         assert_eq!(drain_statuses(&mut events), vec!["connecting", "connected"]);
-        disconnect(&state, &id).await;
+        teardown(&state, &id);
     }
 
     #[tokio::test]

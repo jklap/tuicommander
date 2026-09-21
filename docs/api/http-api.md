@@ -1083,6 +1083,13 @@ never returned, never written to `connections.json` — `GET .../password` answe
 whether one is stored, not what it is. `POST .../token` trades it for the remote
 daemon's in-memory session token.
 
+`DELETE /config/remote-connections/{id}` tears the live connection down before it
+rewrites the store: status poll, mirror task, mirrored session rows, SSH tunnel
+and session token all go, through the same `remote_runtime::teardown` the
+disconnect route uses. Deleting a connected machine therefore needs no
+disconnect first — and must not be given one, because the tunnel is keyed by the
+profile the delete is about to remove.
+
 ### Remote Connection Runtime
 
 ```
@@ -1102,6 +1109,13 @@ connection that is not connected has no such answer.
 down. Neither returns the new status: every transition is pushed as a
 `remote-connection-status` event on `/events` SSE (and to the desktop window),
 so one client connecting is visible to all of them.
+
+Both directions are idempotent. A second `POST .../connect` while one is already
+in flight is a no-op rather than a second handshake, and `DELETE .../connect` on
+an unknown id creates nothing. A connect that fails stops the SSH tunnel it
+started, so a bad password leaves no `ssh` process behind. A connection in
+`error` keeps its poll: the daemon coming back is a `connected` push, not a
+reconnect the user has to ask for.
 
 These three routes are desktop-only — they are registered on `build_router`, not
 in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote

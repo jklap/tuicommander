@@ -285,6 +285,11 @@ pub async fn delete_remote_connection(
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     id: String,
 ) -> Result<(), String> {
+    // Before the store, not after: everything the runtime is holding for this
+    // connection — the poll, the mirror, its rows, the tunnel, the session token
+    // — is keyed by an id that is about to name nothing. Deleting the record
+    // first leaves all of it running with no way left to address it.
+    crate::remote_runtime::teardown(&state.inner().clone(), &id);
     let _guard = state.connections_lock.lock().await;
     let mut connections =
         RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;

@@ -39,9 +39,21 @@ use crate::state::AppEvent;
 /// only has to avoid a hot loop.
 const RECONNECT_DELAY: Duration = Duration::from_secs(3);
 
-/// Timeout for the one-shot `GET /sessions` seed. The event stream gets none —
-/// it is long-lived by design.
+/// Timeout for the one-shot `GET /sessions` seed. The event stream gets a
+/// read-idle deadline instead — see [`STREAM_IDLE_TIMEOUT`].
 const SEED_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the event stream may say nothing before it is treated as dead.
+///
+/// A whole-request timeout would be wrong — the stream is long-lived on purpose
+/// — but no deadline at all was worse: `stream.next()` on a half-open socket is
+/// pending forever, so a laptop that slept, a NAT that dropped its entry or a
+/// tunnel killed mid-flight left the mirror parked on a connection that would
+/// never speak again, holding rows nothing would ever update.
+///
+/// Three missed keep-alives. The daemon's `/events` sends one every 15s
+/// (`sse_routes.rs`), so real silence this long is not a quiet machine.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Sessions running on remote machines, keyed by connection id then session id.
 ///
@@ -315,17 +327,22 @@ fn republish(state: &Arc<AppState>, connection_id: &str, event: &str, payload: s
     });
 }
 
-/// Consume the daemon's `/events` until it ends or errors.
+/// Consume the daemon's `/events` until it ends, errors, or goes quiet for
+/// `idle`.
 ///
 /// No `types=`: the allowlist is the one thing that would have to be edited
 /// every time an event type is added, and a filtered mirror is a mirror that
 /// silently lags the local machine.
+///
+/// `idle` is a parameter rather than the constant so a test can prove the
+/// deadline without waiting 45 seconds for it.
 async fn consume_stream(
     state: &Arc<AppState>,
     client: &reqwest::Client,
     connection_id: &str,
     base_url: &str,
     token: Option<&str>,
+    idle: Duration,
 ) -> Result<(), String> {
     let url = format!("{}/events", base_url.trim_end_matches('/'));
     let mut request = client.get(&url);
@@ -338,7 +355,14 @@ async fn consume_stream(
     }
     let mut decoder = FrameDecoder::default();
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let next = tokio::time::timeout(idle, stream.next()).await.map_err(|_| {
+            format!(
+                "the daemon sent nothing for {}s, past its own keep-alive — treating the stream as dead",
+                idle.as_secs_f32()
+            )
+        })?;
+        let Some(chunk) = next else { break };
         let chunk = chunk.map_err(|e| e.to_string())?;
         for frame in decoder.push(&chunk) {
             if apply_frame(state, connection_id, &frame) {
@@ -363,7 +387,9 @@ async fn consume_stream(
 /// re-seed ordering without waiting on it: the delay is not what is under test,
 /// and a test that sleeps on the real one is a test of how fast this machine is.
 async fn run(state: Arc<AppState>, connection_id: String, retry_delay: Duration) {
-    let client = reqwest::Client::new();
+    // The runtime's client, not a new one: the seed and the probes talk to the
+    // same daemon, so they share the same connection pool.
+    let client = state.remote.http_client();
     loop {
         let Some(base_url) = state.remote.base_url(&connection_id) else {
             // The connection is no longer connected. `disconnect` aborts this
@@ -385,8 +411,15 @@ async fn run(state: Arc<AppState>, connection_id: String, retry_delay: Duration)
                 continue;
             }
         }
-        if let Err(e) =
-            consume_stream(&state, &client, &connection_id, &base_url, token.as_deref()).await
+        if let Err(e) = consume_stream(
+            &state,
+            &client,
+            &connection_id,
+            &base_url,
+            token.as_deref(),
+            STREAM_IDLE_TIMEOUT,
+        )
+        .await
         {
             tracing::warn!(
                 source = "remote",
@@ -842,6 +875,7 @@ mod tests {
             "vps",
             &server.url(),
             Some("tok"),
+            STREAM_IDLE_TIMEOUT,
         )
         .await
         .expect("the stream ended cleanly");
@@ -883,9 +917,16 @@ mod tests {
             .await;
         let state = Arc::new(make_test_app_state());
         let mut rx = state.event_bus.subscribe();
-        consume_stream(&state, &reqwest::Client::new(), "vps", &server.url(), None)
-            .await
-            .expect("the stream ended cleanly");
+        consume_stream(
+            &state,
+            &reqwest::Client::new(),
+            "vps",
+            &server.url(),
+            None,
+            STREAM_IDLE_TIMEOUT,
+        )
+        .await
+        .expect("the stream ended cleanly");
 
         let event = rx.try_recv().expect("one event crossed");
         assert_eq!(
@@ -942,6 +983,71 @@ mod tests {
         list.assert_async().await;
         stream.assert_async().await;
         assert_eq!(mirrored_rows(&state).len(), 1);
+    }
+
+    /// A stream that stops speaking is dead, not quiet.
+    ///
+    /// The daemon sends a keep-alive every 15s, so real silence means the socket
+    /// went away without saying so — a slept laptop, a dropped NAT entry, a
+    /// tunnel killed mid-flight. With no deadline `stream.next()` stays pending
+    /// for the life of the process and the mirror holds rows nothing will ever
+    /// update, while the status poll next door keeps reporting a healthy daemon.
+    ///
+    /// The frame assertion is not decoration: it is what stops this test passing
+    /// vacuously. A deadline that fired during the HTTP response rather than
+    /// during the silence would produce the same error, and the only thing that
+    /// tells the two apart is whether the frame the daemon DID send arrived.
+    #[tokio::test]
+    async fn a_stream_that_stops_speaking_is_retired_rather_than_awaited_forever() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let daemon = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("the mirror connected");
+            let mut request = [0u8; 2048];
+            let _ = socket.read(&mut request).await;
+            let frame = "event: pty-activity\ndata: {\"session_id\":\"s1\"}\n\n";
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+                         transfer-encoding: chunked\r\n\r\n{:x}\r\n{frame}\r\n",
+                        frame.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            socket.flush().await.unwrap();
+            // Then nothing at all, with the socket still open.
+            std::future::pending::<()>().await;
+        });
+
+        let state = Arc::new(make_test_app_state());
+        let mut rx = state.event_bus.subscribe();
+
+        let error = consume_stream(
+            &state,
+            &reqwest::Client::new(),
+            "vps",
+            &format!("http://{addr}"),
+            None,
+            Duration::from_millis(300),
+        )
+        .await
+        .expect_err("silence past the deadline is a dead stream");
+
+        assert!(
+            error.contains("keep-alive"),
+            "the error must name why the stream was retired: {error}"
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::RemoteMirrored { .. })),
+            "the frame that arrived before the silence was dropped, so the \
+             deadline fired on the handshake rather than on the silence"
+        );
+        daemon.abort();
     }
 
     #[test]
