@@ -1,8 +1,21 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildHttpUrl, DEDICATED_WS_COMMANDS, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
-import { setRemoteBaseUrlLookup, setRemoteTokenLookup, setTransportLogger } from "../transportRuntime";
+import {
+	buildHttpUrl,
+	DEDICATED_WS_COMMANDS,
+	INTENTIONALLY_UNMAPPED,
+	isTauri,
+	mapCommandToHttp,
+	owningConnectionFor,
+} from "../transport";
+import {
+	setRemoteBaseUrlLookup,
+	setRemoteTokenLookup,
+	setRepoConnectionLookup,
+	setSessionConnectionLookup,
+	setTransportLogger,
+} from "../transportRuntime";
 
 function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
@@ -3112,5 +3125,61 @@ describe("transport", () => {
 				expect(instances.length).toBe(1);
 			});
 		});
+	});
+});
+
+/**
+ * The gate between "this call belongs to a remote machine" and "this call can
+ * actually be sent there".
+ *
+ * `resolveOwningConnection` answers the first question from the call's
+ * arguments; this function answers the second from the command name. Only a
+ * command with an HTTP mapping can be routed — a host-only one has no
+ * request/response route, so routing it would turn a working local call into a
+ * throw.
+ */
+describe("owningConnectionFor", () => {
+	const SESSION = "sess-on-tycho";
+	const REPO = "/Volumes/work/api";
+	const TYCHO = "conn-tycho";
+
+	beforeEach(() => {
+		setSessionConnectionLookup((id) => (id === SESSION ? TYCHO : undefined));
+		setRepoConnectionLookup((path) => (path.startsWith(REPO) ? TYCHO : undefined));
+	});
+
+	afterEach(() => {
+		setSessionConnectionLookup(() => undefined);
+		setRepoConnectionLookup(() => undefined);
+	});
+
+	it("routes a mapped command to the machine its arguments name", () => {
+		expect(owningConnectionFor("write_pty", { sessionId: SESSION, data: "ls\r" })).toBe(TYCHO);
+		expect(owningConnectionFor("get_branches_detail", { repoPath: REPO })).toBe(TYCHO);
+	});
+
+	it("leaves a call about nothing remote alone", () => {
+		expect(owningConnectionFor("write_pty", { sessionId: "local-session", data: "ls\r" })).toBeUndefined();
+		expect(owningConnectionFor("get_branches_detail", { repoPath: "/local/repo" })).toBeUndefined();
+	});
+
+	// A host-only command keeps running here rather than being routed into a
+	// throw — but silently would leave a remote repo looking local, so it says
+	// so. Once per command: it is reached once per call, and a per-call warning
+	// would be one line per keystroke for a command like `start_native_drag`.
+	it("warns exactly once for a host-only command that names a remote machine", () => {
+		const warn = vi.fn();
+		setTransportLogger({ debug: vi.fn(), warn });
+		// Chosen off the real set rather than invented, so the test cannot pass
+		// against a command that is no longer host-only.
+		const hostOnly = [...INTENTIONALLY_UNMAPPED].find((command) => command === "start_native_drag");
+		expect(hostOnly).toBe("start_native_drag");
+
+		expect(owningConnectionFor("start_native_drag", { repoPath: REPO })).toBeUndefined();
+		expect(owningConnectionFor("start_native_drag", { sessionId: SESSION })).toBeUndefined();
+
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0][1]).toContain("start_native_drag");
+		expect(warn.mock.calls[0][2]).toMatchObject({ command: "start_native_drag", connectionId: TYCHO });
 	});
 });
