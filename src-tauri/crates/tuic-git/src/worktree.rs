@@ -52,6 +52,27 @@ pub fn finish_warm(path: &Path, token: u64, status: serde_json::Value) {
     }
 }
 
+/// Replace the detail of a still-`pending` warm entry (copy progress, which
+/// post-create step is running) while keeping `status: "pending"`. Token-checked
+/// like [`finish_warm`], and a no-op once the entry is no longer pending, so a
+/// late progress report can never resurrect a finished or replaced warm.
+pub fn update_pending_warm(path: &Path, token: u64, detail: serde_json::Value) {
+    if let Some(mut current) = WARM_STATES.get_mut(&warm_key(path))
+        && current.0 == token
+        && current.1["status"] == "pending"
+    {
+        let mut status = serde_json::json!({"status": "pending"});
+        if let (Some(target), serde_json::Value::Object(extra)) = (status.as_object_mut(), detail) {
+            for (key, value) in extra {
+                if key != "status" {
+                    target.insert(key, value);
+                }
+            }
+        }
+        current.1 = status;
+    }
+}
+
 pub fn clear_warm(path: &Path) {
     WARM_STATES.remove(&warm_key(path));
 }
@@ -10636,6 +10657,32 @@ branch refs/heads/feat
         assert_eq!(warm_status(&worktree)["status"], "pending");
         finish_warm(&worktree, new_token, serde_json::json!({"status": "done"}));
         clear_warm(&worktree);
+    }
+
+    #[test]
+    fn pending_warm_detail_is_token_checked_and_never_reopens_a_finished_warm() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("pending-detail");
+        let old_token = begin_warm(&path);
+        let token = begin_warm(&path);
+
+        update_pending_warm(&path, old_token, serde_json::json!({"phase": "stale"}));
+        assert_eq!(warm_status(&path), serde_json::json!({"status": "pending"}));
+
+        update_pending_warm(
+            &path,
+            token,
+            serde_json::json!({"status": "done", "phase": "warming", "copied": 1, "total": 2}),
+        );
+        assert_eq!(
+            warm_status(&path),
+            serde_json::json!({"status": "pending", "phase": "warming", "copied": 1, "total": 2})
+        );
+
+        finish_warm(&path, token, serde_json::json!({"status": "done"}));
+        update_pending_warm(&path, token, serde_json::json!({"phase": "late"}));
+        assert_eq!(warm_status(&path), serde_json::json!({"status": "done"}));
+        clear_warm(&path);
     }
 
     #[test]

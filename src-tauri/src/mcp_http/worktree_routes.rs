@@ -1073,16 +1073,242 @@ mod warm_tests {
 
         assert!(!marker.exists(), "setup script ran for a removed workspace");
         assert!(!destination.join("ignored.txt").exists());
+        let mut terminal_events = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            match event {
+                crate::state::AppEvent::WorktreeSyncStarted { .. } => {
+                    panic!("no chain step may run after removal")
+                }
+                // The only event: the chain's end, so a frontend waiter for
+                // this workspace resolves instead of waiting out its timeout.
+                crate::state::AppEvent::WorktreeSetupScriptCompleted {
+                    outcome,
+                    exit_code,
+                    error,
+                    ..
+                } => terminal_events.push((outcome, exit_code, error.is_some())),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            terminal_events,
+            [(crate::state::SetupChainOutcome::Stopped, None, true)]
+        );
+        assert!(
+            crate::worktree::get_worktree_setup_status(
+                &state,
+                &repo.to_string_lossy(),
+                "removed-chain"
+            )
+            .is_none(),
+            "a removed workspace has no setup outcome to poll"
+        );
+    }
+
+    /// A stale chain for a `(repo, branch)` that was removed and created again
+    /// must neither wipe nor overwrite the new chain's status, nor emit the
+    /// terminal event the new creation's waiter is listening for.
+    #[tokio::test]
+    async fn a_superseded_chain_leaves_the_new_chains_status_and_waiter_alone() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        let repo_path = repo.to_string_lossy().into_owned();
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        let old_token = crate::worktree::begin_warm(&destination);
+        let (entered, wait_entered) = std::sync::mpsc::channel::<()>();
+        let (release, wait_release) = std::sync::mpsc::channel::<()>();
+
+        // The old chain blocks inside its warm...
+        let stale = tokio::spawn(crate::worktree::run_worktree_setup_chain(
+            Arc::clone(&state),
+            repo_path.clone(),
+            "recreated".into(),
+            destination.clone(),
+            Some((
+                old_token,
+                move |_: &std::path::Path, _: &std::path::Path| {
+                    entered.send(()).unwrap();
+                    wait_release.recv().unwrap();
+                    crate::cow::WarmingReport::default()
+                },
+            )),
+        ));
+        tokio::task::spawn_blocking(move || wait_entered.recv().unwrap())
+            .await
+            .unwrap();
+        // ...while the workspace is removed and created again.
+        let new_token = crate::worktree::begin_warm(&destination);
+        let fresh = crate::worktree::spawn_worktree_setup_chain(
+            &state,
+            repo_path.clone(),
+            "recreated".into(),
+            destination.clone(),
+            None,
+        );
+        fresh.await.unwrap();
+        let mut outcomes = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let crate::state::AppEvent::WorktreeSetupScriptCompleted { outcome, .. } = event {
+                outcomes.push(outcome);
+            }
+        }
+        assert_eq!(outcomes, [crate::state::SetupChainOutcome::NotConfigured]);
+
+        release.send(()).unwrap();
+        stale.await.unwrap();
+
+        assert_eq!(
+            crate::worktree::get_worktree_setup_status(&state, &repo_path, "recreated"),
+            Some(crate::state::WorktreeSetupStatus::NotConfigured),
+            "the stale chain wiped or overwrote the new chain's status"
+        );
         while let Ok(event) = events.try_recv() {
             assert!(
                 !matches!(
                     event,
-                    crate::state::AppEvent::WorktreeSyncStarted { .. }
-                        | crate::state::AppEvent::WorktreeSetupScriptCompleted { .. }
+                    crate::state::AppEvent::WorktreeSetupScriptCompleted { .. }
                 ),
-                "no chain step may run after removal"
+                "the stale chain emitted a terminal event for the new workspace"
             );
         }
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "pending"
+        );
+        crate::worktree::finish_warm(
+            &destination,
+            new_token,
+            serde_json::json!({"status": "done"}),
+        );
+        crate::worktree::clear_warm(&destination);
+    }
+
+    /// The warm opt-out applies inside the chain, so every creation path that
+    /// hands it a token honours it: the copy is skipped, the token still
+    /// decides whether the chain may continue, and the status says why.
+    #[tokio::test]
+    async fn a_disabled_warm_skips_the_copy_but_still_finishes_the_chain() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = setup_repo(temp.path());
+        save_repo_entry(
+            &repo,
+            crate::config::RepoSettingsEntry {
+                warm_ignored_directories: Some(false),
+                ..Default::default()
+            },
+        );
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+
+        crate::worktree::run_worktree_setup_chain(
+            Arc::clone(&state),
+            repo.to_string_lossy().into_owned(),
+            "no-warm".into(),
+            destination.clone(),
+            Some((
+                token,
+                |_: &std::path::Path, _: &std::path::Path| -> crate::cow::WarmingReport {
+                    panic!("warming is disabled for this repo")
+                },
+            )),
+        )
+        .await;
+
+        let status = crate::worktree::warm_status(&destination);
+        assert_eq!(status["status"], "done", "{status}");
+        assert!(
+            status["skipped"]
+                .as_str()
+                .is_some_and(|s| s.contains("disabled")),
+            "{status}"
+        );
+        let mut saw_end = false;
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::WorktreeWarmStarted { .. }),
+                "a disabled warm must stay silent"
+            );
+            if let crate::state::AppEvent::WorktreeSetupScriptCompleted { outcome, .. } = event {
+                assert_eq!(outcome, crate::state::SetupChainOutcome::NotConfigured);
+                saw_end = true;
+            }
+        }
+        assert!(saw_end, "the chain must still report its end");
+        crate::worktree::clear_warm(&destination);
+    }
+
+    /// `warm_with_events` turns a reporting warm into the `worktree-warm-*`
+    /// events and the pending `warm_artifacts` detail a poller sees.
+    #[tokio::test]
+    async fn warm_progress_is_published_as_events_and_pending_detail() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let destination = temp.path().join("workspace");
+        std::fs::create_dir(&destination).unwrap();
+        let token = crate::worktree::begin_warm(&destination);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        let probe = destination.clone();
+
+        let warm = crate::worktree::warm_with_events(
+            Arc::clone(&state),
+            "/repo".into(),
+            "feat".into(),
+            token,
+            move |_, _, on_started, on_progress| {
+                on_started(2);
+                assert_eq!(
+                    crate::worktree::warm_status(&probe),
+                    serde_json::json!({"status": "pending", "phase": "warming", "copied": 0, "total": 2})
+                );
+                on_progress(1, 2, std::path::Path::new("node_modules"));
+                on_progress(2, 2, std::path::Path::new("target"));
+                assert_eq!(crate::worktree::warm_status(&probe)["copied"], 2);
+                crate::cow::WarmingReport {
+                    warmed: 2,
+                    warnings: Vec::new(),
+                }
+            },
+        );
+        let report = warm(std::path::Path::new("/repo"), &destination);
+        assert_eq!(report.warmed, 2);
+
+        let mut seen = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            match event {
+                crate::state::AppEvent::WorktreeWarmStarted {
+                    total,
+                    worktree_path,
+                    ..
+                } => {
+                    assert_eq!(worktree_path, destination.to_string_lossy());
+                    seen.push(format!("started:{total}"));
+                }
+                crate::state::AppEvent::WorktreeWarmProgress {
+                    copied, current, ..
+                } => {
+                    seen.push(format!("progress:{copied}:{}", current.unwrap_or_default()));
+                }
+                crate::state::AppEvent::WorktreeWarmCompleted { warmed, .. } => {
+                    seen.push(format!("completed:{warmed}"));
+                }
+                _ => {}
+            }
+        }
+        // The first progress tick may be throttled; the last one never is.
+        assert_eq!(seen.first().map(String::as_str), Some("started:2"));
+        assert_eq!(seen.last().map(String::as_str), Some("completed:2"));
+        assert!(seen.contains(&"progress:2:target".to_string()), "{seen:?}");
+        crate::worktree::clear_warm(&destination);
     }
 
     #[tokio::test]

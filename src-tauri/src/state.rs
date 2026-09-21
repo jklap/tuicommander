@@ -613,11 +613,45 @@ pub enum AppEvent {
         total: usize,
         errors: Vec<String>,
     },
-    /// A worktree's Setup Script finished running in the background, after
-    /// `worktree::spawn_worktree_setup_chain` awaited the CoW warm (when the
-    /// creation path warms) and then the file sync above.
-    /// Fired only when a setup script was actually configured — silent
-    /// otherwise, matching `WorktreeSync*`'s own "nothing to do" precedent.
+    /// The background CoW warm of a freshly created worktree's git-ignored
+    /// build directories started copying `total` directories (after skip
+    /// rules). Silent when warming is disabled or there is nothing to copy.
+    /// See `worktree::warm_with_events`.
+    #[serde(rename = "worktree-warm-started")]
+    WorktreeWarmStarted {
+        repo_path: String,
+        branch: String,
+        worktree_path: String,
+        total: usize,
+    },
+    /// Throttled progress for the same warm, in completion order; `current`
+    /// is the directory that just finished (relative to the worktree).
+    #[serde(rename = "worktree-warm-progress")]
+    WorktreeWarmProgress {
+        repo_path: String,
+        branch: String,
+        worktree_path: String,
+        copied: usize,
+        total: usize,
+        current: Option<String>,
+    },
+    /// The warm's copies are done. Fired only after a `WorktreeWarmStarted`.
+    /// The workspace's `warm_artifacts.status` still reads `pending` until
+    /// the rest of the post-create chain (file sync, Setup Script) finishes.
+    #[serde(rename = "worktree-warm-completed")]
+    WorktreeWarmCompleted {
+        repo_path: String,
+        branch: String,
+        worktree_path: String,
+        warmed: usize,
+        warnings: Vec<String>,
+    },
+    /// The post-create chain (`worktree::spawn_worktree_setup_chain`: CoW
+    /// warm, file sync, Setup Script) reached its end. Always fired once per
+    /// chain that is still the newest for its `(repo_path, branch)`, whatever
+    /// the end was — see [`SetupChainOutcome`] — so a waiter can never hang on
+    /// a frontend/backend disagreement about whether a script is configured,
+    /// nor on a chain stopped by a removal or an abort.
     /// Worktree creation itself has already returned by this point on every
     /// creation path (desktop, MCP HTTP worktree-create, MCP HTTP
     /// session-with-worktree-create): this event, not a synchronous response
@@ -627,6 +661,7 @@ pub enum AppEvent {
         repo_path: String,
         branch: String,
         worktree_path: String,
+        outcome: SetupChainOutcome,
         /// `None` when the script never produced an exit code at all (spawn
         /// failure, task panic) — see `error` for that case.
         exit_code: Option<i64>,
@@ -648,6 +683,20 @@ pub(crate) fn session_state_payload(session_id: &str, state: &SessionState) -> s
     serde_json::json!({ "session_id": session_id, "state": state })
 }
 
+/// How a worktree's post-create chain ended, carried as `outcome` by
+/// [`AppEvent::WorktreeSetupScriptCompleted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SetupChainOutcome {
+    /// A configured Setup Script ran; `exit_code`/`error` say how.
+    Completed,
+    /// No Setup Script is configured for the repo; the chain is done.
+    NotConfigured,
+    /// The chain stopped before the script could finish: the workspace was
+    /// removed, or the task was aborted. `error` says which.
+    Stopped,
+}
+
 /// The wire body of [`AppEvent::WorktreeSetupScriptCompleted`], shared by the
 /// desktop window event (`worktree::spawn_worktree_setup_chain`) and the
 /// `/events` SSE arm — same one-builder rule as [`session_state_payload`].
@@ -655,6 +704,7 @@ pub(crate) fn worktree_setup_script_completed_payload(
     repo_path: &str,
     branch: &str,
     worktree_path: &str,
+    outcome: SetupChainOutcome,
     exit_code: Option<i64>,
     error: Option<&str>,
 ) -> serde_json::Value {
@@ -662,8 +712,61 @@ pub(crate) fn worktree_setup_script_completed_payload(
         "repoPath": repo_path,
         "branch": branch,
         "worktreePath": worktree_path,
+        "outcome": outcome,
         "exitCode": exit_code,
         "error": error,
+    })
+}
+
+/// The wire body of [`AppEvent::WorktreeWarmStarted`], shared by the desktop
+/// window event and the `/events` SSE arm (one-builder rule).
+pub(crate) fn worktree_warm_started_payload(
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    total: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "repoPath": repo_path,
+        "branch": branch,
+        "worktreePath": worktree_path,
+        "total": total,
+    })
+}
+
+/// The wire body of [`AppEvent::WorktreeWarmProgress`] (one-builder rule).
+pub(crate) fn worktree_warm_progress_payload(
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    copied: usize,
+    total: usize,
+    current: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "repoPath": repo_path,
+        "branch": branch,
+        "worktreePath": worktree_path,
+        "copied": copied,
+        "total": total,
+        "current": current,
+    })
+}
+
+/// The wire body of [`AppEvent::WorktreeWarmCompleted`] (one-builder rule).
+pub(crate) fn worktree_warm_completed_payload(
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    warmed: usize,
+    warnings: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "repoPath": repo_path,
+        "branch": branch,
+        "worktreePath": worktree_path,
+        "warmed": warmed,
+        "warnings": warnings,
     })
 }
 
@@ -5634,6 +5737,10 @@ impl AppState {
             | AppEvent::WorktreeSyncStarted { .. }
             | AppEvent::WorktreeSyncProgress { .. }
             | AppEvent::WorktreeSyncCompleted { .. }
+            // So is the CoW warm that precedes it.
+            | AppEvent::WorktreeWarmStarted { .. }
+            | AppEvent::WorktreeWarmProgress { .. }
+            | AppEvent::WorktreeWarmCompleted { .. }
             // The setup-script outcome that follows the sync is repo-scoped too.
             | AppEvent::WorktreeSetupScriptCompleted { .. } => {}
             // Dictation is bound to a session but says nothing about it: a

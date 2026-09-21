@@ -15,7 +15,13 @@ import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
 import { remoteConnectionsStore } from "../stores/remoteConnections";
 import { repoSettingsStore } from "../stores/repoSettings";
-import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
+import {
+	placementWorkspaceFor,
+	repositoriesStore,
+	resolveRepoOwner,
+	resolveRepoPathFor,
+	type WorkspaceState,
+} from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
@@ -138,6 +144,7 @@ export interface AppInitDeps {
 		repoPath: string;
 		branch: string;
 		worktreePath: string;
+		outcome?: "completed" | "not_configured" | "stopped";
 		exitCode: number | null;
 		error: string | null;
 	}) => void;
@@ -589,14 +596,63 @@ export async function initApp(deps: AppInitDeps) {
 		},
 	).catch((err) => appLogger.error("app", "Failed to register worktree-sync-completed listener", err));
 
-	// The setup script (if configured) runs after the sync above, in the same
-	// background chain (see `worktree::spawn_worktree_setup_chain`) — its
-	// outcome arrives here instead of a synchronous response from worktree
-	// creation.
+	// The CoW warm of git-ignored build directories (`worktree::warm_with_events`)
+	// is the FIRST step of the same background chain. It drives the sidebar row's
+	// "Warming…" badge (RepoSection.tsx) rather than a toast: it can run for tens
+	// of seconds, so a live per-row indicator says more than a one-shot
+	// notification. Silent when warming is disabled or nothing is copied.
+	//
+	// Rows are matched by checkout path, never by branch (a branch can back two
+	// workspaces), and only an EXISTING row is updated: `setWorkspace` would
+	// otherwise fabricate one if a warm event outran `worktree-created`, whose
+	// handler is the one that builds the row with real data.
+	const updateWarmState = (repoPath: string, worktreePath: string, warmState: WorkspaceState["warmState"]) => {
+		const workspaces = repositoriesStore.get(repoPath)?.workspaces;
+		if (!workspaces) return;
+		const row = Object.values(workspaces).find((w) => w.worktreePath != null && sameDir(w.worktreePath, worktreePath));
+		if (!row) return;
+		repositoriesStore.setWorkspace(repoPath, row.workspaceId, { warmState });
+	};
+
+	listen<{ repoPath: string; branch: string; worktreePath: string; total: number }>(
+		"worktree-warm-started",
+		(event) => {
+			const { repoPath, worktreePath, total } = event.payload;
+			updateWarmState(repoPath, worktreePath, { status: "warming", copied: 0, total });
+		},
+	).catch((err) => appLogger.error("app", "Failed to register worktree-warm-started listener", err));
+
 	listen<{
 		repoPath: string;
 		branch: string;
 		worktreePath: string;
+		copied: number;
+		total: number;
+		current: string | null;
+	}>("worktree-warm-progress", (event) => {
+		const { repoPath, worktreePath, copied, total, current } = event.payload;
+		updateWarmState(repoPath, worktreePath, { status: "warming", copied, total, current: current ?? undefined });
+	}).catch((err) => appLogger.error("app", "Failed to register worktree-warm-progress listener", err));
+
+	listen<{ repoPath: string; branch: string; worktreePath: string; warmed: number; warnings: string[] }>(
+		"worktree-warm-completed",
+		(event) => {
+			const { repoPath, worktreePath, warnings } = event.payload;
+			if (warnings.length > 0) appLogger.warn("git", "Worktree warm finished with warnings", event.payload);
+			updateWarmState(repoPath, worktreePath, null);
+		},
+	).catch((err) => appLogger.error("app", "Failed to register worktree-warm-completed listener", err));
+
+	// The setup script (if configured) runs after the sync above, in the same
+	// background chain (see `worktree::spawn_worktree_setup_chain`) — its
+	// outcome arrives here instead of a synchronous response from worktree
+	// creation. The backend sends this once per chain whatever its end
+	// (`outcome`: completed / not_configured / stopped).
+	listen<{
+		repoPath: string;
+		branch: string;
+		worktreePath: string;
+		outcome?: "completed" | "not_configured" | "stopped";
 		exitCode: number | null;
 		error: string | null;
 	}>("worktree-setup-script-completed", (event) => {

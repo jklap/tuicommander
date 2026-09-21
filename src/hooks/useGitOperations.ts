@@ -803,10 +803,21 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		repoPath: string;
 		branch: string;
 		worktreePath: string;
+		/** Absent from a backend older than the always-terminal chain event:
+		 *  that one only ever sent it after a script ran. */
+		outcome?: "completed" | "not_configured" | "stopped";
 		exitCode: number | null;
 		error: string | null;
 	}) => {
 		const { branch, exitCode, error } = payload;
+		const outcome = payload.outcome ?? "completed";
+		// The chain also reports an end that ran no script: nothing configured
+		// (silent), or stopped by a removal/abort (not a script failure).
+		if (outcome === "not_configured") return;
+		if (outcome === "stopped") {
+			appLogger.info("git", `Setup chain for ${branch} stopped before its setup script finished`, payload);
+			return;
+		}
 		if (error) {
 			appLogger.warn("git", "Setup script execution error", payload);
 			deps.setStatusInfo(`Setup script failed: ${error}`);

@@ -327,6 +327,9 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::WorktreeSyncStarted { .. } => "worktree-sync-started",
         AppEvent::WorktreeSyncProgress { .. } => "worktree-sync-progress",
         AppEvent::WorktreeSyncCompleted { .. } => "worktree-sync-completed",
+        AppEvent::WorktreeWarmStarted { .. } => "worktree-warm-started",
+        AppEvent::WorktreeWarmProgress { .. } => "worktree-warm-progress",
+        AppEvent::WorktreeWarmCompleted { .. } => "worktree-warm-completed",
         AppEvent::WorktreeSetupScriptCompleted { .. } => "worktree-setup-script-completed",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
         AppEvent::RemoteConnectionStatusChanged { .. } => "remote-connection-status",
@@ -641,10 +644,47 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "errors": errors,
             })
         }
+        // The warm events share their builders with the Tauri window emits
+        // (`worktree::warm_with_events`), like the setup-script event below.
+        AppEvent::WorktreeWarmStarted {
+            repo_path,
+            branch,
+            worktree_path,
+            total,
+        } => crate::state::worktree_warm_started_payload(repo_path, branch, worktree_path, *total),
+        AppEvent::WorktreeWarmProgress {
+            repo_path,
+            branch,
+            worktree_path,
+            copied,
+            total,
+            current,
+        } => crate::state::worktree_warm_progress_payload(
+            repo_path,
+            branch,
+            worktree_path,
+            *copied,
+            *total,
+            current.as_deref(),
+        ),
+        AppEvent::WorktreeWarmCompleted {
+            repo_path,
+            branch,
+            worktree_path,
+            warmed,
+            warnings,
+        } => crate::state::worktree_warm_completed_payload(
+            repo_path,
+            branch,
+            worktree_path,
+            *warmed,
+            warnings,
+        ),
         AppEvent::WorktreeSetupScriptCompleted {
             repo_path,
             branch,
             worktree_path,
+            outcome,
             exit_code,
             error,
         } => {
@@ -655,6 +695,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 repo_path,
                 branch,
                 worktree_path,
+                *outcome,
                 *exit_code,
                 error.as_deref(),
             )
@@ -1094,6 +1135,49 @@ mod tests {
     }
 
     #[test]
+    fn worktree_warm_events_use_camelcase_matching_window_events() {
+        let started = AppEvent::WorktreeWarmStarted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            worktree_path: "/wt/feat-x".into(),
+            total: 3,
+        };
+        assert_eq!(event_type_name(&started), "worktree-warm-started");
+        assert_eq!(
+            event_payload(&started),
+            serde_json::json!({"repoPath": "/repo", "branch": "feat-x", "worktreePath": "/wt/feat-x", "total": 3})
+        );
+
+        let progress = AppEvent::WorktreeWarmProgress {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            worktree_path: "/wt/feat-x".into(),
+            copied: 2,
+            total: 3,
+            current: Some("node_modules".into()),
+        };
+        assert_eq!(event_type_name(&progress), "worktree-warm-progress");
+        let body = event_payload(&progress);
+        assert_eq!(body["copied"], 2);
+        assert_eq!(body["total"], 3);
+        assert_eq!(body["current"], "node_modules");
+        assert_eq!(body["worktreePath"], "/wt/feat-x");
+
+        let completed = AppEvent::WorktreeWarmCompleted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            worktree_path: "/wt/feat-x".into(),
+            warmed: 2,
+            warnings: vec!["target stayed cold".into()],
+        };
+        assert_eq!(event_type_name(&completed), "worktree-warm-completed");
+        let body = event_payload(&completed);
+        assert_eq!(body["warmed"], 2);
+        assert_eq!(body["warnings"][0], "target stayed cold");
+        assert!(body.get("worktree_path").is_none());
+    }
+
+    #[test]
     fn worktree_setup_script_completed_uses_camelcase_matching_window_event() {
         // `worktree::spawn_worktree_setup_chain` dual-emits this on the bus
         // (SSE) AND the Tauri window with identical camelCase keys.
@@ -1101,6 +1185,7 @@ mod tests {
             repo_path: "/repo".into(),
             branch: "feat-x".into(),
             worktree_path: "/repo/worktrees/feat-x".into(),
+            outcome: crate::state::SetupChainOutcome::Completed,
             exit_code: Some(1),
             error: None,
         };
@@ -1109,6 +1194,7 @@ mod tests {
         assert_eq!(body["repoPath"], "/repo");
         assert_eq!(body["branch"], "feat-x");
         assert_eq!(body["worktreePath"], "/repo/worktrees/feat-x");
+        assert_eq!(body["outcome"], "completed");
         assert_eq!(body["exitCode"], 1);
         assert!(body["error"].is_null());
         assert!(body.get("repo_path").is_none());

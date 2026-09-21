@@ -74,7 +74,7 @@ never all expert: in basic mode it would show an empty page.
 | General | Auto-Standby Timeout, Content Indexing, Update Channel |
 | Notifications | Master Volume, Audio Output Device |
 | Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Allow terminal focus/attention requests, Block folding, Show block marks, Show prompt marks, Reflow scrollback on resize |
-| Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup and safe cleanup countdown, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
+| Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Warm ignored build directories, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup and safe cleanup countdown, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
 | Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
@@ -291,7 +291,7 @@ repository and worktree defaults.
 | **Hide Draft PRs / Hide Conflicting PRs / Hide CI Failing PRs** | Filter the pull requests the app shows. Each can be overridden per repository (**On / Use global / Off**, see [Repositories](#worktree-tab)) |
 | **Auto-Delete on PR Close** | Off (default), Ask, or Auto — controls branch cleanup when a PR is merged/closed |
 | **Show issues / Issue Filter** | Which issues to show in the GitHub panel: Assigned (default), Created, Mentioned, All, or Disabled (**Issues** section) |
-| **Repository Defaults** | Base branch, **Copy ignored files** and **Copy untracked files** (two separate toggles), setup/run/archive scripts applied to new repos |
+| **Repository Defaults** | Base branch, **Copy ignored files** and **Copy untracked files** (two separate toggles), **Warm ignored build directories** (on by default; expert), setup/run/archive scripts applied to new repos |
 | **Worktree Defaults** | Storage strategy, branch-name prompt, branch deletion, auto-archive, orphan cleanup, merge strategy, after-merge behavior, auto-fetch interval. See [Worktrees](worktrees.md). |
 | **Additional GitHub Accounts** | Extra github.com or Enterprise logins. See [GitHub Integration](github-integration.md). |
 | **CircleCI** | Store or remove a read-only CircleCI token for failed job logs. The saved token is never displayed again. |
@@ -526,6 +526,9 @@ Settings navigation, or from the sidebar `⋯` → "Repo Settings".
   preselects nothing and shows the same warning until a branch is chosen
 - **Copy ignored files** — Copy .gitignored files to new worktrees
 - **Copy untracked files** — Copy untracked files to new worktrees
+- **Warm ignored build directories** — Copy-on-write copy the parent's git-ignored build
+  directories (`node_modules`, `target`, …) into a new worktree in the background so it starts
+  warm (On / Use global / Off; the global default is On). Off leaves the worktree cold
 - **Always Copy These Files/Directories** — a repo-specific list of extra paths (relative to the
   repo root) always copied — or symlinked, to share a single copy across worktrees — into every
   new worktree of this repo, regardless of the two toggles above. There is no global default for
@@ -561,7 +564,7 @@ A `.tuic.json` file in the repository root provides team-shareable settings that
 
 **Precedence:** `.tuic.json` > per-repo app settings > global defaults
 
-Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `worktree_storage`, `delete_branch_on_remove`, `auto_archive_merged`, `orphan_cleanup`, `pr_merge_strategy`, `after_merge`, `auto_delete_on_pr_close`.
+Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `warm_ignored_directories`, `worktree_storage`, `delete_branch_on_remove`, `auto_archive_merged`, `orphan_cleanup`, `pr_merge_strategy`, `after_merge`, `auto_delete_on_pr_close`.
 
 **`setup_script`/`run_script`/`archive_script` are deliberately NOT supported in `.tuic.json`** — executing a repo-committed script with no trust-on-first-use confirmation would let a malicious branch run arbitrary code the moment its worktree is created. Configure these per-repo (Settings) or as a global default instead.
 

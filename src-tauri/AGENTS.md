@@ -434,6 +434,53 @@ committed `.tuic.json` can never inject its own entries into it. `sync_one` also
 recursively copy the entire source repo — including its real `.git` — on top of the new worktree's
 own linked-worktree `.git` *file*, corrupting it.
 
+
+## Worktree Warming — Opt-Out, Bounded-Parallel, One Pipeline
+
+Warming (clonefiling the parent's git-ignored build directories — `node_modules`, `target`, … —
+into a freshly created linked worktree; `tuic_git::cow`) runs as the FIRST step of the single
+post-create chain `worktree::spawn_worktree_setup_chain` (warm → file sync → Setup Script), with
+main's warm state (`tuic_git::worktree` `begin_warm`/`finish_warm`, token-checked) as the only
+status store. There is deliberately no second warm status cache or poll endpoint: a poller reads
+the workspace's `warm_artifacts` from `worktree_list` / `GET /worktrees/paths`, which while
+`pending` carries `phase` (`warming` with `copied`/`total`, then `file_sync_and_setup_script`) via
+`tuic_git::worktree::update_pending_warm`.
+
+- **Opt-out** `warm_ignored_directories` (default `true`; per-repo > `.tuic.json` > global, via
+  `config::resolve_effective_warm_setting`) is resolved INSIDE the chain, so every creation path
+  that hands the chain a warm token honours it identically. All four do: desktop `create_worktree`,
+  HTTP `POST /worktrees` and MCP `repo worktree_create` (`create_worktree_shared`), and
+  `POST /sessions/worktree` (which had no warm step until 2026-10-07). A disabled warm still goes
+  through `run_background_warm_blocking` so a removal still stops the chain; it ends `done` with a
+  `skipped` reason. A fifth creation path must pass a token too, or document why not.
+- **Bounded parallelism**: `warm_candidates` runs every skip rule as a single-threaded pre-pass
+  BEFORE any copy starts (symlink type, nested repo, destination containment, `to.exists()`,
+  nesting inside an earlier candidate, the intermediate-symlink guard), then fans the copies out
+  over at most `WARM_COPY_CONCURRENCY` (4) scoped threads. Keep that order: interleaving a check
+  with the copies would reopen the symlink-planting class of bug. The nesting rule is explicit
+  because the sequential copy got it implicitly from `to.exists()` (e.g. an externalBin sidecar
+  inside an ignored binaries directory would otherwise be copied twice, concurrently). Warnings
+  are slotted back in candidate order; only `on_progress` sees completion order. A panicking copy
+  is caught per directory and becomes a warning.
+- **Intermediate-symlink guard is shared**: `tuic_git::cow::first_symlinked_ancestor` is used by
+  the warm and (through a thin wrapper) by `worktree_sync::sync_one` — same threat model (a branch
+  commits a directory symlink at an intermediate component of an ignored path). A third writer into
+  a freshly checked-out destination needs it too.
+- **Events**: `worktree-warm-started/-progress/-completed` (`warm_with_events`, payload builders in
+  `state.rs`, SSE arms in `sse_routes.rs`) drive the sidebar "Warming…" badge; silent when nothing
+  is copied. The badge matches rows by checkout path, never by branch.
+- **Chain generations**: setup-status writes and the terminal `worktree-setup-script-completed`
+  event are gated on `SETUP_CHAIN_GENERATIONS` (per `(repo, branch)`), with the map's read guard
+  held across each write. A stale chain for a removed-and-recreated workspace therefore can neither
+  wipe nor overwrite its successor's status nor resolve its successor's frontend waiter. That event
+  now fires once per chain with `outcome` `completed` / `not_configured` / `stopped`, so the
+  frontend waiter (`armSetupScriptWaiter`) is never left to its 20-minute timeout by a removal, an
+  abort, or a repo the backend sees as having no script.
+- **Known gap**: if the frontend believes NO script is configured while the backend runs one, the
+  frontend does not wait and the Run Script can race it; the create response does not say whether a
+  script will run. Removing a worktree mid-copy still cannot cancel in-flight copies (the token is
+  checked before the copy starts, not during it).
+
 ## Window Geometry Restore
 
 `main` is permanently denylisted from `tauri-plugin-window-state`'s `SIZE` flag (`lib.rs`

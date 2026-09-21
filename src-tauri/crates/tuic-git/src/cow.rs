@@ -9,6 +9,44 @@ use std::process::Command;
 
 use crate::git_cli::git_cmd;
 
+/// Default cap on concurrent directory copies while warming a worktree.
+/// `cp -c`/`--reflink=always` is mostly syscall/metadata-bound, not CPU-bound,
+/// and going wider risks I/O contention against the same source/destination
+/// volume with little payoff. Callers pass the cap explicitly
+/// ([`warm_worktree_reporting`]), so a different value needs no code change
+/// here.
+pub const WARM_COPY_CONCURRENCY: usize = 4;
+
+/// The first intermediate component of `root.join(rel)` that is a symlink, if
+/// any (the last component itself is not checked — callers decide what an
+/// existing destination means).
+///
+/// `root` is a freshly checked-out worktree of a branch TUICommander did not
+/// author: a malicious branch can commit a directory symlink at an
+/// intermediate component of a path the parent repo ignores, and a writer that
+/// follows it (`create_dir_all`, a copy) would put the parent's real content
+/// wherever that link points. Shared by the CoW warm (`warm_candidates`) and
+/// the app's worktree file sync (`worktree_sync::sync_one`), which write into
+/// the same kind of untrusted destination.
+pub fn first_symlinked_ancestor(root: &Path, rel: &Path) -> Option<PathBuf> {
+    let mut current = root.to_path_buf();
+    let mut components = rel.components().peekable();
+    while let Some(component) = components.next() {
+        current.push(component);
+        if components.peek().is_none() {
+            break;
+        }
+        if current
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Some(current);
+        }
+    }
+    None
+}
+
 /// The copy-on-write flags supported by macOS `cp` and GNU coreutils `cp`.
 /// Every flag must fail instead of degrading to a byte copy.
 const COW_COPY_FLAGS: [&str; 2] = ["-c", "--reflink=always"];
@@ -248,6 +286,24 @@ fn external_bin_candidates(src: &Path) -> Vec<PathBuf> {
 /// Production wrapper. Probe once so a filesystem without clonefile support
 /// produces one useful warning instead of one failure for every ignored tree.
 pub fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
+    warm_worktree_reporting(src, dest, WARM_COPY_CONCURRENCY, |_| {}, |_, _, _| {})
+}
+
+/// [`warm_worktree`] with a concurrency cap and progress callbacks.
+///
+/// `on_started` is called once, with the number of directories that will
+/// actually be copied (after skip rules, so possibly fewer than git listed),
+/// before any copy begins — and not at all when nothing is copied.
+/// `on_progress(done, total, relative)` is called on the CALLING thread after
+/// each copy finishes, in completion order: up to `concurrency` copies run at
+/// once. The report's warnings stay in candidate order regardless.
+pub fn warm_worktree_reporting(
+    src: &Path,
+    dest: &Path,
+    concurrency: usize,
+    on_started: impl FnOnce(usize),
+    on_progress: impl FnMut(usize, usize, &Path),
+) -> WarmingReport {
     let candidates = match warming_candidates(src, dest) {
         Ok(candidates) => candidates,
         Err(report) => return report,
@@ -258,7 +314,15 @@ pub fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
         return WarmingReport::default();
     }
     match probe_cow_support(src, dest.parent().unwrap_or(dest)) {
-        CowSupport::Supported => warm_candidates(src, dest, candidates, clone_tree),
+        CowSupport::Supported => warm_candidates(
+            src,
+            dest,
+            candidates,
+            clone_tree,
+            concurrency,
+            on_started,
+            on_progress,
+        ),
         CowSupport::Unsupported(reason) => WarmingReport {
             warmed: 0,
             warnings: vec![format!(
@@ -280,25 +344,58 @@ pub fn warm_worktree(src: &Path, dest: &Path) -> WarmingReport {
 pub fn warm_worktree_with(
     src: &Path,
     dest: &Path,
-    copy: impl Fn(&Path, &Path) -> Result<(), String>,
+    copy: impl Fn(&Path, &Path) -> Result<(), String> + Sync,
+) -> WarmingReport {
+    warm_worktree_with_reporting(src, dest, WARM_COPY_CONCURRENCY, copy, |_| {}, |_, _, _| {})
+}
+
+/// [`warm_worktree_with`] with the concurrency cap and progress callbacks of
+/// [`warm_worktree_reporting`]. Test-only, for the same reason.
+#[cfg(test)]
+pub fn warm_worktree_with_reporting(
+    src: &Path,
+    dest: &Path,
+    concurrency: usize,
+    copy: impl Fn(&Path, &Path) -> Result<(), String> + Sync,
+    on_started: impl FnOnce(usize),
+    on_progress: impl FnMut(usize, usize, &Path),
 ) -> WarmingReport {
     let candidates = match warming_candidates(src, dest) {
         Ok(candidates) => candidates,
         Err(report) => return report,
     };
-    warm_candidates(src, dest, candidates, copy)
+    warm_candidates(
+        src,
+        dest,
+        candidates,
+        copy,
+        concurrency,
+        on_started,
+        on_progress,
+    )
 }
 
+/// Skip rules run as a single-threaded pre-pass (cheap, metadata-only), so
+/// `on_started` reports what will really be copied; the copies then fan out
+/// over at most `concurrency` scoped worker threads. Results are slotted back
+/// by candidate index, so the report reads exactly as the sequential copy's
+/// did; only `on_progress` sees completion order.
 fn warm_candidates(
     src: &Path,
     dest: &Path,
     candidates: Vec<PathBuf>,
-    copy: impl Fn(&Path, &Path) -> Result<(), String>,
+    copy: impl Fn(&Path, &Path) -> Result<(), String> + Sync,
+    concurrency: usize,
+    on_started: impl FnOnce(usize),
+    mut on_progress: impl FnMut(usize, usize, &Path),
 ) -> WarmingReport {
     let mut report = WarmingReport::default();
     let src_root = std::fs::canonicalize(src).unwrap_or_else(|_| src.to_path_buf());
     let dest_root = std::fs::canonicalize(dest).unwrap_or_else(|_| dest.to_path_buf());
 
+    // (relative, from, to); an outcome slot per entry, in candidate order.
+    let mut dispatch: Vec<(PathBuf, PathBuf, PathBuf)> = Vec::new();
+    let mut slots: Vec<Option<String>> = Vec::new();
     for relative in candidates {
         let from = src_root.join(&relative);
         let to = dest_root.join(&relative);
@@ -310,26 +407,98 @@ fn warm_candidates(
             || is_inside(&dest_root, &from)
             || is_inside(&from, &dest_root)
             || to.exists()
+            // The sequential copy skipped a candidate nested in one it had
+            // already copied via `to.exists()`; with every check done before
+            // any copy, that has to be explicit or two workers would write
+            // the same tree (e.g. an externalBin sidecar inside an ignored
+            // binaries directory).
+            || dispatch
+                .iter()
+                .any(|(earlier, _, _)| relative.starts_with(earlier))
         {
+            continue;
+        }
+        // `dest_root` is a checkout of a branch TUICommander did not author:
+        // reject a path that traverses a committed symlink rather than follow
+        // it out of the worktree (same guard as the app's file sync). A
+        // warning, not an error — warming is best-effort, so one skipped
+        // candidate must not abort the rest.
+        if let Some(bad) = first_symlinked_ancestor(&dest_root, &relative) {
+            slots.push(Some(format!(
+                "could not warm '{}' in the new worktree, which starts cold there: path traverses \
+                 a symlink at an intermediate component ({})",
+                relative.display(),
+                bad.display()
+            )));
+            dispatch.push((relative, PathBuf::new(), PathBuf::new()));
             continue;
         }
         if let Some(parent) = to.parent()
             && let Err(error) = std::fs::create_dir_all(parent)
         {
-            report.warnings.push(format!(
+            slots.push(Some(format!(
                 "could not prepare '{}' in the new worktree, which starts cold there: {error}",
                 relative.display()
-            ));
+            )));
+            dispatch.push((relative, PathBuf::new(), PathBuf::new()));
             continue;
         }
-        match copy(&from, &to).and_then(|()| restore_owner_write(&to)) {
-            Ok(()) => report.warmed += 1,
-            Err(reason) => report.warnings.push(format!(
-                "could not warm '{}' in the new worktree, which starts cold there: {reason}",
-                relative.display()
-            )),
-        }
+        slots.push(None);
+        dispatch.push((relative, from, to));
     }
+
+    // Entries refused or unpreparable in the pre-pass already hold their warning.
+    let runnable: Vec<usize> = (0..dispatch.len())
+        .filter(|&i| slots[i].is_none())
+        .collect();
+    let total = runnable.len();
+    if total > 0 {
+        on_started(total);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let (sender, receiver) = std::sync::mpsc::channel::<(usize, Result<(), String>)>();
+        let copy = &copy;
+        let dispatch = &dispatch;
+        let runnable = &runnable;
+        std::thread::scope(|scope| {
+            for _ in 0..concurrency.clamp(1, total) {
+                let sender = sender.clone();
+                let next = &next;
+                scope.spawn(move || {
+                    loop {
+                        let position = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&index) = runnable.get(position) else {
+                            break;
+                        };
+                        let (_, from, to) = &dispatch[index];
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                copy(from, to).and_then(|()| restore_owner_write(to))
+                            }))
+                            .unwrap_or_else(|_| Err("copy task panicked".to_string()));
+                        if sender.send((index, outcome)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(sender);
+            let mut done = 0;
+            for (index, outcome) in receiver {
+                done += 1;
+                match outcome {
+                    Ok(()) => report.warmed += 1,
+                    Err(reason) => {
+                        slots[index] = Some(format!(
+                            "could not warm '{}' in the new worktree, which starts cold there: {reason}",
+                            dispatch[index].0.display()
+                        ));
+                    }
+                }
+                on_progress(done, total, &dispatch[index].0);
+            }
+        });
+    }
+    report.warnings.extend(slots.into_iter().flatten());
     report
 }
 
@@ -872,9 +1041,15 @@ mod tests {
         std::fs::write(src.join("real"), "x").unwrap();
         std::os::unix::fs::symlink(src.join("real"), src.join("link")).unwrap();
 
-        let report = warm_candidates(&src, &dest, vec![PathBuf::from("link")], |_, _| {
-            panic!("a symlink must not be copied")
-        });
+        let report = warm_candidates(
+            &src,
+            &dest,
+            vec![PathBuf::from("link")],
+            |_, _| panic!("a symlink must not be copied"),
+            WARM_COPY_CONCURRENCY,
+            |_| {},
+            |_, _, _| {},
+        );
 
         assert_eq!(report, WarmingReport::default());
     }
@@ -1087,6 +1262,41 @@ mod tests {
         );
     }
 
+    /// With every skip check made before any copy starts, a sidecar inside an
+    /// ignored directory that is itself a candidate must not be dispatched a
+    /// second time (the sequential copy skipped it via `to.exists()`).
+    #[test]
+    fn a_candidate_inside_an_earlier_candidate_is_copied_once() {
+        let (_temp, repo, worktree) = warming_fixture();
+        std::fs::write(repo.join(".gitignore"), "src-tauri/binaries/\n").unwrap();
+        std::fs::create_dir_all(repo.join("src-tauri/binaries")).unwrap();
+        std::fs::write(
+            repo.join("src-tauri/tauri.conf.json"),
+            r#"{"bundle":{"externalBin":["binaries/bridge"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("src-tauri/binaries/bridge-aarch64-apple-darwin"),
+            "sidecar",
+        )
+        .unwrap();
+        let copies = std::sync::Mutex::new(Vec::new());
+
+        let report = warm_worktree_with(&repo, &worktree, |from, to| {
+            copies.lock().unwrap().push(from.to_path_buf());
+            plain_copy(from, to)
+        });
+
+        assert!(report.warnings.is_empty(), "{report:?}");
+        assert_eq!(report.warmed, 1);
+        assert_eq!(copies.into_inner().unwrap().len(), 1);
+        assert!(
+            worktree
+                .join("src-tauri/binaries/bridge-aarch64-apple-darwin")
+                .is_file()
+        );
+    }
+
     #[test]
     fn warming_excludes_tmp_directories() {
         let (_temp, repo, worktree) = warming_fixture();
@@ -1264,5 +1474,258 @@ mod tests {
         std::fs::write(src.join(".git"), "gitdir: ../store/wt\n").unwrap();
 
         assert!(head_file(&src).is_file(), "{:?}", head_file(&src));
+    }
+
+    fn many_ignored_dirs_fixture(count: usize) -> (TempDir, PathBuf, PathBuf) {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        init_repo(&repo);
+        let mut gitignore = String::new();
+        for i in 0..count {
+            let name = format!("dir{i:02}");
+            gitignore.push_str(&format!("{name}/\n"));
+            std::fs::create_dir_all(repo.join(&name)).unwrap();
+            std::fs::write(repo.join(&name).join("f"), "x").unwrap();
+        }
+        std::fs::write(repo.join(".gitignore"), gitignore).unwrap();
+        let worktree = temp.path().join("worktree");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                worktree.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        (temp, repo, worktree)
+    }
+
+    /// Copies a blocking fake that records how many copies were in flight at
+    /// once. Structural rather than wall-clock (see src-tauri/AGENTS.md on
+    /// load-bearing timing assertions).
+    fn warm_counting_concurrency(
+        repo: &Path,
+        worktree: &Path,
+        cap: usize,
+    ) -> (WarmingReport, usize) {
+        let in_flight = std::sync::atomic::AtomicUsize::new(0);
+        let max_in_flight = std::sync::atomic::AtomicUsize::new(0);
+        let report = warm_worktree_with_reporting(
+            repo,
+            worktree,
+            cap,
+            |_, to| {
+                let now = in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                let result = std::fs::create_dir_all(to).map_err(|e| e.to_string());
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                result
+            },
+            |_| {},
+            |_, _, _| {},
+        );
+        (report, max_in_flight.into_inner())
+    }
+
+    #[test]
+    fn warming_never_exceeds_the_concurrency_cap() {
+        let count = WARM_COPY_CONCURRENCY * 3;
+        let (_temp, repo, worktree) = many_ignored_dirs_fixture(count);
+        let (report, observed) = warm_counting_concurrency(&repo, &worktree, WARM_COPY_CONCURRENCY);
+        assert_eq!(report.warmed, count);
+        assert!(
+            observed <= WARM_COPY_CONCURRENCY,
+            "observed {observed} concurrent copies, cap is {WARM_COPY_CONCURRENCY}"
+        );
+    }
+
+    #[test]
+    fn warming_fans_out_instead_of_copying_one_directory_at_a_time() {
+        let (_temp, repo, worktree) = many_ignored_dirs_fixture(WARM_COPY_CONCURRENCY * 2);
+        let (_, observed) = warm_counting_concurrency(&repo, &worktree, WARM_COPY_CONCURRENCY);
+        assert!(
+            observed > 1,
+            "only {observed} copy ran at a time: dispatch is sequential"
+        );
+    }
+
+    #[test]
+    fn a_cap_of_one_copies_sequentially() {
+        let (_temp, repo, worktree) = many_ignored_dirs_fixture(4);
+        let (report, observed) = warm_counting_concurrency(&repo, &worktree, 1);
+        assert_eq!(report.warmed, 4);
+        assert_eq!(observed, 1);
+    }
+
+    #[test]
+    fn warming_reports_the_real_total_then_every_completion() {
+        let (_temp, repo, worktree) = many_ignored_dirs_fixture(5);
+        let mut started = None;
+        let mut progress = Vec::new();
+        let report = warm_worktree_with_reporting(
+            &repo,
+            &worktree,
+            WARM_COPY_CONCURRENCY,
+            plain_copy,
+            |total| started = Some(total),
+            |done, total, relative| progress.push((done, total, relative.to_path_buf())),
+        );
+        assert_eq!(report.warmed, 5);
+        assert_eq!(started, Some(5));
+        assert_eq!(
+            progress
+                .iter()
+                .map(|(done, _, _)| *done)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+        assert!(progress.iter().all(|(_, total, _)| *total == 5));
+        let mut seen: Vec<_> = progress
+            .into_iter()
+            .map(|(_, _, relative)| relative)
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            (0..5)
+                .map(|i| PathBuf::from(format!("dir{i:02}")))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn nothing_to_copy_never_reports_a_start() {
+        let (_temp, repo, worktree) = warming_fixture();
+        std::fs::create_dir_all(worktree.join("build")).unwrap();
+        let mut started = false;
+        let report = warm_worktree_with_reporting(
+            &repo,
+            &worktree,
+            WARM_COPY_CONCURRENCY,
+            |_, _| panic!("must not copy"),
+            |_| started = true,
+            |_, _, _| panic!("no progress without a copy"),
+        );
+        assert_eq!(report.warmed, 0);
+        assert!(!started);
+    }
+
+    #[test]
+    fn parallel_failures_keep_candidate_order_in_the_report() {
+        let (_temp, repo, worktree) = many_ignored_dirs_fixture(6);
+        let report = warm_worktree_with(&repo, &worktree, |from, _| {
+            // Later candidates finish first, so completion order is reversed.
+            let index: u64 = from.file_name().unwrap().to_string_lossy()[3..]
+                .parse()
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(5 * (6 - index)));
+            Err("refused".into())
+        });
+        assert_eq!(report.warmed, 0);
+        let order: Vec<usize> = (0..6)
+            .map(|i| {
+                report
+                    .warnings
+                    .iter()
+                    .position(|w| w.contains(&format!("'dir{i:02}'")))
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(order, vec![0, 1, 2, 3, 4, 5], "{:?}", report.warnings);
+    }
+
+    #[test]
+    fn a_panicking_copy_is_a_warning_not_a_crash() {
+        let (_temp, repo, worktree) = warming_fixture();
+        let report = warm_worktree_with(&repo, &worktree, |_, _| panic!("boom"));
+        assert_eq!(report.warmed, 0);
+        assert_eq!(report.warnings.len(), 1);
+        assert!(
+            report.warnings[0].contains("panicked"),
+            "{:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
+    fn first_symlinked_ancestor_ignores_the_last_component() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("a")).unwrap();
+        assert_eq!(first_symlinked_ancestor(&root, Path::new("a/b/c")), None);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(temp.path(), root.join("link")).unwrap();
+            assert_eq!(first_symlinked_ancestor(&root, Path::new("link")), None);
+            assert_eq!(
+                first_symlinked_ancestor(&root, Path::new("link/x")),
+                Some(root.join("link"))
+            );
+        }
+    }
+
+    /// A malicious branch can commit a directory symlink at an intermediate
+    /// component of a path the parent ignores; warming must refuse to follow
+    /// it (same threat model as the app's worktree file sync). `vendor`
+    /// carries tracked content so git reports `vendor/cache/` itself rather
+    /// than collapsing to `vendor`.
+    #[cfg(unix)]
+    #[test]
+    fn warming_refuses_to_follow_a_symlinked_intermediate_component_in_dest() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        init_repo(&repo);
+        std::fs::create_dir_all(repo.join("vendor")).unwrap();
+        std::fs::write(repo.join("vendor/README.md"), "tracked\n").unwrap();
+        git_cmd(&repo)
+            .args(["add", "vendor/README.md"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "add vendor readme",
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(repo.join(".gitignore"), "vendor/cache/\n").unwrap();
+        std::fs::create_dir_all(repo.join("vendor/cache")).unwrap();
+        std::fs::write(repo.join("vendor/cache/secret-build-artifact"), "warm").unwrap();
+        let worktree = temp.path().join("worktree");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                worktree.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        std::fs::remove_dir_all(worktree.join("vendor")).unwrap();
+        let escape_target = temp.path().join("escape-target");
+        std::fs::create_dir_all(&escape_target).unwrap();
+        std::os::unix::fs::symlink(&escape_target, worktree.join("vendor")).unwrap();
+
+        let report = warm_worktree_with(&repo, &worktree, |_, _| {
+            panic!("must not copy through the symlink")
+        });
+
+        assert_eq!(report.warmed, 0);
+        assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+        assert!(
+            report.warnings[0].contains("symlink at an intermediate component"),
+            "{}",
+            report.warnings[0]
+        );
+        assert!(!escape_target.join("cache").exists());
     }
 }
