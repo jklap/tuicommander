@@ -165,3 +165,22 @@ target, then decide what to do with it" — that would make every `set-option`
 call (regardless of whether TUIC can act on it) require a live, reachable
 instance, which is a real regression for `tuic alias`'s general-purpose
 tmux-replacement users, not just the swarm path.
+
+## A `wip→main` rebase casualty left the whole workspace test suite unbuildable (fixed 2026-09-21)
+
+`main.rs`'s `#[cfg(test)] mod tests { use super::{...}; }` import list named
+`without_flag` — a function that has never existed anywhere in this file or
+crate (confirmed: zero definitions, zero call sites, even inside the test
+bodies themselves). `git blame` traces the line to `f0c884f88` ("fix(merge):
+reconcile dual-landed features after the wip→main rebase"), matching the
+"moved-fn ports" rebase-replay failure class — a function from one of the two
+dual-landed branches was dropped during reconciliation while a stray `use`
+reference to it survived. Because `tuic-cli` is a workspace member, this
+broke `cargo test`/`cargo nextest run --workspace` for the **entire**
+workspace (every other crate too), not just this one — `cargo check`/`cargo
+build` were unaffected since the bad import only lives inside `#[cfg(test)]`.
+Fixed by deleting the dead name from the `use` list; all 157 of this crate's
+own tests still pass. If `cargo nextest run --workspace` fails with
+`unresolved import` naming a `tuic-cli` test-only symbol again, check `git
+blame` on the `use` line before assuming a new regression — this exact shape
+has now happened at least once from rebase surgery in a different worktree.
