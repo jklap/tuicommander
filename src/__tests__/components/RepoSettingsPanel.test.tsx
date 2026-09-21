@@ -112,6 +112,7 @@ describe("SettingsPanel — repo context", () => {
 			baseBranch: "automatic",
 			copyIgnoredFiles: false,
 			copyUntrackedFiles: false,
+			warmIgnoredDirectories: null,
 			setupScript: "",
 			runScript: "",
 			archiveScript: "",

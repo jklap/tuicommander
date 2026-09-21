@@ -2821,8 +2821,43 @@ placement on restart; an inactive caller does not change the current selection.
 `{exit_code, stdout, stderr}` result or error string rode on this response).
 The outcome is reported later via the dual-emitted
 `worktree-setup-script-completed` event (`/events` SSE; payload in
-`docs/sync-matrix.md`), silent when no script is configured. The same applies
-to MCP `repo action=worktree_create` and `POST /sessions/worktree`.
+`docs/sync-matrix.md`), or polled via `GET /worktrees/setup-status` below.
+The event is sent exactly once per chain whatever its end, with `outcome`
+`completed` (a script ran; `exitCode`/`error` say how), `not_configured` (no
+script) or `stopped` (removal or abort; `error` says which) — unless a newer
+chain for the same `(repoPath, branch)` replaced it. The same applies to MCP
+`repo action=worktree_create` (poll with `action=worktree_setup_status`) and
+`POST /sessions/worktree`, which also warms now.
+
+The warm copies up to `tuic_git::cow::WARM_COPY_CONCURRENCY` (4) directories at
+a time and is skipped when `warm_ignored_directories` resolves `false` for the
+repo (per-repo setting, then `.tuic.json`, then the global repo default, which
+is `true`); a skipped warm ends `done` with a `skipped` reason. While pending,
+`GET /worktrees/paths` reports `phase: "warming"` with `copied`/`total`, then
+`phase: "file_sync_and_setup_script"`. Live progress is also pushed as
+`worktree-warm-started` / `worktree-warm-progress` / `worktree-warm-completed`
+(`/events` SSE; payloads in `docs/sync-matrix.md`) — silent when nothing is
+copied.
+
+### Poll Worktree Setup Status
+
+```
+GET /worktrees/setup-status?repoPath=/path/to/repo&branch=feature-x
+```
+
+Read-only status check for the background setup chain kicked off by worktree
+creation — the only way an MCP client (no SSE/event stream) can ever learn a
+configured Setup Script's outcome, since `POST /worktrees` doesn't return it
+synchronously (see above). Response is
+`{ "state": "running" | "not_configured" | "completed" | "unknown" }`, with
+`exit_code`/`error` also present when `state` is `"completed"`. `"unknown"`
+means nothing is tracked for this `(repoPath, branch)` pair — never created
+this way, aged out (30 minute TTL), or the app restarted since — treat it as
+"can't tell," not as "definitely no script." A chain stopped because the
+workspace was removed drops its entry (`unknown`); an aborted chain reports
+`completed` with `exit_code: null` and an `error`. `completed` is recorded before
+the workspace's `warm_artifacts.status` turns `done`/`failed`. No auth gate beyond
+the standard server auth (read-only, same as `GET /worktrees/paths`).
 
 ### Worktrees Base Directory
 

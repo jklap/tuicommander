@@ -273,6 +273,21 @@ export const RepoWorktreeTab: Component<RepoWorktreeTabProps> = (props) => {
 							"Copying runs in the background after the worktree is created — a toast shows when it starts and finishes.",
 						)}
 					</p>
+
+					<BooleanOverride
+						settingId="repositories.repos.{key}.warm_ignored_directories"
+						label="Warm ignored build directories"
+						value={props.settings.warmIgnoredDirectories}
+						fallback={props.defaults.warmIgnoredDirectories}
+						onChange={(v) => props.onUpdate("warmIgnoredDirectories", v)}
+					/>
+
+					<p class={s.hint}>
+						{t(
+							"repoWorktree.hint.warmIgnoredDirectories",
+							"Copy-on-write copies node_modules, target, and other git-ignored build directories from the parent repo into a new worktree so it starts warm. Runs in the background after creation.",
+						)}
+					</p>
 				</div>
 
 				<div class={r.group}>

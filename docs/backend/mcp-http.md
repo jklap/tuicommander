@@ -468,6 +468,7 @@ serving a configuration the disk disagrees with. See
 | `GET` | `/worktrees/paths?path=` | Get linked-worktree paths for a repo, keyed by workspace id and carrying `kind` |
 | `GET` | `/worktrees/lifecycle?repoPath=&workspaceId=` | Fresh dirty/commit/removal-safety verdict for one exact workspace; unknown fails closed |
 | `POST` | `/worktrees/run-script` | Run a Setup/Archive/Run script (`{script, cwd}`) with the `TUIC_*` env injected and the 900 s deadline — loopback or authenticated only (`require_local_or_auth`); `cwd` must be absolute after `~` expansion |
+| `GET` | `/worktrees/setup-status` | Poll a worktree's background setup chain (`?repoPath=&branch=`) — `{state: "running"\|"not_configured"\|"completed"\|"unknown"}`, `+exit_code`/`error` when completed |
 
 ### Dictation and Desktop Integration
 
@@ -1059,7 +1060,7 @@ say what was measured, not what the list costs today.
 | `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume | Enabled |
 | `agent` | spawn, wait, register, list_peers, send, inbox, subscribe, ack, unsubscribe, task_get, task_cancel | Enabled |
 | `remote` | preview, update | Only with a connected remote server |
-| `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
+| `repo` | list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, worktree_setup_status, orphan_cleanup_answer, branch_delete, progress_list | Enabled |
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot, design_start/stop/status/reload/navigate/screenshot/errors/eval | Enabled |
 | `workflow` | story, run, proposal_create, report, launch | Enabled |
@@ -1558,7 +1559,12 @@ then the file sync, then the Setup Script). The response returns before that
 chain runs, so it carries **no** `setup_script`/`setup_script_error` (removed;
 the outcome is the `worktree-setup-script-completed` event) and
 `instructions.warm_artifacts.status` stays `pending` until the Setup Script has
-finished.
+finished. While pending, `worktree_list` / `GET /worktrees/paths` report the
+chain's progress in the same object: `phase: "warming"` with `copied`/`total`
+while the directories are copied (up to `tuic_git::cow::WARM_COPY_CONCURRENCY`
+at a time), then `phase: "file_sync_and_setup_script"`. A repo whose
+`warm_ignored_directories` setting is off skips the copy; its final status is
+`done` with a `skipped` reason.
 Every created workspace is a linked worktree: Git refs and objects remain
 shared with the parent, while `instructions.warm_artifacts.warmed_directories`
 reports how many ignored directories arrived warm. Parent tracked changes are
