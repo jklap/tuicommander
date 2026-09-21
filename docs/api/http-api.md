@@ -933,9 +933,13 @@ it. `head_sha` hashes the reviewed diff — it is not a git sha.
 prose only, which is a valid answer rather than an error.
 
 An ego that cannot be reached is a `4xx`/`5xx` with ego's own sentence in the
-error body — never a `200` with an empty result. `POST /repo/pr-review` and
-`POST /repo/improvement-scan` also emit `review-progress` and `proposals-ready`
-on `/events` while they run.
+error body — never a `200` with an empty result. `POST /repo/pr-review`,
+`POST /repo/improvement-scan` and `POST /repo/conflict-assist` also emit
+`review-progress`, `proposals-ready` and `conflict-assist-status` on `/events`
+while they run — on **every** build. All three routes are mounted
+unconditionally, so the headless daemon answers them too, and a browser reading
+`/events` is the only client those builds have: the desktop window emit is
+gated on `feature = "desktop"`, the `event_bus` send never is (#808-84e1).
 
 `POST /ai/review/pr` and `POST /ai/improvements/scan` are gone with the engine
 #784-0aec deleted; the `/ai/` prefix belonged to it, so the replacements sit

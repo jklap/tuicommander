@@ -279,10 +279,16 @@ pub(crate) struct ReviewEnvelopeOut {
     pub files: Vec<ReviewedFile>,
 }
 
-#[cfg(feature = "desktop")]
+/// Dual-emit, in the shape `remote_runtime::publish` uses: the window emit is
+/// the desktop's half and is gated, the bus send is everyone's and is not.
+///
+/// `POST /repo/pr-review` is mounted unconditionally, so the headless build
+/// answers it as well — and its clients are browsers reading `/events`. Gating
+/// the whole function left them with a review column stuck on "running".
 fn emit_review_progress(state: &crate::AppState, repo_path: &str, payload: serde_json::Value) {
-    use tauri::Emitter;
+    #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().clone() {
+        use tauri::Emitter;
         let _ = app.emit(
             "review-progress",
             serde_json::json!({ "repo_path": repo_path, "payload": payload }),
@@ -295,9 +301,6 @@ fn emit_review_progress(state: &crate::AppState, repo_path: &str, payload: serde
             payload,
         });
 }
-
-#[cfg(not(feature = "desktop"))]
-fn emit_review_progress(_state: &crate::AppState, _repo_path: &str, _payload: serde_json::Value) {}
 
 pub(crate) async fn run_pr_review_impl(
     repo_path: String,
@@ -382,6 +385,35 @@ pub(crate) async fn run_pr_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `POST /repo/pr-review` is mounted unconditionally, so the headless build
+    /// answers it too — and every client of that build is a browser reading
+    /// `/events`. The window emit is the desktop's half of the dual emit; the
+    /// bus send is everybody's. Gating the bus send along with it left a review
+    /// started from a browser with a column stuck on "running" and no way to
+    /// learn it had finished.
+    #[test]
+    fn review_progress_reaches_the_bus_on_every_build() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+
+        emit_review_progress(
+            &state,
+            "/repo",
+            serde_json::json!({ "pr_number": 7, "done": false }),
+        );
+
+        match events
+            .try_recv()
+            .expect("the review's progress reaches the event bus")
+        {
+            crate::state::AppEvent::ReviewProgress { repo_path, payload } => {
+                assert_eq!(repo_path, "/repo");
+                assert_eq!(payload["pr_number"], 7);
+            }
+            other => panic!("expected ReviewProgress, got {other:?}"),
+        }
+    }
 
     fn finding(confidence: f32, severity: Severity) -> Finding {
         Finding {

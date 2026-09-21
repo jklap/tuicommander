@@ -74,11 +74,15 @@ struct ProposalEnvelope {
     proposals: Vec<ImprovementProposal>,
 }
 
-#[cfg(feature = "desktop")]
+/// Dual-emit, the same shape as `emit_review_progress` and
+/// `remote_runtime::publish`: only the window emit is gated on the desktop
+/// feature. `POST /repo/improvement-scan` is mounted unconditionally, and
+/// nothing but this event tells a browser client the scan is over.
 fn emit_proposals_ready(state: &crate::AppState, repo_path: &str, result: &ImprovementScanResult) {
-    use tauri::Emitter;
     let payload = serde_json::to_value(result).unwrap_or_else(|_| serde_json::json!({}));
+    #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().clone() {
+        use tauri::Emitter;
         let _ = app.emit(
             "proposals-ready",
             serde_json::json!({ "repo_path": repo_path, "payload": payload }),
@@ -90,14 +94,6 @@ fn emit_proposals_ready(state: &crate::AppState, repo_path: &str, result: &Impro
             repo_path: repo_path.to_string(),
             payload,
         });
-}
-
-#[cfg(not(feature = "desktop"))]
-fn emit_proposals_ready(
-    _state: &crate::AppState,
-    _repo_path: &str,
-    _result: &ImprovementScanResult,
-) {
 }
 
 /// Read ego's answer into proposals worth showing.
@@ -280,6 +276,34 @@ pub(crate) async fn create_issue_from_proposal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The same rule as `emit_review_progress`: `POST /repo/improvement-scan`
+    /// is mounted unconditionally, so the scan a browser starts against a
+    /// headless build has to announce its proposals on the bus. Nothing else
+    /// tells that client the scan is over.
+    #[test]
+    fn proposals_ready_reaches_the_bus_on_every_build() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let result = ImprovementScanResult {
+            repo_path: "/repo".to_string(),
+            focus: ImprovementFocus::Refactor,
+            proposals: Vec::new(),
+        };
+
+        emit_proposals_ready(&state, "/repo", &result);
+
+        match events
+            .try_recv()
+            .expect("the finished scan reaches the event bus")
+        {
+            crate::state::AppEvent::ProposalsReady { repo_path, payload } => {
+                assert_eq!(repo_path, "/repo");
+                assert_eq!(payload["repo_path"], "/repo");
+            }
+            other => panic!("expected ProposalsReady, got {other:?}"),
+        }
+    }
 
     fn sample_status() -> crate::git::WorkingTreeStatus {
         crate::git::WorkingTreeStatus {
