@@ -104,6 +104,22 @@ describe("initApp", () => {
 		paneLayoutStore._testCancelPendingSave();
 	});
 
+	// Visibility is per viewer with a 90 s TTL (B.8); only a tab switch asserted
+	// it, so a tab the user kept looking at went "hidden" and could be parked.
+	it("re-asserts the active session's visibility on the 30 s snapshot timer", async () => {
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-visible" }));
+		terminalsStore.setActive(id);
+		mockRpc.mockClear();
+
+		await vi.advanceTimersByTimeAsync(30_000);
+
+		expect(mockRpc).toHaveBeenCalledWith(
+			"set_session_visible",
+			expect.objectContaining({ sessionId: "sess-visible", visible: true, viewerId: expect.any(String) }),
+		);
+	});
+
 	it("logs the navigation type and document start at each initialization", async () => {
 		const navigation = { type: "reload" } as PerformanceNavigationTiming;
 		vi.spyOn(performance, "getEntriesByType").mockReturnValue([navigation]);

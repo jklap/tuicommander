@@ -13728,7 +13728,8 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 .unwrap_or_default()
                 .as_millis() as u64;
 
-            let vis_count = state.session_maps.session_visibility.len();
+            let not_visible = state.sessions_not_visible();
+            let vis_count = not_visible.len();
             let sessions_count = state.session_maps.sessions.len();
             tracing::trace!(
                 vis_count,
@@ -13737,12 +13738,7 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 "Standby checker tick"
             );
 
-            for entry in state.session_maps.session_visibility.iter() {
-                let session_id = entry.key();
-                let visible = *entry.value();
-                if visible {
-                    continue;
-                }
+            for session_id in &not_visible {
                 if state
                     .session_maps
                     .standby_sessions
