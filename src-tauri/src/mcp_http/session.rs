@@ -127,6 +127,13 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .pty_accent_colors
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                #[cfg(unix)]
+                standby: state
+                    .session_maps
+                    .standby_sessions
+                    .contains_key(&session_id),
+                #[cfg(not(unix))]
+                standby: false,
                 state: state.session_state_with_shell(&session_id),
                 connection_id: None,
                 session_id,
@@ -1124,7 +1131,9 @@ pub(super) async fn set_session_visible(
     let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
     state.set_session_visible(
         &session_id,
-        viewer_id.as_deref().unwrap_or(crate::state::LEGACY_VIEWER_ID),
+        viewer_id
+            .as_deref()
+            .unwrap_or(crate::state::LEGACY_VIEWER_ID),
         body.visible,
     );
     #[cfg(unix)]

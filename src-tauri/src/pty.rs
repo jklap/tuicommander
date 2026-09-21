@@ -6866,6 +6866,7 @@ struct ChunkProcessor {
     /// `None` = not yet captured; `Some(None)` = captured, and the base was
     /// itself no name). Lives exactly as long as the PTY (this struct is
     /// constructed once per session), so it needs no teardown reap.
+    #[allow(clippy::option_option)] // deliberate 3-state disambiguation, see doc comment above
     osc_title_base: Option<Option<String>>,
     /// Reusable screen snapshot handed to the post-lock consumers
     /// (`parse_slash_menu`, `parse_choice_prompt`, the question-dedup absence
@@ -7896,10 +7897,15 @@ impl ChunkProcessor {
                         self.title_awaiting = false;
                     }
                     TermEvent::ClipboardStore(text) => {
-                        #[cfg(feature = "desktop")]
-                        if let Some(a) = state.app_handle.read().as_ref() {
-                            let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
-                        }
+                        // Was a suffixed desktop-only `app.emit` with no bus
+                        // arm at all (D.7) — a browser/PWA client never saw
+                        // an OSC 52 clipboard-store. Converted to the
+                        // unsuffixed `PtyClipboardStore` variant so it can
+                        // ride SSE/WS like every other session-scoped event.
+                        state.emit_dual(crate::state::AppEvent::PtyClipboardStore {
+                            session_id: session_id.to_string(),
+                            text: text.clone(),
+                        });
                     }
                     TermEvent::RequestFocus => {
                         if state.config.read().osc1337_focus_attention {
@@ -13930,18 +13936,14 @@ pub(crate) fn wake_all_standby(state: &AppState) -> usize {
     parked.len()
 }
 
+/// Was desktop-only with no bus arm — a browser/PWA client never saw the
+/// standby badge at all (D.3).
 #[cfg(unix)]
 fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
-    #[cfg(feature = "desktop")]
-    if let Some(ref app) = *state.app_handle.read() {
-        let _ = app.emit(
-            "session-standby",
-            serde_json::json!({
-                "session_id": session_id,
-                "standby": standby,
-            }),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::SessionStandby {
+        session_id: session_id.to_string(),
+        standby,
+    });
 }
 
 /// SIGKILL the foreground process group of a PTY session.
