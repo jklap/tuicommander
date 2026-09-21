@@ -93,6 +93,9 @@
 /dictation/config
 /dictation/corrections
 /dictation/devices
+/dictation/hands-free
+/dictation/hands-free/arm
+/dictation/hands-free/disarm
 /dictation/inject
 /dictation/models
 /dictation/models/delete

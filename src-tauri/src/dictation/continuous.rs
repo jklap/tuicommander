@@ -250,6 +250,22 @@ pub enum Phase {
     Error,
 }
 
+impl Phase {
+    /// The label both transports report. IPC and HTTP serialize the same
+    /// status struct, so this string is the only spelling a client ever sees.
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            Self::Disarmed => "disarmed",
+            Self::Waiting => "waiting",
+            Self::Capturing => "capturing",
+            Self::Transcribing => "transcribing",
+            Self::HoldingBack => "holding_back",
+            Self::Delivered => "delivered",
+            Self::Error => "error",
+        }
+    }
+}
+
 /// Why the mode disarmed. Every one of these is terminal: nothing re-arms by
 /// itself, per Boss's decision that a manual abort kills the mode rather than
 /// the utterance.
@@ -341,6 +357,20 @@ impl HandsFree {
 
     pub fn phase(&self) -> &Phase {
         &self.phase
+    }
+
+    /// The hold-back this mode will apply to the next transcript.
+    pub fn hold_back_ms(&self) -> u64 {
+        self.hold_back_ms
+    }
+
+    /// Take the configured hold-back. Refused while armed: changing it under a
+    /// transcript that is already counting down would move a deadline the user
+    /// is currently watching.
+    pub fn set_hold_back_ms(&mut self, hold_back_ms: u64) {
+        if self.binding.is_none() {
+            self.hold_back_ms = hold_back_ms;
+        }
     }
 
     pub fn generation(&self) -> u64 {

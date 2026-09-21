@@ -126,6 +126,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "POST", path: "/dictation/inject", body: { text: args.text } }),
 	},
 	get_dictation_config: { map: () => ({ method: "GET", path: "/dictation/config" }) },
+	get_hands_free_status: { map: () => ({ method: "GET", path: "/dictation/hands-free" }) },
+	// camelCase on the wire in both directions: the axum request type renames to
+	// match the IPC argument names, so the same store code works on either.
+	arm_hands_free_dictation: {
+		map: (args) => ({
+			method: "POST",
+			path: "/dictation/hands-free/arm",
+			body: { sessionId: args.sessionId, owner: args.owner },
+		}),
+	},
+	disarm_hands_free_dictation: {
+		map: () => ({ method: "POST", path: "/dictation/hands-free/disarm" }),
+	},
 	set_dictation_config: {
 		map: (args) => ({ method: "PUT", path: "/dictation/config", body: args.config }),
 	},

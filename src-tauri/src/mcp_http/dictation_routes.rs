@@ -126,6 +126,52 @@ pub(super) async fn inject_text_http(
     json_result(dictation::commands::inject_text(dictation, body.text))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ArmHandsFreeRequest {
+    pub session_id: String,
+    pub owner: String,
+}
+
+/// Browser/PWA counterpart of `arm_hands_free_dictation`.
+///
+/// The owner is the caller's own endpoint identity: a remote client that arms
+/// here binds *itself*, so a later disconnect can disarm the mode it owns.
+pub(super) async fn arm_hands_free_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ArmHandsFreeRequest>,
+) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::arm_hands_free(
+        &state,
+        &dictation,
+        &body.session_id,
+        &body.owner,
+    ))
+}
+
+pub(super) async fn disarm_hands_free_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    Json(dictation::commands::disarm_hands_free(&state, &dictation)).into_response()
+}
+
+pub(super) async fn get_hands_free_status_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    Json(dictation::commands::hands_free_status(&dictation)).into_response()
+}
+
 pub(super) async fn get_dictation_config_http() -> impl IntoResponse {
     Json(dictation::commands::get_dictation_config())
 }

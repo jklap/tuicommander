@@ -1463,11 +1463,41 @@ GET  /dictation/devices                             -> AudioDevice[]
 POST /dictation/inject           { "text": "..." }  -> "<corrected text>"
 GET  /dictation/config                              -> DictationConfig
 PUT  /dictation/config           DictationConfig    -> null
+GET  /dictation/hands-free                          -> HandsFreeStatus
+POST /dictation/hands-free/arm   { "sessionId": "...", "owner": "..." }
+                                                    -> HandsFreeStatus
+POST /dictation/hands-free/disarm                   -> HandsFreeDisarmed
 ```
 
 `POST /dictation/stop` stops the recording and transcribes it, returning
 `{ text, skip_reason?, duration_s }`. `PUT /dictation/config` takes the config
 object as the whole body, not wrapped in a field.
+
+### Hands-free
+
+`POST /dictation/hands-free/arm` binds the delivery target and the audio owner,
+and opens a generation. It does **not** open a microphone. A target that cannot
+take a Compose entry — an unknown session, or a session that is not running an
+agent — is refused with the error the Tauri command returns, so the two
+transports reject the same cases.
+
+`owner` is the caller's own endpoint identity: a remote client that arms here
+binds *itself*, so a later disconnect can disarm the mode it owns. Both fields
+are bounded at 256 bytes and may not be blank.
+
+`POST /dictation/hands-free/disarm` disarms the whole mode and cancels the voice
+entries the generation still owns. It is idempotent: the second call reports
+`wasArmed: false` and cancels nothing. Entries that already reached the composer
+come back under `alreadyDelivered` — nothing can take those back.
+
+Both bodies are the structs `dictation::commands` serializes, camelCase on the
+wire and identical on both transports:
+
+- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error }`
+- `HandsFreeDisarmed { wasArmed, generation, cancelled, alreadyDelivered, discardedPending, discardedCapture, status }`
+
+`phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
+`holding_back`, `delivered`, `error`.
 
 ## Desktop Integration Endpoints
 

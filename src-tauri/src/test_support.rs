@@ -254,3 +254,147 @@ pub(crate) fn dir_outside_home() -> std::path::PathBuf {
         std::path::PathBuf::from("/tmp")
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sessions a test can deliver to
+// ---------------------------------------------------------------------------
+//
+// These used to live in `pty::tests`, where only that module could reach them.
+// Anything else that needed a session an agent could be delivered to — the
+// hands-free dictation surface, for one — had no way to build one, and the
+// alternative was making a test module public. They are the same helpers,
+// moved; `pty::tests` imports them from here rather than keeping copies.
+
+/// A session `session_is_agent` accepts, with its shell state and silence
+/// tracker pre-seeded. `shell` is one of `pty`'s `SHELL_*` constants; an idle
+/// one is confirmed idle, so the injection gate can claim it.
+pub(crate) fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8) {
+    use std::sync::atomic::AtomicU8;
+    state
+        .session_maps
+        .shell_states
+        .insert(sid.to_string(), AtomicU8::new(shell));
+    state.session_maps.session_states.insert(
+        sid.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            ..Default::default()
+        },
+    );
+    let mut silence = crate::pty::SilenceState::new();
+    if shell == crate::pty::SHELL_IDLE {
+        silence.confirm_idle();
+    }
+    state.session_maps.silence_states.insert(
+        sid.to_string(),
+        std::sync::Arc::new(parking_lot::Mutex::new(silence)),
+    );
+}
+
+/// Everything written to a PTY, kept so a test can assert both what reached the
+/// composer and what deliberately did not.
+#[cfg(unix)]
+pub(crate) struct RecordingWriter {
+    pub(crate) bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+#[cfg(unix)]
+impl std::io::Write for RecordingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.bytes.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The three line-discipline states `write_terminal_reply` must tell apart.
+/// `Cbreak` is not a curiosity: it is the one where `ICANON` and `ECHO`
+/// disagree, so it is the only case that can prove the gate keys on the right
+/// flag. A fresh `openpty` is `Cooked`.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+pub(crate) enum TtyMode {
+    /// `ICANON` + `ECHO` — a reply is painted on screen and never delivered.
+    Cooked,
+    /// `ICANON` off, `ECHO` on — ugly, but the reply IS read immediately.
+    Cbreak,
+    /// Both off — what an agent sets before it queries.
+    Raw,
+}
+
+/// A live PTY whose every byte is recorded.
+#[cfg(unix)]
+pub(crate) fn insert_recording_session(
+    state: &crate::state::AppState,
+    session_id: &str,
+) -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        state,
+        session_id,
+        Box::new(RecordingWriter {
+            bytes: std::sync::Arc::clone(&bytes),
+        }),
+        TtyMode::Raw,
+    );
+    bytes
+}
+
+/// Register a real `openpty` session in `session_maps.sessions`, with its line
+/// discipline set to `mode` and its writes going to `writer`.
+#[cfg(unix)]
+pub(crate) fn insert_session_with_writer(
+    state: &crate::state::AppState,
+    session_id: &str,
+    writer: Box<dyn std::io::Write + Send>,
+    mode: TtyMode,
+) {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    if !matches!(mode, TtyMode::Cooked) {
+        let fd = pair.master.as_raw_fd().expect("master fd");
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        assert_eq!(unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) }, 0);
+        let mut termios = unsafe { termios.assume_init() };
+        termios.c_lflag &= !libc::ICANON;
+        if matches!(mode, TtyMode::Raw) {
+            termios.c_lflag &= !libc::ECHO;
+        }
+        assert_eq!(
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) },
+            0,
+            "setting the line discipline must succeed"
+        );
+    }
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args(["-c", "sleep 30"]);
+    let child = pair.slave.spawn_command(command).expect("spawn shell");
+    state.session_maps.sessions.insert(
+        session_id.to_string(),
+        parking_lot::Mutex::new(crate::state::PtySession {
+            writer: Arc::new(parking_lot::Mutex::new(writer)),
+            master: pair.master,
+            _child: child,
+            paused: Arc::new(AtomicBool::new(false)),
+            worktree: None,
+            cwd: None,
+            display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
+            shell: "/bin/sh".to_string(),
+        }),
+    );
+}

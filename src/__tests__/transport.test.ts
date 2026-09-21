@@ -475,6 +475,8 @@ describe("transport", () => {
 				["get_correction_map", {}, "GET", "/dictation/corrections"],
 				["list_audio_devices", {}, "GET", "/dictation/devices"],
 				["get_dictation_config", {}, "GET", "/dictation/config"],
+				["get_hands_free_status", {}, "GET", "/dictation/hands-free"],
+				["disarm_hands_free_dictation", {}, "POST", "/dictation/hands-free/disarm"],
 				["get_relay_status", {}, "GET", "/system/relay-status"],
 				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
 				["get_session_shell_family", { sessionId: "s1" }, "GET", "/sessions/s1/shell-family"],
@@ -490,6 +492,15 @@ describe("transport", () => {
 				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
 				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],
 				["set_dictation_config", { config: { enabled: true } }, "PUT", "/dictation/config", { enabled: true }],
+				// The body is camelCase on both transports: the Rust request type
+				// renames its fields to match, so one store works unchanged.
+				[
+					"arm_hands_free_dictation",
+					{ sessionId: "s1", owner: "desktop" },
+					"POST",
+					"/dictation/hands-free/arm",
+					{ sessionId: "s1", owner: "desktop" },
+				],
 				[
 					"open_in_app",
 					{ path: "/tmp/x", app: "vscode", line: 12, col: 3 },

@@ -2,6 +2,11 @@ use super::*;
 // Production builds a grid through `AppState::new_vt_log_buffer` so it picks up
 // the config; tests that only exercise the grid construct it directly.
 use crate::state::VtLogBuffer;
+// Session builders live in `test_support` so modules other than this one can
+// build a session an agent is deliverable to.
+#[cfg(unix)]
+use crate::test_support::{RecordingWriter, TtyMode, insert_session_with_writer};
+use crate::test_support::{agent_session, insert_recording_session};
 
 /// Closing a workspace's terminals is a loop over `close_pty`, and its body
 /// waits on two 100 ms `sleep` deadlines per session before it may also delete
@@ -9252,29 +9257,6 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
 
 // ── PTY-injection message delivery (Step 2) ─────────────────────
 
-fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8) {
-    use std::sync::atomic::AtomicU8;
-    state
-        .session_maps
-        .shell_states
-        .insert(sid.to_string(), AtomicU8::new(shell));
-    state.session_maps.session_states.insert(
-        sid.to_string(),
-        crate::state::SessionState {
-            agent_type: Some("claude".to_string()),
-            ..Default::default()
-        },
-    );
-    let mut silence = SilenceState::new();
-    if shell == SHELL_IDLE {
-        silence.confirm_idle();
-    }
-    state
-        .session_maps
-        .silence_states
-        .insert(sid.to_string(), Arc::new(Mutex::new(silence)));
-}
-
 fn flush_one_pending_as_submitted(state: &crate::state::AppState, sid: &str) {
     let claim = claim_idle_for_injection(state, sid).expect("idle claim");
     let injection = state
@@ -10256,22 +10238,6 @@ fn deliver_queues_pending_for_busy_agent() {
     );
 }
 
-/// A live PTY whose every byte is recorded, so a test can assert both what
-/// reached the composer and what deliberately did not.
-#[cfg(unix)]
-fn insert_recording_session(state: &AppState, session_id: &str) -> Arc<std::sync::Mutex<Vec<u8>>> {
-    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
-    insert_session_with_writer(
-        state,
-        session_id,
-        Box::new(RecordingWriter {
-            bytes: Arc::clone(&bytes),
-        }),
-        TtyMode::Raw,
-    );
-    bytes
-}
-
 /// Compose enqueue on a busy agent: nothing may reach the composer, or the
 /// user's queued note would steer the turn they deliberately did not interrupt.
 #[cfg(unix)]
@@ -10759,23 +10725,6 @@ fn partial_write_is_uncertain_not_not_started() {
 }
 
 #[cfg(unix)]
-struct RecordingWriter {
-    bytes: Arc<std::sync::Mutex<Vec<u8>>>,
-}
-
-#[cfg(unix)]
-impl std::io::Write for RecordingWriter {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.bytes.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-#[cfg(unix)]
 struct FailingWriter;
 
 #[cfg(unix)]
@@ -10787,72 +10736,6 @@ impl std::io::Write for FailingWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-}
-
-#[cfg(unix)]
-/// The three line-discipline states `write_terminal_reply` must tell apart.
-/// `Cbreak` is not a curiosity: it is the one where `ICANON` and `ECHO`
-/// disagree, so it is the only case that can prove the gate keys on the right
-/// flag. A fresh `openpty` is `Cooked`.
-#[cfg(unix)]
-#[derive(Clone, Copy)]
-enum TtyMode {
-    /// `ICANON` + `ECHO` — a reply is painted on screen and never delivered.
-    Cooked,
-    /// `ICANON` off, `ECHO` on — ugly, but the reply IS read immediately.
-    Cbreak,
-    /// Both off — what an agent sets before it queries.
-    Raw,
-}
-
-#[cfg(unix)]
-fn insert_session_with_writer(
-    state: &AppState,
-    session_id: &str,
-    writer: Box<dyn std::io::Write + Send>,
-    mode: TtyMode,
-) {
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("openpty");
-    if !matches!(mode, TtyMode::Cooked) {
-        let fd = pair.master.as_raw_fd().expect("master fd");
-        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
-        assert_eq!(unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) }, 0);
-        let mut termios = unsafe { termios.assume_init() };
-        termios.c_lflag &= !libc::ICANON;
-        if matches!(mode, TtyMode::Raw) {
-            termios.c_lflag &= !libc::ECHO;
-        }
-        assert_eq!(
-            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &termios) },
-            0,
-            "setting the line discipline must succeed"
-        );
-    }
-    let mut command = CommandBuilder::new("/bin/sh");
-    command.args(["-c", "sleep 30"]);
-    let child = pair.slave.spawn_command(command).expect("spawn shell");
-    state.session_maps.sessions.insert(
-        session_id.to_string(),
-        Mutex::new(PtySession {
-            writer: Arc::new(Mutex::new(writer)),
-            master: pair.master,
-            _child: child,
-            paused: Arc::new(AtomicBool::new(false)),
-            worktree: None,
-            cwd: None,
-            display_name: None,
-            display_name_is_custom: false,
-            is_remote: false,
-            shell: "/bin/sh".to_string(),
-        }),
-    );
 }
 
 #[cfg(unix)]
