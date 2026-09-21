@@ -45,6 +45,7 @@
 use std::collections::VecDeque;
 use std::num::NonZero;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
 
@@ -89,6 +90,90 @@ impl std::fmt::Display for SpeakError {
 
 impl std::error::Error for SpeakError {}
 
+/// Identifies one reply for its whole life.
+///
+/// A caller that queues a reply gets one of these back and can ask what became
+/// of it afterwards. That indirection is the whole point: [`Speaker::say`]
+/// returns the moment the reply is *accepted*, which is several seconds and
+/// three failure modes before anybody hears it, and a caller told only
+/// "accepted" would have no way to tell a spoken reply from a discarded one.
+///
+/// Meaningful only inside the [`Speaker`] that issued it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct UtteranceId(u64);
+
+impl std::fmt::Display for UtteranceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::str::FromStr for UtteranceId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse().map(Self)
+    }
+}
+
+/// What became of one reply.
+///
+/// The three terminal states are kept apart because a caller reacts
+/// differently to each: `Finished` is the conversation working, `Interrupted`
+/// is the user talking and is not an error, and `Failed` is the only one worth
+/// surfacing. Collapsing the first two into "done" is the mistake that makes a
+/// voice assistant claim it said something it never said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Utterance {
+    /// Accepted, waiting for the renderer.
+    Queued,
+    /// The engine is rendering it.
+    Rendering,
+    /// Handed to the audio device, still coming out.
+    Speaking,
+    /// Played to the end. Set only after the device reported it had nothing
+    /// left — never when the audio was merely handed over.
+    Finished,
+    /// The turn ended before it was heard. Not an error.
+    Interrupted,
+    /// Synthesis or the audio device refused it.
+    Failed(String),
+}
+
+impl Utterance {
+    /// Is there anything left to wait for?
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Finished | Self::Interrupted | Self::Failed(_))
+    }
+}
+
+impl std::fmt::Display for Utterance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Rendering => write!(f, "rendering"),
+            Self::Speaking => write!(f, "speaking"),
+            Self::Finished => write!(f, "finished"),
+            Self::Interrupted => write!(f, "interrupted"),
+            Self::Failed(reason) => write!(f, "failed: {reason}"),
+        }
+    }
+}
+
+/// How many past replies a [`Speaker`] remembers the fate of.
+///
+/// A caller polls for the reply it just queued, so it only ever needs the
+/// newest few. The bound is here because a long conversation would otherwise
+/// grow a map nothing prunes.
+const MAX_TRACKED: usize = 64;
+
+/// How often the render thread looks up from an empty queue to see whether the
+/// device has gone quiet.
+///
+/// It only waits this way while something is actually playing; an idle speaker
+/// blocks on the condvar and costs nothing.
+const PLAYBACK_POLL: Duration = Duration::from_millis(25);
+
 /// Where rendered audio goes.
 ///
 /// A trait because the two things that have to be tested here — that
@@ -126,12 +211,14 @@ pub struct SpeakerStatus {
 }
 
 struct Reply {
+    id: UtteranceId,
     generation: u64,
     text: String,
     voice: String,
 }
 
 struct InFlight {
+    id: UtteranceId,
     generation: u64,
     cancel: SpeechCancel,
 }
@@ -142,6 +229,44 @@ struct State {
     in_flight: Option<InFlight>,
     last_error: Option<String>,
     shutdown: bool,
+    /// Next identity to hand out. Never reused, so a stale caller polling an
+    /// old id gets that id's own fate rather than a newer reply's.
+    next_id: u64,
+    /// What became of each reply, oldest first, capped at [`MAX_TRACKED`].
+    tracked: VecDeque<(UtteranceId, Utterance)>,
+    /// Handed to the device and not yet known to have finished, in the order
+    /// the device will play them. The device reports one boolean for the whole
+    /// queue, so these resolve together when it goes quiet — which is correct,
+    /// since it drains in order.
+    playing: VecDeque<UtteranceId>,
+}
+
+impl State {
+    /// Hand out an identity and start tracking it.
+    fn track(&mut self, state: Utterance) -> UtteranceId {
+        let id = UtteranceId(self.next_id);
+        self.next_id += 1;
+        self.tracked.push_back((id, state));
+        while self.tracked.len() > MAX_TRACKED {
+            self.tracked.pop_front();
+        }
+        id
+    }
+
+    /// Record a transition. Silently ignores an id that has aged out, which is
+    /// the only way it can be missing.
+    fn set(&mut self, id: UtteranceId, state: Utterance) {
+        if let Some(entry) = self.tracked.iter_mut().find(|(tracked, _)| *tracked == id) {
+            entry.1 = state;
+        }
+    }
+
+    fn get(&self, id: UtteranceId) -> Option<Utterance> {
+        self.tracked
+            .iter()
+            .find(|(tracked, _)| *tracked == id)
+            .map(|(_, state)| state.clone())
+    }
 }
 
 struct Shared {
@@ -171,6 +296,9 @@ impl Speaker {
                 in_flight: None,
                 last_error: None,
                 shutdown: false,
+                next_id: 1,
+                tracked: VecDeque::new(),
+                playing: VecDeque::new(),
             }),
             wake: Condvar::new(),
         });
@@ -193,7 +321,10 @@ impl Speaker {
     ///
     /// Returns as soon as it is queued. A reply for a turn that is already
     /// over is refused here rather than rendered and thrown away later.
-    pub fn say(&self, generation: u64, text: &str, voice: &str) -> Result<(), SpeakError> {
+    ///
+    /// The returned [`UtteranceId`] is how the caller finds out what happened
+    /// next: accepting a reply says nothing about whether anybody heard it.
+    pub fn say(&self, generation: u64, text: &str, voice: &str) -> Result<UtteranceId, SpeakError> {
         let mut state = self.shared.state.lock();
         if state.shutdown {
             return Err(SpeakError::Stopped);
@@ -207,13 +338,21 @@ impl Speaker {
         if state.queue.len() >= MAX_QUEUED {
             return Err(SpeakError::Full);
         }
+        let id = state.track(Utterance::Queued);
         state.queue.push_back(Reply {
+            id,
             generation,
             text: text.to_string(),
             voice: voice.to_string(),
         });
         self.shared.wake.notify_all();
-        Ok(())
+        Ok(id)
+    }
+
+    /// What became of a reply, or `None` if this speaker never issued that id
+    /// or has forgotten it — see [`MAX_TRACKED`].
+    pub fn utterance(&self, id: UtteranceId) -> Option<Utterance> {
+        self.shared.state.lock().get(id)
     }
 
     /// Stop talking, now, and forget everything queued for this turn.
@@ -226,11 +365,27 @@ impl Speaker {
     /// which is correct: two interruptions in a row are two turns.
     pub fn hush(&self) -> u64 {
         let generation = {
+            // Read before stopping the device, and while nothing else can
+            // queue: a reply that has already been heard in full must not be
+            // reported as interrupted just because an interruption followed
+            // it. A cheap atomic read, not an interlock.
+            let heard_everything = !self.output.is_speaking();
             let mut state = self.shared.state.lock();
             state.generation += 1;
-            state.queue.clear();
+            for reply in state.queue.drain(..).collect::<Vec<_>>() {
+                state.set(reply.id, Utterance::Interrupted);
+            }
             if let Some(in_flight) = state.in_flight.take() {
                 in_flight.cancel.cancel();
+                state.set(in_flight.id, Utterance::Interrupted);
+            }
+            let outcome = if heard_everything {
+                Utterance::Finished
+            } else {
+                Utterance::Interrupted
+            };
+            while let Some(id) = state.playing.pop_front() {
+                state.set(id, outcome.clone());
             }
             state.generation
         };
@@ -281,7 +436,7 @@ impl Drop for Speaker {
 /// Take replies, render them, play what is still wanted.
 fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
     loop {
-        let Some((reply, cancel)) = next_reply(shared) else {
+        let Some((reply, cancel)) = next_reply(shared, output) else {
             return;
         };
 
@@ -293,6 +448,7 @@ fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
             return;
         }
         if state.generation != reply.generation {
+            state.set(reply.id, Utterance::Interrupted);
             // The turn ended while this was rendering. This is the case the
             // whole module exists for, and the audio is finished and correct —
             // which is exactly why it has to be thrown away here.
@@ -311,45 +467,82 @@ fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
             // the stale audio appended behind it. `play` only queues, so
             // `hush` waits on the order of a mixer append, not an utterance.
             Ok(audio) => match output.play(&audio) {
-                Ok(()) => state.last_error = None,
+                Ok(()) => {
+                    state.last_error = None;
+                    // Handed over, not heard. `Finished` is set by the poll in
+                    // `next_reply` once the device reports it has nothing left.
+                    state.set(reply.id, Utterance::Speaking);
+                    state.playing.push_back(reply.id);
+                }
                 Err(reason) => {
                     tracing::warn!("speech: the audio device refused a reply: {reason}");
+                    state.set(reply.id, Utterance::Failed(reason.clone()));
                     state.last_error = Some(reason);
                 }
             },
             Err(SpeechError::Cancelled) => {
                 // Not a failure. Somebody asked for this.
+                state.set(reply.id, Utterance::Interrupted);
             }
             Err(error) => {
                 tracing::warn!("speech: {error}");
+                state.set(reply.id, Utterance::Failed(error.to_string()));
                 state.last_error = Some(error.to_string());
             }
         }
     }
 }
 
+/// Resolve replies the device has finished playing.
+///
+/// Called only from the render thread, which is why it may take the device's
+/// word for it: `is_speaking` is a status field, and by the time it reads
+/// false everything handed over has come out in order.
+fn note_playback_drained(state: &mut State, output: &dyn Output) {
+    if state.playing.is_empty() || output.is_speaking() {
+        return;
+    }
+    while let Some(id) = state.playing.pop_front() {
+        state.set(id, Utterance::Finished);
+    }
+}
+
 /// Block until there is a reply worth rendering, or until shutdown.
 ///
-/// Returns `None` only on shutdown.
-fn next_reply(shared: &Shared) -> Option<(Reply, SpeechCancel)> {
+/// Returns `None` only on shutdown. While waiting with audio still coming out
+/// it wakes periodically to notice the device going quiet — that is what turns
+/// a `Speaking` reply into a `Finished` one, and it is done here rather than on
+/// its own thread because this loop already owns the state.
+fn next_reply(shared: &Shared, output: &dyn Output) -> Option<(Reply, SpeechCancel)> {
     let mut state = shared.state.lock();
     loop {
         if state.shutdown {
             return None;
         }
+        note_playback_drained(&mut state, output);
         match state.queue.pop_front() {
             Some(reply) if reply.generation == state.generation => {
                 let cancel = SpeechCancel::new();
                 state.in_flight = Some(InFlight {
+                    id: reply.id,
                     generation: reply.generation,
                     cancel: cancel.clone(),
                 });
+                state.set(reply.id, Utterance::Rendering);
                 return Some((reply, cancel));
             }
             // Queued before the turn changed. Dropping it here costs nothing;
             // rendering it first would cost a second of CPU and a second of
             // latency for the reply that does matter.
-            Some(_) => continue,
+            Some(reply) => {
+                state.set(reply.id, Utterance::Interrupted);
+                continue;
+            }
+            // A timed wait only while something is still playing: an idle
+            // speaker must not poll a device that has nothing to report.
+            None if !state.playing.is_empty() => {
+                shared.wake.wait_for(&mut state, PLAYBACK_POLL);
+            }
             None => shared.wake.wait(&mut state),
         }
     }
@@ -471,6 +664,9 @@ mod tests {
     struct FakeOutput {
         recorded: Mutex<Recorded>,
         fail_with: Option<String>,
+        /// How many times the render thread asked whether audio was still
+        /// coming out. A test reads it to prove the thread is not polling.
+        speaking_queries: AtomicUsize,
     }
 
     impl FakeOutput {
@@ -489,6 +685,18 @@ mod tests {
 
         fn stops(&self) -> usize {
             self.recorded.lock().stops
+        }
+
+        /// The device draining by itself, which a real one does when the audio
+        /// ends and a fake one cannot do on its own. Tests drive it explicitly
+        /// rather than sleeping, so "played to the end" is a fact rather than
+        /// a timing guess.
+        fn finish_playing(&self) {
+            self.recorded.lock().speaking = false;
+        }
+
+        fn speaking_queries(&self) -> usize {
+            self.speaking_queries.load(Ordering::SeqCst)
         }
     }
 
@@ -510,6 +718,7 @@ mod tests {
         }
 
         fn is_speaking(&self) -> bool {
+            self.speaking_queries.fetch_add(1, Ordering::SeqCst);
             self.recorded.lock().speaking
         }
     }
@@ -577,6 +786,30 @@ mod tests {
                 self.cancelled.fetch_add(1, Ordering::SeqCst);
                 return Err(SpeechError::Cancelled);
             }
+            Ok(SpeechAudio {
+                samples: vec![text.len() as f32; 4],
+                sample_rate: 24_000,
+            })
+        }
+    }
+
+    /// An engine that finishes what it started, cancel flag or not.
+    ///
+    /// Not a strawman: an adapter checks the flag between frames, and the last
+    /// frame has no "between" after it, so a request cancelled at the wrong
+    /// microsecond still returns audio. The queue has to discard it.
+    struct DeafSpeech {
+        hold: Arc<Mutex<()>>,
+    }
+
+    impl Speech for DeafSpeech {
+        fn synthesize(
+            &self,
+            text: &str,
+            _voice: &str,
+            _cancel: &SpeechCancel,
+        ) -> Result<SpeechAudio, SpeechError> {
+            let _held = self.hold.lock();
             Ok(SpeechAudio {
                 samples: vec![text.len() as f32; 4],
                 sample_rate: 24_000,
@@ -945,6 +1178,240 @@ mod tests {
             source_parameters(&empty)
                 .unwrap_err()
                 .contains("no samples")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Utterance identity (817-f67c)
+    //
+    // The property under test throughout: a caller is told what actually
+    // happened to its reply, and "we accepted it" is never allowed to stand in
+    // for "the user heard it".
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn accepting_a_reply_is_not_the_same_as_speaking_it() {
+        // The defect this exists for: `say` returns in microseconds, and a
+        // caller that treats that as completion reports a spoken reply while
+        // the engine has not even started.
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 3);
+
+        let id = speaker.say(3, "ciao", "alba").unwrap();
+
+        eventually("the reply to reach the device", || {
+            speaker.utterance(id) == Some(Utterance::Speaking)
+        });
+        assert_eq!(output.played().len(), 1);
+        // Still coming out of the speaker, so still not finished.
+        std::thread::sleep(SETTLE);
+        assert_eq!(speaker.utterance(id), Some(Utterance::Speaking));
+
+        output.finish_playing();
+        eventually("the device to be noticed going quiet", || {
+            speaker.utterance(id) == Some(Utterance::Finished)
+        });
+    }
+
+    #[test]
+    fn every_reply_gets_an_identity_of_its_own() {
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+
+        let first = speaker.say(0, "ciao", "alba").unwrap();
+        let second = speaker.say(0, "arrivederci", "alba").unwrap();
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn an_identity_this_speaker_never_issued_is_unknown() {
+        // The MCP caller supplies the id, so an id from another conversation —
+        // or from nowhere — must not resolve to whatever is current.
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), output as _, 0);
+        assert_eq!(speaker.utterance("999".parse().unwrap()), None);
+    }
+
+    #[test]
+    fn a_reply_interrupted_before_it_was_rendered_says_interrupted() {
+        // The user talked over the queue. Nothing failed.
+        let hold = Arc::new(Mutex::new(()));
+        let held = hold.lock();
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(
+            Arc::new(FakeSpeech::blocking(Arc::clone(&hold))),
+            Arc::clone(&output) as _,
+            0,
+        );
+
+        let first = speaker.say(0, "primo", "alba").unwrap();
+        let second = speaker.say(0, "secondo", "alba").unwrap();
+        eventually("the first reply to reach the engine", || {
+            speaker.utterance(first) == Some(Utterance::Rendering)
+        });
+        assert_eq!(speaker.utterance(second), Some(Utterance::Queued));
+
+        speaker.hush();
+        drop(held);
+
+        assert_eq!(speaker.utterance(second), Some(Utterance::Interrupted));
+        eventually("the rendering reply to report interrupted", || {
+            speaker.utterance(first) == Some(Utterance::Interrupted)
+        });
+    }
+
+    #[test]
+    fn a_reply_the_engine_refused_is_failed_and_says_why() {
+        // A failure has to be distinguishable from an interruption: one is
+        // worth telling the user about and the other is the conversation
+        // working as designed.
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(BrokenSpeech), Arc::clone(&output) as _, 0);
+
+        let id = speaker.say(0, "ciao", "alba").unwrap();
+
+        eventually("the failure to be recorded", || {
+            matches!(speaker.utterance(id), Some(Utterance::Failed(_)))
+        });
+        let Some(Utterance::Failed(reason)) = speaker.utterance(id) else {
+            unreachable!("just asserted")
+        };
+        assert!(reason.contains("not downloaded"), "{reason}");
+        assert!(output.played().is_empty());
+    }
+
+    #[test]
+    fn a_reply_the_device_refused_is_failed_rather_than_finished() {
+        let output = Arc::new(FakeOutput::failing("the speaker is gone"));
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+
+        let id = speaker.say(0, "ciao", "alba").unwrap();
+
+        eventually("the device failure to be recorded", || {
+            matches!(speaker.utterance(id), Some(Utterance::Failed(_)))
+        });
+        assert_eq!(
+            speaker.utterance(id),
+            Some(Utterance::Failed("the speaker is gone".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_reply_already_heard_in_full_is_not_rewritten_as_interrupted() {
+        // Two interruptions in a row, the second after the speaker has gone
+        // quiet, must not retract a reply the user actually heard.
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+
+        let id = speaker.say(0, "ciao", "alba").unwrap();
+        eventually("the reply to reach the device", || {
+            speaker.utterance(id) == Some(Utterance::Speaking)
+        });
+
+        output.finish_playing();
+        speaker.hush();
+
+        assert_eq!(speaker.utterance(id), Some(Utterance::Finished));
+    }
+
+    #[test]
+    fn a_reply_cut_off_mid_sentence_is_interrupted_not_finished() {
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+
+        let id = speaker.say(0, "ciao", "alba").unwrap();
+        eventually("the reply to reach the device", || {
+            speaker.utterance(id) == Some(Utterance::Speaking)
+        });
+
+        // Still coming out when the user starts talking.
+        speaker.hush();
+
+        assert_eq!(speaker.utterance(id), Some(Utterance::Interrupted));
+        assert_eq!(output.stops(), 1);
+    }
+
+    #[test]
+    fn a_reply_rendered_for_a_turn_that_ended_reports_interrupted() {
+        // The audio is finished and correct, and is thrown away because the
+        // turn moved on while it rendered. Reachable whenever an engine does
+        // not notice the cancel flag — it checks between frames, and the last
+        // frame has no "between" after it. The caller has to see this as an
+        // interruption rather than as a reply nobody ever accounted for.
+        let hold = Arc::new(Mutex::new(()));
+        let held = hold.lock();
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(
+            Arc::new(DeafSpeech {
+                hold: Arc::clone(&hold),
+            }),
+            Arc::clone(&output) as _,
+            0,
+        );
+
+        let id = speaker.say(0, "ciao", "alba").unwrap();
+        eventually("the reply to reach the engine", || {
+            speaker.utterance(id) == Some(Utterance::Rendering)
+        });
+
+        speaker.hush();
+        drop(held);
+
+        eventually("the stale reply to be discarded", || {
+            speaker.utterance(id) == Some(Utterance::Interrupted)
+        });
+        assert!(
+            output.played().is_empty(),
+            "audio for a turn that ended reached the speaker"
+        );
+    }
+
+    #[test]
+    fn the_fates_it_remembers_are_bounded() {
+        // A long conversation must not grow a map nothing prunes. Forgetting
+        // the oldest is right: a caller polls for the reply it just queued.
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+
+        let first = speaker.say(0, "ciao", "alba").unwrap();
+        eventually("the first reply to reach the device", || {
+            speaker.utterance(first) == Some(Utterance::Speaking)
+        });
+
+        // Well past the bound, one at a time so the queue never fills.
+        for n in 0..MAX_TRACKED + 2 {
+            let id = speaker.say(0, &format!("reply {n}"), "alba").unwrap();
+            eventually("the reply to reach the device", || {
+                speaker.utterance(id) == Some(Utterance::Speaking)
+            });
+        }
+
+        assert_eq!(speaker.utterance(first), None, "the oldest is forgotten");
+    }
+
+    #[test]
+    fn an_idle_speaker_does_not_poll_the_device() {
+        // The playback poll exists to notice a device going quiet. An idle
+        // speaker has nothing to notice, and a loop spinning at 40 Hz for the
+        // life of the app is exactly the kind of cost that never gets found.
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+
+        let id = speaker.say(0, "ciao", "alba").unwrap();
+        eventually("the reply to reach the device", || {
+            speaker.utterance(id) == Some(Utterance::Speaking)
+        });
+        output.finish_playing();
+        eventually("playback to be resolved", || {
+            speaker.utterance(id) == Some(Utterance::Finished)
+        });
+
+        let before = output.speaking_queries();
+        std::thread::sleep(PLAYBACK_POLL * 8);
+        assert_eq!(
+            output.speaking_queries(),
+            before,
+            "the render thread woke up with nothing playing"
         );
     }
 }
