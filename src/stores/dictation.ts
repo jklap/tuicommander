@@ -18,6 +18,8 @@ interface DictationConfig {
 	hands_free_hold_back_ms: number;
 	/** Hands-free activation phrase; empty means ungated. No UI control. */
 	hands_free_activation_phrase: string;
+	/** A user-supplied speech engine as argv; empty means the bundled one. No UI control. */
+	speech_command: string[];
 }
 
 /** Whisper's own no_speech_thold default, mirrored from `transcribe.rs`. */
