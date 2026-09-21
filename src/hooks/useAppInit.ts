@@ -1285,11 +1285,7 @@ export async function initApp(deps: AppInitDeps) {
 				}
 			}
 			appLogger.error("app", "Failed to list active sessions after all retries — giving up");
-			toastsStore.add(
-				"Couldn't reach the backend",
-				"Some terminal tabs may be missing until you reload.",
-				"error",
-			);
+			toastsStore.add("Couldn't reach the backend", "Some terminal tabs may be missing until you reload.", "error");
 		})();
 	}
 

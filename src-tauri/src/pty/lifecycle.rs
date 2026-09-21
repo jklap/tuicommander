@@ -4860,18 +4860,14 @@ pub(crate) fn wake_all_standby(state: &AppState) -> usize {
     parked.len()
 }
 
+/// Was desktop-only with no bus arm — a browser/PWA client never saw the
+/// standby badge at all (D.3).
 #[cfg(unix)]
 fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
-    #[cfg(feature = "desktop")]
-    if let Some(ref app) = *state.app_handle.read() {
-        let _ = app.emit(
-            "session-standby",
-            serde_json::json!({
-                "session_id": session_id,
-                "standby": standby,
-            }),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::SessionStandby {
+        session_id: session_id.to_string(),
+        standby,
+    });
 }
 
 /// SIGKILL the foreground process group of a PTY session.

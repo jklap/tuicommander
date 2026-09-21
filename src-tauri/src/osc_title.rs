@@ -177,6 +177,7 @@ fn write_name(state: &crate::AppState, session_id: &str, name: String) {
 /// from a previous call as if it were the original base — this is exactly
 /// the class of bug `base_name_is_recorded_once_and_not_overwritten_by_a_later_title`
 /// guards against.
+#[allow(clippy::option_option)] // deliberate 3-state disambiguation, see doc comment above
 pub(crate) fn apply_osc_title(
     state: &crate::AppState,
     session_id: &str,
@@ -227,6 +228,7 @@ pub(crate) fn apply_osc_title(
 /// applied an explicit custom rename (`set_session_display_name`'s own
 /// no-op guard also protects against clobbering, but skipping here avoids
 /// even attempting it).
+#[allow(clippy::option_option)] // deliberate 3-state disambiguation, see apply_osc_title's doc comment
 pub(crate) fn restore_base_on_exit(
     state: &crate::AppState,
     session_id: &str,
@@ -587,7 +589,10 @@ mod tests {
                 count += 1;
             }
         }
-        assert_eq!(count, 1, "expected exactly one SessionRenamed, spinner repaint must not re-emit");
+        assert_eq!(
+            count, 1,
+            "expected exactly one SessionRenamed, spinner repaint must not re-emit"
+        );
     }
 
     #[test]
