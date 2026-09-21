@@ -17,6 +17,8 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `vad.rs` | Tail-silence detector (energy-based, ported from whisper.cpp; not a whole-window speech gate) |
 | `corrections.rs` | Post-processing text corrections |
 | `continuous.rs` | Hands-free mode: utterance segmentation and session-bound delivery |
+| `speech.rs` | The speech port: `Speech`, `SpeechAudio`, `SpeechError`, `SpeechCancel`, `budget_seconds` — no engine named |
+| `speech/pocket/` | The Pocket TTS adapter: `pocket.rs` (the port impl), `bundle.rs` (manifest + streaming state), `tokenizer.rs` (SentencePiece Unigram), `engine.rs` (the four ONNX graphs) |
 
 ## Tauri Commands
 
@@ -507,45 +509,84 @@ On macOS, microphone access is gated by the TCC (Transparency, Consent, and Cont
 - **macOS:** Full TCC integration via AVFoundation
 - **Linux/Windows:** Always returns `Authorized` (no TCC framework)
 
-## Kokoro text-to-speech (`crates/kokoro-rs`)
+## Pocket TTS speech synthesis (`speech/pocket/`)
 
-Speech synthesis is native GGML inference over a vendored
-[kokoro.cpp](https://github.com/simonfxr/kokoro.cpp). There is no ONNX, no
-Python and no external service, and no fallback to any of them. The crate
-builds everything it needs from `crates/kokoro-rs/vendor/`; see
-`crates/kokoro-rs/VENDOR.md` for the pins, the one local patch and the
-licensing constraint.
+Spoken replies are rendered locally by [Pocket TTS](https://github.com/kyutai-labs/pocket-tts),
+run in-process over ONNX Runtime. There is no Python, no external service, and
+no fallback to either.
 
-### It is a shared library on purpose
+Kokoro was here first and was removed. Its Italian voices graded C, Boss
+rejected all twelve evaluation samples, and it dragged GPL-3.0 espeak-ng into
+an Apache-2.0 repository. That is the reason `speech.rs` is a port and names
+no engine: the engine behind it has already changed once.
 
-`whisper-rs` links GGML 0.9.5 statically into this process and kokoro.cpp pins
-GGML 0.17.0. The two revisions define 793 symbols with identical names, so
-`build.rs` builds kokoro.cpp as a shared library that hides its GGML and
-exports only `kokoro_*`. `tests/kokoro_whisper_coexistence.rs` holds that in
-place: it links Whisper and Kokoro into one binary, so a regression to a
-static link fails at link time rather than at run time.
+### Nothing of the model is in this repository
 
-### Synthesis cannot be cancelled
+A bundle is a directory downloaded at runtime under the dictation models
+directory, not a build artifact:
 
-The C ABI at the pinned revision has no cancellation and no incremental audio
-callback. **Dropping a `spawn_blocking` future does not stop native work** —
-the thread runs to the end of the utterance and only the result is thrown
-away. The only available bound is request size, so `Kokoro::synthesize`
-rejects text over `MAX_SYNTHESIS_TEXT_BYTES` (2000). Callers that need to
-react to an interruption split text into sentence-sized requests and discard
-stale *results*; the playback queue is what has to be cancellable.
+```text
+<config dir>/models/speech/
+  onnxruntime/libonnxruntime.dylib     the runtime library, also downloaded
+  italian/
+    bundle.json  tokenizer.model  *.onnx
+    voices/giovanni.safetensors
+```
+
+The weights are Kyutai's, CC-BY-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
+Every absence is a typed `SpeechError::ModelUnavailable` naming the missing
+file, never a panic and never silence.
+
+### `bundle.json` is the contract, not the code
+
+The manifest publishes the streaming-state shape — 18 flow-LM and 56 Mimi
+tensors, each with input name, output name, module, key, dtype, fill and shape
+— plus sample rate, frame rate, chunk size and text-preparation flags.
+`bundle.rs` carries that state between steps, so a bundle for a new language
+loads unmodified. This is why English works with no language-specific branch.
+
+A voice file is the flow-LM cache itself, keyed `module/key`. Voices disagree
+about its size (Italian `giovanni` holds 94 frames in 12 tensors, English
+`cosette` 126 frames in 18, with an extra `pad` key), so `copy_overlap` copies
+the voice into the corner of the graph's larger cache instead of assuming a
+shape.
+
+### The runtime library is loaded explicitly
+
+`ort` is built in `load-dynamic` mode: its default feature downloads
+onnxruntime during the build and then has to be bundled on three platforms,
+while here the library travels with the model it serves.
+
+**That mode panics if left to itself.** `ort` resolves the library through the
+system loader on first use and `expect`s the result, so a half-finished
+download would abort the process. `load_runtime` calls `ort::init_from` on an
+explicit path before any session is built, turning it into
+`ModelUnavailable`. It memoises only success, so a user who downloads the
+runtime after a failed attempt gets speech on the next request rather than
+after a restart. `ORT_DYLIB_PATH` still wins when it is set.
+
+### The tokenizer is not the `sentencepiece` crate
+
+That crate statically links protobuf 3.14 while onnxruntime links 3.21, and
+the two abort the process on first use. `tokenizer.rs` reads the model proto
+with `sentencepiece-model` and runs the Unigram Viterbi through `tokenizers`,
+both pure Rust. `ids_match_the_reference_tokenizer` holds it byte-identical to
+Python `sentencepiece` on the real Italian bundle.
+
+### Cancellation and the budget
+
+Unlike the Kokoro C ABI, this one can stop: generation is a loop this process
+drives, so `SpeechCancel` is checked at the chunk, frame and decode loops and
+an abandoned reply stops within a frame.
+
+Generative TTS also runs away — one evaluation candidate produced 195 KB and
+675 KB of audio for the same sentence across four runs. `budget_seconds`
+states the ceiling once for every adapter, `Bundle::frames_for` converts it to
+frames, and `remaining_frames` returns `SpeechError::Runaway` rather than
+letting a chunk mint audio the input never warranted.
 
 ### Threading
 
-A `kokoro_context` is not thread-safe. `Kokoro` keeps the pointer behind a
-mutex and holds the guard for the whole native call, which is what makes it
-`Send + Sync`. Handing the pointer out and releasing the guard is not a
-theoretical mistake: it aborts inside `ggml_concat` with a `GGML_ASSERT`
-failure under four concurrent callers.
-
-### espeak-ng data
-
-kokoro.cpp phonemizes through espeak-ng, which reads its data directory once
-per process from `KOKORO_ESPEAK_DATA_PATH`. `set_espeak_data_root` installs it
-and rejects a second, different directory rather than ignoring it. The default
-is the copy the build compiles, for the eight languages Kokoro-82M supports.
+An `ort::Session` is driven by `&mut` while the port hands out `&self`, so the
+engine sits behind a mutex and synthesis serialises. One spoken reply at a
+time is the actual requirement, not a limitation.
