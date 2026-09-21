@@ -2270,6 +2270,59 @@ describe("transport", () => {
 		]);
 
 		/** Every bare-string (non-template-literal) `listen("name", ...)` call across all of `src/`. */
+		/**
+		 * The top-level string keys of the object literal passed as
+		 * `subscribeEvents(...)`'s first argument, e.g.
+		 * `subscribeEvents({ "mcp-confirm": handler, "pty-open-url": other })`.
+		 * Found via code review: a naive `listen("name", ...)` regex alone
+		 * missed this whole registration shape — `mcp-confirm`,
+		 * `mcp-confirm-resolved`, `pty-open-url`, `progress-recorded`, and
+		 * `session-state-changed` (real production listeners in
+		 * `stores/mcpConfirm.ts`, `stores/ptyOpenUrl.ts`,
+		 * `hooks/useAgentPolling.ts`, `mobile/useSessions.ts`) were silently
+		 * absent from the snapshot, which would have let the D.11 gate pass
+		 * vacuously through a future regression on any of them.
+		 *
+		 * Walks braces by hand (not a regex) so a nested object literal
+		 * inside a handler body — depth 2+ — is never mistaken for a
+		 * top-level key.
+		 */
+		function extractSubscribeEventsKeys(source: string): string[] {
+			const keys: string[] = [];
+			for (const call of source.matchAll(/\bsubscribeEvents\s*\(/g)) {
+				const openBrace = source.indexOf("{", call.index! + call[0].length);
+				if (openBrace < 0) continue;
+				let depth = 0;
+				let end = -1;
+				for (let i = openBrace; i < source.length; i++) {
+					if (source[i] === "{") depth++;
+					else if (source[i] === "}") {
+						depth--;
+						if (depth === 0) {
+							end = i;
+							break;
+						}
+					}
+				}
+				if (end < 0) continue;
+				const body = source.slice(openBrace + 1, end);
+				// Depth-1 keys only: strip out every nested `{...}` (arrow/function
+				// bodies, nested objects) before matching quoted keys, so a
+				// string-keyed object literal INSIDE a handler body can never be
+				// mistaken for one of subscribeEvents' own event names.
+				let topLevelOnly = body;
+				for (;;) {
+					const stripped = topLevelOnly.replace(/\{[^{}]*\}/g, "{}");
+					if (stripped === topLevelOnly) break;
+					topLevelOnly = stripped;
+				}
+				for (const match of topLevelOnly.matchAll(/["']([a-zA-Z0-9_-]+)["']\s*:/g)) {
+					keys.push(match[1]);
+				}
+			}
+			return keys;
+		}
+
 		function extractStaticListenEventNames(): Map<string, string[]> {
 			const found = new Map<string, string[]>();
 			const add = (name: string, path: string) => {
@@ -2280,6 +2333,9 @@ describe("transport", () => {
 			for (const { path, source } of collectFrontendSources()) {
 				for (const match of source.matchAll(/\blisten(?:<[^>]*>)?\(\s*["']([a-zA-Z0-9_-]+)["']/g)) {
 					add(match[1], path);
+				}
+				for (const key of extractSubscribeEventsKeys(source)) {
+					add(key, path);
 				}
 			}
 			return found;

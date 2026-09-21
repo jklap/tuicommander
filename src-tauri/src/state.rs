@@ -2733,17 +2733,50 @@ impl AppState {
     /// `SESSION_VISIBILITY_TTL_MS`. `visible: false` removes the entry
     /// immediately rather than waiting out the TTL, so a deliberate blur
     /// takes effect right away.
+    ///
+    /// `viewer_id` is client-supplied and unvalidated (a security review of
+    /// the desktop-http-parity plan flagged this, 2026-09-21): without a cap,
+    /// a client could call `visible:true` repeatedly with a fresh id each
+    /// time and grow this session's inner map without bound, for the life of
+    /// the session — the OLD single-`bool` map had no such dimension. Fixed
+    /// with three bounds: an oversized id is silently ignored (legit values
+    /// are `CLIENT_INSTANCE_ID`, a UUID, or the `LEGACY_VIEWER_ID` constant —
+    /// all far under the cap); every insert opportunistically drops entries
+    /// already past their TTL, so ordinary viewer churn self-heals without
+    /// waiting for the standby sweeper; and once the survivor count is still
+    /// at the per-session cap, the single oldest entry is evicted to make
+    /// room — bounding the map at `MAX_VIEWERS_PER_SESSION` regardless of how
+    /// many distinct ids a client supplies.
     pub(crate) fn set_session_visible(&self, session_id: &str, viewer_id: &str, visible: bool) {
+        const MAX_VIEWER_ID_LEN: usize = 128;
+        const MAX_VIEWERS_PER_SESSION: usize = 16;
+
         if visible {
+            if viewer_id.len() > MAX_VIEWER_ID_LEN {
+                return;
+            }
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            self.session_maps
+            let mut viewers = self
+                .session_maps
                 .session_visibility
                 .entry(session_id.to_string())
-                .or_default()
-                .insert(viewer_id.to_string(), now_ms);
+                .or_default();
+            viewers.retain(|_, &mut last_asserted| {
+                now_ms.saturating_sub(last_asserted) <= SESSION_VISIBILITY_TTL_MS
+            });
+            if viewers.len() >= MAX_VIEWERS_PER_SESSION
+                && !viewers.contains_key(viewer_id)
+                && let Some(oldest) = viewers
+                    .iter()
+                    .min_by_key(|&(_, &last_asserted)| last_asserted)
+                    .map(|(id, _)| id.clone())
+            {
+                viewers.remove(&oldest);
+            }
+            viewers.insert(viewer_id.to_string(), now_ms);
         } else if let Some(mut viewers) = self.session_maps.session_visibility.get_mut(session_id) {
             viewers.remove(viewer_id);
         }
@@ -6481,6 +6514,63 @@ mod tests {
                 .get("s1")
                 .is_some_and(|v| v.contains_key("desktop")),
             "a deliberate blur must drop the viewer's entry, not just be shadowed by a fresher TTL check"
+        );
+    }
+
+    /// Security review, 2026-09-21: `viewer_id` is client-supplied and
+    /// unvalidated — an oversized one must be silently ignored, not stored.
+    #[test]
+    fn set_session_visible_ignores_an_oversized_viewer_id() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        let oversized = "x".repeat(1000);
+
+        state.set_session_visible("s1", &oversized, true);
+
+        assert!(
+            !state
+                .session_maps
+                .session_visibility
+                .get("s1")
+                .is_some_and(|v| v.contains_key(&oversized)),
+            "an oversized viewer_id must never be stored"
+        );
+    }
+
+    /// Security review, 2026-09-21: without a per-session cap, a client
+    /// calling `visible:true` with a fresh random `viewer_id` every time
+    /// grows this session's inner map without bound for the life of the
+    /// session — unlike the pre-B.8 single-`bool` map, which was inherently
+    /// bounded by session count.
+    #[test]
+    fn set_session_visible_caps_the_number_of_viewers_per_session() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+
+        for i in 0..1000 {
+            state.set_session_visible("s1", &format!("viewer-{i}"), true);
+        }
+
+        let count = state
+            .session_maps
+            .session_visibility
+            .get("s1")
+            .map(|v| v.len())
+            .unwrap_or(0);
+        assert!(
+            count <= 16,
+            "session_visibility must stay bounded regardless of how many distinct \
+             viewer_ids a client supplies, got {count} entries"
+        );
+        // The most recent assertion must survive eviction — only the oldest
+        // entries are dropped to make room.
+        assert!(
+            state
+                .session_maps
+                .session_visibility
+                .get("s1")
+                .is_some_and(|v| v.contains_key("viewer-999")),
+            "the most recently asserted viewer must not be the one evicted"
         );
     }
 

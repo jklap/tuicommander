@@ -18,6 +18,8 @@ github-issues-update
 github-pr-update
 github-transition
 head-changed
+mcp-confirm
+mcp-confirm-resolved
 mcp-toast
 menu-action
 native-key-down
@@ -25,8 +27,11 @@ panel-action
 panel-resync-request
 panel-window-closed
 plugin-changed
+progress-recorded
 pty-clipboard-store
 pty-description-changed
+pty-open-url
+pty-parsed
 reattach-terminal
 repo-changed
 repositories-changed
@@ -38,6 +43,7 @@ session-created
 session-focus-requested
 session-renamed
 session-standby
+session-state-changed
 system-wake
 term-alias-assigned
 themes-changed
