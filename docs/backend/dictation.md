@@ -28,6 +28,21 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `stop_dictation_and_transcribe()` | Stop streaming, final pass on full captured audio, return `TranscribeResponse { text, skip_reason, duration_s, truncated_s }` |
 | `inject_text(text)` | Apply corrections to text (called after transcription) |
 
+### Hands-free
+
+| Command | HTTP | Description |
+|---------|------|-------------|
+| `arm_hands_free_dictation(sessionId, owner)` | `POST /dictation/hands-free/arm` | Bind the delivery target and the audio owner, open a generation, return `HandsFreeStatus`. Refused when the target cannot take a Compose entry. Does **not** open a microphone. |
+| `disarm_hands_free_dictation()` | `POST /dictation/hands-free/disarm` | Disarm the whole mode, cancel the voice entries it still owns, return `HandsFreeDisarmed`. Idempotent. |
+| `get_hands_free_status()` | `GET /dictation/hands-free` | `HandsFreeStatus`. |
+
+Both transports serialize the same structs, camelCase on the wire:
+`HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error }` and
+`HandsFreeDisarmed { wasArmed, generation, cancelled, alreadyDelivered, discardedPending, discardedCapture, status }`.
+`sessionId` and `owner` are bounded at 256 bytes and may not be blank.
+`phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
+`holding_back`, `delivered`, `error`.
+
 ### Tauri Events
 
 | Event | Direction | Payload |
@@ -49,7 +64,7 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(config)` | Save dictation configuration |
+| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`) |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -66,6 +81,7 @@ pub struct DictationState {
     pub streaming: Mutex<Option<StreamingSession>>,
     pub transcriber_arc: Mutex<Option<Arc<dyn Transcriber>>>,
     pub accumulated_partials: Arc<Mutex<String>>,
+    pub hands_free: Mutex<HandsFree>,
 }
 ```
 

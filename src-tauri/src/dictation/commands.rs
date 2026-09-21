@@ -701,6 +701,202 @@ pub fn inject_text(dictation: State<'_, DictationState>, text: String) -> Result
     Ok(final_text)
 }
 
+// ---------------------------------------------------------------------------
+// Hands-free mode
+// ---------------------------------------------------------------------------
+
+/// Longest accepted session id or audio owner.
+///
+/// Both come from the caller, and over HTTP that caller is a remote client. The
+/// owner in particular is retained for as long as the mode stays armed and
+/// echoed back in every status reply, so an unbounded one is a buffer the
+/// client controls the size of.
+pub(crate) const MAX_BINDING_LEN: usize = 256;
+
+/// Hands-free state, as both transports report it.
+///
+/// One struct, serialized by the Tauri command and by the HTTP route, so the
+/// field names and casing cannot drift between them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandsFreeStatus {
+    pub armed: bool,
+    /// See `continuous::Phase::as_wire`.
+    pub phase: String,
+    /// The bound delivery target. Unchanged by focus for as long as it is set.
+    pub session_id: Option<String>,
+    /// The bound audio endpoint.
+    pub owner: Option<String>,
+    pub generation: u64,
+    /// The transcript waiting out its hold-back, so the UI can show what is
+    /// about to be sent while there is still time to stop it.
+    pub pending_text: Option<String>,
+    /// Compose-queue ids this mode owns and would cancel on disarm.
+    pub queued_ids: Vec<u64>,
+    pub hold_back_ms: u64,
+    pub error: Option<String>,
+}
+
+/// What a disarm did.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandsFreeDisarmed {
+    /// False when there was nothing to disarm. The other fields are then empty
+    /// rather than implying work that did not happen.
+    pub was_armed: bool,
+    pub generation: u64,
+    /// Voice entries pulled back out of the Compose queue.
+    pub cancelled: Vec<u64>,
+    /// Voice entries the composer already had. Nothing can retract these, and
+    /// reporting them is the difference between an honest outcome and a claim.
+    pub already_delivered: Vec<u64>,
+    pub discarded_pending: bool,
+    pub discarded_capture: bool,
+    pub status: HandsFreeStatus,
+}
+
+pub(crate) fn hands_free_status(dictation: &DictationState) -> HandsFreeStatus {
+    let mode = dictation.hands_free.lock();
+    HandsFreeStatus {
+        armed: mode.binding().is_some(),
+        phase: mode.phase().as_wire().to_string(),
+        session_id: mode.binding().map(|binding| binding.session_id.clone()),
+        owner: mode.binding().map(|binding| binding.owner.clone()),
+        generation: mode.generation(),
+        pending_text: mode.pending_text().map(str::to_string),
+        queued_ids: mode.owned_ids().to_vec(),
+        hold_back_ms: mode.hold_back_ms(),
+        error: mode.last_error().map(str::to_string),
+    }
+}
+
+/// Take the configured hold-back into the mode. A no-op while armed — see
+/// `HandsFree::set_hold_back_ms`.
+pub(crate) fn apply_hold_back_from_config(dictation: &DictationState) {
+    let hold_back_ms = get_dictation_config().hands_free_hold_back_ms;
+    dictation
+        .hands_free
+        .lock()
+        .set_hold_back_ms(hold_back_ms.into());
+}
+
+fn check_binding_field(value: &str, label: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{label} is empty"));
+    }
+    if value.len() > MAX_BINDING_LEN {
+        return Err(format!("{label} is too long"));
+    }
+    Ok(())
+}
+
+/// Bind hands-free capture to a session and an audio owner.
+///
+/// This binds and opens a generation; it does **not** open a microphone. The
+/// capture adapter is the audio endpoint's job (see the plan's runtime
+/// boundaries), and arming is what 817's speech capability and 821's entry hint
+/// key off, so it has to be reachable before any UI exists.
+///
+/// Refused when the target cannot take a Compose-queue entry. There is no
+/// fallback delivery path, so an unsupported target stays unavailable.
+pub(crate) fn arm_hands_free(
+    state: &crate::state::AppState,
+    dictation: &DictationState,
+    session_id: &str,
+    owner: &str,
+) -> Result<HandsFreeStatus, String> {
+    check_binding_field(session_id, "Session id")?;
+    check_binding_field(owner, "Audio owner")?;
+    if !crate::pty::session_accepts_voice(state, session_id) {
+        return Err("Session cannot accept hands-free input".to_string());
+    }
+    apply_hold_back_from_config(dictation);
+    dictation
+        .hands_free
+        .lock()
+        .arm(session_id, owner, true)
+        .map_err(|error| match error {
+            crate::dictation::continuous::ArmError::AlreadyArmed => {
+                "Hands-free is already armed".to_string()
+            }
+            crate::dictation::continuous::ArmError::UnsupportedTarget => {
+                "Session cannot accept hands-free input".to_string()
+            }
+        })?;
+    Ok(hands_free_status(dictation))
+}
+
+/// Disarm the whole mode and cancel what it still owns.
+///
+/// Idempotent: disarming a mode that was never armed reports `was_armed: false`
+/// and cancels nothing, rather than inventing an outcome.
+pub(crate) fn disarm_hands_free(
+    state: &crate::state::AppState,
+    dictation: &DictationState,
+) -> HandsFreeDisarmed {
+    use crate::dictation::continuous::{DisarmReason, PtyVoiceQueue, cancel_disarmed};
+
+    let disarmed = {
+        let mut mode = dictation.hands_free.lock();
+        let session_id = mode.binding().map(|binding| binding.session_id.clone());
+        mode.disarm(DisarmReason::Manual)
+            .map(|disarmed| (session_id, disarmed))
+    };
+    let Some((session_id, disarmed)) = disarmed else {
+        // Both fields below read the mode, and `hands_free` is not reentrant: a
+        // `lock()` temporary inside the struct literal lives until the end of
+        // the whole statement, so taking it there deadlocks against the one
+        // `hands_free_status` takes. Read it once, first.
+        let status = hands_free_status(dictation);
+        return HandsFreeDisarmed {
+            was_armed: false,
+            generation: status.generation,
+            cancelled: Vec::new(),
+            already_delivered: Vec::new(),
+            discarded_pending: false,
+            discarded_capture: false,
+            status,
+        };
+    };
+    let session_id = session_id.unwrap_or_default();
+    let cancellation = cancel_disarmed(&PtyVoiceQueue(state), &session_id, &disarmed);
+    HandsFreeDisarmed {
+        was_armed: true,
+        generation: disarmed.generation,
+        cancelled: cancellation.cancelled,
+        already_delivered: cancellation.already_delivered,
+        discarded_pending: disarmed.discarded_pending,
+        discarded_capture: disarmed.discarded_capture,
+        status: hands_free_status(dictation),
+    }
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub fn arm_hands_free_dictation(
+    state: State<'_, Arc<crate::state::AppState>>,
+    dictation: State<'_, DictationState>,
+    session_id: String,
+    owner: String,
+) -> Result<HandsFreeStatus, String> {
+    arm_hands_free(&state, &dictation, &session_id, &owner)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub fn disarm_hands_free_dictation(
+    state: State<'_, Arc<crate::state::AppState>>,
+    dictation: State<'_, DictationState>,
+) -> HandsFreeDisarmed {
+    disarm_hands_free(&state, &dictation)
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub fn get_hands_free_status(dictation: State<'_, DictationState>) -> HandsFreeStatus {
+    hands_free_status(&dictation)
+}
+
 /// Dictation configuration persisted to <config_dir>/dictation-config.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictationConfig {
@@ -726,6 +922,11 @@ pub struct DictationConfig {
     /// Maximum `no_speech_probability` accepted for a segment. See [`VoiceGates`].
     #[serde(default = "default_no_speech_threshold")]
     pub no_speech_threshold: f32,
+    /// Visible hold-back between a hands-free transcript and its enqueue, in
+    /// milliseconds. Zero would send every utterance the instant it lands, so a
+    /// config written before hands-free existed takes the default instead.
+    #[serde(default = "default_hold_back_ms")]
+    pub hands_free_hold_back_ms: u32,
 }
 
 fn default_model() -> String {
@@ -742,6 +943,12 @@ fn default_rms_threshold() -> f32 {
 
 fn default_no_speech_threshold() -> f32 {
     transcribe::DEFAULT_NO_SPEECH_THRESHOLD
+}
+
+/// Long enough to read a transcript and stop it, short enough not to feel like
+/// a delay. The number is a setting; this is only where it starts.
+pub(crate) fn default_hold_back_ms() -> u32 {
+    1_500
 }
 
 impl DictationConfig {
@@ -766,6 +973,7 @@ impl Default for DictationConfig {
             auto_send: false,
             rms_threshold: default_rms_threshold(),
             no_speech_threshold: default_no_speech_threshold(),
+            hands_free_hold_back_ms: default_hold_back_ms(),
         }
     }
 }
@@ -801,6 +1009,227 @@ pub fn open_microphone_settings() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dictation::continuous::Phase;
+
+    /// Both halves of a binding are attacker-shaped input on the HTTP transport:
+    /// a remote client names the session and the owner. Neither may be empty,
+    /// and neither may be unbounded — the owner string is retained for as long
+    /// as the mode is armed and echoed back in every status reply.
+    #[test]
+    fn arming_rejects_unbounded_or_empty_identifiers() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let dictation = DictationState::new();
+
+        assert_eq!(
+            arm_hands_free(&state, &dictation, "", "desktop").unwrap_err(),
+            "Session id is empty".to_string()
+        );
+        assert_eq!(
+            arm_hands_free(&state, &dictation, "session", "").unwrap_err(),
+            "Audio owner is empty".to_string()
+        );
+        assert_eq!(
+            arm_hands_free(
+                &state,
+                &dictation,
+                &"s".repeat(MAX_BINDING_LEN + 1),
+                "desktop"
+            )
+            .unwrap_err(),
+            "Session id is too long".to_string()
+        );
+        assert_eq!(
+            arm_hands_free(
+                &state,
+                &dictation,
+                "session",
+                &"o".repeat(MAX_BINDING_LEN + 1)
+            )
+            .unwrap_err(),
+            "Audio owner is too long".to_string()
+        );
+        assert!(
+            !hands_free_status(&dictation).armed,
+            "a refused arm must leave the mode disarmed"
+        );
+    }
+
+    /// The unsupported-target rule, at the surface a caller actually reaches.
+    #[test]
+    fn arming_against_a_target_that_cannot_take_a_compose_entry_is_refused() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let dictation = DictationState::new();
+
+        assert_eq!(
+            arm_hands_free(&state, &dictation, "no-such-session", "desktop").unwrap_err(),
+            "Session cannot accept hands-free input".to_string()
+        );
+        let status = hands_free_status(&dictation);
+        assert!(!status.armed);
+        assert_eq!(status.phase, "disarmed");
+        assert_eq!(status.session_id, None);
+    }
+
+    /// Disarm is idempotent and says plainly that there was nothing to disarm,
+    /// rather than reporting a cancellation it did not perform.
+    #[test]
+    fn disarming_a_mode_that_was_never_armed_reports_no_work() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let dictation = DictationState::new();
+
+        let outcome = disarm_hands_free(&state, &dictation);
+
+        assert!(!outcome.was_armed);
+        assert!(outcome.cancelled.is_empty());
+        assert!(outcome.already_delivered.is_empty());
+        assert!(!outcome.discarded_pending);
+        assert_eq!(outcome.status.phase, "disarmed");
+    }
+
+    /// The status reply is the one shape both transports serialize, so this
+    /// pins the fields a store reads on IPC *and* over HTTP.
+    #[test]
+    fn a_disarmed_status_names_every_field_a_client_reads() {
+        let dictation = DictationState::new();
+
+        let status = hands_free_status(&dictation);
+        let wire = serde_json::to_value(&status).expect("serialize");
+
+        assert_eq!(wire["armed"], serde_json::json!(false));
+        assert_eq!(wire["phase"], serde_json::json!("disarmed"));
+        assert_eq!(wire["sessionId"], serde_json::Value::Null);
+        assert_eq!(wire["owner"], serde_json::Value::Null);
+        assert_eq!(wire["generation"], serde_json::json!(0));
+        assert_eq!(wire["pendingText"], serde_json::Value::Null);
+        assert_eq!(wire["queuedIds"], serde_json::json!([]));
+        assert_eq!(
+            wire["holdBackMs"],
+            serde_json::json!(default_hold_back_ms())
+        );
+    }
+
+    /// The hold-back is a setting, not a constant, and arming is what reads it.
+    #[test]
+    fn arming_takes_the_hold_back_from_the_configuration() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        set_dictation_config(DictationConfig {
+            hands_free_hold_back_ms: 4_000,
+            ..Default::default()
+        })
+        .expect("config save");
+        let dictation = DictationState::new();
+
+        apply_hold_back_from_config(&dictation);
+
+        assert_eq!(hands_free_status(&dictation).hold_back_ms, 4_000);
+    }
+
+    /// A config written before hands-free existed must keep a usable hold-back,
+    /// not deserialize to zero and send every utterance the instant it lands.
+    #[test]
+    fn a_config_written_before_hands_free_existed_keeps_a_hold_back() {
+        let stored = serde_json::json!({
+            "enabled": true,
+            "hotkey": "F5",
+            "language": "auto",
+        });
+        let config: DictationConfig = serde_json::from_value(stored).expect("deserialize");
+
+        assert_eq!(config.hands_free_hold_back_ms, default_hold_back_ms());
+        assert!(config.hands_free_hold_back_ms > 0);
+    }
+
+    /// The whole feature, once, against a real session: arm binds, the status
+    /// reports the binding, a held-back transcript reaches the Compose queue,
+    /// and disarm cancels what it owns and nothing else.
+    ///
+    /// The target is deliberately BUSY. An idle one would have its entry typed
+    /// by the flush, and then there would be nothing parked left to cancel —
+    /// the case this test exists to check.
+    #[cfg(unix)]
+    #[test]
+    fn arming_binds_a_real_session_and_disarm_cancels_only_its_own_entries() {
+        use crate::dictation::continuous::{PtyVoiceQueue, deliver_due};
+
+        let state = crate::state::tests_support::make_test_app_state();
+        crate::test_support::agent_session(&state, "voice-e2e", crate::pty::SHELL_BUSY);
+        crate::test_support::insert_recording_session(&state, "voice-e2e");
+        let dictation = DictationState::new();
+        // Work a human and a peer already parked on the same session.
+        let (human, notice) = {
+            let mut queue = state
+                .pending_injections
+                .entry("voice-e2e".to_string())
+                .or_default();
+            let human = crate::state::PendingInjection::user_command("typed by hand");
+            let notice = crate::state::PendingInjection::notice("peer mail wake");
+            let ids = (human.id(), notice.id());
+            queue.push_back(human);
+            queue.push_back(notice);
+            ids
+        };
+
+        let armed = arm_hands_free(&state, &dictation, "voice-e2e", "desktop").expect("arm");
+        assert!(armed.armed);
+        assert_eq!(armed.session_id.as_deref(), Some("voice-e2e"));
+        assert_eq!(armed.owner.as_deref(), Some("desktop"));
+        assert_eq!(armed.phase, "waiting");
+
+        // One hands-free turn, through the only exit this mode has.
+        let generation = armed.generation;
+        let voice_id = {
+            let mut mode = dictation.hands_free.lock();
+            mode.accept_transcript(generation, "run the tests", 0);
+            deliver_due(&mut mode, &PtyVoiceQueue(&state), armed.hold_back_ms)
+                .expect("the hold-back has expired")
+                .expect("a busy agent parks the entry rather than refusing it")
+        };
+
+        let status = hands_free_status(&dictation);
+        assert_eq!(
+            status.queued_ids,
+            [voice_id],
+            "the status must own exactly the entry it queued"
+        );
+        assert_eq!(status.session_id.as_deref(), Some("voice-e2e"));
+
+        let disarmed = disarm_hands_free(&state, &dictation);
+
+        assert!(disarmed.was_armed);
+        assert_eq!(disarmed.cancelled, [voice_id]);
+        assert!(disarmed.already_delivered.is_empty());
+        let remaining: Vec<u64> = state
+            .pending_injections
+            .get("voice-e2e")
+            .expect("queue")
+            .iter()
+            .map(crate::state::PendingInjection::id)
+            .collect();
+        assert_eq!(
+            remaining,
+            [human, notice],
+            "the human's command and the peer notice must survive a voice disarm"
+        );
+        assert!(!disarmed.status.armed);
+        assert!(
+            !disarm_hands_free(&state, &dictation).was_armed,
+            "disarming twice must report the second call honestly"
+        );
+    }
+
+    /// Phase is the one string both transports report; a rename would silently
+    /// break whatever renders it.
+    #[test]
+    fn every_phase_has_a_stable_wire_name() {
+        assert_eq!(Phase::Disarmed.as_wire(), "disarmed");
+        assert_eq!(Phase::Waiting.as_wire(), "waiting");
+        assert_eq!(Phase::Capturing.as_wire(), "capturing");
+        assert_eq!(Phase::Transcribing.as_wire(), "transcribing");
+        assert_eq!(Phase::HoldingBack.as_wire(), "holding_back");
+        assert_eq!(Phase::Delivered.as_wire(), "delivered");
+        assert_eq!(Phase::Error.as_wire(), "error");
+    }
 
     /// Persist a config that names `model`, then clear the snapshot cache so the
     /// next read observes it.

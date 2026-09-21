@@ -8480,6 +8480,16 @@ pub(crate) fn enqueue_voice_command(
     Ok(crate::state::VoiceEnqueued { id, typed, queued })
 }
 
+/// Whether a session can take hands-free speech at all.
+///
+/// The same two conditions `enqueue_voice_command` enforces, asked *before*
+/// arming so an unsupported target is refused where the user can see it rather
+/// than after the first utterance. Deliberately not a "can we reach it somehow"
+/// check: an ACP target has no Compose queue, and there is no fallback for it.
+pub(crate) fn session_accepts_voice(state: &AppState, session_id: &str) -> bool {
+    state.session_maps.sessions.contains_key(session_id) && session_is_agent(state, session_id)
+}
+
 /// Drop the named voice entries that are still parked.
 ///
 /// Only entries that are voice-owned *and* named by the caller are removed: an

@@ -1757,6 +1757,18 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/dictation/config",
             get(dictation_routes::get_dictation_config_http)
                 .put(dictation_routes::set_dictation_config_http),
+        )
+        .route(
+            "/dictation/hands-free",
+            get(dictation_routes::get_hands_free_status_http),
+        )
+        .route(
+            "/dictation/hands-free/arm",
+            post(dictation_routes::arm_hands_free_http),
+        )
+        .route(
+            "/dictation/hands-free/disarm",
+            post(dictation_routes::disarm_hands_free_http),
         );
 
     // OS integration — desktop-only: the relay client, the audio output and the

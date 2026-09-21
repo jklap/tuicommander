@@ -28,6 +28,9 @@ pub struct DictationState {
     pub transcriber_arc: Mutex<Option<Arc<dyn transcribe::Transcriber>>>,
     /// Concatenation of all streaming partials (for accuracy comparison logging).
     pub accumulated_partials: Arc<Mutex<String>>,
+    /// Hands-free mode. Separate from `recording` on purpose: push-to-talk and
+    /// hands-free are different modes and neither arms the other.
+    pub hands_free: Mutex<continuous::HandsFree>,
 }
 
 impl DictationState {
@@ -41,6 +44,9 @@ impl DictationState {
             streaming: Mutex::new(None),
             transcriber_arc: Mutex::new(None),
             accumulated_partials: Arc::new(Mutex::new(String::new())),
+            hands_free: Mutex::new(continuous::HandsFree::new(
+                commands::default_hold_back_ms().into(),
+            )),
         }
     }
 

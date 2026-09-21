@@ -2778,3 +2778,16 @@ Rust — needs a `make dev` restart. The hands-free mode has no UI control yet
 - [ ] Enqueue two commands on a busy agent and let them drain on the next idle
       window. They must still arrive in order — `enqueue_user_command` now
       appends through a shared helper, and a reordering would show up here.
+
+## Hands-free arm and disarm (#814-6d13)
+
+Rust — needs a `make dev` restart. There is still no UI control, so the HTTP
+surface is the only way to reach it.
+
+- [ ] Hands-free arm/disarm over HTTP, against a throwaway agent session:
+      `curl -X POST localhost:9877/dictation/hands-free/arm -H 'content-type: application/json' -d '{"sessionId":"<id>","owner":"probe"}'`
+      must return `armed: true` with `sessionId` echoed back. Arming against a
+      shell (non-agent) session must return `Session cannot accept hands-free
+      input`. `GET /dictation/hands-free` must agree with what arm returned, and
+      `POST /dictation/hands-free/disarm` must report `wasArmed: true` once and
+      `wasArmed: false` on a second call.
