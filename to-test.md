@@ -8,6 +8,40 @@
 
 # To Test
 
+## Selection during output (2026-09-21) — **Rust, needs a `make dev` restart**
+
+- [x] Isolated browser verification passed: held and released multi-row
+      selections survive 50 output rows at the history cap, with stable base
+      canvas hashes. Snapshot copy returns the original line; expired endpoints
+      return HTTP 409. Clipboard writes were intercepted before app load.
+      Evidence: `tests/terminal-stress/SELECTION_FINDINGS.md`.
+- [ ] After loading the updated frontend, copy one block, then select a different
+      multi-row block while output continues and keep the mouse held. The new
+      selection must not disappear when another full frame arrives.
+- [ ] After loading the rebuilt backend and frontend, park a terminal in history
+      while output continues beyond the scrollback cap. Selection must stay on
+      the same retained text, both during dragging and after release; copying
+      must not substitute the next row when history advances. Automated browser
+      checks require the verified clipboard guard in `tests/terminal-stress/`.
+      Investigation and validation: `plans/terminal-selection-output-integrity.md`.
+
+## Terminal Unicode integrity (2026-09-21) — **Rust, needs a `make dev` restart**
+
+- [x] Resize/scroll visibility recovery verified in the isolated browser on
+      2026-09-21: 1200×1223 → 1000×700 → scroll-to-top stayed painted, with
+      scrollbar movement and valid frames, without forced hide/show. Evidence:
+      `.tmp/terminal-integrity/post-fix-20260921-1819-frontend/`.
+- [ ] Finish the block-cursor-on-decomposed-glyph visual check using a browser
+      with verified clipboard interception. The prior run was interrupted after
+      terminal auto-copy overwrote the host clipboard; do not repeat real
+      selection/copy/paste against the shared clipboard.
+- [ ] After loading the rebuilt backend, print precomposed and decomposed accents,
+      including an accent written after its base letter. Verify rendering, block
+      cursor, selection/copy, search and a link following accented text; scroll
+      during output and resize. The installed instance still needs a restart
+      even when the isolated verification build passes. See
+      `plans/terminal-unicode-integrity.md` for automated evidence and limits.
+
 ## Dictation preserves speech before a pause (2026-09-21) — **Rust, needs a `make dev` restart**
 
 - [ ] After restart, dictate a short phrase followed by a pause while holding F5. The live preview must receive the phrase; the final transcription must retain it. Verify silent recordings remain rejected by the configured speech gates.
@@ -2891,3 +2925,15 @@ the config surface. A Dictation control belongs to story 818.
 - [ ] The Context bar (`Show last prompt` setting) on the restored tab must show
       the same restored values, and must be replaced by the live ones as soon as
       the resumed agent declares a new intent or the user sends a prompt.
+
+## Echo canceller starts with the app
+
+Needs a `make dev` restart — the Rust backend does not hot-reload.
+
+- [ ] After the restart, `GET http://localhost:9876/logs?source=dictation` must
+      NOT contain `no echo cancellation`. That line means `WebRtc::new()` failed
+      and hands-free fell back to `PassThrough`, which cannot hear the user over
+      the speaker. It is logged at warn level on purpose; a quiet fallback would
+      look exactly like a working canceller until someone tried to interrupt.
+- [ ] Startup must not be visibly slower. `DictationState::new()` now builds one
+      AEC3 instance for the life of the app, before any dictation is used.
