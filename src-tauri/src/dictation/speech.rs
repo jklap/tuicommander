@@ -28,7 +28,9 @@
 // ones, not to make an unused module permanent.
 #![allow(dead_code)]
 
+pub mod assets;
 pub mod external;
+pub mod library;
 pub mod pocket;
 
 use std::sync::Arc;

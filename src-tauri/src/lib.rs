@@ -1413,6 +1413,12 @@ pub fn run() {
                 // Claude Code while still connecting saved upstreams at boot.
                 let auto_state = server_state.clone();
                 let settle_guard = auto_state.clone();
+                // Remote machines come up on their own too, for the same reason
+                // upstreams do: a machine the user registered is one they expect
+                // to be there. Each gets a supervisor that connects and then
+                // keeps retrying, so this returns at once and nothing here waits
+                // on a machine that is asleep.
+                crate::remote_runtime::autoconnect_all(&auto_state);
                 let auto_handle = tokio::spawn(async move {
                     crate::mcp_upstream_config::auto_connect_saved_upstreams(&auto_state).await;
                 });
@@ -1917,6 +1923,10 @@ pub fn run() {
             dictation::commands::get_model_info,
             dictation::commands::download_whisper_model,
             dictation::commands::delete_whisper_model,
+            dictation::commands::get_speech_assets,
+            dictation::commands::download_speech_asset,
+            dictation::commands::cancel_speech_download,
+            dictation::commands::delete_speech_asset,
             dictation::commands::start_dictation,
             dictation::commands::stop_dictation_and_transcribe,
             dictation::commands::get_correction_map,

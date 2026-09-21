@@ -1733,6 +1733,22 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(dictation_routes::delete_whisper_model_http),
         )
         .route(
+            "/dictation/speech/assets",
+            get(dictation_routes::get_speech_assets_http),
+        )
+        .route(
+            "/dictation/speech/assets/download",
+            post(dictation_routes::download_speech_asset_http),
+        )
+        .route(
+            "/dictation/speech/assets/cancel",
+            post(dictation_routes::cancel_speech_download_http),
+        )
+        .route(
+            "/dictation/speech/assets/delete",
+            post(dictation_routes::delete_speech_asset_http),
+        )
+        .route(
             "/dictation/start",
             post(dictation_routes::start_dictation_http),
         )

@@ -1098,6 +1098,14 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Text correction dictionary (e.g., "new line" → `\n`)
 - **Auto-send** — Enable in Settings > Dictation to automatically submit (press Enter) after transcription completes.
 
+### 9.7 Speech Assets
+- Spoken replies need two downloads beside the Whisper models: a **language bundle** (ONNX graphs, tokenizer, voices — about 125 MB) and **ONNX Runtime** itself (42 MB). Neither ships with the app.
+- The catalogue is an **allowlist compiled into the binary**, not a fetched manifest: every file is pinned to an immutable upstream revision and to a sha256, and a download whose bytes do not match that hash is refused instead of installed.
+- Downloads report progress, can be cancelled, and install **atomically** — the bytes land in a staging directory, are verified there, and only then replace the installed version. An interrupted or corrupt download never appears ready.
+- Three states, told apart on purpose: `absent` offers a download, `incomplete` names the files that are missing, `ready` is the only one a language can be spoken from.
+- Replacing or deleting a language waits for any reply being spoken to finish, then unloads its graphs. The 125 MB an engine holds resident is released on deletion and at shutdown.
+- Sources and licensing: the graphs come from a public Hugging Face export of Kyutai's Pocket TTS weights; the voices are re-published by TUICommander because the upstream repository is gated. Both are CC-BY-4.0, attributed in `THIRD_PARTY_NOTICES.md`.
+
 ---
 
 ## 10. Prompt Library

@@ -62,6 +62,61 @@ pub(super) async fn delete_whisper_model_http(
     ))
 }
 
+/// Named `asset` rather than `id` so the wire key says what it identifies —
+/// the IPC twin's parameter is `asset` too, and the two must match.
+#[derive(serde::Deserialize)]
+pub(super) struct SpeechAssetRequest {
+    pub asset: String,
+}
+
+pub(super) async fn get_speech_assets_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    Json(dictation::commands::get_speech_assets(dictation)).into_response()
+}
+
+pub(super) async fn download_speech_asset_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SpeechAssetRequest>,
+) -> Response {
+    let app_handle = state.app_handle.read().clone();
+    let Some(app) = app_handle else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    json_result(dictation::commands::download_speech_asset(app, body.asset).await)
+}
+
+pub(super) async fn cancel_speech_download_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SpeechAssetRequest>,
+) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::cancel_speech_download(
+        dictation, body.asset,
+    ))
+}
+
+pub(super) async fn delete_speech_asset_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SpeechAssetRequest>,
+) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::delete_speech_asset(
+        dictation, body.asset,
+    ))
+}
+
 pub(super) async fn start_dictation_http(State(state): State<Arc<AppState>>) -> Response {
     let app_handle = state.app_handle.read().clone();
     let Some(app) = app_handle else {
