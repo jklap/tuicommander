@@ -3648,16 +3648,16 @@ impl AppState {
         self.session_maps
             .term_aliases
             .insert(session_id.to_string(), alias.clone());
-        #[cfg(feature = "desktop")]
-        if let Some(ref app) = *self.app_handle.read() {
-            let _ = app.emit(
-                "term-alias-assigned",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "alias": alias,
-                }),
-            );
-        }
+        // Was desktop-only with no bus arm at all — a browser/PWA client
+        // never learned the alias (not even via GET /sessions, since neither
+        // SessionInfo nor ActiveSessionInfo carried it), and the desktop
+        // itself lost it permanently on reload. `AppEvent::TermAliasAssigned`
+        // is session-scoped (see `pty_session_id()`), so this also reaches
+        // the per-session WS lane.
+        self.emit_dual(AppEvent::TermAliasAssigned {
+            session_id: session_id.to_string(),
+            alias,
+        });
     }
 
     /// Find an existing prefix used by a session with the same repo name.

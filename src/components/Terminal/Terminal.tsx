@@ -122,53 +122,6 @@ function stripPrompt(line: string): string {
 	return line.replace(/^.*[$%#❯→>]\s/, "").trimEnd();
 }
 
-/** Shell control flow pattern — titles containing these are cryptic scripts, not useful names */
-const SHELL_SCRIPT_RE =
-	/;|&&|\|\||\$\(|\bif\b|\bthen\b|\belse\b|\belif\b|\bfi\b|\bfor\b|\bwhile\b|\bdo\b|\bdone\b|\bcase\b|\besac\b/;
-
-/** Clean an OSC 0/2 title: strip user@host prefix, env var assignments, and command args.
- *  Returns empty string if the title is only a user@host pattern (no useful info),
- *  or if it looks like a shell script (compound commands, control flow). */
-export function cleanOscTitle(title: string): string {
-	// Reject titles that look like shell scripts before any processing
-	if (SHELL_SCRIPT_RE.test(title)) return "";
-
-	// Strip leading spinner/symbol noise: *, middle dots, bullets, braille patterns,
-	// dingbats, geometric shapes, and other non-alphanumeric decorators agents prepend.
-	// The dingbat range starts at U+2713 (\u2713\u2714\u2715\u2716\u2717\u2718) rather than U+2720 so completion and
-	// error indicators are stripped too \u2014 pi ends a turn with "\u2713 | \u03C0 | repo" and a failure
-	// with "\u2717 | \u03C0 | repo", which would otherwise leak a status glyph into the tab name.
-	let cleaned = title.replace(
-		/^[\s*\u00B7\u2022\u2219\u22C5\u2027\u25A0-\u25FF\u2800-\u28FF\u2713-\u273F\u2580-\u259F]+/,
-		"",
-	);
-	// Then drop the separator the indicator was attached to, so a status-prefixed title
-	// (pi emits "\u2826 | \u03C0 | repo", "\u25CB | \u03C0 | repo", "\u2713 | \u03C0 | repo") does not leave a dangling
-	// "| " once the animated glyph is gone.
-	cleaned = cleaned.replace(/^[|\u2502\u00B7\-\u2013\u2014:]+\s*/, "");
-	// Strip "user@host:" or bare "user@host" prefix
-	cleaned = cleaned.replace(/^[^@\s]+@[^:\s]+(:\s*)?/, "");
-	// Strip leading env var assignments (KEY=value pairs, including empty values)
-	cleaned = cleaned.replace(/^(\s*\w+=\S*\s+)+/, "");
-	cleaned = cleaned.trim();
-	// Paths: shell is just reporting CWD (idle prompt) — not useful as a tab title
-	// since the status bar already shows the full path. Return empty to keep original name.
-	if (/^(\/|~|[A-Za-z]:[\\/]|\\\\)/.test(cleaned)) {
-		return "";
-	}
-	// Strip flags and their values, keep command + subcommands (bare words before first flag)
-	if (cleaned) {
-		const words = cleaned.split(/\s+/);
-		const kept: string[] = [];
-		for (const w of words) {
-			if (w.startsWith("-")) break;
-			kept.push(w);
-		}
-		cleaned = kept.join(" ");
-	}
-	return cleaned;
-}
-
 /** Get initial terminal dimensions from container size + font metrics.
  *
  *  Mirrors CanvasTerminal's remeasure EXACTLY — shared `gridDimsForBox` formula
@@ -216,7 +169,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// synchronous try/catch that cannot see the rejection.
 	let unlistenParsed: (() => unknown) | undefined;
 	let unlistenKitty: (() => unknown) | undefined;
-	let unlistenTitle: (() => unknown) | undefined;
 	let unlistenClipboardStore: (() => unknown) | undefined;
 
 	let kittyFlags = 0;
@@ -278,9 +230,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			}
 		}
 	});
-
-	// Original tab name before any OSC title overwrote it
-	let originalName: string | null = null;
 
 	const pty = usePty();
 
@@ -635,10 +584,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				const hadAgent = stillExists?.agentType != null;
 				const notifyOnExit = handleAgentExitCompletion(props.id);
 				if (stillExists) {
-					// Restore original tab name if it was overwritten by OSC title
-					if (originalName && !stillExists.nameIsCustom) {
-						terminalsStore.update(props.id, { name: originalName });
-					}
+					// Restoring an OSC-title-overwritten name on exit is now the
+					// backend's job (osc_title::restore_base_on_exit, called from
+					// the reader thread right before it announces session-closed)
+					// so it works on every transport, not just desktop — see
+					// AGENTS.md's IPC/HTTP Parity notes on this move.
 					if (hadAgent) {
 						// Agent finished: keep the tab with a grey "exited" dot so the user
 						// can read the final output and re-launch. Without this a dead session
@@ -757,32 +707,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// still feeds the same sink, but that is a different source for agents
 			// with no shell integration, not a copy.
 
-			// Listen for OSC 0/2 title changes from Rust (native renderer)
-			unlistenTitle = await listen<string>(`pty-title-${targetSessionId}`, (event) => {
-				if (disposed) return;
-				const title = event.payload;
-				const term = terminalsStore.get(props.id);
-				if (term?.nameIsCustom || (term?.agentIntent && settingsStore.state.intentTabTitle)) return;
-				if (!title) {
-					if (originalName) terminalsStore.update(props.id, { name: originalName });
-				} else {
-					const cleaned = cleanOscTitle(title);
-					if (cleaned) {
-						if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
-						terminalsStore.update(props.id, { name: cleaned });
-					} else if (originalName) {
-						terminalsStore.update(props.id, { name: originalName });
-					}
-				}
-			});
-			// Unmounting during the await above leaves this listener attached:
-			// onCleanup already ran and saw `unlistenTitle` still undefined. Every
-			// sibling listener has this guard; this one was missing it.
-			if (disposed) {
-				safeUnlisten(unlistenTitle);
-				unlistenTitle = undefined;
-				return;
-			}
+			// OSC 0/2 title handling moved to the backend (osc_title.rs) so it
+			// applies on every transport, not just desktop — see AGENTS.md's
+			// IPC/HTTP Parity notes. The backend writes through
+			// AppState::set_session_display_name, so this session's
+			// session-renamed listener (useAppInit.ts, transport-agnostic)
+			// picks it up the same way any other rename does; no
+			// desktop-only pty-title-* listener needed here anymore.
 
 			// Listen for OSC 52 clipboard store from Rust (native renderer).
 			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
@@ -879,8 +810,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					unlistenParsed = undefined;
 					safeUnlisten(unlistenKitty);
 					unlistenKitty = undefined;
-					safeUnlisten(unlistenTitle);
-					unlistenTitle = undefined;
 					safeUnlisten(unlistenClipboardStore);
 					unlistenClipboardStore = undefined;
 				}
@@ -1042,8 +971,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		unlistenParsed = undefined;
 		safeUnlisten(unlistenKitty);
 		unlistenKitty = undefined;
-		safeUnlisten(unlistenTitle);
-		unlistenTitle = undefined;
 		safeUnlisten(unlistenClipboardStore);
 		unlistenClipboardStore = undefined;
 		kittyFlags = 0;

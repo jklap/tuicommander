@@ -84,6 +84,7 @@ mod native_drag;
 mod native_keys;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
+pub(crate) mod osc_title;
 mod output_parser;
 pub(crate) mod output_watchers;
 #[cfg(feature = "desktop")]
