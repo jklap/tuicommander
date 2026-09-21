@@ -13,7 +13,18 @@ pub(crate) async fn create_pty(
     state: State<'_, Arc<AppState>>,
     config: PtyConfig,
 ) -> Result<String, String> {
-    let session_id = Uuid::new_v4().to_string();
+    // Honor a client-provided id when it is non-empty and not already taken —
+    // the desktop-transport twin of the browser pre-registration race fix in
+    // `mcp_http::session::spawn_pty_session`. Without this, once
+    // `create_pty` starts announcing `SessionCreated` (see the emit at the
+    // end of this function), a Tauri `app.emit` delivered before this
+    // `invoke()` call resolves could otherwise spawn a duplicate tab.
+    let session_id = match config.session_id.as_deref() {
+        Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(id) => {
+            id.to_string()
+        }
+        _ => Uuid::new_v4().to_string(),
+    };
 
     let shell = resolve_shell(config.shell.clone());
 
@@ -82,6 +93,15 @@ pub(crate) async fn create_pty(
         .try_clone_reader()
         .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
+    // Captured before `config.cwd`/`config.agent_type`/`config.display_name`
+    // move into the session struct / `SessionState` insert below —
+    // `emit_session_created` at the end of this function needs the same
+    // values those inserts used, or it clobbers its own preset (see that
+    // function's doc comment).
+    let created_cwd = config.cwd.clone();
+    let created_agent_type = config.agent_type.clone();
+    let created_display_name = config.display_name.clone();
+
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(
@@ -93,14 +113,13 @@ pub(crate) async fn create_pty(
             paused: paused.clone(),
             worktree: None,
             cwd: config.cwd,
-            display_name: None,
-            display_name_is_custom: false,
+            display_name: config.display_name,
+            display_name_is_custom: config.display_name_is_custom,
             display_name_from_spawn: false,
             is_remote: false,
             shell: shell.clone(),
         }),
     );
-    state.assign_term_alias(&session_id, config.alias.as_deref());
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -162,6 +181,22 @@ pub(crate) async fn create_pty(
         .session_states
         .insert(session_id.clone(), ss);
 
+    // Announce BEFORE the reader thread starts, so no client can see this
+    // session's first output before `session-created` — the ordering bug
+    // flagged in `mcp_http::session::spawn_pty_session`'s own history.
+    emit_session_created(
+        &state,
+        &session_id,
+        created_cwd,
+        created_agent_type,
+        created_display_name,
+        None,
+    );
+    // Assigned AFTER SessionCreated — a subscriber must see SessionCreated as
+    // the first event for a brand-new session_id; TermAliasAssigned
+    // dual-emits too and would otherwise race ahead of it.
+    state.assign_term_alias(&session_id, config.alias.as_deref());
+
     spawn_reader_thread(
         reader,
         paused,
@@ -203,8 +238,15 @@ pub(crate) async fn create_pty_with_worktree(
     };
     let worktree_path = worktree.path.clone();
 
-    // Wrap PTY creation so we can clean up the worktree on failure.
-    let session_id = Uuid::new_v4().to_string();
+    // Wrap PTY creation so we can clean up the worktree on failure. Honor a
+    // client-provided id the same way `create_pty` does — see that
+    // function's identical comment for why.
+    let session_id = match pty_config.session_id.as_deref() {
+        Some(id) if !id.is_empty() && !state.session_maps.sessions.contains_key(id) => {
+            id.to_string()
+        }
+        _ => Uuid::new_v4().to_string(),
+    };
     let rows = pty_config.rows.max(24);
     let cols = pty_config.cols.max(80);
     let shell = resolve_shell(pty_config.shell.clone());
@@ -271,6 +313,13 @@ pub(crate) async fn create_pty_with_worktree(
     let branch = worktree.branch.clone();
     let worktree_cwd = Some(worktree.path.to_string_lossy().to_string());
 
+    // Captured before `worktree_cwd`/`pty_config.agent_type`/
+    // `pty_config.display_name` move into the `PtySession`/`SessionState`
+    // inserts below — see `create_pty`'s identical comment.
+    let created_cwd = worktree_cwd.clone();
+    let created_agent_type = pty_config.agent_type.clone();
+    let created_display_name = pty_config.display_name.clone();
+
     // Store session with worktree info (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(
@@ -282,14 +331,13 @@ pub(crate) async fn create_pty_with_worktree(
             paused: paused.clone(),
             worktree: Some(worktree),
             cwd: worktree_cwd,
-            display_name: None,
-            display_name_is_custom: false,
+            display_name: pty_config.display_name,
+            display_name_is_custom: pty_config.display_name_is_custom,
             display_name_from_spawn: false,
             is_remote: false,
             shell,
         }),
     );
-    state.assign_term_alias(&session_id, pty_config.alias.as_deref());
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -331,6 +379,21 @@ pub(crate) async fn create_pty_with_worktree(
         .session_maps
         .session_states
         .insert(session_id.clone(), ss);
+
+    // Announce BEFORE the reader thread starts — see `create_pty`'s
+    // identical comment.
+    emit_session_created(
+        &state,
+        &session_id,
+        created_cwd,
+        created_agent_type,
+        created_display_name,
+        None,
+    );
+    // Assigned AFTER SessionCreated — a subscriber must see SessionCreated as
+    // the first event for a brand-new session_id; TermAliasAssigned
+    // dual-emits too and would otherwise race ahead of it.
+    state.assign_term_alias(&session_id, pty_config.alias.as_deref());
 
     spawn_reader_thread(
         reader,
@@ -754,14 +817,13 @@ pub(crate) fn set_session_name(
     name: Option<String>,
     is_custom: Option<bool>,
 ) -> Result<(), String> {
-    let entry = state
-        .session_maps
-        .sessions
-        .get(&session_id)
-        .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    entry
-        .lock()
-        .set_display_name(name, is_custom.unwrap_or(true));
+    if !state.session_maps.sessions.contains_key(&session_id) {
+        return Err(format!("Session not found: {session_id}"));
+    }
+    // Storage + no-op guard live once on `AppState` — see
+    // `set_session_display_name`'s doc comment (no emit: this rename started
+    // in the frontend).
+    state.set_session_display_name(&session_id, name, is_custom.unwrap_or(true));
     Ok(())
 }
 

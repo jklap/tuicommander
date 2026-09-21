@@ -839,21 +839,15 @@ pub(crate) fn get_worktree_setup_status(
         .map(|arc| (*arc).clone())
 }
 
+// The worktree post-create events below all go through `AppState::emit_dual`:
+// one `AppEvent`, whose wire payload (`event_wire::event_payload`, which calls
+// the shared builders in `state.rs`) feeds both the desktop window emit and the
+// `/events` SSE arm, so the camelCase keys cannot drift between transports.
 fn emit_worktree_sync_started(state: &Arc<AppState>, repo_path: &str, branch: &str) {
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeSyncStarted {
-            repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        use tauri::Emitter as _;
-        let _ = handle.emit(
-            "worktree-sync-started",
-            serde_json::json!({ "repoPath": repo_path, "branch": branch }),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::WorktreeSyncStarted {
+        repo_path: repo_path.to_string(),
+        branch: branch.to_string(),
+    });
 }
 
 fn emit_worktree_sync_progress(
@@ -863,22 +857,12 @@ fn emit_worktree_sync_progress(
     copied: usize,
     total: usize,
 ) {
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeSyncProgress {
-            repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
-            copied,
-            total,
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        use tauri::Emitter as _;
-        let _ = handle.emit(
-            "worktree-sync-progress",
-            serde_json::json!({ "repoPath": repo_path, "branch": branch, "copied": copied, "total": total }),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::WorktreeSyncProgress {
+        repo_path: repo_path.to_string(),
+        branch: branch.to_string(),
+        copied,
+        total,
+    });
 }
 
 fn emit_worktree_sync_completed(
@@ -887,32 +871,15 @@ fn emit_worktree_sync_completed(
     branch: &str,
     summary: &crate::worktree_sync::SyncSummary,
 ) {
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeSyncCompleted {
-            repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
-            copied: summary.copied,
-            total: summary.total,
-            errors: summary.errors.clone(),
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        use tauri::Emitter as _;
-        let _ = handle.emit(
-            "worktree-sync-completed",
-            serde_json::json!({
-                "repoPath": repo_path,
-                "branch": branch,
-                "copied": summary.copied,
-                "total": summary.total,
-                "errors": summary.errors,
-            }),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::WorktreeSyncCompleted {
+        repo_path: repo_path.to_string(),
+        branch: branch.to_string(),
+        copied: summary.copied,
+        total: summary.total,
+        errors: summary.errors.clone(),
+    });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_worktree_setup_script_completed(
     state: &Arc<AppState>,
     repo_path: &str,
@@ -922,35 +889,16 @@ fn emit_worktree_setup_script_completed(
     exit_code: Option<i64>,
     error: Option<String>,
 ) {
-    // DEFERRED: migrate to `AppState::emit_dual` when it lands (wip 948189a69).
-    #[cfg(feature = "desktop")]
-    let payload = crate::state::worktree_setup_script_completed_payload(
-        repo_path,
-        branch,
-        worktree_path,
+    state.emit_dual(crate::state::AppEvent::WorktreeSetupScriptCompleted {
+        repo_path: repo_path.to_string(),
+        branch: branch.to_string(),
+        worktree_path: worktree_path.to_string(),
         outcome,
         exit_code,
-        error.as_deref(),
-    );
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeSetupScriptCompleted {
-            repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
-            worktree_path: worktree_path.to_string(),
-            outcome,
-            exit_code,
-            error,
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        use tauri::Emitter as _;
-        let _ = handle.emit("worktree-setup-script-completed", payload);
-    }
+        error,
+    });
 }
 
-// DEFERRED: the three warm emitters below migrate to `AppState::emit_dual`
-// when it lands (wip 948189a69); their payloads already come from one builder.
 fn emit_worktree_warm_started(
     state: &Arc<AppState>,
     repo_path: &str,
@@ -958,22 +906,12 @@ fn emit_worktree_warm_started(
     worktree_path: &str,
     total: usize,
 ) {
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeWarmStarted {
-            repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
-            worktree_path: worktree_path.to_string(),
-            total,
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        use tauri::Emitter as _;
-        let _ = handle.emit(
-            "worktree-warm-started",
-            crate::state::worktree_warm_started_payload(repo_path, branch, worktree_path, total),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::WorktreeWarmStarted {
+        repo_path: repo_path.to_string(),
+        branch: branch.to_string(),
+        worktree_path: worktree_path.to_string(),
+        total,
+    });
 }
 
 fn emit_worktree_warm_progress(
@@ -985,31 +923,14 @@ fn emit_worktree_warm_progress(
     total: usize,
     current: Option<&str>,
 ) {
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeWarmProgress {
-            repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
-            worktree_path: worktree_path.to_string(),
-            copied,
-            total,
-            current: current.map(str::to_string),
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        use tauri::Emitter as _;
-        let _ = handle.emit(
-            "worktree-warm-progress",
-            crate::state::worktree_warm_progress_payload(
-                repo_path,
-                branch,
-                worktree_path,
-                copied,
-                total,
-                current,
-            ),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::WorktreeWarmProgress {
+        repo_path: repo_path.to_string(),
+        branch: branch.to_string(),
+        worktree_path: worktree_path.to_string(),
+        copied,
+        total,
+        current: current.map(str::to_string),
+    });
 }
 
 fn emit_worktree_warm_completed(
@@ -1020,29 +941,13 @@ fn emit_worktree_warm_completed(
     warmed: usize,
     warnings: &[String],
 ) {
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::WorktreeWarmCompleted {
-            repo_path: repo_path.to_string(),
-            branch: branch.to_string(),
-            worktree_path: worktree_path.to_string(),
-            warmed,
-            warnings: warnings.to_vec(),
-        });
-    #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        use tauri::Emitter as _;
-        let _ = handle.emit(
-            "worktree-warm-completed",
-            crate::state::worktree_warm_completed_payload(
-                repo_path,
-                branch,
-                worktree_path,
-                warmed,
-                warnings,
-            ),
-        );
-    }
+    state.emit_dual(crate::state::AppEvent::WorktreeWarmCompleted {
+        repo_path: repo_path.to_string(),
+        branch: branch.to_string(),
+        worktree_path: worktree_path.to_string(),
+        warmed,
+        warnings: warnings.to_vec(),
+    });
 }
 
 /// Resolve the worktree base directory for a given repo + storage strategy.

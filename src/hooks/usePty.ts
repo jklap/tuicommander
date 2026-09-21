@@ -1,27 +1,24 @@
 import { appLogger } from "../stores/appLogger";
-import { isTauri, owningConnectionFor, rpc } from "../transport";
+import { rpc } from "../transport";
 import type { OrchestratorStats, PtyConfig } from "../types";
 import { randomId } from "../utils/randomId";
 import { clearShellFamilyCache, getShellFamily, sendCommand as sendCommandUtil } from "../utils/sendCommand";
-import { browserCreatedSessions } from "./useAppInit";
+import { locallyCreatedSessions } from "./useAppInit";
 
-/** Pre-generate a session id for creates that travel over HTTP and register it
- *  locally BEFORE the create RPC. The backend's `session-created` event is
- *  delivered over SSE, which can arrive before the RPC's HTTP response — so
- *  registering the id up front closes that race window and the echo is dropped
- *  by the `session-created` listener instead of spawning a duplicate "PTY:" tab.
- *
- *  The desktop over Tauri IPC has no such echo race, but a desktop create for a
- *  REMOTE repo is routed to that machine's daemon and does, which is why the
- *  predicate is "not local", not "not Tauri" — the same one `rpc()` uses to
- *  decide whether `write_pty` needs its per-session queue. */
-function preRegisterBrowserSessionId(command: string, args: Record<string, unknown>): string | undefined {
-	if (isTauri() && !owningConnectionFor(command, args)) return undefined;
+/** Pre-generate a session id for a create and register it locally BEFORE the
+ *  create RPC. The backend's `session-created` event can be delivered before
+ *  the RPC's own response resolves — over SSE for a browser client or a
+ *  desktop create routed to a remote daemon, or via a desktop `app.emit` that
+ *  Tauri can deliver before the originating `invoke()` call returns — so
+ *  registering the id up front closes that race window on EVERY transport and
+ *  the echo is dropped by the `session-created` listener instead of spawning a
+ *  duplicate "PTY:" tab. */
+function preRegisterLocalSessionId(): string {
 	// No prefix: this id becomes the PTY's `$TUIC_SESSION` and is filtered
 	// through the backend's `is_valid_uuid` gate, which rejects anything that
 	// isn't a bare canonical UUID.
 	const id = randomId("");
-	browserCreatedSessions.add(id);
+	locallyCreatedSessions.add(id);
 	return id;
 }
 
@@ -127,11 +124,11 @@ export function usePty() {
 
 	/** Create a new PTY session */
 	async function createSession(config: PtyConfig): Promise<string> {
-		const requestedId = preRegisterBrowserSessionId("create_pty", { config });
+		const requestedId = preRegisterLocalSessionId();
 		const sessionId = await rpc<string>("create_pty", {
-			config: requestedId ? { ...config, session_id: requestedId } : config,
+			config: { ...config, session_id: requestedId },
 		});
-		browserCreatedSessions.add(sessionId);
+		locallyCreatedSessions.add(sessionId);
 		return sessionId;
 	}
 
@@ -140,15 +137,12 @@ export function usePty() {
 		ptyConfig: PtyConfig,
 		worktreeConfig: WorktreeConfig,
 	): Promise<WorktreeResult> {
-		const requestedId = preRegisterBrowserSessionId("create_pty_with_worktree", {
-			pty_config: ptyConfig,
-			worktree_config: worktreeConfig,
-		});
+		const requestedId = preRegisterLocalSessionId();
 		const result = await rpc<WorktreeResult>("create_pty_with_worktree", {
-			pty_config: requestedId ? { ...ptyConfig, session_id: requestedId } : ptyConfig,
+			pty_config: { ...ptyConfig, session_id: requestedId },
 			worktree_config: worktreeConfig,
 		});
-		browserCreatedSessions.add(result.session_id);
+		locallyCreatedSessions.add(result.session_id);
 		return result;
 	}
 

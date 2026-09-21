@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
-import { browserCreatedSessions } from "../../hooks/useAppInit";
+import { locallyCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { setRemoteBaseUrlLookup, setRepoConnectionLookup } from "../../transportRuntime";
 import { mockInvoke } from "../mocks/tauri";
@@ -35,12 +35,21 @@ describe("usePty", () => {
 	});
 
 	describe("createSession()", () => {
-		it("calls invoke with config and returns session ID", async () => {
+		it("calls invoke with config plus a pre-registered session id, and returns the backend's session ID", async () => {
 			const config = { cwd: "/tmp", rows: 24, cols: 80, shell: null };
 			mockInvoke.mockResolvedValueOnce("sess-abc");
 			const result = await pty.createSession(config);
 			expect(result).toBe("sess-abc");
-			expect(mockInvoke).toHaveBeenCalledWith("create_pty", { config });
+			// Desktop generalizes the same self-echo-drop mechanism the browser
+			// transport already used (B.1's companion fix) — a Tauri `app.emit`
+			// can be delivered before this `invoke()` call resolves, so
+			// `createSession` pre-registers an id on both transports now, not
+			// just in browser mode.
+			const call = mockInvoke.mock.calls[0];
+			expect(call[0]).toBe("create_pty");
+			expect(call[1].config).toMatchObject(config);
+			expect(call[1].config.session_id).toBeTruthy();
+			expect(locallyCreatedSessions.has(call[1].config.session_id)).toBe(true);
 		});
 	});
 
@@ -79,7 +88,7 @@ describe("usePty", () => {
 			expect(sessionId).toBe(sentBody.session_id);
 			// ...and it was registered locally so the session-created SSE echo is
 			// recognized as locally-created (suppressing the duplicate "PTY:" tab).
-			expect(browserCreatedSessions.has(sessionId)).toBe(true);
+			expect(locallyCreatedSessions.has(sessionId)).toBe(true);
 		});
 
 		it("flattens worktree_config into the create-worktree body (browser routing)", async () => {
@@ -98,7 +107,7 @@ describe("usePty", () => {
 			expect(sentBody.base_repo).toBe("/repos/main");
 			expect(sentBody.branch_name).toBe("feat-x");
 			expect(sentBody.config.session_id).toBeTruthy();
-			expect(browserCreatedSessions.has(result.session_id)).toBe(true);
+			expect(locallyCreatedSessions.has(result.session_id)).toBe(true);
 		});
 
 		it("still pre-registers a session id when crypto.randomUUID is unavailable (non-secure-context remote clients)", async () => {
@@ -115,7 +124,7 @@ describe("usePty", () => {
 				const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
 				expect(sentBody.session_id).toBeTruthy();
 				expect(sessionId).toBe(sentBody.session_id);
-				expect(browserCreatedSessions.has(sessionId)).toBe(true);
+				expect(locallyCreatedSessions.has(sessionId)).toBe(true);
 			} finally {
 				vi.stubGlobal("crypto", realCrypto);
 			}
@@ -160,17 +169,21 @@ describe("usePty", () => {
 			const sentBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
 			expect(sentBody.session_id).toBeTruthy();
 			// ...and that id is known locally before the daemon can echo it back.
-			expect(browserCreatedSessions.has(sentBody.session_id)).toBe(true);
+			expect(locallyCreatedSessions.has(sentBody.session_id)).toBe(true);
 			expect(sessionId).toBe(sentBody.session_id);
 		});
 
-		it("still lets the backend mint the id for a local repo", async () => {
+		it("pre-registers a client-minted id for a local repo too, over IPC", async () => {
 			mockInvoke.mockResolvedValueOnce("sess-local");
 			await pty.createSession({ cwd: "/Users/stefano/local-repo", rows: 24, cols: 80, shell: null });
 
+			// Local creates stay on IPC, but now carry an id too: the desktop
+			// `create_pty` announces `session-created` itself, and that window
+			// emit can land before `invoke()` resolves.
 			expect(fetchMock).not.toHaveBeenCalled();
 			const [, sentArgs] = mockInvoke.mock.calls[0];
-			expect(sentArgs.config.session_id).toBeUndefined();
+			expect(sentArgs.config.session_id).toBeTruthy();
+			expect(locallyCreatedSessions.has(sentArgs.config.session_id)).toBe(true);
 		});
 	});
 
@@ -192,10 +205,13 @@ describe("usePty", () => {
 
 			const result = await pty.createSessionWithWorktree(ptyConfig, worktreeConfig);
 			expect(result).toEqual(expected);
-			expect(mockInvoke).toHaveBeenCalledWith("create_pty_with_worktree", {
-				pty_config: ptyConfig,
-				worktree_config: worktreeConfig,
-			});
+			// Same pre-registered-id behavior as createSession() — see that
+			// test's comment.
+			const call = mockInvoke.mock.calls[0];
+			expect(call[0]).toBe("create_pty_with_worktree");
+			expect(call[1].pty_config).toMatchObject(ptyConfig);
+			expect(call[1].pty_config.session_id).toBeTruthy();
+			expect(call[1].worktree_config).toEqual(worktreeConfig);
 		});
 	});
 

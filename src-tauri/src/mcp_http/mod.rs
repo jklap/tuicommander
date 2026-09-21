@@ -10328,7 +10328,7 @@ mod tests {
             .unwrap()
             .set_times(std::fs::FileTimes::new().set_modified(old))
             .unwrap();
-        crate::pty::cleanup_session("upload-session", &state);
+        crate::pty::cleanup_session("upload-session", &state, "closed");
         assert!(
             !path.exists(),
             "closing the session removes attachments older than seven days"

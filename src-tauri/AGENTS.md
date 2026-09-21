@@ -467,8 +467,8 @@ the workspace's `warm_artifacts` from `worktree_list` / `GET /worktrees/paths`, 
   commits a directory symlink at an intermediate component of an ignored path). A third writer into
   a freshly checked-out destination needs it too.
 - **Events**: `worktree-warm-started/-progress/-completed` (`warm_with_events`, payload builders in
-  `state.rs`, SSE arms in `sse_routes.rs`) drive the sidebar "Warming…" badge; silent when nothing
-  is copied. The badge matches rows by checkout path, never by branch.
+  `state.rs`, wire arms in `event_wire.rs`, dual-emitted through `AppState::emit_dual`) drive the
+  sidebar "Warming…" badge; silent when nothing is copied. The badge matches rows by checkout path, never by branch.
 - **Chain generations**: setup-status writes and the terminal `worktree-setup-script-completed`
   event are gated on `SETUP_CHAIN_GENERATIONS` (per `(repo, branch)`), with the map's read guard
   held across each write. A stale chain for a removed-and-recreated workspace therefore can neither
