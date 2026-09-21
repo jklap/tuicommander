@@ -1,6 +1,6 @@
 use super::{
-    DictationState, audio, continuous, corrections, model, permission, speech, streaming,
-    transcribe,
+    DictationState, audio, continuous, corrections, echo, model, permission, speaker, speech,
+    streaming, transcribe,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -408,6 +408,417 @@ pub fn delete_speech_asset(
         .delete(target)
         .map_err(|error| error.to_string())?;
     Ok(format!("Deleted {}", target.display_name))
+}
+
+// ---------------------------------------------------------------------------
+// Spoken replies (817-f67c)
+// ---------------------------------------------------------------------------
+
+/// The engine and voice a reply would be spoken with, or why there is none.
+///
+/// Every `Err` here is a setup problem stated in the user's terms, because
+/// every one of them reaches a model as "unavailable, and here is why" rather
+/// than as a failure it should retry.
+fn open_voice(
+    config: &DictationConfig,
+    library: &speech::library::SpeechLibrary,
+) -> Result<(Arc<dyn speech::Speech>, String), String> {
+    if !config.speech_command.is_empty() {
+        // The user's own engine. It names its own voices inside its template,
+        // so there is nothing here to choose between and the voice is empty.
+        let engine = speech::external::ExternalSpeech::new(config.speech_command.clone())
+            .map_err(|error| error.to_string())?;
+        return Ok((Arc::new(engine), String::new()));
+    }
+
+    // DEFERRED (2026-09-21) — "auto" is refused rather than resolved. Whisper
+    // does detect a language per utterance, but nothing yet carries that
+    // detection out of the transcript and into the turn, which is exactly what
+    // #822-7d7a exists to do. Refusing is the honest half of that story: a
+    // reply spoken in a language the user did not choose is worse than one
+    // that does not happen.
+    if config.language == "auto" {
+        return Err(
+            "Spoken replies need a fixed dictation language; Auto does not choose one yet"
+                .to_string(),
+        );
+    }
+
+    let asset = speech::assets::for_language_code(&config.language).ok_or_else(|| {
+        format!(
+            "No speech bundle ships for language \"{}\"",
+            config.language
+        )
+    })?;
+    let runtime = speech::assets::runtime();
+    for needed in [runtime, asset] {
+        match speech::assets::status(needed) {
+            speech::assets::Status::Ready => {}
+            speech::assets::Status::Absent => {
+                return Err(format!("{} is not downloaded", needed.display_name));
+            }
+            speech::assets::Status::Incomplete { missing } => {
+                return Err(format!(
+                    "{} is incomplete; missing {}",
+                    needed.display_name,
+                    missing.join(", ")
+                ));
+            }
+        }
+    }
+    let voice = asset
+        .voices()
+        .first()
+        .ok_or_else(|| format!("{} ships no voice", asset.display_name))?;
+    // From the library rather than built here: it is the one instance that
+    // serialises replacing a language against speaking it, and an engine built
+    // beside it would hold the very files a download is about to rename away.
+    let engine = library.engine(asset.language().unwrap_or_default());
+    Ok((engine, (*voice).to_string()))
+}
+
+/// Build the reply queue for a conversation that is being armed.
+///
+/// Failure is not fatal to arming: hands-free without a voice is dictation,
+/// which still works. The reason travels back so the caller can say it once
+/// rather than leaving the model to discover it on its first `speak`.
+pub(crate) fn open_speaker(
+    dictation: &DictationState,
+    generation: u64,
+) -> Result<speaker::Armed, String> {
+    let config = get_dictation_config();
+    let (engine, voice) = open_voice(&config, &dictation.speech)?;
+    // The output device is the system default. Picking one is the Dictation
+    // panel's job (#818-2a29); `config.device` is the *microphone* and using
+    // it here would route replies to a capture device.
+    let device = speaker::DeviceOutput::open(None)?;
+    // Wrapped so the canceller learns what is being played. Without this the
+    // microphone hears the reply and the VAD opens a turn on the application's
+    // own voice.
+    let tapped = speech_far_end(Arc::new(device), dictation);
+    Ok(speaker::Armed {
+        speaker: Arc::new(speaker::Speaker::new(engine, tapped, generation)),
+        voice,
+    })
+}
+
+fn speech_far_end(
+    device: Arc<dyn speaker::Output>,
+    dictation: &DictationState,
+) -> Arc<dyn speaker::Output> {
+    Arc::new(echo::FarEndTap::new(device, dictation.echo.clone()))
+}
+
+/// What a caller is told about one reply it asked for.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpokenReply {
+    /// Identifies this reply for as long as the conversation remembers it.
+    pub utterance_id: String,
+    /// `queued`, `rendering`, `speaking`, `finished`, `interrupted` or
+    /// `failed`. Accepting a reply reports `queued` — never `finished`.
+    pub state: String,
+    /// Set only for `failed`.
+    pub error: Option<String>,
+    /// The turn this reply belongs to. A reply for a turn that has ended is
+    /// refused rather than spoken.
+    pub turn: u64,
+}
+
+impl SpokenReply {
+    fn new(id: speaker::UtteranceId, state: &speaker::Utterance, turn: u64) -> Self {
+        Self {
+            utterance_id: id.to_string(),
+            state: match state {
+                speaker::Utterance::Queued => "queued",
+                speaker::Utterance::Rendering => "rendering",
+                speaker::Utterance::Speaking => "speaking",
+                speaker::Utterance::Finished => "finished",
+                speaker::Utterance::Interrupted => "interrupted",
+                speaker::Utterance::Failed(_) => "failed",
+            }
+            .to_string(),
+            error: match state {
+                speaker::Utterance::Failed(reason) => Some(reason.clone()),
+                _ => None,
+            },
+            turn,
+        }
+    }
+}
+
+/// Whether this installation can speak right now, and into which conversation.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeechStatus {
+    /// Can a reply be spoken right now? False whenever hands-free is not
+    /// armed, and whenever it is armed without a working voice.
+    pub available: bool,
+    /// Why not. Empty when `available`.
+    pub unavailable_reason: String,
+    /// The terminal replies are spoken into, absent when nothing is armed.
+    pub session_id: Option<String>,
+    /// The turn a reply must belong to. Bumped by every interruption, so a
+    /// model answering an older turn can be refused rather than played over
+    /// whatever the user said next.
+    ///
+    /// Not the same counter as `HandsFreeStatus::generation`, which counts
+    /// arms rather than interruptions; this one is the speaker's.
+    pub turn: u64,
+    /// The voice, empty for a user-supplied engine that names its own.
+    pub voice: String,
+    pub queued: usize,
+    pub rendering: bool,
+    pub speaking: bool,
+    /// The last synthesis or device failure, cleared by the next reply that
+    /// works.
+    pub last_error: Option<String>,
+    /// The reply the caller asked about, absent when it asked about none.
+    ///
+    /// An id this conversation no longer remembers comes back with a state of
+    /// `unknown` rather than as an absent field: "I have forgotten" and "you
+    /// did not ask" are different answers and a caller polling for its own
+    /// reply has to be able to tell them apart.
+    pub utterance: Option<SpokenReply>,
+}
+
+/// Who is asking to speak.
+///
+/// The distinction is the binding: the owner armed the conversation and may
+/// always drive it, while a model may only speak into the conversation it is
+/// itself the target of. A model that could speak into another terminal's
+/// conversation would be talking to somebody else's user.
+pub(crate) enum Caller<'a> {
+    /// The user's own UI, on either transport.
+    Owner,
+    /// A model, named by the TUIC session its MCP connection is bound to.
+    Model(&'a str),
+}
+
+impl Caller<'_> {
+    /// May this caller drive the conversation bound to `session_id`?
+    fn may_drive(&self, session_id: &str) -> Result<(), String> {
+        match self {
+            Self::Owner => Ok(()),
+            Self::Model(caller) if *caller == session_id => Ok(()),
+            Self::Model(_) => Err(
+                "Speech is bound to another session; only the session hands-free is armed for can speak"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
+/// The armed conversation's terminal, or why there is none.
+fn bound_session(dictation: &DictationState) -> Result<String, String> {
+    reap_finished_runtime(dictation);
+    dictation
+        .hands_free
+        .lock()
+        .binding()
+        .map(|binding| binding.session_id.clone())
+        .ok_or_else(|| {
+            "Hands-free is not armed; there is no conversation to speak into".to_string()
+        })
+}
+
+/// Queue a spoken reply.
+///
+/// Returns as soon as the reply is accepted, carrying the identity the caller
+/// polls to find out whether anybody heard it. `turn` refuses a reply written
+/// for a turn the user has already talked over; omitting it means "now".
+pub(crate) fn speak(
+    dictation: &DictationState,
+    caller: Caller<'_>,
+    text: &str,
+    turn: Option<u64>,
+) -> Result<SpokenReply, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Nothing to say".to_string());
+    }
+    if text.chars().count() > MAX_SPOKEN_CHARS {
+        return Err(format!(
+            "A spoken reply is limited to {MAX_SPOKEN_CHARS} characters; this one is {}",
+            text.chars().count()
+        ));
+    }
+    let session_id = bound_session(dictation)?;
+    caller.may_drive(&session_id)?;
+
+    let armed = dictation.speaker.lock();
+    let armed = armed
+        .as_ref()
+        .ok_or_else(|| speech_unavailable_reason(dictation))?;
+    // The speaker's own counter, not the caller's guess: it is what `say`
+    // compares against, and reading it here makes an interruption landing in
+    // between refuse the reply rather than race it.
+    let current = armed.speaker.generation();
+    let wanted = turn.unwrap_or(current);
+    let id = armed
+        .speaker
+        .say(wanted, text, &armed.voice)
+        .map_err(|error| error.to_string())?;
+    let state = armed
+        .speaker
+        .utterance(id)
+        .unwrap_or(speaker::Utterance::Queued);
+    // DEFERRED (2026-09-21) — the push half of the contract. A client learns an
+    // utterance's fate by polling `speech_status`, which every transport has;
+    // nothing is emitted when it changes, so a desktop window and an SSE/WS
+    // consumer both have to ask. Emitting here needs a new `AppEvent` variant in
+    // `state.rs`, which another agent holds uncommitted — landing a half-written
+    // variant in somebody else's change set is worse than a poll. The shape is
+    // settled: one event carrying this same `SpokenReply`, emitted from the
+    // speaker's own transitions rather than from here, so `interrupted` and
+    // `finished` — which happen on the render thread, long after this returns —
+    // are reported too. Wire it as soon as `state.rs` is free.
+    Ok(SpokenReply::new(id, &state, wanted))
+}
+
+/// Stop talking now and open a new turn.
+///
+/// Reports the state afterwards rather than a bare success: the caller needs
+/// the new turn to know which replies are still worth sending.
+pub(crate) fn stop_speaking(
+    dictation: &DictationState,
+    caller: Caller<'_>,
+) -> Result<SpeechStatus, String> {
+    let session_id = bound_session(dictation)?;
+    caller.may_drive(&session_id)?;
+    if let Some(armed) = dictation.speaker.lock().as_ref() {
+        armed.speaker.hush();
+    }
+    Ok(speech_status(dictation, None))
+}
+
+/// The longest reply that will be accepted, in characters.
+///
+/// Well past a conversational answer and well short of a model pasting a file.
+/// The budget in [`speech`](super::speech::budget_seconds) already stops a
+/// runaway *rendering*, but it cannot stop a caller queueing four of these and
+/// filling the queue with ten minutes of audio.
+const MAX_SPOKEN_CHARS: usize = 2_000;
+
+/// Why speech is unavailable while hands-free is armed.
+///
+/// Re-derived rather than remembered, so a language downloaded after arming is
+/// reported as "download it and re-arm" rather than as whatever was wrong
+/// when the conversation started.
+fn speech_unavailable_reason(dictation: &DictationState) -> String {
+    match open_voice(&get_dictation_config(), &dictation.speech) {
+        Err(reason) => reason,
+        // The voice resolves but no speaker exists, so either the audio device
+        // failed when the conversation was armed or the bundle arrived since.
+        // Either way re-arming is the fix, and saying so beats reporting
+        // everything as fine while nothing can be spoken.
+        Ok(_) => {
+            "Speech was not available when hands-free was armed; re-arm to try again".to_string()
+        }
+    }
+}
+
+/// [`speech_status`] for a caller whose right to this conversation must be
+/// checked first.
+///
+/// A model bound to another terminal is told it is not the target rather than
+/// shown somebody else's queue — the status fields alone would leak what the
+/// other conversation is doing, and a model that can see a queue will try to
+/// speak into it.
+///
+/// Not armed at all is a status rather than an error: the model asked a fair
+/// question and the honest answer is "nothing is armed".
+pub(crate) fn speech_status_for(
+    dictation: &DictationState,
+    caller: Caller<'_>,
+    utterance: Option<&str>,
+) -> Result<SpeechStatus, String> {
+    if let Ok(session_id) = bound_session(dictation) {
+        caller.may_drive(&session_id)?;
+    }
+    Ok(speech_status(dictation, utterance))
+}
+
+/// Everything a caller needs to decide whether to speak, and what became of a
+/// reply it already sent.
+pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>) -> SpeechStatus {
+    let session_id = bound_session(dictation).ok();
+    let armed = dictation.speaker.lock();
+    let Some(armed) = armed.as_ref() else {
+        return SpeechStatus {
+            available: false,
+            unavailable_reason: match &session_id {
+                None => "Hands-free is not armed".to_string(),
+                Some(_) => speech_unavailable_reason(dictation),
+            },
+            session_id,
+            turn: 0,
+            voice: String::new(),
+            queued: 0,
+            rendering: false,
+            speaking: false,
+            last_error: None,
+            utterance: None,
+        };
+    };
+    let status = armed.speaker.status();
+    let asked_about = utterance.map(|asked| {
+        let known = asked
+            .parse::<speaker::UtteranceId>()
+            .ok()
+            .and_then(|id| armed.speaker.utterance(id).map(|state| (id, state)));
+        match known {
+            Some((id, state)) => SpokenReply::new(id, &state, status.generation),
+            None => SpokenReply {
+                utterance_id: asked.to_string(),
+                state: "unknown".to_string(),
+                error: None,
+                turn: status.generation,
+            },
+        }
+    });
+    SpeechStatus {
+        available: true,
+        unavailable_reason: String::new(),
+        session_id,
+        turn: status.generation,
+        voice: armed.voice.clone(),
+        queued: status.queued,
+        rendering: status.rendering,
+        speaking: status.speaking,
+        last_error: status.last_error,
+        utterance: asked_about,
+    }
+}
+
+/// Speak a reply into the armed conversation.
+///
+/// The desktop and browser control surface. A model does not call this — it
+/// goes through the `voice` MCP tool, which supplies its own identity so the
+/// binding can be checked. Here the caller *is* the owner: it is the thing
+/// that armed the conversation.
+#[tauri::command]
+pub fn speak_reply(
+    dictation: tauri::State<'_, DictationState>,
+    text: String,
+    turn: Option<u64>,
+) -> Result<SpokenReply, String> {
+    speak(&dictation, Caller::Owner, &text, turn)
+}
+
+/// Stop talking now, dropping whatever was queued for this turn.
+#[tauri::command]
+pub fn stop_speech(dictation: tauri::State<'_, DictationState>) -> Result<SpeechStatus, String> {
+    stop_speaking(&dictation, Caller::Owner)
+}
+
+/// Whether anything can be spoken, and what became of a reply already sent.
+#[tauri::command]
+pub fn get_speech_status(
+    dictation: tauri::State<'_, DictationState>,
+    utterance: Option<String>,
+) -> SpeechStatus {
+    speech_status(&dictation, utterance.as_deref())
 }
 
 /// Start push-to-talk recording.
@@ -1134,6 +1545,32 @@ pub(crate) fn arm_hands_free_with(
         return Err(error);
     }
 
+    // The reply queue, built with the turn the mode just opened so both halves
+    // agree about which turn is current from the first reply onwards.
+    //
+    // Before the runtime, not after: the capture loop takes the queue as its
+    // barge-in port, and a loop started first would spend its first ticks
+    // unable to interrupt anything.
+    //
+    // A failure here does not fail the arm. Hands-free without a voice is
+    // dictation, which is useful on its own and is what a user who has not
+    // downloaded a language bundle gets; the reason is logged once here and
+    // reported by the voice capability rather than being discovered per reply.
+    let generation = dictation.hands_free.lock().generation();
+    let interruptible: Option<Arc<dyn continuous::Interruptible>> =
+        match open_speaker(dictation, generation) {
+            Ok(armed) => {
+                let port = Arc::clone(&armed.speaker) as Arc<dyn continuous::Interruptible>;
+                *dictation.speaker.lock() = Some(armed);
+                Some(port)
+            }
+            Err(reason) => {
+                tracing::info!("dictation: armed without spoken replies: {reason}");
+                *dictation.speaker.lock() = None;
+                None
+            }
+        };
+
     // DEFERRED (2026-09-21) — the segmenter runs on its compiled defaults.
     // Hold-back is read from user config just above; pre-roll, trailing
     // silence, minimum speech and the utterance cap are not reachable from
@@ -1149,7 +1586,9 @@ pub(crate) fn arm_hands_free_with(
         endpoint,
         continuous::SegmenterConfig::default(),
         dictation.echo.clone(),
+        interruptible,
     ));
+
     Ok(hands_free_status(dictation))
 }
 
@@ -1164,6 +1603,12 @@ pub(crate) fn disarm_hands_free(
     use crate::dictation::continuous::{DisarmReason, PtyVoiceQueue, cancel_disarmed};
 
     let disarmed = dictation.hands_free.lock().disarm(DisarmReason::Manual);
+    // Stop talking first, and unconditionally. Dropping the queue cancels the
+    // reply in flight and stops the device, which is what makes disarm revoke
+    // speech whether or not the model ever acknowledged anything — a late
+    // `speak` then finds no speaker and is told so rather than being played to
+    // a user who has left.
+    *dictation.speaker.lock() = None;
     // Stop the runtime and close the microphone whichever way this went: a
     // thread that already disarmed itself still has a device to release.
     *dictation.hands_free_runtime.lock() = None;
@@ -2044,6 +2489,272 @@ mod tests {
         assert_eq!(
             resolve_model("nonexistent"),
             model::WhisperModel::LargeV3Turbo
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Spoken replies (817-f67c)
+    // -----------------------------------------------------------------------
+
+    /// Synthesis the test decides the duration of.
+    ///
+    /// It takes `gate` before producing anything, so a test holding that lock
+    /// holds the reply in the queue: without it the worker thread finishes a
+    /// one-sample render before the assertion runs, and "accepting is not
+    /// hearing" would pass or fail on scheduling rather than on the rule.
+    struct HeldSpeech {
+        gate: Arc<parking_lot::Mutex<()>>,
+    }
+
+    impl speech::Speech for HeldSpeech {
+        fn synthesize(
+            &self,
+            _text: &str,
+            _voice: &str,
+            _cancel: &speech::SpeechCancel,
+        ) -> Result<speech::SpeechAudio, speech::SpeechError> {
+            let _held = self.gate.lock();
+            Ok(speech::SpeechAudio {
+                samples: vec![0.0; 16],
+                sample_rate: 24_000,
+            })
+        }
+    }
+
+    /// A device that accepts audio and is never busy afterwards, so a reply
+    /// handed to it drains on the next poll.
+    struct QuietOutput;
+
+    impl speaker::Output for QuietOutput {
+        fn play(&self, _audio: &speech::SpeechAudio) -> Result<(), String> {
+            Ok(())
+        }
+        fn stop(&self) {}
+        fn is_speaking(&self) -> bool {
+            false
+        }
+    }
+
+    /// A conversation armed for `session_id`, with a voice whose rendering the
+    /// test controls through the returned gate.
+    fn armed_with_a_voice(session_id: &str) -> (DictationState, Arc<parking_lot::Mutex<()>>) {
+        let dictation = DictationState::new();
+        let generation = dictation
+            .hands_free
+            .lock()
+            .arm(session_id, "desktop", true)
+            .expect("arm");
+        let gate = Arc::new(parking_lot::Mutex::new(()));
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech {
+                    gate: Arc::clone(&gate),
+                }),
+                Arc::new(QuietOutput),
+                generation,
+            )),
+            voice: "giovanni".to_string(),
+        });
+        (dictation, gate)
+    }
+
+    /// Poll until `id` reaches a state the test is waiting for, or say what it
+    /// was stuck on. The worker thread decides when, so a fixed sleep would be
+    /// a guess; the deadline is the harness bound, not the behaviour.
+    fn wait_for_utterance(dictation: &DictationState, id: &str, wanted: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut last = String::new();
+        while std::time::Instant::now() < deadline {
+            last = speech_status(dictation, Some(id))
+                .utterance
+                .expect("an id was asked about")
+                .state;
+            if last == wanted {
+                return last;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("utterance {id} never reached {wanted}; it is {last}");
+    }
+
+    /// A model may drive only the conversation it is the target of. Reading the
+    /// queue is refused for the same reason as speaking into it: the fields
+    /// alone say what somebody else's conversation is doing.
+    #[test]
+    fn a_model_bound_to_another_terminal_can_neither_speak_nor_read_the_queue() {
+        let (dictation, _gate) = armed_with_a_voice("session-a");
+
+        let refused = speak(&dictation, Caller::Model("session-b"), "hello", None).unwrap_err();
+        assert!(
+            refused.contains("bound to another session"),
+            "the refusal must name the reason: {refused}"
+        );
+        assert_eq!(
+            stop_speaking(&dictation, Caller::Model("session-b")).unwrap_err(),
+            refused
+        );
+        assert_eq!(
+            speech_status_for(&dictation, Caller::Model("session-b"), None).unwrap_err(),
+            refused
+        );
+
+        // The bound model gets past the binding, and so does the owner.
+        assert!(speak(&dictation, Caller::Model("session-a"), "hello", None).is_ok());
+        assert!(speak(&dictation, Caller::Owner, "hello", None).is_ok());
+    }
+
+    /// Nothing armed is not an error for `status` — the model asked a fair
+    /// question — but it is one for `speak`, which would otherwise have to
+    /// choose a conversation itself.
+    #[test]
+    fn with_nothing_armed_speech_is_refused_and_status_says_why() {
+        let dictation = DictationState::new();
+
+        assert!(
+            speak(&dictation, Caller::Model("session-a"), "hello", None)
+                .unwrap_err()
+                .contains("not armed")
+        );
+
+        let status = speech_status_for(&dictation, Caller::Model("session-a"), None)
+            .expect("status is answerable when nothing is armed");
+        assert!(!status.available);
+        assert_eq!(status.unavailable_reason, "Hands-free is not armed");
+        assert_eq!(status.session_id, None);
+    }
+
+    /// The turn is the guard against reviving a reply the user already talked
+    /// over: `hush` opens a new one, and a reply written for the old turn is
+    /// refused rather than played over whatever was said next.
+    #[test]
+    fn a_reply_written_for_a_turn_the_user_talked_over_is_refused() {
+        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let before = speech_status(&dictation, None).turn;
+
+        let after = stop_speaking(&dictation, Caller::Owner).expect("stop").turn;
+        assert!(
+            after > before,
+            "stopping must open a new turn: {before} -> {after}"
+        );
+
+        let stale = speak(&dictation, Caller::Owner, "too late", Some(before)).unwrap_err();
+        assert!(
+            stale.contains(&format!("turn {before}")) && stale.contains(&format!("turn {after}")),
+            "the refusal must name both turns so the model can retry: {stale}"
+        );
+
+        // Omitting the turn means "now", which is still allowed.
+        let fresh = speak(&dictation, Caller::Owner, "in time", None).expect("current turn");
+        assert_eq!(fresh.turn, after);
+    }
+
+    /// Accepting a reply is not the user hearing it. The state a caller gets
+    /// back from `speak` is the queue's, and only the device going quiet can
+    /// produce `finished`.
+    #[test]
+    fn accepting_a_reply_is_never_reported_as_having_been_heard() {
+        let (dictation, gate) = armed_with_a_voice("session-a");
+        let held = gate.lock();
+
+        let accepted = speak(&dictation, Caller::Owner, "a spoken reply", None).expect("accepted");
+        assert!(
+            accepted.state == "queued" || accepted.state == "rendering",
+            "acceptance reports the queue, not the speaker: {}",
+            accepted.state
+        );
+        assert_eq!(accepted.error, None);
+
+        let polled = speech_status(&dictation, Some(&accepted.utterance_id))
+            .utterance
+            .expect("the reply is remembered");
+        assert_ne!(
+            polled.state, "finished",
+            "nothing can be finished while synthesis has not returned"
+        );
+
+        // Only now can it be rendered, played, and observed to have drained.
+        drop(held);
+        wait_for_utterance(&dictation, &accepted.utterance_id, "finished");
+    }
+
+    /// A reply the conversation no longer remembers is a different answer from
+    /// "you asked about nothing", and a caller polling its own id has to be
+    /// able to tell them apart.
+    #[test]
+    fn an_utterance_this_conversation_never_had_is_reported_as_unknown() {
+        let (dictation, _gate) = armed_with_a_voice("session-a");
+
+        let status = speech_status(&dictation, Some("4242"));
+        let asked = status.utterance.expect("asking must produce an answer");
+        assert_eq!(asked.utterance_id, "4242");
+        assert_eq!(asked.state, "unknown");
+
+        assert!(
+            speech_status(&dictation, None).utterance.is_none(),
+            "asking about nothing must leave the field absent"
+        );
+    }
+
+    /// Bounded input, in the caller's terms. The synthesis budget already stops
+    /// one runaway render; it cannot stop a model queueing several.
+    #[test]
+    fn an_empty_or_oversized_reply_is_refused_before_it_reaches_the_queue() {
+        let (dictation, _gate) = armed_with_a_voice("session-a");
+
+        assert_eq!(
+            speak(&dictation, Caller::Owner, "   \n ", None).unwrap_err(),
+            "Nothing to say"
+        );
+
+        let long = "è".repeat(MAX_SPOKEN_CHARS + 1);
+        let refused = speak(&dictation, Caller::Owner, &long, None).unwrap_err();
+        assert!(
+            refused.contains(&(MAX_SPOKEN_CHARS + 1).to_string()),
+            "counted in characters, not bytes: {refused}"
+        );
+        assert_eq!(speech_status(&dictation, None).queued, 0);
+    }
+
+    /// The one shape both transports serialize. This pins the field names a
+    /// store reads over IPC and over HTTP, in the casing the wire uses.
+    #[test]
+    fn the_speech_status_wire_shape_names_every_field_a_client_reads() {
+        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let accepted = speak(&dictation, Caller::Owner, "hello", None).expect("accepted");
+
+        let wire = serde_json::to_value(speech_status(&dictation, Some(&accepted.utterance_id)))
+            .expect("serialize");
+
+        assert_eq!(wire["available"], serde_json::json!(true));
+        assert_eq!(wire["unavailableReason"], serde_json::json!(""));
+        assert_eq!(wire["sessionId"], serde_json::json!("session-a"));
+        assert_eq!(wire["voice"], serde_json::json!("giovanni"));
+        assert!(wire["turn"].is_u64());
+        assert!(wire["queued"].is_u64());
+        assert!(wire["rendering"].is_boolean());
+        assert!(wire["speaking"].is_boolean());
+        assert_eq!(wire["lastError"], serde_json::Value::Null);
+        assert_eq!(
+            wire["utterance"]["utteranceId"],
+            serde_json::json!(accepted.utterance_id)
+        );
+        assert!(wire["utterance"]["state"].is_string());
+    }
+
+    /// Disarming takes the voice away before the engine goes, so a reply
+    /// queued against the old conversation cannot be spoken into the next one.
+    #[test]
+    fn disarming_drops_the_voice_with_the_conversation() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let (dictation, _gate) = armed_with_a_voice("session-a");
+
+        disarm_hands_free(&state, &dictation);
+
+        assert!(dictation.speaker.lock().is_none());
+        assert!(
+            speak(&dictation, Caller::Owner, "hello", None)
+                .unwrap_err()
+                .contains("not armed")
         );
     }
 }

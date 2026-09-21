@@ -25,7 +25,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use super::SpeechCancel;
-use super::assets::{self, Asset, InstallError, Status};
+use super::assets::{self, Asset, InstallError};
 use super::pocket::PocketSpeech;
 
 #[derive(Default)]
@@ -86,11 +86,6 @@ impl SpeechLibrary {
         for cancel in self.downloads.lock().values() {
             cancel.cancel();
         }
-    }
-
-    /// Is this asset usable right now?
-    pub fn status(&self, asset: &Asset) -> Status {
-        assets::status(asset)
     }
 
     /// Is a download of this asset in flight?

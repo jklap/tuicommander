@@ -90,6 +90,12 @@ pub enum Kind {
     /// the engine already expects them inside the language directory.
     Language {
         language: &'static str,
+        /// The Whisper language code this bundle answers to, so the one
+        /// language setting the user picks for dictation also chooses the
+        /// voice that replies. Whisper speaks ISO 639-1 and the upstream
+        /// bundles are named in English, and neither side is going to change:
+        /// the translation belongs here, once, rather than at each call site.
+        code: &'static str,
         /// Which voices this language ships, for a caller that has to offer a
         /// choice. Every name here must have a matching entry under
         /// `voices/` in the payload; a test proves it.
@@ -177,6 +183,27 @@ impl Asset {
             Kind::Runtime => None,
         }
     }
+
+    /// The Whisper language code this asset answers to.
+    pub fn code(&self) -> Option<&'static str> {
+        match self.kind {
+            Kind::Language { code, .. } => Some(code),
+            Kind::Runtime => None,
+        }
+    }
+}
+
+/// The language bundle that speaks a Whisper language code, if we ship one.
+///
+/// `None` for a code with no bundle, which is an answer rather than a failure:
+/// the caller reports that it cannot speak this language instead of picking
+/// another one. Silently falling back is how a voice assistant ends up
+/// replying in English to an Italian conversation.
+pub fn for_language_code(code: &str) -> Option<&'static Asset> {
+    CATALOGUE
+        .iter()
+        .copied()
+        .find(|asset| asset.code() == Some(code))
 }
 
 /// Is this asset usable, and if not, what is missing?
@@ -629,11 +656,16 @@ fn write_library(dest: &Path, bytes: &[u8]) -> Result<(), InstallError> {
 /// The Hugging Face revision every language is pinned to. A commit, not a
 /// branch: `main` moves, and a model that changes under a hash we already
 /// checked is exactly what the hash is there to catch.
+/// `cfg(test)` because the macros below cannot interpolate a constant into
+/// `concat!` — they carry the literal, and this is what proves the two agree.
+#[cfg(test)]
 const POCKET_ONNX_REVISION: &str = "58a6d00cf13d239b6748cb0769f35c580a8f606c";
 
 /// Where the voices are re-published, for the gating reason in the module
 /// documentation. A tag, which on GitHub is as immutable as we make it — the
 /// sha256 below is what actually holds it still.
+/// `cfg(test)` for the same reason as the revision above.
+#[cfg(test)]
 const VOICES_TAG: &str = "speech-voices-v1";
 
 macro_rules! pocket_onnx_url {
@@ -774,6 +806,7 @@ static ITALIAN: Asset = Asset {
     display_name: "Italian",
     kind: Kind::Language {
         language: "italian",
+        code: "it",
         voices: &["giovanni"],
     },
     payload: Payload::Files(ITALIAN_FILES),
@@ -790,6 +823,7 @@ pub fn find(id: &str) -> Option<&'static Asset> {
 }
 
 /// The language assets, for a caller offering a choice of voice.
+#[cfg(test)]
 pub fn languages() -> impl Iterator<Item = &'static Asset> {
     CATALOGUE.iter().copied().filter(|a| a.language().is_some())
 }
@@ -1021,6 +1055,44 @@ mod tests {
         assert!(find("french").is_none());
     }
 
+    #[test]
+    fn a_language_code_resolves_to_the_bundle_that_speaks_it() {
+        // One language setting drives dictation and the reply, so the code
+        // Whisper is configured with has to reach the right voice.
+        assert_eq!(
+            for_language_code("it").map(|asset| asset.id),
+            Some("italian")
+        );
+    }
+
+    #[test]
+    fn a_language_we_do_not_ship_resolves_to_nothing_rather_than_to_english() {
+        // The failure this exists to prevent: replying in a language the user
+        // did not ask for because a fallback looked friendlier than an error.
+        assert!(for_language_code("fr").is_none());
+        assert!(for_language_code("en").is_none());
+        assert!(for_language_code("auto").is_none());
+        assert!(for_language_code("").is_none());
+    }
+
+    #[test]
+    fn every_language_carries_a_code_and_no_two_share_one() {
+        // A duplicate would make `for_language_code` answer with whichever
+        // came first in the catalogue, which is not a decision anybody made.
+        let mut seen = std::collections::HashSet::new();
+        for asset in CATALOGUE.iter().filter(|a| a.language().is_some()) {
+            let code = asset
+                .code()
+                .unwrap_or_else(|| panic!("{} is a language with no code", asset.id));
+            assert!(
+                !code.is_empty(),
+                "{} carries an empty language code",
+                asset.id
+            );
+            assert!(seen.insert(code), "two languages both answer to {code:?}");
+        }
+    }
+
     /// Point the config directory at a temporary one and lay down an asset's
     /// files at their declared sizes.
     ///
@@ -1170,6 +1242,7 @@ mod tests {
             display_name: "Test",
             kind: Kind::Language {
                 language: "test-language",
+                code: "zz",
                 voices: &[],
             },
             payload: Payload::Files(Box::leak(Box::new([Fetch {

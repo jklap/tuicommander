@@ -123,6 +123,7 @@ impl ExternalSpeech {
     ///
     /// The tests use this so a timeout can be proven in a second rather than
     /// in [`TIMEOUT_FLOOR`].
+    #[cfg(test)]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self

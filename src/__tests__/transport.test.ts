@@ -471,6 +471,13 @@ describe("transport", () => {
 				["get_dictation_status", {}, "GET", "/dictation/status"],
 				["get_model_info", {}, "GET", "/dictation/models"],
 				["get_speech_assets", {}, "GET", "/dictation/speech/assets"],
+				["stop_speech", {}, "POST", "/dictation/speech/stop"],
+				["get_speech_status", {}, "GET", "/dictation/speech/status"],
+				// Asking about one reply is a query parameter rather than a
+				// second route: it is the same question with a narrower answer,
+				// and a caller polling its own utterance still wants to know
+				// whether speech is available at all.
+				["get_speech_status", { utterance: "7" }, "GET", "/dictation/speech/status?utterance=7"],
 				["start_dictation", {}, "POST", "/dictation/start"],
 				["stop_dictation_and_transcribe", {}, "POST", "/dictation/stop"],
 				["get_correction_map", {}, "GET", "/dictation/corrections"],
@@ -514,6 +521,16 @@ describe("transport", () => {
 					"POST",
 					"/dictation/speech/assets/delete",
 					{ asset: "italian" },
+				],
+				// `turn` rides in the body rather than being derived: a reply
+				// written for a turn the user has already talked over must be
+				// refusable, and only the caller knows which turn it answered.
+				[
+					"speak_reply",
+					{ text: "Fatto.", turn: 3 },
+					"POST",
+					"/dictation/speech/speak",
+					{ text: "Fatto.", turn: 3 },
 				],
 				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
 				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],

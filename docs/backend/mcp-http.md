@@ -601,7 +601,10 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Ten native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+
+The payload measurements above predate `voice` and are left as recorded: they
+say what was measured, not what the list costs today.
 
 | Tool | Actions | Default |
 |------|---------|---------|
@@ -612,10 +615,32 @@ Nine native tools, organized by domain. Two (`config`, `debug`) are hidden by de
 | `progress` | *(no actions — appends one `done` or `blocked` entry)* | Enabled, unless `progress_tracking` is off |
 | `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
+| `voice` | speak, stop, status | Enabled |
 | `config` | get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt | Disabled |
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+
+#### `voice` is always listed and usually unavailable
+
+It is listed whether or not anything is armed, and on builds with no audio at
+all. That is deliberate: `notifications/tools/list_changed` is not a discovery
+mechanism we can rely on — Claude Code never refetches on it — so arming cannot
+be what makes the tool appear. Instead the tool is always there and answers
+`action=status` with `available: false` plus a reason. A headless
+`tuic-remote` build answers the same shape, so a model reads one contract on
+both builds rather than an unknown-tool error on one of them.
+
+Every action is bound to the **calling terminal**: `resolve_mcp_origin_session`
+maps `mcp-session-id` onto a TUIC session, and that session must be the one
+hands-free is armed for. A connection with no TUIC session is refused outright
+rather than falling back to the user's own control surface. `status` checks the
+binding too — the fields alone say what somebody else's conversation is doing.
+
+Because `handle_call_tool` preserves `addr` and `mcp_session_id`, the direct and
+collapsed paths reach the same handler with the same identity;
+`voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths` asserts
+both produce byte-identical answers, bound and unbound.
 
 This table is generated from the same `*_ACTIONS` constants the schemas use, and
 `every_documented_action_constant_matches_schema_and_description` keeps the three

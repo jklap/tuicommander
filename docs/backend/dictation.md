@@ -79,6 +79,21 @@ from" below.
 | `cancel_speech_download(asset)` | Abandon a download in flight; succeeds with a note when there was none |
 | `delete_speech_asset(asset)` | Unload the engine, then remove the files |
 
+### Spoken replies
+
+Available only while hands-free is armed **and** the conversation opened with a
+working voice. Every one of them answers `available: false` with a reason rather
+than failing, so a caller can always ask.
+
+| Command | HTTP | Description |
+|---------|------|-------------|
+| `speak_reply(text, turn?)` | `POST /dictation/speech/speak` | Queue one reply, at most 2000 characters. Returns `SpokenReply { utteranceId, state, error?, turn }` with `state: "queued"` — never `"finished"`. `turn` refuses a reply written for a turn the user has already talked over; omitting it means "now". |
+| `stop_speech()` | `POST /dictation/speech/stop` | Stop now, drop the queue, open a new turn. Returns the `SpeechStatus` afterwards, so the caller learns the new turn. |
+| `get_speech_status(utterance?)` | `GET /dictation/speech/status?utterance=` | `SpeechStatus`. With `utterance` it also carries that one reply's `SpokenReply`; an id this conversation no longer remembers comes back as `state: "unknown"` rather than as an absent field. |
+
+A model does not call these. It calls the `voice` MCP tool, which supplies its
+own identity so the binding can be checked — see "Who may speak" below.
+
 ### Configuration
 
 | Command | Description |
@@ -103,10 +118,18 @@ pub struct DictationState {
     pub transcriber_arc: Mutex<Option<Arc<dyn Transcriber>>>,
     pub accumulated_partials: Arc<Mutex<String>>,
     pub hands_free: Mutex<HandsFree>,
+    /// The armed conversation's reply queue and voice. `None` while nothing is
+    /// armed, and while a conversation is armed without a working voice.
+    pub speaker: Mutex<Option<speaker::Armed>>,
 }
 ```
 
 Managed as Tauri state alongside `AppState`.
+
+`speaker` is emptied **first** on both `shutdown` and `disarm_hands_free`, before
+the engine and the runtime go: dropping the queue cancels the reply in flight and
+stops the device, which is what makes disarm revoke speech whether or not the
+model ever acknowledged anything.
 
 ## Transcriber Trait
 
@@ -804,6 +827,52 @@ is no more current than a reply addressed to the turn before it.
 `last_error` is cleared by the next reply that plays, so the UI cannot show a
 problem that is over.
 
+### Utterance identity: accepting a reply is not the user hearing it
+
+`say` returns a `UtteranceId`, and the queue remembers the last 64 of them with
+what became of each. A caller polls `Speaker::utterance(id)` — through
+`get_speech_status` or the `voice` tool — to find out.
+
+| State | Means |
+|---|---|
+| `queued` | accepted, nothing has been rendered |
+| `rendering` | synthesis is running |
+| `speaking` | handed to the device |
+| `finished` | the device went quiet with this reply behind it — **the only state that means somebody heard it** |
+| `interrupted` | the turn ended first, or `hush` arrived mid-sentence |
+| `failed: <reason>` | never audible; the reason is the engine's or the device's |
+
+The distinction is structural, not documentary. `finished` is written in exactly
+one place — `note_playback_drained`, which runs only when `Output::is_speaking()`
+is false. And `hush` reads the device **before** stopping it, so a reply already
+heard to the end is not rewritten as `interrupted` just because an interruption
+followed it.
+
+The device reports one boolean for its whole queue, so replies handed to it
+resolve together when it goes quiet. That is correct rather than approximate: it
+drains in order.
+
+Finding out costs a timed condvar wait of 25 ms — but only while something is
+actually playing. An idle speaker blocks on the condvar and never queries the
+device at all.
+
+### Who may speak
+
+Speech belongs to a conversation, not to the application. `Caller` is the whole
+rule:
+
+| Caller | May drive |
+|---|---|
+| `Owner` — the user's own UI, on either transport | always |
+| `Model(session)` — an MCP connection, named by the TUIC session it is bound to | only the conversation armed for that same session |
+
+An MCP connection with no TUIC session is refused outright rather than falling
+back to `Owner`: that path exists for the user's UI, and handing it to a model
+would let any client speak into whichever conversation happened to be armed.
+`status` checks the binding too — the fields alone say what somebody else's
+conversation is doing, and a model that can see a queue will try to speak into
+it.
+
 ### The engine's own sample rate reaches the device
 
 `DeviceOutput` passes `SpeechAudio::sample_rate` straight through and lets
@@ -821,6 +890,28 @@ acoustic echo cancellation. Whoever detects near-end speech calls `hush`; this
 module has no microphone and no opinion. The split is deliberate — the queue's
 correctness is provable without audio hardware, and an audio-hardware test
 cannot prove the queue. It lives in `echo.rs`, below.
+
+### Barge-in: who actually calls `hush`
+
+The capture loop in `continuous.rs` does, through the `Interruptible` port it
+holds for the armed conversation. The rule is three lines and each one is
+load-bearing:
+
+- **After the canceller.** `capture.echo.lock().clean(...)` runs first, so
+  whatever opens the energy gate is the user and not the reply coming back
+  through the microphone. Wired the other way round, every reply interrupts
+  itself on its own first word.
+- **On the edge, not the level.** `hush` opens a new turn on *every* call, so a
+  level trigger would open one per 50 ms tick and every reply the model wrote
+  for the turn in progress would be refused as stale while the user was still
+  speaking one sentence.
+- **A port, not the queue.** A conversation armed without a voice holds `None`
+  and interrupts nothing, which is ordinary dictation; and the loop stays
+  testable without an audio device or a loaded synthesis graph.
+
+The queue is built in `arm_hands_free_with` **before** the runtime is spawned,
+for this reason alone: a loop started first would spend its first ticks unable
+to interrupt anything.
 
 ## Hearing the user over our own voice (`echo.rs`)
 

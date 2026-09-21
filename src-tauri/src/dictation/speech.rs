@@ -21,13 +21,6 @@
 //!    cannot stop itself hands the user a minute of babble, so [`budget_seconds`]
 //!    states the ceiling once, for every adapter.
 
-// The port and its adapter are finished and tested, and nothing calls them
-// yet: the consumers are playback (816-cbbf), the MCP capability (817-f67c)
-// and the Dictation UI (818-2a29). Drop this attribute with the first of them
-// that lands — it is here to keep 56 dead-code warnings from burying the real
-// ones, not to make an unused module permanent.
-#![allow(dead_code)]
-
 pub mod assets;
 pub mod external;
 pub mod library;

@@ -1749,6 +1749,18 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(dictation_routes::delete_speech_asset_http),
         )
         .route(
+            "/dictation/speech/speak",
+            post(dictation_routes::speak_http),
+        )
+        .route(
+            "/dictation/speech/stop",
+            post(dictation_routes::stop_speech_http),
+        )
+        .route(
+            "/dictation/speech/status",
+            get(dictation_routes::get_speech_status_http),
+        )
+        .route(
             "/dictation/start",
             post(dictation_routes::start_dictation_http),
         )

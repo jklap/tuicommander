@@ -37,11 +37,6 @@
 //! and this stops. That split is deliberate — the queue's correctness can be
 //! proven without a microphone, and a microphone test cannot prove the queue.
 
-// Same reason as `speech.rs`: the queue is finished and tested, and its
-// consumers are the MCP capability (817-f67c) and the Dictation UI (818-2a29).
-// Drop this with the first of them that lands.
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::num::NonZero;
 use std::sync::Arc;
@@ -140,13 +135,6 @@ pub enum Utterance {
     Failed(String),
 }
 
-impl Utterance {
-    /// Is there anything left to wait for?
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Finished | Self::Interrupted | Self::Failed(_))
-    }
-}
-
 impl std::fmt::Display for Utterance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -219,7 +207,6 @@ struct Reply {
 
 struct InFlight {
     id: UtteranceId,
-    generation: u64,
     cancel: SpeechCancel,
 }
 
@@ -273,6 +260,19 @@ struct Shared {
     state: Mutex<State>,
     /// Woken by a new reply, by an interruption and by shutdown.
     wake: Condvar,
+}
+
+/// A reply queue bound to one armed conversation.
+///
+/// The voice rides along because it is decided once, when the conversation is
+/// armed, from the dictation language — not per reply and not by the caller.
+/// A model that could choose its own voice could choose its own language, and
+/// then the reply no longer matches what the user is speaking.
+pub struct Armed {
+    pub speaker: Arc<Speaker>,
+    /// Empty for a user-supplied engine, which names its own voices inside its
+    /// command template.
+    pub voice: String,
 }
 
 /// The queue. Dropping it stops everything.
@@ -413,6 +413,17 @@ impl Speaker {
     }
 }
 
+/// Barge-in: the capture loop interrupts the reply the moment the user starts
+/// talking over it. It wants nothing back — the new turn reaches a model
+/// through the voice capability's `turn`, not through this call.
+impl super::continuous::Interruptible for Speaker {
+    fn hush(&self) {
+        // Named, not `self.hush()`: the inherent method wins that lookup today,
+        // and a reader should not have to know that to see this is not a loop.
+        Speaker::hush(self);
+    }
+}
+
 impl Drop for Speaker {
     fn drop(&mut self) {
         {
@@ -525,7 +536,6 @@ fn next_reply(shared: &Shared, output: &dyn Output) -> Option<(Reply, SpeechCanc
                 let cancel = SpeechCancel::new();
                 state.in_flight = Some(InFlight {
                     id: reply.id,
-                    generation: reply.generation,
                     cancel: cancel.clone(),
                 });
                 state.set(reply.id, Utterance::Rendering);

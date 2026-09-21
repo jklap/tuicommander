@@ -2974,3 +2974,40 @@ below stays open until the release is cut.
 - [ ] Corrupting one installed file afterwards (`truncate -s 100
       <config>/models/speech/italian/bundle.json`) must move the asset to
       `"state": "incomplete"` with that file named in `missing` — never `ready`.
+
+## Spoken replies and the `voice` MCP tool (story `817-f67c`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+Everything below is blocked on the `speech-voices-v1` release, because arming
+without an installed language bundle opens the conversation **without** a voice.
+Until then only the last two items are checkable.
+
+- [ ] Arm hands-free against a throwaway session on the restarted build, then
+      `curl 'localhost:9877/dictation/speech/status'`. `available` must be
+      `true`, `sessionId` must be that session, and `voice` must name the
+      installed Italian voice.
+- [ ] `curl -X POST localhost:9877/dictation/speech/speak -H 'content-type:
+      application/json' -d '{"text":"Ciao, sto parlando."}'` must answer
+      `state: "queued"` with an `utteranceId` — never `"finished"`. Listen: the
+      reply comes out of the speaker in Italian.
+- [ ] Poll `GET /dictation/speech/status?utterance=<id>` while it plays. It must
+      walk `queued` → `rendering` → `speaking` → `finished`, and only reach
+      `finished` **after** the last word is audible.
+- [ ] **Barge-in.** Queue a long reply, then start talking over it. The speaker
+      must stop within a beat, the utterance must report `interrupted` rather
+      than `finished`, and `turn` must have advanced. What you said must arrive
+      in the terminal as a new turn — not appended behind the reply.
+- [ ] Re-send the same reply quoting the **old** `turn`. It must be refused with
+      a message naming both turns, not spoken.
+- [ ] `POST /dictation/speech/stop` while a reply plays: silence immediately,
+      the queue empties, and the returned `turn` is higher than before.
+- [ ] Disarm while a reply is playing. The audio must stop, and a `speak` after
+      that must be refused with "Hands-free is not armed".
+- [ ] From a **second** terminal's Claude Code, `voice action=status`: it must
+      report the binding refusal, not the first conversation's queue. From the
+      armed terminal's own Claude Code, `voice action=speak` must be heard.
+- [ ] With nothing armed, `GET /dictation/speech/status` must answer
+      `available: false`, `unavailableReason: "Hands-free is not armed"` — never
+      an error.
+- [ ] In Claude Code connected to this build, `voice` must appear in the tool
+      list on a fresh connection without any list-change notification, and
+      `action=status` must answer rather than erroring.

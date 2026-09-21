@@ -104,6 +104,9 @@
 /dictation/speech/assets/cancel
 /dictation/speech/assets/delete
 /dictation/speech/assets/download
+/dictation/speech/speak
+/dictation/speech/status
+/dictation/speech/stop
 /dictation/start
 /dictation/status
 /dictation/stop

@@ -32,8 +32,12 @@ pub struct StateEntry {
 
 #[derive(Debug, Deserialize)]
 pub struct Bundle {
-    /// The language this bundle speaks, as the export declares it. Only used
-    /// to tell a reader — and a test fixture — which bundle is loaded.
+    /// The language this bundle speaks, as the export declares it. Nothing
+    /// reads it: the language is already known from the directory the bundle
+    /// was loaded from. It stays because this struct is the only record in the
+    /// code of what the manifest declares, and a reader comparing the two
+    /// should not have to guess which fields were omitted on purpose.
+    #[allow(dead_code)]
     #[serde(default)]
     pub language: String,
     pub sample_rate: u32,
@@ -72,6 +76,10 @@ impl Bundle {
 
     /// PCM samples in one frame. Declared in the manifest as well, but derived
     /// here so the two can never disagree about what a frame budget means.
+    ///
+    /// The engine counts frames, not samples, so only a test converting one to
+    /// the other needs this.
+    #[cfg(test)]
     pub fn samples_per_frame(&self) -> usize {
         if self.frame_rate <= 0.0 {
             return 0;
