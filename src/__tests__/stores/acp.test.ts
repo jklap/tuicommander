@@ -117,8 +117,8 @@ describe("acpStore: the journal cursor", () => {
 	// frame the store accepted — not on the frames it found interesting.
 	it("advances to the sequence of the last frame handled", () => {
 		acpStore.applySnapshot(snapshot());
-		acpStore.applyFrame(frame(4, { kind: "turnStarted" }, SESSION));
-		acpStore.applyFrame(frame(5, { kind: "turnSettled", stopReason: "end_turn", usage: null }, SESSION));
+		acpStore.applyFrame(CONNECTION, frame(4, { kind: "turnStarted" }, SESSION));
+		acpStore.applyFrame(CONNECTION, frame(5, { kind: "turnSettled", stopReason: "end_turn", usage: null }, SESSION));
 
 		expect(acpStore.cursor(CONNECTION)).toBe(5);
 	});
@@ -128,7 +128,7 @@ describe("acpStore: the journal cursor", () => {
 	// nor skips one.
 	it("resumes one past the last sequence handled", () => {
 		acpStore.applySnapshot(snapshot());
-		acpStore.applyFrame(frame(7, { kind: "turnStarted" }, SESSION));
+		acpStore.applyFrame(CONNECTION, frame(7, { kind: "turnStarted" }, SESSION));
 
 		expect(acpStore.resumeFrom(CONNECTION)).toBe(8);
 	});
@@ -148,8 +148,8 @@ describe("acpStore: the journal cursor", () => {
 	// everything after it on the next resume.
 	it("never moves the cursor backwards", () => {
 		acpStore.applySnapshot(snapshot());
-		acpStore.applyFrame(frame(9, { kind: "turnStarted" }, SESSION));
-		acpStore.applyFrame(frame(3, { kind: "turnStarted" }, SESSION));
+		acpStore.applyFrame(CONNECTION, frame(9, { kind: "turnStarted" }, SESSION));
+		acpStore.applyFrame(CONNECTION, frame(3, { kind: "turnStarted" }, SESSION));
 
 		expect(acpStore.cursor(CONNECTION)).toBe(9);
 	});
@@ -158,7 +158,7 @@ describe("acpStore: the journal cursor", () => {
 describe("acpStore: state events", () => {
 	it("moves the connection to the state a connectionState frame reports", () => {
 		acpStore.applySnapshot(snapshot());
-		acpStore.applyFrame(frame(2, { kind: "connectionState", state: "failed" }));
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "connectionState", state: "failed" }));
 
 		expect(acpStore.connection(CONNECTION)?.state).toBe("failed");
 	});
@@ -168,7 +168,7 @@ describe("acpStore: state events", () => {
 	it("moves only the attachment the envelope names", () => {
 		const other = "01932d5e-0000-7000-8000-0000000000ab";
 		acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: other })] }));
-		acpStore.applyFrame(frame(2, { kind: "attachmentState", state: "prompting" }, SESSION));
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "attachmentState", state: "prompting" }, SESSION));
 
 		expect(acpStore.attachment(CONNECTION, SESSION)?.state).toBe("prompting");
 		expect(acpStore.attachment(CONNECTION, other)?.state).toBe("idle");
@@ -183,6 +183,7 @@ describe("acpStore: pending interactions", () => {
 		expect(acpStore.interactions(CONNECTION)).toHaveLength(1);
 
 		acpStore.applyFrame(
+			CONNECTION,
 			frame(3, { kind: "permissionSettled", requestId: "req-1", outcome: { outcome: "cancelled" } }, SESSION),
 		);
 
@@ -195,12 +196,14 @@ describe("acpStore: pending interactions", () => {
 	it("drops a question settled by somebody else", () => {
 		acpStore.applySnapshot(snapshot());
 		acpStore.applyFrame(
+			CONNECTION,
 			frame(2, { kind: "permissionRequested", requestId: "req-2", request: permissionRequest() }, SESSION),
 		);
 
 		expect(acpStore.interactions(CONNECTION).map((i) => i.requestId)).toEqual(["req-2"]);
 
 		acpStore.applyFrame(
+			CONNECTION,
 			frame(
 				3,
 				{ kind: "permissionSettled", requestId: "req-2", outcome: { outcome: "selected", optionId: "allow" } },
@@ -215,6 +218,7 @@ describe("acpStore: pending interactions", () => {
 		acpStore.applySnapshot(snapshot());
 		acpStore.applyInteractions(CONNECTION, [permission("req-3")]);
 		acpStore.applyFrame(
+			CONNECTION,
 			frame(4, { kind: "permissionRequested", requestId: "req-3", request: permissionRequest() }, SESSION),
 		);
 
@@ -229,8 +233,8 @@ describe("acpStore: a gap is a state, not a dropped frame", () => {
 	// for it to be surfaced.
 	it("records the gap and stops treating the stream as live", () => {
 		acpStore.applySnapshot(snapshot());
-		acpStore.applyFrame(frame(2, { kind: "turnStarted" }, SESSION));
-		acpStore.applyFrame({
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "turnStarted" }, SESSION));
+		acpStore.applyFrame(CONNECTION, {
 			kind: "gap",
 			code: "stream_gap",
 			message: "sequence 3 is no longer held; the earliest is 40",
@@ -249,8 +253,8 @@ describe("acpStore: a gap is a state, not a dropped frame", () => {
 	// for events that were never delivered.
 	it("leaves the cursor where the last real frame left it", () => {
 		acpStore.applySnapshot(snapshot());
-		acpStore.applyFrame(frame(2, { kind: "turnStarted" }, SESSION));
-		acpStore.applyFrame({
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "turnStarted" }, SESSION));
+		acpStore.applyFrame(CONNECTION, {
 			kind: "gap",
 			code: "stream_gap",
 			message: "gone",
@@ -265,7 +269,7 @@ describe("acpStore: a gap is a state, not a dropped frame", () => {
 
 	it("clears the gap when the connection is subscribed again", () => {
 		acpStore.applySnapshot(snapshot());
-		acpStore.applyFrame({
+		acpStore.applyFrame(CONNECTION, {
 			kind: "gap",
 			code: "stream_gap",
 			message: "gone",
@@ -299,10 +303,27 @@ describe("acpStore: a gap is a state, not a dropped frame", () => {
 	it("ends the stream without recording a gap", () => {
 		acpStore.applySnapshot(snapshot());
 		acpStore.markStreaming(CONNECTION);
-		acpStore.applyFrame({ kind: "end" });
+		acpStore.applyFrame(CONNECTION, { kind: "end" });
 
 		expect(acpStore.isStreaming(CONNECTION)).toBe(false);
 		expect(acpStore.gap(CONNECTION)).toBeNull();
+	});
+
+	// `end` is a unit variant on the wire and names nobody, so the reader's own
+	// id is the only thing that says which connection finished. Connections are
+	// per repo root and coexist: ego exiting on root A used to put root B's
+	// panel on "Not receiving updates" with a live stream behind it.
+	it("ends only the stream that reported it", () => {
+		const other = "01932d5e-0000-7000-8000-0000000000c2";
+		acpStore.applySnapshot(snapshot());
+		acpStore.applySnapshot(snapshot({ connectionId: other }));
+		acpStore.markStreaming(CONNECTION);
+		acpStore.markStreaming(other);
+
+		acpStore.applyFrame(CONNECTION, { kind: "end" });
+
+		expect(acpStore.isStreaming(CONNECTION)).toBe(false);
+		expect(acpStore.isStreaming(other)).toBe(true);
 	});
 });
 
@@ -312,7 +333,7 @@ describe("acpStore: frames for a connection it does not know", () => {
 	// resurrect the connection from, though: a half-built entry with no snapshot
 	// behind it renders as a connection that does not exist.
 	it("is ignored rather than creating a connection", () => {
-		acpStore.applyFrame(frame(2, { kind: "turnStarted" }, SESSION));
+		acpStore.applyFrame(CONNECTION, frame(2, { kind: "turnStarted" }, SESSION));
 
 		expect(acpStore.connection(CONNECTION)).toBeNull();
 		expect(acpStore.cursor(CONNECTION)).toBe(0);

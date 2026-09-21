@@ -1,4 +1,4 @@
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, unwrap } from "solid-js/store";
 import type {
 	AcpPlanEntry,
 	AcpSessionId,
@@ -163,16 +163,39 @@ export const acpTranscript = {
 	},
 
 	/**
-	 * Drop one session's transcript.
+	 * Drop one session's transcript and hand back what was dropped.
 	 *
 	 * Called before a `session/load`, which replays the whole history: without
 	 * it the replay lands under what is already there and every message appears
-	 * twice.
+	 * twice. The return value is what makes that safe to do *before* the load —
+	 * a load that is refused leaves the panel live on a session whose
+	 * conversation has been erased, and only the caller knows the request failed.
 	 */
-	clear(sessionId: AcpSessionId): void {
+	clear(sessionId: AcpSessionId): AcpTranscriptEntry[] {
+		// Unwrapped and copied: what comes back has to outlive the store node it
+		// came from, and handing back a live proxy to an array this call is about
+		// to delete is how a restore puts back an empty transcript.
+		const removed = [...(unwrap(state.sessions[sessionId]) ?? [])];
 		setState(
 			produce((s: TranscriptState) => {
 				delete s.sessions[sessionId];
+			}),
+		);
+		return removed;
+	},
+
+	/**
+	 * Put back a transcript `clear` removed, for a load that never happened.
+	 *
+	 * Replaces rather than merges, and does nothing for an empty list: the only
+	 * caller is undoing its own `clear`, so anything now under that session id
+	 * arrived after the failure and is fresher than what is being restored.
+	 */
+	restore(sessionId: AcpSessionId, entries: AcpTranscriptEntry[]): void {
+		if (entries.length === 0) return;
+		setState(
+			produce((s: TranscriptState) => {
+				s.sessions[sessionId] = entries;
 			}),
 		);
 	},
@@ -206,13 +229,39 @@ export const acpTranscript = {
 		);
 	},
 
-	/** What the user typed, shown before the agent has echoed it back. */
-	noteUserMessage(sessionId: AcpSessionId, text: string): void {
+	/**
+	 * What the user typed, shown before the agent has echoed it back.
+	 *
+	 * Returns the entry's id so the caller can take it back. The message is put
+	 * on screen before the prompt is sent — that is the point of it — so a prompt
+	 * the backend refuses would otherwise leave a turn the agent never received
+	 * sitting in the conversation, indistinguishable from one it ignored.
+	 */
+	noteUserMessage(sessionId: AcpSessionId, text: string): string {
+		const id = `e${state.nextId}`;
 		setState(
 			produce((s: TranscriptState) => {
 				const entries = (s.sessions[sessionId] ??= []);
-				entries.push({ id: `e${s.nextId}`, kind: "user", text });
+				entries.push({ id, kind: "user", text });
 				s.nextId += 1;
+			}),
+		);
+		return id;
+	},
+
+	/**
+	 * Take back an entry that turned out not to have happened.
+	 *
+	 * By id rather than by position: frames keep arriving while a prompt is in
+	 * flight, so "the last entry" is not reliably the one being withdrawn.
+	 */
+	dropEntry(sessionId: AcpSessionId, entryId: string): void {
+		setState(
+			produce((s: TranscriptState) => {
+				const entries = s.sessions[sessionId];
+				if (!entries) return;
+				const index = entries.findIndex((entry) => entry.id === entryId);
+				if (index >= 0) entries.splice(index, 1);
 			}),
 		);
 	},
