@@ -173,7 +173,7 @@ function feed(event: AcpClientEvent, sessionId: string | null = SESSION): void {
 		turnId: null,
 		event,
 	};
-	acpStore.applyFrame(frame);
+	acpStore.applyFrame(CONNECTION, frame);
 	acpTranscript.applyFrame(frame);
 }
 
@@ -450,7 +450,7 @@ describe("AIChatPanel: a gap", () => {
 		const { container } = renderPanel();
 		await settle();
 
-		acpStore.applyFrame({
+		acpStore.applyFrame(CONNECTION, {
 			kind: "gap",
 			code: "stream_gap",
 			message: "sequence 3 is no longer held",

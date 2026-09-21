@@ -9,6 +9,7 @@ import { invoke } from "../../invoke";
 import { createAcpClient } from "../../services/acpClient";
 import type { AcpStreamHandle, AcpStreamOptions } from "../../services/acpStream";
 import { acpStore } from "../../stores/acp";
+import { acpTranscript } from "../../stores/acpTranscript";
 import type { AcpConnectionSnapshot, AcpStreamFrame } from "../../types/acp";
 
 const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
@@ -55,6 +56,13 @@ class FakeStreams {
 		const last = this.opened.at(-1);
 		if (!last) throw new Error("no stream was opened");
 		return last;
+	}
+
+	/** The newest stream opened for one connection, for tests with several. */
+	for(connectionId: string): AcpStreamOptions {
+		const found = [...this.opened].reverse().find((options: AcpStreamOptions) => options.connectionId === connectionId);
+		if (!found) throw new Error(`no stream was opened for ${connectionId}`);
+		return found;
 	}
 
 	deliver(frame: AcpStreamFrame): void {
@@ -115,6 +123,7 @@ beforeEach(() => {
 	mockInvoke.mockReset();
 	mockInvoke.mockImplementation(answering());
 	acpStore.reset();
+	acpTranscript.reset();
 	streams = new FakeStreams();
 	client = createAcpClient(streams.open);
 });
@@ -231,6 +240,59 @@ describe("acpClient: talking to a session", () => {
 		});
 	});
 
+	// The message is put on screen before the prompt is sent, which is the point
+	// of it. A prompt the backend refuses therefore has to take it back, or the
+	// conversation holds a turn ego never received — indistinguishable, to the
+	// person reading it, from one it received and ignored.
+	it("takes back the optimistic message when the prompt is refused", async () => {
+		await client.connect(ROOT);
+		mockInvoke.mockImplementation((command: string) =>
+			command === "acp_session_prompt"
+				? Promise.reject(new Error("the session is not accepting prompts"))
+				: answering()(command),
+		);
+
+		await expect(client.prompt(CONNECTION, SESSION, "hello")).rejects.toThrow("not accepting prompts");
+
+		expect(acpTranscript.entries(SESSION)).toEqual([]);
+	});
+
+	it("leaves the message in place when the prompt is accepted", async () => {
+		await client.connect(ROOT);
+
+		await client.prompt(CONNECTION, SESSION, "hello");
+
+		expect(acpTranscript.entries(SESSION)).toEqual([expect.objectContaining({ kind: "user", text: "hello" })]);
+	});
+
+	// The clear has to come first — `session/load` replays the whole history, so
+	// without it every message doubles — which means a load that is refused
+	// leaves the panel live on a session whose conversation has been erased.
+	it("puts the transcript back when a session load is refused", async () => {
+		await client.connect(ROOT);
+		acpTranscript.noteUserMessage(SESSION, "what was said before");
+		mockInvoke.mockImplementation((command: string) =>
+			command === "acp_session_load"
+				? Promise.reject(new Error("no such session"))
+				: answering()(command),
+		);
+
+		await expect(client.loadSession(CONNECTION, SESSION, ROOT)).rejects.toThrow("no such session");
+
+		expect(acpTranscript.entries(SESSION)).toEqual([
+			expect.objectContaining({ kind: "user", text: "what was said before" }),
+		]);
+	});
+
+	it("clears the transcript for a load that succeeds, so the replay does not double it", async () => {
+		await client.connect(ROOT);
+		acpTranscript.noteUserMessage(SESSION, "what was said before");
+
+		await client.loadSession(CONNECTION, SESSION, ROOT);
+
+		expect(acpTranscript.entries(SESSION)).toEqual([]);
+	});
+
 	// The ids are the agent's. Answering with an Allow/Deny of this client's own
 	// invention would answer a question nobody asked.
 	it("answers a permission with one of the option ids the agent published", async () => {
@@ -276,6 +338,111 @@ describe("acpClient: talking to a session", () => {
 
 		const call = mockInvoke.mock.calls.find(([command]) => command === "acp_turn_pause");
 		expect(call?.[1].requestId).toMatch(/^[0-9a-f-]{36}$/);
+	});
+});
+
+describe("acpClient: connections that coexist", () => {
+	/** A second connection, the way a second repo root gets one. */
+	const OTHER = "01932d5e-0000-7000-8000-0000000000c2";
+	const OTHER_ROOT = "/other-repo";
+
+	/** Answer `acp_connect` with whichever root was asked for. */
+	function answeringBothRoots() {
+		return (command: string, args?: Record<string, unknown>) => {
+			if (command === "acp_connect") {
+				return Promise.resolve(
+					args?.root === OTHER_ROOT ? snapshot({ connectionId: OTHER }) : snapshot(),
+				);
+			}
+			return answering()(command);
+		};
+	}
+
+	// `end` is a unit variant on the wire, so the frame names nobody. Reading it
+	// as "everything stopped" put the other root's panel on "Not receiving
+	// updates" while its stream was still live and still delivering.
+	it("stops streaming only on the connection whose stream ended", async () => {
+		mockInvoke.mockImplementation(answeringBothRoots());
+		await client.connect(ROOT);
+		await client.connect(OTHER_ROOT);
+		expect(acpStore.isStreaming(CONNECTION)).toBe(true);
+		expect(acpStore.isStreaming(OTHER)).toBe(true);
+
+		streams.for(CONNECTION).onFrame({ kind: "end" });
+
+		expect(acpStore.isStreaming(CONNECTION)).toBe(false);
+		expect(acpStore.isStreaming(OTHER)).toBe(true);
+	});
+});
+
+describe("acpClient: replacing a connection", () => {
+	/** The id `acp_reconnect` mints for the replacement process. */
+	const FRESH = "01932d5e-0000-7000-8000-0000000000c3";
+
+	function answeringReconnect() {
+		return (command: string) =>
+			command === "acp_reconnect"
+				? Promise.resolve(snapshot({ connectionId: FRESH }))
+				: answering()(command);
+	}
+
+	// The backend mints a new id, so the old entry is not overwritten — it is
+	// orphaned. Left in the store it shows in the connection list as a
+	// connection nobody can reach, and it leaks one per recover().
+	it("leaves no entry behind for the connection it replaced", async () => {
+		await client.connect(ROOT);
+		mockInvoke.mockImplementation(answeringReconnect());
+
+		await client.reconnect(CONNECTION, ROOT);
+
+		expect(acpStore.connection(CONNECTION)).toBeNull();
+		expect(acpStore.connectionIds()).toEqual([FRESH]);
+		expect(acpStore.isStreaming(FRESH)).toBe(true);
+	});
+
+	// And the old stream is closed rather than left reading. This is the second
+	// half of the same defect: a stream nobody forgot goes on to deliver the
+	// dead connection's `end`, which used to freeze the fresh panel.
+	it("closes the replaced connection's stream", async () => {
+		await client.connect(ROOT);
+		mockInvoke.mockImplementation(answeringReconnect());
+
+		await client.reconnect(CONNECTION, ROOT);
+		streams.for(CONNECTION).onFrame({ kind: "end" });
+
+		expect(streams.closed).toBe(1);
+		expect(acpStore.isStreaming(FRESH)).toBe(true);
+	});
+});
+
+describe("acpClient: a connection that does not finish arriving", () => {
+	// `acp_pending_interactions` is a round trip to a process that has only just
+	// started. A failure used to leave the store holding a connection with a
+	// null handle and no stream — present in the list, reading as idle, and
+	// never going to receive anything.
+	it("holds nothing when the pending fetch fails", async () => {
+		mockInvoke.mockImplementation((command: string) =>
+			command === "acp_pending_interactions"
+				? Promise.reject(new Error("the connection went away"))
+				: answering()(command),
+		);
+
+		await expect(client.connect(ROOT)).rejects.toThrow("the connection went away");
+
+		expect(acpStore.connection(CONNECTION)).toBeNull();
+		expect(streams.opened).toHaveLength(0);
+	});
+
+	// The same for the other fallible half. The store is written before the
+	// stream opens on purpose — a frame can arrive the instant the socket is up
+	// — so the rollback is what keeps that safe.
+	it("holds nothing when the stream refuses to open", async () => {
+		streams.failOpens(1);
+
+		await expect(client.connect(ROOT)).rejects.toThrow("the stream refused to open");
+
+		expect(acpStore.connection(CONNECTION)).toBeNull();
+		expect(acpStore.isStreaming(CONNECTION)).toBe(false);
 	});
 });
 

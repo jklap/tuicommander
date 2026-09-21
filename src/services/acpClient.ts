@@ -56,7 +56,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		const handle = await open({
 			connectionId,
 			afterSequence: acpStore.resumeFrom(connectionId),
-			onFrame: (frame) => receive(entry, frame),
+			onFrame: (frame) => receive(connectionId, entry, frame),
 			onDropped: () => {
 				void resume(connectionId, entry);
 			},
@@ -73,9 +73,17 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		acpStore.markStreaming(connectionId);
 	}
 
-	function receive(entry: Live, frame: AcpStreamFrame): void {
+	/**
+	 * Hand one frame to the stores, on behalf of the connection it came from.
+	 *
+	 * The id is passed rather than read off the frame because `end` carries none
+	 * — see `acpStore.applyFrame`. This function is the only place that still
+	 * knows which stream a frame arrived on, so losing it here is losing it for
+	 * good.
+	 */
+	function receive(connectionId: AcpConnectionId, entry: Live, frame: AcpStreamFrame): void {
 		entry.spent = 0;
-		acpStore.applyFrame(frame);
+		acpStore.applyFrame(connectionId, frame);
 		acpTranscript.applyFrame(frame);
 		if (frame.kind !== "event") {
 			// `gap` and `end` are both terminal and neither is recoverable by
@@ -120,14 +128,34 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 	 * blocked.
 	 */
 	async function adopt(snapshot: AcpConnectionSnapshot): Promise<AcpConnectionSnapshot> {
-		acpStore.applySnapshot(snapshot);
 		const connectionId = snapshot.connectionId;
+		// Before anything is committed. This is the fetch most likely to fail —
+		// it is a round trip to a process that has only just started — and a
+		// failure here used to leave the store holding a connection with a null
+		// handle and no stream, which renders as present and reads as idle.
+		const pending = await invoke<AcpPendingInteraction[]>("acp_pending_interactions", { connectionId });
+
 		forget(connectionId);
+		// The store is written before the stream opens, not after: `subscribe`
+		// reads the cursor and marks the connection streaming, and a frame can
+		// arrive the instant the socket is up. A commit ordered after the open
+		// would drop those frames as belonging to an unknown connection. The
+		// rollback below is what makes the early commit safe.
+		const held = acpStore.connection(connectionId) !== null;
+		acpStore.applySnapshot(snapshot);
+		acpStore.applyInteractions(connectionId, pending);
 		const entry: Live = { handle: null, spent: 0, abandoned: false };
 		live.set(connectionId, entry);
-		const pending = await invoke<AcpPendingInteraction[]>("acp_pending_interactions", { connectionId });
-		acpStore.applyInteractions(connectionId, pending);
-		await subscribe(connectionId, entry);
+		try {
+			await subscribe(connectionId, entry);
+		} catch (error) {
+			live.delete(connectionId);
+			// Only what this call added. `adopt` always runs against a
+			// freshly-minted id today, but a re-adopt of a connection the panel
+			// already holds must not erase the cursor it was reading from.
+			if (!held) acpStore.forget(connectionId);
+			throw error;
+		}
 		return snapshot;
 	}
 
@@ -137,9 +165,22 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			return adopt(await invoke<AcpConnectionSnapshot>("acp_connect", { root }));
 		},
 
-		/** Replace a connection with a fresh process on the same root. */
+		/**
+		 * Replace a connection with a fresh process on the same root.
+		 *
+		 * The backend mints a **new** id for the replacement, so the old one has
+		 * to be let go by name. Left behind, its entry stays in the connection
+		 * list as a connection nobody can reach, and its stream is still open —
+		 * which is how the dead connection's `end` frame used to arrive and stop
+		 * the fresh one.
+		 */
 		async reconnect(connectionId: AcpConnectionId, root: string): Promise<AcpConnectionSnapshot> {
-			return adopt(await invoke<AcpConnectionSnapshot>("acp_reconnect", { connectionId, root }));
+			const snapshot = await invoke<AcpConnectionSnapshot>("acp_reconnect", { connectionId, root });
+			if (snapshot.connectionId !== connectionId) {
+				forget(connectionId);
+				acpStore.forget(connectionId);
+			}
+			return adopt(snapshot);
 		},
 
 		/** Read the connection's current picture without touching its stream. */
@@ -175,13 +216,22 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		/** Attach to a session ego already owns and replay its history. */
 		async loadSession(connectionId: AcpConnectionId, sessionId: AcpSessionId, cwd: string): Promise<void> {
 			// `session/load` replays the whole history as updates. Without this the
-			// replay lands under what is already shown and every message doubles.
-			acpTranscript.clear(sessionId);
-			await invoke("acp_session_load", {
-				connectionId,
-				sessionId,
-				authority: { cwd, additionalDirectories: [] },
-			});
+			// replay lands under what is already shown and every message doubles —
+			// so the clear has to come first, and a load that is refused has to put
+			// back what it took. The panel stays on this session either way; an
+			// erased conversation under a live session reads as history that is
+			// gone rather than as a request that failed.
+			const cleared = acpTranscript.clear(sessionId);
+			try {
+				await invoke("acp_session_load", {
+					connectionId,
+					sessionId,
+					authority: { cwd, additionalDirectories: [] },
+				});
+			} catch (error) {
+				acpTranscript.restore(sessionId, cleared);
+				throw error;
+			}
 			await this.refresh(connectionId);
 		},
 
@@ -200,13 +250,20 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		/** Send one turn. A person types text; ego reads content blocks. */
 		async prompt(connectionId: AcpConnectionId, sessionId: AcpSessionId, text: string): Promise<string> {
 			// Shown before the agent answers. Ego echoes a user message only when
-			// it replays history, so nothing else would put it on screen.
-			acpTranscript.noteUserMessage(sessionId, text);
-			return invoke<string>("acp_session_prompt", {
-				connectionId,
-				sessionId,
-				prompt: [{ type: "text", text }],
-			});
+			// it replays history, so nothing else would put it on screen — and a
+			// prompt the backend refuses would leave a turn that never happened
+			// sitting in the conversation, reading as one the agent ignored.
+			const entryId = acpTranscript.noteUserMessage(sessionId, text);
+			try {
+				return await invoke<string>("acp_session_prompt", {
+					connectionId,
+					sessionId,
+					prompt: [{ type: "text", text }],
+				});
+			} catch (error) {
+				acpTranscript.dropEntry(sessionId, entryId);
+				throw error;
+			}
 		},
 
 		async cancel(connectionId: AcpConnectionId, sessionId: AcpSessionId): Promise<void> {

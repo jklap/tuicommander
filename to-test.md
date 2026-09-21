@@ -2667,3 +2667,19 @@ reads `ws.protocol` in `onopen` before the first frame.
       never deflated (`ssh -C` already compressed the channel), which is the
       `::ffff:127.0.0.1` case the canonical-address fix covers. Check CPU on the
       daemon stays flat while an agent repaints.
+
+## The AI Chat panel keeps its connections apart (#806-4335)
+
+Frontend only — Vite HMR picks this up, no `make dev` restart needed.
+
+- [ ] Open AI Chat on two different repo roots so two ego connections are live.
+      Stop ego on the first (or disconnect it). The second panel must keep
+      streaming — no "Not receiving updates" banner on the root that did not end.
+- [ ] Press Recover after a gap. The connection list must show ONE connection
+      afterwards, not the dead one plus the fresh one, and the fresh panel must
+      keep receiving updates rather than freezing a second later.
+- [ ] Send a prompt while ego is wedged or the session is not accepting prompts.
+      The message must disappear from the transcript rather than sitting there as
+      a turn that was never received.
+- [ ] Attach to a session id ego does not have. The transcript that was on screen
+      must come back rather than being left blank under a live session.

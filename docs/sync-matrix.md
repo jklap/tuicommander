@@ -233,9 +233,9 @@ command ego runs, so the server-side synthesis in `granted` is what keeps it saf
 | `src/components/AIChatPanel/SessionControls.tsx` | The options the session publishes, plus pause/resume/compact — each drawn only when ego advertised it |
 | `src/components/AIChatPanel/Composer.tsx`, `draft.ts` | Where a turn is written; the draft is module-scoped so the context menu can seed it |
 | `src/components/AIChatPanel/contextMenuActions.ts` | "Explain with AI" / "Fix this error" on terminal right-click, registered through `contextMenuActionsStore` |
-| `src/services/acpClient.ts`, `src/services/acpStream.ts` | Every command the panel sends and the frame stream behind it |
-| `src/stores/acp.ts` | Protocol state per connection: snapshot, journal cursor, pending questions, gap |
-| `src/stores/acpTranscript.ts` | The render projection, keyed by session |
+| `src/services/acpClient.ts`, `src/services/acpStream.ts` | Every command the panel sends and the frame stream behind it. `adopt` commits to the store only after the pending fetch and the open succeed, and `reconnect` lets go of the id the backend replaced — the new one is a *different* connection |
+| `src/stores/acp.ts` | Protocol state per connection: snapshot, journal cursor, pending questions, gap. `applyFrame` takes the reading stream's id because `end` names nobody on the wire |
+| `src/stores/acpTranscript.ts` | The render projection, keyed by session. Everything shown before the backend answered must be reversible: `noteUserMessage`/`dropEntry`, `clear`/`restore` |
 | `src/panelAdapters/aiChat.tsx` | Registry entry: what makes `Cmd+Alt+A`, the status-bar button, the palette entry and detach work |
 | `src/components/PanelOrchestrator.tsx` | Switches between AIChatPanel and DetachedPlaceholder |
 | `src/components/DetachedPlaceholder.tsx` | Placeholder shown in the main window when the panel is detached |

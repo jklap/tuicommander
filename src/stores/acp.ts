@@ -158,18 +158,26 @@ export const acpStore = {
 	},
 
 	/**
-	 * Apply one frame off the stream.
+	 * Apply one frame off the stream that `streamId` belongs to.
 	 *
 	 * A frame naming a connection this store does not hold is dropped in
 	 * silence: a disconnect races the frames already in flight behind it, and
 	 * building an entry from a frame would produce a connection with no snapshot
 	 * behind it — which renders as a connection that does not exist.
+	 *
+	 * `streamId` is passed because `end` is a **unit variant on the wire** and so
+	 * names nobody. Connections are per repo root and coexist, so reading it as
+	 * "every connection stopped" froze the panel on root B when ego on root A
+	 * exited — and, after a reconnect, the dead stream's own `end` froze the
+	 * fresh connection that had just replaced it. Every stream belongs to exactly
+	 * one connection, so the reader's own id is the answer the frame lacks.
 	 */
-	applyFrame(frame: AcpStreamFrame): void {
+	applyFrame(streamId: AcpConnectionId, frame: AcpStreamFrame): void {
 		if (frame.kind === "end") {
 			setState(
 				produce((s: AcpState) => {
-					for (const entry of Object.values(s.connections)) entry.streaming = false;
+					const entry = s.connections[streamId];
+					if (entry) entry.streaming = false;
 				}),
 			);
 			return;
