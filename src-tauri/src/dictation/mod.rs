@@ -4,6 +4,7 @@ pub mod continuous;
 pub mod corrections;
 pub mod echo;
 pub mod fn_key_monitor;
+pub mod language;
 pub mod model;
 pub mod permission;
 pub mod speaker;
@@ -70,7 +71,11 @@ pub struct DictationState {
     /// conversation, not to the application. Built on arm because it needs a
     /// loaded engine and an open audio device, both of which are worth holding
     /// only while somebody is listening.
-    pub speaker: Mutex<Option<speaker::Armed>>,
+    ///
+    /// `Arc` because the hands-free capture loop holds the same slot as its
+    /// barge-in port: it must interrupt whatever is speaking *now*, which
+    /// under Auto is a voice that did not exist when the loop started.
+    pub speaker: Arc<Mutex<Option<speaker::Armed>>>,
 }
 
 impl DictationState {
@@ -92,7 +97,7 @@ impl DictationState {
             hands_free_owner_alive: Arc::new(AtomicBool::new(false)),
             echo: Arc::new(Mutex::new(echo::install())),
             speech: Arc::new(speech::library::SpeechLibrary::new()),
-            speaker: Mutex::new(None),
+            speaker: Arc::new(Mutex::new(None)),
         }
     }
 

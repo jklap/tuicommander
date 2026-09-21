@@ -1515,6 +1515,19 @@ voice, `status` reports `available: false` and names the reason rather than
 failing. State changes are **not** pushed on `/events` yet — the deferral is
 recorded at the would-be emit site in `dictation::commands::speak`.
 
+`SpeechStatus.language` is the two-letter code this conversation is being held
+in: the dictation setting when it names one, and what Whisper detected when the
+setting is `auto`. Empty means nobody has spoken yet under `auto` — the one
+state in which no reply can be spoken, reported as `available: false` with a
+reason naming Auto rather than filled in with a default. Neither the speak
+payload nor the `voice` MCP tool takes a language or a voice: both come from
+this field, and a second source would disagree with it the first time the user
+switched languages.
+
+`PUT /dictation/config` with a different `language` or `speechCommand` drops the
+voice built for the previous one, cancelling whatever it was speaking. Every
+other field leaves it alone.
+
 ### Hands-free
 
 `POST /dictation/hands-free/arm` binds the delivery target and the audio owner,

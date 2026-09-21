@@ -361,11 +361,16 @@ pub struct VoiceSend {
     pub generation: u64,
     pub session_id: String,
     pub text: String,
+    /// The language this turn was spoken in, as a two-letter code, or `None`
+    /// when the recogniser named none. It travels with the text because the
+    /// model is told to answer in it.
+    pub language: Option<String>,
 }
 
 struct PendingSend {
     generation: u64,
     text: String,
+    language: Option<String>,
     send_at_ms: u64,
 }
 
@@ -532,6 +537,14 @@ pub struct HandsFree {
     owned: Vec<u64>,
     last_error: Option<String>,
     activation: Activation,
+    /// The language of the last transcript this mode accepted.
+    ///
+    /// The turn's language, not the setting's: with a fixed language the two
+    /// are the same, and with `auto` this is the only record of what the user
+    /// actually spoke. The voice that answers is chosen from it, so it is
+    /// cleared on arm and on disarm — a reply must never be spoken in the
+    /// language of a conversation that has ended.
+    turn_language: Option<String>,
 }
 
 impl HandsFree {
@@ -545,6 +558,7 @@ impl HandsFree {
             owned: Vec::new(),
             last_error: None,
             activation: Activation::default(),
+            turn_language: None,
         }
     }
 
@@ -618,7 +632,21 @@ impl HandsFree {
         });
         self.phase = Phase::Waiting;
         self.last_error = None;
+        // Nobody has spoken yet, so this conversation has no language. With a
+        // fixed setting the first reply could borrow it, but with `auto` there
+        // is nothing to borrow and inheriting the last conversation's language
+        // is how a new user is answered in the previous one's.
+        self.turn_language = None;
         Ok(self.generation)
+    }
+
+    /// The language of the most recent accepted turn, as a two-letter code.
+    ///
+    /// `None` before anybody has spoken, and after a turn the recogniser could
+    /// not name. Callers treat that as "not yet known" and refuse to speak
+    /// rather than choosing a language on the user's behalf.
+    pub fn turn_language(&self) -> Option<&str> {
+        self.turn_language.as_deref()
     }
 
     /// An utterance opened.
@@ -637,10 +665,16 @@ impl HandsFree {
 
     /// Hand back a transcription result. `generation` is the one the capture
     /// carried, which is how a result that outlived its mode is rejected.
+    ///
+    /// `language` is what the recogniser made of this turn. It is recorded on
+    /// the same call as the text rather than on a call of its own: the two are
+    /// one result, and two entry points would let a turn be admitted with the
+    /// previous turn's language still standing.
     pub fn accept_transcript(
         &mut self,
         generation: u64,
         text: &str,
+        language: Option<&str>,
         now_ms: u64,
     ) -> TranscriptOutcome {
         if self.binding.is_none() {
@@ -661,18 +695,27 @@ impl HandsFree {
             Admission::Ungated => text,
             Admission::Accept(rest) => rest,
             Admission::PhraseOnly { window_until_ms } => {
+                // Addressed here, so it counts: the phrase alone already tells
+                // us which language this conversation is being held in.
+                self.turn_language = language.map(str::to_string);
                 self.phase = Phase::Waiting;
                 return TranscriptOutcome::Activated { window_until_ms };
             }
             Admission::Rejected => {
+                // Not addressed here, so its language is not ours either.
+                // Recording it would let a remark across the room choose the
+                // voice the next real turn is answered in.
                 self.phase = Phase::Waiting;
                 return TranscriptOutcome::Rejected;
             }
         };
+        let language = language.map(str::to_string);
+        self.turn_language = language.clone();
         let send_at_ms = now_ms + self.hold_back_ms;
         self.pending = Some(PendingSend {
             generation,
             text: text.to_string(),
+            language,
             send_at_ms,
         });
         self.phase = Phase::HoldingBack;
@@ -697,6 +740,7 @@ impl HandsFree {
             generation: pending.generation,
             session_id,
             text: pending.text,
+            language: pending.language,
         })
     }
 
@@ -746,8 +790,11 @@ impl HandsFree {
         self.binding = None;
         // Every reason this machine can end for — the user's abort, a closed
         // target, a lost owner, a dead microphone — is the user no longer
-        // addressing it. None of them may hand the next arm an open window.
+        // addressing it. None of them may hand the next arm an open window,
+        // and none of them may hand it a language either: a reply queued after
+        // this point belongs to a conversation nobody is having.
         self.activation.close();
+        self.turn_language = None;
         self.phase = match &reason {
             DisarmReason::DeviceFailed(message) => {
                 self.last_error = Some(message.clone());
@@ -806,6 +853,28 @@ impl VoiceQueue for PtyVoiceQueue<'_> {
     }
 }
 
+/// What a spoken turn looks like once it reaches the model.
+///
+/// The transcript, plus the one thing the model cannot work out for itself: a
+/// spoken conversation has a language, and a model that answers a question in
+/// English because English is what it defaults to has ended the conversation.
+/// The requirement travels in the entry rather than in a system prompt or a
+/// mode hint, because the Compose queue is the only thing that reaches the
+/// model — hints can be turned off, and the requirement may not be.
+///
+/// One line, never two. The queue types this into a terminal and submits it,
+/// and a newline in the middle submits half a sentence.
+///
+/// An unnamed language adds nothing. There is no default to fall back to: an
+/// invented "reply in English" is the exact failure this exists to prevent, so
+/// a turn nobody could name goes to the model as the user said it.
+fn compose_entry(text: &str, language: Option<&str>) -> String {
+    match language.and_then(super::language::name_for) {
+        Some(name) => format!("{text} (reply in {name})"),
+        None => text.to_string(),
+    }
+}
+
 /// Deliver a transcript whose hold-back expired, and record its queue identity.
 ///
 /// Split out so the enqueue/record pair cannot drift apart: an id recorded
@@ -817,7 +886,8 @@ pub fn deliver_due(
     now_ms: u64,
 ) -> Option<Result<u64, String>> {
     let send = mode.poll_send(now_ms)?;
-    match queue.enqueue(&send.session_id, &send.text, send.generation) {
+    let entry = compose_entry(&send.text, send.language.as_deref());
+    match queue.enqueue(&send.session_id, &entry, send.generation) {
         Ok(id) => {
             mode.note_enqueued(send.generation, id);
             Some(Ok(id))
@@ -842,7 +912,22 @@ pub trait VoiceEndpoint: Send {
     /// False once the endpoint that armed the mode is gone.
     fn connected(&self) -> bool;
     /// Transcribe one closed utterance. Called without the mode lock held.
-    fn transcribe(&self, audio: &[f32]) -> Result<String, String>;
+    fn transcribe(&self, audio: &[f32]) -> Result<Transcript, String>;
+}
+
+/// What a recogniser made of one closed utterance.
+///
+/// The language rides with the text instead of being asked for separately,
+/// because it is a property of *this* pass: a recogniser that has moved on to
+/// the next utterance can no longer answer "and what language was the previous
+/// one".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Transcript {
+    /// What was said. Empty when nothing was recognised.
+    pub text: String,
+    /// The two-letter code it was recognised as, or `None` when the recogniser
+    /// named none — which includes every empty result.
+    pub language: Option<String>,
 }
 
 /// Whether the bound session can still take a Compose-queue entry.
@@ -1022,8 +1107,13 @@ pub fn tick(
             mode.generation()
         };
         match endpoint.transcribe(&utterance.audio) {
-            Ok(text) => {
-                let outcome = mode.lock().accept_transcript(generation, &text, now_ms);
+            Ok(transcript) => {
+                let outcome = mode.lock().accept_transcript(
+                    generation,
+                    &transcript.text,
+                    transcript.language.as_deref(),
+                    now_ms,
+                );
                 // A dropped turn is otherwise indistinguishable from a deaf
                 // microphone. The text stays out of the log: speech the user
                 // did not address here is not ours to record either.
@@ -1411,7 +1501,7 @@ mod tests {
         // A focus change is not an input to this machine at all — nothing here
         // reads "the active tab", which is what makes the redirect impossible.
         assert_eq!(
-            mode.accept_transcript(generation, "run the tests", 0),
+            mode.accept_transcript(generation, "run the tests", None, 0),
             TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
         );
         let send = mode.poll_send(1_500).expect("hold-back expired");
@@ -1424,7 +1514,7 @@ mod tests {
     fn nothing_is_enqueued_before_the_hold_back_expires() {
         let mut mode = armed();
         let generation = mode.generation();
-        mode.accept_transcript(generation, "delete everything", 1_000);
+        mode.accept_transcript(generation, "delete everything", None, 1_000);
 
         assert!(
             mode.poll_send(2_499).is_none(),
@@ -1440,7 +1530,7 @@ mod tests {
     fn a_manual_abort_disarms_the_whole_mode_and_discards_the_pending_send() {
         let mut mode = armed();
         let generation = mode.generation();
-        mode.accept_transcript(generation, "never send this", 0);
+        mode.accept_transcript(generation, "never send this", None, 0);
 
         let disarmed = mode.disarm(DisarmReason::Manual).expect("was armed");
 
@@ -1452,7 +1542,7 @@ mod tests {
             "a discarded transcript may not surface later"
         );
         assert_eq!(
-            mode.accept_transcript(generation, "late result", 10_000),
+            mode.accept_transcript(generation, "late result", None, 10_000),
             TranscriptOutcome::NotArmed,
             "a disarmed mode must not re-arm itself on the next phrase"
         );
@@ -1466,7 +1556,7 @@ mod tests {
         mode.arm("target", "desktop", true).expect("re-arm");
 
         assert_eq!(
-            mode.accept_transcript(stale_generation, "from the last session", 0),
+            mode.accept_transcript(stale_generation, "from the last session", None, 0),
             TranscriptOutcome::Stale
         );
         assert!(mode.poll_send(u64::MAX).is_none());
@@ -1479,7 +1569,7 @@ mod tests {
         mode.note_transcribing();
 
         assert_eq!(
-            mode.accept_transcript(generation, "   ", 0),
+            mode.accept_transcript(generation, "   ", None, 0),
             TranscriptOutcome::Empty
         );
         assert_eq!(*mode.phase(), Phase::Waiting);
@@ -1505,7 +1595,7 @@ mod tests {
         let generation = mode.generation();
 
         assert_eq!(
-            mode.accept_transcript(generation, "apri il file", 0),
+            mode.accept_transcript(generation, "apri il file", None, 0),
             TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
         );
         assert_eq!(mode.pending_text(), Some("apri il file"));
@@ -1518,7 +1608,7 @@ mod tests {
         let generation = mode.generation();
 
         assert_eq!(
-            mode.accept_transcript(generation, "Ciao Tuic, apri il file", 0),
+            mode.accept_transcript(generation, "Ciao Tuic, apri il file", None, 0),
             TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
         );
         assert_eq!(mode.pending_text(), Some("apri il file"));
@@ -1539,7 +1629,7 @@ mod tests {
             let generation = mode.generation();
 
             assert_eq!(
-                mode.accept_transcript(generation, spoken, 0),
+                mode.accept_transcript(generation, spoken, None, 0),
                 TranscriptOutcome::HeldBack { send_at_ms: 1_500 },
                 "{spoken:?} must activate"
             );
@@ -1559,7 +1649,7 @@ mod tests {
         let generation = mode.generation();
 
         assert_eq!(
-            mode.accept_transcript(generation, "Ciao Tuicommander, cancella tutto", 0),
+            mode.accept_transcript(generation, "Ciao Tuicommander, cancella tutto", None, 0),
             TranscriptOutcome::Rejected
         );
         assert!(mode.pending_text().is_none());
@@ -1575,7 +1665,7 @@ mod tests {
         let generation = mode.generation();
 
         assert_eq!(
-            mode.accept_transcript(generation, "Per favore, ciao tuic, cancella tutto", 0),
+            mode.accept_transcript(generation, "Per favore, ciao tuic, cancella tutto", None, 0),
             TranscriptOutcome::Rejected
         );
         assert!(mode.pending_text().is_none());
@@ -1589,7 +1679,7 @@ mod tests {
         let generation = mode.generation();
 
         assert_eq!(
-            mode.accept_transcript(generation, "Ciao Tuic.", 0),
+            mode.accept_transcript(generation, "Ciao Tuic.", None, 0),
             TranscriptOutcome::Activated {
                 window_until_ms: 10_000
             }
@@ -1598,7 +1688,7 @@ mod tests {
         assert_eq!(*mode.phase(), Phase::Waiting);
 
         assert_eq!(
-            mode.accept_transcript(generation, "apri il file", 1_000),
+            mode.accept_transcript(generation, "apri il file", None, 1_000),
             TranscriptOutcome::HeldBack { send_at_ms: 2_500 },
             "the phrase must have opened the window for what follows"
         );
@@ -1611,11 +1701,11 @@ mod tests {
     fn follow_up_speech_inside_the_window_needs_no_phrase() {
         let mut mode = armed_with_phrase("ciao tuic");
         let generation = mode.generation();
-        mode.accept_transcript(generation, "Ciao Tuic, apri il file", 0);
+        mode.accept_transcript(generation, "Ciao Tuic, apri il file", None, 0);
         mode.poll_send(1_500).expect("first turn");
 
         assert_eq!(
-            mode.accept_transcript(generation, "e adesso committa", 9_999),
+            mode.accept_transcript(generation, "e adesso committa", None, 9_999),
             TranscriptOutcome::HeldBack { send_at_ms: 11_499 }
         );
         assert_eq!(mode.pending_text(), Some("e adesso committa"));
@@ -1627,18 +1717,18 @@ mod tests {
     fn speech_after_the_window_expires_needs_the_phrase_again() {
         let mut mode = armed_with_phrase("ciao tuic");
         let generation = mode.generation();
-        mode.accept_transcript(generation, "Ciao Tuic, apri il file", 0);
+        mode.accept_transcript(generation, "Ciao Tuic, apri il file", None, 0);
         mode.poll_send(1_500).expect("first turn");
 
         assert_eq!(
-            mode.accept_transcript(generation, "passami il sale", 10_000),
+            mode.accept_transcript(generation, "passami il sale", None, 10_000),
             TranscriptOutcome::Rejected,
             "the window must not survive its own bound"
         );
         assert!(mode.pending_text().is_none());
 
         assert_eq!(
-            mode.accept_transcript(generation, "Ciao Tuic, committa", 10_000),
+            mode.accept_transcript(generation, "Ciao Tuic, committa", None, 10_000),
             TranscriptOutcome::HeldBack { send_at_ms: 11_500 },
             "the phrase must still reopen it"
         );
@@ -1668,7 +1758,7 @@ mod tests {
             let mut mode = armed_with_phrase("ciao tuic");
             let generation = mode.generation();
             assert!(matches!(
-                mode.accept_transcript(generation, "Ciao Tuic", 0),
+                mode.accept_transcript(generation, "Ciao Tuic", None, 0),
                 TranscriptOutcome::Activated { .. }
             ));
 
@@ -1677,7 +1767,7 @@ mod tests {
             let generation = mode.generation();
 
             assert_eq!(
-                mode.accept_transcript(generation, "cancella tutto", 100),
+                mode.accept_transcript(generation, "cancella tutto", None, 100),
                 TranscriptOutcome::Rejected,
                 "{label} must close the activation window"
             );
@@ -1784,7 +1874,7 @@ mod tests {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeQueue::default();
-        mode.accept_transcript(generation, "run the tests", 0);
+        mode.accept_transcript(generation, "run the tests", None, 0);
 
         assert!(deliver_due(&mut mode, &queue, 1_000).is_none());
         let delivered = deliver_due(&mut mode, &queue, 1_500).expect("hold-back expired");
@@ -1814,9 +1904,9 @@ mod tests {
         // An unrelated Compose entry already sits in the FIFO.
         queue.parked.borrow_mut().push(99);
 
-        mode.accept_transcript(generation, "first", 0);
+        mode.accept_transcript(generation, "first", None, 0);
         let _ = deliver_due(&mut mode, &queue, 1_500).expect("first send");
-        mode.accept_transcript(generation, "second", 2_000);
+        mode.accept_transcript(generation, "second", None, 2_000);
         let _ = deliver_due(&mut mode, &queue, 3_500).expect("second send");
         // The composer typed the first one before the user aborted.
         queue.mark_delivered(1);
@@ -1842,7 +1932,7 @@ mod tests {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeQueue::default();
-        mode.accept_transcript(generation, "typed already", 0);
+        mode.accept_transcript(generation, "typed already", None, 0);
         deliver_due(&mut mode, &queue, 1_500);
 
         mode.note_delivered(1);
@@ -1861,7 +1951,7 @@ mod tests {
         let generation = mode.generation();
         let queue = FakeQueue::default();
         *queue.fail.borrow_mut() = Some("Session is not running an agent".to_string());
-        mode.accept_transcript(generation, "run the tests", 0);
+        mode.accept_transcript(generation, "run the tests", None, 0);
 
         let outcome = deliver_due(&mut mode, &queue, 1_500).expect("hold-back expired");
 
@@ -1956,11 +2046,153 @@ mod tests {
         mode.disarm(DisarmReason::Manual);
 
         assert_eq!(
-            mode.accept_transcript(generation, "too late", 0),
+            mode.accept_transcript(generation, "too late", None, 0),
             TranscriptOutcome::NotArmed
         );
         assert!(deliver_due(&mut mode, &queue, u64::MAX).is_none());
         assert!(queue.enqueued.borrow().is_empty());
+    }
+
+    // --- The language of the turn -----------------------------------------
+
+    /// Boss's requirement, and the one thing a model cannot work out for
+    /// itself: the entry says which language it is being spoken to in.
+    #[test]
+    fn a_spoken_turn_tells_the_model_which_language_to_answer_in() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        deliver_due(&mut mode, &queue, 1_500)
+            .expect("the hold-back has expired")
+            .expect("enqueued");
+
+        assert_eq!(
+            queue.enqueued.borrow()[0].1,
+            "esegui i test (reply in Italian)",
+            "the requirement travels in the entry, which is the only thing that reaches the model"
+        );
+    }
+
+    /// The requirement is part of the entry, not of a mode hint. Nothing turns
+    /// it off, because a conversation that loses it is a conversation the model
+    /// answers in English.
+    #[test]
+    fn every_turn_carries_the_requirement_and_it_names_the_language_just_spoken() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        deliver_due(&mut mode, &queue, 1_500).expect("first turn is due");
+        mode.accept_transcript(generation, "now run them again", Some("en"), 2_000);
+        deliver_due(&mut mode, &queue, 4_000).expect("second turn is due");
+
+        let entries: Vec<String> = queue
+            .enqueued
+            .borrow()
+            .iter()
+            .map(|(_, text, _, _)| text.clone())
+            .collect();
+        assert_eq!(
+            entries,
+            vec![
+                "esegui i test (reply in Italian)".to_string(),
+                "now run them again (reply in English)".to_string(),
+            ],
+            "a conversation that changes language must not keep requiring the previous one"
+        );
+    }
+
+    /// The failure this whole story exists to prevent, at its smallest: an
+    /// unnamed language must produce no requirement rather than a default one.
+    #[test]
+    fn a_turn_the_recogniser_could_not_name_reaches_the_model_as_it_was_spoken() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        mode.accept_transcript(generation, "run the tests", None, 0);
+        deliver_due(&mut mode, &queue, 1_500).expect("due");
+
+        assert_eq!(
+            queue.enqueued.borrow()[0].1,
+            "run the tests",
+            "no language means no requirement; inventing English here is the bug"
+        );
+    }
+
+    /// Whisper recognises about a hundred languages and the panel offers
+    /// eleven. One it cannot name is one it cannot require.
+    #[test]
+    fn a_language_the_panel_does_not_offer_names_nothing() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        mode.accept_transcript(generation, "rhedwch y profion", Some("cy"), 0);
+        deliver_due(&mut mode, &queue, 1_500).expect("due");
+
+        assert_eq!(queue.enqueued.borrow()[0].1, "rhedwch y profion");
+    }
+
+    /// The voice that answers is chosen from this, so it has to be the language
+    /// of the turn rather than of the setting.
+    #[test]
+    fn the_conversation_remembers_the_language_of_the_last_turn() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        assert_eq!(
+            mode.turn_language(),
+            None,
+            "before anybody speaks there is no language, and no default either"
+        );
+
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        assert_eq!(mode.turn_language(), Some("it"));
+
+        mode.accept_transcript(generation, "run the tests", Some("en"), 2_000);
+        assert_eq!(mode.turn_language(), Some("en"));
+    }
+
+    /// A remark across the room is not this conversation, and must not decide
+    /// which language the next real turn is answered in.
+    #[test]
+    fn speech_that_was_not_addressed_here_does_not_choose_the_language() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "ciao tuic, esegui i test", Some("it"), 0);
+
+        // Past the window the first turn opened: inside it every turn is
+        // addressed here, which is a different rule and a different test.
+        assert_eq!(
+            mode.accept_transcript(generation, "did you watch the game", Some("en"), 20_000),
+            TranscriptOutcome::Rejected
+        );
+        assert_eq!(
+            mode.turn_language(),
+            Some("it"),
+            "the rejected turn never reached the model, so it cannot pick the reply language"
+        );
+    }
+
+    /// Arming is a new conversation with a new person in front of it.
+    #[test]
+    fn a_new_conversation_starts_without_the_previous_language() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+
+        mode.disarm(DisarmReason::Manual).expect("armed");
+        assert_eq!(mode.turn_language(), None, "a disarm ends the conversation");
+
+        mode.arm("target", "desktop", true).expect("arm");
+        assert_eq!(
+            mode.turn_language(),
+            None,
+            "inheriting it would answer the next user in the previous one's language"
+        );
     }
 
     // --- The runtime loop -------------------------------------------------
@@ -1974,6 +2206,8 @@ mod tests {
         connected: std::cell::Cell<bool>,
         drain_error: RefCell<Option<String>>,
         transcript: String,
+        /// What the recogniser says this speech was, per call.
+        language: RefCell<Option<String>>,
         calls: std::cell::Cell<usize>,
         /// Run inside `transcribe`, to model work that lands while a whisper
         /// pass is still running.
@@ -1987,6 +2221,7 @@ mod tests {
                 connected: std::cell::Cell::new(true),
                 drain_error: RefCell::new(None),
                 transcript: transcript.to_string(),
+                language: RefCell::new(None),
                 calls: std::cell::Cell::new(0),
                 during_transcribe: RefCell::new(None),
             }
@@ -1994,6 +2229,11 @@ mod tests {
 
         fn feed(&self, samples: Vec<f32>) {
             self.chunks.borrow_mut().push_back(samples);
+        }
+
+        fn speaking(self, code: &str) -> Self {
+            *self.language.borrow_mut() = Some(code.to_string());
+            self
         }
     }
 
@@ -2009,12 +2249,15 @@ mod tests {
             self.connected.get()
         }
 
-        fn transcribe(&self, _audio: &[f32]) -> Result<String, String> {
+        fn transcribe(&self, _audio: &[f32]) -> Result<Transcript, String> {
             self.calls.set(self.calls.get() + 1);
             if let Some(during) = self.during_transcribe.borrow().as_ref() {
                 during();
             }
-            Ok(self.transcript.clone())
+            Ok(Transcript {
+                text: self.transcript.clone(),
+                language: self.language.borrow().clone(),
+            })
         }
     }
 
@@ -2592,7 +2835,7 @@ mod tests {
         let mode = std::sync::Arc::new(armed_shared());
         let generation = mode.lock().generation();
         mode.lock()
-            .accept_transcript(generation, "run the tests", 0);
+            .accept_transcript(generation, "run the tests", None, 0);
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::scope(|scope| {

@@ -422,6 +422,7 @@ pub fn delete_speech_asset(
 fn open_voice(
     config: &DictationConfig,
     library: &speech::library::SpeechLibrary,
+    language: &str,
 ) -> Result<(Arc<dyn speech::Speech>, String), String> {
     if !config.speech_command.is_empty() {
         // The user's own engine. It names its own voices inside its template,
@@ -431,24 +432,11 @@ fn open_voice(
         return Ok((Arc::new(engine), String::new()));
     }
 
-    // DEFERRED (2026-09-21) — "auto" is refused rather than resolved. Whisper
-    // does detect a language per utterance, but nothing yet carries that
-    // detection out of the transcript and into the turn, which is exactly what
-    // #822-7d7a exists to do. Refusing is the honest half of that story: a
-    // reply spoken in a language the user did not choose is worse than one
-    // that does not happen.
-    if config.language == "auto" {
-        return Err(
-            "Spoken replies need a fixed dictation language; Auto does not choose one yet"
-                .to_string(),
-        );
-    }
-
-    let asset = speech::assets::for_language_code(&config.language).ok_or_else(|| {
-        format!(
-            "No speech bundle ships for language \"{}\"",
-            config.language
-        )
+    let asset = speech::assets::for_language_code(language).ok_or_else(|| {
+        // Named rather than swapped for one we do ship. Speaking Italian into
+        // an English conversation is worse than saying nothing, and a model
+        // that is told *why* can write its reply as text instead.
+        format!("No speech bundle ships for language \"{language}\"")
     })?;
     let runtime = speech::assets::runtime();
     for needed in [runtime, asset] {
@@ -477,17 +465,72 @@ fn open_voice(
     Ok((engine, (*voice).to_string()))
 }
 
+/// The language this conversation is being held in.
+///
+/// A fixed setting answers for every turn, including the first. `auto` can only
+/// be answered by whoever spoke: [`HandsFree::turn_language`] carries what
+/// Whisper made of the last turn, and before anybody has spoken there is no
+/// answer at all — which is `None`, never a default.
+///
+/// Reading the mode is why this must not be called with the speaker lock held.
+fn conversation_language(config: &DictationConfig, dictation: &DictationState) -> Option<String> {
+    if config.language != "auto" {
+        return Some(config.language.clone());
+    }
+    dictation
+        .hands_free
+        .lock()
+        .turn_language()
+        .map(str::to_string)
+}
+
+/// The language a voice must be opened for, or why none can be.
+///
+/// Empty is a real answer here and means "not language-specific": a
+/// user-supplied engine picks its own language inside its command template, so
+/// there is nothing for us to choose and nothing that a change of detected
+/// language invalidates.
+fn speech_language(config: &DictationConfig, dictation: &DictationState) -> Result<String, String> {
+    if !config.speech_command.is_empty() {
+        return Ok(String::new());
+    }
+    conversation_language(config, dictation).ok_or_else(|| {
+        "Dictation language is Auto and nothing has been said yet, so there is no language to \
+         speak in"
+            .to_string()
+    })
+}
+
 /// Build the reply queue for a conversation that is being armed.
 ///
 /// Failure is not fatal to arming: hands-free without a voice is dictation,
 /// which still works. The reason travels back so the caller can say it once
 /// rather than leaving the model to discover it on its first `speak`.
+///
+/// Under Auto this fails at arm time by design — nobody has spoken, so no
+/// language is known. The queue is then built by the first [`speak`] that finds
+/// one, which is why that path must not assume this one succeeded.
 pub(crate) fn open_speaker(
     dictation: &DictationState,
     generation: u64,
 ) -> Result<speaker::Armed, String> {
     let config = get_dictation_config();
-    let (engine, voice) = open_voice(&config, &dictation.speech)?;
+    let language = speech_language(&config, dictation)?;
+    open_speaker_for(dictation, generation, &config, &language)
+}
+
+/// [`open_speaker`] with the language already resolved.
+///
+/// The split is a lock-order rule, not a convenience: resolving the language
+/// takes the hands-free lock, and this is called with the speaker lock held.
+/// Taking them in that order here would invert every other path in this file.
+fn open_speaker_for(
+    dictation: &DictationState,
+    generation: u64,
+    config: &DictationConfig,
+    language: &str,
+) -> Result<speaker::Armed, String> {
+    let (engine, voice) = open_voice(config, &dictation.speech, language)?;
     // The output device is the system default. Picking one is the Dictation
     // panel's job (#818-2a29); `config.device` is the *microphone* and using
     // it here would route replies to a capture device.
@@ -499,7 +542,32 @@ pub(crate) fn open_speaker(
     Ok(speaker::Armed {
         speaker: Arc::new(speaker::Speaker::new(engine, tapped, generation)),
         voice,
+        language: language.to_string(),
     })
+}
+
+/// Barge-in, pointed at the slot rather than at one queue.
+///
+/// The capture loop is started once, when the conversation is armed, and under
+/// Auto the queue it will have to interrupt does not exist until somebody
+/// speaks. Holding the slot means the loop interrupts whatever is speaking on
+/// the tick the user talks over it, including a voice built minutes later and a
+/// voice rebuilt because the language changed.
+struct ArmedSpeaker(Arc<parking_lot::Mutex<Option<speaker::Armed>>>);
+
+impl continuous::Interruptible for ArmedSpeaker {
+    fn hush(&self) {
+        // `try_lock`, because this runs on the capture loop and anything it
+        // waits for delays the next chunk of the user's own voice. The only
+        // writer is a rebuild in `speak`, which has already hushed the queue it
+        // is replacing and has not started the new one — so a missed lock here
+        // is a tick with nothing to interrupt, not a missed interruption.
+        if let Some(slot) = self.0.try_lock()
+            && let Some(armed) = slot.as_ref()
+        {
+            armed.speaker.hush();
+        }
+    }
 }
 
 fn speech_far_end(
@@ -558,6 +626,14 @@ pub struct SpeechStatus {
     pub unavailable_reason: String,
     /// The terminal replies are spoken into, absent when nothing is armed.
     pub session_id: Option<String>,
+    /// The language this conversation is being held in, as a two-letter code.
+    ///
+    /// The dictation setting when it names one, and what Whisper made of the
+    /// last turn when the setting is Auto. Empty means nobody has spoken yet
+    /// under Auto, which is the one state in which no reply can be spoken and
+    /// no reply language can be required — never a silent fall back to
+    /// English.
+    pub language: String,
     /// The turn a reply must belong to. Bumped by every interruption, so a
     /// model answering an older turn can be refused rather than played over
     /// whatever the user said next.
@@ -646,10 +722,29 @@ pub(crate) fn speak(
     let session_id = bound_session(dictation)?;
     caller.may_drive(&session_id)?;
 
-    let armed = dictation.speaker.lock();
-    let armed = armed
-        .as_ref()
-        .ok_or_else(|| speech_unavailable_reason(dictation))?;
+    // Everything that reads the mode happens before the speaker lock is taken,
+    // and the rebuild below is handed the answers. The two locks are always
+    // taken in this order.
+    let config = get_dictation_config();
+    let language = speech_language(&config, dictation)?;
+    let armed_at = dictation.hands_free.lock().generation();
+
+    let mut slot = dictation.speaker.lock();
+    // The queue is per language, so a conversation that changed language needs
+    // a new one. `hush` on the way out is what makes the change invalidate the
+    // replies written for the old language: it opens a new turn, and `say`
+    // refuses anything addressed to the turn before it.
+    let rebuild_at = match slot.as_ref() {
+        Some(armed) if armed.language == language => None,
+        Some(_) => slot.take().map(|previous| previous.speaker.hush()),
+        // Nothing yet: under Auto this is the first reply of the conversation,
+        // and the language only became knowable when the user spoke.
+        None => Some(armed_at),
+    };
+    if let Some(turn) = rebuild_at {
+        *slot = Some(open_speaker_for(dictation, turn, &config, &language)?);
+    }
+    let armed = slot.as_ref().expect("a queue was just built or kept");
     // The speaker's own counter, not the caller's guess: it is what `say`
     // compares against, and reading it here makes an interruption landing in
     // between refuse the reply rather than race it.
@@ -700,24 +795,6 @@ pub(crate) fn stop_speaking(
 /// filling the queue with ten minutes of audio.
 const MAX_SPOKEN_CHARS: usize = 2_000;
 
-/// Why speech is unavailable while hands-free is armed.
-///
-/// Re-derived rather than remembered, so a language downloaded after arming is
-/// reported as "download it and re-arm" rather than as whatever was wrong
-/// when the conversation started.
-fn speech_unavailable_reason(dictation: &DictationState) -> String {
-    match open_voice(&get_dictation_config(), &dictation.speech) {
-        Err(reason) => reason,
-        // The voice resolves but no speaker exists, so either the audio device
-        // failed when the conversation was armed or the bundle arrived since.
-        // Either way re-arming is the fix, and saying so beats reporting
-        // everything as fine while nothing can be spoken.
-        Ok(_) => {
-            "Speech was not available when hands-free was armed; re-arm to try again".to_string()
-        }
-    }
-}
-
 /// [`speech_status`] for a caller whose right to this conversation must be
 /// checked first.
 ///
@@ -743,16 +820,34 @@ pub(crate) fn speech_status_for(
 /// reply it already sent.
 pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>) -> SpeechStatus {
     let session_id = bound_session(dictation).ok();
+    let config = get_dictation_config();
+    // Everything that reads the mode is read here, before the speaker lock: the
+    // language of the conversation, the turn a caller would address, and
+    // whether a voice could be opened at all. Asking any of them later would
+    // take the two locks in the opposite order to `speak`.
+    let language = conversation_language(&config, dictation).unwrap_or_default();
+    let openable = session_id.as_ref().map(|_| {
+        speech_language(&config, dictation)
+            .and_then(|language| open_voice(&config, &dictation.speech, &language).map(|_| ()))
+    });
+    let armed_at = dictation.hands_free.lock().generation();
+
     let armed = dictation.speaker.lock();
     let Some(armed) = armed.as_ref() else {
+        // No voice open. Under Auto that is every moment before the first
+        // turn, and it is not a failure: `available` answers "would a reply be
+        // accepted", which is a question about the language and the bundle
+        // rather than about whether anything has been said yet.
         return SpeechStatus {
-            available: false,
-            unavailable_reason: match &session_id {
+            available: matches!(openable, Some(Ok(()))),
+            unavailable_reason: match &openable {
                 None => "Hands-free is not armed".to_string(),
-                Some(_) => speech_unavailable_reason(dictation),
+                Some(Err(reason)) => reason.clone(),
+                Some(Ok(())) => String::new(),
             },
             session_id,
-            turn: 0,
+            language,
+            turn: armed_at,
             voice: String::new(),
             queued: 0,
             rendering: false,
@@ -781,6 +876,7 @@ pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>)
         available: true,
         unavailable_reason: String::new(),
         session_id,
+        language,
         turn: status.generation,
         voice: armed.voice.clone(),
         queued: status.queued,
@@ -1404,17 +1500,21 @@ impl continuous::VoiceEndpoint for DesktopVoiceEndpoint {
         self.alive.load(Ordering::Acquire)
     }
 
-    fn transcribe(&self, audio: &[f32]) -> Result<String, String> {
+    fn transcribe(&self, audio: &[f32]) -> Result<continuous::Transcript, String> {
         let result = self
             .transcriber
             .transcribe(audio, self.language.as_deref(), self.gates)?;
         // A gated segment is not an error and not a message: whisper decided
         // this was not speech, so the utterance is dropped the same way an
-        // empty transcript is.
+        // empty transcript is — and with it goes the language, which would
+        // otherwise be whatever whisper made of room noise.
         Ok(if result.skip_reason.is_some() {
-            String::new()
+            continuous::Transcript::default()
         } else {
-            result.text
+            continuous::Transcript {
+                text: result.text,
+                language: result.language,
+            }
         })
     }
 }
@@ -1557,19 +1657,22 @@ pub(crate) fn arm_hands_free_with(
     // downloaded a language bundle gets; the reason is logged once here and
     // reported by the voice capability rather than being discovered per reply.
     let generation = dictation.hands_free.lock().generation();
+    match open_speaker(dictation, generation) {
+        Ok(armed) => *dictation.speaker.lock() = Some(armed),
+        Err(reason) => {
+            // Not a failure to arm, and under Auto not even a failure: no
+            // language is known until the user speaks, so the first reply
+            // opens the voice instead.
+            tracing::info!("dictation: armed without a voice yet: {reason}");
+            *dictation.speaker.lock() = None;
+        }
+    }
+    // The slot, not the queue in it. A port bound to the queue built above
+    // would be bound to nothing whenever that build failed — which is every
+    // Auto conversation — and barge-in would stay dead for the whole session
+    // even once a later reply opened a voice.
     let interruptible: Option<Arc<dyn continuous::Interruptible>> =
-        match open_speaker(dictation, generation) {
-            Ok(armed) => {
-                let port = Arc::clone(&armed.speaker) as Arc<dyn continuous::Interruptible>;
-                *dictation.speaker.lock() = Some(armed);
-                Some(port)
-            }
-            Err(reason) => {
-                tracing::info!("dictation: armed without spoken replies: {reason}");
-                *dictation.speaker.lock() = None;
-                None
-            }
-        };
+        Some(Arc::new(ArmedSpeaker(Arc::clone(&dictation.speaker))));
 
     // DEFERRED (2026-09-21) — the segmenter runs on its compiled defaults.
     // Hold-back is read from user config just above; pre-roll, trailing
@@ -1772,16 +1875,47 @@ pub fn get_dictation_config() -> DictationConfig {
 }
 
 #[tauri::command]
-pub fn set_dictation_config(config: DictationConfig) -> Result<(), String> {
+pub fn set_dictation_config(
+    config: DictationConfig,
+    dictation: State<'_, DictationState>,
+) -> Result<(), String> {
+    save_dictation_config(config, Some(&dictation))
+}
+
+/// [`set_dictation_config`] for a caller that may not have the dictation state.
+///
+/// `None` only affects the live conversation: the file is written either way,
+/// and the next reply re-reads it. A transport that can reach `DictationState`
+/// passes it so a language change takes effect on the voice that is speaking
+/// right now, rather than on the one after it.
+pub(crate) fn save_dictation_config(
+    config: DictationConfig,
+    dictation: Option<&DictationState>,
+) -> Result<(), String> {
     // DEFERRED (2026-09-21) — switching the input device while hands-free is
     // armed should release the endpoint the mode bound to (that is an owner
-    // disconnect, see `release_desktop_endpoint`). It needs `DictationState`
-    // here, and this function's signature is shared with the HTTP route in
-    // `mcp_http/dictation_routes.rs`, which story 814-6d13 pass 4 may not edit.
+    // disconnect, see `release_desktop_endpoint`). The state is reachable here
+    // now, but the endpoint swap needs the runtime to be restarted around it,
+    // which is a change to `arm_hands_free_with` rather than to this function.
     // Until then the mode keeps capturing from the device it armed with.
+    let previous = get_dictation_config();
     crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)?;
     // The configured model is part of the cached status snapshot.
     invalidate_model_snapshot();
+    // A voice belongs to a language and to an engine. Change either and every
+    // reply already queued for the old one is wrong — a sentence half spoken
+    // in Italian does not become English by finishing it. Dropping the queue
+    // stops the device and cancels what is in flight; the next reply opens a
+    // voice for the language now configured.
+    //
+    // Only on those two fields. Every other setting here is a threshold or a
+    // hotkey, and cutting a reply off mid-word because somebody moved a slider
+    // would be a worse bug than the one this prevents.
+    let voice_changed =
+        previous.language != config.language || previous.speech_command != config.speech_command;
+    if voice_changed && let Some(dictation) = dictation {
+        *dictation.speaker.lock() = None;
+    }
     Ok(())
 }
 
@@ -1826,8 +1960,11 @@ mod tests {
             true
         }
 
-        fn transcribe(&self, _audio: &[f32]) -> Result<String, String> {
-            Ok(self.transcript.clone())
+        fn transcribe(&self, _audio: &[f32]) -> Result<continuous::Transcript, String> {
+            Ok(continuous::Transcript {
+                text: self.transcript.clone(),
+                language: Some("it".to_string()),
+            })
         }
     }
 
@@ -2000,10 +2137,13 @@ mod tests {
     fn arming_takes_the_hold_back_from_the_configuration() {
         let dir = tempfile::tempdir().expect("tempdir");
         let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-        set_dictation_config(DictationConfig {
-            hands_free_hold_back_ms: 4_000,
-            ..Default::default()
-        })
+        save_dictation_config(
+            DictationConfig {
+                hands_free_hold_back_ms: 4_000,
+                ..Default::default()
+            },
+            None,
+        )
         .expect("config save");
         let dictation = DictationState::new();
 
@@ -2039,11 +2179,14 @@ mod tests {
     fn a_configured_activation_phrase_decides_which_speech_reaches_the_queue() {
         let dir = tempfile::tempdir().expect("tempdir");
         let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
-        set_dictation_config(DictationConfig {
-            hands_free_activation_phrase: "ciao tuic".to_string(),
-            hands_free_hold_back_ms: 100,
-            ..Default::default()
-        })
+        save_dictation_config(
+            DictationConfig {
+                hands_free_activation_phrase: "ciao tuic".to_string(),
+                hands_free_hold_back_ms: 100,
+                ..Default::default()
+            },
+            None,
+        )
         .expect("config save");
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::test_support::agent_session(&state, "voice-gate", crate::pty::SHELL_BUSY);
@@ -2073,8 +2216,9 @@ mod tests {
             .map(|entry| entry.text().to_string())
             .expect("the queued entry");
         assert_eq!(
-            text, "run the tests",
-            "the phrase addresses the tool and may not reach the model"
+            text, "run the tests (reply in Italian)",
+            "the phrase addresses the tool and may not reach the model, and the language the \
+             user spoke it in must"
         );
         disarm_hands_free(&state, &dictation);
 
@@ -2270,10 +2414,13 @@ mod tests {
     /// Persist a config that names `model`, then clear the snapshot cache so the
     /// next read observes it.
     fn write_model_config(model: &str) {
-        set_dictation_config(DictationConfig {
-            model: model.to_string(),
-            ..Default::default()
-        })
+        save_dictation_config(
+            DictationConfig {
+                model: model.to_string(),
+                ..Default::default()
+            },
+            None,
+        )
         .expect("config save");
     }
 
@@ -2535,9 +2682,38 @@ mod tests {
         }
     }
 
+    /// A configuration directory of this test's own, holding `config`.
+    ///
+    /// Everything that reaches a voice now reads the dictation settings, so a
+    /// test without this one reads Boss's — and passes or fails depending on
+    /// the language he happens to dictate in. The returned value holds both the
+    /// directory and the process-wide override; drop it and the next test gets
+    /// its own.
+    #[must_use]
+    fn config_of_this_test(config: DictationConfig) -> (tempfile::TempDir, impl Drop) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        save_dictation_config(config, None).expect("config save");
+        (dir, guard)
+    }
+
     /// A conversation armed for `session_id`, with a voice whose rendering the
     /// test controls through the returned gate.
-    fn armed_with_a_voice(session_id: &str) -> (DictationState, Arc<parking_lot::Mutex<()>>) {
+    ///
+    /// The configuration comes back with it because it has to outlive the
+    /// conversation: a dropped override sends the next `speak` looking for the
+    /// language in the real config directory.
+    fn armed_with_a_voice(
+        session_id: &str,
+    ) -> (
+        DictationState,
+        Arc<parking_lot::Mutex<()>>,
+        (tempfile::TempDir, impl Drop),
+    ) {
+        let config = config_of_this_test(DictationConfig {
+            language: "it".to_string(),
+            ..Default::default()
+        });
         let dictation = DictationState::new();
         let generation = dictation
             .hands_free
@@ -2554,8 +2730,9 @@ mod tests {
                 generation,
             )),
             voice: "giovanni".to_string(),
+            language: "it".to_string(),
         });
-        (dictation, gate)
+        (dictation, gate, config)
     }
 
     /// Poll until `id` reaches a state the test is waiting for, or say what it
@@ -2582,7 +2759,7 @@ mod tests {
     /// alone say what somebody else's conversation is doing.
     #[test]
     fn a_model_bound_to_another_terminal_can_neither_speak_nor_read_the_queue() {
-        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
 
         let refused = speak(&dictation, Caller::Model("session-b"), "hello", None).unwrap_err();
         assert!(
@@ -2628,7 +2805,7 @@ mod tests {
     /// refused rather than played over whatever was said next.
     #[test]
     fn a_reply_written_for_a_turn_the_user_talked_over_is_refused() {
-        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
         let before = speech_status(&dictation, None).turn;
 
         let after = stop_speaking(&dictation, Caller::Owner).expect("stop").turn;
@@ -2653,7 +2830,7 @@ mod tests {
     /// produce `finished`.
     #[test]
     fn accepting_a_reply_is_never_reported_as_having_been_heard() {
-        let (dictation, gate) = armed_with_a_voice("session-a");
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
         let held = gate.lock();
 
         let accepted = speak(&dictation, Caller::Owner, "a spoken reply", None).expect("accepted");
@@ -2682,7 +2859,7 @@ mod tests {
     /// able to tell them apart.
     #[test]
     fn an_utterance_this_conversation_never_had_is_reported_as_unknown() {
-        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
 
         let status = speech_status(&dictation, Some("4242"));
         let asked = status.utterance.expect("asking must produce an answer");
@@ -2699,7 +2876,7 @@ mod tests {
     /// one runaway render; it cannot stop a model queueing several.
     #[test]
     fn an_empty_or_oversized_reply_is_refused_before_it_reaches_the_queue() {
-        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
 
         assert_eq!(
             speak(&dictation, Caller::Owner, "   \n ", None).unwrap_err(),
@@ -2719,7 +2896,7 @@ mod tests {
     /// store reads over IPC and over HTTP, in the casing the wire uses.
     #[test]
     fn the_speech_status_wire_shape_names_every_field_a_client_reads() {
-        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
         let accepted = speak(&dictation, Caller::Owner, "hello", None).expect("accepted");
 
         let wire = serde_json::to_value(speech_status(&dictation, Some(&accepted.utterance_id)))
@@ -2728,6 +2905,7 @@ mod tests {
         assert_eq!(wire["available"], serde_json::json!(true));
         assert_eq!(wire["unavailableReason"], serde_json::json!(""));
         assert_eq!(wire["sessionId"], serde_json::json!("session-a"));
+        assert_eq!(wire["language"], serde_json::json!("it"));
         assert_eq!(wire["voice"], serde_json::json!("giovanni"));
         assert!(wire["turn"].is_u64());
         assert!(wire["queued"].is_u64());
@@ -2741,12 +2919,180 @@ mod tests {
         assert!(wire["utterance"]["state"].is_string());
     }
 
+    /// Auto has no language until somebody speaks, and a voice assistant that
+    /// guesses one guesses English. It has to say so instead.
+    #[test]
+    fn under_auto_there_is_no_language_and_so_no_voice_until_somebody_speaks() {
+        let _config = config_of_this_test(DictationConfig {
+            language: "auto".to_string(),
+            ..Default::default()
+        });
+        let dictation = DictationState::new();
+        dictation
+            .hands_free
+            .lock()
+            .arm("session-a", "desktop", true)
+            .expect("arm");
+
+        let before = speech_status(&dictation, None);
+        assert!(!before.available);
+        assert_eq!(before.language, "", "no turn, no language, and no default");
+        assert!(
+            before.unavailable_reason.contains("Auto"),
+            "the state has to name Auto as the reason: {}",
+            before.unavailable_reason
+        );
+        assert!(
+            speak(&dictation, Caller::Owner, "ciao", None)
+                .unwrap_err()
+                .contains("Auto")
+        );
+
+        // The user speaks Italian. The conversation now has a language, and
+        // the reason changes from "nothing said yet" to whatever is wrong with
+        // Italian on this machine — here, a bundle nobody downloaded.
+        let generation = dictation.hands_free.lock().generation();
+        dictation
+            .hands_free
+            .lock()
+            .accept_transcript(generation, "ciao", Some("it"), 0);
+
+        let after = speech_status(&dictation, None);
+        assert_eq!(
+            after.language, "it",
+            "Auto must expose what Whisper actually detected"
+        );
+        assert!(
+            !after.unavailable_reason.contains("Auto"),
+            "the detection answered Auto's question; what is left is about this machine: {}",
+            after.unavailable_reason
+        );
+        assert!(
+            after.unavailable_reason.contains("not downloaded"),
+            "on a machine with no speech assets that is what is missing: {}",
+            after.unavailable_reason
+        );
+    }
+
+    /// A language Whisper transcribes and no bundle speaks is reported as
+    /// itself. Substituting a voice we do ship is how an Italian conversation
+    /// gets answered in English.
+    #[test]
+    fn a_language_no_bundle_speaks_is_named_rather_than_replaced() {
+        let _config = config_of_this_test(DictationConfig {
+            language: "ko".to_string(),
+            ..Default::default()
+        });
+        let dictation = DictationState::new();
+        dictation
+            .hands_free
+            .lock()
+            .arm("session-a", "desktop", true)
+            .expect("arm");
+
+        let status = speech_status(&dictation, None);
+        assert!(!status.available);
+        assert_eq!(status.language, "ko");
+        assert_eq!(
+            status.unavailable_reason,
+            "No speech bundle ships for language \"ko\""
+        );
+        assert!(
+            speak(&dictation, Caller::Owner, "안녕", None)
+                .unwrap_err()
+                .contains("ko")
+        );
+    }
+
+    /// Criterion 4: the setting moves, and every reply written for the old one
+    /// stops. Silence is the only honest outcome — a half-spoken Italian
+    /// sentence does not become English by finishing it.
+    #[test]
+    fn changing_the_language_takes_the_voice_away_from_the_replies_written_for_it() {
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+        assert!(speech_status(&dictation, None).queued > 0 || dictation.speaker.lock().is_some());
+
+        save_dictation_config(
+            DictationConfig {
+                language: "en".to_string(),
+                ..Default::default()
+            },
+            Some(&dictation),
+        )
+        .expect("config save");
+
+        assert!(
+            dictation.speaker.lock().is_none(),
+            "the queue built for Italian may not speak English replies"
+        );
+        let status = speech_status(&dictation, None);
+        assert_eq!(status.language, "en", "the model context moves with it");
+        assert!(
+            !status.available,
+            "and nothing is speakable until a voice for the new language opens"
+        );
+    }
+
+    /// The other half of that rule. Every dictation setting goes through the
+    /// same function, and cutting a reply off mid-word because somebody moved
+    /// a threshold slider would be the worse bug.
+    #[test]
+    fn moving_a_threshold_leaves_the_voice_alone() {
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        let accepted = speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+
+        save_dictation_config(
+            DictationConfig {
+                language: "it".to_string(),
+                rms_threshold: 0.05,
+                ..Default::default()
+            },
+            Some(&dictation),
+        )
+        .expect("config save");
+
+        assert!(dictation.speaker.lock().is_some());
+        assert_eq!(
+            speech_status(&dictation, Some(&accepted.utterance_id))
+                .utterance
+                .expect("asked")
+                .state
+                .is_empty(),
+            false,
+            "the reply in flight still has a fate to report"
+        );
+    }
+
+    /// Barge-in reaches whatever is speaking now, not the queue that existed
+    /// when the capture loop started — which under Auto is no queue at all.
+    #[test]
+    fn barge_in_interrupts_the_voice_that_is_open_at_the_time() {
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        let port = ArmedSpeaker(Arc::clone(&dictation.speaker));
+        let before = speech_status(&dictation, None).turn;
+
+        continuous::Interruptible::hush(&port);
+
+        assert_eq!(
+            speech_status(&dictation, None).turn,
+            before + 1,
+            "the interruption has to open a new turn, or the model's next reply is refused"
+        );
+
+        // And an empty slot is a tick with nothing to interrupt, not a panic:
+        // the capture loop runs on every conversation, including the ones that
+        // never opened a voice.
+        *dictation.speaker.lock() = None;
+        continuous::Interruptible::hush(&port);
+    }
+
     /// Disarming takes the voice away before the engine goes, so a reply
     /// queued against the old conversation cannot be spoken into the next one.
     #[test]
     fn disarming_drops_the_voice_with_the_conversation() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
-        let (dictation, _gate) = armed_with_a_voice("session-a");
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
 
         disarm_hands_free(&state, &dictation);
 

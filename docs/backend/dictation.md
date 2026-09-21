@@ -905,13 +905,81 @@ load-bearing:
   level trigger would open one per 50 ms tick and every reply the model wrote
   for the turn in progress would be refused as stale while the user was still
   speaking one sentence.
-- **A port, not the queue.** A conversation armed without a voice holds `None`
-  and interrupts nothing, which is ordinary dictation; and the loop stays
-  testable without an audio device or a loaded synthesis graph.
+- **The slot, not the queue.** The port is `commands::ArmedSpeaker`, which holds
+  `DictationState.speaker` itself rather than the `Speaker` that was in it when
+  the loop started. Under Auto there *is* no queue at arm time — the language is
+  unknown until somebody speaks — so a port bound to one queue would be bound to
+  nothing for the whole conversation. It `try_lock`s, because this runs on the
+  capture loop and anything it waits for delays the next chunk of the user's own
+  voice; the only writer is a rebuild in `speak`, which has already hushed the
+  queue it is replacing.
 
-The queue is built in `arm_hands_free_with` **before** the runtime is spawned,
-for this reason alone: a loop started first would spend its first ticks unable
-to interrupt anything.
+The queue is built in `arm_hands_free_with` **before** the runtime is spawned
+whenever a language is already known, for this reason alone: a loop started
+first would spend its first ticks unable to interrupt anything.
+
+## The language of the conversation
+
+Boss's requirement is one sentence: **the model and the voice use the language
+Whisper is transcribing, and nothing replies in English by accident.** Four
+places enforce it, and they all read the same source.
+
+| Where | What it does |
+|---|---|
+| `transcribe.rs` | `TranscribeResult.language` — the two-letter code whisper used, read off `full_lang_id_from_state()` |
+| `continuous.rs` | `HandsFree.turn_language`, set by `accept_transcript`, cleared on arm and disarm |
+| `continuous.rs` | `compose_entry` appends `(reply in <Name>)` to every voice entry |
+| `commands.rs` | `speech_language` picks the voice, and `Armed.language` records which one |
+
+**There is one language, not one per subsystem.** The dictation setting is the
+source when it names a language; under `auto` the source is what whisper
+actually detected, carried out of the transcript by `Transcript.language`. There
+is no separate TTS language setting, and the `voice` MCP tool takes no language
+and no voice — a model that could pass either would be a second source, and the
+two would disagree the first time the user switched languages.
+
+**`auto` before the first turn has no language, and that is a state.**
+`speech_status` reports `available: false` with a reason naming Auto, and
+`speak` refuses. It is the one moment in a conversation where no reply can be
+spoken, and inventing English to fill it is exactly the bug this exists to
+prevent. The voice opens on the first `speak` after somebody has spoken.
+
+**Confidence is not available on this path.** `whisper_full_lang_id_from_state`
+returns the id and nothing else, so an ambiguous detection is indistinguishable
+from a certain one. The probabilities live behind `WhisperState::lang_detect`,
+which needs its own mel and encoder pass and would double the cost of every
+utterance. What *is* handled is a missing answer: an id that maps to no code
+leaves `language: None`, which reaches the model as the transcript alone — no
+requirement rather than a guessed one.
+
+**A language with no bundle is named, never substituted.** `for_language_code`
+answers `None` for Korean, and the status says `No speech bundle ships for
+language "ko"`. Picking the Italian voice because it is installed is how an
+assistant answers a Korean conversation in Italian.
+
+**The requirement travels in the Compose entry.** `esegui i test` is queued as
+`esegui i test (reply in Italian)`. In the entry rather than in a mode hint,
+because hints are optional and this is not; on one line, because the queue types
+the entry into a terminal and submits it, and a newline in the middle submits
+half a sentence. The English name comes from `dictation/language.rs`, whose
+table is checked against `WHISPER_LANGUAGES` in `src/stores/dictation.ts` by a
+test that reads the TypeScript.
+
+**Changing the language stops the replies written for the old one.**
+`save_dictation_config` drops `DictationState.speaker` when `language` or
+`speech_command` moves — and on nothing else, because cutting a reply off
+mid-word because somebody moved a threshold slider would be the worse bug. The
+next `speak` opens a voice for the language now configured. The same rebuild
+happens mid-conversation under Auto: `speak` compares `Armed.language` against
+the turn language and, when they differ, hushes the old queue before building
+the new one. That `hush` is what invalidates the replies in flight — it opens a
+new turn, and `say` refuses anything addressed to the turn before it.
+
+**Lock order: the mode, then the speaker.** Resolving a language takes
+`hands_free`; rebuilding takes `speaker`. `speak` and `speech_status` both
+resolve everything they need from the mode *before* taking the speaker lock, and
+`open_speaker_for` is handed the language rather than looking it up, so the
+rebuild under the speaker lock cannot invert the order.
 
 ## Hearing the user over our own voice (`echo.rs`)
 

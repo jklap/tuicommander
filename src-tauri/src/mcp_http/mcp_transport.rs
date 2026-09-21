@@ -1232,7 +1232,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "voice",
-            "description": "Speak a reply out loud, when the user is talking to you hands-free.\n\nOnly works while the user has armed hands-free dictation for YOUR terminal: speech belongs to that conversation, not to the application. Call action=status first — if available is false, the reason says why and you must reply in text as usual. Nothing here replaces your normal reply; speaking is in addition to it.\n\nAccepting a reply is NOT the same as the user hearing it. action=speak returns an utterance_id in state 'queued'; rendering takes seconds and the user can talk over it at any moment. Poll action=status with that utterance_id to learn the outcome: 'finished' means it was heard to the end, 'interrupted' means the user started talking (normal, not an error), 'failed' means it was never audible.\n\nActions:\n- speak: Queue one spoken reply. Requires text (max 2000 characters). Optional turn: the turn you are answering, from an earlier status or from the hands-free notice. Supply it — a reply written for a turn the user has already talked over is then refused instead of spoken over whatever they said next. Omitting it means 'right now'. Returns {utterance_id, state, turn}.\n- stop: Stop talking immediately and drop anything queued. Opens a new turn. Use it when you realise the reply in progress is wrong.\n- status: {available, unavailable_reason, session_id, turn, voice, queued, rendering, speaking, last_error}. Optional utterance_id adds {utterance: {utterance_id, state, error?}} for that one reply; a reply too old to remember comes back as state 'unknown'.",
+            "description": "Speak a reply out loud, when the user is talking to you hands-free.\n\nOnly works while the user has armed hands-free dictation for YOUR terminal: speech belongs to that conversation, not to the application. Call action=status first — if available is false, the reason says why and you must reply in text as usual. Nothing here replaces your normal reply; speaking is in addition to it.\n\nYou do not choose the language or the voice. Both belong to the conversation: the voice is the one for the language the user is speaking, reported as status.language, and it will happily pronounce text in any other language badly. Write the reply in status.language — the same language the hands-free entry told you to answer in.\n\nAccepting a reply is NOT the same as the user hearing it. action=speak returns an utterance_id in state 'queued'; rendering takes seconds and the user can talk over it at any moment. Poll action=status with that utterance_id to learn the outcome: 'finished' means it was heard to the end, 'interrupted' means the user started talking (normal, not an error), 'failed' means it was never audible.\n\nActions:\n- speak: Queue one spoken reply. Requires text (max 2000 characters). Optional turn: the turn you are answering, from an earlier status or from the hands-free notice. Supply it — a reply written for a turn the user has already talked over is then refused instead of spoken over whatever they said next. Omitting it means 'right now'. Returns {utterance_id, state, turn}.\n- stop: Stop talking immediately and drop anything queued. Opens a new turn. Use it when you realise the reply in progress is wrong.\n- status: {available, unavailable_reason, session_id, language, turn, voice, queued, rendering, speaking, last_error}. Optional utterance_id adds {utterance: {utterance_id, state, error?}} for that one reply; a reply too old to remember comes back as state 'unknown'.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: speak, stop, status" },
                 "text": { "type": "string", "description": "What to say, max 2000 characters (action=speak, required)" },
@@ -7751,6 +7751,36 @@ mod tests {
         assert!(
             description.contains("available is false"),
             "the tool exists whether or not it can speak, so it must say how to tell"
+        );
+    }
+
+    /// The dictation language is the single source for what is heard and what
+    /// is said. A model that could pass a language or a voice here would be a
+    /// second source, and the two would disagree the first time the user
+    /// switched languages.
+    #[test]
+    fn a_model_cannot_choose_the_language_or_the_voice_it_is_spoken_in() {
+        let definition = native_tool_named("voice");
+        let properties = definition["inputSchema"]["properties"]
+            .as_object()
+            .expect("properties");
+
+        let mut accepted: Vec<&str> = properties.keys().map(String::as_str).collect();
+        accepted.sort_unstable();
+        assert_eq!(
+            accepted,
+            ["action", "text", "turn", "utterance_id"],
+            "a new input here is a new way for a model to override the user's language"
+        );
+
+        let description = definition["description"].as_str().expect("description");
+        assert!(
+            description.contains("do not choose the language"),
+            "and the model has to be told so, not merely prevented: {description}"
+        );
+        assert!(
+            description.contains("status.language"),
+            "the one field it must write its reply in has to be named: {description}"
         );
     }
 
