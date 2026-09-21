@@ -33,6 +33,8 @@ export interface RepoSettings {
 	/** null = inherit from repoDefaultsStore */
 	copyUntrackedFiles: boolean | null;
 	/** null = inherit from repoDefaultsStore */
+	warmIgnoredDirectories: boolean | null;
+	/** null = inherit from repoDefaultsStore */
 	setupScript: string | null;
 	/** null = inherit from repoDefaultsStore */
 	runScript: string | null;
@@ -91,6 +93,7 @@ export interface EffectiveRepoSettings {
 	baseBranch: string;
 	copyIgnoredFiles: boolean;
 	copyUntrackedFiles: boolean;
+	warmIgnoredDirectories: boolean;
 	setupScript: string;
 	runScript: string;
 	archiveScript: string;
@@ -122,6 +125,7 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 	| "baseBranch"
 	| "copyIgnoredFiles"
 	| "copyUntrackedFiles"
+	| "warmIgnoredDirectories"
 	| "setupScript"
 	| "runScript"
 	| "archiveScript"
@@ -143,6 +147,7 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 	baseBranch: null,
 	copyIgnoredFiles: null,
 	copyUntrackedFiles: null,
+	warmIgnoredDirectories: null,
 	setupScript: null,
 	runScript: null,
 	archiveScript: null,
@@ -167,6 +172,7 @@ interface RepoLocalConfig {
 	base_branch?: string;
 	copy_ignored_files?: boolean;
 	copy_untracked_files?: boolean;
+	warm_ignored_directories?: boolean;
 	// Script fields intentionally omitted — unsafe without TOFU prompt.
 	worktree_storage?: WorktreeStorage;
 	delete_branch_on_remove?: boolean;
@@ -260,6 +266,8 @@ function createRepoSettingsStore() {
 			s.copyIgnoredFiles ?? local()?.copy_ignored_files ?? repoDefaultsStore.state.copyIgnoredFiles,
 		copyUntrackedFiles: (s, local) =>
 			s.copyUntrackedFiles ?? local()?.copy_untracked_files ?? repoDefaultsStore.state.copyUntrackedFiles,
+		warmIgnoredDirectories: (s, local) =>
+			s.warmIgnoredDirectories ?? local()?.warm_ignored_directories ?? repoDefaultsStore.state.warmIgnoredDirectories,
 		// SECURITY: .tuic.json scripts are NOT merged here — a malicious repo could
 		// inject arbitrary shell commands via committed .tuic.json. Scripts must come
 		// from per-repo user settings or global defaults only. A future trust-on-first-use
@@ -366,6 +374,7 @@ function createRepoSettingsStore() {
 				baseBranch: resolvers.baseBranch(settings, local),
 				copyIgnoredFiles: resolvers.copyIgnoredFiles(settings, local),
 				copyUntrackedFiles: resolvers.copyUntrackedFiles(settings, local),
+				warmIgnoredDirectories: resolvers.warmIgnoredDirectories(settings, local),
 				setupScript: resolvers.setupScript(settings, local),
 				runScript: resolvers.runScript(settings, local),
 				archiveScript: resolvers.archiveScript(settings, local),

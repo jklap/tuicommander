@@ -211,10 +211,17 @@ describe("Sidebar", () => {
 		settingsStore.setShowPrBadges(true);
 		settingsStore.setShowGitState(true);
 		_resetMergedActivityAccum();
+		// Every branch row with a worktreePath fires RepoSection's warm-status
+		// poll-on-mount (pollWarmStatusOnce) unless warmState is already set —
+		// stub fetch so that hits this mock instead of a real, never-resolving
+		// network call, which otherwise leaks a promise across every test in
+		// this file (mirrors RepoSection.test.tsx's own default stub).
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) }));
 	});
 
 	afterEach(() => {
 		vi.useRealTimers();
+		vi.unstubAllGlobals();
 	});
 
 	describe("empty state", () => {

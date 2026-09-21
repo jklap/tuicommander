@@ -165,6 +165,24 @@ pub(super) async fn get_worktree_setup_status_http(
     }
 }
 
+/// Poll the current state of a worktree's background warm step
+/// (`worktree::run_worktree_warm`, the setup chain's new first stage) —
+/// sibling to [`get_worktree_setup_status_http`], not a merge into it (see
+/// `WorktreeWarmStatus`'s doc comment for why). Read-only, no
+/// `require_local_or_auth` gate needed, same as its sibling.
+pub(super) async fn get_worktree_warm_status_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<WorktreeWarmStatusQuery>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&q.repo_path) {
+        return e.into_response();
+    }
+    match crate::worktree::get_worktree_warm_status(&state, &q.repo_path, &q.branch) {
+        Some(status) => Json(status).into_response(),
+        None => Json(serde_json::json!({"state": "unknown"})).into_response(),
+    }
+}
+
 pub(super) async fn create_worktree_shared(
     state: &Arc<AppState>,
     base_repo: String,
@@ -902,6 +920,203 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_worktree_shared_tracks_warm_status_through_to_completed() {
+        // Mirrors create_worktree_shared_tracks_setup_status_through_to_completed
+        // for the sibling WorktreeWarmStatus cache — proves the new first stage
+        // of spawn_worktree_setup_chain is tracked the same way the setup
+        // script always has been.
+        let repo = create_temp_git_repo();
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        create_worktree_shared(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "warm-status-branch".to_string(),
+            None,
+        )
+        .await
+        .expect("worktree should be created");
+
+        // spawn_worktree_setup_chain inserts a Running placeholder synchronously
+        // before create_worktree_shared returns — must never still be
+        // "untracked" at this point.
+        let immediate = crate::worktree::get_worktree_warm_status(
+            &state,
+            repo.path().to_string_lossy().as_ref(),
+            "warm-status-branch",
+        );
+        assert!(
+            immediate.is_some(),
+            "warm status must be tracked synchronously, before the background chain finishes"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut final_status = None;
+        while std::time::Instant::now() < deadline {
+            match crate::worktree::get_worktree_warm_status(
+                &state,
+                repo.path().to_string_lossy().as_ref(),
+                "warm-status-branch",
+            ) {
+                Some(s @ crate::state::WorktreeWarmStatus::Completed { .. }) => {
+                    final_status = Some(s);
+                    break;
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        // The fixture repo has no ignored directories, so this settles on
+        // Completed{warmed: 0, warnings: []} — nothing to warm, not disabled.
+        assert_eq!(
+            final_status,
+            Some(crate::state::WorktreeWarmStatus::Completed {
+                warmed: 0,
+                warnings: Vec::new(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_worktree_shared_tracks_skipped_when_warming_is_disabled() {
+        let repo = create_temp_git_repo();
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        crate::config::save_repo_settings(crate::config::RepoSettingsMap {
+            repos: [(
+                repo.path().to_string_lossy().to_string(),
+                crate::config::RepoSettingsEntry {
+                    path: repo.path().to_string_lossy().to_string(),
+                    warm_ignored_directories: Some(false),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })
+        .expect("save repo settings");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        create_worktree_shared(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "warm-disabled-branch".to_string(),
+            None,
+        )
+        .await
+        .expect("worktree should be created");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut final_status = None;
+        while std::time::Instant::now() < deadline {
+            match crate::worktree::get_worktree_warm_status(
+                &state,
+                repo.path().to_string_lossy().as_ref(),
+                "warm-disabled-branch",
+            ) {
+                Some(s @ crate::state::WorktreeWarmStatus::Skipped) => {
+                    final_status = Some(s);
+                    break;
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        assert_eq!(
+            final_status,
+            Some(crate::state::WorktreeWarmStatus::Skipped),
+            "must settle on Skipped, never Completed/Running, when warm_ignored_directories is off"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_worktree_shared_warms_before_the_file_sync_begins() {
+        // Mirrors create_worktree_shared_runs_the_file_sync_before_the_setup_script's
+        // ordering proof, one stage earlier: warm must resolve before the sync
+        // stage's own effects (an ignored file landing via copy_ignored_files)
+        // are observable, preserving the order warm always had when it ran
+        // synchronously before this chain existed at all.
+        let repo = create_temp_git_repo();
+        std::fs::write(repo.path().join(".gitignore"), "ignored.txt\n").expect("write gitignore");
+        std::fs::write(repo.path().join("ignored.txt"), "secret-config").expect("write ignored");
+        std::process::Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git add .gitignore");
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git commit");
+
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        crate::config::save_repo_settings(crate::config::RepoSettingsMap {
+            repos: [(
+                repo.path().to_string_lossy().to_string(),
+                crate::config::RepoSettingsEntry {
+                    path: repo.path().to_string_lossy().to_string(),
+                    copy_ignored_files: Some(true),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        })
+        .expect("save repo settings");
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let created = create_worktree_shared(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "warm-before-sync-branch".to_string(),
+            None,
+        )
+        .await
+        .expect("worktree should be created");
+        // The parent repo's own `ignored.txt` (written above, directly, before
+        // the worktree ever existed) is not the signal — it always exists.
+        // The sync stage's effect is a SECOND copy landing in the WORKTREE.
+        let worktree_ignored_file = std::path::PathBuf::from(&created.path).join("ignored.txt");
+
+        // By the time the sync stage completes, warm must already have
+        // settled to a terminal state (Completed/Skipped) — never still
+        // Running. If warm were still running when sync started, this would
+        // be flaky/racy; a terminal warm status by the time sync finishes is
+        // the ordering guarantee this test exists to pin.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut sync_completed = false;
+        let mut warm_status_at_sync_completion = None;
+        while std::time::Instant::now() < deadline {
+            if worktree_ignored_file.exists() {
+                // The sync stage's own effect landed — check warm now.
+                warm_status_at_sync_completion = crate::worktree::get_worktree_warm_status(
+                    &state,
+                    repo.path().to_string_lossy().as_ref(),
+                    "warm-before-sync-branch",
+                );
+                sync_completed = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            sync_completed,
+            "sync should have copied ignored.txt within the timeout"
+        );
+        assert!(
+            matches!(
+                warm_status_at_sync_completion,
+                Some(crate::state::WorktreeWarmStatus::Completed { .. })
+                    | Some(crate::state::WorktreeWarmStatus::Skipped)
+            ),
+            "warm must have already settled by the time the sync stage's own \
+             effect is observable, got: {warm_status_at_sync_completion:?}"
+        );
+    }
+
     #[test]
     fn get_worktree_setup_status_is_none_for_an_untracked_pair() {
         let state = crate::state::tests_support::make_test_app_state();
@@ -1136,6 +1351,64 @@ mod tests {
         let response = get_worktree_setup_status_http(
             State(state),
             Query(WorktreeSetupStatusQuery {
+                repo_path: "not-an-absolute-path".to_string(),
+                branch: "main".to_string(),
+            }),
+        )
+        .await;
+        assert_ne!(response.status(), StatusCode::OK);
+    }
+
+    // --- get_worktree_warm_status_http: sibling to get_worktree_setup_status_http ---
+
+    #[tokio::test]
+    async fn get_worktree_warm_status_http_returns_unknown_for_an_untracked_pair() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = get_worktree_warm_status_http(
+            State(state),
+            Query(WorktreeWarmStatusQuery {
+                repo_path: "/never/tracked".to_string(),
+                branch: "some-branch".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["state"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn get_worktree_warm_status_http_returns_the_tracked_status() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.worktree_warm_status.insert(
+            ("/repo".to_string(), "feat-x".to_string()),
+            Arc::new(crate::state::WorktreeWarmStatus::Completed {
+                warmed: 2,
+                warnings: vec!["one cache stayed cold".to_string()],
+            }),
+        );
+
+        let response = get_worktree_warm_status_http(
+            State(state),
+            Query(WorktreeWarmStatusQuery {
+                repo_path: "/repo".to_string(),
+                branch: "feat-x".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["state"], "completed");
+        assert_eq!(body["warmed"], 2);
+        assert_eq!(body["warnings"][0], "one cache stayed cold");
+    }
+
+    #[tokio::test]
+    async fn get_worktree_warm_status_http_rejects_an_invalid_repo_path() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = get_worktree_warm_status_http(
+            State(state),
+            Query(WorktreeWarmStatusQuery {
                 repo_path: "not-an-absolute-path".to_string(),
                 branch: "main".to_string(),
             }),

@@ -30,6 +30,114 @@ pub(crate) fn resolve_archive_script(repo_path: &str) -> Option<String> {
     None
 }
 
+/// Warm a freshly created worktree's git-ignored build directories in the
+/// background, gated by the per-repo `warm_ignored_directories` setting
+/// (`config::resolve_effective_warm_setting`). This is the new FIRST stage of
+/// [`spawn_worktree_setup_chain`] — it used to happen synchronously inside
+/// `create_workspace`/`create_workspace_with`, before the chain even started;
+/// moving it here preserves that same effective ordering (warm before sync
+/// before script) while making it non-blocking.
+///
+/// Writes a [`crate::state::WorktreeWarmStatus`] snapshot into
+/// `AppState::worktree_warm_status` at each transition, and dual-emits
+/// (event_bus + Tauri window) `worktree-warm-*` events — but only once the
+/// real candidate count is known and greater than zero; a disabled setting or
+/// a repo with nothing to warm produces no events at all, matching
+/// `run_worktree_file_sync`'s own "nothing to do is silent" precedent. Either
+/// way this always leaves a `Skipped` or `Completed` status behind for a
+/// poller, never leaves the caller's synchronous pre-insert (`Running { 0, 0
+/// }` — see `spawn_worktree_setup_chain`) stuck as a stale placeholder.
+async fn run_worktree_warm(state: &Arc<AppState>, base_repo: &str, branch: &str, dest_path: &Path) {
+    let status_key = (base_repo.to_string(), branch.to_string());
+
+    let repo_for_setting = base_repo.to_string();
+    let enabled = tokio::task::spawn_blocking(move || {
+        crate::config::resolve_effective_warm_setting(&repo_for_setting)
+    })
+    .await
+    .unwrap_or(true);
+
+    if !enabled {
+        state.worktree_warm_status.insert(
+            status_key,
+            Arc::new(crate::state::WorktreeWarmStatus::Skipped),
+        );
+        return;
+    }
+
+    let source = PathBuf::from(base_repo);
+    let dest = dest_path.to_path_buf();
+    let repo_path = base_repo.to_string();
+    let branch_owned = branch.to_string();
+
+    // Tracks whether `on_started` ever fired, so the final decision on
+    // whether to emit `worktree-warm-completed` is driven by the same signal
+    // that drove `worktree-warm-started` — not re-derived from the report's
+    // contents, which can be nonzero (e.g. a pre-dispatch "git ls-files
+    // failed" warning) even when nothing ever started.
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started_flag = Arc::clone(&started);
+    let status_key_started = status_key.clone();
+    let state_started = Arc::clone(state);
+    let repo_started = repo_path.clone();
+    let branch_started = branch_owned.clone();
+    let on_started = move |total: usize| {
+        started_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        state_started.worktree_warm_status.insert(
+            status_key_started,
+            Arc::new(crate::state::WorktreeWarmStatus::Running { copied: 0, total }),
+        );
+        emit_worktree_warm_started(&state_started, &repo_started, &branch_started, total);
+    };
+
+    let status_key_progress = status_key.clone();
+    let state_progress = Arc::clone(state);
+    let repo_progress = repo_path.clone();
+    let branch_progress = branch_owned.clone();
+    let mut last_emit = std::time::Instant::now();
+    let on_progress = move |copied: usize, total: usize, current: Option<&str>| {
+        let now = std::time::Instant::now();
+        if copied == total || now.duration_since(last_emit).as_millis() >= 150 {
+            last_emit = now;
+            state_progress.worktree_warm_status.insert(
+                status_key_progress.clone(),
+                Arc::new(crate::state::WorktreeWarmStatus::Running { copied, total }),
+            );
+            emit_worktree_warm_progress(
+                &state_progress,
+                &repo_progress,
+                &branch_progress,
+                copied,
+                total,
+                current,
+            );
+        }
+    };
+
+    let report = crate::cow::warm_worktree(&source, &dest, on_started, on_progress).await;
+
+    state.worktree_warm_status.insert(
+        status_key,
+        Arc::new(crate::state::WorktreeWarmStatus::Completed {
+            warmed: report.warmed,
+            warnings: report.warnings.clone(),
+        }),
+    );
+    // Silent (no event) when nothing was ever started — either the raw
+    // candidate list was empty, every candidate was filtered out by
+    // skip-rules before dispatch, or `warming_candidates` itself failed
+    // (a pre-dispatch warning, not a started/completed pair).
+    if started.load(std::sync::atomic::Ordering::SeqCst) {
+        emit_worktree_warm_completed(
+            state,
+            &repo_path,
+            &branch_owned,
+            report.warmed,
+            report.warnings,
+        );
+    }
+}
+
 /// Copy ignored/untracked/explicit-listed files into a freshly created
 /// worktree, awaiting completion. Resolves the repo's effective copy settings
 /// from disk (`config::resolve_effective_copy_settings`) itself, so a
@@ -105,11 +213,14 @@ async fn run_worktree_file_sync(
     Some(summary)
 }
 
-/// Kick off the (file sync → setup script) background chain for a freshly
-/// created worktree, in that order, so a setup script that depends on a
-/// synced file (a `copy_paths` entry symlinking `node_modules`, a synced
+/// Kick off the (warm → file sync → setup script) background chain for a
+/// freshly created worktree, in that order, so a setup script that depends on
+/// a synced file (a `copy_paths` entry symlinking `node_modules`, a synced
 /// `.env`, etc.) can no longer race ahead of the sync and run without it —
-/// the previously "KNOWN, ACCEPTED ORDERING GAP" this replaces.
+/// the previously "KNOWN, ACCEPTED ORDERING GAP" this replaces. Warm runs
+/// first, preserving the ordering it had when it ran synchronously inside
+/// `create_workspace` before this change (warm always finished before the
+/// rest of this chain even started).
 ///
 /// Fire-and-forget: **worktree creation itself has already returned** by the
 /// time this chain runs, on all three creation paths (desktop `create_worktree`,
@@ -143,7 +254,21 @@ pub(crate) fn spawn_worktree_setup_chain(
         status_key.clone(),
         Arc::new(crate::state::WorktreeSetupStatus::Running),
     );
+    // Placeholder `total: 0` — the real count isn't known until the
+    // background task enumerates candidates (a git subprocess call), and
+    // that can't happen synchronously here without reintroducing the exact
+    // blocking cost this change removes. Corrected to the real total (or to
+    // `Skipped`/`Completed`) moments later, before any copy begins — see
+    // `run_worktree_warm`.
+    state.worktree_warm_status.insert(
+        status_key.clone(),
+        Arc::new(crate::state::WorktreeWarmStatus::Running {
+            copied: 0,
+            total: 0,
+        }),
+    );
     tokio::spawn(async move {
+        run_worktree_warm(&state, &base_repo, &branch, &worktree_path).await;
         run_worktree_file_sync(&state, &base_repo, &branch, &worktree_path).await;
 
         let repo_for_script = base_repo.clone();
@@ -207,6 +332,23 @@ pub(crate) fn get_worktree_setup_status(
 ) -> Option<crate::state::WorktreeSetupStatus> {
     state
         .worktree_setup_status
+        .get(&(repo_path.to_string(), branch.to_string()))
+        .map(|arc| (*arc).clone())
+}
+
+/// Poll the current status of a worktree's background warm step, keyed by
+/// `(repo_path, branch)` — the same pair `spawn_worktree_setup_chain` tracks
+/// and the `worktree-warm-*` events carry. Same "`None` means still starting,
+/// not definitely nothing" caveat as [`get_worktree_setup_status`] — the
+/// entry is inserted synchronously by `spawn_worktree_setup_chain` before it
+/// returns.
+pub(crate) fn get_worktree_warm_status(
+    state: &AppState,
+    repo_path: &str,
+    branch: &str,
+) -> Option<crate::state::WorktreeWarmStatus> {
+    state
+        .worktree_warm_status
         .get(&(repo_path.to_string(), branch.to_string()))
         .map(|arc| (*arc).clone())
 }
@@ -312,6 +454,87 @@ fn emit_worktree_setup_script_completed(
                 "worktreePath": worktree_path,
                 "exitCode": exit_code,
                 "error": error,
+            }),
+        );
+    }
+}
+
+fn emit_worktree_warm_started(state: &Arc<AppState>, repo_path: &str, branch: &str, total: usize) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeWarmStarted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            total,
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-warm-started",
+            serde_json::json!({ "repoPath": repo_path, "branch": branch, "total": total }),
+        );
+    }
+}
+
+fn emit_worktree_warm_progress(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    copied: usize,
+    total: usize,
+    current: Option<&str>,
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeWarmProgress {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            copied,
+            total,
+            current: current.map(str::to_string),
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-warm-progress",
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "copied": copied,
+                "total": total,
+                "current": current,
+            }),
+        );
+    }
+}
+
+fn emit_worktree_warm_completed(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    warmed: usize,
+    warnings: Vec<String>,
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeWarmCompleted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            warmed,
+            warnings: warnings.clone(),
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-warm-completed",
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "warmed": warmed,
+                "warnings": warnings,
             }),
         );
     }
@@ -860,11 +1083,6 @@ pub(crate) struct CreatedWorkspace {
     pub(crate) path: PathBuf,
     pub(crate) branch: String,
     pub(crate) kind: WorkspaceKind,
-    /// Failures encountered while warming ignored build directories.
-    pub(crate) warnings: Vec<String>,
-    /// Git-ignored build directories clonefiled in from the parent so a linked
-    /// worktree starts warm.
-    pub(crate) warmed_directories: usize,
 }
 
 impl CreatedWorkspace {
@@ -878,60 +1096,60 @@ impl CreatedWorkspace {
     /// 200k tokens ago:
     ///
     /// - inherited work in progress is not the model's own bug,
-    /// - the warm artifacts are already there, so setting up is not a build,
+    /// - warm build artifacts may still be arriving in the background, so
+    ///   "not there yet" is not evidence warming is disabled or done,
     /// - and, for a clone, that the parent cannot see this branch — the failure
     ///   is silent, because `git merge` in the parent finds a same-named ref
     ///   and merges the WRONG one.
+    ///
+    /// Warming moved off this synchronous response and into
+    /// `spawn_worktree_setup_chain`'s background chain (see that function's
+    /// doc comment) — this can no longer report a real `warmed_directories`
+    /// count, only that a poll exists. `cow::warm_artifacts` (`present`) stays
+    /// a live, disk-derived check: usually empty immediately after creation,
+    /// but honest either way, since it re-reads disk rather than reporting a
+    /// stale count from before this response was built.
     pub(crate) fn instruction_payload(&self) -> serde_json::Value {
         let warm = crate::cow::warm_artifacts(&self.path);
         let isolation = "This is a linked worktree: refs and objects are shared with the parent \
             repository, so your commits are visible there immediately."
             .to_string();
 
-        let setup = if warm.is_empty() {
-            "No build output came with this workspace.".to_string()
-        } else {
-            "These came with the workspace at near-zero cost. Do NOT run an install or a full build \
-             to \"set up\" — they are already warm. Run one only if a lockfile or a dependency \
-             actually changed."
-                .to_string()
-        };
-
         serde_json::json!({
             "workspace_id": self.workspace_id,
             "path": self.path.to_string_lossy(),
             "branch": self.branch,
             "kind": self.kind,
-            "warnings": self.warnings,
             "state": {
                 "carried_over": 0,
                 "note": "Tracked changes are not carried over: this workspace starts from a clean checkout.",
             },
             "warm_artifacts": {
                 "present": warm,
-                "warmed_directories": self.warmed_directories,
-                "note": setup,
+                "status": "pending",
+                "poll": "repo action=worktree_warm_status (or GET /worktrees/warm-status?repoPath=&branch=)",
+                "note": "Git-ignored build directories (node_modules, target, ...) are clonefiled in \
+                    the background, if warming is enabled for this repo — not before this response. \
+                    Poll warm status before assuming they are absent, present, or up to date; do NOT \
+                    run an install or a full build to \"set up\" once they arrive warm, and do not \
+                    infer from an empty `present` list right now that warming is disabled.",
             },
             "isolation": isolation,
         })
     }
 }
 
-/// Create a linked worktree and warm its ignored build directories.
+/// Create a linked worktree. Warming its ignored build directories no longer
+/// happens here — it moved into `spawn_worktree_setup_chain`'s background
+/// chain (see that function's doc comment for why), which every caller of
+/// this function goes on to invoke right after. This function used to take
+/// an injected `warm` closure as a test seam for that inline step; the seam
+/// moved with the warming itself, so tests now inject a callback into the
+/// chain (`spawn_worktree_setup_chain`) rather than here.
 pub(crate) fn create_workspace(
     worktrees_dir: &Path,
     config: &WorktreeConfig,
     base_ref: Option<&str>,
-) -> Result<CreatedWorkspace, String> {
-    create_workspace_with(worktrees_dir, config, base_ref, crate::cow::warm_worktree)
-}
-
-/// `create_workspace` with warming injected for deterministic tests.
-pub(crate) fn create_workspace_with(
-    worktrees_dir: &Path,
-    config: &WorktreeConfig,
-    base_ref: Option<&str>,
-    warm: impl Fn(&Path, &Path) -> crate::cow::WarmingReport,
 ) -> Result<CreatedWorkspace, String> {
     let src = PathBuf::from(&config.base_repo);
     let branch = config
@@ -946,14 +1164,11 @@ pub(crate) fn create_workspace_with(
     // DEFERRED (2026-09-13): carrying the parent's tracked changes was dropped
     // with independent COW workspace creation. If reinstated, pipe
     // `git diff HEAD` in the parent to `git apply` in this linked worktree.
-    let warming = warm(&src, &worktree.path);
     Ok(CreatedWorkspace {
         workspace_id: workspace_id_of_worktree(&branch),
         path: worktree.path,
         branch,
         kind: WorkspaceKind::Worktree,
-        warnings: warming.warnings,
-        warmed_directories: warming.warmed,
     })
 }
 /// A branch can belong to only one linked worktree.
@@ -7073,6 +7288,34 @@ branch refs/heads/feat
         (temp, repo, workspaces)
     }
 
+    /// Phase 2 update of the Phase 0 baseline (worktree-warming-async-plan.md):
+    /// warming used to run synchronously inside this function via an injected
+    /// closure seam; that seam is gone now that warming moved into
+    /// `spawn_worktree_setup_chain`'s background chain. This proves the flip
+    /// directly — a parent repo with a real ignored directory returns from
+    /// `create_workspace` without that directory having been copied in,
+    /// because `create_workspace` itself no longer touches warming at all.
+    #[test]
+    fn create_workspace_no_longer_warms_anything_itself() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        std::fs::write(repo.join(".gitignore"), "build/\n").unwrap();
+        std::fs::create_dir_all(repo.join("build")).unwrap();
+        std::fs::write(repo.join("build/artifact"), "warm").unwrap();
+        let config = WorktreeConfig {
+            task_name: "sync-check".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("sync-check".into()),
+            create_branch: true,
+        };
+        let created = create_workspace(&workspaces, &config, None).expect("linked workspace");
+
+        assert!(
+            !created.path.join("build").exists(),
+            "create_workspace must not warm anything itself — that now happens \
+             only via spawn_worktree_setup_chain, which the caller invokes separately"
+        );
+    }
+
     #[test]
     fn create_workspace_always_returns_a_linked_worktree() {
         let (_temp, repo, workspaces) = workspace_fixture();
@@ -7082,10 +7325,7 @@ branch refs/heads/feat
             branch: Some("feature".into()),
             create_branch: true,
         };
-        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
-            crate::cow::WarmingReport::default()
-        })
-        .expect("linked workspace");
+        let created = create_workspace(&workspaces, &config, None).expect("linked workspace");
 
         assert_eq!(created.kind, WorkspaceKind::Worktree);
         assert_eq!(created.workspace_id, "feature");
@@ -7093,28 +7333,7 @@ branch refs/heads/feat
     }
 
     #[test]
-    fn create_workspace_reports_best_effort_warming() {
-        let (_temp, repo, workspaces) = workspace_fixture();
-        let config = WorktreeConfig {
-            task_name: "warm".into(),
-            base_repo: repo.to_string_lossy().into_owned(),
-            branch: Some("warm".into()),
-            create_branch: true,
-        };
-        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
-            crate::cow::WarmingReport {
-                warmed: 2,
-                warnings: vec!["one cache stayed cold".into()],
-            }
-        })
-        .expect("linked workspace");
-
-        assert_eq!(created.warmed_directories, 2);
-        assert_eq!(created.warnings, vec!["one cache stayed cold"]);
-    }
-
-    #[test]
-    fn workspace_payload_states_linked_isolation_and_clean_tracked_state() {
+    fn workspace_payload_states_linked_isolation_and_a_pending_warm_poll() {
         let (_temp, repo, workspaces) = workspace_fixture();
         let config = WorktreeConfig {
             task_name: "payload".into(),
@@ -7122,10 +7341,7 @@ branch refs/heads/feat
             branch: Some("payload".into()),
             create_branch: true,
         };
-        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
-            crate::cow::WarmingReport::default()
-        })
-        .expect("linked workspace");
+        let created = create_workspace(&workspaces, &config, None).expect("linked workspace");
         let payload = created.instruction_payload();
 
         assert_eq!(payload["kind"], "worktree");
@@ -7136,6 +7352,20 @@ branch refs/heads/feat
                 .unwrap()
                 .contains("linked worktree")
         );
-        assert_eq!(payload["warm_artifacts"]["warmed_directories"], 0);
+        // warmed_directories no longer exists synchronously — the response
+        // instead points at a poll (see CreatedWorkspace::instruction_payload's
+        // doc comment for why: warming now runs in spawn_worktree_setup_chain's
+        // background chain, after this response has already gone out).
+        assert_eq!(payload["warm_artifacts"]["status"], "pending");
+        assert!(
+            payload["warm_artifacts"]["poll"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())
+        );
+        assert!(
+            payload["warm_artifacts"]
+                .get("warmed_directories")
+                .is_none()
+        );
     }
 }

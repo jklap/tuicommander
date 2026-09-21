@@ -24,6 +24,7 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 		baseBranch: null,
 		copyIgnoredFiles: null,
 		copyUntrackedFiles: null,
+		warmIgnoredDirectories: null,
 		setupScript: null,
 		runScript: null,
 		archiveScript: null,
@@ -58,6 +59,7 @@ const defaults: RepoDefaults = {
 	baseBranch: "main",
 	copyIgnoredFiles: true,
 	copyUntrackedFiles: false,
+	warmIgnoredDirectories: true,
 	setupScript: "",
 	runScript: "",
 	archiveScript: "",
@@ -311,6 +313,38 @@ describe("RepoWorktreeTab", () => {
 			<RepoWorktreeTab settings={makeSettings({ copyIgnoredFiles: true })} defaults={defaults} onUpdate={onUpdate} />
 		));
 		expect(triRowText(triGroup(overriddenCase.container, "Copy ignored files"))).not.toContain("Use global default");
+	});
+
+	it("resolves warmIgnoredDirectories against the global default when null, and selecting Off overrides it", () => {
+		const { container } = render(() => (
+			<RepoWorktreeTab
+				settings={makeSettings({ warmIgnoredDirectories: null })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+			/>
+		));
+		// warmIgnoredDirectories inherits defaults.warmIgnoredDirectories=true.
+		const warmGroup = triGroup(container, "Warm ignored build directories");
+		expect(warmGroup.getAttribute("aria-checked")).toBe("mixed");
+		expect(triRowText(warmGroup)).toContain("Use global default: On");
+
+		// Cycle order is Global -> On -> Off -> Global; from null (Global, resolving
+		// to true) one click selects On explicitly, a second selects Off.
+		fireEvent.click(warmGroup);
+		expect(onUpdate).toHaveBeenCalledWith("warmIgnoredDirectories", true);
+	});
+
+	it("clears the 'Use global default' hint for warmIgnoredDirectories once overridden", () => {
+		const overridden = render(() => (
+			<RepoWorktreeTab
+				settings={makeSettings({ warmIgnoredDirectories: false })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+			/>
+		));
+		const warmGroup = triGroup(overridden.container, "Warm ignored build directories");
+		expect(warmGroup.getAttribute("aria-checked")).toBe("false");
+		expect(triRowText(warmGroup)).not.toContain("Use global default");
 	});
 
 	it("calls onUpdate for autoConsolidateWorktrees (no null/inherit state — always a concrete bool)", () => {

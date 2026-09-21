@@ -1979,6 +1979,129 @@ describe("initApp", () => {
 		});
 	});
 
+	describe("worktree-warm-* events (background warming of git-ignored build directories)", () => {
+		/** Capture the handler `useAppInit` registers for `eventName`, whatever
+		 *  else it also registers `listen()` for. */
+		function captureListener<T>(eventName: string) {
+			const listenMock = vi.mocked(listen);
+			let callback: ((event: { payload: T }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === eventName) {
+					callback = handler as unknown as (event: { payload: T }) => void;
+				}
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return { getCallback: () => callback };
+		}
+
+		it("writes a warming state onto the matching row when warming starts", async () => {
+			const { getCallback } = captureListener<{ repoPath: string; branch: string; total: number }>(
+				"worktree-warm-started",
+			);
+			const deps = createMockDeps();
+			await initApp(deps);
+			// The listener only updates an EXISTING row (see the "never creates a
+			// phantom row" test below) — seed one with a real (unspied) call first.
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setWorkspace("/repo", "feat-x", {});
+			const setWorkspace = vi.spyOn(repositoriesStore, "setWorkspace").mockImplementation(() => {});
+
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-x", total: 5 } });
+
+			expect(setWorkspace).toHaveBeenCalledWith("/repo", "feat-x", {
+				warmState: { status: "warming", copied: 0, total: 5 },
+			});
+			setWorkspace.mockRestore();
+		});
+
+		it("updates copied/total/current on each progress tick", async () => {
+			const { getCallback } = captureListener<{
+				repoPath: string;
+				branch: string;
+				copied: number;
+				total: number;
+				current: string | null;
+			}>("worktree-warm-progress");
+			const deps = createMockDeps();
+			await initApp(deps);
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setWorkspace("/repo", "feat-x", {});
+			const setWorkspace = vi.spyOn(repositoriesStore, "setWorkspace").mockImplementation(() => {});
+
+			getCallback()!({
+				payload: { repoPath: "/repo", branch: "feat-x", copied: 2, total: 5, current: "node_modules" },
+			});
+
+			expect(setWorkspace).toHaveBeenCalledWith("/repo", "feat-x", {
+				warmState: { status: "warming", copied: 2, total: 5, current: "node_modules" },
+			});
+			setWorkspace.mockRestore();
+		});
+
+		it("omits current when the backend reports null", async () => {
+			const { getCallback } = captureListener<{
+				repoPath: string;
+				branch: string;
+				copied: number;
+				total: number;
+				current: string | null;
+			}>("worktree-warm-progress");
+			const deps = createMockDeps();
+			await initApp(deps);
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setWorkspace("/repo", "feat-x", {});
+			const setWorkspace = vi.spyOn(repositoriesStore, "setWorkspace").mockImplementation(() => {});
+
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-x", copied: 0, total: 5, current: null } });
+
+			expect(setWorkspace).toHaveBeenCalledWith("/repo", "feat-x", {
+				warmState: { status: "warming", copied: 0, total: 5, current: undefined },
+			});
+			setWorkspace.mockRestore();
+		});
+
+		it("clears the warming state when warming completes", async () => {
+			const { getCallback } = captureListener<{
+				repoPath: string;
+				branch: string;
+				warmed: number;
+				warnings: string[];
+			}>("worktree-warm-completed");
+			const deps = createMockDeps();
+			await initApp(deps);
+			repositoriesStore.add({ path: "/repo", displayName: "repo" });
+			repositoriesStore.setWorkspace("/repo", "feat-x", {});
+			const setWorkspace = vi.spyOn(repositoriesStore, "setWorkspace").mockImplementation(() => {});
+
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-x", warmed: 3, warnings: [] } });
+
+			expect(setWorkspace).toHaveBeenCalledWith("/repo", "feat-x", { warmState: null });
+			setWorkspace.mockRestore();
+		});
+
+		it("never creates a phantom workspace row for a branch the frontend hasn't learned about yet", async () => {
+			// Regression test: worktree-warm-started/-progress/-completed are
+			// dual-emitted independently of worktree-created, so delivery order
+			// isn't guaranteed. If a warm-* event won that race and called the
+			// real (unguarded) setWorkspace, it would fabricate a new row with
+			// wrong defaults (worktreePath: null, etc.) — setWorkspace's own
+			// create-on-missing behavior, meant for worktree-created's handler,
+			// not this one. No row for "feat-y" is seeded here on purpose.
+			const { getCallback } = captureListener<{ repoPath: string; branch: string; total: number }>(
+				"worktree-warm-started",
+			);
+			const deps = createMockDeps();
+			await initApp(deps);
+			const setWorkspace = vi.spyOn(repositoriesStore, "setWorkspace").mockImplementation(() => {});
+
+			getCallback()!({ payload: { repoPath: "/repo", branch: "feat-y", total: 5 } });
+
+			expect(setWorkspace).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["feat-y"]).toBeUndefined();
+			setWorkspace.mockRestore();
+		});
+	});
+
 	describe("session-created event (agent tab activation)", () => {
 		type SessionCreatedPayload = {
 			session_id: string;

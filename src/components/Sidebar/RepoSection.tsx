@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
@@ -18,6 +18,7 @@ import { invoke } from "../../invoke";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { settingsStore } from "../../stores/settings";
+import { buildHttpUrl } from "../../transport";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
@@ -63,6 +64,43 @@ const GIT_OP_BADGE: Record<GitOpKind, { label: string; cls: string }> = {
 	revert: { label: "Reverting", cls: s.gitOpRevert },
 	bisect: { label: "Bisecting", cls: s.gitOpBisect },
 };
+
+/** Upper bound on how long a "warming" badge is allowed to stay up before this
+ *  row clears it itself — consistent with `createWorktreeCreationCoordinator
+ *  .ts`'s 900s safety timeout on `waitForSetupScriptCompletion`. Guards against
+ *  a dropped `worktree-warm-completed` event (or a genuinely hung warm step)
+ *  leaving the badge stuck forever; it never rejects anything, it just clears
+ *  the row's own state. */
+const WARM_BADGE_SAFETY_TIMEOUT_MS = 900_000;
+
+/** One-shot reconciliation for a row that mounts with no live `warmState` yet
+ *  — covers a page reload/reconnect that happens mid-warm, where the
+ *  `worktree-warm-started`/`-progress` events already fired and were missed.
+ *  Read-only, no-auth-gate endpoint (`get_worktree_warm_status_http`); a
+ *  "not tracked"/`unknown` or already-finished result is a normal, silent
+ *  no-op, not an error. */
+async function pollWarmStatusOnce(
+	repoPath: string,
+	branch: string,
+): Promise<{ status: "warming"; copied: number; total: number } | null> {
+	try {
+		const response = await fetch(
+			buildHttpUrl(
+				`/worktrees/warm-status?repoPath=${encodeURIComponent(repoPath)}&branch=${encodeURIComponent(branch)}`,
+			),
+		);
+		if (!response.ok) return null;
+		const data = (await response.json()) as { state?: string; copied?: number; total?: number };
+		if (data.state === "running") {
+			return { status: "warming", copied: data.copied ?? 0, total: data.total ?? 0 };
+		}
+		return null;
+	} catch {
+		// Best-effort reconciliation only — a network hiccup here just means the
+		// row stays whatever it already was (almost always "no badge").
+		return null;
+	}
+}
 
 /** Branch icon component — icon shape and color driven by terminal state.
  *
@@ -277,6 +315,38 @@ export const BranchItem: Component<{
 			const t = terminalsStore.get(id);
 			return t == null || t.shellState !== "exited";
 		});
+
+	// Reconcile a mount that missed the live worktree-warm-* events (page
+	// reload/reconnect mid-warm) — see `pollWarmStatusOnce`'s doc comment.
+	onMount(() => {
+		if (props.branch.warmState != null) return;
+		if (props.branch.worktreePath == null) return; // main checkout is never warmed
+		pollWarmStatusOnce(props.repoPath, props.branch.branchName).then((warmState) => {
+			// Discard a stale response: if a live worktree-warm-* event already
+			// wrote something while this poll was in flight (running progress,
+			// or a clear on completion), that write is authoritative — applying
+			// this now-outdated snapshot on top would resurrect a badge for a
+			// warm that already finished, and re-arm the safety timeout for
+			// nothing. Only write if nothing else touched warmState in the
+			// meantime.
+			if (warmState && props.branch.warmState == null) {
+				repositoriesStore.setWorkspace(props.repoPath, props.branch.workspaceId, { warmState });
+			}
+		});
+	});
+
+	// Safety net: never let a "warming" badge outlive WARM_BADGE_SAFETY_TIMEOUT_MS,
+	// regardless of whether the miss was a dropped event or a genuinely hung warm
+	// step. Re-arms whenever warmState transitions to non-null.
+	createEffect(() => {
+		if (props.branch.warmState == null) return;
+		const workspaceId = props.branch.workspaceId;
+		const repoPath = props.repoPath;
+		const timer = setTimeout(() => {
+			repositoriesStore.setWorkspace(repoPath, workspaceId, { warmState: null });
+		}, WARM_BADGE_SAFETY_TIMEOUT_MS);
+		onCleanup(() => clearTimeout(timer));
+	});
 
 	const handleDoubleClick = (e: MouseEvent) => {
 		e.stopPropagation();
@@ -500,6 +570,16 @@ export const BranchItem: Component<{
 							title={`This worktree has a ${GIT_OP_BADGE[kind()].label.toLowerCase()} in progress — it will not be auto-cleaned up until it's resolved`}
 						>
 							{GIT_OP_BADGE[kind()].label}
+						</span>
+					)}
+				</Show>
+				<Show when={props.branch.warmState}>
+					{(warm) => (
+						<span
+							class={s.warmBadge}
+							title={`Warming build caches: ${warm().copied}/${warm().total}${warm().current ? ` (${warm().current})` : ""}`}
+						>
+							Warming…
 						</span>
 					)}
 				</Show>

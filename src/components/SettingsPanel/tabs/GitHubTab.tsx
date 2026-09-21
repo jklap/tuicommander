@@ -645,6 +645,18 @@ export const GitHubTab: Component = () => {
 						/>
 						<span>Copy untracked files</span>
 					</div>
+					<div class={s.toggle}>
+						<input
+							type="checkbox"
+							checked={repoDefaultsStore.state.warmIgnoredDirectories}
+							onChange={(e) => repoDefaultsStore.setWarmIgnoredDirectories(e.currentTarget.checked)}
+						/>
+						<span>Warm ignored build directories</span>
+					</div>
+					<p class={s.hint}>
+						Copy-on-write copies node_modules, target, and other git-ignored build directories from the parent repo into
+						a new worktree so it starts warm. Runs in the background after creation.
+					</p>
 				</div>
 
 				<div class={s.group}>

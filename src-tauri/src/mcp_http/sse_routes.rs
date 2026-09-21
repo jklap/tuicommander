@@ -297,6 +297,9 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::WorktreeSyncProgress { .. } => "worktree-sync-progress",
         AppEvent::WorktreeSyncCompleted { .. } => "worktree-sync-completed",
         AppEvent::WorktreeSetupScriptCompleted { .. } => "worktree-setup-script-completed",
+        AppEvent::WorktreeWarmStarted { .. } => "worktree-warm-started",
+        AppEvent::WorktreeWarmProgress { .. } => "worktree-warm-progress",
+        AppEvent::WorktreeWarmCompleted { .. } => "worktree-warm-completed",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
     }
 }
@@ -610,6 +613,43 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "worktreePath": worktree_path,
                 "exitCode": exit_code,
                 "error": error,
+            })
+        }
+        AppEvent::WorktreeWarmStarted {
+            repo_path,
+            branch,
+            total,
+        } => {
+            // camelCase keys mirror the Tauri window `worktree-warm-started`
+            // event — see `worktree::run_worktree_warm`.
+            serde_json::json!({ "repoPath": repo_path, "branch": branch, "total": total })
+        }
+        AppEvent::WorktreeWarmProgress {
+            repo_path,
+            branch,
+            copied,
+            total,
+            current,
+        } => {
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "copied": copied,
+                "total": total,
+                "current": current,
+            })
+        }
+        AppEvent::WorktreeWarmCompleted {
+            repo_path,
+            branch,
+            warmed,
+            warnings,
+        } => {
+            serde_json::json!({
+                "repoPath": repo_path,
+                "branch": branch,
+                "warmed": warmed,
+                "warnings": warnings,
             })
         }
     }
@@ -1001,6 +1041,53 @@ mod tests {
         assert!(body["error"].is_null());
         assert!(body.get("repo_path").is_none());
         assert!(body.get("worktree_path").is_none());
+    }
+
+    #[test]
+    fn worktree_warm_events_use_camelcase_matching_window_events() {
+        // Mirrors `worktree_sync_events_use_camelcase_matching_window_events`:
+        // `worktree::run_worktree_warm` dual-emits all three of these on the
+        // bus (SSE) AND the Tauri window with identical camelCase keys.
+        let started = AppEvent::WorktreeWarmStarted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            total: 4,
+        };
+        assert_eq!(event_type_name(&started), "worktree-warm-started");
+        let body = event_payload(&started);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert_eq!(body["total"], 4);
+        assert!(body.get("repo_path").is_none());
+
+        let progress = AppEvent::WorktreeWarmProgress {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            copied: 2,
+            total: 4,
+            current: Some("node_modules".into()),
+        };
+        assert_eq!(event_type_name(&progress), "worktree-warm-progress");
+        let body = event_payload(&progress);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert_eq!(body["copied"], 2);
+        assert_eq!(body["total"], 4);
+        assert_eq!(body["current"], "node_modules");
+
+        let completed = AppEvent::WorktreeWarmCompleted {
+            repo_path: "/repo".into(),
+            branch: "feat-x".into(),
+            warmed: 3,
+            warnings: vec!["could not warm 'target': refused".into()],
+        };
+        assert_eq!(event_type_name(&completed), "worktree-warm-completed");
+        let body = event_payload(&completed);
+        assert_eq!(body["repoPath"], "/repo");
+        assert_eq!(body["branch"], "feat-x");
+        assert_eq!(body["warmed"], 3);
+        assert_eq!(body["warnings"][0], "could not warm 'target': refused");
+        assert!(body.get("repo_path").is_none());
     }
 
     #[test]

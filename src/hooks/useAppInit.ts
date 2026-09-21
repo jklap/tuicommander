@@ -15,6 +15,7 @@ import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
+import type { WorkspaceState } from "../stores/workspaceIdentity";
 import { settingsStore } from "../stores/settings";
 import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
@@ -531,6 +532,49 @@ export async function initApp(deps: AppInitDeps) {
 	}>("worktree-setup-script-completed", (event) => {
 		deps.handleWorktreeSetupScriptCompleted(event.payload);
 	}).catch((err) => appLogger.error("app", "Failed to register worktree-setup-script-completed listener", err));
+
+	// Background warming of git-ignored build directories (see
+	// `cow::warm_worktree` / `worktree::run_worktree_warm`), now the FIRST stage
+	// of the same background chain the sync/setup-script events above report
+	// on. Drives the sidebar's per-row "Warming…" badge (`RepoSection.tsx`)
+	// rather than a toast — this can run for tens of seconds on a large repo,
+	// so a live, per-row progress indicator is more useful than a one-shot
+	// notification. Silent (no events at all) when there's nothing to warm or
+	// the repo has warming disabled — mirrors worktree-sync-started's
+	// nothing-to-do silence.
+	//
+	// `updateWarmState` only WRITES to a workspace row that already exists —
+	// `setWorkspace` silently fabricates a new row (with `worktreePath: null`
+	// and other wrong defaults) when the key is missing, which the `worktree-created`
+	// event's own handler is the one meant to do with the real data. A warm-*
+	// event racing ahead of that (both are dual-emitted independently, so
+	// delivery order isn't guaranteed) must never win that race and plant a
+	// phantom/incorrectly-defaulted sidebar row of its own.
+	const updateWarmState = (repoPath: string, branch: string, warmState: WorkspaceState["warmState"]) => {
+		if (!repositoriesStore.get(repoPath)?.workspaces[branch]) return;
+		repositoriesStore.setWorkspace(repoPath, branch, { warmState });
+	};
+
+	listen<{ repoPath: string; branch: string; total: number }>("worktree-warm-started", (event) => {
+		const { repoPath, branch, total } = event.payload;
+		updateWarmState(repoPath, branch, { status: "warming", copied: 0, total });
+	}).catch((err) => appLogger.error("app", "Failed to register worktree-warm-started listener", err));
+
+	listen<{ repoPath: string; branch: string; copied: number; total: number; current: string | null }>(
+		"worktree-warm-progress",
+		(event) => {
+			const { repoPath, branch, copied, total, current } = event.payload;
+			updateWarmState(repoPath, branch, { status: "warming", copied, total, current: current ?? undefined });
+		},
+	).catch((err) => appLogger.error("app", "Failed to register worktree-warm-progress listener", err));
+
+	listen<{ repoPath: string; branch: string; warmed: number; warnings: string[] }>(
+		"worktree-warm-completed",
+		(event) => {
+			const { repoPath, branch } = event.payload;
+			updateWarmState(repoPath, branch, null);
+		},
+	).catch((err) => appLogger.error("app", "Failed to register worktree-warm-completed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
 	replaceMcpToastListener((event) => {

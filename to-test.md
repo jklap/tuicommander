@@ -4580,10 +4580,11 @@ seconds and confirm the duplicate receipt produces no second event.
 ## Linked worktrees start WARM (story `767-3968`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
 - [ ] Create a linked worktree of this repo through the dialog or
-      `repo action=worktree_create` without `mode` or `dirty` fields.
-      It must contain `node_modules/` and `src-tauri/target/` straight away, and
-      the MCP/HTTP `instructions` payload must report
-      `warm_artifacts.warmed_directories` > 0.
+      `repo action=worktree_create` without `mode` or `dirty` fields. It must
+      contain `node_modules/` and `src-tauri/target/` within a few seconds of
+      creation, but NOT necessarily by the time creation itself returns —
+      warming now runs in the background (see the follow-up entry below for
+      what changed and what to verify about that).
 - [ ] `git -C <worktree> status` must still work after creation, and the
       worktree's `.git` must still be a FILE, not a directory.
 - [ ] The ignored top-level FILES must NOT have been copied: no `.env`,
@@ -4591,14 +4592,56 @@ seconds and confirm the duplicate receipt produces no second event.
       branch tracks.
 - [ ] `plugins/` (a submodule) and `src-tauri/plugins/claude-wakeup/` must not
       have been double-copied or left half-populated.
-- [ ] Time it. Expect ~38 s on this repo; if it feels worse than a cold build,
-      say so rather than living with it.
 - [ ] Switch Settings → worktree storage to "inside repo" (`.worktrees/`),
       create a worktree, and confirm creation does not hang or recurse — the
       destination's own ignored ancestor must be skipped.
 - [ ] Confirm Settings and settings search contain no copy-on-write workspace
       toggle, the create dialog has no mechanism or parent-changes picker, and
       the Worktree Manager has no clone badge or Publish action.
+
+## Worktree warming moved to the background, gained an opt-out and bounded parallelism — **Rust + frontend, needs a `make dev` restart**
+
+Follow-up to the story above: warming used to run *synchronously*, before
+worktree creation could return — on this repo (real `node_modules`/`target`,
+~80k files/~30GB) that meant ~38s where the "Create Worktree" dialog (and any
+MCP `worktree_create` call) sat blocked. It now runs in the background as the
+first stage of the existing setup chain (warm → file-sync → setup script),
+copies several ignored directories concurrently instead of one at a time
+(capped, not unbounded), and can be turned off per-repo or globally.
+
+- [ ] Time worktree creation on this repo (real `node_modules`/`src-tauri/target`
+      present). It should return in roughly the same time as an unwarmed
+      `git worktree add` — not ~38s. If it's still slow, that's a regression,
+      say so rather than living with it.
+- [ ] Poll `repo action=worktree_warm_status path=<repo> branch=<branch>` (or
+      `GET /worktrees/warm-status?repoPath=...&branch=...`) right after
+      creating a worktree here. It should report `"running"` with `copied`
+      climbing toward `total`, then `"completed"` with `warmed` > 0 once
+      `node_modules`/`src-tauri/target` have actually arrived.
+- [ ] Turn off "Warm ignored build directories" (Settings → Repository →
+      Worktree, or the global default under Settings → Git & GitHub →
+      Worktree Defaults / File Handling Defaults) for this repo, create a
+      worktree, and confirm it stays cold — `node_modules`/`target` never
+      appear, and the poll above reports `"skipped"` instead of
+      `"running"`/`"completed"`. Confirm the per-repo override actually wins
+      over the global default and vice versa (three-position On/Use
+      global/Off, same control as Copy ignored/untracked files).
+- [ ] Kill and restart the app (or the test instance) while a large warm is
+      still in progress (a big `node_modules`/`target`, or throttle disk I/O
+      to slow it down). Confirm nothing is left stuck: a later
+      `worktree_warm_status` poll for that pair reports something sane
+      (`"unknown"` is fine — the in-memory status cache doesn't survive a
+      restart — but it must not hang or crash anything that reads it).
+- [ ] **Sidebar indicator**: while a worktree is warming, its sidebar row
+      shows a "still initializing" badge (`RepoSection.tsx`'s `.warmBadge`,
+      driven by `WorkspaceState.warmState`) whose tooltip's copied/total
+      numbers move as directories finish, and the badge clears once
+      `worktree-warm-completed` fires. Also confirm a restart mid-warm
+      doesn't leave the badge stuck forever — it reconciles via a one-shot
+      poll of `GET /worktrees/warm-status` when the row mounts with no live
+      `warmState` yet, and self-clears via a 900s safety-net timeout
+      (`WARM_BADGE_SAFETY_TIMEOUT_MS`) even if both the event and the poll
+      are somehow missed.
 
 - [ ] After restarting `make dev`, verify Project Progress HTTP controls on the
       isolated test instance: pause rejects reports, resume accepts only new reports,

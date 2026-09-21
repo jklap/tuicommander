@@ -173,6 +173,29 @@ vi.mock("../../hooks/useAgentDetection", async () => {
 Use `vi.hoisted()` for the mutable box itself, not a plain module-scope `let` — `vi.mock` calls (and their factories' effects) are hoisted above other top-level statements in the file, so a plain `let` the factory assigns into hits a TDZ `ReferenceError`.
 
 
+## A New Effect That Calls `fetch()` Needs `fetch` Stubbed In EVERY Test File That Renders The Component, Not Just Its Own
+
+`RepoSection.tsx`'s `BranchItem` fires a real `fetch()` on mount (`pollWarmStatusOnce`,
+added for the worktree-warming sidebar badge) whenever a row mounts with no live
+`warmState` yet — a real, unmocked network call in a test environment either hangs or
+rejects, and either way `vitest`'s leak detector marks the whole test FILE as failed for
+a "leaking promise," even when every individual `it()` in that file passes. The new
+`RepoSection.test.tsx` stubbed `global.fetch` in its own `beforeEach`/`afterEach` and was
+fine — but `Sidebar.test.tsx`, a **sibling** test file that renders the full `Sidebar`
+tree (and therefore every `BranchItem` row inside it) with no `fetch` stub of its own,
+started leaking the moment this feature landed, even though nothing in `Sidebar.test.tsx`
+itself changed. Fixed by adding the same `vi.stubGlobal("fetch", ...)` /
+`vi.unstubAllGlobals()` pair to `Sidebar.test.tsx`'s global `beforeEach`/`afterEach`.
+
+**The general lesson: adding a `fetch`/network call to a component's mount effect is not
+safe to verify by checking only the test file you're adding assertions to.** Grep for
+every OTHER test file that renders the same component (directly or via a parent like
+`Sidebar.tsx`) before declaring the change complete — a sibling file with no reason to
+have ever mocked `fetch` before will silently start leaking, and the failure surfaces as
+a generic "Test Files N failed" with a stack trace pointing at your new code, not as an
+assertion failure in the file you actually touched.
+
+
 ## `t()` Interpolation and `$`-Pattern Injection
 
 `src/i18n/t.ts`'s `t(key, fallback, params)` interpolates via `str.replace(new RegExp(...), v)` — passing the raw dynamic value `v` as `String.replace`'s **replacement** argument, not as literal text. Per the JS spec, a replacement string containing `$&`, `$1`, `$$`, etc. is reinterpreted as a special pattern (matched substring, capture group, literal `$`) rather than inserted verbatim. Any call site that interpolates a value which can contain `$` and isn't fully controlled by us (a git branch name, a file path, free-form user text) can render garbled output — e.g. a branch named `foo$&bar` would have `$&` replaced by the matched `{placeholder}` text instead of appearing literally. Fixed (2026-09-10, found via code review while adding branch-name interpolation to the Create Worktree dialog's stale-setting warning) by escaping `$` → `$$` in each `v` before calling `.replace()`. This fix lives in the single shared helper, so it protects every existing and future `t(..., {...})` call site — no call site itself needs to change.

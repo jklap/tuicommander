@@ -755,6 +755,24 @@
   animation: var(--ind-anim-gitstate-bisecting);
 }
 
+/* Background warm-step badge — shares .gitOpBadge's shape but its own
+ * neutral/informational color: warming isn't an attention-needed state the
+ * way a git op is, just a "still setting up" one. */
+.warmBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  font-family: var(--font-ui);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: var(--bg-primary);
+  background: var(--accent);
+}
+
 .lifecycleRisk {
   background: var(--attention);
   color: var(--bg-primary);

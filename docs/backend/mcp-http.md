@@ -879,9 +879,14 @@ MCP `repo action=worktree_create` uses the same creation path as HTTP
 cache invalidation, `worktree-created` SSE/Tauri events, setup-script result
 reporting, and best-effort copy-on-write warming of Git-ignored directories.
 Every created workspace is a linked worktree: Git refs and objects remain
-shared with the parent, while `instructions.warm_artifacts.warmed_directories`
-reports how many ignored directories arrived warm. Parent tracked changes are
-not copied. See `docs/api/http-api.md` § Create Worktree; both transports call
+shared with the parent. Warming now runs in the background (bounded-parallel,
+capped at `cow::WARM_COPY_CONCURRENCY`) rather than before the response is
+built, so `instructions.warm_artifacts` no longer carries a synchronous
+`warmed_directories` count — it reports `{present, status: "pending", poll,
+note}` instead, pointing at `repo action=worktree_warm_status` /
+`GET /worktrees/warm-status?repoPath=&branch=` for the real outcome. Parent
+tracked changes are not copied. See `docs/api/http-api.md` § Create Worktree
+and § Poll Worktree Warm Status; both transports call
 the same shared core.
 
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
