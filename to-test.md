@@ -8,6 +8,10 @@
 
 # To Test
 
+## Dictation preserves speech before a pause (2026-09-21) — **Rust, needs a `make dev` restart**
+
+- [ ] After restart, dictate a short phrase followed by a pause while holding F5. The live preview must receive the phrase; the final transcription must retain it. Verify silent recordings remain rejected by the configured speech gates.
+
 ## Protocol idle survives terminal animation (2026-09-21) — **Rust, needs a `make dev` restart**
 
 - [ ] After a rebuild/restart, finish a Codex turn in brainstorming with its idle

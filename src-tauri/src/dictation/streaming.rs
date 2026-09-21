@@ -1,13 +1,14 @@
 /// Streaming transcription engine.
 ///
 /// A background thread drains audio from the shared buffer in adaptive sliding
-/// windows (1.5s → 3s), runs VAD to skip silence, and feeds whisper-rs for
+/// windows (1.5s → 3s) and feeds whisper-rs, including trailing pauses, for
 /// partial transcription results emitted via `mpsc::Sender<String>`.
 ///
 /// Follows the `stream.cpp` pattern from whisper.cpp:
 /// - Overlapping windows with `keep_ms` of previous context
 /// - `set_single_segment(true)` + `set_no_timestamps(true)` for short windows
 use crate::dictation::transcribe::{Transcriber, VoiceGates};
+#[cfg(test)]
 use crate::dictation::vad;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -28,10 +29,13 @@ const KEEP_MS: u32 = 200;
 /// Sample rate (must match AudioCapture output).
 const SAMPLE_RATE: u32 = 16_000;
 /// VAD energy threshold.
+#[cfg(test)]
 const VAD_THRESHOLD: f32 = 0.6;
 /// VAD high-pass cutoff Hz.
+#[cfg(test)]
 const VAD_FREQ_THRESHOLD: f32 = 100.0;
 /// VAD window in milliseconds.
+#[cfg(test)]
 const VAD_LAST_MS: u32 = 1000;
 /// Polling interval in milliseconds.
 const POLL_INTERVAL_MS: u64 = 50;
@@ -250,16 +254,10 @@ fn streaming_loop(
         let force_flush = step_buf.len() >= max_buffer_samples;
 
         if step_buf.len() >= current_step_samples || force_flush {
-            // VAD: check if the step buffer has speech
-            let has_speech = !vad::vad_simple(
-                &step_buf,
-                SAMPLE_RATE,
-                VAD_LAST_MS,
-                VAD_THRESHOLD,
-                VAD_FREQ_THRESHOLD,
-            );
-
-            if has_speech {
+            // Only digital silence can be rejected here without losing speech.
+            // A quiet tail marks the end of a phrase, not an empty window.
+            // The transcriber owns the configurable RMS and speech-confidence gates.
+            if step_buf.iter().any(|sample| *sample != 0.0) {
                 // Build window: [keep from previous | current step] — reuse buffer
                 window_buf.clear();
                 window_buf.reserve(prev_tail.len() + step_buf.len());
@@ -553,6 +551,36 @@ mod tests {
     }
 
     #[test]
+    fn speech_followed_by_silence_reaches_transcriber_intact() {
+        let transcriber = Arc::new(EchoTranscriber::new());
+        let mut audio = speech_samples(500);
+        audio.extend(vec![0.0; ms_to_samples(1000)]);
+        let buffer = Arc::new(Mutex::new(VecDeque::from(audio.clone())));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let handle = {
+            let transcriber = transcriber.clone();
+            let buffer = buffer.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                streaming_loop(transcriber, buffer, tx, stop, None, VoiceGates::default())
+            })
+        };
+        wait_until_drained(&buffer);
+        stop.store(true, Ordering::Release);
+        let retained = handle.join().expect("streaming loop should finish");
+        assert_eq!(
+            retained.audio, audio,
+            "final pass must retain the entire phrase"
+        );
+        assert_eq!(transcriber.call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            rx.try_recv().expect("phrase must reach the live preview"),
+            "24000samples"
+        );
+    }
+
+    #[test]
     fn test_streaming_loop_skips_silence() {
         // Feed silence into the buffer — no partials should arrive
         let transcriber: Arc<dyn Transcriber> = Arc::new(EchoTranscriber::new());
@@ -584,7 +612,7 @@ mod tests {
         stop.store(true, Ordering::Release);
         handle.join().expect("Loop should not panic");
 
-        // VAD should have skipped — no partials
+        // Digital silence should have skipped — no partials
         assert!(rx.try_recv().is_err(), "No partials expected for silence");
     }
 
