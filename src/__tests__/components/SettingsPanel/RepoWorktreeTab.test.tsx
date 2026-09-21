@@ -24,6 +24,7 @@ function makeSettings(overrides: Partial<RepoSettings> = {}): RepoSettings {
 		baseBranch: null,
 		copyIgnoredFiles: null,
 		copyUntrackedFiles: null,
+		warmIgnoredDirectories: null,
 		setupScript: null,
 		runScript: null,
 		archiveScript: null,
@@ -59,6 +60,7 @@ const defaults: RepoDefaults = {
 	baseBranch: "main",
 	copyIgnoredFiles: true,
 	copyUntrackedFiles: false,
+	warmIgnoredDirectories: true,
 	setupScript: "",
 	runScript: "",
 	archiveScript: "",
@@ -329,6 +331,38 @@ describe("RepoWorktreeTab", () => {
 			/>
 		));
 		expect((overriddenCase.container.querySelector(selector) as HTMLSelectElement).value).toBe("true");
+	});
+
+	it("resolves warmIgnoredDirectories against the global default when null, and selecting Off overrides it", () => {
+		const { container } = render(() => (
+			<RepoWorktreeTab
+				settings={makeSettings({ warmIgnoredDirectories: null })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+			/>
+		));
+		// warmIgnoredDirectories inherits defaults.warmIgnoredDirectories=true.
+		const warm = container.querySelector(
+			'select[data-setting-id="repositories.repos.{key}.warm_ignored_directories"]',
+		) as HTMLSelectElement;
+		expect(warm.value).toBe("__inherit__");
+		expect(warm.options[0].textContent).toBe("Use global default (On)");
+		fireEvent.change(warm, { target: { value: "false" } });
+		expect(onUpdate).toHaveBeenCalledWith("warmIgnoredDirectories", false);
+	});
+
+	it("selects the explicit override for warmIgnoredDirectories once set", () => {
+		const overridden = render(() => (
+			<RepoWorktreeTab
+				settings={makeSettings({ warmIgnoredDirectories: false })}
+				defaults={defaults}
+				onUpdate={onUpdate}
+			/>
+		));
+		const warm = overridden.container.querySelector(
+			'select[data-setting-id="repositories.repos.{key}.warm_ignored_directories"]',
+		) as HTMLSelectElement;
+		expect(warm.value).toBe("false");
 	});
 
 	it("calls onUpdate for autoConsolidateWorktrees (no null/inherit state — always a concrete bool)", () => {

@@ -42,6 +42,7 @@ function Preview() {
 		baseBranch: null,
 		copyIgnoredFiles: null,
 		copyUntrackedFiles: false,
+		warmIgnoredDirectories: null,
 		setupScript: null,
 		runScript: "pnpm dev",
 		archiveScript: null,

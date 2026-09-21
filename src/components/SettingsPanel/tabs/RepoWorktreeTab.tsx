@@ -45,12 +45,13 @@ function BooleanOverride(props: {
 	settingId?: SettingId;
 	"data-setting-exclusion"?: string;
 	label: string;
+	hint?: string;
 	value: boolean | null;
 	fallback: boolean;
 	onChange: (value: boolean | null) => void;
 }) {
 	return (
-		<SettingRow label={props.label}>
+		<SettingRow label={props.label} hint={props.hint}>
 			{(id, descriptionId) => (
 				<Select
 					data-setting-id={props.settingId}
@@ -278,6 +279,18 @@ export const RepoWorktreeTab: Component<RepoWorktreeTabProps> = (props) => {
 						value={props.settings.copyUntrackedFiles}
 						fallback={props.defaults.copyUntrackedFiles}
 						onChange={(v) => props.onUpdate("copyUntrackedFiles", v)}
+					/>
+
+					<BooleanOverride
+						settingId="repositories.repos.{key}.warm_ignored_directories"
+						label={t("repoWorktree.toggle.warmIgnoredDirectories", "Warm ignored build directories")}
+						hint={t(
+							"repoWorktree.hint.warmIgnoredDirectories",
+							"Copy-on-write copies node_modules, target, and other git-ignored build directories from the parent repo into a new worktree so it starts warm. Runs in the background after creation.",
+						)}
+						value={props.settings.warmIgnoredDirectories}
+						fallback={props.defaults.warmIgnoredDirectories}
+						onChange={(v) => props.onUpdate("warmIgnoredDirectories", v)}
 					/>
 				</div>
 

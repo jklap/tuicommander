@@ -809,6 +809,20 @@ export const GitHubTab: Component = () => {
 						/>
 					</ExpertSetting>
 
+					<ExpertSetting
+						configKey="repo_defaults.warm_ignored_directories"
+						value={repoDefaultsStore.state.warmIgnoredDirectories}
+					>
+						<SettingToggle
+							settingId="repo_defaults.warm_ignored_directories"
+							row
+							checked={repoDefaultsStore.state.warmIgnoredDirectories}
+							onChange={(v) => repoDefaultsStore.setWarmIgnoredDirectories(v)}
+							label="Warm ignored build directories"
+							hint="Copy-on-write copies node_modules, target, and other git-ignored build directories from the parent repo into a new worktree so it starts warm. Runs in the background after creation."
+						/>
+					</ExpertSetting>
+
 					<div class={s.group}>
 						<div class={s.helpLabel}>
 							<label for="default-setup-script">Default Setup Script</label>
