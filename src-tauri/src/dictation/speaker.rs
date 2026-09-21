@@ -459,6 +459,9 @@ mod tests {
     struct Recorded {
         played: Vec<String>,
         stops: usize,
+        /// Set by `play`, cleared by `stop`. A real device clears it when the
+        /// mixer drains; here it is exact, which is what a test needs.
+        speaking: bool,
     }
 
     /// An output that remembers instead of making a noise.
@@ -492,19 +495,20 @@ mod tests {
             if let Some(reason) = &self.fail_with {
                 return Err(reason.clone());
             }
-            self.recorded
-                .lock()
-                .played
-                .push(format!("{:.0}", audio.samples[0]));
+            let mut recorded = self.recorded.lock();
+            recorded.played.push(format!("{:.0}", audio.samples[0]));
+            recorded.speaking = true;
             Ok(())
         }
 
         fn stop(&self) {
-            self.recorded.lock().stops += 1;
+            let mut recorded = self.recorded.lock();
+            recorded.stops += 1;
+            recorded.speaking = false;
         }
 
         fn is_speaking(&self) -> bool {
-            false
+            self.recorded.lock().speaking
         }
     }
 
@@ -513,6 +517,9 @@ mod tests {
     struct FakeSpeech {
         /// Held for as long as a test wants synthesis to be in progress.
         hold: Option<Arc<Mutex<()>>>,
+        /// How many replies render instantly before `hold` starts applying.
+        /// Lets one reply reach the speaker before the next one gets stuck.
+        render_freely: usize,
         started: Arc<AtomicUsize>,
         cancelled: Arc<AtomicUsize>,
     }
@@ -521,6 +528,7 @@ mod tests {
         fn instant() -> Self {
             Self {
                 hold: None,
+                render_freely: 0,
                 started: Arc::new(AtomicUsize::new(0)),
                 cancelled: Arc::new(AtomicUsize::new(0)),
             }
@@ -529,8 +537,14 @@ mod tests {
         fn blocking(hold: Arc<Mutex<()>>) -> Self {
             Self {
                 hold: Some(hold),
-                started: Arc::new(AtomicUsize::new(0)),
-                cancelled: Arc::new(AtomicUsize::new(0)),
+                ..Self::instant()
+            }
+        }
+
+        fn blocking_after(hold: Arc<Mutex<()>>, render_freely: usize) -> Self {
+            Self {
+                render_freely,
+                ..Self::blocking(hold)
             }
         }
     }
@@ -542,8 +556,8 @@ mod tests {
             _voice: &str,
             cancel: &SpeechCancel,
         ) -> Result<SpeechAudio, SpeechError> {
-            self.started.fetch_add(1, Ordering::SeqCst);
-            if let Some(hold) = &self.hold {
+            let nth = self.started.fetch_add(1, Ordering::SeqCst);
+            if let Some(hold) = self.hold.as_ref().filter(|_| nth >= self.render_freely) {
                 // Wait for the test to release the lock, checking the flag the
                 // way a real adapter does between frames.
                 loop {
@@ -732,6 +746,42 @@ mod tests {
 
         assert_eq!(output.stops(), 1, "the device was told to stop");
         assert!(took < Duration::from_millis(100), "hush took {took:?}");
+    }
+
+    #[test]
+    fn interrupting_during_playback_stops_the_device_and_no_stale_reply_resumes() {
+        // The third cancellation point: audio is out of the engine and coming
+        // out of the speaker, with more replies behind it. Interrupting must
+        // silence the device and leave nothing to resume.
+        let hold = Arc::new(Mutex::new(()));
+        let guard = hold.lock();
+        let output = Arc::new(FakeOutput::default());
+        // The first reply renders and plays; the second one gets stuck in the
+        // engine, so the interruption arrives with the device still speaking.
+        let speech = Arc::new(FakeSpeech::blocking_after(Arc::clone(&hold), 1));
+        let started = Arc::clone(&speech.started);
+        let speaker = Speaker::new(speech, Arc::clone(&output) as _, 0);
+
+        speaker.say(0, "first", "v").unwrap();
+        speaker.say(0, "second", "v").unwrap();
+        speaker.say(0, "third", "v").unwrap();
+        eventually("the first reply to reach the speaker", || {
+            speaker.status().speaking
+        });
+        eventually("the second reply to start rendering", || {
+            started.load(Ordering::SeqCst) == 2
+        });
+
+        speaker.hush();
+        drop(guard);
+
+        std::thread::sleep(SETTLE);
+        let status = speaker.status();
+        assert!(!status.speaking, "the device kept talking through the user");
+        assert_eq!(output.stops(), 1);
+        assert_eq!(output.played(), vec!["5"], "only the reply from before");
+        assert_eq!(status.queued, 0);
+        assert!(!status.rendering);
     }
 
     #[test]
