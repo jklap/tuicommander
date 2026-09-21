@@ -16,6 +16,7 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `streaming.rs` | Streaming transcription loop with adaptive windows and shared speech gates |
 | `vad.rs` | Tail-silence detector (energy-based, ported from whisper.cpp; not a whole-window speech gate) |
 | `corrections.rs` | Post-processing text corrections |
+| `continuous.rs` | Hands-free mode: utterance segmentation and session-bound delivery |
 
 ## Tauri Commands
 
@@ -141,6 +142,53 @@ The tail detector is ported from whisper.cpp `common.cpp` `vad_simple()`:
 - **High-pass filter:** First-order RC at 100Hz removes ambient noise (HVAC, fans)
 - **Threshold:** `vad_thold = 0.6` — if `energy_last / energy_all < 0.6`, silence detected
 - **Relative:** Microphone gain doesn't affect detection (ratio-based)
+
+## Hands-free mode (`continuous.rs`)
+
+Push-to-talk is unchanged by this module and does not use it. Hands-free is a
+separate mode with two independent state machines, neither of which reads a
+clock — the caller supplies frame durations and `now_ms`.
+
+**`Segmenter`** cuts the capture stream into utterances over 20 ms frames:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `pre_roll_ms` | 300 | audio kept ahead of the first speech frame, so a soft first syllable survives |
+| `trailing_silence_ms` | 800 | quiet interval that ends an utterance |
+| `min_speech_ms` | 200 | below this the utterance is discarded, not sent |
+| `max_utterance_ms` | 30 000 | hard cap; a monologue is cut rather than buffered without limit |
+| `activity_rms` | 0.01 | frame RMS at or above which a frame counts as speech |
+
+While nobody speaks the only retained audio is the bounded pre-roll ring, so an
+armed microphone in a quiet room holds constant memory and runs no inference.
+`vad_simple` is **not** used here: it answers "is the tail quiet", which is a
+different question from "where does this utterance end".
+
+**`HandsFree`** owns the mode. Arming binds a target session **and** an audio
+owner and opens a generation. A focus change is not an input to this machine at
+all, which is what makes a redirected delivery impossible rather than merely
+unlikely. Every asynchronous result carries the generation it was captured
+under; one that no longer matches is rejected as stale.
+
+A transcript is held back for a visible interval **before** enqueue, so an
+unintended turn can be stopped while nothing has been queued yet. A manual abort
+disarms the whole mode — pending capture, transcription and the held-back
+transcript are discarded, and nothing re-arms by itself. Target closure, audio
+owner disconnect and device failure disarm the same way.
+
+**Delivery is the existing Compose queue and nothing else.** `VoiceQueue` is the
+only exit, and its one production implementation appends through
+`pty::enqueue_voice_command` — the same FIFO, idle gate and id space the Compose
+panel uses. There is no PTY write, no `sendCommand`, no submit and no ACP
+prompt. A target that cannot take a Compose entry (not an agent PTY session)
+is refused at `arm` and at the queue; it stays unavailable, with no fallback.
+
+Queue entries carry ownership: `PendingInjection::VoiceCommand` (wire `kind`
+`voice_command`) holds the hands-free generation. `pty::cancel_voice_commands`
+removes only entries that are both voice-owned and named by the caller, so a
+disarm can never clear a human's Compose command, a peer notice or an exit hint.
+Ids that already left the queue come back in `already_delivered` rather than
+being reported as cancelled — the composer has them and nothing can retract them.
 
 ## Speech gates
 
@@ -333,3 +381,46 @@ On macOS, microphone access is gated by the TCC (Transparency, Consent, and Cont
 **Platform behavior:**
 - **macOS:** Full TCC integration via AVFoundation
 - **Linux/Windows:** Always returns `Authorized` (no TCC framework)
+
+## Kokoro text-to-speech (`crates/kokoro-rs`)
+
+Speech synthesis is native GGML inference over a vendored
+[kokoro.cpp](https://github.com/simonfxr/kokoro.cpp). There is no ONNX, no
+Python and no external service, and no fallback to any of them. The crate
+builds everything it needs from `crates/kokoro-rs/vendor/`; see
+`crates/kokoro-rs/VENDOR.md` for the pins, the one local patch and the
+licensing constraint.
+
+### It is a shared library on purpose
+
+`whisper-rs` links GGML 0.9.5 statically into this process and kokoro.cpp pins
+GGML 0.17.0. The two revisions define 793 symbols with identical names, so
+`build.rs` builds kokoro.cpp as a shared library that hides its GGML and
+exports only `kokoro_*`. `tests/kokoro_whisper_coexistence.rs` holds that in
+place: it links Whisper and Kokoro into one binary, so a regression to a
+static link fails at link time rather than at run time.
+
+### Synthesis cannot be cancelled
+
+The C ABI at the pinned revision has no cancellation and no incremental audio
+callback. **Dropping a `spawn_blocking` future does not stop native work** —
+the thread runs to the end of the utterance and only the result is thrown
+away. The only available bound is request size, so `Kokoro::synthesize`
+rejects text over `MAX_SYNTHESIS_TEXT_BYTES` (2000). Callers that need to
+react to an interruption split text into sentence-sized requests and discard
+stale *results*; the playback queue is what has to be cancellable.
+
+### Threading
+
+A `kokoro_context` is not thread-safe. `Kokoro` keeps the pointer behind a
+mutex and holds the guard for the whole native call, which is what makes it
+`Send + Sync`. Handing the pointer out and releasing the guard is not a
+theoretical mistake: it aborts inside `ggml_concat` with a `GGML_ASSERT`
+failure under four concurrent callers.
+
+### espeak-ng data
+
+kokoro.cpp phonemizes through espeak-ng, which reads its data directory once
+per process from `KOKORO_ESPEAK_DATA_PATH`. `set_espeak_data_root` installs it
+and rejects a second, different directory rather than ignoring it. The default
+is the copy the build compiles, for the eight languages Kokoro-82M supports.

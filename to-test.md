@@ -2765,3 +2765,16 @@ Rust — needs a `make dev` restart.
       commit there was nothing in the log at all.
 - [ ] Put it back and restart. That warning must NOT appear, and AI Chat must be
       able to list terminals again.
+
+## Hands-free voice entries in the Compose queue (#814-6d13)
+
+Rust — needs a `make dev` restart. The hands-free mode has no UI control yet
+(Step 8), so this checks the queue half through the existing HTTP surface.
+
+- [ ] With an agent tab busy, `POST /sessions/{id}/queue` a command, then check
+      `GET /sessions/{id}/queue`: every entry still lists a `kind`, and an
+      ordinary Compose command still reads `user_command`. The new
+      `voice_command` kind must not appear for anything typed by hand.
+- [ ] Enqueue two commands on a busy agent and let them drain on the next idle
+      window. They must still arrive in order — `enqueue_user_command` now
+      appends through a shared helper, and a reordering would show up here.

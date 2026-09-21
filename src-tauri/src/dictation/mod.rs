@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod commands;
+pub mod continuous;
 pub mod corrections;
 pub mod fn_key_monitor;
 pub mod model;
