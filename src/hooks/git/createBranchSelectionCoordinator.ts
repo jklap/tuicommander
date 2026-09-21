@@ -8,6 +8,7 @@ import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
+import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import type { SavedTerminal } from "../../types";
 import { resolveAgentResume, verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
@@ -324,7 +325,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			);
 			appLogger.debug(
 				"terminal",
-				`BranchSelect → ${workspaceId} valid=${validTerminals.length} saved=${branch?.savedTerminals?.length ?? 0}`,
+				`BranchSelect → ${workspaceId} valid=${validTerminals.length} saved=${branch ? savedTerminalsFor(branch).length : 0}`,
 			);
 			if (validTerminals.length === 0 && (branch?.terminals?.length ?? 0) > 0) {
 				appLogger.warn(
@@ -374,7 +375,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 						terminalsStore.setActive(validTerminals[0]);
 					}
 				}
-			} else if (branch?.savedTerminals && branch.savedTerminals.length > 0) {
+			} else if (branch && savedTerminalsFor(branch).length > 0) {
+				const saved = savedTerminalsFor(branch);
 				// Agent tabs restore with a resume banner (verified below). Shell
 				// tabs restore as a fresh live shell in their saved cwd when the
 				// setting is on; otherwise they're dropped — they have no session
@@ -382,10 +384,16 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				// fallback spawn below. A suspended tab is always kept: the user
 				// kept it on purpose.
 				const restorableTerminals = settingsStore.state.restoreShellTerminals
-					? branch.savedTerminals
-					: branch.savedTerminals.filter((t) => t.agentType != null || t.suspended);
-				// Clear savedTerminals (consume-once) regardless of filter result
-				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
+					? saved
+					: saved.filter((t) => t.agentType != null || t.suspended);
+				// Clear savedTerminals (consume-once) regardless of filter result.
+				// `saved` above is the UNION of every client's key
+				// (savedTerminalsFor) — this restore just consumed all of it, so
+				// every contributing key must be cleared, not just this client's
+				// own. Clearing only CLIENT_INSTANCE_ID's key would leave another
+				// client's still-populated key to be "restored" a second time
+				// (duplicate PTY spawn) the next time this workspace is selected.
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminalsByClient: {} });
 
 				if (restorableTerminals.length > 0) {
 					// Capture old terminal IDs from the pane layout (branch.terminals is cleared on hydration)
@@ -467,11 +475,13 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				if (!isEagerResumeArmed()) return;
 				for (const repoPath of repositoriesStore.getPaths()) {
 					for (const [workspaceId, workspace] of Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {})) {
-						const saved = workspace.savedTerminals ?? [];
+						const saved = savedTerminalsFor(workspace);
 						if (workspace.terminals.length > 0) continue;
 						if (!saved.some((tab) => tab.agentType != null && !tab.suspended && tab.agentSessionId)) continue;
-						// Consume-once, as in a branch select.
-						repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
+						// Consume-once, as in a branch select: the union of every client's
+						// snapshot was just read, so clear the whole map (see the branch
+						// select's own consume above).
+						repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminalsByClient: {} });
 						const restored = await restoreSavedTabs(
 							repoPath,
 							workspaceId,

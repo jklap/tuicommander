@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLIENT_INSTANCE_ID } from "../../stores/clientInstance";
 import "../mocks/tauri";
 
 const { mockRpc } = vi.hoisted(() => ({ mockRpc: vi.fn().mockResolvedValue(undefined) }));
@@ -25,6 +26,7 @@ import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
+import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import * as transport from "../../transport";
 import egoAwaiting2103 from "../fixtures/ego-awaiting-2103.json";
 import { makeTerminal, testInScopeAsync } from "../helpers/store";
@@ -1684,26 +1686,31 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", {
 			worktreePath: "/repo",
 			lastActiveTerminal: "term-800",
-			savedTerminals: [
-				{
-					frontendId: "term-800",
-					sessionId: "live",
-					tuicSession: "stable-live",
-					name: "Live",
-					cwd: "/repo",
-					fontSize: 16,
-					agentType: "codex",
+			savedTerminalsByClient: {
+				[CLIENT_INSTANCE_ID]: {
+					savedAt: Date.now(),
+					terminals: [
+						{
+							frontendId: "term-800",
+							sessionId: "live",
+							tuicSession: "stable-live",
+							name: "Live",
+							cwd: "/repo",
+							fontSize: 16,
+							agentType: "codex",
+						},
+						{
+							frontendId: "term-801",
+							tuicSession: "stable-suspended",
+							name: "Suspended",
+							cwd: "/repo",
+							fontSize: 14,
+							agentType: "codex",
+							suspended: true,
+						},
+					],
 				},
-				{
-					frontendId: "term-801",
-					tuicSession: "stable-suspended",
-					name: "Suspended",
-					cwd: "/repo",
-					fontSize: 14,
-					agentType: "codex",
-					suspended: true,
-				},
-			],
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		paneLayoutStore.reset();
@@ -1750,9 +1757,21 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", {
 			worktreePath: "/repo",
 			lastActiveTerminal: "term-880",
-			savedTerminals: [
-				{ frontendId: "term-880", agentType: null, sessionId: "race-live", name: "Live", cwd: "/repo", fontSize: 18 },
-			],
+			savedTerminalsByClient: {
+				[CLIENT_INSTANCE_ID]: {
+					savedAt: Date.now(),
+					terminals: [
+						{
+							frontendId: "term-880",
+							agentType: null,
+							sessionId: "race-live",
+							name: "Live",
+							cwd: "/repo",
+							fontSize: 18,
+						},
+					],
+				},
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		paneLayoutStore.reset();
@@ -1787,17 +1806,22 @@ describe("initApp", () => {
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setWorkspace("/repo", "paused", {
 			worktreePath: "/repo-paused",
-			savedTerminals: [
-				{
-					frontendId: "term-890",
-					agentType: null,
-					tuicSession: "paused-peer",
-					name: "Paused",
-					cwd: "/repo-paused",
-					fontSize: 14,
-					suspended: true,
+			savedTerminalsByClient: {
+				[CLIENT_INSTANCE_ID]: {
+					savedAt: Date.now(),
+					terminals: [
+						{
+							frontendId: "term-890",
+							agentType: null,
+							tuicSession: "paused-peer",
+							name: "Paused",
+							cwd: "/repo-paused",
+							fontSize: 14,
+							suspended: true,
+						},
+					],
 				},
-			],
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		paneLayoutStore.reset();
@@ -1824,14 +1848,19 @@ describe("initApp", () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", {
 			worktreePath: "/repo",
-			savedTerminals: [
-				{ frontendId: "term-891", agentType: null, name: "Paused", cwd: "/repo", fontSize: 14, suspended: true },
-			],
+			savedTerminalsByClient: {
+				[CLIENT_INSTANCE_ID]: {
+					savedAt: Date.now(),
+					terminals: [
+						{ frontendId: "term-891", agentType: null, name: "Paused", cwd: "/repo", fontSize: 14, suspended: true },
+					],
+				},
+			},
 		});
 		repositoriesStore.setActiveWorkspace("/repo", "main");
 		const deps = createMockDeps({
 			handleBranchSelect: vi.fn().mockImplementation(async () => {
-				expect(repositoriesStore.get("/repo")?.workspaces.main.savedTerminals).toEqual([]);
+				expect(savedTerminalsFor(repositoriesStore.get("/repo")!.workspaces.main)).toEqual([]);
 				expect(repositoriesStore.get("/repo")?.workspaces.main.terminals).toContain("term-891");
 			}),
 		});
@@ -2151,8 +2180,9 @@ describe("initApp", () => {
 		window.dispatchEvent(new Event("beforeunload"));
 
 		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
-		expect(branch?.savedTerminals?.length).toBe(1);
-		expect(branch?.savedTerminals?.[0].agentSessionId).toBe("abc-123-uuid");
+		const saved = branch ? savedTerminalsFor(branch) : [];
+		expect(saved.length).toBe(1);
+		expect(saved[0].agentSessionId).toBe("abc-123-uuid");
 	});
 
 	// The flag is what keeps a suspended tab suspended across a restart; a snapshot that
@@ -2173,7 +2203,8 @@ describe("initApp", () => {
 		terminalsStore.update(terminalsStore.getIds()[0], { suspended: true });
 		window.dispatchEvent(new Event("beforeunload"));
 
-		const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+		const savedBranch = repositoriesStore.get("/repo")?.workspaces["main"];
+		const saved = savedBranch ? savedTerminalsFor(savedBranch)[0] : undefined;
 		expect(saved?.suspended).toBe(true);
 	});
 
@@ -2193,8 +2224,9 @@ describe("initApp", () => {
 		window.dispatchEvent(new Event("beforeunload"));
 
 		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
-		expect(branch?.savedTerminals?.length).toBe(1);
-		expect(branch?.savedTerminals?.[0].agentSessionId).toBeNull();
+		const saved = branch ? savedTerminalsFor(branch) : [];
+		expect(saved.length).toBe(1);
+		expect(saved[0].agentSessionId).toBeNull();
 	});
 
 	it("snapshots the intent and a truncated prompt so a restored tab can say what it was doing", async () => {
@@ -2218,7 +2250,8 @@ describe("initApp", () => {
 
 		window.dispatchEvent(new Event("beforeunload"));
 
-		const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+		const savedBranch = repositoriesStore.get("/repo")?.workspaces["main"];
+		const saved = savedBranch ? savedTerminalsFor(savedBranch)[0] : undefined;
 		expect(saved?.agentIntent).toBe("finishing the resume banner");
 		expect(saved?.lastPrompt).toBe("x".repeat(300));
 	});
@@ -2240,9 +2273,10 @@ describe("initApp", () => {
 
 			window.dispatchEvent(new Event("beforeunload"));
 
-			const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals;
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
+			const saved = branch ? savedTerminalsFor(branch) : [];
 			expect(saved).toHaveLength(1);
-			expect(saved?.[0].agentType).toBeNull();
+			expect(saved[0].agentType).toBeNull();
 		});
 
 		it("carries tuicSession and agentLaunchCommand through the snapshot", async () => {
@@ -2264,7 +2298,8 @@ describe("initApp", () => {
 
 			window.dispatchEvent(new Event("beforeunload"));
 
-			const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+			const branch = repositoriesStore.get("/repo")?.workspaces["main"];
+			const saved = branch ? savedTerminalsFor(branch)[0] : undefined;
 			expect(saved?.tuicSession).toBe("tuic-abc");
 			expect(saved?.agentLaunchCommand).toBe("c --model opus");
 		});
@@ -2284,8 +2319,10 @@ describe("initApp", () => {
 
 			window.dispatchEvent(new Event("beforeunload"));
 
-			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals).toHaveLength(1);
-			expect(repositoriesStore.get("/repo")?.workspaces["empty-branch"]?.savedTerminals).toBeUndefined();
+			const mainBranch = repositoriesStore.get("/repo")?.workspaces["main"];
+			const emptyBranch = repositoriesStore.get("/repo")?.workspaces["empty-branch"];
+			expect(mainBranch ? savedTerminalsFor(mainBranch) : []).toHaveLength(1);
+			expect(emptyBranch ? savedTerminalsFor(emptyBranch) : []).toHaveLength(0);
 		});
 
 		it("flushes activityStore, uiStore, and paneLayoutStore before snapshotting", async () => {
@@ -2319,9 +2356,11 @@ describe("initApp", () => {
 			});
 			await initApp(deps);
 
-			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals).toBeUndefined();
+			const branchBefore = repositoriesStore.get("/repo")?.workspaces["main"];
+			expect(branchBefore ? savedTerminalsFor(branchBefore) : []).toHaveLength(0);
 			await vi.advanceTimersByTimeAsync(30_000);
-			expect(repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals).toHaveLength(1);
+			const branchAfter = repositoriesStore.get("/repo")?.workspaces["main"];
+			expect(branchAfter ? savedTerminalsFor(branchAfter) : []).toHaveLength(1);
 		});
 	});
 

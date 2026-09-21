@@ -4910,6 +4910,29 @@ pub(crate) struct StaleTempCandidate {
     pub(crate) display_name: String,
 }
 
+/// Every saved restart-snapshot terminal one workspace record holds: the legacy
+/// flat `savedTerminals` array and each client's
+/// `savedTerminalsByClient.<client>.terminals` (the per-client snapshot the
+/// frontend writes since B.5 — `src/stores/workspaceIdentity.ts`). Backend
+/// readers go through here so neither shape is missed.
+pub(crate) fn workspace_saved_terminals(
+    workspace: &serde_json::Value,
+) -> impl Iterator<Item = &serde_json::Value> {
+    let flat = workspace
+        .get("savedTerminals")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten();
+    let by_client = workspace
+        .get("savedTerminalsByClient")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|clients| clients.values())
+        .filter_map(|entry| entry.get("terminals").and_then(serde_json::Value::as_array))
+        .flatten();
+    flat.chain(by_client)
+}
+
 fn json_is_absent_or_empty_array(value: Option<&serde_json::Value>) -> bool {
     match value {
         None => true,
@@ -4974,7 +4997,9 @@ fn classify_stale_temp_repo(path: &str, repo: &serde_json::Value) -> Option<Stal
     if !json_is_absent_or_empty_array(ws.get("terminals")) {
         return None;
     }
-    if !json_is_absent_or_empty_array(ws.get("savedTerminals")) {
+    if !json_is_absent_or_empty_array(ws.get("savedTerminals"))
+        || workspace_saved_terminals(workspace).next().is_some()
+    {
         return None;
     }
     if json_is_present_non_null(ws.get("lastActiveTerminal")) {
@@ -10194,12 +10219,41 @@ mod tests {
         assert!(classify_stale_temp_repo(&path, &repo).is_none());
     }
 
+    // Catches: backend readers seeing only the legacy flat list, so a
+    // workspace whose restart tabs live in the B.5 per-client snapshot reads
+    // as having none (stale-temp cleanup, suspended-tab lookup, placement).
+    #[test]
+    fn workspace_saved_terminals_reads_flat_and_per_client_snapshots() {
+        let workspace = serde_json::json!({
+            "savedTerminals": [{"tuicSession": "flat"}],
+            "savedTerminalsByClient": {
+                "a": {"savedAt": 1, "terminals": [{"tuicSession": "client-a"}]},
+                "b": {"savedAt": 2, "terminals": []}
+            }
+        });
+        let ids: Vec<_> = workspace_saved_terminals(&workspace)
+            .map(|tab| tab["tuicSession"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["flat", "client-a"]);
+        assert!(
+            workspace_saved_terminals(&serde_json::json!({}))
+                .next()
+                .is_none()
+        );
+    }
+
     #[test]
     fn survives_a_workspace_with_saved_terminals() {
         let path = stale_temp_candidate_path();
         let mut repo = stale_temp_repo_json(&path);
         repo["workspaces"]["main"]["savedTerminals"] = serde_json::json!([{"agentType": null}]);
         assert!(classify_stale_temp_repo(&path, &repo).is_none());
+
+        // The B.5 per-client snapshot is saved state too.
+        let mut per_client = stale_temp_repo_json(&path);
+        per_client["workspaces"]["main"]["savedTerminalsByClient"] =
+            serde_json::json!({"c": {"savedAt": 1, "terminals": [{"agentType": null}]}});
+        assert!(classify_stale_temp_repo(&path, &per_client).is_none());
     }
 
     #[test]

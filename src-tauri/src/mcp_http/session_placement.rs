@@ -104,7 +104,23 @@ pub(super) fn declare_worktree(
     let workspaces = after[workspace_key]
         .as_object_mut()
         .ok_or("Invalid workspace configuration")?;
+    // Saved restart tabs live in the legacy flat `savedTerminals` array and in
+    // per-client `savedTerminalsByClient.<client>.terminals` snapshots (B.5).
+    // Move the caller's tab out of whichever one holds it and into the same
+    // slot of the declared workspace, keeping the owning client and its
+    // `savedAt` so the frontend's TTL and per-client merge stay correct.
+    let take_peer = |terminals: &mut Vec<serde_json::Value>, saved: &mut Vec<serde_json::Value>| {
+        terminals.retain(|terminal| {
+            if terminal["tuicSession"].as_str() == Some(peer) {
+                saved.push(terminal.clone());
+                false
+            } else {
+                true
+            }
+        });
+    };
     let mut saved = Vec::new();
+    let mut saved_by_client: Vec<(String, serde_json::Value, Vec<serde_json::Value>)> = Vec::new();
     for workspace in workspaces.values_mut() {
         // Reading an optional restore list must not insert null: newly discovered
         // workspace rows omit this field until the frontend's first snapshot.
@@ -112,14 +128,25 @@ pub(super) fn declare_worktree(
             .get_mut("savedTerminals")
             .and_then(serde_json::Value::as_array_mut)
         {
-            terminals.retain(|terminal| {
-                if terminal["tuicSession"].as_str() == Some(peer) {
-                    saved.push(terminal.clone());
-                    false
-                } else {
-                    true
+            take_peer(terminals, &mut saved);
+        }
+        if let Some(clients) = workspace
+            .get_mut("savedTerminalsByClient")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for (client, entry) in clients.iter_mut() {
+                let saved_at = entry["savedAt"].clone();
+                if let Some(terminals) = entry
+                    .get_mut("terminals")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    let mut moved = Vec::new();
+                    take_peer(terminals, &mut moved);
+                    if !moved.is_empty() {
+                        saved_by_client.push((client.clone(), saved_at, moved));
+                    }
                 }
-            });
+            }
         }
     }
     let workspace = workspaces.entry(workspace_id.clone()).or_insert_with(|| {
@@ -138,6 +165,32 @@ pub(super) fn declare_worktree(
             .as_array_mut()
             .ok_or("Invalid saved terminal configuration")?
             .extend(saved);
+    }
+    for (client, saved_at, moved) in saved_by_client {
+        if workspace.get("savedTerminalsByClient").is_none() {
+            workspace["savedTerminalsByClient"] = serde_json::json!({});
+        }
+        let clients = workspace["savedTerminalsByClient"]
+            .as_object_mut()
+            .ok_or("Invalid saved terminal configuration")?;
+        let entry = clients
+            .entry(client)
+            .or_insert_with(|| serde_json::json!({"savedAt": saved_at, "terminals": []}));
+        let newer = entry["savedAt"].as_f64().unwrap_or(0.0) < saved_at.as_f64().unwrap_or(0.0);
+        if newer {
+            entry["savedAt"] = saved_at;
+        }
+        if entry
+            .get("terminals")
+            .and_then(serde_json::Value::as_array)
+            .is_none()
+        {
+            entry["terminals"] = serde_json::json!([]);
+        }
+        entry["terminals"]
+            .as_array_mut()
+            .ok_or("Invalid saved terminal configuration")?
+            .extend(moved);
     }
     let changed = crate::config::save_repositories_request(serde_json::json!({
         "mutationVersion": 1, "repos": [{"id": repo_path, "before": before, "after": after}],

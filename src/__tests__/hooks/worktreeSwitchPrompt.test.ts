@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLIENT_INSTANCE_ID } from "../../stores/clientInstance";
+import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import declaration from "../fixtures/declared-worktree-2044.json";
 import { makeTerminal, testInScopeAsync } from "../helpers/store";
 
@@ -311,9 +313,14 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 				handlers.get("session-worktree-declared")?.(event);
 				expect(repositoriesStore.findOwnerForTerminal(creator)?.workspaceId).toBe(BRANCH);
 				repositoriesStore.setWorkspace(REPO, BRANCH, {
-					savedTerminals: [
-						{ name: "Caller", cwd: REPO, fontSize: 14, agentType: "codex", tuicSession: "stable-caller" },
-					],
+					savedTerminalsByClient: {
+						[CLIENT_INSTANCE_ID]: {
+							savedAt: Date.now(),
+							terminals: [
+								{ name: "Caller", cwd: REPO, fontSize: 14, agentType: "codex", tuicSession: "stable-caller" },
+							],
+						},
+					},
 				});
 				handlers.get("session-worktree-declared")?.(event);
 				const { reconcileTerminalOwnership } = await import("../../stores/terminalOwnership");
@@ -331,7 +338,7 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 				expect(terminalsStore.get(creator)?.cwd).toBe(REPO);
 				expect(repositoriesStore.get(REPO)?.workspaces[BRANCH].terminals).toEqual([creator]);
 				expect(repositoriesStore.findOwnerForTerminal(creator)?.workspaceId).toBe(BRANCH);
-				expect(repositoriesStore.get(REPO)?.workspaces[BRANCH].savedTerminals).toHaveLength(1);
+				expect(savedTerminalsFor(repositoriesStore.get(REPO)!.workspaces[BRANCH])).toHaveLength(1);
 				expect(repositoriesStore.findOwnerForTerminal(sibling)?.workspaceId).toBe("main");
 				expect(repositoriesStore.get(REPO)?.activeWorkspaceId).toBe(active ? BRANCH : "main");
 				expect(terminalsStore.state.activeId).toBe(active ? creator : sibling);

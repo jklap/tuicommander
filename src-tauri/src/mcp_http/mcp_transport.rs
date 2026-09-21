@@ -1801,7 +1801,13 @@ mod session_placement_tests {
                 root_path: {"path":root_path,"workspaces":{"main":{"worktreePath":root_path,"savedTerminals":[
                     {"tuicSession":"caller-peer","name":"Caller","cwd":root_path,"fontSize":14,"agentType":"codex"},
                     {"tuicSession":"sibling-peer","name":"Sibling","cwd":root_path,"fontSize":14,"agentType":"codex"}
-                ]},
+                ],
+                // B.5 per-client snapshot: the caller's tab saved by another
+                // client must move too, under the same client key and savedAt.
+                "savedTerminalsByClient":{"client-b":{"savedAt":5,"terminals":[
+                    {"tuicSession":"caller-peer","name":"Caller (B)","cwd":root_path,"fontSize":14,"agentType":"codex"},
+                    {"tuicSession":"sibling-peer","name":"Sibling (B)","cwd":root_path,"fontSize":14,"agentType":"codex"}
+                ]}}},
                 // setWorkspace saves new rows without savedTerminals until a snapshot.
                 // Catches: scanning that absent key with IndexMut inserts null, so
                 // declaring an already-discovered row fails before saving anything.
@@ -1862,6 +1868,15 @@ mod session_placement_tests {
             saved["repos"][root_path]["workspaces"]["feature"]["savedTerminals"][0]["tuicSession"],
             "caller-peer"
         );
+        // Catches: a per-client (B.5) saved tab left behind in the old workspace.
+        let main_b =
+            &saved["repos"][root_path]["workspaces"]["main"]["savedTerminalsByClient"]["client-b"];
+        assert_eq!(main_b["terminals"].as_array().unwrap().len(), 1);
+        assert_eq!(main_b["terminals"][0]["tuicSession"], "sibling-peer");
+        let feature_b = &saved["repos"][root_path]["workspaces"]["feature"]["savedTerminalsByClient"]
+            ["client-b"];
+        assert_eq!(feature_b["savedAt"], 5);
+        assert_eq!(feature_b["terminals"][0]["tuicSession"], "caller-peer");
         assert_eq!(
             handle_session(&state, &request, Some("placement-mcp")),
             placed

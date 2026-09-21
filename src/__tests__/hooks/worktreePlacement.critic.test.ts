@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLIENT_INSTANCE_ID } from "../../stores/clientInstance";
 import "../mocks/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { createBranchSelectionCoordinator } from "../../hooks/git/createBranchSelectionCoordinator";
@@ -70,18 +71,23 @@ describe("worktree placement lifecycle regressions", () => {
 			const repo = repositoriesStore.get(REPO);
 			if (!repo) throw new Error("fixture repository missing");
 			repositoriesStore.setWorkspace(REPO, "feature", {
-				savedTerminals: [
-					{
-						name: "Codex",
-						cwd: REPO,
-						fontSize: 14,
-						agentType: "codex",
-						agentSessionId: null,
-						tuicSession: "stable-peer",
-						agentLaunchCommand: null,
-						suspended: true,
+				savedTerminalsByClient: {
+					[CLIENT_INSTANCE_ID]: {
+						savedAt: Date.now(),
+						terminals: [
+							{
+								name: "Codex",
+								cwd: REPO,
+								fontSize: 14,
+								agentType: "codex",
+								agentSessionId: null,
+								tuicSession: "stable-peer",
+								agentLaunchCommand: null,
+								suspended: true,
+							},
+						],
 					},
-				],
+				},
 			});
 			const persisted = JSON.parse(
 				JSON.stringify({
@@ -141,13 +147,18 @@ describe("worktree placement lifecycle regressions", () => {
 			await testInScopeAsync(async () => {
 				repositoriesStore.setWorkspace(REPO, "feature", {
 					hadTerminals,
-					savedTerminals: cwds.map((cwd, index) => ({
-						name: `saved-${index}`,
-						cwd,
-						fontSize: 14,
-						agentType: "codex",
-						suspended: true,
-					})),
+					savedTerminalsByClient: {
+						[CLIENT_INSTANCE_ID]: {
+							savedAt: Date.now(),
+							terminals: cwds.map((cwd, index) => ({
+								name: `saved-${index}`,
+								cwd,
+								fontSize: 14,
+								agentType: "codex",
+								suspended: true,
+							})),
+						},
+					},
 				});
 				const oldIds = cwds.map((_, index) => `old-${index}`);
 				mockInvoke.mockImplementation(async (command) =>

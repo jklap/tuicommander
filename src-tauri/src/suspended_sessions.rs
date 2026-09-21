@@ -181,7 +181,7 @@ fn saved_tab(identity: &str) -> serde_json::Value {
                 .into_iter()
                 .flat_map(|workspaces| workspaces.values())
         })
-        .flat_map(|workspace| workspace["savedTerminals"].as_array().into_iter().flatten())
+        .flat_map(crate::config::workspace_saved_terminals)
         .find(|tab| tab["tuicSession"] == identity)
         .cloned()
         .unwrap_or_default()

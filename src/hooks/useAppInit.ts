@@ -37,6 +37,7 @@ import { toastsStore } from "../stores/toasts";
 import { tunnelsStore } from "../stores/tunnels";
 import { uiStore } from "../stores/ui";
 import { workflowRunSignals } from "../stores/workflowRunSignals";
+import { savedTerminalsFor, withoutSavedTerminals } from "../stores/workspaceIdentity";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, rpc, subscribeEvents } from "../transport";
 import { getSessionConnection } from "../transportRuntime";
@@ -838,7 +839,7 @@ export async function initApp(deps: AppInitDeps) {
 		.getPaths()
 		.flatMap((repoPath) =>
 			Object.entries(repositoriesStore.get(repoPath)?.workspaces ?? {}).flatMap(([workspaceId, branch]) =>
-				(branch.savedTerminals ?? []).map((tab) => ({ repoPath, workspaceId, tab })),
+				savedTerminalsFor(branch).map((tab) => ({ repoPath, workspaceId, tab })),
 			),
 		);
 	terminalsStore.reserveSnapshotIds(savedTabs.map(({ tab }) => tab.frontendId));
@@ -1347,7 +1348,7 @@ export async function initApp(deps: AppInitDeps) {
 		// Consume this snapshot so a later lazy branch restore cannot duplicate it.
 		const workspace = repositoriesStore.get(repoPath)?.workspaces[workspaceId];
 		repositoriesStore.setWorkspace(repoPath, workspaceId, {
-			savedTerminals: workspace?.savedTerminals?.filter((saved) => saved !== tab),
+			savedTerminalsByClient: withoutSavedTerminals(workspace?.savedTerminalsByClient, (saved) => saved === tab),
 		});
 	}
 
