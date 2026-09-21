@@ -993,7 +993,7 @@ say what was measured, not what the list costs today.
 | `voice` | speak, stop, status | Only with voice configured |
 | `telegram` | register, unregister, begin, activity, finish, send | Only with Telegram configured |
 | `settings` | describe, get, set, reset, patch, perform, refresh | Disabled; trusted UI opt-in required |
-| `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
+| `debug` | agent_detection, explain_state, logs, sessions, invoke_js, help | Disabled |
 
 ### Capability cutover and client migration
 

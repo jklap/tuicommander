@@ -2871,6 +2871,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             pty::get_session_foreground_process,
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
+            pty::explain_session_state,
             pty_capture::get_pty_capture,
             pty_capture::set_pty_capture,
             load_config,

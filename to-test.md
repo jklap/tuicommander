@@ -5693,3 +5693,28 @@ copies up to four ignored directories at once, reports progress, and gives
 - [ ] Remove a worktree while its chain is still running (big warm or a slow
       Setup Script): the creation flow of a NEW worktree on the same branch is
       not released early or frozen, and the new one's setup status is not wiped.
+
+## Session State Explain (2026-09-21, **Rust change — needs `make dev` restart**)
+- New read-only troubleshooting dump for "why is this session's status badge what it is" —
+  ranked evidence per axis, `decide_now`, the `agent_state` ladder rung, screen/silence
+  bookkeeping, the last notification classification, and an always-on decision trail (including
+  rejected evidence attempts and what outranked them). Full design in `docs/backend/pty.md`'s
+  "Session State Explain" section.
+- Surfaces: desktop `explain_session_state` command, `GET /sessions/{id}/explain-state`, MCP
+  `debug action=explain_state`; frontend modal reachable from the Activity Dashboard row's new
+  icon button and the terminal tab context menu's "Explain State…" item.
+- **Verify against a real running session** (needs a rebuild first — this is Rust-side): open
+  the Activity Dashboard, click the small "?" button on a working session's row, confirm the
+  modal loads and every section renders (Visible/Evidence & decision/Agent & screen/Silence
+  timer/Decision trail); try it again on an idle session and on one currently awaiting input.
+  Right-click a terminal tab and confirm "Explain State…" opens the same modal for that
+  session, and is disabled/absent for a tab with no PTY session or an exited one.
+- **Verify Copy as JSON in the real desktop app, not just browser mode** — this is exactly the
+  surface where a prior WKWebView clipboard bug shipped once (issue #101,
+  `navigator.clipboard.writeText` silently failing inside a modal); `writeClipboard` is used
+  here specifically to avoid repeating it, but only a real Tauri build proves it.
+- **Try to catch a genuine mis-detection with it**: next time a session's badge looks wrong,
+  pull its explain-state dump before doing anything else and check whether `trail` shows a
+  rejected attempt, or `decide_now` disagrees with the displayed `shell_state` — either would
+  confirm the feature is actually useful for real troubleshooting, not just self-consistent in
+  tests.
