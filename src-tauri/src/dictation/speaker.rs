@@ -78,7 +78,10 @@ impl std::fmt::Display for SpeakError {
             Self::Stale {
                 generation,
                 current,
-            } => write!(f, "reply belongs to turn {generation}, and turn {current} is current"),
+            } => write!(
+                f,
+                "reply belongs to turn {generation}, and turn {current} is current"
+            ),
             Self::Stopped => write!(f, "the speaker is shutting down"),
         }
     }
@@ -391,12 +394,11 @@ impl Output for DeviceOutput {
         //
         // After a `stop` this waits for the mixer to drop the stopped source
         // before it resumes the player — one `periodic_access` tick, ~5 ms.
-        self.player
-            .append(rodio::buffer::SamplesBuffer::new(
-                channels,
-                rate,
-                audio.samples.clone(),
-            ));
+        self.player.append(rodio::buffer::SamplesBuffer::new(
+            channels,
+            rate,
+            audio.samples.clone(),
+        ));
         Ok(())
     }
 
@@ -801,7 +803,10 @@ mod tests {
             speaker.say(0, &format!("reply {n}"), "v").unwrap();
         }
 
-        assert_eq!(speaker.say(0, "one too many", "v").unwrap_err(), SpeakError::Full);
+        assert_eq!(
+            speaker.say(0, "one too many", "v").unwrap_err(),
+            SpeakError::Full
+        );
         assert_eq!(speaker.status().queued, MAX_QUEUED);
     }
 
@@ -871,7 +876,10 @@ mod tests {
         let took = at.elapsed();
 
         assert!(took < Duration::from_secs(1), "dropping took {took:?}");
-        assert!(output.stops() >= 1, "the device was silenced on the way out");
+        assert!(
+            output.stops() >= 1,
+            "the device was silenced on the way out"
+        );
         assert!(output.played().is_empty());
     }
 
@@ -884,7 +892,10 @@ mod tests {
             state.shutdown = true;
         }
 
-        assert_eq!(speaker.say(0, "ciao", "v").unwrap_err(), SpeakError::Stopped);
+        assert_eq!(
+            speaker.say(0, "ciao", "v").unwrap_err(),
+            SpeakError::Stopped
+        );
     }
 
     #[test]
@@ -930,6 +941,10 @@ mod tests {
         };
 
         assert!(source_parameters(&zero_rate).unwrap_err().contains("zero"));
-        assert!(source_parameters(&empty).unwrap_err().contains("no samples"));
+        assert!(
+            source_parameters(&empty)
+                .unwrap_err()
+                .contains("no samples")
+        );
     }
 }

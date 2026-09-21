@@ -64,7 +64,12 @@ impl Engine {
     }
 
     /// Open the graphs. The runtime library must already be loaded.
-    pub fn open(dir: &Path, bundle: Bundle, tokenizer: Tokenizer, temperature: f32) -> Result<Self> {
+    pub fn open(
+        dir: &Path,
+        bundle: Bundle,
+        tokenizer: Tokenizer,
+        temperature: f32,
+    ) -> Result<Self> {
         Ok(Self {
             // The conditioner and the encoder are exported at full precision
             // only; asking for the quantised name would fail to open.
@@ -185,7 +190,9 @@ impl Engine {
             }
 
             let mut x: Vec<f32> = if stddev > 0.0 {
-                (0..latent_dim).map(|_| gaussian(&mut rng, stddev)).collect()
+                (0..latent_dim)
+                    .map(|_| gaussian(&mut rng, stddev))
+                    .collect()
             } else {
                 vec![0.0; latent_dim]
             };
@@ -227,7 +234,12 @@ impl Engine {
     }
 
     /// Latents to PCM, a handful of frames at a time.
-    fn decode(&mut self, latents: &[f32], frames: usize, cancel: &SpeechCancel) -> Result<Vec<f32>> {
+    fn decode(
+        &mut self,
+        latents: &[f32],
+        frames: usize,
+        cancel: &SpeechCancel,
+    ) -> Result<Vec<f32>> {
         let latent_dim = self.bundle.latent_dim;
         let mut state = init_state(&self.bundle.mimi_state_manifest)?;
         let mut audio: Vec<f32> = Vec::new();
@@ -352,7 +364,11 @@ mod tests {
         let variance =
             samples.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / samples.len() as f32;
         assert!(mean.abs() < 0.02, "mean {mean}");
-        assert!((variance.sqrt() - 0.5).abs() < 0.02, "stddev {}", variance.sqrt());
+        assert!(
+            (variance.sqrt() - 0.5).abs() < 0.02,
+            "stddev {}",
+            variance.sqrt()
+        );
     }
 
     #[test]
@@ -374,7 +390,12 @@ mod tests {
         // what the text can justify. Returning the audio so far would look
         // like a correct, if clipped, reply and nobody would investigate.
         let error = remaining_frames(100, 100, 12.5).unwrap_err();
-        assert_eq!(error, SpeechError::Runaway { budget_seconds: 8.0 });
+        assert_eq!(
+            error,
+            SpeechError::Runaway {
+                budget_seconds: 8.0
+            }
+        );
     }
 
     #[test]
@@ -383,7 +404,12 @@ mod tests {
         // chunks, so the last one may end a frame or two over. The subtraction
         // must not wrap into a huge allowance.
         let error = remaining_frames(100, 140, 12.5).unwrap_err();
-        assert_eq!(error, SpeechError::Runaway { budget_seconds: 8.0 });
+        assert_eq!(
+            error,
+            SpeechError::Runaway {
+                budget_seconds: 8.0
+            }
+        );
     }
 
     /// Cancellation and the budget, against a real bundle.

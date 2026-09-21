@@ -61,7 +61,8 @@ impl Bundle {
     pub fn load(dir: &Path) -> Result<Self> {
         let path = dir.join("bundle.json");
         let bytes = std::fs::read(&path).map_err(|e| unavailable(&path, format!("{e}")))?;
-        serde_json::from_slice(&bytes).map_err(|e| failed(format!("parsing {}: {e}", path.display())))
+        serde_json::from_slice(&bytes)
+            .map_err(|e| failed(format!("parsing {}: {e}", path.display())))
     }
 
     /// How many audio frames the engine may produce for `seconds` of speech.
@@ -244,9 +245,8 @@ pub struct VoiceState {
 
 impl VoiceState {
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path).map_err(|e| {
-            SpeechError::UnknownVoice(format!("{} ({e})", path.display()))
-        })?;
+        let bytes = std::fs::read(path)
+            .map_err(|e| SpeechError::UnknownVoice(format!("{} ({e})", path.display())))?;
         let file = safetensors::SafeTensors::deserialize(&bytes)
             .map_err(|e| failed(format!("reading {}: {e}", path.display())))?;
         let mut tensors = HashMap::new();
@@ -254,7 +254,10 @@ impl VoiceState {
             let view = file
                 .tensor(name)
                 .map_err(|e| failed(format!("reading {name}: {e}")))?;
-            tensors.insert(name.to_string(), (view.shape().to_vec(), view.data().to_vec()));
+            tensors.insert(
+                name.to_string(),
+                (view.shape().to_vec(), view.data().to_vec()),
+            );
         }
         Ok(Self { tensors })
     }
@@ -265,11 +268,23 @@ impl VoiceState {
 }
 
 fn f32_from_bytes(bytes: &[u8]) -> Vec<f32> {
-    bytes.as_chunks::<4>().0.iter().copied().map(f32::from_le_bytes).collect()
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .copied()
+        .map(f32::from_le_bytes)
+        .collect()
 }
 
 fn i64_from_bytes(bytes: &[u8]) -> Vec<i64> {
-    bytes.as_chunks::<8>().0.iter().copied().map(i64::from_le_bytes).collect()
+    bytes
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .copied()
+        .map(i64::from_le_bytes)
+        .collect()
 }
 
 /// Build the flow LM's starting state from a saved voice.
@@ -367,7 +382,8 @@ mod tests {
         // The flow LM's first sequence slot is declared `nan` on purpose. If it
         // silently became 0.0 the first generated frame would be conditioned on
         // a real-looking latent instead of an undefined one.
-        let StateValue::F32 { data, .. } = StateValue::filled(&entry("float32", "nan", &[2])).unwrap()
+        let StateValue::F32 { data, .. } =
+            StateValue::filled(&entry("float32", "nan", &[2])).unwrap()
         else {
             panic!("expected a float tensor");
         };

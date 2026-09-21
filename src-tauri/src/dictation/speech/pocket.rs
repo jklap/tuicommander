@@ -37,7 +37,9 @@ use super::{Speech, SpeechAudio, SpeechCancel, SpeechError, budget_seconds};
 /// error type that is. Every call into onnxruntime goes through this.
 macro_rules! ort_try {
     ($e:expr) => {
-        ($e).map_err(|e| $crate::dictation::speech::SpeechError::Failed(format!("onnxruntime: {e}")))?
+        ($e).map_err(|e| {
+            $crate::dictation::speech::SpeechError::Failed(format!("onnxruntime: {e}"))
+        })?
     };
 }
 
@@ -54,19 +56,18 @@ fn failed(reason: String) -> SpeechError {
 /// Name the missing file by its last two components: a bare file name is
 /// ambiguous across languages, and a full path is noise in a toast.
 fn unavailable(path: &Path, reason: String) -> SpeechError {
-    let what = path
-        .parent()
-        .and_then(Path::file_name)
-        .map_or_else(
-            || path.display().to_string(),
-            |parent| format!("{}/{}", parent.to_string_lossy(), file_name(path)),
-        );
+    let what = path.parent().and_then(Path::file_name).map_or_else(
+        || path.display().to_string(),
+        |parent| format!("{}/{}", parent.to_string_lossy(), file_name(path)),
+    );
     SpeechError::ModelUnavailable { what, reason }
 }
 
 fn file_name(path: &Path) -> String {
-    path.file_name()
-        .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into())
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into(),
+    )
 }
 
 /// Sampling temperature. The reference runtime's default; lower is flatter,
@@ -209,17 +210,15 @@ fn resolve_runtime_library(bundle_dir: &Path, configured: Option<String>) -> Opt
         Some(path) if !path.is_empty() => return Some(PathBuf::from(path)),
         _ => {}
     }
-    let path = bundle_dir.parent()?.join("onnxruntime").join(library_name());
+    let path = bundle_dir
+        .parent()?
+        .join("onnxruntime")
+        .join(library_name());
     path.exists().then_some(path)
 }
 
 impl Speech for PocketSpeech {
-    fn synthesize(
-        &self,
-        text: &str,
-        voice: &str,
-        cancel: &SpeechCancel,
-    ) -> Result<SpeechAudio> {
+    fn synthesize(&self, text: &str, voice: &str, cancel: &SpeechCancel) -> Result<SpeechAudio> {
         // Checked before anything expensive: a reply the user has already
         // talked over is the common case, not an error case.
         if cancel.is_cancelled() {
@@ -330,7 +329,10 @@ mod tests {
         voice(&speech, "giovanni");
         assert_eq!(
             speech.voice_path("giovanni").unwrap(),
-            speech.bundle_dir().join(VOICES_SUBDIR).join("giovanni.safetensors")
+            speech
+                .bundle_dir()
+                .join(VOICES_SUBDIR)
+                .join("giovanni.safetensors")
         );
         // Underscores and digits are real voice names upstream.
         voice(&speech, "expresso_02");
@@ -395,8 +397,7 @@ mod tests {
         // without this check a half-finished download takes the app down.
         let dir = tempfile::tempdir().unwrap();
         let speech = PocketSpeech::new(dir.path().join("italian"));
-        let SpeechError::ModelUnavailable { what, reason } =
-            speech.ensure_runtime().unwrap_err()
+        let SpeechError::ModelUnavailable { what, reason } = speech.ensure_runtime().unwrap_err()
         else {
             panic!("expected the runtime to be reported unavailable");
         };
@@ -459,7 +460,11 @@ mod tests {
             .expect("synthesis");
 
         assert_eq!(audio.sample_rate, 24_000);
-        assert!(audio.duration_seconds() > 2.0, "{}s", audio.duration_seconds());
+        assert!(
+            audio.duration_seconds() > 2.0,
+            "{}s",
+            audio.duration_seconds()
+        );
         assert!(
             audio.duration_seconds() <= budget_seconds(text),
             "{}s over a {}s budget",

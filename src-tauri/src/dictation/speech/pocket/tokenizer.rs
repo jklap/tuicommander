@@ -31,8 +31,8 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     pub fn open(path: &Path) -> Result<Self> {
-        let spm = SentencePieceModel::from_file(path)
-            .map_err(|e| unavailable(path, format!("{e}")))?;
+        let spm =
+            SentencePieceModel::from_file(path).map_err(|e| unavailable(path, format!("{e}")))?;
         let vocab: Vec<(String, f64)> = spm
             .pieces()
             .iter()
@@ -113,7 +113,11 @@ pub fn prepare_text(bundle: &Bundle, text: &str) -> Result<(String, usize)> {
         text = text.replace(';', ",");
     }
 
-    let frames_after_eos = if text.split_whitespace().count() <= 4 { 3 } else { 1 };
+    let frames_after_eos = if text.split_whitespace().count() <= 4 {
+        3
+    } else {
+        1
+    };
 
     let mut chars = text.chars();
     if let Some(first) = chars.next()
@@ -155,7 +159,12 @@ fn boundary_indices(tokens: &[u32], boundaries: &[u32]) -> Vec<usize> {
 fn segments(tokenizer: &Tokenizer, tokens: &[u32], indices: &[usize]) -> Vec<(usize, String)> {
     indices
         .windows(2)
-        .map(|pair| (pair[1] - pair[0], tokenizer.decode(&tokens[pair[0]..pair[1]])))
+        .map(|pair| {
+            (
+                pair[1] - pair[0],
+                tokenizer.decode(&tokens[pair[0]..pair[1]]),
+            )
+        })
         .collect()
 }
 
@@ -165,13 +174,21 @@ fn segments(tokenizer: &Tokenizer, tokens: &[u32], indices: &[usize]) -> Vec<(us
 /// The limit is the bundle's `max_token_per_chunk`. Past it the transformer's
 /// attention window is exhausted and the tail of the sentence degrades, so this
 /// is a correctness bound rather than a performance one.
-pub fn split_into_chunks(bundle: &Bundle, tokenizer: &Tokenizer, text: &str) -> Result<Vec<String>> {
+pub fn split_into_chunks(
+    bundle: &Bundle,
+    tokenizer: &Tokenizer,
+    text: &str,
+) -> Result<Vec<String>> {
     let (prepared, _) = prepare_text(bundle, text)?;
     let tokens = tokenizer.encode(prepared.trim())?;
 
     // The leading id is the dummy-prefix piece, not punctuation.
     let sentence_ends = tokenizer.encode(".!...?")?[1..].to_vec();
-    let coarse = segments(tokenizer, &tokens, &boundary_indices(&tokens, &sentence_ends));
+    let coarse = segments(
+        tokenizer,
+        &tokens,
+        &boundary_indices(&tokens, &sentence_ends),
+    );
 
     let fallback = tokenizer.encode(",;:")?[1..].to_vec();
     let mut refined = Vec::new();
@@ -181,7 +198,11 @@ pub fn split_into_chunks(bundle: &Bundle, tokenizer: &Tokenizer, text: &str) -> 
             continue;
         }
         let sub_tokens = tokenizer.encode(segment_text.trim())?;
-        let sub = segments(tokenizer, &sub_tokens, &boundary_indices(&sub_tokens, &fallback));
+        let sub = segments(
+            tokenizer,
+            &sub_tokens,
+            &boundary_indices(&sub_tokens, &fallback),
+        );
         if sub.len() > 1 {
             refined.extend(sub);
         } else {
@@ -380,10 +401,7 @@ mod tests {
             ],
             50,
         );
-        assert_eq!(
-            merged,
-            vec!["Primo. Secondo.", "Terzo molto piu lungo."]
-        );
+        assert_eq!(merged, vec!["Primo. Secondo.", "Terzo molto piu lungo."]);
     }
 
     #[test]
@@ -433,7 +451,9 @@ mod tests {
             ),
             (
                 "Città, qualità, perché, però, più.",
-                &[744, 397, 618, 261, 333, 392, 261, 260, 299, 261, 374, 261, 301, 263],
+                &[
+                    744, 397, 618, 261, 333, 392, 261, 260, 299, 261, 374, 261, 301, 263,
+                ],
             ),
         ];
         for (text, ids) in expected {
