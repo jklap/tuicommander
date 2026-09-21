@@ -3981,6 +3981,8 @@ mod tests {
                     cwd: None,
                     session_id: None,
                     alias: None,
+                    display_name: None,
+                    display_name_is_custom: false,
                 },
                 base_repo: repo.path().to_string_lossy().to_string(),
                 branch_name: "warm-test-branch".to_string(),
