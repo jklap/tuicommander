@@ -242,6 +242,19 @@
   color: var(--fg-primary);
 }
 
+.explainBtn {
+  color: var(--fg-muted);
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.explainBtn:hover {
+  opacity: 1;
+  color: var(--fg-primary);
+  background: var(--bg-highlight);
+}
+
 /* Sub-rows: current task, last prompt, agent intent */
 .subRow {
   display: flex;

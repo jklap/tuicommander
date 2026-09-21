@@ -324,6 +324,7 @@
 /sessions/x
 /sessions/x/accent-color
 /sessions/x/chat-view
+/sessions/x/explain-state
 /sessions/x/focus
 /sessions/x/force-retry
 /sessions/x/foreground
