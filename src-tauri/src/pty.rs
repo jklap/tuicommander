@@ -6860,6 +6860,13 @@ struct ChunkProcessor {
     codex_approval_question: Option<String>,
     /// A cancellation row painted since the current Codex approval began.
     codex_approval_canceled: bool,
+    /// The display name to restore an OSC title to, once captured — see
+    /// `osc_title::apply_osc_title`'s doc comment for why this is
+    /// `Option<Option<String>>` rather than a plain `Option<String>` (outer
+    /// `None` = not yet captured; `Some(None)` = captured, and the base was
+    /// itself no name). Lives exactly as long as the PTY (this struct is
+    /// constructed once per session), so it needs no teardown reap.
+    osc_title_base: Option<Option<String>>,
     /// Reusable screen snapshot handed to the post-lock consumers
     /// (`parse_slash_menu`, `parse_choice_prompt`, the question-dedup absence
     /// check and `rearm_awaiting_for_open_dialog`). Retained across chunks so
@@ -6975,6 +6982,7 @@ impl ChunkProcessor {
             title_awaiting: false,
             codex_approval_question: None,
             codex_approval_canceled: false,
+            osc_title_base: None,
             screen_buf: Vec::new(),
             pending_open_urls: Vec::new(),
         }
@@ -7841,10 +7849,16 @@ impl ChunkProcessor {
                             "PtyWrite reached the deferred event loop instead of being flushed early");
                     }
                     TermEvent::Title(title) => {
-                        #[cfg(feature = "desktop")]
-                        if let Some(a) = state.app_handle.read().as_ref() {
-                            let _ = a.emit(&format!("pty-title-{session_id}"), &title);
-                        }
+                        // Both transports now converge on one display name —
+                        // see osc_title.rs's module doc comment for why this
+                        // used to be a desktop-only app.emit with no bus arm
+                        // and no write to PtySession.display_name anywhere.
+                        crate::osc_title::apply_osc_title(
+                            state,
+                            session_id,
+                            Some(&title),
+                            &mut self.osc_title_base,
+                        );
                         // Some agents signal an awaiting-approval permission prompt by
                         // putting "Action Required" in their OSC 0 title (grok prefixes
                         // "⚠ Action Required - ⠙ - Running: echo … - Execute Shell …";
@@ -7873,10 +7887,12 @@ impl ChunkProcessor {
                         self.title_awaiting = title_awaiting;
                     }
                     TermEvent::ResetTitle => {
-                        #[cfg(feature = "desktop")]
-                        if let Some(a) = state.app_handle.read().as_ref() {
-                            let _ = a.emit(&format!("pty-title-{session_id}"), "");
-                        }
+                        crate::osc_title::apply_osc_title(
+                            state,
+                            session_id,
+                            None,
+                            &mut self.osc_title_base,
+                        );
                         self.title_awaiting = false;
                     }
                     TermEvent::ClipboardStore(text) => {
@@ -13266,6 +13282,12 @@ pub(crate) fn spawn_reader_thread(
                     serde_json::json!({ "session_id": session_id }),
                 );
             }
+            // Restore an OSC-title-overwritten name to its captured base
+            // before announcing the close — see
+            // `osc_title::restore_base_on_exit`'s doc comment. This is what
+            // makes step C.1.5 (the ported frontend's own exit-time
+            // restore) work on every transport instead of only desktop.
+            crate::osc_title::restore_base_on_exit(&state, &session_id, &processor.osc_title_base);
             tracing::info!(source = "pty", session_id = %session_id, "Session closed: process exited");
             emit_session_closed(&state, &session_id, "process_exit");
 
