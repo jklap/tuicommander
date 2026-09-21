@@ -2617,3 +2617,29 @@ Same restart caveat — Rust.
       sessions must reappear.
 - [ ] Wrong password: the badge reads `unauthenticated`, and for an SSH-transport
       machine no `ssh` process is left behind (`pgrep -fl ssh`).
+
+## A dropped request must not leak an ego process (#804-2ec8)
+
+Rust change — needs a `make dev` restart (or `make build`) to load.
+
+`/acp/one-shot` was awaited inline under the router's 301s timeout, which drops
+the handler future. Everything after the drop was skipped, including the
+`disconnect` that stops ego, and nothing else ever would: the supervisor is an
+independent task and only settled connections are pruned. The turn now runs on
+its own task, the launch has its own 60s budget and the turn 240s, so the whole
+call fits inside the router's bound.
+
+- [ ] Run a Smart Prompt in `api` mode, then close the tab / kill the request
+      mid-turn (`curl ... & sleep 2; kill %1` against
+      `POST http://127.0.0.1:9877/acp/one-shot`). Within a few seconds
+      `pgrep -fl ego` must show no leftover process.
+- [ ] `GET /acp/connections` must not list a connection for the abandoned turn.
+- [ ] A normal Smart Prompt still answers, and a long one that runs out of time
+      reports "ego did not finish the turn within 240s" rather than a bare 408.
+- [ ] Point `ego_executable` at something that starts and never speaks (e.g. a
+      `sleep 600` wrapper) and press Connect in AI Chat: it must fail within a
+      minute with "the agent did not answer initialize within 60s" instead of
+      spinning forever, and leave no child behind.
+- [ ] Press Connect on a remote machine and navigate away immediately. The
+      machine must still reach `connected` (or `error`) — never stay stuck on
+      `connecting`, which used to make every later Connect a silent no-op.

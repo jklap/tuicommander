@@ -66,6 +66,48 @@ async fn malformed_non_v1_and_early_eof_leave_no_registered_connection() {
     }
 }
 
+/// An agent that starts and then says nothing is abandoned, not waited on.
+///
+/// The three scenarios above all end the pipe, so the client learns of them by
+/// reading EOF. `silent-initialize` never does: the process is alive, stdout is
+/// open and no answer is coming, so a `connect` with no deadline of its own
+/// sits in `send_request` holding the child for the life of the app — and every
+/// caller above it inherits that, `/acp/one-shot` most of all, whose whole turn
+/// has to fit inside the router's `REQUEST_TIMEOUT` (#804-2ec8).
+///
+/// The budget is a parameter because it IS the subject: 200 ms is small enough
+/// to run and large enough that the launch cannot exhaust it, and the assertion
+/// is that connect RETURNED, not how fast. The outer 10 s is the hang bound and
+/// is strictly larger than the budget it wraps, so its message cannot lie.
+#[tokio::test]
+async fn an_agent_that_never_answers_initialize_is_given_up_on() {
+    let fixture = Fixture::with("silent-initialize");
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        fixture.manager.connect_within(
+            &Fixture::config(),
+            AcpConnectRequest {
+                root: fixture.root(),
+            },
+            std::time::Duration::from_millis(200),
+        ),
+    )
+    .await
+    .expect("connect never returned: the initialize budget did not fire")
+    .expect_err("a silent agent must not report a ready connection");
+
+    assert_eq!(error.code, AcpClientErrorCode::InitializationFailed);
+    assert!(
+        error.message.contains("did not answer initialize"),
+        "the error must name what was waited for: {error:?}"
+    );
+    assert!(
+        fixture.manager.connection_ids().is_empty(),
+        "a connection that never initialized must not be registered: {:?}",
+        fixture.manager.connection_ids()
+    );
+}
+
 #[tokio::test]
 async fn unknown_snapshot_is_typed_not_found() {
     let manager = AcpClientManager::new();

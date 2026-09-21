@@ -27,7 +27,9 @@
 //! The fold from events to an answer is [`TurnCollector`], which is pure and
 //! carries the tests. Everything around it is I/O.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1;
@@ -40,13 +42,23 @@ use super::{
 use crate::acp_commands::ego_config;
 use crate::state::AppState;
 
-/// How long one unattended turn may take before it is abandoned.
+/// How long the turn itself may take, once ego is up: `session/new`, the
+/// prompt, and everything ego then says.
 ///
 /// Server-side and not a parameter: no caller needs a different value, and a
 /// timeout an HTTP body could choose is a way to pin an ego process for as long
-/// as the sender likes. It matches the headless-CLI budget in
-/// `useSmartPrompts`, which is the same kind of work.
-const TURN_TIMEOUT: Duration = Duration::from_secs(300);
+/// as the sender likes.
+///
+/// It is 240s rather than the 300s it used to be because it now has to share
+/// the router's budget with the launch. `/acp/one-shot` is wrapped by
+/// `mcp_http::REQUEST_TIMEOUT` (301s), and this deadline used to bound only
+/// [`collect`] — the ego launch, `initialize`, `session/new` and the prompt all
+/// sat outside it, so a turn that used its full 300s of thinking overshot the
+/// router and came back as a bare 408 instead of the sentence below.
+/// `INITIALIZE_TIMEOUT` (60s) plus this is 300s, the same deliberate one-second
+/// margin `CONFIRM_TIMEOUT` keeps, and
+/// `request_timeout_beats_every_in_handler_deadline` pins it.
+pub(crate) const TURN_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// What one unattended turn produced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -206,7 +218,7 @@ fn quoted(text: &str) -> String {
 /// separate one, and the alternative — writing ego's own config — is forbidden
 /// by the plan (§6.2, decision 2).
 pub(crate) async fn ask(
-    state: &AppState,
+    state: &Arc<AppState>,
     root: PathBuf,
     system: &str,
     content: String,
@@ -235,29 +247,90 @@ pub(crate) fn unparseable(what: &str, err: impl std::fmt::Display, answer: &str)
 /// left running for a turn nobody is waiting on is a process that will only be
 /// noticed when there are a dozen of them.
 pub(crate) async fn run_prompt(
+    state: &Arc<AppState>,
+    root: PathBuf,
+    prompt: String,
+) -> Result<EgoTurn, AcpClientError> {
+    let state = Arc::clone(state);
+    detached(async move { run_turn(&state, root, prompt).await }).await
+}
+
+/// Run one turn on its own task, so a caller that goes away cannot cancel it.
+///
+/// `/acp/one-shot` sits under the router's `REQUEST_TIMEOUT`, and
+/// `tower_http`'s timeout DROPS the handler future when it fires; a browser
+/// that disconnects mid-request does the same. Everything after the drop point
+/// is then simply skipped — including the `disconnect` that stops the ego
+/// process — and nothing else would ever stop it: the supervisor holding the
+/// child is an independent task, and `forget_stale_settled` prunes settled
+/// connections only, so the connection stays registered with a live process
+/// until the app exits.
+///
+/// Awaiting a `JoinHandle` makes the caller's interest and the work's lifetime
+/// two different things: dropping the handle abandons the answer, not the turn.
+async fn detached<T: Send + 'static>(
+    body: impl Future<Output = Result<T, AcpClientError>> + Send + 'static,
+) -> Result<T, AcpClientError> {
+    match tokio::spawn(body).await {
+        Ok(outcome) => outcome,
+        // Re-raised rather than converted: with the body inline a panic unwound
+        // through the caller, and there is no `AcpClientError` that honestly
+        // means "we have a bug" — dressing one up as a protocol failure would
+        // send the next reader to ego. Nothing aborts this task, so
+        // `into_panic` cannot be the cancelled case.
+        Err(join) => std::panic::resume_unwind(join.into_panic()),
+    }
+}
+
+/// Launch, ask, shut down. Runs to completion whatever the caller does.
+async fn run_turn(
     state: &AppState,
     root: PathBuf,
     prompt: String,
 ) -> Result<EgoTurn, AcpClientError> {
     let config = ego_config(state)?;
+    // Bounded by `INITIALIZE_TIMEOUT` inside the manager, which is why no
+    // deadline is wrapped around it here: a timeout at this level would drop a
+    // future that is not the one holding the ego child.
     let connection = state
         .acp
         .connect(&config, AcpConnectRequest { root: root.clone() })
         .await?;
+    let connection_id = connection.connection_id;
 
-    let outcome = drive(
-        state,
-        &connection.connection_id,
-        connection.latest_sequence,
-        root,
-        prompt,
+    // The budget covers `session/new` and the prompt as well as the answer.
+    // Around `collect` alone it bounded the part that was already the least
+    // likely to hang, and left the caller's total unbounded.
+    let outcome = match tokio::time::timeout(
+        TURN_TIMEOUT,
+        drive(
+            state,
+            &connection_id,
+            connection.latest_sequence,
+            root,
+            prompt,
+        ),
     )
-    .await;
+    .await
+    {
+        Ok(outcome) => outcome,
+        // `None` for the operation: a turn that ran out of time is not a
+        // capability ego failed to offer, and naming one would send a reader
+        // looking for a missing feature.
+        Err(_) => Err(AcpClientError::agent_error(
+            connection_id,
+            None,
+            format!(
+                "ego did not finish the turn within {}s",
+                TURN_TIMEOUT.as_secs()
+            ),
+        )),
+    };
 
     // The settlement is not reported: the caller asked for an answer, and a
     // connection that would not shut down cleanly says nothing about whether
     // the answer is good.
-    let _ = state.acp.disconnect(connection.connection_id).await;
+    let _ = state.acp.disconnect(connection_id).await;
     outcome
 }
 
@@ -297,25 +370,9 @@ async fn drive(
         )
         .await?;
 
-    let collected = tokio::time::timeout(
-        TURN_TIMEOUT,
-        collect(state, connection_id, &mut events, &session_id),
-    )
-    .await
-    .map_err(|_| {
-        // `None` for the operation: a turn that ran out of time is not a
-        // capability ego failed to offer, and naming one would send a reader
-        // looking for a missing feature.
-        AcpClientError::agent_error(
-            connection_id,
-            None,
-            format!(
-                "ego did not finish the turn within {}s",
-                TURN_TIMEOUT.as_secs()
-            ),
-        )
-        .with_session_id(session_id.clone())
-    })??;
+    // No deadline here: `run_turn` wraps this whole function, so a budget at
+    // this depth would bound the last step and leave the three before it free.
+    let collected = collect(state, connection_id, &mut events, &session_id).await?;
 
     collected
         .finish()
@@ -439,6 +496,49 @@ mod tests {
                 "which one?",
             )),
         }
+    }
+
+    /// The shutdown must survive the caller going away, because that is the
+    /// case it exists for.
+    ///
+    /// `/acp/one-shot` runs under the router's `REQUEST_TIMEOUT`, and
+    /// `tower_http` DROPS the handler future when it fires; a browser that
+    /// disconnects mid-turn does the same. Awaited inline, everything after the
+    /// drop point was skipped — the `disconnect` in [`run_turn`] above all —
+    /// and nothing else stops an ego process: its supervisor is an independent
+    /// task, and only settled connections are ever pruned.
+    ///
+    /// The 1 ms is the drop, not a deadline on the work: `timeout` polls the
+    /// inner future before it sleeps, so the spawn always happens, and the
+    /// assertion below it refuses to let this pass by finishing early. The 5 s
+    /// is the "did this hang" bound, far above the 50 ms the body needs.
+    #[tokio::test]
+    async fn a_caller_that_goes_away_does_not_cancel_the_shutdown() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let shut_down = Arc::new(AtomicBool::new(false));
+        let in_body = Arc::clone(&shut_down);
+        let turn = detached(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            in_body.store(true, Ordering::SeqCst);
+            Ok::<(), AcpClientError>(())
+        });
+
+        tokio::time::timeout(Duration::from_millis(1), turn)
+            .await
+            .expect_err("the body must still be running when the caller is dropped");
+        assert!(
+            !shut_down.load(Ordering::SeqCst),
+            "the body finished before the drop, so this run proves nothing"
+        );
+
+        for _ in 0..500 {
+            if shut_down.load(Ordering::SeqCst) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the dropped caller cancelled the shutdown");
     }
 
     #[test]

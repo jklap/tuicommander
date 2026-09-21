@@ -26,7 +26,7 @@ mod manager;
 pub(crate) mod oneshot;
 
 pub use events::{AcpEventJournal, AcpEventStream};
-pub use manager::AcpClientManager;
+pub use manager::{AcpClientManager, INITIALIZE_TIMEOUT};
 
 /// The three ways a connection attaches to a session ego already owns.
 ///

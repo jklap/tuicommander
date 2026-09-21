@@ -302,7 +302,7 @@ fn emit_review_progress(_state: &crate::AppState, _repo_path: &str, _payload: se
 pub(crate) async fn run_pr_review_impl(
     repo_path: String,
     pr_number: i64,
-    state: &crate::AppState,
+    state: &std::sync::Arc<crate::AppState>,
 ) -> Result<PrReviewResult, String> {
     let diff = crate::github::get_pr_diff_impl(&repo_path, pr_number, state).await?;
     let head_sha = format!("{:016x}", hash_diff(&diff));

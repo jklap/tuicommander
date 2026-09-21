@@ -173,8 +173,8 @@ three rules in `acp/oneshot.rs` changes what the mode is allowed to do.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/acp/oneshot.rs` | The turn: what counts as the answer, which questions are refused, how long the turn may take |
-| `src-tauri/src/acp/manager.rs` | `new_unattended_session` / `unattended` — the emptied authority. `granted` is its attended counterpart |
+| `src-tauri/src/acp/oneshot.rs` | The turn: what counts as the answer, which questions are refused, how long the turn may take. `detached` is why a dropped caller cannot skip the shutdown, and `TURN_TIMEOUT` must leave room for `INITIALIZE_TIMEOUT` inside `REQUEST_TIMEOUT` |
+| `src-tauri/src/acp/manager.rs` | `new_unattended_session` / `unattended` — the emptied authority. `granted` is its attended counterpart. `INITIALIZE_TIMEOUT` bounds the launch, enforced inside the supervisor because only there can expiry stop the child |
 | `src-tauri/src/acp_commands.rs`, `src-tauri/src/mcp_http/acp_routes.rs` | `acp_one_shot_prompt` and `POST /acp/one-shot`. The route takes the spawn guard: it launches a process |
 | `src/transport.ts`, `src-tauri/src/mcp_http/command_table_paths.txt` | The parity entry and its regenerated snapshot |
 | `src/hooks/useSmartPrompts.ts` | `canExecuteApi`, `apiRoot`, `executeApi` — and the `api` branch of `executeHeadless`, which is the same one path |
