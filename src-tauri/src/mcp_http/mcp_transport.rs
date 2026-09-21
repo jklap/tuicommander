@@ -1242,7 +1242,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_setup_status, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export";
+const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_setup_status, worktree_warm_status, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
@@ -1468,15 +1468,15 @@ fn native_tool_definitions(prefer_spawning: bool, prefer_messaging: bool) -> ser
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories are warmed with copy-on-write copies when supported. Read the returned instructions.warm_artifacts.warmed_directories to see what arrived warm.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- worktree_setup_status: Poll a worktree's Setup Script outcome (the script runs in the background after worktree_create returns, so this is the only way to learn its result). Requires path, branch. Returns {state: \"running\"|\"not_configured\"|\"completed\"|\"unknown\"}, plus exit_code/error when completed.\n\nProject progress. Every progress_* action requires path — a destructive one never infers the active project — and carries its payload in the typed `input` object, which rejects unknown fields. Record a NEW outcome with the `progress` tool, not here.\n- progress_status: Collection state, unread count, workstreams and open blockers.\n- progress_list: Page of recorded entries. input: beforeSequence, limit, workstreamId, kind, unreadOnly, blockerOnly, createdAfterMs, createdBeforeMs (all optional).\n- progress_pause: Stop collecting for this project.\n- progress_resume: Resume collecting for this project.\n- progress_delete: Remove entries. input.eventIds (required).\n- progress_clear: Remove every entry for the project. input.expectedRevision (required) — a stale revision is rejected instead of clearing.\n- progress_update: Apply corrections. input.expectedRevision + input.corrections, each tagged by `operation`: edit_summary, move_event, rename_workstream, merge_workstreams, merge_events, resolve_blocker, set_workstream_state.\n- progress_read: Acknowledge everything up to input.snapshotCursor (required — take it from a progress_list or progress_status response) as read. Returns a revision receipt, not entries.\n- progress_export: Deterministic Markdown snapshot. input.operation=preview renders it and writes nothing; operation=write persists progress.md and needs snapshotId, snapshotTimeMs, replace, expectedContent.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories are warmed with copy-on-write copies in the background, if enabled for this repo — NOT before this call returns. Poll worktree_warm_status for the outcome; do not assume the returned instructions.warm_artifacts describes a finished state.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- worktree_setup_status: Poll a worktree's Setup Script outcome (the script runs in the background after worktree_create returns, so this is the only way to learn its result). Requires path, branch. Returns {state: \"running\"|\"not_configured\"|\"completed\"|\"unknown\"}, plus exit_code/error when completed.\n- worktree_warm_status: Poll a worktree's background warm-directories outcome (git-ignored build directories like node_modules/target clonefiled in from the parent — runs in the background after worktree_create returns, so this is the only way to learn its result). Requires path, branch. Returns {state: \"running\"|\"skipped\"|\"completed\"|\"unknown\"}, plus copied/total when running or warmed/warnings when completed. \"skipped\" means warming is disabled for this repo, not that it failed.\n\nProject progress. Every progress_* action requires path — a destructive one never infers the active project — and carries its payload in the typed `input` object, which rejects unknown fields. Record a NEW outcome with the `progress` tool, not here.\n- progress_status: Collection state, unread count, workstreams and open blockers.\n- progress_list: Page of recorded entries. input: beforeSequence, limit, workstreamId, kind, unreadOnly, blockerOnly, createdAfterMs, createdBeforeMs (all optional).\n- progress_pause: Stop collecting for this project.\n- progress_resume: Resume collecting for this project.\n- progress_delete: Remove entries. input.eventIds (required).\n- progress_clear: Remove every entry for the project. input.expectedRevision (required) — a stale revision is rejected instead of clearing.\n- progress_update: Apply corrections. input.expectedRevision + input.corrections, each tagged by `operation`: edit_summary, move_event, rename_workstream, merge_workstreams, merge_events, resolve_blocker, set_workstream_state.\n- progress_read: Acknowledge everything up to input.snapshotCursor (required — take it from a progress_list or progress_status response) as read. Returns a revision receipt, not entries.\n- progress_export: Deterministic Markdown snapshot. input.operation=preview renders it and writes nothing; operation=write persists progress.md and needs snapshotId, snapshotTimeMs, replace, expectedContent.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_setup_status, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_setup_status)" },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_setup_status, worktree_warm_status, progress_status, progress_list, progress_pause, progress_resume, progress_delete, progress_clear, progress_update, progress_read, progress_export" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, worktree_setup_status, worktree_warm_status)" },
                 "workspace_id": { "type": "string", "description": "Workspace id from action=worktree_list (required for action=worktree_remove)." },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
                 "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
-                "branch": { "type": "string", "description": "Branch name (action=worktree_create optional, action=worktree_setup_status required)" },
+                "branch": { "type": "string", "description": "Branch name (action=worktree_create optional, action=worktree_setup_status/worktree_warm_status required)" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
                 "input": { "type": "object", "description": "Typed action payload for progress_list/delete/clear/update/read/export. Unknown fields are rejected." }
@@ -3859,6 +3859,25 @@ async fn handle_worktree(
                 }
             };
             match crate::worktree::get_worktree_setup_status(state, &path, &branch) {
+                Some(status) => to_json_or_error(status),
+                None => serde_json::json!({"state": "unknown"}),
+            }
+        }
+        "warm_status" => {
+            let path = match require_path(args, "warm_status") {
+                Ok(p) => p,
+                Err(e) => return e,
+            };
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let branch = match args["branch"].as_str() {
+                Some(b) => b.to_string(),
+                None => {
+                    return serde_json::json!({"error": "Action 'warm_status' requires 'branch' parameter"});
+                }
+            };
+            match crate::worktree::get_worktree_warm_status(state, &path, &branch) {
                 Some(status) => to_json_or_error(status),
                 None => serde_json::json!({"state": "unknown"}),
             }
@@ -6776,6 +6795,9 @@ async fn handle_repo(
         "worktree_setup_status" => {
             handle_worktree(state, &remap_action(args, "setup_status"), is_claude_code).await
         }
+        "worktree_warm_status" => {
+            handle_worktree(state, &remap_action(args, "warm_status"), is_claude_code).await
+        }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'repo'. Available: {}", other, REPO_ACTIONS
         )}),
@@ -8120,6 +8142,145 @@ mod tests {
             &state,
             &serde_json::json!({
                 "action": "worktree_setup_status",
+                "path": repo.path().to_string_lossy(),
+                "branch": "never-created",
+            }),
+            false,
+        )
+        .await;
+
+        assert_eq!(response["state"], "unknown");
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_warm_status_requires_branch() {
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "warm_status",
+                "path": repo.path().to_string_lossy(),
+            }),
+            false,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("requires 'branch'"),
+            "response: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_warm_status_requires_path() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "warm_status",
+                "branch": "some-branch",
+            }),
+            false,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("requires 'path'"),
+            "response: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_worktree_warm_status_reports_unknown_for_an_untracked_pair() {
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "warm_status",
+                "path": repo.path().to_string_lossy(),
+                "branch": "never-created",
+            }),
+            false,
+        )
+        .await;
+
+        assert_eq!(response["state"], "unknown");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn handle_worktree_warm_status_reports_the_tracked_status_after_create() {
+        // End-to-end through the same "create" arm: an MCP client that just
+        // created a worktree must be able to poll for the warm outcome, since
+        // the create response itself no longer carries a real
+        // `warmed_directories` count synchronously.
+        let repo = create_temp_git_repo_for_mcp_test();
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let create_response = handle_worktree(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_create",
+                "path": repo.path().to_string_lossy(),
+                "branch": "mcp-warm-status-test",
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(create_response["branch"], "mcp-warm-status-test");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut final_response = None;
+        loop {
+            let response = handle_worktree(
+                &state,
+                &serde_json::json!({
+                    "action": "warm_status",
+                    "path": repo.path().to_string_lossy(),
+                    "branch": "mcp-warm-status-test",
+                }),
+                false,
+            )
+            .await;
+            if response["state"] == "completed" || response["state"] == "skipped" {
+                final_response = Some(response);
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // The fixture repo has no ignored directories, so this resolves to
+        // Completed{warmed: 0, warnings: []} rather than Skipped — either
+        // outcome proves the poll surfaces a real, non-"unknown" terminal
+        // state, which is what this test exists to prove.
+        let response = final_response.expect("warm step should settle within the timeout");
+        assert_eq!(response["state"], "completed");
+        assert_eq!(response["warmed"], 0);
+    }
+
+    #[tokio::test]
+    async fn handle_repo_worktree_warm_status_remaps_to_handle_worktree() {
+        let repo = create_temp_git_repo_for_mcp_test();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_warm_status",
                 "path": repo.path().to_string_lossy(),
                 "branch": "never-created",
             }),
@@ -13259,6 +13420,7 @@ mod tests {
             "worktree_create",
             "worktree_remove",
             "worktree_setup_status",
+            "worktree_warm_status",
         ] {
             assert!(
                 action_desc.contains(action),

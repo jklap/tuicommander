@@ -2128,14 +2128,41 @@ event and the `/events` SSE frame serialize the same struct, so the field names
 are identical by construction. Payload table: `docs/sync-matrix.md`.
 
 
-The worktree's own file sync (`copy_ignored_files`/`copy_untracked_files`/
-`copy_paths`) and its configured Setup Script, if any, both run **afterward in
-the background** (`worktree::spawn_worktree_setup_chain`, always
-sync-then-script in that order), so this response never carries
-`setup_script`/`setup_script_error`. The setup script's outcome — if one is
-configured — is reported later via the dual-emitted
-`worktree-setup-script-completed` event (see `docs/sync-matrix.md`),
-or can be polled via `GET /worktrees/setup-status` below.
+Warming its git-ignored build directories (`node_modules`, `target`, etc. —
+if `warm_ignored_directories` resolves `true` for this repo), the worktree's
+own file sync (`copy_ignored_files`/`copy_untracked_files`/`copy_paths`), and
+its configured Setup Script, if any, all run **afterward in the background**
+(`worktree::spawn_worktree_setup_chain`, always warm-then-sync-then-script in
+that order), so this response never carries `setup_script`/`setup_script_error`,
+and `instructions.warm_artifacts` never carries a finished `warmed_directories`
+count — only `{ "present": [...], "status": "pending", "poll": "...", "note":
+"..." }`, since warming hasn't necessarily finished by the time this response
+is built. The setup script's outcome — if one is configured — is reported
+later via the dual-emitted `worktree-setup-script-completed` event (see
+`docs/sync-matrix.md`), or can be polled via `GET /worktrees/setup-status`
+below; warming's outcome is reported via `worktree-warm-completed` or
+`GET /worktrees/warm-status`, its own sibling endpoint.
+
+### Poll Worktree Warm Status
+
+```
+GET /worktrees/warm-status?repoPath=/path/to/repo&branch=feature-x
+```
+
+Read-only status check for the background warm step (the chain's first
+stage, ahead of the file sync) kicked off by worktree creation — the only way
+an MCP client (no SSE/event stream) can ever learn whether the git-ignored
+build directories actually arrived, since `POST /worktrees` doesn't return a
+finished count synchronously (see above). Response is
+`{ "state": "running" | "skipped" | "completed" | "unknown" }`, with
+`copied`/`total` also present when `state` is `"running"`, and
+`warmed`/`warnings` when `state` is `"completed"`. `"skipped"` means
+`warm_ignored_directories` resolved `false` for this repo — warming was never
+attempted, not that it failed. `"unknown"` means nothing is tracked for this
+`(repoPath, branch)` pair — never created this way, aged out, or the app
+restarted since — treat it as "can't tell," not as "definitely nothing was
+warmed." Sibling to `GET /worktrees/setup-status` below (same shape of
+gate: read-only, no extra auth gate beyond the standard server auth).
 
 ### Poll Worktree Setup Status
 

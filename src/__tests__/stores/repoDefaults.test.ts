@@ -27,6 +27,8 @@ describe("repoDefaultsStore", () => {
 				expect(store.state.baseBranch).toBe("automatic");
 				expect(store.state.copyIgnoredFiles).toBe(false);
 				expect(store.state.copyUntrackedFiles).toBe(false);
+				// Pure opt-out (unlike the two copy toggles): default must stay true.
+				expect(store.state.warmIgnoredDirectories).toBe(true);
 				expect(store.state.setupScript).toBe("");
 				expect(store.state.runScript).toBe("");
 			});
@@ -39,6 +41,7 @@ describe("repoDefaultsStore", () => {
 				base_branch: "main",
 				copy_ignored_files: true,
 				copy_untracked_files: true,
+				warm_ignored_directories: false,
 				setup_script: "npm install",
 				run_script: "npm run dev",
 			});
@@ -49,6 +52,7 @@ describe("repoDefaultsStore", () => {
 				expect(store.state.baseBranch).toBe("main");
 				expect(store.state.copyIgnoredFiles).toBe(true);
 				expect(store.state.copyUntrackedFiles).toBe(true);
+				expect(store.state.warmIgnoredDirectories).toBe(false);
 				expect(store.state.setupScript).toBe("npm install");
 				expect(store.state.runScript).toBe("npm run dev");
 			});
@@ -61,6 +65,7 @@ describe("repoDefaultsStore", () => {
 			testInScope(() => {
 				expect(store.state.baseBranch).toBe("automatic");
 				expect(store.state.copyIgnoredFiles).toBe(false);
+				expect(store.state.warmIgnoredDirectories).toBe(true);
 			});
 		});
 
@@ -109,6 +114,19 @@ describe("repoDefaultsStore", () => {
 			});
 		});
 
+		it("setWarmIgnoredDirectories updates state and persists", () => {
+			testInScope(() => {
+				store.setWarmIgnoredDirectories(false);
+				expect(store.state.warmIgnoredDirectories).toBe(false);
+				expect(mockInvoke).toHaveBeenCalledWith(
+					"save_repo_defaults",
+					expect.objectContaining({
+						config: expect.objectContaining({ warm_ignored_directories: false }),
+					}),
+				);
+			});
+		});
+
 		it("setSetupScript updates state and persists", () => {
 			testInScope(() => {
 				store.setSetupScript("npm install");
@@ -143,6 +161,7 @@ describe("repoDefaultsStore", () => {
 						base_branch: "develop",
 						copy_ignored_files: false,
 						copy_untracked_files: false,
+						warm_ignored_directories: true,
 						setup_script: "",
 						run_script: "",
 						archive_script: "",

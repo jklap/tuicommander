@@ -441,6 +441,147 @@ recursively copy the entire source repo — including its real `.git` — on top
 own linked-worktree `.git` *file*, corrupting it.
 
 
+## Worktree Warming (`warm_ignored_directories`) — Background, Bounded-Parallel
+
+Warming (clonefile-copying the parent's git-ignored build directories — `node_modules`,
+`target`, etc. — into a freshly created linked worktree so it starts warm; see `cow.rs`)
+used to run **synchronously inside `worktree::create_workspace_with`**, before
+`CreatedWorkspace` was returned — on a repo with real `node_modules`/`target` this
+blocked worktree creation for tens of seconds (~38s measured on this repo, 83k inodes).
+Fixed (2026-09-21) by moving it into `spawn_worktree_setup_chain` as that chain's new
+**first** stage (chain order is now warm → file-sync → setup script), gated by a new
+tri-state setting `warm_ignored_directories` (`config::resolve_effective_warm_setting`,
+same 3-tier resolution as `copy_ignored_files`, default `true` — a pure opt-out, not an
+opt-in, so existing repos keep warming unless someone turns it off).
+
+**`cow::warm_candidates_concurrent` fans out each candidate directory's copy across a
+`WARM_COPY_CONCURRENCY`-capped (`4`) `Arc<tokio::sync::Semaphore>` + `tokio::task::JoinSet`
+— but the pre-existing skip-rule pre-pass (symlink-ancestor check, `.git`-holding-directory
+skip, destination-containment check, `to.exists()`) stays a single-threaded loop that runs
+to completion BEFORE any dispatch begins.** This is load-bearing, not an implementation
+detail: it means every check gates every candidate exactly the same way it did when
+warming was sequential — nothing moved to the wrong side of the concurrency boundary. If
+you touch this function again, keep that ordering (all skip-rules evaluated, `to_dispatch`
+fully built, `on_started(total)` fired, only THEN does the `Semaphore`/`JoinSet` fan-out
+begin) — interleaving a check with the concurrent copies would reopen exactly the class of
+symlink-planting attack `first_symlinked_ancestor` (in the sibling file-sync module, same
+threat model) exists to close.
+
+**Warming gets its own sibling poll status (`WorktreeWarmStatus`/`worktree_warm_status`),
+not a merge into the existing `WorktreeSetupStatus`/`worktree_setup_status`.** Considered
+folding warm info into the setup-script status so a caller could learn "is this worktree
+fully ready" in one call, but rejected: warm and the setup script are independently-lifecycled
+stages with different outcome shapes, and the file-sync stage *doesn't* get its own poll
+endpoint either — only the setup script did, because that's the one stage whose outcome a
+caller needs to branch on programmatically. Warm now needs the exact same treatment (did
+`node_modules` actually arrive?), so it gets the same one-stage-per-endpoint pattern rather
+than widening `WorktreeSetupStatus`'s.
+
+**The creation response's `instructions.warm_artifacts` no longer carries a synchronous
+`warmed_directories` count** — a breaking response-shape change for any existing caller that
+read it (see the same section's history for the desktop `create_worktree` command, the MCP
+HTTP `create_worktree_shared` route, and the `repo action=worktree_create` MCP tool). It now
+reports `{present, status: "pending", poll, note}`, pointing at the new
+`repo action=worktree_warm_status` / `GET /worktrees/warm-status?repoPath=&branch=` instead.
+`cow::warm_artifacts()` (the separate, disk-derived presence/size check used to build
+`present`) is unaffected — it re-derives from disk each call and never depended on the
+synchronous warm step having run.
+
+**`mcp_http/session.rs`'s `create_session_with_worktree` (`/sessions/worktree`) gets warming
+as a side effect, with no changes needed there** — it already called
+`spawn_worktree_setup_chain` (for the file-sync fix documented above), so once warming moved
+into that same chain, this third creation path started warming too, closing a gap it never
+even had test coverage to notice (it went from "doesn't warm" to "warms" silently). Verified
+by `create_session_with_worktree_also_warms` in that file's test module — if you add a
+FOURTH creation path, make sure it either goes through `spawn_worktree_setup_chain` too, or
+gets an equivalent explicit test proving it does (or doesn't) warm; don't assume.
+
+**Security fix (2026-09-21): `warm_candidates_concurrent`'s skip-rule pre-pass was missing
+the intermediate-symlink guard `worktree_sync.rs::sync_one` already has for the identical
+threat model.** A malicious branch (the same `head_ref`-influenced threat model as the `--`
+end-of-options guard in `create_worktree_internal`) could commit a directory symlink at any
+intermediate component of a path matching one of the *parent's own* ignored-directory names
+(e.g. a tracked symlink named `vendor` standing in for what the parent has as a real
+directory containing `vendor/cache`) — `git worktree add` checks it out into `dest` as a real
+symlink, and without a guard, warming's `create_dir_all`/copy would follow it and write the
+parent's real ignored build content through to wherever the branch pointed, using this
+(trusted) repo's own content. Fixed by making `worktree_sync::first_symlinked_ancestor`
+`pub(crate)` and calling it from `warm_candidates_concurrent` too, exactly like `sync_one`
+does — reject (as a warning, not a hard error; warming is best-effort) rather than follow.
+Regression test: `cow::tests::warming_refuses_to_follow_a_symlinked_intermediate_component_in_dest`.
+**If you add a third writer into an untrusted, freshly-checked-out `dest`, it needs this same
+guard — don't assume "we already fixed this class of bug" covers a sibling module that
+writes into the same kind of path independently.**
+
+**Another instance of "Which timing assertions are load-bearing" (see that section below):**
+`cow::tests::warming_runs_concurrently_not_sequentially` originally asserted
+`elapsed < 500ms` to prove concurrent dispatch is faster than sequential would be —
+reliable in isolation, but observed failing at 2.35s elapsed under `cargo nextest run
+--workspace`'s full parallel load (thousands of tests contending for CPU). No wall-clock
+margin fixes this; the OS scheduler simply isn't guaranteed to run the 4 capped threads
+within any fixed window when the machine is this loaded. Fixed by dropping the timing
+assertion entirely in favor of the same `max_in_flight` atomic-counter technique its sibling
+`warming_never_exceeds_the_concurrency_cap` already uses — asserting `max_in_flight > 1`
+proves real parallelism happened regardless of how slowly anything gets scheduled. Prefer
+this structural approach over a wall-clock bound for any future "did concurrency actually
+happen" test in this codebase.
+
+**Known limitations, found in review, deliberately not fixed (2026-09-21):**
+- `state.rs`'s `worktree_warm_status`/`worktree_setup_status` caches are both keyed only by
+  `(repo_path, branch)`, with no generation/epoch guard. A rapid remove-then-recreate of a
+  worktree on the *same branch name* while the first one's warm/setup-script task is still
+  running (nothing cancels an orphaned `tokio::spawn`) can let the stale task's later write
+  land after the new task's, showing a wrong progress count or a premature "completed" for
+  the new worktree. This is the same pre-existing shape in both caches (not new to warming),
+  self-corrects once no further stale writes land, and the trigger (remove+recreate the exact
+  same branch name within seconds) is rare enough that a generation guard wasn't added for
+  it — but if you're touching either cache for another reason, consider adding one to both
+  at once rather than fixing only the one you're already in.
+- `run_worktree_warm` reconstructs "did warming actually dispatch anything" via a side-channel
+  `Arc<AtomicBool>` shared across `on_started`/`on_progress`/a post-await check, purely to
+  decide whether to emit `worktree-warm-completed` — `cow::WarmingReport` has no field for
+  this itself. Works correctly (verified: nothing here actually runs concurrently across real
+  threads, so the atomic ordering is stricter than needed, just not incorrect), but the
+  information properly belongs on `WarmingReport`, not reconstructed at the call site. Left
+  as-is rather than reshaping the return type for a cosmetic-only fix.
+- `remove_worktree_by_workspace_id` guards against live PTY sessions before removing a
+  worktree, but has no equivalent guard against an in-flight background warm task for that
+  same `(repo_path, branch)` — nothing stores a handle to the `tokio::spawn`'d warm chain, so
+  nothing can wait for or cancel it. Removing a worktree immediately after creating it, before
+  its warm step finishes, can race `git worktree remove` against `warm_candidates_concurrent`'s
+  still-running copies: at best a harmless copy failure (silently absorbed as a warning nobody
+  reads), at worst a copy that recreates a directory at the just-removed path after `rm -rf`
+  has already walked past it, leaving orphaned build-artifact content on disk under a path the
+  user believes was fully removed. Narrow trigger (create-then-immediately-remove the exact
+  same worktree within the warm window) and not data corruption, so not fixed here — but if
+  you're adding cancellation/wait plumbing for the setup-script chain for any other reason,
+  extend it to cover this too rather than treating it as a warm-only gap.
+- Reviewed and deliberately left as-is (negligible real cost, confirmed by direct inspection,
+  not just asserted): `warm_candidates_concurrent`'s cheap metadata-only skip-rule pre-pass
+  isn't wrapped in its own `spawn_blocking` (the copies and the COW probe already are); warm
+  and file-sync settings resolution each independently re-read the same three config sources
+  from disk once per worktree creation (small files, once per creation, not a hot path); the
+  sidebar's poll-on-mount fires one cheap (no-filesystem-work, moka-cache-backed) HTTP request
+  per worktree row on every mount/reconnect regardless of the row's age; the safety-timeout
+  `createEffect` in `RepoSection.tsx` clears and re-arms its 900s timer on every progress tick
+  (each event is a new object reference), not only on the null→non-null transition. Each of
+  these is a real, verified observation — just not worth the risk of touching more code for
+  the actual magnitude of savings involved.
+- `build_worktree_warm_status_cache`/`build_worktree_setup_status_cache` (state.rs),
+  `emit_worktree_warm_*`/`emit_worktree_sync_*`/`emit_worktree_setup_script_completed`
+  (worktree.rs, the dual-emit shape), `resolve_warm_setting_from`/`resolve_copy_settings_from`
+  (config.rs, the 3-tier resolution chain), and `get_worktree_warm_status_http`/
+  `get_worktree_setup_status_http` (worktree_routes.rs) are each a close structural copy of
+  an existing sibling, with no shared generic helper. This is consistent with how this
+  codebase already handles every other per-setting resolver and per-stage poll surface (each
+  is its own hand-written copy — confirmed by a full sibling survey during review: no generic
+  `resolve_tier<T>` or `dual_emit(...)` helper exists anywhere for ANY existing setting/event),
+  so warming isn't introducing a new inconsistency, just extending an existing one. If a THIRD
+  background-creation-stage ever needs its own poll surface, that's the point to generalize
+  the cache/route/query/MCP-action shape into one parameterized helper rather than hand-copying
+  a third time — not before.
+
+
 ## Window Geometry Restore
 
 `main` is permanently denylisted from `tauri-plugin-window-state`'s `SIZE` flag (`lib.rs`

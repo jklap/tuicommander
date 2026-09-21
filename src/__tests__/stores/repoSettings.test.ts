@@ -29,6 +29,7 @@ const [mockDefaults, setMockDefaults] = createStore({
 	baseBranch: "automatic",
 	copyIgnoredFiles: false,
 	copyUntrackedFiles: false,
+	warmIgnoredDirectories: true,
 	setupScript: "",
 	runScript: "",
 	archiveScript: "",
@@ -60,6 +61,7 @@ describe("repoSettingsStore", () => {
 			baseBranch: "automatic",
 			copyIgnoredFiles: false,
 			copyUntrackedFiles: false,
+			warmIgnoredDirectories: true,
 			setupScript: "",
 			runScript: "",
 			archiveScript: "",
@@ -296,6 +298,30 @@ describe("repoSettingsStore", () => {
 			});
 		});
 
+		// warmIgnoredDirectories is a pure opt-OUT (default true, unlike
+		// copyIgnoredFiles/copyUntrackedFiles which default false) — pin both
+		// directions of the 3-tier resolution the same way those two are pinned
+		// above, so a future refactor can't silently flip the default.
+		it("returns warmIgnoredDirectories from global default when not overridden", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				expect(store.getEffective("/repo")!.warmIgnoredDirectories).toBe(true);
+
+				setMockDefaults("warmIgnoredDirectories", false);
+				expect(store.getEffective("/repo")!.warmIgnoredDirectories).toBe(false);
+			});
+		});
+
+		it("uses per-repo warmIgnoredDirectories override when set", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { warmIgnoredDirectories: false });
+				setMockDefaults("warmIgnoredDirectories", true); // global default is different
+				const effective = store.getEffective("/repo");
+				expect(effective!.warmIgnoredDirectories).toBe(false);
+			});
+		});
+
 		// A tri-state field's persistence (toWire/fromWire) and its resolution
 		// (this function) are two separately-tested halves that never meet in
 		// the tests above — every getEffective() case here starts from an
@@ -343,6 +369,43 @@ describe("repoSettingsStore", () => {
 				expect(store.get("/repo")?.copyIgnoredFiles).toBe(false);
 				expect(store.getEffective("/repo")?.copyIgnoredFiles).toBe(false);
 				expect(store.getEffectiveField("/repo", "copyIgnoredFiles")).toBe(false);
+			});
+		});
+
+		it("a null warmIgnoredDirectories survives save→hydrate and resolves to the global default", async () => {
+			setMockDefaults("warmIgnoredDirectories", false);
+
+			await testInScopeAsync(async () => {
+				store.getOrCreate("/repo", "my-repo");
+				const saved = lastInvokeCall("save_repo_settings");
+				const wire = (saved![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(wire.warm_ignored_directories).toBeNull();
+
+				mockInvoke.mockResolvedValueOnce({ repos: { "/repo": wire } });
+				await store.hydrate();
+
+				expect(store.get("/repo")?.warmIgnoredDirectories).toBeNull();
+				expect(store.getEffective("/repo")?.warmIgnoredDirectories).toBe(false);
+				expect(store.getEffectiveField("/repo", "warmIgnoredDirectories")).toBe(false);
+			});
+		});
+
+		it("warmIgnoredDirectories explicitly set to false survives save→hydrate and resolves to false, not the (true) global default", async () => {
+			setMockDefaults("warmIgnoredDirectories", true);
+
+			await testInScopeAsync(async () => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { warmIgnoredDirectories: false });
+				const saved = lastInvokeCall("save_repo_settings");
+				const wire = (saved![1] as { config: { repos: Record<string, WireRepoEntry> } }).config.repos["/repo"];
+				expect(wire.warm_ignored_directories).toBe(false);
+
+				mockInvoke.mockResolvedValueOnce({ repos: { "/repo": wire } });
+				await store.hydrate();
+
+				expect(store.get("/repo")?.warmIgnoredDirectories).toBe(false);
+				expect(store.getEffective("/repo")?.warmIgnoredDirectories).toBe(false);
+				expect(store.getEffectiveField("/repo", "warmIgnoredDirectories")).toBe(false);
 			});
 		});
 

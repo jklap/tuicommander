@@ -3867,6 +3867,104 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_session_with_worktree_also_warms() {
+        // This endpoint calls create_worktree_with_stale_recovery directly,
+        // not create_workspace/create_workspace_with — it never went through
+        // the old *synchronous* warm() call at all, so before this session's
+        // change it never warmed a worktree either. Warming moving into
+        // spawn_worktree_setup_chain (which this endpoint already called, for
+        // the file sync) means this path starts warming as a side effect,
+        // with no changes needed here — verify that side effect actually
+        // happens rather than assuming it from the chain's own tests.
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        std::fs::write(repo.path().join(".gitignore"), "node_modules/\n").expect("write gitignore");
+        std::fs::create_dir_all(repo.path().join("node_modules")).expect("mkdir node_modules");
+        std::fs::write(repo.path().join("node_modules/pkg.json"), "{}").expect("write pkg.json");
+        std::process::Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git commit");
+
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session_with_worktree(
+            State(state.clone()),
+            Json(CreateSessionWithWorktreeRequest {
+                config: CreateSessionRequest {
+                    rows: None,
+                    cols: None,
+                    shell: None,
+                    cwd: None,
+                    session_id: None,
+                    alias: None,
+                },
+                base_repo: repo.path().to_string_lossy().to_string(),
+                branch_name: "warm-test-branch".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status, StatusCode::CREATED, "response: {body}");
+        let worktree_path = body["worktree_path"].as_str().expect("worktree_path");
+
+        let warmed = std::path::Path::new(worktree_path).join("node_modules/pkg.json");
+        // Poll the warm STATUS to a terminal state, not just the file: the file lands
+        // on disk (inside the background copy task, via a `tokio::task::spawn_blocking`
+        // subprocess) a moment BEFORE `run_worktree_warm` gets to insert `Completed` into
+        // `worktree_warm_status` — both happen off the back of the same await chain, but
+        // through separate scheduling hops (JoinSet -> on_progress -> function return ->
+        // status insert). Asserting on the status immediately after only the file appears
+        // races that gap and was observed to read back a stale `Running { copied: 0, total: 1
+        // }` even though the copy had already succeeded — see AGENTS.md's "Which timing
+        // assertions are load-bearing" for why the fix is to wait on the thing being
+        // asserted on, not a side channel that can outrun it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut actual_status = crate::worktree::get_worktree_warm_status(
+            &state,
+            repo.path().to_string_lossy().as_ref(),
+            "warm-test-branch",
+        );
+        while std::time::Instant::now() < deadline
+            && !matches!(
+                actual_status,
+                Some(crate::state::WorktreeWarmStatus::Completed { .. })
+            )
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            actual_status = crate::worktree::get_worktree_warm_status(
+                &state,
+                repo.path().to_string_lossy().as_ref(),
+                "warm-test-branch",
+            );
+        }
+        assert!(
+            warmed.exists(),
+            "node_modules should have warmed into the new worktree via this endpoint's shared \
+             setup chain, the same way copy_ignored_files does"
+        );
+        assert!(
+            matches!(
+                actual_status,
+                Some(crate::state::WorktreeWarmStatus::Completed { warmed, .. }) if warmed > 0
+            ),
+            "warm status should report a completed, non-zero warm for this endpoint too: {actual_status:?}"
+        );
+    }
+
     #[test]
     fn run_ui_action_impl_rejects_names_outside_the_allowlist() {
         let state = super::super::tests::test_state();

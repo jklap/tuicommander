@@ -233,7 +233,12 @@ fn sync_one(source: &Path, dest: &Path, spec: &SyncPathSpec) -> Result<(), Strin
 /// already exists as a symlink. `None` means the whole intermediate chain is
 /// real directories (or doesn't exist yet), so it's safe to `create_dir_all`
 /// through it.
-fn first_symlinked_ancestor(root: &Path, rel: &Path) -> Option<std::path::PathBuf> {
+///
+/// `pub(crate)`: also used by `cow::warm_candidates_concurrent` — warming
+/// writes into the exact same kind of untrusted, freshly-checked-out `dest`
+/// this guard was written for, so it needs the identical protection rather
+/// than a second copy of this walk.
+pub(crate) fn first_symlinked_ancestor(root: &Path, rel: &Path) -> Option<std::path::PathBuf> {
     let mut current = root.to_path_buf();
     let mut components = rel.components().peekable();
     while let Some(component) = components.next() {

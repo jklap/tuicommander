@@ -569,6 +569,42 @@ pub enum AppEvent {
         /// failure, mirroring `run_setup_script`'s own `Result` shape.
         error: Option<String>,
     },
+    /// Warming a freshly created worktree's git-ignored build directories has
+    /// started, in the background — see `worktree::spawn_worktree_setup_chain`'s
+    /// new first stage. `total` is the number of directories that will
+    /// actually be copied (after skip-rules — symlinks, self-repos, existing
+    /// destinations), not the raw candidate count. Only fired when there is
+    /// something to warm AND `warm_ignored_directories` resolves `true` for
+    /// this repo — silent otherwise, matching `WorktreeSync*`'s own
+    /// "nothing to do is silent" precedent.
+    #[serde(rename = "worktree-warm-started")]
+    WorktreeWarmStarted {
+        repo_path: String,
+        branch: String,
+        total: usize,
+    },
+    /// Throttled progress for the same background warm (not on every single
+    /// directory — see `cow::warm_candidates_concurrent`'s throttling in its
+    /// caller). `current` is the directory that just finished, in COMPLETION
+    /// order — copies run concurrently, so this is not candidate order.
+    #[serde(rename = "worktree-warm-progress")]
+    WorktreeWarmProgress {
+        repo_path: String,
+        branch: String,
+        copied: usize,
+        total: usize,
+        current: Option<String>,
+    },
+    /// The background warm finished (successfully or with some per-directory
+    /// warnings — `warnings` is non-fatal detail: a failed copy leaves that
+    /// one directory cold, not the worktree invalid).
+    #[serde(rename = "worktree-warm-completed")]
+    WorktreeWarmCompleted {
+        repo_path: String,
+        branch: String,
+        warmed: usize,
+        warnings: Vec<String>,
+    },
 }
 
 /// The wire body of [`AppEvent::SessionStateChanged`], shared by the desktop
@@ -2084,6 +2120,10 @@ pub struct AppState {
     /// client (no event stream) can check status instead of only ever being
     /// told via `worktree-setup-script-completed`. See [`WorktreeSetupStatus`].
     pub(crate) worktree_setup_status: WorktreeSetupStatusCache,
+    /// Pollable snapshot of each worktree's background warm step (the setup
+    /// chain's new first stage). Sibling to `worktree_setup_status`, not a
+    /// merge into it — see [`WorktreeWarmStatus`]'s doc comment for why.
+    pub(crate) worktree_warm_status: WorktreeWarmStatusCache,
     /// Raw file watchers per repo (keyed by repo path), with per-category
     /// debounce. macOS/Windows: one recursive `notify::RecommendedWatcher` over
     /// the repo root. Linux: pruned non-recursive working-tree watches + targeted
@@ -3256,6 +3296,7 @@ impl AppState {
             config: parking_lot::RwLock::new(config),
             git_cache: GitCacheState::new(),
             worktree_setup_status: build_worktree_setup_status_cache(),
+            worktree_warm_status: build_worktree_warm_status_cache(),
             repo_watchers: DashMap::new(),
             repo_git_fingerprints: DashMap::new(),
             repo_head_targets: DashMap::new(),
@@ -3761,6 +3802,56 @@ pub(crate) type WorktreeSetupStatusCache =
 /// indefinitely. Capacity matches `GIT_CACHE_CAPACITY`: worktree creation is
 /// rare enough that this is a generous bound, not a tight one.
 pub(crate) fn build_worktree_setup_status_cache() -> WorktreeSetupStatusCache {
+    moka::sync::Cache::builder()
+        .max_capacity(GIT_CACHE_CAPACITY)
+        .time_to_live(Duration::from_secs(30 * 60))
+        .build()
+}
+
+/// Snapshot of a worktree's background warm step — the new first stage of
+/// `worktree::spawn_worktree_setup_chain`, keyed by `(repo_path, branch)` in
+/// [`WorktreeWarmStatusCache`]. Sibling to [`WorktreeSetupStatus`], not a
+/// merge into it: warm and the setup script are independently-lifecycled
+/// stages with different outcome shapes, and — like the setup script, and
+/// unlike the file-sync stage, which has no poll endpoint of its own — warm's
+/// outcome is something a caller actually needs to branch on ("did
+/// `node_modules` actually arrive?"), so it gets its own pollable snapshot
+/// rather than being folded into the setup script's.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub(crate) enum WorktreeWarmStatus {
+    /// The warm step is running. `total` is a placeholder `0` for the brief
+    /// window between the synchronous pre-insert (before the background task
+    /// is even spawned, so a caller polling immediately after the creation
+    /// response never sees "untracked") and the moment the background task
+    /// has actually enumerated candidates — at which point this is corrected
+    /// to the real count, before any copy begins.
+    Running { copied: usize, total: usize },
+    /// `warm_ignored_directories` resolved `false` for this repo — the warm
+    /// step never ran at all. Distinct from `Completed { warmed: 0, .. }`
+    /// (which means it ran and there was nothing to warm): this means it was
+    /// never attempted.
+    Skipped,
+    /// The warm step finished — either because it ran and copied what it
+    /// could (`warnings` holds any per-directory failures, non-fatal), or
+    /// because there was nothing to warm in the first place (`warmed: 0`,
+    /// `warnings: []`).
+    Completed {
+        warmed: usize,
+        warnings: Vec<String>,
+    },
+}
+
+/// Bounded, TTL-evicted cache of [`WorktreeWarmStatus`] snapshots, keyed by
+/// `(repo_path, branch)`. Same shape as [`WorktreeSetupStatusCache`].
+pub(crate) type WorktreeWarmStatusCache =
+    moka::sync::Cache<(String, String), Arc<WorktreeWarmStatus>>;
+
+/// Same capacity/TTL rationale as [`build_worktree_setup_status_cache`] — warm
+/// is expected to finish well within 30 minutes even on a very large ignored
+/// tree, and worktree creation is rare enough that this bound is generous,
+/// not tight.
+pub(crate) fn build_worktree_warm_status_cache() -> WorktreeWarmStatusCache {
     moka::sync::Cache::builder()
         .max_capacity(GIT_CACHE_CAPACITY)
         .time_to_live(Duration::from_secs(30 * 60))
@@ -4836,7 +4927,10 @@ impl AppState {
             | AppEvent::WorktreeSyncStarted { .. }
             | AppEvent::WorktreeSyncProgress { .. }
             | AppEvent::WorktreeSyncCompleted { .. }
-            | AppEvent::WorktreeSetupScriptCompleted { .. } => {}
+            | AppEvent::WorktreeSetupScriptCompleted { .. }
+            | AppEvent::WorktreeWarmStarted { .. }
+            | AppEvent::WorktreeWarmProgress { .. }
+            | AppEvent::WorktreeWarmCompleted { .. } => {}
         }
     }
 

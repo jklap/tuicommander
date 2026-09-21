@@ -672,6 +672,13 @@ pub(super) struct WorktreeSetupStatusQuery {
 }
 
 #[derive(Deserialize)]
+pub(super) struct WorktreeWarmStatusQuery {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub branch: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct DiscoverAgentSessionRequest {
     #[serde(rename = "agentType")]
     pub agent_type: String,
