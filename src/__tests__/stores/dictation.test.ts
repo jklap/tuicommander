@@ -668,6 +668,31 @@ describe("dictationStore", () => {
 		});
 	});
 
+	describe("setNotifyModelOnHandsFree()", () => {
+		/**
+		 * The one setting whose default is `true`, so the assertion that
+		 * matters is the one that turns it off: a default-on flag that cannot
+		 * be written false is indistinguishable from a flag nobody reads.
+		 */
+		it("writes the flag off and remembers it", async () => {
+			mockInvoke.mockResolvedValueOnce(undefined);
+
+			await testInScopeAsync(async () => {
+				expect(store.state.notifyModelOnHandsFree, "on by default, as in Rust").toBe(true);
+				store.setNotifyModelOnHandsFree(false);
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith(
+						"set_dictation_config",
+						expect.objectContaining({
+							config: expect.objectContaining({ hands_free_notify_model: false }),
+						}),
+					),
+				);
+				await vi.waitFor(() => expect(store.state.notifyModelOnHandsFree).toBe(false));
+			});
+		});
+	});
+
 	describe("downloadModel() error", () => {
 		it("clears downloading state on error", async () => {
 			mockInvoke.mockRejectedValueOnce(new Error("download failed"));

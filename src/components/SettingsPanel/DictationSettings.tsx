@@ -240,6 +240,24 @@ export const DictationSettings: Component = () => {
 				</div>
 			</div>
 
+			{/* Tell the model when hands-free starts and stops */}
+			<div class={s.group}>
+				<label>{t("dictation.notifyModelLabel", "Notify model when hands-free changes")}</label>
+				<div class={s.toggle}>
+					<input
+						type="checkbox"
+						checked={dictationStore.state.notifyModelOnHandsFree}
+						onChange={(e) => dictationStore.setNotifyModelOnHandsFree(e.currentTarget.checked)}
+					/>
+					<span>
+						{t(
+							"dictation.notifyModelHint",
+							"Tell the agent when a hands-free conversation starts, so it answers out loud, and when it ends, so it goes back to text. Turning this off never leaves speech running: disarming always stops it.",
+						)}
+					</span>
+				</div>
+			</div>
+
 			{/* Language */}
 			<div class={s.group}>
 				<label>{t("dictation.languageLabel", "Language")}</label>
