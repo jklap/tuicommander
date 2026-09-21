@@ -1,7 +1,9 @@
-use super::{DictationState, audio, corrections, model, permission, streaming, transcribe};
+use super::{
+    DictationState, audio, continuous, corrections, model, permission, streaming, transcribe,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 
 /// Helper to reset recording flag on error paths.
@@ -268,6 +270,71 @@ pub fn delete_whisper_model(
 // DEFERRED (2026-08-17) — the load still occupies one Tauri runtime worker for
 // its duration. Moving it to `spawn_blocking` needs an async fn, which means
 // changing this signature and the caller in `mcp_http/dictation_routes.rs`.
+/// Make sure the microphone is usable, or say why it is not.
+///
+/// Shared by push-to-talk and hands-free: one spelling of the TCC dance, so the
+/// two modes cannot disagree about what "denied" means.
+fn ensure_microphone_access() -> Result<(), String> {
+    match permission::check() {
+        permission::MicPermission::Denied => Err("microphone_denied".to_string()),
+        permission::MicPermission::Restricted => Err("microphone_restricted".to_string()),
+        permission::MicPermission::NotDetermined => {
+            // CoreAudio (cpal) does NOT trigger the TCC prompt — we must
+            // explicitly request access via AVCaptureDevice to show the dialog.
+            if permission::request() {
+                Ok(())
+            } else {
+                Err("microphone_denied".to_string())
+            }
+        }
+        permission::MicPermission::Authorized => Ok(()),
+    }
+}
+
+/// The loaded recogniser, loading it first if the model changed or none is up.
+///
+/// Both modes share the one `transcriber_arc`: loading a second copy of a
+/// multi-gigabyte model because the other mode got there first would be a
+/// straightforward way to run the machine out of memory.
+///
+/// `app` is `None` off the desktop event loop, where there is no handle to log
+/// through; the load is the same either way.
+fn ensure_transcriber(
+    app: Option<&AppHandle>,
+    dictation: &DictationState,
+    whisper_model: model::WhisperModel,
+) -> Result<Arc<dyn transcribe::Transcriber>, String> {
+    let mut transcriber_arc_lock = dictation.transcriber_arc.lock();
+    let mut active_model_lock = dictation.active_model.lock();
+    let model_changed = active_model_lock
+        .as_deref()
+        .map(|name| name != whisper_model.name())
+        .unwrap_or(true);
+
+    if model_changed || transcriber_arc_lock.is_none() {
+        if !model::model_exists(whisper_model) {
+            return Err("Model not downloaded".to_string());
+        }
+        let loading = format!("Loading model: {}", whisper_model.display_name());
+        match app {
+            Some(app) => app_logger::log_via_handle(app, "info", "dictation", &loading),
+            None => tracing::info!(source = "dictation", "{loading}"),
+        }
+        let t = transcribe::WhisperTranscriber::load(&model::model_path(whisper_model))?;
+        *transcriber_arc_lock = Some(Arc::new(t));
+        *active_model_lock = Some(whisper_model.name().to_string());
+        let loaded = format!("Model loaded (backend: {})", transcribe::backend_label());
+        match app {
+            Some(app) => app_logger::log_via_handle(app, "info", "dictation", &loaded),
+            None => tracing::info!(source = "dictation", "{loaded}"),
+        }
+    }
+
+    transcriber_arc_lock
+        .clone()
+        .ok_or_else(|| "Transcriber not available".to_string())
+}
+
 #[tauri::command(async)]
 pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> Result<(), String> {
     // Atomic test-and-set: prevents TOCTOU race from concurrent IPC calls
@@ -285,58 +352,13 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
         return Err("Transcription in progress".to_string());
     }
 
-    // Check microphone permission before attempting audio capture
-    let mic_status = permission::check();
-    match mic_status {
-        permission::MicPermission::Denied => {
-            return Err("microphone_denied".to_string());
-        }
-        permission::MicPermission::Restricted => {
-            return Err("microphone_restricted".to_string());
-        }
-        permission::MicPermission::NotDetermined => {
-            // CoreAudio (cpal) does NOT trigger the TCC prompt — we must
-            // explicitly request access via AVCaptureDevice to show the dialog.
-            if !permission::request() {
-                return Err("microphone_denied".to_string());
-            }
-        }
-        permission::MicPermission::Authorized => {}
-    }
+    ensure_microphone_access()?;
 
     // One read of dictation-config.json for the whole start: the model, the
     // input device and the language all come from this snapshot.
     let config = get_dictation_config();
     let whisper_model = resolve_model(&config.model);
-
-    // Reload transcriber if model changed or not loaded
-    let mut transcriber_arc_lock = dictation.transcriber_arc.lock();
-    let mut active_model_lock = dictation.active_model.lock();
-    let model_changed = active_model_lock
-        .as_deref()
-        .map(|name| name != whisper_model.name())
-        .unwrap_or(true);
-
-    if model_changed || transcriber_arc_lock.is_none() {
-        if !model::model_exists(whisper_model) {
-            return Err("Model not downloaded".to_string());
-        }
-        app_logger::log_via_handle(
-            &app,
-            "info",
-            "dictation",
-            &format!("Loading model: {}", whisper_model.display_name()),
-        );
-        let t = transcribe::WhisperTranscriber::load(&model::model_path(whisper_model))?;
-        *transcriber_arc_lock = Some(Arc::new(t));
-        *active_model_lock = Some(whisper_model.name().to_string());
-        app_logger::log_via_handle(
-            &app,
-            "info",
-            "dictation",
-            &format!("Model loaded (backend: {})", transcribe::backend_label()),
-        );
-    }
+    let transcriber_arc = ensure_transcriber(Some(&app), &dictation, whisper_model)?;
 
     // Always emit backend info so the frontend gets it even when model is reused
     let _ = app.emit(
@@ -345,12 +367,6 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
             "backend": transcribe::backend_label(),
         }),
     );
-
-    let transcriber_arc = transcriber_arc_lock
-        .clone()
-        .ok_or("Transcriber not available")?;
-    drop(active_model_lock);
-    drop(transcriber_arc_lock);
 
     // Start audio capture using the configured device (or system default)
     let device_name = config.device.as_deref().filter(|s| !s.is_empty());
@@ -756,6 +772,9 @@ pub struct HandsFreeDisarmed {
 }
 
 pub(crate) fn hands_free_status(dictation: &DictationState) -> HandsFreeStatus {
+    // A poll is also where a runtime that ended by itself gets cleaned up; see
+    // `reap_finished_runtime` for why the thread cannot do it.
+    reap_finished_runtime(dictation);
     let mode = dictation.hands_free.lock();
     HandsFreeStatus {
         armed: mode.binding().is_some(),
@@ -790,39 +809,192 @@ fn check_binding_field(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The one audio endpoint this story implements.
+///
+/// Any other owner is a browser or remote client, whose endpoint adapter is
+/// Step 8 (story 818). It is refused here rather than served by the desktop
+/// microphone: arming from a laptop must not open the microphone on the machine
+/// running TUICommander.
+pub(crate) const DESKTOP_OWNER: &str = "desktop";
+
+/// The desktop microphone plus the loaded whisper model.
+///
+/// Holds only the capture *buffer*, never the `cpal::Stream`: the stream is
+/// `!Send` and stays in `DictationState`, which is also what keeps push-to-talk
+/// and hands-free on separate devices.
+struct DesktopVoiceEndpoint {
+    buffer: Arc<parking_lot::Mutex<std::collections::VecDeque<f32>>>,
+    alive: Arc<AtomicBool>,
+    transcriber: Arc<dyn transcribe::Transcriber>,
+    language: Option<String>,
+    gates: transcribe::VoiceGates,
+}
+
+impl continuous::VoiceEndpoint for DesktopVoiceEndpoint {
+    fn drain(&mut self) -> Result<Vec<f32>, String> {
+        Ok(self.buffer.lock().drain(..).collect())
+    }
+
+    fn connected(&self) -> bool {
+        self.alive.load(Ordering::Acquire)
+    }
+
+    fn transcribe(&self, audio: &[f32]) -> Result<String, String> {
+        let result = self
+            .transcriber
+            .transcribe(audio, self.language.as_deref(), self.gates)?;
+        // A gated segment is not an error and not a message: whisper decided
+        // this was not speech, so the utterance is dropped the same way an
+        // empty transcript is.
+        Ok(if result.skip_reason.is_some() {
+            String::new()
+        } else {
+            result.text
+        })
+    }
+}
+
+/// Open the desktop capture endpoint for an armed session.
+fn open_desktop_endpoint(
+    dictation: &DictationState,
+    owner: &str,
+) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
+    if owner != DESKTOP_OWNER {
+        return Err(format!(
+            "Audio endpoint '{owner}' is not available on this build"
+        ));
+    }
+    ensure_microphone_access()?;
+    let config = get_dictation_config();
+    let transcriber = ensure_transcriber(None, dictation, resolve_model(&config.model))?;
+    let device_name = config.device.as_deref().filter(|name| !name.is_empty());
+    let capture = audio::AudioCapture::start_with_device(device_name)?;
+    let gates = config.gates();
+    let buffer = capture.buffer_handle();
+    *dictation.hands_free_audio.lock() = Some(capture);
+    dictation
+        .hands_free_owner_alive
+        .store(true, Ordering::Release);
+    Ok(Box::new(DesktopVoiceEndpoint {
+        buffer,
+        alive: dictation.hands_free_owner_alive.clone(),
+        transcriber,
+        language: (config.language != "auto").then_some(config.language),
+        gates,
+    }))
+}
+
+/// Release the desktop audio endpoint.
+///
+/// The runtime sees its owner gone on the next tick and disarms itself with
+/// `OwnerDisconnected` — the mode is never left armed against a microphone that
+/// is no longer the one it bound to.
+pub(crate) fn release_desktop_endpoint(dictation: &DictationState) {
+    dictation
+        .hands_free_owner_alive
+        .store(false, Ordering::Release);
+}
+
+/// Drop a runtime whose thread has already returned, and the microphone with it.
+///
+/// An automatic disarm (closed target, dead device) ends the thread from the
+/// inside, and the thread cannot release the capture device itself — a
+/// `cpal::Stream` is `!Send`, so it never crossed the thread boundary. Reaping
+/// here means the microphone closes on the next status poll rather than staying
+/// open until somebody arms again.
+fn reap_finished_runtime(dictation: &DictationState) {
+    let finished = dictation
+        .hands_free_runtime
+        .lock()
+        .as_ref()
+        .is_some_and(continuous::HandsFreeRuntime::is_finished);
+    if finished {
+        *dictation.hands_free_runtime.lock() = None;
+        *dictation.hands_free_audio.lock() = None;
+        release_desktop_endpoint(dictation);
+    }
+}
+
 /// Bind hands-free capture to a session and an audio owner.
 ///
-/// This binds and opens a generation; it does **not** open a microphone. The
-/// capture adapter is the audio endpoint's job (see the plan's runtime
-/// boundaries), and arming is what 817's speech capability and 821's entry hint
-/// key off, so it has to be reachable before any UI exists.
+/// This binds the target and the audio owner, opens the endpoint that owner
+/// names, and starts the runtime that carries speech from it to the Compose
+/// queue. Arming is also what 817's speech capability and 821's entry hint key
+/// off, which is why it is reachable before any UI exists.
 ///
 /// Refused when the target cannot take a Compose-queue entry. There is no
-/// fallback delivery path, so an unsupported target stays unavailable.
+/// fallback delivery path, so an unsupported target stays unavailable — and so
+/// does an audio endpoint this build does not implement.
 pub(crate) fn arm_hands_free(
-    state: &crate::state::AppState,
+    state: &Arc<crate::state::AppState>,
     dictation: &DictationState,
     session_id: &str,
     owner: &str,
+) -> Result<HandsFreeStatus, String> {
+    arm_hands_free_with(state, dictation, session_id, owner, &open_desktop_endpoint)
+}
+
+/// `arm_hands_free` with the capture endpoint supplied.
+///
+/// The seam exists so a test can drive the whole armed path — bind, capture,
+/// segment, transcribe, hold back, enqueue — without a microphone or a
+/// multi-gigabyte model, against a real session and the real Compose queue.
+pub(crate) fn arm_hands_free_with(
+    state: &Arc<crate::state::AppState>,
+    dictation: &DictationState,
+    session_id: &str,
+    owner: &str,
+    open_endpoint: &dyn Fn(
+        &DictationState,
+        &str,
+    ) -> Result<Box<dyn continuous::VoiceEndpoint>, String>,
 ) -> Result<HandsFreeStatus, String> {
     check_binding_field(session_id, "Session id")?;
     check_binding_field(owner, "Audio owner")?;
     if !crate::pty::session_accepts_voice(state, session_id) {
         return Err("Session cannot accept hands-free input".to_string());
     }
+    reap_finished_runtime(dictation);
+    if dictation.hands_free.lock().binding().is_some() {
+        return Err("Hands-free is already armed".to_string());
+    }
+    // The microphone opens before the bind, so a refused or broken endpoint
+    // leaves the mode untouched rather than armed-and-deaf with a generation
+    // already spent.
+    let endpoint = open_endpoint(dictation, owner)?;
+
     apply_hold_back_from_config(dictation);
-    dictation
+    let armed = dictation
         .hands_free
         .lock()
         .arm(session_id, owner, true)
         .map_err(|error| match error {
-            crate::dictation::continuous::ArmError::AlreadyArmed => {
-                "Hands-free is already armed".to_string()
-            }
-            crate::dictation::continuous::ArmError::UnsupportedTarget => {
+            continuous::ArmError::AlreadyArmed => "Hands-free is already armed".to_string(),
+            continuous::ArmError::UnsupportedTarget => {
                 "Session cannot accept hands-free input".to_string()
             }
-        })?;
+        });
+    if let Err(error) = armed {
+        *dictation.hands_free_audio.lock() = None;
+        release_desktop_endpoint(dictation);
+        return Err(error);
+    }
+
+    // DEFERRED (2026-09-21) — the segmenter runs on its compiled defaults.
+    // Hold-back is read from user config just above; pre-roll, trailing
+    // silence, minimum speech and the utterance cap are not reachable from
+    // `DictationConfig`, so `SegmenterConfig` is parameterised without being
+    // tunable by anyone but a recompile. Left as-is because no measurement has
+    // yet shown a default that needs moving, and a knob nobody has asked for is
+    // a knob that has to be documented, persisted and migrated. Wire it when
+    // Step 8 (#818-2a29) gives Dictation settings a place to put it, or sooner
+    // if trailing silence proves wrong for a real speaker.
+    *dictation.hands_free_runtime.lock() = Some(continuous::spawn_runtime(
+        state.clone(),
+        dictation.hands_free.clone(),
+        endpoint,
+        continuous::SegmenterConfig::default(),
+    ));
     Ok(hands_free_status(dictation))
 }
 
@@ -836,13 +1008,13 @@ pub(crate) fn disarm_hands_free(
 ) -> HandsFreeDisarmed {
     use crate::dictation::continuous::{DisarmReason, PtyVoiceQueue, cancel_disarmed};
 
-    let disarmed = {
-        let mut mode = dictation.hands_free.lock();
-        let session_id = mode.binding().map(|binding| binding.session_id.clone());
-        mode.disarm(DisarmReason::Manual)
-            .map(|disarmed| (session_id, disarmed))
-    };
-    let Some((session_id, disarmed)) = disarmed else {
+    let disarmed = dictation.hands_free.lock().disarm(DisarmReason::Manual);
+    // Stop the runtime and close the microphone whichever way this went: a
+    // thread that already disarmed itself still has a device to release.
+    *dictation.hands_free_runtime.lock() = None;
+    *dictation.hands_free_audio.lock() = None;
+    release_desktop_endpoint(dictation);
+    let Some(disarmed) = disarmed else {
         // Both fields below read the mode, and `hands_free` is not reentrant: a
         // `lock()` temporary inside the struct literal lives until the end of
         // the whole statement, so taking it there deadlocks against the one
@@ -858,8 +1030,7 @@ pub(crate) fn disarm_hands_free(
             status,
         };
     };
-    let session_id = session_id.unwrap_or_default();
-    let cancellation = cancel_disarmed(&PtyVoiceQueue(state), &session_id, &disarmed);
+    let cancellation = cancel_disarmed(&PtyVoiceQueue(state), &disarmed);
     HandsFreeDisarmed {
         was_armed: true,
         generation: disarmed.generation,
@@ -987,6 +1158,12 @@ pub fn get_dictation_config() -> DictationConfig {
 
 #[tauri::command]
 pub fn set_dictation_config(config: DictationConfig) -> Result<(), String> {
+    // DEFERRED (2026-09-21) — switching the input device while hands-free is
+    // armed should release the endpoint the mode bound to (that is an owner
+    // disconnect, see `release_desktop_endpoint`). It needs `DictationState`
+    // here, and this function's signature is shared with the HTTP route in
+    // `mcp_http/dictation_routes.rs`, which story 814-6d13 pass 4 may not edit.
+    // Until then the mode keeps capturing from the device it armed with.
     crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)?;
     // The configured model is part of the cached status snapshot.
     invalidate_model_snapshot();
@@ -1011,13 +1188,87 @@ mod tests {
     use super::*;
     use crate::dictation::continuous::Phase;
 
+    /// A microphone and a recogniser the test writes the script for.
+    ///
+    /// After its one phrase it keeps handing back room silence, exactly as a
+    /// live capture device does — a device that stops delivering samples is a
+    /// failure, and this fake must not fake one.
+    struct ScriptedEndpoint {
+        phrase: parking_lot::Mutex<Option<Vec<f32>>>,
+        transcript: String,
+    }
+
+    impl continuous::VoiceEndpoint for ScriptedEndpoint {
+        fn drain(&mut self) -> Result<Vec<f32>, String> {
+            Ok(self
+                .phrase
+                .lock()
+                .take()
+                .unwrap_or_else(|| vec![0.0; continuous::SAMPLE_RATE as usize / 20]))
+        }
+
+        fn connected(&self) -> bool {
+            true
+        }
+
+        fn transcribe(&self, _audio: &[f32]) -> Result<String, String> {
+            Ok(self.transcript.clone())
+        }
+    }
+
+    /// A spoken phrase: 600ms of tone, then long enough a pause to close it.
+    fn spoken_phrase() -> Vec<f32> {
+        let sample_rate = continuous::SAMPLE_RATE as f32;
+        let speech = (0..(sample_rate as usize * 600 / 1000))
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / sample_rate).sin() * 0.5);
+        speech
+            .chain(std::iter::repeat_n(0.0, sample_rate as usize))
+            .collect()
+    }
+
+    fn scripted_endpoint(
+        transcript: &'static str,
+    ) -> impl Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
+        move |_dictation, _owner| {
+            Ok(Box::new(ScriptedEndpoint {
+                phrase: parking_lot::Mutex::new(Some(spoken_phrase())),
+                transcript: transcript.to_string(),
+            }))
+        }
+    }
+
+    /// Wait for the runtime thread to park a voice entry, or say what it did
+    /// instead. A fixed sleep would be a guess about scheduling; the hold-back
+    /// is a real deadline and the slack above it is the harness bound.
+    fn wait_for_voice_entry(
+        state: &crate::state::AppState,
+        session_id: &str,
+        hold_back_ms: u64,
+    ) -> u64 {
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(hold_back_ms + 10_000);
+        while std::time::Instant::now() < deadline {
+            let voice = state.pending_injections.get(session_id).and_then(|queue| {
+                queue
+                    .iter()
+                    .find(|entry| entry.voice_generation().is_some())
+                    .map(crate::state::PendingInjection::id)
+            });
+            if let Some(id) = voice {
+                return id;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("the hands-free runtime never parked a voice entry");
+    }
+
     /// Both halves of a binding are attacker-shaped input on the HTTP transport:
     /// a remote client names the session and the owner. Neither may be empty,
     /// and neither may be unbounded — the owner string is retained for as long
     /// as the mode is armed and echoed back in every status reply.
     #[test]
     fn arming_rejects_unbounded_or_empty_identifiers() {
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let dictation = DictationState::new();
 
         assert_eq!(
@@ -1057,7 +1308,7 @@ mod tests {
     /// The unsupported-target rule, at the surface a caller actually reaches.
     #[test]
     fn arming_against_a_target_that_cannot_take_a_compose_entry_is_refused() {
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let dictation = DictationState::new();
 
         assert_eq!(
@@ -1074,7 +1325,7 @@ mod tests {
     /// rather than reporting a cancellation it did not perform.
     #[test]
     fn disarming_a_mode_that_was_never_armed_reports_no_work() {
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let dictation = DictationState::new();
 
         let outcome = disarm_hands_free(&state, &dictation);
@@ -1150,9 +1401,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn arming_binds_a_real_session_and_disarm_cancels_only_its_own_entries() {
-        use crate::dictation::continuous::{PtyVoiceQueue, deliver_due};
-
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::test_support::agent_session(&state, "voice-e2e", crate::pty::SHELL_BUSY);
         crate::test_support::insert_recording_session(&state, "voice-e2e");
         let dictation = DictationState::new();
@@ -1170,21 +1419,23 @@ mod tests {
             ids
         };
 
-        let armed = arm_hands_free(&state, &dictation, "voice-e2e", "desktop").expect("arm");
+        let armed = arm_hands_free_with(
+            &state,
+            &dictation,
+            "voice-e2e",
+            "desktop",
+            &scripted_endpoint("run the tests"),
+        )
+        .expect("arm");
         assert!(armed.armed);
         assert_eq!(armed.session_id.as_deref(), Some("voice-e2e"));
         assert_eq!(armed.owner.as_deref(), Some("desktop"));
         assert_eq!(armed.phase, "waiting");
 
-        // One hands-free turn, through the only exit this mode has.
-        let generation = armed.generation;
-        let voice_id = {
-            let mut mode = dictation.hands_free.lock();
-            mode.accept_transcript(generation, "run the tests", 0);
-            deliver_due(&mut mode, &PtyVoiceQueue(&state), armed.hold_back_ms)
-                .expect("the hold-back has expired")
-                .expect("a busy agent parks the entry rather than refusing it")
-        };
+        // No further pokes: the runtime thread started by `arm` captures the
+        // phrase, segments it, transcribes it, waits out the hold-back and
+        // enqueues it on its own.
+        let voice_id = wait_for_voice_entry(&state, "voice-e2e", armed.hold_back_ms);
 
         let status = hands_free_status(&dictation);
         assert_eq!(
@@ -1215,6 +1466,85 @@ mod tests {
         assert!(
             !disarm_hands_free(&state, &dictation).was_armed,
             "disarming twice must report the second call honestly"
+        );
+        assert!(
+            dictation.hands_free_runtime.lock().is_none(),
+            "a disarm stops the capture runtime"
+        );
+        assert!(
+            dictation.audio.lock().is_none(),
+            "hands-free must never take push-to-talk's capture slot"
+        );
+    }
+
+    /// Arming from a browser must not open the microphone on the machine
+    /// running TUICommander. The remote endpoint adapter is story 818; until it
+    /// exists that owner is unavailable, not quietly served by the desktop mic.
+    #[cfg(unix)]
+    #[test]
+    fn an_owner_without_an_endpoint_is_refused_rather_than_given_the_desktop_microphone() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-remote", crate::pty::SHELL_BUSY);
+        crate::test_support::insert_recording_session(&state, "voice-remote");
+        let dictation = DictationState::new();
+
+        let refused = arm_hands_free(&state, &dictation, "voice-remote", "browser-42")
+            .expect_err("a remote owner has no endpoint on this build");
+
+        assert_eq!(
+            refused,
+            "Audio endpoint 'browser-42' is not available on this build"
+        );
+        assert!(!hands_free_status(&dictation).armed);
+        assert!(
+            dictation.hands_free_audio.lock().is_none(),
+            "a refused owner must not have opened a capture device"
+        );
+    }
+
+    /// The bound tab closes while the mode is armed: the runtime notices on its
+    /// own, disarms, and releases the capture device it was holding.
+    #[cfg(unix)]
+    #[test]
+    fn closing_the_bound_session_disarms_the_running_mode_and_releases_the_device() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-closing", crate::pty::SHELL_BUSY);
+        crate::test_support::insert_recording_session(&state, "voice-closing");
+        let dictation = DictationState::new();
+
+        arm_hands_free_with(
+            &state,
+            &dictation,
+            "voice-closing",
+            "desktop",
+            &scripted_endpoint("never sent"),
+        )
+        .expect("arm");
+
+        // What closing a tab does to the session map.
+        state.session_maps.sessions.remove("voice-closing");
+
+        // Wait for the *reap*, not for `armed`: the mode is unbound the moment
+        // the runtime disarms, which is a scheduling tick before its thread
+        // actually returns and its device can be released.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if !hands_free_status(&dictation).armed && dictation.hands_free_runtime.lock().is_none()
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let status = hands_free_status(&dictation);
+        assert!(!status.armed, "a closed target must disarm the mode");
+        assert!(
+            dictation.hands_free_runtime.lock().is_none(),
+            "the finished runtime must be reaped"
+        );
+        assert!(
+            dictation.hands_free_audio.lock().is_none(),
+            "and the capture device released with it"
         );
     }
 

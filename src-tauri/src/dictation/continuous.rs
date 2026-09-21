@@ -141,8 +141,13 @@ impl Segmenter {
         closed
     }
 
-    /// Close an open utterance early — used when the mode disarms or the audio
-    /// owner goes away and the caller wants whatever was captured discarded.
+    /// Drop everything captured so far.
+    ///
+    /// Nothing calls it in production today: a disarm ends the runtime, and the
+    /// next arm builds a fresh `Capture`, so the segmenter is never reused
+    /// across generations. It stays because that is the invariant — if a future
+    /// caller ever keeps one alive across an arm, this is what it must call.
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.remainder.clear();
         self.pre_roll.clear();
@@ -293,6 +298,10 @@ pub struct Disarmed {
     /// The generation that was current. Anything asynchronous still carrying it
     /// is stale from here on.
     pub generation: u64,
+    /// The target the cancelled ids were enqueued against. Carried here because
+    /// the binding is gone by the time a caller sees this, and cancelling needs
+    /// the session name the entries are parked under.
+    pub session_id: String,
     /// Voice-owned queue ids to cancel. Only ever entries this mode enqueued.
     pub cancel_ids: Vec<u64>,
     /// A transcript was waiting out its hold-back and never reached the queue.
@@ -499,12 +508,25 @@ impl HandsFree {
         self.owned.retain(|owned| *owned != id);
     }
 
+    /// The Compose queue refused a delivery.
+    ///
+    /// The mode stays armed — the target is still bound and the next utterance
+    /// may well land — but the failure is reported rather than swallowed, so a
+    /// message that never reached a model does not look like one that did.
+    pub fn note_send_failed(&mut self, message: &str) {
+        if self.binding.is_some() {
+            self.last_error = Some(message.to_string());
+            self.phase = Phase::Waiting;
+        }
+    }
+
     /// Disarm the whole mode. Never re-arms itself; `arm` is the only way back.
     pub fn disarm(&mut self, reason: DisarmReason) -> Option<Disarmed> {
-        self.binding.as_ref()?;
+        let session_id = self.binding.as_ref()?.session_id.clone();
         let discarded_capture = matches!(self.phase, Phase::Capturing | Phase::Transcribing);
         let disarmed = Disarmed {
             generation: self.generation,
+            session_id,
             cancel_ids: std::mem::take(&mut self.owned),
             discarded_pending: self.pending.take().is_some(),
             discarded_capture,
@@ -589,16 +611,301 @@ pub fn deliver_due(
     }
 }
 
-/// Cancel everything a disarm made obsolete.
-pub fn cancel_disarmed(
+// ---------------------------------------------------------------------------
+// Capture port and the runtime loop
+// ---------------------------------------------------------------------------
+
+/// One armed capture endpoint: a microphone and the recogniser behind it.
+///
+/// The desktop adapter is `commands::DesktopVoiceEndpoint`. The browser/remote
+/// endpoint is Step 8 (story 818) and is deliberately absent rather than
+/// stubbed — an unimplemented endpoint must refuse to arm, not arm and go deaf.
+pub trait VoiceEndpoint: Send {
+    /// Audio captured since the last call, empty when nothing arrived yet.
+    /// `Err` is a hard capture failure and disarms the mode.
+    fn drain(&mut self) -> Result<Vec<f32>, String>;
+    /// False once the endpoint that armed the mode is gone.
+    fn connected(&self) -> bool;
+    /// Transcribe one closed utterance. Called without the mode lock held.
+    fn transcribe(&self, audio: &[f32]) -> Result<String, String>;
+}
+
+/// Whether the bound session can still take a Compose-queue entry.
+pub trait TargetProbe {
+    fn accepts(&self, session_id: &str) -> bool;
+}
+
+/// Production probe: the same predicate `arm` checked, re-asked every tick.
+pub struct PtyTargetProbe<'a>(pub &'a AppState);
+
+impl TargetProbe for PtyTargetProbe<'_> {
+    fn accepts(&self, session_id: &str) -> bool {
+        crate::pty::session_accepts_voice(self.0, session_id)
+    }
+}
+
+/// How long a stream may deliver nothing before it counts as a dead device.
+///
+/// A live microphone in a silent room still delivers samples — silence is a
+/// value, not an absence. No samples at all means the stream stopped, which
+/// cpal reports through a callback the capture owner cannot return from.
+pub const DEVICE_SILENCE_TIMEOUT_MS: u64 = 5_000;
+
+/// Everything the loop carries between ticks.
+pub struct Capture {
+    segmenter: Segmenter,
+    /// When audio last arrived, for the starvation rule above.
+    last_audio_ms: u64,
+    device_silence_timeout_ms: u64,
+}
+
+impl Capture {
+    pub fn new(config: SegmenterConfig, device_silence_timeout_ms: u64, now_ms: u64) -> Self {
+        Self {
+            segmenter: Segmenter::new(config),
+            last_audio_ms: now_ms,
+            device_silence_timeout_ms,
+        }
+    }
+
+    /// Retained audio. Nothing in production needs this number; it exists so
+    /// the bounded-memory rule can be asserted rather than asserted about.
+    #[allow(dead_code)]
+    pub fn retained_samples(&self) -> usize {
+        self.segmenter.retained_samples()
+    }
+}
+
+/// What one tick did.
+#[derive(Debug)]
+pub enum Tick {
+    /// Nothing to do: the mode is not armed. The driver stops.
+    NotArmed,
+    /// Still armed. `enqueued` is the queue id a hold-back that expired this
+    /// tick produced; `send_error` is a delivery the queue refused.
+    Running {
+        enqueued: Option<u64>,
+        send_error: Option<String>,
+    },
+    /// The mode disarmed itself. The driver cancels what it owned and stops.
+    Disarmed(Disarmed),
+}
+
+/// One pass of the hands-free runtime: check the bindings still hold, segment
+/// whatever audio arrived, transcribe what closed, and deliver what is due.
+///
+/// Clock-free like the machines it drives — `now_ms` comes from the driver, so
+/// a test states the timeline instead of sleeping through it.
+///
+/// The mode lock is taken in short sections and **released across
+/// `transcribe`**: a whisper pass takes seconds, and an abort issued during one
+/// has to be able to land. That is what makes the generation check on the way
+/// back out load-bearing rather than decorative.
+pub fn tick(
+    capture: &mut Capture,
+    mode: &parking_lot::Mutex<HandsFree>,
+    endpoint: &mut dyn VoiceEndpoint,
+    target: &dyn TargetProbe,
     queue: &dyn VoiceQueue,
-    session_id: &str,
-    disarmed: &Disarmed,
-) -> VoiceCancellation {
+    now_ms: u64,
+) -> Tick {
+    let Some(binding) = mode.lock().binding().cloned() else {
+        return Tick::NotArmed;
+    };
+
+    if !target.accepts(&binding.session_id) {
+        return disarmed_or_not_armed(mode.lock().note_session_closed(&binding.session_id));
+    }
+    if !endpoint.connected() {
+        return disarmed_or_not_armed(mode.lock().note_owner_disconnected(&binding.owner));
+    }
+
+    let samples = match endpoint.drain() {
+        Ok(samples) => samples,
+        Err(error) => return disarmed_or_not_armed(mode.lock().note_device_failed(error)),
+    };
+    if samples.is_empty() {
+        if now_ms.saturating_sub(capture.last_audio_ms) > capture.device_silence_timeout_ms {
+            return disarmed_or_not_armed(mode.lock().note_device_failed(format!(
+                "The capture device delivered no audio for {}s",
+                capture.device_silence_timeout_ms / 1_000
+            )));
+        }
+    } else {
+        capture.last_audio_ms = now_ms;
+    }
+
+    let closed = capture.segmenter.push(&samples);
+    if closed.is_empty() && capture.segmenter.is_capturing() {
+        mode.lock().note_capturing();
+    }
+
+    for utterance in closed {
+        // The generation is read with the lock, before the pass starts. What
+        // comes back is checked against the generation *then* current, which is
+        // how a result that outlived its mode is refused.
+        let generation = {
+            let mut mode = mode.lock();
+            mode.note_transcribing();
+            mode.generation()
+        };
+        match endpoint.transcribe(&utterance.audio) {
+            Ok(text) => {
+                mode.lock().accept_transcript(generation, &text, now_ms);
+            }
+            Err(error) => {
+                return disarmed_or_not_armed(mode.lock().note_device_failed(error));
+            }
+        }
+    }
+
+    // Bound in its own statement, never in the `match` scrutinee: a temporary
+    // there lives until the end of the whole match, and the error arm locks the
+    // mode again. `parking_lot` is not reentrant, so that shape deadlocks the
+    // runtime — and every status poll behind it — the first time the queue
+    // refuses a delivery.
+    let delivered = deliver_due(&mut mode.lock(), queue, now_ms);
+    match delivered {
+        Some(Ok(id)) => Tick::Running {
+            enqueued: Some(id),
+            send_error: None,
+        },
+        Some(Err(error)) => {
+            mode.lock().note_send_failed(&error);
+            Tick::Running {
+                enqueued: None,
+                send_error: Some(error),
+            }
+        }
+        None => Tick::Running {
+            enqueued: None,
+            send_error: None,
+        },
+    }
+}
+
+/// How often the driver thread ticks. Short enough that end-of-speech is not
+/// noticeably late, long enough to cost nothing while nobody is speaking.
+pub const POLL_INTERVAL_MS: u64 = 50;
+
+/// The thread that drives [`tick`] while the mode is armed.
+///
+/// Dropping it stops the thread and waits for it — bounded by one poll plus,
+/// at worst, one transcription in flight.
+pub struct HandsFreeRuntime {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HandsFreeRuntime {
+    /// True once the loop has returned — it disarmed itself, or the mode was
+    /// disarmed from elsewhere. The caller uses this to release the capture
+    /// device, which cannot travel to this thread (cpal streams are `!Send`).
+    pub fn is_finished(&self) -> bool {
+        self.handle
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+    }
+}
+
+impl Drop for HandsFreeRuntime {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// Run the hands-free loop against a real session until it disarms.
+///
+/// The thread owns nothing but the audio endpoint: the target probe and the
+/// queue are both built from `AppState` on each tick, so this path is the same
+/// Compose FIFO a hand-typed command uses and there is no second way out.
+pub fn spawn_runtime(
+    state: std::sync::Arc<AppState>,
+    mode: std::sync::Arc<parking_lot::Mutex<HandsFree>>,
+    mut endpoint: Box<dyn VoiceEndpoint>,
+    config: SegmenterConfig,
+) -> HandsFreeRuntime {
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_clone = stop.clone();
+    let handle = std::thread::Builder::new()
+        .name("hands-free-dictation".into())
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            let mut capture = Capture::new(config, DEVICE_SILENCE_TIMEOUT_MS, 0);
+            loop {
+                if stop_clone.load(std::sync::atomic::Ordering::Acquire) {
+                    break;
+                }
+                let now_ms = started.elapsed().as_millis() as u64;
+                let outcome = tick(
+                    &mut capture,
+                    &mode,
+                    endpoint.as_mut(),
+                    &PtyTargetProbe(&state),
+                    &PtyVoiceQueue(&state),
+                    now_ms,
+                );
+                match outcome {
+                    Tick::NotArmed => break,
+                    Tick::Disarmed(disarmed) => {
+                        // Whatever this mode parked in the Compose queue goes
+                        // with it. An entry the composer already typed is
+                        // reported by `cancel`, not silently claimed back.
+                        let cancellation = cancel_disarmed(&PtyVoiceQueue(&state), &disarmed);
+                        tracing::info!(
+                            source = "dictation",
+                            "Hands-free disarmed: {:?} (cancelled {:?}, already delivered {:?})",
+                            disarmed.reason,
+                            cancellation.cancelled,
+                            cancellation.already_delivered
+                        );
+                        break;
+                    }
+                    Tick::Running {
+                        enqueued,
+                        send_error,
+                    } => {
+                        if let Some(id) = enqueued {
+                            tracing::info!(
+                                source = "dictation",
+                                "Hands-free turn queued as Compose entry {id}"
+                            );
+                        }
+                        if let Some(error) = send_error {
+                            tracing::warn!(
+                                source = "dictation",
+                                "Hands-free delivery refused: {error}"
+                            );
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+            }
+        })
+        .expect("Failed to spawn hands-free thread");
+    HandsFreeRuntime {
+        stop,
+        handle: Some(handle),
+    }
+}
+
+/// A disarm that found nothing to disarm means someone else got there first.
+fn disarmed_or_not_armed(disarmed: Option<Disarmed>) -> Tick {
+    match disarmed {
+        Some(disarmed) => Tick::Disarmed(disarmed),
+        None => Tick::NotArmed,
+    }
+}
+
+/// Cancel everything a disarm made obsolete.
+pub fn cancel_disarmed(queue: &dyn VoiceQueue, disarmed: &Disarmed) -> VoiceCancellation {
     if disarmed.cancel_ids.is_empty() {
         return VoiceCancellation::default();
     }
-    queue.cancel(session_id, &disarmed.cancel_ids)
+    queue.cancel(&disarmed.session_id, &disarmed.cancel_ids)
 }
 
 #[cfg(test)]
@@ -1022,14 +1329,14 @@ mod tests {
         queue.parked.borrow_mut().push(99);
 
         mode.accept_transcript(generation, "first", 0);
-        deliver_due(&mut mode, &queue, 1_500).expect("first send");
+        let _ = deliver_due(&mut mode, &queue, 1_500).expect("first send");
         mode.accept_transcript(generation, "second", 2_000);
-        deliver_due(&mut mode, &queue, 3_500).expect("second send");
+        let _ = deliver_due(&mut mode, &queue, 3_500).expect("second send");
         // The composer typed the first one before the user aborted.
         queue.mark_delivered(1);
 
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
-        let cancellation = cancel_disarmed(&queue, "target", &disarmed);
+        let cancellation = cancel_disarmed(&queue, &disarmed);
 
         assert_eq!(cancellation.cancelled, [2]);
         assert_eq!(
@@ -1167,6 +1474,445 @@ mod tests {
             TranscriptOutcome::NotArmed
         );
         assert!(deliver_due(&mut mode, &queue, u64::MAX).is_none());
+        assert!(queue.enqueued.borrow().is_empty());
+    }
+
+    // --- The runtime loop -------------------------------------------------
+
+    /// A microphone and a recogniser, under the test's control.
+    ///
+    /// `drain` hands back one queued chunk per call, so a test states the audio
+    /// timeline chunk by chunk exactly as the desktop adapter delivers it.
+    struct FakeEndpoint {
+        chunks: RefCell<std::collections::VecDeque<Vec<f32>>>,
+        connected: std::cell::Cell<bool>,
+        drain_error: RefCell<Option<String>>,
+        transcript: String,
+        calls: std::cell::Cell<usize>,
+        /// Run inside `transcribe`, to model work that lands while a whisper
+        /// pass is still running.
+        during_transcribe: RefCell<Option<Box<dyn Fn() + Send>>>,
+    }
+
+    impl FakeEndpoint {
+        fn new(transcript: &str) -> Self {
+            Self {
+                chunks: RefCell::new(std::collections::VecDeque::new()),
+                connected: std::cell::Cell::new(true),
+                drain_error: RefCell::new(None),
+                transcript: transcript.to_string(),
+                calls: std::cell::Cell::new(0),
+                during_transcribe: RefCell::new(None),
+            }
+        }
+
+        fn feed(&self, samples: Vec<f32>) {
+            self.chunks.borrow_mut().push_back(samples);
+        }
+    }
+
+    impl VoiceEndpoint for FakeEndpoint {
+        fn drain(&mut self) -> Result<Vec<f32>, String> {
+            if let Some(error) = self.drain_error.borrow().as_ref() {
+                return Err(error.clone());
+            }
+            Ok(self.chunks.borrow_mut().pop_front().unwrap_or_default())
+        }
+
+        fn connected(&self) -> bool {
+            self.connected.get()
+        }
+
+        fn transcribe(&self, _audio: &[f32]) -> Result<String, String> {
+            self.calls.set(self.calls.get() + 1);
+            if let Some(during) = self.during_transcribe.borrow().as_ref() {
+                during();
+            }
+            Ok(self.transcript.clone())
+        }
+    }
+
+    /// A target that answers whatever the test last said.
+    struct FakeTarget(std::cell::Cell<bool>);
+
+    impl TargetProbe for FakeTarget {
+        fn accepts(&self, _session_id: &str) -> bool {
+            self.0.get()
+        }
+    }
+
+    fn runtime_capture() -> Capture {
+        Capture::new(test_config(), 5_000, 0)
+    }
+
+    fn armed_shared() -> parking_lot::Mutex<HandsFree> {
+        let mut mode = HandsFree::new(1_000);
+        mode.arm("target", "desktop", true).expect("arm");
+        parking_lot::Mutex::new(mode)
+    }
+
+    /// The whole point of the pass: audio in one end, a Compose-queue entry out
+    /// the other, with nobody touching a PTY in between.
+    #[test]
+    fn a_spoken_phrase_travels_from_capture_to_the_queue() {
+        let mode = armed_shared();
+        let generation = mode.lock().generation();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("run the tests");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let mut input = speech(500);
+        input.extend(silence(600));
+        endpoint.feed(input);
+
+        let first = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        assert!(
+            matches!(first, Tick::Running { enqueued: None, .. }),
+            "the hold-back must still be running, got {first:?}"
+        );
+        assert_eq!(
+            mode.lock().pending_text(),
+            Some("run the tests"),
+            "the transcript must be visible while it is held back"
+        );
+        assert!(queue.enqueued.borrow().is_empty());
+
+        let sent = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 1_200);
+
+        assert!(
+            matches!(
+                sent,
+                Tick::Running {
+                    enqueued: Some(1),
+                    ..
+                }
+            ),
+            "the expired hold-back must enqueue, got {sent:?}"
+        );
+        assert_eq!(
+            queue.enqueued.borrow().as_slice(),
+            [(
+                "target".to_string(),
+                "run the tests".to_string(),
+                generation,
+                1
+            )]
+        );
+        assert_eq!(mode.lock().owned_ids(), [1]);
+    }
+
+    /// An armed microphone in an empty room must cost nothing: no inference at
+    /// all, and a retained-audio figure that does not move with time.
+    #[test]
+    fn an_armed_and_silent_microphone_never_infers_and_stays_bounded() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("should never be asked");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        // 60s of room silence, delivered the way cpal delivers it.
+        for step in 0..1_200u64 {
+            endpoint.feed(silence(50));
+            tick(
+                &mut capture,
+                &mode,
+                &mut endpoint,
+                &target,
+                &queue,
+                step * 50,
+            );
+        }
+
+        assert_eq!(
+            endpoint.calls.get(),
+            0,
+            "silence must never reach the recogniser"
+        );
+        assert!(queue.enqueued.borrow().is_empty());
+        assert!(
+            capture.retained_samples() <= ms_to_samples(test_config().pre_roll_ms) + FRAME_SAMPLES,
+            "silence retained {} samples — the pre-roll is the only buffer",
+            capture.retained_samples()
+        );
+    }
+
+    /// Whisper hands back an empty string for a cough. Nothing may be sent, and
+    /// the mode must go back to listening rather than sit in `transcribing`.
+    #[test]
+    fn a_transcript_the_recogniser_rejects_sends_nothing() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("   ");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let mut input = speech(500);
+        input.extend(silence(600));
+        endpoint.feed(input);
+
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
+        // Well past any hold-back, with the stream still alive.
+        endpoint.feed(silence(50));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 3_000);
+
+        assert_eq!(endpoint.calls.get(), 1, "the utterance was transcribed");
+        assert!(
+            queue.enqueued.borrow().is_empty(),
+            "an empty transcript is not a message"
+        );
+        assert_eq!(*mode.lock().phase(), Phase::Waiting);
+    }
+
+    /// The reason the mode lock is released across a whisper pass: an abort
+    /// during transcription has to be able to land, and the result that arrives
+    /// afterwards has to be refused.
+    #[test]
+    fn an_abort_during_transcription_lands_and_its_result_is_refused() {
+        let mode = std::sync::Arc::new(armed_shared());
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("too late");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let aborting = mode.clone();
+        *endpoint.during_transcribe.borrow_mut() = Some(Box::new(move || {
+            let mut mode = aborting
+                .try_lock()
+                .expect("the runtime must not hold the mode lock across a transcription");
+            mode.disarm(DisarmReason::Manual);
+        }));
+
+        let mut input = speech(500);
+        input.extend(silence(600));
+        endpoint.feed(input);
+
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 10_000);
+
+        assert_eq!(endpoint.calls.get(), 1);
+        assert!(
+            queue.enqueued.borrow().is_empty(),
+            "a result that outlived its mode must not reach a model"
+        );
+        assert!(mode.lock().binding().is_none());
+    }
+
+    /// The bound tab is closed while the mode is armed.
+    #[test]
+    fn a_closed_target_disarms_the_running_mode() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("unused");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        target.0.set(false);
+        let outcome = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
+
+        match outcome {
+            Tick::Disarmed(disarmed) => assert_eq!(disarmed.reason, DisarmReason::TargetClosed),
+            other => panic!("a closed target must disarm, got {other:?}"),
+        }
+        assert!(mode.lock().binding().is_none());
+    }
+
+    /// The endpoint that armed the mode goes away — the desktop audio endpoint
+    /// released on shutdown, or (in 818) a remote client's socket closing.
+    #[test]
+    fn a_disconnected_owner_disarms_the_running_mode() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("unused");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        endpoint.connected.set(false);
+        let outcome = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
+
+        match outcome {
+            Tick::Disarmed(disarmed) => {
+                assert_eq!(disarmed.reason, DisarmReason::OwnerDisconnected)
+            }
+            other => panic!("a disconnected owner must disarm, got {other:?}"),
+        }
+    }
+
+    /// A hard capture error is a device failure, and the message reaches the
+    /// status rather than a log nobody reads.
+    #[test]
+    fn a_capture_error_disarms_with_its_message() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("unused");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        *endpoint.drain_error.borrow_mut() = Some("input device disappeared".to_string());
+        let outcome = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
+
+        match outcome {
+            Tick::Disarmed(disarmed) => assert_eq!(
+                disarmed.reason,
+                DisarmReason::DeviceFailed("input device disappeared".to_string())
+            ),
+            other => panic!("a capture error must disarm, got {other:?}"),
+        }
+        assert_eq!(mode.lock().last_error(), Some("input device disappeared"));
+    }
+
+    /// A microphone that was unplugged does not report an error — it simply
+    /// stops delivering samples. Silence in the *audio* is normal; silence in
+    /// the *stream* is a dead device, and the mode must not stay armed on it.
+    #[test]
+    fn a_device_that_stops_delivering_samples_disarms_after_its_timeout() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("unused");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        // Still inside the timeout: no samples yet, but not a failure either.
+        assert!(matches!(
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, 4_000),
+            Tick::Running { .. }
+        ));
+
+        let outcome = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 5_001);
+
+        match outcome {
+            Tick::Disarmed(disarmed) => assert!(
+                matches!(disarmed.reason, DisarmReason::DeviceFailed(_)),
+                "got {:?}",
+                disarmed.reason
+            ),
+            other => panic!("a silent stream must disarm, got {other:?}"),
+        }
+    }
+
+    /// Audio arriving resets the starvation clock: a long dictation session
+    /// must not disarm itself just because it passed the timeout.
+    #[test]
+    fn audio_keeps_the_device_alive_past_the_timeout() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("unused");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        for step in 0..300u64 {
+            endpoint.feed(silence(50));
+            let outcome = tick(
+                &mut capture,
+                &mode,
+                &mut endpoint,
+                &target,
+                &queue,
+                step * 50,
+            );
+            assert!(
+                matches!(outcome, Tick::Running { .. }),
+                "a live stream must stay armed at {}ms, got {outcome:?}",
+                step * 50
+            );
+        }
+    }
+
+    /// A queue that refuses everything, and is `Send` so the tick under test
+    /// can run on a thread the test can put a deadline on.
+    struct RefusingQueue;
+
+    impl VoiceQueue for RefusingQueue {
+        fn enqueue(&self, _session_id: &str, _text: &str, _generation: u64) -> Result<u64, String> {
+            Err("Session not found".to_string())
+        }
+
+        fn cancel(&self, _session_id: &str, _ids: &[u64]) -> VoiceCancellation {
+            VoiceCancellation::default()
+        }
+    }
+
+    /// A refused delivery is an ordinary outcome — the target can disappear
+    /// between the transcript and the send — so the runtime must report it and
+    /// keep going.
+    ///
+    /// It runs on its own thread with a deadline because the failure this
+    /// guards against is a *deadlock*, not a wrong answer: holding the mode
+    /// lock across the error arm parks the runtime and every status poll behind
+    /// it forever. The 5s is a harness bound on a clock-free call, not a
+    /// behaviour assertion — nothing inside `tick` waits for anything.
+    #[test]
+    fn a_refused_delivery_is_reported_without_parking_the_runtime() {
+        let mode = std::sync::Arc::new(armed_shared());
+        let generation = mode.lock().generation();
+        mode.lock()
+            .accept_transcript(generation, "run the tests", 0);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let mode = mode.clone();
+            scope.spawn(move || {
+                let mut capture = runtime_capture();
+                let mut endpoint = FakeEndpoint::new("unused");
+                endpoint.feed(silence(50));
+                let outcome = tick(
+                    &mut capture,
+                    &mode,
+                    &mut endpoint,
+                    &FakeTarget(std::cell::Cell::new(true)),
+                    &RefusingQueue,
+                    2_000,
+                );
+                let _ = tx.send(matches!(
+                    outcome,
+                    Tick::Running {
+                        send_error: Some(_),
+                        ..
+                    }
+                ));
+            });
+
+            let reported = rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("tick parked on the mode lock instead of reporting the refusal");
+            assert!(reported, "the refusal must reach the caller");
+        });
+
+        let mode = mode
+            .try_lock()
+            .expect("the mode lock must have been released");
+        assert_eq!(mode.last_error(), Some("Session not found"));
+        assert!(
+            mode.binding().is_some(),
+            "a refused send is not a reason to disarm the mode"
+        );
+    }
+
+    /// The hold-back is only a safety net if the abort inside it works.
+    #[test]
+    fn an_abort_inside_the_hold_back_sends_nothing() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("delete everything");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let mut input = speech(500);
+        input.extend(silence(600));
+        endpoint.feed(input);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
+
+        let disarmed = mode.lock().disarm(DisarmReason::Manual).expect("armed");
+        assert!(
+            disarmed.discarded_pending,
+            "the held transcript was dropped"
+        );
+
+        assert!(matches!(
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, 10_000),
+            Tick::NotArmed
+        ));
         assert!(queue.enqueued.borrow().is_empty());
     }
 }

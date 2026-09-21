@@ -12,6 +12,13 @@
 
 - [ ] After restart, dictate a short phrase followed by a pause while holding F5. The live preview must receive the phrase; the final transcription must retain it. Verify silent recordings remain rejected by the configured speech gates.
 
+## Hooked dialogs restore the question badge (2026-09-21) — **Rust, needs a `make dev` restart**
+
+- [ ] After restart, a Claude selection dialog with native hooks enabled must
+      show the question badge. It must survive switching sub-questions and
+      redraws without duplicate notifications. After the final answer or cancel,
+      normal protocol activity must clear question when the dialog closes.
+
 ## Protocol idle survives terminal animation (2026-09-21) — **Rust, needs a `make dev` restart**
 
 - [ ] After a rebuild/restart, finish a Codex turn in brainstorming with its idle
@@ -2779,15 +2786,69 @@ Rust — needs a `make dev` restart. The hands-free mode has no UI control yet
       window. They must still arrive in order — `enqueue_user_command` now
       appends through a shared helper, and a reordering would show up here.
 
+## Kokoro native synthesis (#812-5cc4)
+
+Rust and a new native build — needs a `make dev` restart, and the first build
+of `kokoro-rs` compiles espeak-ng, GGML and Highway (~7 minutes cold).
+
+- [HUMAN] Listen to `.tmp/kokoro-eval/italian-phonetics.wav` and
+      `.tmp/kokoro-eval/italian-mixed.wav`, both `if_sara` at 24 kHz mono.
+      Intelligibility of Italian is the criterion and no test can judge it.
+      The first probes `gl`/`gn`, geminates, elision and a stressed final; the
+      second probes digits and English loanwords inside Italian, which is
+      where a phonemizer usually breaks. Regenerate either with
+      `cargo run -p kokoro-rs --example italian_probe -- .tmp/kokoro-eval`.
+- [ ] Windows and Linux lab machines: follow
+      `src-tauri/crates/kokoro-rs/PLATFORM-VERIFICATION.md` end to end. Only
+      macOS/arm64 has been built so far, and the symbol isolation uses a
+      different mechanism on each platform (version script on Linux,
+      `dllexport` on Windows), so a clean link on one proves nothing about the
+      others.
+
 ## Hands-free arm and disarm (#814-6d13)
 
 Rust — needs a `make dev` restart. There is still no UI control, so the HTTP
 surface is the only way to reach it.
 
+**Arming opens the microphone and starts capturing.** `open_endpoint` runs
+before the bind (`dictation/commands.rs:959`) and a successful arm spawns a
+driver thread that polls every 50 ms, transcribes each closed utterance through
+Whisper, and injects the text into the bound session's Compose queue. Speak near
+the machine while armed and the words reach the agent. Use a throwaway session,
+and disarm before walking away.
+
 - [ ] Hands-free arm/disarm over HTTP, against a throwaway agent session:
-      `curl -X POST localhost:9877/dictation/hands-free/arm -H 'content-type: application/json' -d '{"sessionId":"<id>","owner":"probe"}'`
+      `curl -X POST localhost:9877/dictation/hands-free/arm -H 'content-type: application/json' -d '{"sessionId":"<id>","owner":"desktop"}'`
       must return `armed: true` with `sessionId` echoed back. Arming against a
       shell (non-agent) session must return `Session cannot accept hands-free
       input`. `GET /dictation/hands-free` must agree with what arm returned, and
       `POST /dictation/hands-free/disarm` must report `wasArmed: true` once and
       `wasArmed: false` on a second call.
+- [ ] Arm, then speak one short Italian sentence and stop. Within about a second
+      of the pause the text must appear as a `voice_command` entry in
+      `GET /sessions/{id}/queue`, and reach the agent on its next idle window.
+      `GET /dictation/hands-free` must walk `waiting` → `capturing` →
+      `transcribing` → `holding_back` → `delivered` across the turn; a phase that
+      never leaves `capturing` means end-of-speech was not detected.
+- [ ] Arm, then close the bound session from the UI. The mode must disarm itself
+      with `TargetClosed` and release the microphone without a disarm call —
+      check `GET /dictation/hands-free` reads `armed: false` and that the app log
+      carries `Hands-free disarmed: TargetClosed`. This is the path that keeps a
+      dead tab from holding the device open.
+- [ ] Arm, then unplug or switch away the input device. After the silence
+      timeout the mode must disarm with `DeviceFailed` and name the device in the
+      message, rather than sitting armed and deaf.
+- [ ] `owner` is now checked against the one adapter that exists. Any value other
+      than `desktop` must be refused with `Audio endpoint '<owner>' is not
+      available on this build` and must leave the mode unarmed — the browser
+      endpoint is story 818. This is a behaviour change: arming from a remote
+      client used to bind and now fails at the endpoint.
+- [ ] Push-to-talk must be unaffected. With hands-free armed, run a normal
+      push-to-talk recording: it must capture and transcribe as usual, and must
+      neither disarm hands-free nor be disarmed by it. Then disarm hands-free and
+      confirm push-to-talk still works. The two modes hold separate captures.
+- [HUMAN] Confirm the microphone indicator (menu bar / camera-mic dot) turns on
+      at arm and off at disarm, for every disarm path above. Nothing in the test
+      suite can see whether the OS actually released the device, and an armed
+      mode that leaks the microphone after disarm is the failure that matters
+      most here.

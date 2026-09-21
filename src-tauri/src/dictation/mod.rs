@@ -30,7 +30,21 @@ pub struct DictationState {
     pub accumulated_partials: Arc<Mutex<String>>,
     /// Hands-free mode. Separate from `recording` on purpose: push-to-talk and
     /// hands-free are different modes and neither arms the other.
-    pub hands_free: Mutex<continuous::HandsFree>,
+    ///
+    /// `Arc` because the runtime thread drives it between ticks.
+    pub hands_free: Arc<Mutex<continuous::HandsFree>>,
+    /// The thread driving hands-free capture while it is armed.
+    pub hands_free_runtime: Mutex<Option<continuous::HandsFreeRuntime>>,
+    /// The microphone hands-free captures from. Deliberately **not** `audio`:
+    /// that one belongs to push-to-talk, and a shared slot would let either
+    /// mode close the other's device.
+    ///
+    /// It stays on this side of the thread boundary because a `cpal::Stream` is
+    /// `!Send` — the runtime only ever sees the buffer handle.
+    pub hands_free_audio: Mutex<Option<audio::AudioCapture>>,
+    /// Liveness of the desktop audio endpoint. Cleared when that endpoint is
+    /// released, which is how the runtime learns its owner is gone.
+    pub hands_free_owner_alive: Arc<AtomicBool>,
 }
 
 impl DictationState {
@@ -44,9 +58,12 @@ impl DictationState {
             streaming: Mutex::new(None),
             transcriber_arc: Mutex::new(None),
             accumulated_partials: Arc::new(Mutex::new(String::new())),
-            hands_free: Mutex::new(continuous::HandsFree::new(
+            hands_free: Arc::new(Mutex::new(continuous::HandsFree::new(
                 commands::default_hold_back_ms().into(),
-            )),
+            ))),
+            hands_free_runtime: Mutex::new(None),
+            hands_free_audio: Mutex::new(None),
+            hands_free_owner_alive: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -54,6 +71,17 @@ impl DictationState {
     /// transcriber. Order matters — the streaming thread holds an Arc clone of
     /// the transcriber, so we must join it before the WhisperContext can be freed.
     pub fn shutdown(&self) {
+        // 0. Release the desktop audio endpoint and disarm hands-free.
+        //    The disarm is done here rather than left to the runtime: dropping
+        //    the runtime stops its thread, so racing it for the owner flag
+        //    would leave the mode armed on some runs and not others.
+        self.hands_free_owner_alive
+            .store(false, std::sync::atomic::Ordering::Release);
+        self.hands_free
+            .lock()
+            .disarm(continuous::DisarmReason::OwnerDisconnected);
+        *self.hands_free_runtime.lock() = None;
+        *self.hands_free_audio.lock() = None;
         // 1. Stop audio capture (upstream source)
         *self.audio.lock() = None;
         // 2. Stop + join the streaming thread (Drop impl signals stop flag)
