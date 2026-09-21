@@ -85,6 +85,11 @@ pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Ve
                     .pty_accent_colors
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                alias: state
+                    .session_maps
+                    .term_aliases
+                    .get(&session_id)
+                    .map(|value| value.value().clone()),
                 state: session_state,
             }
         })

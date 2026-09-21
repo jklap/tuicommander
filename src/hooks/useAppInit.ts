@@ -97,6 +97,7 @@ export interface AppInitDeps {
 				pty_description?: string | null;
 				display_name_is_custom?: boolean;
 				is_remote?: boolean;
+				alias?: string | null;
 				state?: {
 					shell_state?: "busy" | "idle";
 					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
@@ -951,6 +952,7 @@ export async function initApp(deps: AppInitDeps) {
 					agentType: parseAgentType(session.state?.agent_type),
 					cwd: session.cwd,
 					awaitingInput: null,
+					alias: session.alias ?? null,
 				});
 			// A session-created event can insert this terminal while the surviving-session
 			// request is pending. Reconcile its independent lifecycle fields too, but do
@@ -967,6 +969,7 @@ export async function initApp(deps: AppInitDeps) {
 				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
+				...(session.alias !== undefined ? { alias: session.alias ?? null } : {}),
 				ptyDescription: session.pty_description ?? null,
 				agentState: session.state?.agent_state ?? null,
 				awaitingInput: session.state?.awaiting_input === true ? "question" : null,

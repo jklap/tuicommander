@@ -34,6 +34,13 @@ pub(super) struct SessionInfo {
     /// (Claude Code's per-teammate `--agent-color`) — see `tmux_routes.rs`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<String>,
+    /// The short address other agents/tabs reach this session by (e.g.
+    /// `tc-1`) — `AppState::assign_term_alias`. Previously only ever reached
+    /// the desktop window via a hand-emitted event with no bus arm; a
+    /// browser/PWA client had no way to learn it at all, not even via this
+    /// same hydration read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,
