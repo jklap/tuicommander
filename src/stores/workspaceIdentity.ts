@@ -65,6 +65,12 @@ export interface WorkspaceState {
 	/** Set while the worktree has a rebase/merge/cherry-pick/revert/bisect in progress; which one.
 	 *  `null` once it finishes: `setWorkspace` drops `undefined` fields, so a refresh clears it with null. */
 	gitOp?: GitOpKind | null;
+	/** Set while the backend is warming this worktree's git-ignored build
+	 * directories in from the parent repo (`worktree-warm-*` events). `null`
+	 * clears it through `setWorkspace`, same as `gitOp` above. `current` is the
+	 * just-completed directory's relative path (completion order, not candidate
+	 * order) — absent until the first progress tick arrives. */
+	warmState?: { status: "warming"; copied: number; total: number; current?: string } | null;
 	worktreePath: string | null; // Path to worktree directory (null for main branch)
 	terminals: string[]; // terminal IDs belonging to this workspace
 	hadTerminals: boolean; // true once a terminal has been created — suppresses auto-spawn after close-all

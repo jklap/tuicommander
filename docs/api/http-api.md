@@ -2588,10 +2588,23 @@ are identical by construction. Payload table: `docs/sync-matrix.md`.
 `{exit_code, stdout, stderr}` result or error string rode on this response).
 The outcome is reported later via the dual-emitted
 `worktree-setup-script-completed` event (`/events` SSE; payload in
-`docs/sync-matrix.md`), silent when no script is configured, or polled via
-`GET /worktrees/setup-status` below. The same applies to MCP
+`docs/sync-matrix.md`), or polled via `GET /worktrees/setup-status` below.
+The event is sent exactly once per chain whatever its end, with `outcome`
+`completed` (a script ran; `exitCode`/`error` say how), `not_configured` (no
+script) or `stopped` (removal or abort; `error` says which) — unless a newer
+chain for the same `(repoPath, branch)` replaced it. The same applies to MCP
 `repo action=worktree_create` (poll with `action=worktree_setup_status`) and
-`POST /sessions/worktree`.
+`POST /sessions/worktree`, which also warms now.
+
+The warm copies up to `tuic_git::cow::WARM_COPY_CONCURRENCY` (4) directories at
+a time and is skipped when `warm_ignored_directories` resolves `false` for the
+repo (per-repo setting, then `.tuic.json`, then the global repo default, which
+is `true`); a skipped warm ends `done` with a `skipped` reason. While pending,
+`GET /worktrees/paths` reports `phase: "warming"` with `copied`/`total`, then
+`phase: "file_sync_and_setup_script"`. Live progress is also pushed as
+`worktree-warm-started` / `worktree-warm-progress` / `worktree-warm-completed`
+(`/events` SSE; payloads in `docs/sync-matrix.md`) — silent when nothing is
+copied.
 
 ### Poll Worktree Setup Status
 

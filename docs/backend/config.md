@@ -627,6 +627,7 @@ Per-repository fields:
 | `base_branch` | `Option<String>` | `null` | Tri-state override (`null` inherits `.tuic.json`, then the global default) naming which branch new worktrees are created from — `"automatic"` means detect the repo's default branch |
 | `copy_ignored_files` | `Option<bool>` | `null` | Tri-state override (`null` inherits `.tuic.json`, then the global default) of whether `.gitignore`d files are copied into a new worktree |
 | `copy_untracked_files` | `Option<bool>` | `null` | Tri-state override of whether untracked (never `git add`ed) files are copied into a new worktree |
+| `warm_ignored_directories` | `Option<bool>` | `null` | Tri-state override (`null` inherits `.tuic.json`, then the global default, which is `true`) of whether git-ignored build directories (`node_modules`, `target`, …) are copy-on-write warmed into a new worktree |
 | `copy_paths` | `Vec<CopyPathEntry>` | `[]` | Files/directories always copied (or symlinked) into every new worktree of this repo, regardless of the two toggles above. Repo-specific only — no `.tuic.json`/global tier, same as `branch_labels`. Each entry is `{ path: String, mode: CopyPathMode }` (`mode`: `"copy"` \| `"symlink"`) |
 | `setup_script` | `String` | `""` | Script to run after worktree creation |
 | `run_script` | `String` | `""` | Default run command |
@@ -656,6 +657,12 @@ worktree is actually created — see `src-tauri/src/worktree_sync.rs` for the
 copy/symlink engine and `docs/sync-matrix.md`'s event table for the
 `worktree-sync-*` events it emits.
 
+`warm_ignored_directories` is resolved the same three-tier way by
+`resolve_effective_warm_setting(repo_path)` inside the post-create chain
+(`worktree::run_worktree_setup_chain`), so desktop, HTTP and MCP creation all
+honour it. Off skips the CoW copy; the workspace's warm status then ends `done`
+with a `skipped` reason.
+
 ### Repository Defaults (`repo-defaults.json`)
 
 **Type:** `RepoDefaultsConfig`
@@ -667,6 +674,7 @@ Default values applied to new repositories when no per-repo override exists.
 | `base_branch` | `String` | `"automatic"` | Default base branch |
 | `copy_ignored_files` | `bool` | `false` | Copy .gitignored files to worktree |
 | `copy_untracked_files` | `bool` | `false` | Copy untracked files to worktree |
+| `warm_ignored_directories` | `bool` | `true` | CoW-warm git-ignored build directories into a new worktree (pure opt-out: absent means `true`) |
 | `setup_script` | `String` | `""` | Default setup script |
 | `run_script` | `String` | `""` | Default run command |
 | `archive_script` | `String` | `""` | Default archive script |
@@ -1068,6 +1076,7 @@ The Design Mode `dev_server_url` is deliberately absent from this format: a comm
 | `base_branch` | `String` | Base branch for worktrees |
 | `copy_ignored_files` | `bool` | Copy .gitignored files to worktree |
 | `copy_untracked_files` | `bool` | Copy untracked files to worktree |
+| `warm_ignored_directories` | `bool` | CoW-warm git-ignored build directories into a new worktree |
 | `worktree_storage` | `WorktreeStorage` | Storage strategy (sibling/app-dir/inside-repo) |
 | `delete_branch_on_remove` | `bool` | Delete branch when removing worktree |
 | `auto_archive_merged` | `bool` | Auto-archive merged worktrees |

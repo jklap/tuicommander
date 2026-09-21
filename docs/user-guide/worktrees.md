@@ -50,6 +50,11 @@ it runs, so a copy that fails costs build time and nothing else — creation sti
 succeeds and the response carries a warning naming the directory that stayed
 cold. Measured on this repository: **~38 s for 30 GB across 80k files**
 (`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
+It runs in the background after the worktree exists, never before creation
+returns, and copies several ignored directories at once (bounded — four at a
+time — so it does not compete unboundedly with everything else on disk). While
+it runs, the branch row in the sidebar shows a **Warming…** badge whose tooltip
+names the live copied/total progress.
 For desktop, HTTP, and MCP creation, wait until the workspace's warm status is
 `done` or `failed` before installing dependencies or building. On every
 creation path (desktop, HTTP, MCP) the order is fixed: the warm copy first, then
@@ -65,6 +70,11 @@ creation still succeeds with one warning and a cold worktree.
 Copied files and directories gain owner write permission in the new worktree,
 even when ignored build evidence is read-only in the source. Symlinks are not
 followed, and the source permissions and contents stay unchanged.
+
+Warming can be turned off per repository or globally (Settings → Repository/Git &
+GitHub → Worktree, "Warm ignored build directories" — on by default). Turning it
+off skips the copy entirely; the worktree stays cold and starts a real build
+instead, which some repos may prefer over the background I/O.
 
 ## Creating Worktrees
 
@@ -110,11 +120,11 @@ In Ask mode, a dialog containing only clean orphaned worktrees removes them afte
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 
 Each setting can use the global default or be overridden for a specific repository. On/off
-settings (Copy ignored files, Copy untracked files, Prompt on create, Delete branch on remove,
-Auto-archive merged, the PR-visibility filters, and — on macOS — the Cmd+1-9 terminal hotkeys) use
-a three-position **On / Use global / Off** control instead of a plain checkbox, so "inherit the
-global setting" stays a selectable state rather than something you can only get back to by
-resetting the whole repo's overrides.
+settings (Copy ignored files, Copy untracked files, Warm ignored build directories, Prompt on
+create, Delete branch on remove, Auto-archive merged, the PR-visibility filters, and — on macOS —
+the Cmd+1-9 terminal hotkeys) use a three-position **On / Use global / Off** control instead of a
+plain checkbox, so "inherit the global setting" stays a selectable state rather than something you
+can only get back to by resetting the whole repo's overrides.
 
 A repo can also list specific files/directories (relative to its root) to **always** copy — or
 symlink, to share one copy across every worktree instead of duplicating it — into every new
@@ -262,12 +272,22 @@ AI agents connected via MCP can create worktrees using `repo action=worktree_cre
 
 Because nothing enforces how an agent treats a workspace, the response also
 carries instructions stating that tracked changes were not carried over,
-identifying warmed build directories, and explaining that refs and objects are
-shared with the parent.
+noting that ignored build directories are warmed in the background (not
+finished by the time this response arrives — see below), and explaining that
+refs and objects are shared with the parent.
 
 When TUICommander receives a worktree creation event while the active terminal is running an agent, the confirmation offers **Open Worktree**. Accepting selects an existing terminal in the new worktree or creates one when needed. The running agent stays in its original terminal, branch, and working directory; TUICommander does not relabel or interrupt it.
 
 If the repo has a Setup Script configured, it runs in the background after creation and its outcome isn't included in the creation response. Poll `repo action=worktree_setup_status path=<repo> branch=<branch>` for `{state: "running" | "not_configured" | "completed" | "unknown"}` (plus `exit_code`/`error` once completed) instead of assuming success.
+
+Warming (see "Warm Linked Worktrees" above) runs the same way — in the
+background, not before this response returns — so `instructions.warm_artifacts`
+in the creation response reports `status: "pending"`. Poll `repo
+action=worktree_list path=<repo>` (or `GET /worktrees/paths?path=<repo>`) and
+read that workspace's `warm_artifacts`: while pending it carries `phase`
+(`warming` with `copied`/`total`, then `file_sync_and_setup_script`); wait for
+`done` or `failed` before assuming `node_modules`/`target` have arrived. A
+`done` with a `skipped` reason means warming is off for this repo.
 
 ### Claude Code — Agent Bridge
 

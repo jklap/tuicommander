@@ -372,44 +372,103 @@ async fn run_worktree_file_sync(
     Some(summary)
 }
 
+/// Generation of the newest post-create chain per `(repo_path, branch)`.
+///
+/// The setup status cache and the `worktree-setup-script-completed` event are
+/// keyed by that pair, which a removed-then-recreated workspace reuses. Every
+/// status write and terminal event of a chain is gated on its generation still
+/// being the newest one, so a stale chain (stopped by the removal, or simply
+/// slower) can never wipe or overwrite the status of the chain that replaced
+/// it, nor resolve the new creation's waiter early. Process-wide like
+/// tuic-git's warm state, which it complements; entries are removed when the
+/// chain ends.
+static SETUP_CHAIN_GENERATIONS: std::sync::LazyLock<dashmap::DashMap<(String, String), u64>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+static NEXT_SETUP_CHAIN_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+fn begin_setup_chain(key: &(String, String)) -> u64 {
+    let generation = NEXT_SETUP_CHAIN_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    SETUP_CHAIN_GENERATIONS.insert(key.clone(), generation);
+    generation
+}
+
+/// Run `write` only while `generation` is the newest chain for `key`. The map
+/// entry's read guard is held across `write`, so a chain beginning for the
+/// same key cannot interleave between the check and the write.
+fn if_current_setup_chain(key: &(String, String), generation: u64, write: impl FnOnce()) -> bool {
+    match SETUP_CHAIN_GENERATIONS.get(key) {
+        Some(current) if *current == generation => {
+            write();
+            true
+        }
+        _ => false,
+    }
+}
+
+fn end_setup_chain(key: &(String, String), generation: u64) {
+    SETUP_CHAIN_GENERATIONS.remove_if(key, |_, current| *current == generation);
+}
+
 /// Settles a chain that is dropped (task aborted or panicked, runtime shutting
 /// down) before it published its outcome: a still-`pending` warm is marked
-/// `failed` and the pollable setup status reports the stop, so neither can
-/// read "in progress" forever. `finish_warm` is token-checked, so firing after
-/// a removal cleared the token is a harmless no-op.
+/// `failed`, the pollable setup status reports the stop, and a terminal
+/// `worktree-setup-script-completed` (`outcome: stopped`) is emitted, so
+/// neither a poller nor a frontend waiter can read "in progress" forever.
+/// `finish_warm` is token-checked and the status/event are generation-checked,
+/// so firing after a removal or a re-creation is a harmless no-op.
 struct ChainStopGuard {
     state: Arc<AppState>,
     status_key: (String, String),
-    warm: Option<(PathBuf, u64)>,
+    generation: u64,
+    worktree_path: PathBuf,
+    warm: Option<u64>,
     armed: bool,
 }
 
 impl Drop for ChainStopGuard {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
+        if self.armed {
+            const REASON: &str = "worktree setup chain stopped before it finished";
+            if let Some(token) = self.warm {
+                finish_warm(
+                    &self.worktree_path,
+                    token,
+                    serde_json::json!({"status": "failed", "reason": REASON}),
+                );
+            }
+            if_current_setup_chain(&self.status_key, self.generation, || {
+                self.state.worktree_setup_status.insert(
+                    self.status_key.clone(),
+                    Arc::new(crate::state::WorktreeSetupStatus::Completed {
+                        exit_code: None,
+                        error: Some(REASON.to_string()),
+                    }),
+                );
+                emit_worktree_setup_script_completed(
+                    &self.state,
+                    &self.status_key.0,
+                    &self.status_key.1,
+                    &self.worktree_path.to_string_lossy(),
+                    crate::state::SetupChainOutcome::Stopped,
+                    None,
+                    Some(REASON.to_string()),
+                );
+            });
         }
-        const REASON: &str = "worktree setup chain stopped before it finished";
-        if let Some((destination, token)) = &self.warm {
-            finish_warm(
-                destination,
-                *token,
-                serde_json::json!({"status": "failed", "reason": REASON}),
-            );
-        }
-        self.state.worktree_setup_status.insert(
-            self.status_key.clone(),
-            Arc::new(crate::state::WorktreeSetupStatus::Completed {
-                exit_code: None,
-                error: Some(REASON.to_string()),
-            }),
-        );
+        end_setup_chain(&self.status_key, self.generation);
     }
 }
 
 /// Kick off the post-create background chain for a freshly created worktree:
 /// **CoW warm → file sync → Setup Script**, strictly in that order.
 ///
+/// - The warm honours the repo's `warm_ignored_directories` opt-out
+///   (`config::resolve_effective_warm_setting`, resolved inside the chain so
+///   every creation path behaves the same) and copies with bounded parallelism
+///   (`crate::cow::WARM_COPY_CONCURRENCY` directories at a time), reporting
+///   progress as `worktree-warm-*` events and in the workspace's pending
+///   `warm_artifacts` detail (see [`warm_with_events`]).
 /// - The file sync AWAITS the warm: both write into the same destination, and
 ///   running them concurrently let either one win (CoW benefit lost, or every
 ///   synced path reported "destination already exists"), or an interleaved
@@ -418,23 +477,23 @@ impl Drop for ChainStopGuard {
 ///   file (a `copy_paths` entry symlinking `node_modules`, a synced `.env`)
 ///   can no longer run before it exists — the old "KNOWN, ACCEPTED ORDERING
 ///   GAP".
-/// - `warm_token` is the token from `begin_warm` (`None` on a creation path
-///   that does not warm, e.g. `POST /sessions/worktree`). The warm status is
-///   published only after the LAST step, so the workspace reads
-///   `warm_artifacts.status == "pending"` until the whole chain is done — the
-///   setup script itself still observes `pending`, as it did when main ran it
-///   before the warm. A removal that clears the token mid-chain stops the
-///   remaining steps (nothing more is written into a removed checkout).
+/// - `warm_token` is the token from `begin_warm` (`None` only for a caller
+///   that does not warm). The warm status is published only after the LAST
+///   step, so the workspace reads `warm_artifacts.status == "pending"` until
+///   the whole chain is done — the setup script itself still observes
+///   `pending`, as it did when main ran it before the warm. A removal that
+///   clears the token mid-chain stops the remaining steps (nothing more is
+///   written into a removed checkout).
 ///
 /// Fire-and-forget for the caller: worktree creation has already returned by
 /// the time this runs, on every creation path (desktop `create_worktree`, HTTP
 /// `create_worktree_shared` incl. MCP `repo worktree_create`, HTTP
 /// `create_session_with_worktree`). That is why no creation response carries
 /// `setup_script`/`setup_script_error` any more: the outcome does not exist yet
-/// when the response is built. Once the script finishes, the chain dual-emits
-/// (event_bus + Tauri window) `AppEvent::WorktreeSetupScriptCompleted` —
-/// silent when no setup script is configured, matching
-/// `run_worktree_file_sync`'s nothing-to-do-is-silent precedent.
+/// when the response is built. When the chain ends, it dual-emits (event_bus +
+/// Tauri window) `AppEvent::WorktreeSetupScriptCompleted` exactly once, with an
+/// `outcome` of `completed`, `not_configured` or `stopped` (removal/abort) —
+/// unless a newer chain for the same `(repo_path, branch)` has replaced it.
 ///
 /// The event alone left MCP clients (no SSE/event stream to listen on) with
 /// no way to ever learn the outcome — the chain also writes a
@@ -444,7 +503,8 @@ impl Drop for ChainStopGuard {
 /// `Completed` once the chain finishes (the entry is dropped — reads as
 /// `unknown` — when a removal stopped the chain). Pollable via
 /// [`get_worktree_setup_status`] / `repo action=worktree_setup_status` /
-/// `GET /worktrees/setup-status`.
+/// `GET /worktrees/setup-status`. Writes are gated by a per-chain generation
+/// ([`SETUP_CHAIN_GENERATIONS`]).
 pub(crate) fn spawn_worktree_setup_chain(
     state: &Arc<AppState>,
     base_repo: String,
@@ -453,22 +513,124 @@ pub(crate) fn spawn_worktree_setup_chain(
     warm_token: Option<u64>,
 ) -> tokio::task::JoinHandle<()> {
     let state = Arc::clone(state);
-    state.worktree_setup_status.insert(
-        (base_repo.clone(), branch.clone()),
-        Arc::new(crate::state::WorktreeSetupStatus::Running),
-    );
-    let warm = warm_token.map(|token| (token, crate::cow::warm_worktree));
-    tokio::spawn(run_worktree_setup_chain(
+    let status_key = (base_repo.clone(), branch.clone());
+    let generation = begin_setup_chain(&status_key);
+    if_current_setup_chain(&status_key, generation, || {
+        state.worktree_setup_status.insert(
+            status_key.clone(),
+            Arc::new(crate::state::WorktreeSetupStatus::Running),
+        );
+    });
+    let warm = warm_token.map(|token| {
+        (
+            token,
+            warm_with_events(
+                Arc::clone(&state),
+                base_repo.clone(),
+                branch.clone(),
+                token,
+                |source, destination, on_started, on_progress| {
+                    crate::cow::warm_worktree_reporting(
+                        source,
+                        destination,
+                        crate::cow::WARM_COPY_CONCURRENCY,
+                        on_started,
+                        on_progress,
+                    )
+                },
+            ),
+        )
+    });
+    tokio::spawn(run_worktree_setup_chain_generation(
         state,
         base_repo,
         branch,
         worktree_path,
         warm,
+        generation,
     ))
 }
 
+/// Wrap a progress-reporting warm so it publishes what it does: the real
+/// directory count and per-directory completions go out as dual-emitted
+/// `worktree-warm-started`/`-progress`/`-completed` events (progress throttled
+/// to ~150 ms, like the file sync) and into the workspace's pending
+/// `warm_artifacts` detail (`phase: "warming"`, `copied`, `total`), which is
+/// what an MCP/HTTP poller of `worktree_list`/`GET /worktrees/paths` sees.
+/// Silent — no events at all — when nothing is copied. `reporting` is
+/// injectable so tests can drive the events without a real copy.
+pub(crate) fn warm_with_events<R>(
+    state: Arc<AppState>,
+    repo_path: String,
+    branch: String,
+    token: u64,
+    reporting: R,
+) -> impl FnOnce(&Path, &Path) -> crate::cow::WarmingReport + Send + 'static
+where
+    R: FnOnce(
+            &Path,
+            &Path,
+            &mut dyn FnMut(usize),
+            &mut dyn FnMut(usize, usize, &Path),
+        ) -> crate::cow::WarmingReport
+        + Send
+        + 'static,
+{
+    move |source: &Path, destination: &Path| {
+        let worktree_path = destination.to_string_lossy().into_owned();
+        let mut started = false;
+        let mut last_emit = std::time::Instant::now();
+        let report = {
+            let mut on_started = |total: usize| {
+                started = true;
+                update_pending_warm(
+                    destination,
+                    token,
+                    serde_json::json!({"phase": "warming", "copied": 0, "total": total}),
+                );
+                emit_worktree_warm_started(&state, &repo_path, &branch, &worktree_path, total);
+            };
+            let mut on_progress = |copied: usize, total: usize, current: &Path| {
+                let now = std::time::Instant::now();
+                if copied == total || now.duration_since(last_emit).as_millis() >= 150 {
+                    last_emit = now;
+                    update_pending_warm(
+                        destination,
+                        token,
+                        serde_json::json!({"phase": "warming", "copied": copied, "total": total}),
+                    );
+                    emit_worktree_warm_progress(
+                        &state,
+                        &repo_path,
+                        &branch,
+                        &worktree_path,
+                        copied,
+                        total,
+                        Some(&current.to_string_lossy()),
+                    );
+                }
+            };
+            reporting(source, destination, &mut on_started, &mut on_progress)
+        };
+        if started {
+            emit_worktree_warm_completed(
+                &state,
+                &repo_path,
+                &branch,
+                &worktree_path,
+                report.warmed,
+                &report.warnings,
+            );
+        }
+        report
+    }
+}
+
 /// The body of [`spawn_worktree_setup_chain`], with the warm step injectable
-/// so tests can observe the ordering deterministically.
+/// so tests can observe the ordering deterministically. Starts its own chain
+/// generation; production goes through [`spawn_worktree_setup_chain`], which
+/// begins the generation synchronously before spawning.
+#[cfg(test)]
 pub(crate) async fn run_worktree_setup_chain<W>(
     state: Arc<AppState>,
     base_repo: String,
@@ -476,35 +638,89 @@ pub(crate) async fn run_worktree_setup_chain<W>(
     worktree_path: PathBuf,
     warm: Option<(u64, W)>,
 ) where
-    W: FnOnce(&Path, &Path) -> tuic_git::cow::WarmingReport + Send + 'static,
+    W: FnOnce(&Path, &Path) -> crate::cow::WarmingReport + Send + 'static,
+{
+    let generation = begin_setup_chain(&(base_repo.clone(), branch.clone()));
+    run_worktree_setup_chain_generation(state, base_repo, branch, worktree_path, warm, generation)
+        .await;
+}
+
+async fn run_worktree_setup_chain_generation<W>(
+    state: Arc<AppState>,
+    base_repo: String,
+    branch: String,
+    worktree_path: PathBuf,
+    warm: Option<(u64, W)>,
+    generation: u64,
+) where
+    W: FnOnce(&Path, &Path) -> crate::cow::WarmingReport + Send + 'static,
 {
     let status_key = (base_repo.clone(), branch.clone());
+    let worktree_path_str = worktree_path.to_string_lossy().into_owned();
     let mut guard = ChainStopGuard {
         state: Arc::clone(&state),
         status_key: status_key.clone(),
-        warm: warm
-            .as_ref()
-            .map(|(token, _)| (worktree_path.clone(), *token)),
+        generation,
+        worktree_path: worktree_path.clone(),
+        warm: warm.as_ref().map(|(token, _)| *token),
         armed: true,
     };
-    // A removal won: nothing more may be written into the checkout, and
-    // there is no outcome to report for a workspace that no longer exists.
+    // A removal won: nothing more may be written into the checkout. The
+    // status entry is dropped (there is no outcome for a workspace that no
+    // longer exists), but the waiter still gets its terminal event.
     let stop_removed = |guard: &mut ChainStopGuard| {
         guard.armed = false;
-        state.worktree_setup_status.invalidate(&status_key);
+        if_current_setup_chain(&status_key, generation, || {
+            state.worktree_setup_status.invalidate(&status_key);
+            emit_worktree_setup_script_completed(
+                &state,
+                &base_repo,
+                &branch,
+                &worktree_path_str,
+                crate::state::SetupChainOutcome::Stopped,
+                None,
+                Some("the worktree was removed before its setup chain finished".to_string()),
+            );
+        });
     };
 
-    // 1. CoW warm (awaited; its status is held back until the end).
+    // 1. CoW warm (awaited; its status is held back until the end), unless
+    //    the repo opted out — the copy is then skipped but the token is still
+    //    honoured, so a removal stops the chain exactly as before.
     let mut warm_result: Option<(u64, serde_json::Value)> = None;
     if let Some((token, warm_fn)) = warm {
+        let repo_for_setting = base_repo.clone();
+        let enabled = tokio::task::spawn_blocking(move || {
+            crate::config::resolve_effective_warm_setting(&repo_for_setting)
+        })
+        .await
+        .unwrap_or(true);
         let source = PathBuf::from(&base_repo);
         let destination = worktree_path.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            tuic_git::worktree::run_background_warm_blocking(&source, &destination, token, warm_fn)
+            tuic_git::worktree::run_background_warm_blocking(
+                &source,
+                &destination,
+                token,
+                |source, destination| {
+                    if enabled {
+                        warm_fn(source, destination)
+                    } else {
+                        crate::cow::WarmingReport::default()
+                    }
+                },
+            )
         })
         .await;
         match outcome {
-            Ok(Some(status)) => warm_result = Some((token, status)),
+            Ok(Some(mut status)) => {
+                if !enabled {
+                    status["skipped"] = serde_json::json!(
+                        "warming ignored directories is disabled for this repository"
+                    );
+                }
+                warm_result = Some((token, status));
+            }
             // Removed before the copy could start: nothing may be written
             // into this checkout any more.
             Ok(None) => {
@@ -522,6 +738,13 @@ pub(crate) async fn run_worktree_setup_chain<W>(
     let still_current =
         |token: Option<u64>| token.is_none_or(|token| warm_token_is_current(&worktree_path, token));
     let token = warm_result.as_ref().map(|(token, _)| *token);
+    if let Some(token) = token {
+        update_pending_warm(
+            &worktree_path,
+            token,
+            serde_json::json!({"phase": "file_sync_and_setup_script"}),
+        );
+    }
 
     // 2. File sync, only after the warm has finished writing.
     if still_current(token) {
@@ -542,7 +765,7 @@ pub(crate) async fn run_worktree_setup_chain<W>(
         .ok()
         .flatten();
         if let Some(script) = script {
-            let cwd_for_script = worktree_path.to_string_lossy().to_string();
+            let cwd_for_script = worktree_path_str.clone();
             let outcome =
                 tokio::task::spawn_blocking(move || run_setup_script(script, cwd_for_script)).await;
             let (exit_code, error) = match outcome {
@@ -550,26 +773,40 @@ pub(crate) async fn run_worktree_setup_chain<W>(
                 Ok(Err(e)) => (None, Some(e)),
                 Err(e) => (None, Some(format!("task panic: {e}"))),
             };
-            state.worktree_setup_status.insert(
-                status_key.clone(),
-                Arc::new(crate::state::WorktreeSetupStatus::Completed {
+            if_current_setup_chain(&status_key, generation, || {
+                state.worktree_setup_status.insert(
+                    status_key.clone(),
+                    Arc::new(crate::state::WorktreeSetupStatus::Completed {
+                        exit_code,
+                        error: error.clone(),
+                    }),
+                );
+                emit_worktree_setup_script_completed(
+                    &state,
+                    &base_repo,
+                    &branch,
+                    &worktree_path_str,
+                    crate::state::SetupChainOutcome::Completed,
                     exit_code,
-                    error: error.clone(),
-                }),
-            );
-            emit_worktree_setup_script_completed(
-                &state,
-                &base_repo,
-                &branch,
-                &worktree_path.to_string_lossy(),
-                exit_code,
-                error,
-            );
+                    error,
+                );
+            });
         } else {
-            state.worktree_setup_status.insert(
-                status_key.clone(),
-                Arc::new(crate::state::WorktreeSetupStatus::NotConfigured),
-            );
+            if_current_setup_chain(&status_key, generation, || {
+                state.worktree_setup_status.insert(
+                    status_key.clone(),
+                    Arc::new(crate::state::WorktreeSetupStatus::NotConfigured),
+                );
+                emit_worktree_setup_script_completed(
+                    &state,
+                    &base_repo,
+                    &branch,
+                    &worktree_path_str,
+                    crate::state::SetupChainOutcome::NotConfigured,
+                    None,
+                    None,
+                );
+            });
         }
     }
 
@@ -675,19 +912,23 @@ fn emit_worktree_sync_completed(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_worktree_setup_script_completed(
     state: &Arc<AppState>,
     repo_path: &str,
     branch: &str,
     worktree_path: &str,
+    outcome: crate::state::SetupChainOutcome,
     exit_code: Option<i64>,
     error: Option<String>,
 ) {
+    // DEFERRED: migrate to `AppState::emit_dual` when it lands (wip 948189a69).
     #[cfg(feature = "desktop")]
     let payload = crate::state::worktree_setup_script_completed_payload(
         repo_path,
         branch,
         worktree_path,
+        outcome,
         exit_code,
         error.as_deref(),
     );
@@ -697,6 +938,7 @@ fn emit_worktree_setup_script_completed(
             repo_path: repo_path.to_string(),
             branch: branch.to_string(),
             worktree_path: worktree_path.to_string(),
+            outcome,
             exit_code,
             error,
         });
@@ -704,6 +946,102 @@ fn emit_worktree_setup_script_completed(
     if let Some(handle) = state.app_handle.read().as_ref() {
         use tauri::Emitter as _;
         let _ = handle.emit("worktree-setup-script-completed", payload);
+    }
+}
+
+// DEFERRED: the three warm emitters below migrate to `AppState::emit_dual`
+// when it lands (wip 948189a69); their payloads already come from one builder.
+fn emit_worktree_warm_started(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    total: usize,
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeWarmStarted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            worktree_path: worktree_path.to_string(),
+            total,
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-warm-started",
+            crate::state::worktree_warm_started_payload(repo_path, branch, worktree_path, total),
+        );
+    }
+}
+
+fn emit_worktree_warm_progress(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    copied: usize,
+    total: usize,
+    current: Option<&str>,
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeWarmProgress {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            worktree_path: worktree_path.to_string(),
+            copied,
+            total,
+            current: current.map(str::to_string),
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-warm-progress",
+            crate::state::worktree_warm_progress_payload(
+                repo_path,
+                branch,
+                worktree_path,
+                copied,
+                total,
+                current,
+            ),
+        );
+    }
+}
+
+fn emit_worktree_warm_completed(
+    state: &Arc<AppState>,
+    repo_path: &str,
+    branch: &str,
+    worktree_path: &str,
+    warmed: usize,
+    warnings: &[String],
+) {
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorktreeWarmCompleted {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+            worktree_path: worktree_path.to_string(),
+            warmed,
+            warnings: warnings.to_vec(),
+        });
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref() {
+        use tauri::Emitter as _;
+        let _ = handle.emit(
+            "worktree-warm-completed",
+            crate::state::worktree_warm_completed_payload(
+                repo_path,
+                branch,
+                worktree_path,
+                warmed,
+                warnings,
+            ),
+        );
     }
 }
 

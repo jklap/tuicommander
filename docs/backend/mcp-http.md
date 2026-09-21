@@ -1223,7 +1223,12 @@ then the file sync, then the Setup Script). The response returns before that
 chain runs, so it carries **no** `setup_script`/`setup_script_error` (removed;
 the outcome is the `worktree-setup-script-completed` event) and
 `instructions.warm_artifacts.status` stays `pending` until the Setup Script has
-finished.
+finished. While pending, `worktree_list` / `GET /worktrees/paths` report the
+chain's progress in the same object: `phase: "warming"` with `copied`/`total`
+while the directories are copied (up to `tuic_git::cow::WARM_COPY_CONCURRENCY`
+at a time), then `phase: "file_sync_and_setup_script"`. A repo whose
+`warm_ignored_directories` setting is off skips the copy; its final status is
+`done` with a `skipped` reason.
 Every created workspace is a linked worktree: Git refs and objects remain
 shared with the parent, while `instructions.warm_artifacts.warmed_directories`
 reports how many ignored directories arrived warm. Parent tracked changes are

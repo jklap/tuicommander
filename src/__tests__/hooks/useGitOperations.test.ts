@@ -3416,6 +3416,20 @@ describe("useGitOperations", () => {
 			gitOps.handleWorktreeSetupScriptCompleted(payload({ exitCode: 0 }));
 			expect(mockSetStatusInfo).not.toHaveBeenCalled();
 		});
+
+		it("stays silent for a chain that ran no script or was stopped by a removal", () => {
+			mockSetStatusInfo.mockClear();
+			gitOps.handleWorktreeSetupScriptCompleted(payload({ outcome: "not_configured" }));
+			gitOps.handleWorktreeSetupScriptCompleted(
+				payload({ outcome: "stopped", error: "the worktree was removed before its setup chain finished" }),
+			);
+			expect(mockSetStatusInfo).not.toHaveBeenCalled();
+		});
+
+		it("still reports a failure carried with an explicit completed outcome", () => {
+			gitOps.handleWorktreeSetupScriptCompleted(payload({ outcome: "completed", exitCode: 2 }));
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Setup script failed (exit 2)"));
+		});
 	});
 
 	describe("handleCreateWorktreeFromBranch", () => {

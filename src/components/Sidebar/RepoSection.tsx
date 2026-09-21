@@ -86,6 +86,12 @@ const GIT_OP_BADGE: Record<GitOpKind, { label: string; cls: string }> = {
 	bisect: { label: "Bisecting", cls: s.gitOpBisect },
 };
 
+/** Upper bound on how long a "Warming…" badge may stay up before its row clears
+ *  it itself. The backend reports the end of every warm that started
+ *  (`worktree-warm-completed`); this only guards a dropped event, e.g. an SSE
+ *  reconnect mid-warm, so the badge can never stick forever. */
+export const WARM_BADGE_SAFETY_TIMEOUT_MS = 900_000;
+
 /** Branch icon component — icon shape and color driven by terminal state.
  *
  *  Icon shapes:
@@ -530,6 +536,18 @@ export const BranchItem: Component<{
 	const rowTitle = createMemo(() => {
 		const parts = [branchLabel(), props.branch.branchName].filter(Boolean);
 		return parts.join(" — ");
+	});
+
+	// Safety net for the warm badge: re-armed whenever warmState changes, so it
+	// only fires after WARM_BADGE_SAFETY_TIMEOUT_MS without any warm event.
+	createEffect(() => {
+		if (props.branch.warmState == null) return;
+		const repoPath = props.repoPath;
+		const workspaceId = props.branch.workspaceId;
+		const timer = setTimeout(() => {
+			repositoriesStore.setWorkspace(repoPath, workspaceId, { warmState: null });
+		}, WARM_BADGE_SAFETY_TIMEOUT_MS);
+		onCleanup(() => clearTimeout(timer));
 	});
 
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
@@ -988,6 +1006,18 @@ export const BranchItem: Component<{
 								data-tooltip-pos="bottom"
 							>
 								{GIT_OP_BADGE[kind()].label}
+							</span>
+						)}
+					</Show>
+					<Show when={props.branch.warmState}>
+						{(warm) => (
+							<span
+								class={s.warmBadge}
+								data-testid="warm-badge"
+								data-tooltip={`Warming build caches: ${warm().copied}/${warm().total}${warm().current ? ` (${warm().current})` : ""}`}
+								data-tooltip-pos="bottom"
+							>
+								Warming…
 							</span>
 						)}
 					</Show>

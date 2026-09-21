@@ -233,23 +233,12 @@ fn sync_one(source: &Path, dest: &Path, spec: &SyncPathSpec) -> Result<(), Strin
 /// already exists as a symlink. `None` means the whole intermediate chain is
 /// real directories (or doesn't exist yet), so it's safe to `create_dir_all`
 /// through it.
+///
+/// The walk lives in tuic-git (`cow::first_symlinked_ancestor`) because the
+/// CoW warm writes into the same kind of untrusted, freshly checked-out
+/// destination and needs the identical guard, not a second copy of it.
 fn first_symlinked_ancestor(root: &Path, rel: &Path) -> Option<std::path::PathBuf> {
-    let mut current = root.to_path_buf();
-    let mut components = rel.components().peekable();
-    while let Some(component) = components.next() {
-        current.push(component);
-        if components.peek().is_none() {
-            break;
-        }
-        if current
-            .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            return Some(current);
-        }
-    }
-    None
+    tuic_git::cow::first_symlinked_ancestor(root, rel)
 }
 
 /// Create a symlink at `dest` pointing at `src` (canonicalized, so the link

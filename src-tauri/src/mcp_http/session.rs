@@ -1258,14 +1258,18 @@ pub(super) async fn create_session_with_worktree(
     // first, then runs the setup script in the background (see its own doc
     // comment), reporting the outcome via the dual-emitted
     // worktree-setup-script-completed event rather than in this response.
-    // No warm token: this route creates through
-    // `create_worktree_with_stale_recovery`, which never CoW-warms.
+    // It also CoW-warms first, exactly like `POST /worktrees`, MCP
+    // `repo worktree_create` and the desktop `create_worktree` (this route
+    // used to be the one creation path that never warmed): the same
+    // `warm_ignored_directories` opt-out applies, and a removal clearing the
+    // token stops the chain.
+    let warm_token = crate::worktree::begin_warm(&worktree.path);
     crate::worktree::spawn_worktree_setup_chain(
         &state,
         base_repo.clone(),
         branch_name.clone(),
         std::path::PathBuf::from(&worktree_path_str),
-        None,
+        Some(warm_token),
     );
 
     let rows = body.config.rows.unwrap_or(24);
@@ -4657,6 +4661,86 @@ mod tests {
             .session_parent
             .insert(session_id.clone(), "lead-session".to_string());
         assert_eq!(parent().as_deref(), Some("lead-session"));
+    }
+
+    /// This route used to be the only creation path whose chain had no warm
+    /// step; it now warms like `POST /worktrees` and the desktop command.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn create_session_with_worktree_also_warms() {
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        std::fs::write(repo.path().join(".gitignore"), "node_modules/\n").expect("write gitignore");
+        std::fs::create_dir_all(repo.path().join("node_modules")).expect("mkdir node_modules");
+        std::fs::write(repo.path().join("node_modules/pkg.json"), "{}").expect("write pkg.json");
+        std::process::Command::new("git")
+            .args(["add", ".gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add gitignore"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git commit");
+
+        let _guard = crate::config::set_config_dir_override(repo.path().join("tuic-config"));
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+        let response = create_session_with_worktree(
+            State(state.clone()),
+            Json(CreateSessionWithWorktreeRequest {
+                config: CreateSessionRequest {
+                    rows: None,
+                    cols: None,
+                    shell: None,
+                    cwd: None,
+                    session_id: None,
+                    alias: None,
+                },
+                base_repo: repo.path().to_string_lossy().to_string(),
+                branch_name: "warm-test-branch".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status, StatusCode::CREATED, "response: {body}");
+        let worktree_path = std::path::PathBuf::from(body["worktree_path"].as_str().unwrap());
+
+        // The chain's terminal event arrives once the warm status is final.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut finished = false;
+        while !finished && std::time::Instant::now() < deadline {
+            if let Ok(Ok(crate::state::AppEvent::WorktreeSetupScriptCompleted {
+                outcome, ..
+            })) =
+                tokio::time::timeout(std::time::Duration::from_millis(200), events.recv()).await
+            {
+                assert_eq!(outcome, crate::state::SetupChainOutcome::NotConfigured);
+                finished = true;
+            }
+        }
+        assert!(finished, "the chain never reported its end");
+        let warm = crate::worktree::warm_status(&worktree_path);
+        let supported = matches!(
+            tuic_git::cow::probe_cow_support(repo.path(), worktree_path.parent().unwrap()),
+            tuic_git::cow::CowSupport::Supported
+        );
+        if supported {
+            assert_eq!(warm["status"], "done", "{warm}");
+            assert!(
+                worktree_path.join("node_modules/pkg.json").exists(),
+                "node_modules should have warmed into the new worktree"
+            );
+        } else {
+            assert_eq!(warm["status"], "failed", "{warm}");
+        }
+        crate::worktree::clear_warm(&worktree_path);
     }
 
     #[cfg(unix)]

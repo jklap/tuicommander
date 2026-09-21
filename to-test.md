@@ -4542,6 +4542,31 @@ seconds and confirm the duplicate receipt produces no second event.
       toggle, the create dialog has no mechanism or parent-changes picker, and
       the Worktree Manager has no clone badge or Publish action.
 
+## Worktree warming: opt-out, bounded parallelism, sidebar badge — **Rust + frontend, needs a `make dev` restart**
+
+Warming already ran in the background on main; this adds a per-repo/global opt-out,
+copies up to four ignored directories at once, reports progress, and gives
+`POST /sessions/worktree` the same warm step as the other creation paths.
+
+- [ ] Create a worktree of a repo with a large `node_modules`/`target`. While it
+      warms, `repo action=worktree_list` (or `GET /worktrees/paths?path=<repo>`)
+      shows that workspace's `warm_artifacts` as `pending` with `phase: "warming"`
+      and `copied` climbing toward `total`, then `phase:
+      "file_sync_and_setup_script"`, then `done`.
+- [ ] The sidebar row shows a **Warming…** badge whose tooltip's copied/total
+      moves as directories finish; it clears when the copy finishes (not when the
+      Setup Script finishes).
+- [ ] Turn off "Warm ignored build directories" for the repo (Settings →
+      Repository → Worktree; global default under Settings → Git & GitHub →
+      Repository Defaults, expert mode), create a worktree: no badge, no
+      `node_modules`/`target`, and the final `warm_artifacts` is `done` with a
+      `skipped` reason. Per-repo On/Use global/Off beats the global default.
+- [ ] Same opt-out through `POST /sessions/worktree` (HTTP) and MCP
+      `repo worktree_create`: identical behaviour to the desktop dialog.
+- [ ] Remove a worktree while its chain is still running (big warm or a slow
+      Setup Script): the creation flow of a NEW worktree on the same branch is
+      not released early or frozen, and the new one's setup status is not wiped.
+
 - [x] After restarting `make dev`, verify Project Progress HTTP controls on the _(obsolete, verified 2026-09-29: Progress pause/resume/clear removed: transport.test.ts:395 lists progress_pause/clear/export as gone; no /progress/pause route in mcp_http/mod.rs:884-890.)_
       isolated test instance: pause rejects reports, resume accepts only new reports,
       and clear leaves an existing `progress.md` untouched. _(Rust backend change;

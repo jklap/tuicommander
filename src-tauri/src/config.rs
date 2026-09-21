@@ -1755,6 +1755,12 @@ pub(crate) struct RepoLocalConfig {
     pub(crate) copy_ignored_files: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) copy_untracked_files: Option<bool>,
+    /// Clonefile the parent's git-ignored build directories (node_modules,
+    /// target, ...) into a freshly created linked worktree in the background.
+    /// Pure opt-out: absent (`None`) resolves to `true` at every tier — see
+    /// `resolve_effective_warm_setting`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) warm_ignored_directories: Option<bool>,
     // Script fields (setup_script, run_script, archive_script) intentionally
     // omitted — executing repo-committed scripts without TOFU prompt is unsafe.
     // Re-add when trust-on-first-use confirmation is implemented.
@@ -1815,6 +1821,11 @@ pub(crate) struct RepoSettingsEntry {
     /// null = inherit from global repo defaults
     #[serde(default)]
     pub(crate) copy_untracked_files: Option<bool>,
+    /// Clonefile the parent's git-ignored build directories into a freshly
+    /// created linked worktree in the background. null = inherit from global
+    /// repo defaults (which default to `true` — pure opt-out).
+    #[serde(default)]
+    pub(crate) warm_ignored_directories: Option<bool>,
     /// null = inherit from global repo defaults
     #[serde(default)]
     pub(crate) setup_script: Option<String>,
@@ -1895,6 +1906,7 @@ impl RepoSettingsEntry {
         self.base_branch.is_some()
             || self.copy_ignored_files.is_some()
             || self.copy_untracked_files.is_some()
+            || self.warm_ignored_directories.is_some()
             || self.setup_script.is_some()
             || self.run_script.is_some()
             || self.archive_script.is_some()
@@ -1929,6 +1941,10 @@ pub(crate) struct RepoDefaultsConfig {
     pub(crate) copy_ignored_files: bool,
     #[serde(default)]
     pub(crate) copy_untracked_files: bool,
+    /// Pure opt-out: defaults to `true` so warming stays on unless explicitly
+    /// disabled at some tier — see `resolve_effective_warm_setting`.
+    #[serde(default = "default_true")]
+    pub(crate) warm_ignored_directories: bool,
     #[serde(default)]
     pub(crate) setup_script: String,
     #[serde(default)]
@@ -1966,6 +1982,7 @@ impl Default for RepoDefaultsConfig {
             base_branch: default_base_branch(),
             copy_ignored_files: false,
             copy_untracked_files: false,
+            warm_ignored_directories: true,
             setup_script: String::new(),
             run_script: String::new(),
             archive_script: String::new(),
@@ -3407,6 +3424,9 @@ fn fill_repo_local_defaults(
     if base.copy_untracked_files.is_none() {
         base.copy_untracked_files = Some(defaults.copy_untracked_files);
     }
+    if base.warm_ignored_directories.is_none() {
+        base.warm_ignored_directories = Some(defaults.warm_ignored_directories);
+    }
     if base.worktree_storage.is_none() {
         base.worktree_storage = Some(defaults.worktree_storage.clone());
     }
@@ -3443,6 +3463,9 @@ fn overlay_repo_local_config(
     }
     if entry.copy_untracked_files.is_some() {
         base.copy_untracked_files = entry.copy_untracked_files;
+    }
+    if entry.warm_ignored_directories.is_some() {
+        base.warm_ignored_directories = entry.warm_ignored_directories;
     }
     if entry.worktree_storage.is_some() {
         base.worktree_storage = entry.worktree_storage.clone();
@@ -3589,6 +3612,36 @@ fn resolve_copy_settings_from(
         .unwrap_or(defaults.copy_untracked_files);
     let copy_paths = entry.map(|e| e.copy_paths.clone()).unwrap_or_default();
     (copy_ignored, copy_untracked, copy_paths)
+}
+
+/// Resolve whether a freshly created linked worktree should be warmed with
+/// the parent's git-ignored build directories — same three-tier chain
+/// (per-repo app setting > `.tuic.json` > global default) as
+/// `resolve_effective_copy_settings`, kept as its own function rather than
+/// folded into that tuple: it is a single independent concern (unlike the
+/// two copy toggles, which are always read together), and pure opt-out
+/// (default `true` at every tier) rather than opt-in. Read by the post-create
+/// chain (`worktree::run_worktree_setup_chain`), so every creation path
+/// (IPC, HTTP, MCP) honours it identically.
+pub(crate) fn resolve_effective_warm_setting(repo_path: &str) -> bool {
+    let settings: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
+    let defaults: RepoDefaultsConfig = load_json_config(REPO_DEFAULTS_FILE);
+    let local = load_repo_local_config_from_path(std::path::Path::new(repo_path));
+    resolve_warm_setting_from(&settings, &defaults, local.as_ref(), repo_path)
+}
+
+fn resolve_warm_setting_from(
+    settings: &RepoSettingsMap,
+    defaults: &RepoDefaultsConfig,
+    local: Option<&RepoLocalConfig>,
+    repo_path: &str,
+) -> bool {
+    settings
+        .repos
+        .get(repo_path)
+        .and_then(|e| e.warm_ignored_directories)
+        .or_else(|| local.and_then(|l| l.warm_ignored_directories))
+        .unwrap_or(defaults.warm_ignored_directories)
 }
 
 // Repositories (opaque JSON — schema owned by frontend)
@@ -6324,6 +6377,7 @@ mod tests {
                 base_branch: Some("main".to_string()),
                 copy_ignored_files: Some(true),
                 copy_untracked_files: None,
+                warm_ignored_directories: Some(false),
                 setup_script: Some("npm install".to_string()),
                 run_script: Some("npm start".to_string()),
                 archive_script: Some("cleanup.sh".to_string()),
@@ -6363,6 +6417,7 @@ mod tests {
         assert_eq!(entry.base_branch, Some("main".to_string()));
         assert_eq!(entry.copy_ignored_files, Some(true));
         assert_eq!(entry.copy_untracked_files, None);
+        assert_eq!(entry.warm_ignored_directories, Some(false));
         assert_eq!(entry.archive_script, Some("cleanup.sh".to_string()));
         assert!(entry.auto_consolidate_worktrees);
         assert_eq!(entry.pr_hide_drafts, Some(true));
@@ -6682,6 +6737,98 @@ mod tests {
             ..RepoSettingsEntry::default()
         };
         assert!(entry.has_custom_settings());
+    }
+
+    #[test]
+    fn has_custom_settings_true_when_warm_ignored_directories_set() {
+        let entry = RepoSettingsEntry {
+            warm_ignored_directories: Some(false),
+            ..RepoSettingsEntry::default()
+        };
+        assert!(entry.has_custom_settings());
+    }
+
+    #[test]
+    fn resolve_warm_setting_per_repo_override_wins_over_defaults() {
+        let mut settings = RepoSettingsMap::default();
+        settings.repos.insert(
+            "/repo".to_string(),
+            RepoSettingsEntry {
+                warm_ignored_directories: Some(false),
+                ..RepoSettingsEntry::default()
+            },
+        );
+        let defaults = RepoDefaultsConfig {
+            warm_ignored_directories: true,
+            ..RepoDefaultsConfig::default()
+        };
+        assert!(!resolve_warm_setting_from(
+            &settings, &defaults, None, "/repo"
+        ));
+    }
+
+    #[test]
+    fn resolve_warm_setting_falls_through_to_local_config_then_defaults() {
+        let settings = RepoSettingsMap::default();
+        let defaults = RepoDefaultsConfig {
+            warm_ignored_directories: true,
+            ..RepoDefaultsConfig::default()
+        };
+        let local = RepoLocalConfig {
+            warm_ignored_directories: Some(false),
+            ..RepoLocalConfig::default()
+        };
+        assert!(
+            !resolve_warm_setting_from(&settings, &defaults, Some(&local), "/repo"),
+            "per-repo unset, .tuic.json false should win over the global true default"
+        );
+    }
+
+    #[test]
+    fn resolve_warm_setting_per_repo_override_beats_local_config() {
+        let mut settings = RepoSettingsMap::default();
+        settings.repos.insert(
+            "/repo".to_string(),
+            RepoSettingsEntry {
+                warm_ignored_directories: Some(true),
+                ..RepoSettingsEntry::default()
+            },
+        );
+        let defaults = RepoDefaultsConfig::default();
+        let local = RepoLocalConfig {
+            warm_ignored_directories: Some(false),
+            ..RepoLocalConfig::default()
+        };
+        assert!(
+            resolve_warm_setting_from(&settings, &defaults, Some(&local), "/repo"),
+            "explicit per-repo On must beat a .tuic.json Off"
+        );
+    }
+
+    #[test]
+    fn resolve_warm_setting_no_config_returns_the_global_default() {
+        let settings = RepoSettingsMap::default();
+        let defaults = RepoDefaultsConfig::default();
+        assert!(
+            resolve_warm_setting_from(&settings, &defaults, None, "/unknown-repo"),
+            "RepoDefaultsConfig::default() is warm_ignored_directories: true"
+        );
+    }
+
+    #[test]
+    fn resolve_effective_warm_setting_default_is_true_for_an_unconfigured_repo() {
+        // Regression guard for the "pure opt-out" guarantee: a repo with zero
+        // config anywhere (no per-repo entry, no .tuic.json, untouched global
+        // defaults) must still resolve to `true` — current behavior is
+        // unchanged unless someone explicitly flips this off.
+        let settings = RepoSettingsMap::default();
+        let defaults = RepoDefaultsConfig::default();
+        assert!(resolve_warm_setting_from(
+            &settings,
+            &defaults,
+            None,
+            "/totally/unconfigured/repo"
+        ));
     }
 
     #[test]
@@ -7185,6 +7332,11 @@ mod tests {
         // Old config without worktree fields should deserialize with defaults
         let json = r#"{"base_branch":"automatic","copy_ignored_files":false}"#;
         let loaded: RepoDefaultsConfig = serde_json::from_str(json).unwrap();
+        assert!(
+            loaded.warm_ignored_directories,
+            "field absent from JSON must default to true — pure opt-out, current \
+             (always-warm) behavior must not change for anyone until they flip it"
+        );
         assert_eq!(loaded.worktree_storage, WorktreeStorage::Sibling);
         assert!(loaded.prompt_on_create);
         assert!(loaded.delete_branch_on_remove);
