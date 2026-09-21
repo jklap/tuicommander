@@ -473,6 +473,56 @@ const WATCHER_BATCH_CAP: usize = 256 * 1024;
 /// first pulse.
 const ACTIVITY_PULSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// The ONLY way to announce a new session. Every creation path calls this —
+/// `create_pty`/`create_pty_with_worktree` (`pty/commands.rs`),
+/// `spawn_session_for_agent`, `register_pty_session`
+/// (`mcp_http::session`, itself shared by `spawn_pty_session`, the HTTP
+/// agent-spawn route, and MCP `agent action=spawn`), and `agent::spawn_agent`.
+///
+/// `agent_type` MUST be the exact same value the caller's own
+/// `session_states` insert used (see `apply_event_to_session_state`'s
+/// `SessionCreated` arm, `state.rs`, which unconditionally overwrites
+/// `agent_type` from this event on the entry it just created/updated) — a
+/// caller that presets `agent_type` locally and then emits `None` here wipes
+/// its own preset.
+pub(crate) fn emit_session_created(
+    state: &AppState,
+    session_id: &str,
+    cwd: Option<String>,
+    agent_type: Option<String>,
+    display_name: Option<String>,
+) {
+    state.emit_dual(crate::state::AppEvent::SessionCreated {
+        session_id: session_id.to_string(),
+        cwd,
+        agent_type,
+        display_name,
+    });
+}
+
+/// The ONLY way to announce a closed session. Every close path calls this —
+/// `close_pty_core`, `kill_pty_core`, `cleanup_session`, and the reader
+/// thread's own EOF handling.
+///
+/// Reads `agent_type` from `session_states` BEFORE building/sending the
+/// event, not after: the accumulator's own `SessionClosed` arm removes that
+/// entry the moment this event is applied, so a read that happens after
+/// `emit_dual` returns can already find nothing there. This ordering is what
+/// fixes the historical case where the reader-thread's EOF path "usually"
+/// reported `agent_type: None`.
+pub(crate) fn emit_session_closed(state: &AppState, session_id: &str, reason: &str) {
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| s.agent_type.clone());
+    state.emit_dual(crate::state::AppEvent::SessionClosed {
+        session_id: session_id.to_string(),
+        reason: reason.to_string(),
+        agent_type,
+    });
+}
+
 /// Tell this session's frontends that output is flowing. Payload-free by design
 /// — see [`ACTIVITY_PULSE_WINDOW`].
 ///
@@ -8534,7 +8584,12 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
 
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
-pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
+pub(crate) fn cleanup_session(session_id: &str, state: &AppState, reason: &str) {
+    // Before `remove_live_session_state`, same ordering requirement as
+    // `close_pty_core`/`kill_pty_core`: that call reaps
+    // `state.pty_event_channels`, and emitting after it would silently drop
+    // the session-scoped WS "closed" frame.
+    emit_session_closed(state, session_id, reason);
     if state.session_maps.sessions.remove(session_id).is_some() {
         state
             .metrics
@@ -11155,26 +11210,7 @@ pub(crate) fn spawn_reader_thread(
                 );
             }
             tracing::info!(source = "pty", session_id = %session_id, "Session closed: process exited");
-            state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-                session_id: session_id.clone(),
-                reason: "process_exit".to_string(),
-            });
-            #[cfg(feature = "desktop")]
-            if let Some(app) = state.app_handle.read().as_ref() {
-                let agent_type = state
-                    .session_maps
-                    .session_states
-                    .get(&session_id)
-                    .and_then(|s| s.agent_type.clone());
-                let _ = app.emit(
-                    "session-closed",
-                    serde_json::json!({
-                        "session_id": session_id,
-                        "reason": "process_exit",
-                        "agent_type": agent_type,
-                    }),
-                );
-            }
+            emit_session_closed(&state, &session_id, "process_exit");
 
             mark_session_exited(&session_id, &state);
         })); // end catch_unwind
@@ -11253,6 +11289,12 @@ pub(crate) async fn spawn_session_for_agent(
         .try_clone_reader()
         .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
+    // Captured before `cwd`/`display_name` move into the `PtySession` struct
+    // below — `emit_session_created` at the end of this function needs the
+    // same values.
+    let created_cwd = cwd.clone();
+    let created_display_name = display_name.clone();
+
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(
         session_id.clone(),
@@ -11300,26 +11342,18 @@ pub(crate) async fn spawn_session_for_agent(
         .session_states
         .insert(session_id.clone(), crate::state::SessionState::default());
 
-    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
-        session_id: session_id.clone(),
-        cwd: state
-            .session_maps
-            .sessions
-            .get(&session_id)
-            .and_then(|s| s.lock().cwd.clone()),
-        agent_type: None,
-        display_name: display_name.clone(),
-    });
-    #[cfg(feature = "desktop")]
-    if let Some(ref a) = *state.app_handle.read() {
-        let _ = a.emit(
-            "session-created",
-            serde_json::json!({
-                "session_id": session_id,
-                "display_name": display_name,
-            }),
-        );
-    }
+    // Announce BEFORE the reader thread starts, same convention as
+    // `create_pty`/`create_pty_with_worktree`. Previously the desktop half of
+    // this announcement dropped `cwd` entirely (bus half had it via a
+    // second `session_maps` lookup) — one call now carries the same values
+    // on both transports.
+    emit_session_created(
+        &state,
+        &session_id,
+        created_cwd,
+        None, // no agent_type input on this orchestrated-spawn path
+        created_display_name,
+    );
 
     spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
@@ -12010,6 +12044,7 @@ pub(crate) fn close_pty_core(
     state: &AppState,
     session_id: &str,
     cleanup_worktree: bool,
+    reason: &str,
 ) -> Option<crate::state::WorktreeInfo> {
     let (_, session_mutex) = state.session_maps.sessions.remove(session_id)?;
     state
@@ -12067,6 +12102,14 @@ pub(crate) fn close_pty_core(
             .insert(session_id.to_string(), status.exit_code() as i32);
     }
 
+    // Announce the close BEFORE tombstone_transient_cleanup: it removes
+    // `state.pty_event_channels` (via `remove_live_session_state`), so
+    // emitting after it means `emit_pty_event` finds no per-session channel
+    // and the session-scoped WS `"closed"` frame is silently never
+    // delivered — see `mcp_http::session::close_session`'s doc comment on
+    // this exact hazard.
+    emit_session_closed(state, session_id, reason);
+
     // Preserve output_buffers, vt_log_buffers, last_output_ms, exit_codes.
     // Tombstone sweeper reaps them after TOMBSTONE_TTL_MS.
     tombstone_transient_cleanup(session_id, state);
@@ -12100,7 +12143,7 @@ pub(crate) fn close_pty_core(
 /// Unlike `close_pty_core`, skips the Ctrl-C grace period — sends SIGKILL
 /// immediately. The child exits near-instantly so `try_wait` captures the
 /// exit code before the tombstone is stamped.
-pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
+pub(crate) fn kill_pty_core(state: &AppState, session_id: &str, reason: &str) -> bool {
     let Some((_, session_mutex)) = state.session_maps.sessions.remove(session_id) else {
         return false;
     };
@@ -12136,6 +12179,11 @@ pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
             .exit_codes
             .insert(session_id.to_string(), status.exit_code() as i32);
     }
+
+    // See `close_pty_core`'s identical comment: must precede
+    // `tombstone_transient_cleanup`, which reaps the per-session WS channel
+    // this emit needs to deliver the session-scoped "closed" frame.
+    emit_session_closed(state, session_id, reason);
 
     tombstone_transient_cleanup(session_id, state);
     drop(session);

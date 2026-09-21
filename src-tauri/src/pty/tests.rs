@@ -15900,7 +15900,7 @@ fn close_pty_core_kills_agent_grandchild() {
         "grandchild should be alive before close"
     );
 
-    close_pty_core(&state, sid, false);
+    close_pty_core(&state, sid, false, "closed");
 
     // killpg(SIGKILL) is untrappable: the grandchild must be gone shortly.
     let mut dead = false;
@@ -16027,7 +16027,7 @@ fn cleanup_session_clears_transient_session_maps() {
         .pty_accent_colors
         .insert(sid.to_string(), "blue".to_string());
 
-    cleanup_session(sid, &state);
+    cleanup_session(sid, &state, "closed");
 
     assert!(!state.session_maps.output_buffers.contains_key(sid));
     assert!(!state.grid.vt_log_buffers.contains_key(sid));
@@ -16172,7 +16172,7 @@ fn closing_a_session_reaps_the_swarm_maps_too() {
     let mcp_sid = "mcp-close-swarm";
     populate_swarm_session_maps(&state, sid, mcp_sid);
 
-    cleanup_session(sid, &state);
+    cleanup_session(sid, &state, "closed");
 
     assert!(!state.session_maps.session_parent.contains_key(sid));
     assert!(!state.session_maps.shell_state_since_ms.contains_key(sid));
@@ -16189,7 +16189,7 @@ fn closing_a_session_reaps_the_maps_no_phase_owned() {
     let sid = "close-unowned";
     populate_unowned_session_maps(&state, sid);
 
-    cleanup_session(sid, &state);
+    cleanup_session(sid, &state, "closed");
 
     assert!(!state.session_maps.slash_mode.contains_key(sid));
     assert!(!state.session_maps.last_input_ms.contains_key(sid));
@@ -16330,7 +16330,7 @@ fn cleanup_session_removes_session_and_decrements_metrics() {
     let before = state.metrics.active_sessions.load(Ordering::Relaxed);
     assert!(state.session_maps.sessions.contains_key(sid));
 
-    cleanup_session(sid, &state);
+    cleanup_session(sid, &state, "closed");
 
     assert!(
         !state.session_maps.sessions.contains_key(sid),

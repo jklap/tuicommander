@@ -1,6 +1,6 @@
 import { type Component, createEffect, createSignal, lazy, on, onCleanup, onMount, Show, Suspense } from "solid-js";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
-import { browserCreatedSessions } from "../../hooks/useAppInit";
+import { locallyCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -901,6 +901,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					// pass unconditionally rather than threading a "this is a
 					// restore" flag through the whole terminal-creation path.
 					restore_scrollback: settingsStore.state.restoreScrollback,
+					// Propagate the name this client already chose (one of several
+					// local default-naming schemes, or an explicit rename already
+					// applied to the store) so every other client displays the exact
+					// same string instead of independently inventing its own default.
+					display_name: termData?.name ?? null,
+					display_name_is_custom: termData?.nameIsCustom ?? false,
 				});
 				// The component can unmount during the await above (tab churn while
 				// an agent like grok rapidly toggles visibility). setCurrentSessionId
@@ -917,9 +923,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				}
 				setCurrentSessionId(sessionId);
 				if (sessionId) {
-					if (!isTauri()) {
-						browserCreatedSessions.add(sessionId);
-					}
+					// Desktop generalizes the same self-echo-drop mechanism the
+					// browser transport already used — `usePty.createSession`
+					// now pre-registers this id on both transports (see
+					// `preRegisterLocalSessionId`'s doc comment), so this must
+					// no longer be browser-only either.
+					locallyCreatedSessions.add(sessionId);
 					await attachSessionListeners(sessionId);
 					if (disposed) {
 						terminalsStore.setSessionId(props.id, sessionId);

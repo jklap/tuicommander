@@ -820,7 +820,7 @@ mod persist_tests {
         let state = make_test_app_state();
         state.record_outcome("s1", sample_outcome());
 
-        crate::pty::cleanup_session("s1", &state);
+        crate::pty::cleanup_session("s1", &state, "closed");
 
         assert!(
             state.ai.session_knowledge.contains_key("s1"),
