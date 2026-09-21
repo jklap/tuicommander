@@ -3,6 +3,7 @@
 # Read by event_wire::tests::frontend_listen_event_names_all_have_an_sse_arm_or_are_allowlisted.
 # Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u
 acp-notice
+automation-run-changed
 background-mode-changed
 chat-view-changed
 close-dialog
@@ -22,17 +23,23 @@ github-issues-update
 github-pr-update
 github-transition
 head-changed
+mcp-confirm
+mcp-confirm-resolved
 mcp-toast
 menu-action
 native-key-down
 native-notification-click
 navigation-blocked
+open-markdown-tabs-changed
 panel-action
 panel-resync-request
 panel-window-closed
 plugin-changed
+progress-recorded
 pty-clipboard-store
 pty-description-changed
+pty-open-url
+pty-parsed
 reattach-terminal
 remote-connection-status
 repo-changed
@@ -44,8 +51,10 @@ session-created
 session-focus-requested
 session-renamed
 session-standby
+session-state-changed
 session-suspended
 session-worktree-declared
+settings-changed
 snapshot-now
 speech-download-progress
 speech-utterance
@@ -57,6 +66,7 @@ ui-action-requested
 ui-tab
 upstream-status-changed
 work-item-provider-request
+workflow-run-changed
 worktree-created
 worktree-removed
 worktree-setup-script-completed
