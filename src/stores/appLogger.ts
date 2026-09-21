@@ -154,6 +154,40 @@ function ringClear(r: Ring): void {
 	r.count = 0;
 }
 
+/** Diagnostic fields worth pulling off an error-like value's prototype chain. */
+const OPAQUE_ERROR_KEYS = ["name", "message", "code", "reason", "stack"] as const;
+
+/**
+ * Last-resort unpacking for an error-like value that is neither `instanceof Error`
+ * nor `instanceof DOMException` but has the same shape: diagnostic fields exposed
+ * only via prototype getters, not as the instance's own enumerable properties — so
+ * plain `JSON.stringify` still collapses it to `{}`. Confirmed recurring in the wild
+ * (2026-09-21): both "onFrame threw in channel callback" and "Repository changes
+ * were not saved" logged a bare `{}` for a real thrown/rejected value that fell
+ * through the two branches below (most likely a Tauri IPC transport-level failure —
+ * e.g. a webview channel torn down mid-request — rather than a normal command
+ * error, which explains why it isn't shaped like either known class).
+ *
+ * Returns null when there is truly nothing to extract, so the caller falls back to
+ * logging the value as-is rather than fabricating a misleading empty object.
+ */
+function unpackOpaqueErrorLike(value: object): Record<string, unknown> | null {
+	if (Object.keys(value).length > 0) return null; // already has own enumerable data
+	const extracted: Record<string, unknown> = {};
+	for (const key of OPAQUE_ERROR_KEYS) {
+		if (key in value) {
+			const fieldValue = (value as Record<string, unknown>)[key];
+			if (fieldValue !== undefined) extracted[key] = fieldValue;
+		}
+	}
+	if (Object.keys(extracted).length > 0) return extracted;
+	// Nothing accessible even via common diagnostic keys — at least name the
+	// constructor so a future `{}` sighting isn't a complete dead end. Skip plain
+	// `Object`/`Object.create(null)` values: those really are just `{}`.
+	const ctorName = value.constructor?.name;
+	return ctorName && ctorName !== "Object" ? { constructorName: ctorName } : null;
+}
+
 /**
  * JSON.stringify replacer that unpacks Error objects. Plain JSON.stringify emits
  * `{}` for an Error because name/message/stack are non-enumerable — which is why
@@ -162,7 +196,8 @@ function ringClear(r: Ring): void {
  *
  * DOMException (e.g. clipboard API rejections) has the same non-enumerable
  * name/message shape but doesn't extend Error, so it needs its own branch —
- * otherwise it still collapses to `{}`.
+ * otherwise it still collapses to `{}`. `unpackOpaqueErrorLike` below is the
+ * generic fallback for a third, unidentified class with the same shape.
  */
 function logDataReplacer(_key: string, value: unknown): unknown {
 	if (value instanceof Error) {
@@ -170,6 +205,10 @@ function logDataReplacer(_key: string, value: unknown): unknown {
 	}
 	if (value instanceof DOMException) {
 		return { name: value.name, message: value.message };
+	}
+	if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+		const unpacked = unpackOpaqueErrorLike(value);
+		if (unpacked) return unpacked;
 	}
 	return value;
 }

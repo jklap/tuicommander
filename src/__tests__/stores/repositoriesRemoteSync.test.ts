@@ -224,6 +224,38 @@ describe("repositoriesStore remote sync", () => {
 		});
 	});
 
+	it("adopts a brand-new branch on a repo this window already has open, without disturbing the existing branch's live fields", async () => {
+		setDisk({
+			repos: { "/repo": repoRecord("/repo", "Repo", { main: branchRecord("main") }) },
+			repoOrder: ["/repo"],
+		});
+
+		await testInScopeAsync(async () => {
+			await store.hydrate();
+			store.addTerminalToWorkspace("/repo", "main", "term-1");
+			await vi.advanceTimersByTimeAsync(500);
+
+			// Another client created a new branch/worktree under the same repo. This
+			// window has no live record for "feature" at all, so there is nothing to
+			// merge in for it — it must be adopted as-is.
+			setDisk({
+				repos: {
+					"/repo": repoRecord("/repo", "Repo", {
+						main: branchRecord("main"),
+						feature: branchRecord("feature", { isMain: false }),
+					}),
+				},
+				repoOrder: ["/repo"],
+			});
+			await broadcast();
+
+			expect(store.get("/repo")?.workspaces["feature"]).toBeDefined();
+			expect(store.get("/repo")?.workspaces["feature"].isMain).toBe(false);
+			// The existing branch's live-only field survives the same adoption.
+			expect(store.get("/repo")?.workspaces["main"].terminals).toEqual(["term-1"]);
+		});
+	});
+
 	it("refuses a removal that would orphan live terminals", async () => {
 		setDisk({
 			repos: { "/repo": repoRecord("/repo", "Original", { main: branchRecord("main") }) },
@@ -503,6 +535,115 @@ describe("repositoriesStore remote sync", () => {
 
 		const subscriptions = mockListen.mock.calls.filter((call) => call[0] === "repositories-changed");
 		expect(subscriptions).toHaveLength(1);
+	});
+
+	it("logs and does not crash when the remote re-read itself fails", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		let loadCount = 0;
+		mockInvoke.mockImplementation((command: string) => {
+			if (command === "load_repositories") {
+				loadCount += 1;
+				// The first call is hydrate's own read; only the broadcast-triggered
+				// re-read (the second) should fail.
+				if (loadCount === 1) return Promise.resolve(structuredClone(disk));
+				return Promise.reject(new Error("network error"));
+			}
+			return Promise.resolve(undefined);
+		});
+
+		await testInScopeAsync(async () => {
+			await store.hydrate();
+			await broadcast();
+
+			expect(errorSpy).toHaveBeenCalledWith(
+				"[store]",
+				"Failed to re-read repositories after a remote change",
+				expect.objectContaining({ message: "network error" }),
+			);
+		});
+
+		errorSpy.mockRestore();
+	});
+
+	it("resets remote-sync state on a failed listener registration, so a later hydrate can retry", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		mockListen.mockImplementationOnce(() => Promise.reject(new Error("channel closed")));
+
+		await testInScopeAsync(async () => {
+			await store.hydrate();
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(errorSpy).toHaveBeenCalledWith(
+				"[store]",
+				"Failed to register the repositories-changed listener",
+				expect.objectContaining({ message: "channel closed" }),
+			);
+			expect(listeners.has("repositories-changed")).toBe(false);
+
+			// A later hydrate must be able to retry registration rather than staying
+			// permanently wedged with no subscription at all.
+			await store.hydrate();
+			expect(listeners.has("repositories-changed")).toBe(true);
+		});
+
+		errorSpy.mockRestore();
+	});
+
+	it("defers adoption when a local save starts while the remote re-read is in flight, then adopts once the save settles", async () => {
+		let resolveLoad!: (value: unknown) => void;
+		const loadPromise = new Promise((resolve) => {
+			resolveLoad = resolve;
+		});
+		let resolveSave!: (value: unknown) => void;
+		const savePromise = new Promise((resolve) => {
+			resolveSave = resolve;
+		});
+
+		await testInScopeAsync(async () => {
+			await store.hydrate();
+
+			// "Another client" adds a repo only now, after this window already
+			// hydrated — the disk this test controls diverges from what's live here.
+			setDisk({ repos: { "/other": repoRecord("/other", "Other") }, repoOrder: ["/other"] });
+
+			// From here on: the very next load_repositories call (the broadcast's
+			// own re-read) is held open; save_repositories is held open too.
+			let firstLoadAfterHydrate = true;
+			mockInvoke.mockImplementation((command: string) => {
+				if (command === "load_repositories") {
+					if (firstLoadAfterHydrate) {
+						firstLoadAfterHydrate = false;
+						return loadPromise;
+					}
+					return Promise.resolve(structuredClone(disk));
+				}
+				if (command === "save_repositories") return savePromise;
+				return Promise.resolve(undefined);
+			});
+
+			// Start the remote re-read — its load_repositories call is now pending.
+			const handler = listeners.get("repositories-changed");
+			expect(handler).toBeDefined();
+			handler!({ payload: {} });
+			await vi.advanceTimersByTimeAsync(0);
+
+			// A local edit starts and reaches "save in flight" while that read is
+			// still pending.
+			store.add({ path: "/mine", displayName: "Mine" });
+			await vi.advanceTimersByTimeAsync(500);
+
+			// The read resolves now, with the save still in flight — adoption must
+			// defer rather than run against a baseline the in-flight save is about
+			// to move.
+			resolveLoad(structuredClone(disk));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(store.get("/other")).toBeUndefined();
+
+			// Once the save settles, the deferred sync must run on its own.
+			resolveSave(undefined);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(store.get("/other")?.displayName).toBe("Other");
+		});
 	});
 
 	it("does not adopt anything before hydrate has a baseline", () => {

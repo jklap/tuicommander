@@ -139,6 +139,29 @@ describe("appLogger", () => {
 		});
 	});
 
+	it("clear warns to console but does not throw when the Rust ring buffer clear fails", async () => {
+		const rustError = new Error("backend unreachable");
+		mockRpc.mockImplementation((cmd: string) => {
+			if (cmd === "clear_logs") return Promise.reject(rustError);
+			return Promise.resolve(undefined);
+		});
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		await testInScopeAsync(async () => {
+			appLogger.info("app", "a");
+			expect(() => appLogger.clear()).not.toThrow();
+			// Local state must clear immediately regardless of the backend outcome —
+			// the failed rpc call is best-effort and shouldn't block the local reset.
+			expect(appLogger.getEntries()).toHaveLength(0);
+
+			await vi.waitFor(() => {
+				expect(warnSpy).toHaveBeenCalledWith("[appLogger] Failed to clear Rust log buffer:", rustError);
+			});
+		});
+
+		warnSpy.mockRestore();
+	});
+
 	// ---- Unseen error count ----
 
 	it("unseenErrorCount increments only on errors", () => {
@@ -233,6 +256,62 @@ describe("appLogger", () => {
 		// and name/message are non-enumerable) — the replacer must surface the failure.
 		expect(parsed.name).toBe("NotAllowedError");
 		expect(parsed.message).toBe("Write permission denied.");
+	});
+
+	it("surfaces name/message on an error-like value that is neither Error nor DOMException", async () => {
+		// Same non-enumerable-getter shape as Error/DOMException, but from neither
+		// class (e.g. a cross-realm or IPC-transport error object) — this is the
+		// exact `{}` collapse seen in the wild for "Repository changes were not
+		// saved {}" / "onFrame threw ... {\"error\":{}}".
+		class OpaqueTransportError {
+			get name() {
+				return "TransportError";
+			}
+			get message() {
+				return "channel closed";
+			}
+		}
+		testInScope(() => {
+			appLogger.error("store", "Repository changes were not saved", new OpaqueTransportError());
+		});
+
+		await vi.waitFor(() => {
+			expect(mockRpc).toHaveBeenCalledWith("push_log", expect.objectContaining({ level: "error", source: "store" }));
+		});
+		const call = mockRpc.mock.calls.find((c) => c[0] === "push_log");
+		expect(call).toBeDefined();
+		const parsed = JSON.parse((call![1] as { dataJson: string }).dataJson);
+		expect(parsed.name).toBe("TransportError");
+		expect(parsed.message).toBe("channel closed");
+	});
+
+	it("names the constructor when an opaque error-like value exposes no diagnostic fields at all", async () => {
+		class FullyOpaque {}
+		testInScope(() => {
+			appLogger.error("terminal", "onFrame threw in channel callback", { sessionId: "s1", error: new FullyOpaque() });
+		});
+
+		await vi.waitFor(() => {
+			expect(mockRpc).toHaveBeenCalledWith("push_log", expect.objectContaining({ level: "error", source: "terminal" }));
+		});
+		const call = mockRpc.mock.calls.find((c) => c[0] === "push_log");
+		expect(call).toBeDefined();
+		const parsed = JSON.parse((call![1] as { dataJson: string }).dataJson);
+		expect(parsed.error).toEqual({ constructorName: "FullyOpaque" });
+	});
+
+	it("still logs a genuinely empty plain object as {}", async () => {
+		testInScope(() => {
+			appLogger.error("terminal", "onFrame threw in channel callback", { sessionId: "s1", error: {} });
+		});
+
+		await vi.waitFor(() => {
+			expect(mockRpc).toHaveBeenCalledWith("push_log", expect.objectContaining({ level: "error", source: "terminal" }));
+		});
+		const call = mockRpc.mock.calls.find((c) => c[0] === "push_log");
+		expect(call).toBeDefined();
+		const parsed = JSON.parse((call![1] as { dataJson: string }).dataJson);
+		expect(parsed.error).toEqual({});
 	});
 
 	it("push sends null dataJson when no data provided", async () => {
@@ -401,6 +480,55 @@ describe("appLogger", () => {
 			await appLogger.hydrateFromRust();
 			// No crash, existing entries preserved
 			expect(appLogger.entryCount()).toBeGreaterThanOrEqual(1);
+		});
+	});
+
+	it("hydrateFromRust falls back to the raw string when data_json isn't valid JSON", async () => {
+		mockRpc.mockImplementation((cmd: string) => {
+			if (cmd === "get_logs") {
+				return Promise.resolve([
+					{
+						id: 200,
+						timestamp_ms: 1000,
+						level: "warn",
+						source: "git",
+						message: "malformed-payload",
+						data_json: "not valid json {{{",
+					},
+				]);
+			}
+			return Promise.resolve(undefined);
+		});
+
+		await testInScopeAsync(async () => {
+			await appLogger.hydrateFromRust();
+			const entry = appLogger.getEntries().find((e) => e.message === "malformed-payload");
+			expect(entry?.data).toBe("not valid json {{{");
+		});
+	});
+
+	it("hydrateFromRust advances nextId past the highest Rust id, so a later local entry never collides", async () => {
+		let priorId!: number;
+		testInScope(() => {
+			appLogger.info("app", "before-hydrate");
+			priorId = appLogger.getEntries()[0].id;
+		});
+
+		const farAheadId = priorId + 100_000;
+		mockRpc.mockImplementation((cmd: string) => {
+			if (cmd === "get_logs") {
+				return Promise.resolve([
+					{ id: farAheadId, timestamp_ms: 2000, level: "warn", source: "git", message: "far-ahead", data_json: null },
+				]);
+			}
+			return Promise.resolve(undefined);
+		});
+
+		await testInScopeAsync(async () => {
+			await appLogger.hydrateFromRust();
+			appLogger.info("app", "after-hydrate");
+			const after = appLogger.getEntries().find((e) => e.message === "after-hydrate");
+			expect(after!.id).toBeGreaterThan(farAheadId);
 		});
 	});
 

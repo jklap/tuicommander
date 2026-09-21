@@ -131,6 +131,15 @@ function isMainBranch(branchName: string): boolean {
 
 const SAVE_DEBOUNCE_MS = 500;
 
+/** Base backoff delay for retrying a transient (non-conflict) save failure — a
+ *  network blip, a webview IPC channel torn down mid-request, a request timeout.
+ *  Doubles on each consecutive failure. */
+const SAVE_RETRY_BASE_MS = 2000;
+
+/** Give up on a transient failure after this many consecutive retries rather than
+ *  retry forever against a sustained outage. */
+const SAVE_RETRY_MAX_ATTEMPTS = 5;
+
 interface RepositorySnapshot {
 	repos: Record<string, RepositoryState>;
 	repoOrder: string[];
@@ -527,6 +536,9 @@ let persistedSnapshot: RepositorySnapshot | null = null;
 let queuedSnapshot: RepositorySnapshot | null = null;
 let saveInFlight = false;
 
+/** Consecutive transient (non-conflict) save failures. Reset on any success. */
+let transientSaveFailures = 0;
+
 /** Set by the store so an adoption that arrived mid-save can run once the baseline
  *  is settled. A save writes `persistedSnapshot` when its request resolves, which
  *  would otherwise overwrite a baseline an adoption moved while it was in flight. */
@@ -546,13 +558,45 @@ function drainRepositorySaveQueue(): void {
 
 	saveInFlight = true;
 	persistRepositoryMutation(mutation, next)
+		.then(() => {
+			transientSaveFailures = 0;
+		})
 		.catch((err: unknown) => {
 			// An error-level entry increments the visible Errors badge. In particular,
 			// same-record conflicts must never remain a debug-only lost mutation.
 			appLogger.error("store", "Repository changes were not saved", err);
-			// Do not requeue the failed snapshot: a deterministic conflict must not
-			// spin. Preserve a newer snapshot queued while this request was in flight;
-			// it is a distinct user mutation and still deserves one visible attempt.
+			if (isRepositoryConflict(err)) {
+				// Deterministic: persistRepositoryMutation already rebased and retried
+				// once against fresh disk state and still lost the race. Retrying the
+				// identical mutation would likely just repeat, so give up rather than
+				// spin. Preserve a newer snapshot queued while this request was in
+				// flight — it is a distinct user mutation and still deserves one
+				// visible attempt, handled by `finally`'s own queuedSnapshot check.
+				transientSaveFailures = 0;
+				return;
+			}
+			// Not a conflict — a transient failure (network blip, a webview IPC
+			// channel torn down mid-request, a timeout). Unlike a conflict this is
+			// not deterministic, so it deserves a retry instead of losing the
+			// mutation for good.
+			if (queuedSnapshot) return; // a newer edit is already queued and supersedes this one
+			if (transientSaveFailures >= SAVE_RETRY_MAX_ATTEMPTS) {
+				appLogger.error("store", `Repository changes abandoned after ${SAVE_RETRY_MAX_ATTEMPTS} retries`);
+				transientSaveFailures = 0;
+				return;
+			}
+			const baselineAtFailure = persistedSnapshot;
+			const delay = SAVE_RETRY_BASE_MS * 2 ** transientSaveFailures;
+			transientSaveFailures++;
+			setTimeout(() => {
+				// Abandon a stale retry rather than risk reverting a newer save that
+				// completed during the backoff window — `next` only reflects what was
+				// desired back when this attempt was first queued, and a newer local
+				// edit or an adopted remote change already supersedes it.
+				if (queuedSnapshot || persistedSnapshot !== baselineAtFailure) return;
+				queuedSnapshot = next;
+				drainRepositorySaveQueue();
+			}, delay);
 		})
 		.finally(() => {
 			saveInFlight = false;
