@@ -41,6 +41,10 @@ pub(super) struct SessionInfo {
     /// same hydration read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+    /// SIGSTOP'd (D.3's follow-on) — a client connecting mid-standby still
+    /// sees the badge without waiting for the next `session-standby` event.
+    #[serde(default)]
+    pub standby: bool,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,

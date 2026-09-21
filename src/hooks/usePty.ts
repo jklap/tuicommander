@@ -173,11 +173,6 @@ export function usePty() {
 		await rpc("resume_pty", { sessionId });
 	}
 
-	/** Query current kitty keyboard protocol flags for a session (0 = not active) */
-	async function getKittyFlags(sessionId: string): Promise<number> {
-		return await rpc<number>("get_kitty_flags", { sessionId });
-	}
-
 	/** Close a PTY session */
 	async function close(sessionId: string, cleanupWorktree: boolean = false): Promise<void> {
 		clearShellFamilyCache(sessionId);
@@ -222,7 +217,6 @@ export function usePty() {
 		resize,
 		pause,
 		resume,
-		getKittyFlags,
 		close,
 		getStats,
 		getMetrics,

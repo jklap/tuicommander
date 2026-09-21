@@ -1554,7 +1554,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/github/bindings/remove",
             post(github_routes::github_unbind_repo),
         )
-        // AI watchers (story 070 RPC parity) — CRUD; fires surface as SessionCreated SSE
+        // AI watchers (story 070 RPC parity) — CRUD. A fire does NOT create a
+        // session; it hands off to the frontend to run an agent/prompt in an
+        // EXISTING session. Status changes surface as `watcher-status` SSE
+        // (see `ai_agent/watcher.rs`'s `notify_status`/`AppEvent::WatcherStatusChanged`).
         .route(
             "/ai/watchers",
             get(ai_routes::watcher_list_http).post(ai_routes::watcher_create_http),

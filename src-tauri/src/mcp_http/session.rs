@@ -90,6 +90,13 @@ pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Ve
                     .term_aliases
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                #[cfg(unix)]
+                standby: state
+                    .session_maps
+                    .standby_sessions
+                    .contains_key(&session_id),
+                #[cfg(not(unix))]
+                standby: false,
                 state: session_state,
             }
         })
@@ -550,6 +557,7 @@ const NEW_SESSION_MIN_VT_COLS: u16 = 220;
 /// A caller that pre-seeds `session_states` or queues injections must do so
 /// **before** calling: this emits `SessionCreated`, and the reader thread the
 /// caller starts afterwards is what consumes them.
+#[allow(clippy::too_many_arguments)] // consolidates 3 call sites that used to open-code and drift; see above
 pub(super) fn register_pty_session(
     state: &AppState,
     session_id: &str,
@@ -567,7 +575,6 @@ pub(super) fn register_pty_session(
         .session_maps
         .sessions
         .insert(session_id.to_string(), Mutex::new(session));
-    state.assign_term_alias(session_id, requested_alias);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -618,6 +625,11 @@ pub(super) fn register_pty_session(
             display_name,
         });
     }
+    // Assigned AFTER SessionCreated (not before, as this used to read) — a
+    // subscriber must see SessionCreated as the first event for a brand-new
+    // session_id; TermAliasAssigned now also dual-emits (C.3) and would
+    // otherwise race ahead of it.
+    state.assign_term_alias(session_id, requested_alias);
 }
 
 /// Shared PTY setup: opens a PTY, spawns the shell, registers buffers and reader thread.
@@ -996,7 +1008,9 @@ pub(super) async fn set_session_visible(
     let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
     state.set_session_visible(
         &session_id,
-        viewer_id.as_deref().unwrap_or(crate::state::LEGACY_VIEWER_ID),
+        viewer_id
+            .as_deref()
+            .unwrap_or(crate::state::LEGACY_VIEWER_ID),
         body.visible,
     );
     #[cfg(unix)]

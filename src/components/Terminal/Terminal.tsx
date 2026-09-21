@@ -3,7 +3,7 @@ import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { locallyCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
-import { invoke } from "../../invoke";
+import { invoke, listen } from "../../invoke";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsStore } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
@@ -168,10 +168,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// such so every teardown goes through `safeUnlisten` instead of a
 	// synchronous try/catch that cannot see the rejection.
 	let unlistenParsed: (() => unknown) | undefined;
-	let unlistenKitty: (() => unknown) | undefined;
 	let unlistenClipboardStore: (() => unknown) | undefined;
-
-	let kittyFlags = 0;
 
 	const RETRY_DELAYS = [5_000, 15_000, 30_000];
 	let retryCount = 0;
@@ -674,6 +671,25 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			},
 		);
 
+		// Listen for OSC 52 clipboard store from the backend. Was a desktop-only,
+		// per-session-suffixed Tauri event (D.7) — converted to the unsuffixed
+		// `pty-clipboard-store` AppEvent so a browser/PWA client sees it too, via
+		// the transport-agnostic `listen()` (works over SSE as well as Tauri IPC).
+		// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
+		// can overwrite the clipboard. Surface a non-blocking notice on every write and
+		// let the user disable OSC 52 entirely via settings.
+		unlistenClipboardStore = await listen<{ session_id: string; text: string }>("pty-clipboard-store", (event) => {
+			if (event.payload.session_id !== targetSessionId) return;
+			if (!settingsStore.state.osc52Clipboard) return;
+			const name = terminalsStore.get(props.id)?.name || "terminal";
+			handleOsc52ClipboardStore(event.payload.text, name);
+		});
+		if (disposed) {
+			safeUnlisten(unlistenClipboardStore);
+			unlistenClipboardStore = undefined;
+			return;
+		}
+
 		// Tauri-only listeners (kitty keyboard, shell state sync)
 		if (isTauri()) {
 			const { listen } = await import("@tauri-apps/api/event");
@@ -683,16 +699,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			if (disposed) {
 				safeUnlisten(unlistenParsed);
 				unlistenParsed = undefined;
-				return;
-			}
-
-			// Listen for kitty keyboard protocol flag changes from Rust
-			unlistenKitty = await listen<number>(`kitty-keyboard-${targetSessionId}`, (event) => {
-				kittyFlags = event.payload;
-			});
-			if (disposed) {
-				safeUnlisten(unlistenKitty);
-				unlistenKitty = undefined;
 				return;
 			}
 
@@ -714,30 +720,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// session-renamed listener (useAppInit.ts, transport-agnostic)
 			// picks it up the same way any other rename does; no
 			// desktop-only pty-title-* listener needed here anymore.
-
-			// Listen for OSC 52 clipboard store from Rust (native renderer).
-			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
-			// can overwrite the clipboard. Surface a non-blocking notice on every write and
-			// let the user disable OSC 52 entirely via settings. (Gated here, off the
-			// per-byte parse hot path — this fires once per actual OSC 52 sequence.)
-			unlistenClipboardStore = await listen<string>(`pty-clipboard-store-${targetSessionId}`, (event) => {
-				if (!settingsStore.state.osc52Clipboard) return;
-				const name = terminalsStore.get(props.id)?.name || "terminal";
-				handleOsc52ClipboardStore(event.payload, name);
-			});
-			if (disposed) {
-				safeUnlisten(unlistenClipboardStore);
-				unlistenClipboardStore = undefined;
-				return;
-			}
-
-			// Sync initial kitty flags — the push event may have fired before listener attached.
-			// Only apply if the listener hasn't already updated kittyFlags (race guard).
-			const preListenFlags = kittyFlags;
-			const flags = await pty.getKittyFlags(targetSessionId);
-			if (flags > 0 && kittyFlags === preListenFlags) {
-				kittyFlags = flags;
-			}
 
 			// Sync shell state from Rust — covers events missed while unsubscribed
 			// (e.g. tab switch, branch switch, component remount).
@@ -808,8 +790,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					unsubscribePty = undefined;
 					safeUnlisten(unlistenParsed);
 					unlistenParsed = undefined;
-					safeUnlisten(unlistenKitty);
-					unlistenKitty = undefined;
 					safeUnlisten(unlistenClipboardStore);
 					unlistenClipboardStore = undefined;
 				}
@@ -969,11 +949,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		unsubscribePty = undefined;
 		safeUnlisten(unlistenParsed);
 		unlistenParsed = undefined;
-		safeUnlisten(unlistenKitty);
-		unlistenKitty = undefined;
 		safeUnlisten(unlistenClipboardStore);
 		unlistenClipboardStore = undefined;
-		kittyFlags = 0;
 
 		if (sessionId) pluginRegistry.removeSession(sessionId);
 	});

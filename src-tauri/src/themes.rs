@@ -357,11 +357,12 @@ pub(crate) fn start_theme_watcher(themes_dir: PathBuf, state: &std::sync::Arc<cr
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    let app_handle = state.app_handle.read().clone();
+    let watcher_state = std::sync::Arc::clone(state);
     let last_emit = std::sync::Arc::new(AtomicU64::new(0));
 
     let watcher =
         notify::recommended_watcher(move |result: Result<notify::Event, notify::Error>| {
+            let state = &watcher_state;
             let event = match result {
                 Ok(e) => e,
                 Err(err) => {
@@ -393,10 +394,9 @@ pub(crate) fn start_theme_watcher(themes_dir: PathBuf, state: &std::sync::Arc<cr
                 source = "theme_watcher",
                 "Themes directory changed, emitting themes-changed"
             );
-            if let Some(ref app) = app_handle {
-                use tauri::Emitter as _;
-                let _ = app.emit("themes-changed", ());
-            }
+            // Was a desktop-only `app.emit` (D.6) — a browser/PWA client
+            // connected to this same instance never learned a theme changed.
+            state.emit_dual(crate::state::AppEvent::ThemesChanged);
         });
 
     match watcher {
@@ -761,5 +761,33 @@ mod tests {
         assert_eq!(blend("#000000", "#ffffff", 0.5), "#808080");
         assert_eq!(blend("#ff0000", "#0000ff", 0.0), "#ff0000");
         assert_eq!(blend("#ff0000", "#0000ff", 1.0), "#0000ff");
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn theme_file_change_dual_emits_themes_changed() {
+        let dir = TempDir::new().unwrap();
+        seed_builtin_themes(dir.path()).unwrap();
+
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut bus_rx = state.event_bus.subscribe();
+
+        start_theme_watcher(dir.path().to_path_buf(), &state);
+        // Give the watcher thread time to register before writing.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        fs::write(dir.path().join("custom.json"), make_wt_json("custom")).unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Ok(crate::state::AppEvent::ThemesChanged) = bus_rx.try_recv() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "expected a dual-emitted ThemesChanged on the bus"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }

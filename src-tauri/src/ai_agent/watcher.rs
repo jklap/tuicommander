@@ -1163,7 +1163,6 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
             if config.rules[idx].fire_count >= config.rules[idx].max_fires {
                 config.rules[idx].status = WatcherStatus::Exhausted;
                 tracing::info!(rule_id, "Watcher exhausted — max_fires reached");
-                #[cfg(feature = "desktop")]
                 self.notify_status(&config.rules[idx]);
                 FireDecision::Halted
             } else if self.is_burst(
@@ -1173,7 +1172,6 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
             ) {
                 config.rules[idx].status = WatcherStatus::Paused;
                 tracing::warn!(rule_id, "Watcher burst detected — auto-paused");
-                #[cfg(feature = "desktop")]
                 self.notify_status(&config.rules[idx]);
                 FireDecision::Halted
             } else {
@@ -1181,7 +1179,6 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
                 let payload =
                     build_fire_payload(&config.rules[idx], session_id, context, pr_meta.as_ref());
                 config.rules[idx].fire_count += 1;
-                #[cfg(feature = "desktop")]
                 self.notify_status(&config.rules[idx]);
                 FireDecision::Fire(Box::new(payload))
             }
@@ -1302,19 +1299,25 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
         }
     }
 
-    #[cfg(feature = "desktop")]
+    /// Was gated to `#[cfg(feature = "desktop")]` with no bus arm at all
+    /// (D.5) — a browser/PWA client never saw a watcher's status change, and
+    /// the headless `tuic-remote` build never had this at all either, since
+    /// the whole function used to not exist outside the desktop feature.
     fn notify_status(&self, rule: &WatcherRule) {
-        if let Some(app) = self.state.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "watcher-status",
-                serde_json::json!({
-                    "id": rule.id,
-                    "status": rule.status,
-                    "fire_count": rule.fire_count,
-                    "session_id": rule.session_id,
-                }),
-            );
-        }
+        // `WatcherStatus` serializes via `#[serde(rename_all = "snake_case")]`
+        // (e.g. "active", "paused") — round-trip through serde_json rather
+        // than hand-duplicating that mapping here.
+        let status = serde_json::to_value(&rule.status)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        self.state
+            .emit_dual(crate::state::AppEvent::WatcherStatusChanged {
+                id: rule.id.clone(),
+                status,
+                fire_count: rule.fire_count,
+                session_id: rule.session_id.clone(),
+            });
     }
 
     fn on_user_input(&self, session_id: &str) {
@@ -1326,7 +1329,6 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
             {
                 rule.status = WatcherStatus::Paused;
                 tracing::info!(rule_id = %rule.id, "Watcher paused by user input");
-                #[cfg(feature = "desktop")]
                 self.notify_status(rule);
                 changed = true;
             }
@@ -2288,6 +2290,35 @@ mod tests {
             evaluate_trigger(&trigger, None, &lines),
             TriggerOutcome::Fire
         );
+    }
+
+    #[test]
+    fn notify_status_dual_emits_watcher_status_changed() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut bus_rx = state.event_bus.subscribe();
+        let engine = WatcherEngine::new(Arc::clone(&state));
+
+        let mut rule = make_rule(Some("s1"), "watch");
+        rule.id = "r1".into();
+        rule.status = WatcherStatus::Paused;
+        rule.fire_count = 3;
+
+        engine.notify_status(&rule);
+
+        match bus_rx.try_recv() {
+            Ok(AppEvent::WatcherStatusChanged {
+                id,
+                status,
+                fire_count,
+                session_id,
+            }) => {
+                assert_eq!(id, "r1");
+                assert_eq!(status, "paused");
+                assert_eq!(fire_count, 3);
+                assert_eq!(session_id, Some("s1".to_string()));
+            }
+            other => panic!("expected WatcherStatusChanged, got {other:?}"),
+        }
     }
 
     #[test]

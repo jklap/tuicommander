@@ -626,7 +626,7 @@ the server is back to the filter the connection was opened with.
 |-------|---------|-------------|
 | `session-created` | `{session_id, cwd, agent_type, display_name}` | New session started; `display_name` is the optional stable assigned name |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
-| `session-closed` | `{session_id}` | Session ended |
+| `session-closed` | `{session_id, reason, agent_type}` | Session ended. `reason` is informational (`"closed"`, `"killed"`, `"process_exit"`, `"explicit_close"`); `agent_type` is the session's agent type at close time (or `null`), read before the session-state accumulator removes the entry — used to pick the short vs. long auto-close timer |
 | `repo-changed` | `{repo_path, kind}` | Repository changed. `kind` is `"git-state"` (`.git/` was written — a commit, ref or index change) or `"working-tree"` (files changed and `.git` did not). A git-state emit cancels the pending working-tree one, so `"git-state"` does **not** mean "only `.git` changed" — a client that needs working-tree news must react to both kinds. |
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |
 | `pty-parsed` | `{session_id, parsed}` | Structured output event from PTY parser |
@@ -641,6 +641,12 @@ the server is back to the filter the connection was opened with.
 | `triage-progress` | `{repo_path, summary, files, phase, done, llm_used, llm_model}` | Diff-triage classification progress (browser parity for the desktop window event) |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
+| `session-standby` | `{session_id, standby}` | A session was parked in (or woken from) SIGSTOP standby. Visibility-driven — see `is_session_visible`/`sessions_not_visible` in `AGENTS.md`'s per-viewer visibility notes |
+| `ai-suggestion` | `{session_id, trigger_reason, proposed_goal}` | A proposed next goal for an idle session, surfaced by the AI triage layer |
+| `watcher-status` | `{id, status, fire_count, session_id}` | An AI watcher rule's status changed (`active`/`paused`/`stopped`/`exhausted`) or its fire count incremented. `session_id` is `null` for a repo-scoped rule with no bound session |
+| `themes-changed` | `{}` | The themes directory changed on disk (hot-reload); clients should re-fetch `GET /themes` |
+| `pty-clipboard-store` | `{session_id, text}` | OSC 52 clipboard-store sequence seen in the PTY stream. Never relayed off the host (see `relay_client.rs`'s `is_relayable` exclusion) |
+| `term-alias-assigned` | `{session_id, alias}` | The session's short tab-hover alias (e.g. `tc-1`) was assigned |
 
 ### MCP Streamable HTTP
 
@@ -1750,10 +1756,14 @@ POST /ai/watchers/attach   { templateId, sessionId }         -> id
 POST /ai/watchers/detach   { id }                            -> { ok }
 ```
 
-CRUD for the agent watcher rules (WatcherManager). Watcher *fires* surface as the
-existing `session-created` SSE event (a fired watcher spawns an agent session), so no
-dedicated watcher-fire stream is needed. Config mutations are client-initiated → the UI
-refetches `GET /ai/watchers`; no push event for state changes. The mutation logic is the
+CRUD for the agent watcher rules (WatcherManager). A watcher *fire* does NOT create a
+session — it hands off to the frontend to run an agent/prompt in an **existing** session,
+so there is deliberately no SSE arm for it at all (an imperative event: dual-emitting it
+would make a desktop window and an open browser tab both execute the same fire — see
+`AGENTS.md`'s IPC/HTTP Parity notes). A rule's status changes (paused/exhausted/fire
+count) DO push: `watcher-status` (`AppEvent::WatcherStatusChanged`, see the SSE event
+table above). Config mutations (create/update/delete/toggle) are still client-initiated →
+the UI refetches `GET /ai/watchers`; no push event for those. The mutation logic is the
 shared `ai_agent::watcher::*_rule` core; `watcher_create`/`watcher_update` reuse the
 extracted `*_impl`.
 

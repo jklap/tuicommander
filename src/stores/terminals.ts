@@ -698,9 +698,7 @@ function createTerminalsStore() {
 			// is now per-viewer, "visible" means visible to ANY of them. See
 			// AppState::is_session_visible's doc comment.
 			if (prevId && prevId !== id) {
-				rpc("set_session_visible", { sessionId: prevId, visible: false, viewerId: CLIENT_INSTANCE_ID }).catch(
-					() => {},
-				);
+				rpc("set_session_visible", { sessionId: prevId, visible: false, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
 			}
 			if (id) {
 				rpc("set_session_visible", { sessionId: id, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});

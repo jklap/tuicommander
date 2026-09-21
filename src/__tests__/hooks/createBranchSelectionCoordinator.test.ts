@@ -364,7 +364,7 @@ describe("createBranchSelectionCoordinator", () => {
 				repositoriesStore.setWorkspace("/Gits/alpha", "main", {
 					worktreePath: "/Gits/alpha",
 					hadTerminals: true,
-						terminals: [id],
+					terminals: [id],
 					savedTerminalsByClient: {
 						"test-client": { savedAt: Date.now(), terminals: [agentSaved] },
 					},

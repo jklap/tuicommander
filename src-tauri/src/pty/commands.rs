@@ -118,7 +118,6 @@ pub(crate) async fn create_pty(
             shell: shell.clone(),
         }),
     );
-    state.assign_term_alias(&session_id, config.alias.as_deref());
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -187,6 +186,11 @@ pub(crate) async fn create_pty(
         created_agent_type,
         created_display_name,
     );
+    // Assigned AFTER SessionCreated (not before, as this used to read) — a
+    // subscriber must see SessionCreated as the first event for a brand-new
+    // session_id; TermAliasAssigned now also dual-emits (C.3) and would
+    // otherwise race ahead of it.
+    state.assign_term_alias(&session_id, config.alias.as_deref());
 
     spawn_reader_thread(
         reader,
@@ -337,7 +341,6 @@ pub(crate) async fn create_pty_with_worktree(
             shell,
         }),
     );
-    state.assign_term_alias(&session_id, pty_config.alias.as_deref());
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -386,6 +389,11 @@ pub(crate) async fn create_pty_with_worktree(
         created_agent_type,
         created_display_name,
     );
+    // Assigned AFTER SessionCreated (not before, as this used to read) — a
+    // subscriber must see SessionCreated as the first event for a brand-new
+    // session_id; TermAliasAssigned now also dual-emits (C.3) and would
+    // otherwise race ahead of it.
+    state.assign_term_alias(&session_id, pty_config.alias.as_deref());
 
     spawn_reader_thread(
         reader,
@@ -1406,7 +1414,9 @@ pub(crate) async fn set_session_visible(
     let viewer_id = viewer_id.filter(|v| !v.is_empty());
     state.set_session_visible(
         &session_id,
-        viewer_id.as_deref().unwrap_or(crate::state::LEGACY_VIEWER_ID),
+        viewer_id
+            .as_deref()
+            .unwrap_or(crate::state::LEGACY_VIEWER_ID),
         visible,
     );
     #[cfg(unix)]
