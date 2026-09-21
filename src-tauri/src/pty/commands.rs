@@ -1448,7 +1448,9 @@ pub(crate) async fn set_session_visible(
     let viewer_id = viewer_id.filter(|v| !v.is_empty());
     state.set_session_visible(
         &session_id,
-        viewer_id.as_deref().unwrap_or(crate::state::LEGACY_VIEWER_ID),
+        viewer_id
+            .as_deref()
+            .unwrap_or(crate::state::LEGACY_VIEWER_ID),
         visible,
     );
     #[cfg(unix)]

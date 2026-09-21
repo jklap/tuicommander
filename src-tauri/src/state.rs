@@ -687,29 +687,6 @@ pub enum AppEvent {
     /// never saw the badge.
     #[serde(rename = "session-standby")]
     SessionStandby { session_id: String, standby: bool },
-    /// The orchestrator proposed a next goal for this session (idle-agent
-    /// AI-suggestion pipeline). Previously desktop-window-only.
-    #[serde(rename = "ai-suggestion")]
-    AiSuggestion {
-        session_id: String,
-        trigger_reason: String,
-        proposed_goal: String,
-    },
-    /// A `WatcherRule`'s status changed (fired, exhausted, burst-paused, or
-    /// reset by user input) — `ai_agent::watcher`'s `notify_status`.
-    /// `session_id` is the session the rule watches, when it is
-    /// session-scoped (a rule can also watch a whole repo). Previously
-    /// desktop-window-only, and even there gated to `#[cfg(feature =
-    /// "desktop")]` at every one of its 4 callers, so the headless
-    /// `tuic-remote` build never got it either.
-    #[serde(rename = "watcher-status")]
-    WatcherStatusChanged {
-        id: String,
-        status: String,
-        fire_count: u32,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
-    },
     /// The theme registry finished its (debounced) reload from disk — clients
     /// should re-read `GET /config/themes`. Payload-free, like
     /// `RepositoriesChanged`: shipping the theme set on every save would copy
@@ -886,11 +863,7 @@ impl AppEvent {
             | AppEvent::SessionAccentColorChanged { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. }
             | AppEvent::SessionStandby { session_id, .. }
-            | AppEvent::AiSuggestion { session_id, .. }
             | AppEvent::PtyClipboardStore { session_id, .. } => Some(session_id),
-            // `WatcherStatusChanged.session_id` is optional (a rule can watch a
-            // whole repo, not just one session) — it stays a global event even
-            // when Some, so it does not fit this per-session routing.
             _ => None,
         }
     }
@@ -2866,9 +2839,8 @@ impl AppState {
     /// a narrow, explicit exception — see its doc comment), so every producer
     /// must dual-emit explicitly. This is the one place that does it, so the
     /// desktop and SSE/WS payloads cannot drift the way
-    /// `session-created`/`session-closed`/`session-standby`/`ai-suggestion`/
-    /// `themes-changed`/`watcher-status` all independently did before this
-    /// existed.
+    /// `session-created`/`session-closed`/`session-standby`/`themes-changed`
+    /// all independently did before this existed.
     ///
     /// MUST branch on `pty_session_id()`, not call `emit_pty_event`
     /// unconditionally: `emit_pty_event` unconditionally feeds the lossless
@@ -2883,10 +2855,10 @@ impl AppState {
     /// entirely, so only the broadcast arm ever sees it.
     pub(crate) fn emit_dual(&self, event: AppEvent) {
         #[cfg(feature = "desktop")]
-        if let Some(name) = crate::event_wire::window_event_name(&event) {
-            if let Some(app) = self.app_handle.read().as_ref() {
-                let _ = app.emit(name, crate::event_wire::event_payload(&event));
-            }
+        if let Some(name) = crate::event_wire::window_event_name(&event)
+            && let Some(app) = self.app_handle.read().as_ref()
+        {
+            let _ = app.emit(name, crate::event_wire::event_payload(&event));
         }
         if event.pty_session_id().is_some() {
             self.emit_pty_event(event); // per-session lane + per-session WS + bus
@@ -6014,11 +5986,6 @@ impl AppState {
             // Standby is a process-signal (SIGSTOP/wake) that lives on
             // `session_visibility`/the standby sweeper, not `SessionState`.
             | AppEvent::SessionStandby { .. }
-            // A proposed next goal is a one-shot suggestion surfaced to the
-            // UI, not durable session state.
-            | AppEvent::AiSuggestion { .. }
-            // A watcher rule's own status, not the session's.
-            | AppEvent::WatcherStatusChanged { .. }
             | AppEvent::ThemesChanged
             // Clipboard text is transient, never accumulated.
             | AppEvent::PtyClipboardStore { .. } => {}
