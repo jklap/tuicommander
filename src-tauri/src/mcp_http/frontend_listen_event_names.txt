@@ -59,3 +59,6 @@ worktree-removed
 worktree-setup-script-completed
 worktree-sync-completed
 worktree-sync-started
+worktree-warm-completed
+worktree-warm-progress
+worktree-warm-started

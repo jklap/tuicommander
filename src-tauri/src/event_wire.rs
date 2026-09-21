@@ -423,7 +423,10 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "warnings": warnings,
             })
         }
-        AppEvent::SessionStandby { session_id, standby } => {
+        AppEvent::SessionStandby {
+            session_id,
+            standby,
+        } => {
             serde_json::json!({ "session_id": session_id, "standby": standby })
         }
         AppEvent::AiSuggestion {
