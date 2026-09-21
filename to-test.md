@@ -2697,17 +2697,22 @@ Frontend only — Vite HMR picks this up, no `make dev` restart needed.
 Rust — needs a `make dev` restart, and the interesting half needs the headless
 binary: `cargo build --bin tuic-remote --no-default-features`.
 
-- [ ] Run `tuic-remote`, open the web UI against it, and start a PR review on a
-      repo. The Review findings column must move from "running" to a result on
-      its own. Before this commit it stayed on "running" forever, because the
-      `review-progress` event was dropped on that build.
+**Which binary:** `run_headless` (the main binary's headless mode), NOT
+`tuic-remote`. The three routes are in `build_router`; `build_remote_router`
+does not carry them, so `tuic-remote` answers 404 (#810-4986).
+
+- [ ] Start the headless mode of a `--no-default-features` build, open the web
+      UI against it, and start a PR review on a repo. The Review findings column
+      must move from "running" to a result on its own. Before this commit it
+      stayed on "running" forever, because the `review-progress` event was
+      dropped on that build.
 - [ ] Same daemon, run an improvement scan. The proposals must appear in the
       panel when the scan finishes — the return value never populates it, only
       the `proposals-ready` event does.
 - [ ] Same daemon, run conflict assist on a PR with conflicts. The status must
       reach the panel rather than leaving it idle.
-- [ ] `curl -N http://127.0.0.1:<port>/events` against the headless daemon while
-      each of the three runs. The `review-progress`, `proposals-ready` and
+- [ ] `curl -N http://127.0.0.1:<port>/events` against that daemon while each of
+      the three runs. The `review-progress`, `proposals-ready` and
       `conflict-assist-status` frames must appear on the stream.
 - [ ] Desktop build, same three operations: unchanged. The window emit still
       fires, so nothing about the desktop panels may look different.

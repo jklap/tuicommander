@@ -936,10 +936,12 @@ An ego that cannot be reached is a `4xx`/`5xx` with ego's own sentence in the
 error body — never a `200` with an empty result. `POST /repo/pr-review`,
 `POST /repo/improvement-scan` and `POST /repo/conflict-assist` also emit
 `review-progress`, `proposals-ready` and `conflict-assist-status` on `/events`
-while they run — on **every** build. All three routes are mounted
-unconditionally, so the headless daemon answers them too, and a browser reading
-`/events` is the only client those builds have: the desktop window emit is
-gated on `feature = "desktop"`, the `event_bus` send never is (#808-84e1).
+while they run — on **every** build. The routes are mounted in `build_router`,
+which `run_headless` serves as well as the desktop app, and a browser reading
+`/events` is the only client a non-desktop build has: the desktop window emit is
+gated on `feature = "desktop"`, the `event_bus` send never is (#808-84e1). They
+are **not** in `shared_routes`, so the `tuic-remote` daemon does not serve them
+at all (#810-4986).
 
 `POST /ai/review/pr` and `POST /ai/improvements/scan` are gone with the engine
 #784-0aec deleted; the `/ai/` prefix belonged to it, so the replacements sit

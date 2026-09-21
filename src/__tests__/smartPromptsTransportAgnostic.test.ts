@@ -5,13 +5,14 @@ import { describe, expect, it } from "vitest";
 /**
  * Story 706-8d98 investigated a claim that Smart Prompts "blocks in browser
  * mode without saying so" and needed an isTauri()-gated "requires the desktop
- * app" message. That premise did not hold: every execution mode (inject,
- * shell, headless, api) already goes through `invoke()` calls that are
- * HTTP-mapped for IPC/HTTP parity, and `providerRegistryStore.hydrate()` runs
- * unconditionally at bootstrap — nothing here is actually desktop-only. The
- * story's criterion 2 was rejected rather than implemented (see the story's
- * worklog): adding an isTauri() branch would regress a feature that works in
- * browser mode today.
+ * app" message. That premise did not hold: all four execution modes still in
+ * `useSmartPrompts.ts` — inject, shell, headless and api — go through
+ * `invoke()` calls that are HTTP-mapped for IPC/HTTP parity, so nothing here
+ * is desktop-only. `api` and a headless run resolving to `api` are one ego
+ * turn over ACP, and `/acp` is in `shared_routes`, so they reach a browser
+ * client too. The story's criterion 2 was rejected rather than implemented
+ * (see the story's worklog): adding an isTauri() branch would regress a
+ * feature that works in browser mode today.
  *
  * A source scan rather than a behavioral test, because what must never exist
  * is the reference itself — the moment `isTauri` shows up in these files it

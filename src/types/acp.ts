@@ -3,9 +3,18 @@
  *
  * These are not the ACP protocol's own types. They are the shapes
  * `src-tauri/src/acp/mod.rs` serializes, which is a deliberately narrower
- * surface: the client refuses stdio MCP servers, boolean config options and any
- * elicitation mode but `form` before they reach a host, so a type here that
- * admitted them would describe a frame that cannot arrive.
+ * surface: the client refuses stdio MCP servers and any elicitation mode but
+ * `form` before they reach a host, so a type here that admitted them would
+ * describe a frame that cannot arrive.
+ *
+ * A boolean config option is **not** one of those, and the difference matters
+ * because the two failures are opposite. `client_boolean_config: false` is a
+ * capability this client does not advertise, and `AcpCapabilitySnapshot`
+ * excludes it for that reason — but Rust passes `Vec<SessionConfigOption>`
+ * through unfiltered, so an agent that publishes a boolean option anyway
+ * produces a frame that arrives and is simply never rendered. Deleting the
+ * `{ type: "boolean" }` member here to match the capability would break
+ * parsing of a frame that can and does turn up (#810-4986).
  *
  * Every field name below is pinned by `src-tauri/tests/story785_event_wire_shapes.rs`.
  * That test exists because both defects it caught were silent: serde renames
