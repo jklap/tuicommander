@@ -6,6 +6,7 @@ import { isNotificationSound } from "../notifications";
 import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
+import { CLIENT_INSTANCE_ID } from "../stores/clientInstance";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../stores/globalWorkspace";
@@ -321,6 +322,19 @@ function assignSessionToRepoBranch(
 	}
 }
 
+/** Re-assert that this client still shows its active terminal's session.
+ *  Visibility is per viewer and an assertion expires after
+ *  `SESSION_VISIBILITY_TTL_MS` (90 s, `state.rs`), while `terminalsStore.setActive`
+ *  only asserts on a tab switch — without this a tab the user keeps looking at
+ *  would count as hidden after 90 s and the standby sweeper could SIGSTOP it.
+ *  Rides the 30 s snapshot timer, well inside the TTL. */
+function reassertActiveSessionVisible(): void {
+	const activeId = terminalsStore.state.activeId;
+	const sessionId = activeId ? terminalsStore.get(activeId)?.sessionId : null;
+	if (!sessionId) return;
+	rpc("set_session_visible", { sessionId, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+}
+
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 /** One entry of `deps.pty.listActiveSessions()`'s result. */
 type ActiveSessionEntry = Awaited<ReturnType<AppInitDeps["pty"]["listActiveSessions"]>>[number];
@@ -433,6 +447,7 @@ export async function initApp(deps: AppInitDeps) {
 		if (snapshots.size > 0) {
 			repositoriesStore.snapshotTerminals(snapshots);
 		}
+		reassertActiveSessionVisible();
 	}, SNAPSHOT_INTERVAL_MS);
 
 	// Snapshot terminal metadata, flush pending saves, and close PTY sessions on app exit
