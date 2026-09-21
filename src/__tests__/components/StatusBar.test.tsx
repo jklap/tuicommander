@@ -10,6 +10,8 @@ const {
 	mockGetBranchPrData,
 	mockIsGitRepo,
 	mockTerminalGetActive,
+	mockGetAllReposOrdered,
+	mockGetConnections,
 } = vi.hoisted(() => ({
 	mockGitHubStatus: vi.fn<() => unknown>(() => null),
 	mockGitHubRefresh: vi.fn(),
@@ -17,6 +19,8 @@ const {
 	mockGetBranchPrData: vi.fn<() => unknown>(() => null),
 	mockIsGitRepo: vi.fn<() => boolean>(() => true),
 	mockTerminalGetActive: vi.fn<() => unknown>(() => null),
+	mockGetAllReposOrdered: vi.fn<() => unknown[]>(() => []),
+	mockGetConnections: vi.fn<() => Record<string, unknown>>(() => ({})),
 }));
 
 vi.mock("../../hooks/useGitHub", () => ({
@@ -36,6 +40,7 @@ vi.mock("../../stores/repositories", () => ({
 		get: vi.fn(() => undefined),
 		getGroupForRepo: vi.fn(() => undefined),
 		getRevision: vi.fn(() => 0),
+		getAllReposOrdered: mockGetAllReposOrdered,
 		isGitRepo: mockIsGitRepo,
 	},
 }));
@@ -50,6 +55,12 @@ vi.mock("../../stores/terminals", async (importOriginal) => {
 		},
 	};
 });
+
+vi.mock("../../stores/remoteConnections", () => ({
+	remoteConnectionsStore: {
+		getConnections: mockGetConnections,
+	},
+}));
 
 vi.mock("../../stores/repoSettings", () => ({
 	repoSettingsStore: {
@@ -173,6 +184,8 @@ describe("StatusBar", () => {
 		mockDictationState.loading = false;
 		mockLastActivityAt.mockReturnValue(0);
 		mockIsGitRepo.mockReturnValue(true);
+		mockGetAllReposOrdered.mockReturnValue([]);
+		mockGetConnections.mockReturnValue({});
 	});
 
 	afterEach(() => {
@@ -501,5 +514,36 @@ describe("StatusBar", () => {
 		const badges = githubStatus!.querySelectorAll("[data-testid='status-badge']");
 		const prBadge = Array.from(badges).find((b) => b.textContent?.includes("PR #42"));
 		expect(prBadge).toBeDefined();
+	});
+
+	// The offline notice exists so a disconnected machine is named once, instead
+	// of surfacing as every operation on its repos failing separately. A machine
+	// holding no registered repo is silent: not being connected to it is the
+	// normal resting state.
+	it("names a disconnected machine that holds a registered repo", () => {
+		mockGetAllReposOrdered.mockReturnValue([{ path: "/r", connectionId: "c1" }]);
+		mockGetConnections.mockReturnValue({
+			c1: { connection: { id: "c1", name: "lab-linux" }, status: "disconnected" },
+		});
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		expect(container.textContent).toContain("lab-linux");
+	});
+
+	it("stays silent for a disconnected machine with no registered repo", () => {
+		mockGetAllReposOrdered.mockReturnValue([]);
+		mockGetConnections.mockReturnValue({
+			c1: { connection: { id: "c1", name: "lab-linux" }, status: "disconnected" },
+		});
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		expect(container.textContent).not.toContain("lab-linux");
+	});
+
+	it("stays silent for a connected machine that holds a registered repo", () => {
+		mockGetAllReposOrdered.mockReturnValue([{ path: "/r", connectionId: "c1" }]);
+		mockGetConnections.mockReturnValue({
+			c1: { connection: { id: "c1", name: "lab-linux" }, status: "connected" },
+		});
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		expect(container.textContent).not.toContain("lab-linux");
 	});
 });
