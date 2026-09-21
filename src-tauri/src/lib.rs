@@ -2702,6 +2702,7 @@ pub fn run() {
             pty::get_session_leaf_pid,
             pty::has_foreground_process,
             pty::debug_agent_detection,
+            pty::explain_session_state,
             pty_capture::get_pty_capture,
             pty_capture::set_pty_capture,
             load_config,

@@ -23,6 +23,7 @@ import type { ActivitySnapshot } from "../../utils/activitySnapshot";
 function row(overrides: Partial<TerminalRow> = {}): TerminalRow {
 	return {
 		id: "t1",
+		sessionId: null,
 		name: "shell",
 		project: null,
 		projectColor: undefined,
@@ -463,6 +464,7 @@ describe("moveActivitySelection", () => {
 function subRow(id: string, subAgentTag: string | null): TerminalRow {
 	return {
 		id,
+		sessionId: null,
 		name: id,
 		project: null,
 		projectColor: undefined,

@@ -29,6 +29,7 @@ export function snapshotToRows(snap: ActivitySnapshot, prev?: readonly TerminalR
 	const rows = snap.terminals.map(
 		(t): TerminalRow => ({
 			id: t.id,
+			sessionId: t.sessionId,
 			name: t.name,
 			project: projectName(t.cwd),
 			projectColor: undefined,
