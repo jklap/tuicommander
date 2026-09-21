@@ -358,7 +358,8 @@ pub(super) const REPO_ACTIONS: &str = "list, add, active, status, branch_integra
 pub(super) const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 pub(super) const TASK_ACTIONS: &str = "get, cancel";
 pub(super) const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
-pub(super) const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
+pub(super) const DEBUG_ACTIONS: &str =
+    "agent_detection, explain_state, logs, sessions, invoke_js, help";
 #[cfg(any(feature = "dictation", test))]
 pub(super) const VOICE_ACTIONS: &str = "speak, stop, status";
 pub(super) const REMOTE_ACTIONS: &str = "preview, update";
@@ -735,8 +736,8 @@ pub(super) fn native_tool_definitions(
             "name": "debug",
             "description": "Diagnostics for TUICommander internals. action=help returns the full usage guide.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: agent_detection, logs, sessions, invoke_js, help" },
-                "session_id": { "type": "string", "description": "PTY session UUID (action=agent_detection, optional — omit for all)" },
+                "action": { "type": "string", "description": "One of: agent_detection, explain_state, logs, sessions, invoke_js, help" },
+                "session_id": { "type": "string", "description": "PTY session UUID (action=agent_detection, optional — omit for all; action=explain_state, required)" },
                 "level": { "type": "string", "description": "Log level filter: debug, info, warn, error (action=logs)" },
                 "source": { "type": "string", "description": "Log source filter (action=logs)" },
                 "script": { "type": "string", "description": "JavaScript to execute in the WebView (action=invoke_js). The ONLY global is window.__TUIC__ — call action=help for the full API list. Example: return window.__TUIC__.terminals()" },

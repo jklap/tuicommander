@@ -89,6 +89,28 @@ fn test_classify_agent_version_strip_does_not_overreach() {
     );
 }
 
+/// `amp`/`cursor`/`droid` have NO ready-screen adapter and will latch busy
+/// forever on their long-lived foreground process (documented gap, checked
+/// 2026-09-07, tracked in `has_ready_screen_adapter`'s own doc comment). This
+/// was previously pinned only by 5 *positive* per-agent assertions; nothing
+/// asserted the negative side, which the state-explain feature's payload now
+/// surfaces as `no_adapter_for_agent`.
+#[test]
+fn has_ready_screen_adapter_false_for_agents_with_no_adapter() {
+    for agent in ["amp", "cursor", "droid"] {
+        assert!(
+            !has_ready_screen_adapter(Some(agent)),
+            "{agent} must have no ready-screen adapter (documented gap)"
+        );
+    }
+}
+
+#[test]
+fn has_ready_screen_adapter_false_for_none_and_unknown_agent() {
+    assert!(!has_ready_screen_adapter(None));
+    assert!(!has_ready_screen_adapter(Some("some-future-agent")));
+}
+
 /// The ready-screen adapter is the whole point of detecting the agent: grok
 /// runs as one long-lived foreground command, so OSC 133 marks the shell busy
 /// once and only the screen can take it back to idle.

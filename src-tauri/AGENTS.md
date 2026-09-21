@@ -785,6 +785,19 @@ then replay it.
 `GET /sessions/{id}/output`, `mcp_http/session.rs:460` — a page size, not a
 retention bound.)
 
+**Ask the running session before reproducing blind.** `GET /sessions/{id}/explain-state`
+(desktop: `explain_session_state`; MCP: `debug action=explain_state`) is a read-only dump of
+exactly what produced the current badge: the held ranked evidence per axis, whether `decide()`
+would flip the shell state right now, which rung of the `agent_state` ladder won, the
+screen/silence-timer bookkeeping, the last `Notification` classification, and an always-on
+64-entry decision trail — including **rejected** evidence attempts and what outranked them
+(`record_busy`/`record_idle`'s `bool` return, previously discarded everywhere). A rejection is
+usually the actual answer to "why didn't the badge update," and it survives the 8 KB output-ring
+window closing, since the trail lives on `SilenceState` for the session's whole life, not in the
+output buffer. Full design in `docs/backend/pty.md`'s "Session State Explain" section. This
+still doesn't replace capturing — the trail explains a *decision*, not what the agent actually
+printed — so a genuinely new mis-detection still needs the capture workflow below.
+
 ```bash
 curl -X POST localhost:9876/diagnostics/capture -H 'content-type: application/json' \
      -d '{"enabled":true}'                      # every session
