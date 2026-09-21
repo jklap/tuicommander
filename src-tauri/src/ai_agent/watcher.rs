@@ -764,13 +764,9 @@ impl WatcherEngine {
         }
         let last_exit_code = self.last_exit_code(session_id);
         let screen_tail = self.screen_tail(session_id);
-        let tab_visible = self
-            .state
-            .session_maps
-            .session_visibility
-            .get(session_id)
-            .map(|v| *v)
-            .unwrap_or(true);
+        // Visible to ANY viewer (B.8), not a single shared flag — see
+        // `AppState::is_session_visible`'s doc comment.
+        let tab_visible = self.state.is_session_visible(session_id);
 
         // (rule_id, session_id, is_idle) — Idle rules go through the self-check gate.
         let fire_candidates: Vec<(String, String, bool)> = {

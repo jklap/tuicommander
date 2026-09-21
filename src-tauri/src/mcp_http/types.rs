@@ -908,6 +908,12 @@ pub(super) struct TerminalSelectionQuery {
 #[derive(Deserialize)]
 pub(super) struct SessionVisibleRequest {
     pub visible: bool,
+    /// This client's stable id (`CLIENT_INSTANCE_ID`, suffixed per-window) —
+    /// see `AppState::set_session_visible`'s doc comment (B.8). Absent for an
+    /// older client, which degrades to the shared pre-B.8 behavior via
+    /// `LEGACY_VIEWER_ID`.
+    #[serde(default)]
+    pub viewer_id: Option<String>,
 }
 
 #[derive(Deserialize)]

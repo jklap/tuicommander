@@ -993,10 +993,12 @@ pub(super) async fn set_session_visible(
     Path(session_id): Path<String>,
     Json(body): Json<SessionVisibleRequest>,
 ) -> impl IntoResponse {
-    state
-        .session_maps
-        .session_visibility
-        .insert(session_id.clone(), body.visible);
+    let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
+    state.set_session_visible(
+        &session_id,
+        viewer_id.as_deref().unwrap_or(crate::state::LEGACY_VIEWER_ID),
+        body.visible,
+    );
     #[cfg(unix)]
     if body.visible
         && let Err(e) = crate::pty::wake_session(&state, &session_id)

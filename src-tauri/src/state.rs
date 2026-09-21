@@ -1874,6 +1874,21 @@ pub(crate) const LIFECYCLE_MSG_ID_PREFIX: &str = "tuic-auto-";
 /// Max message body size in bytes (64 KB).
 pub(crate) const AGENT_MESSAGE_MAX_BYTES: usize = 64 * 1024;
 
+/// How long a viewer's `session_visibility` assertion stays valid without a
+/// re-assert (B.8). Piggybacks on the existing 30s snapshot timer for
+/// re-assertion, so this is a generous multiple of that rather than tied to
+/// any one transport's own connection liveness — a viewer that goes away
+/// without explicitly asserting `visible: false` (a crashed tab, a dropped
+/// connection) delays standby by at most one TTL window past the standby
+/// sweeper's own 30s cadence, then behaves as if it were never visible.
+pub(crate) const SESSION_VISIBILITY_TTL_MS: u64 = 90_000;
+
+/// Fallback viewer id for a client that sends no `viewer_id` at all (an
+/// older build). Degrades that client to the pre-B.8 single-flag behavior —
+/// its own visibility claims all collapse onto one shared key — rather than
+/// "never visible", which would immediately SIGSTOP every session it opens.
+pub(crate) const LEGACY_VIEWER_ID: &str = "legacy";
+
 /// Max concurrent *monitoring* git subprocesses (see `monitoring_git_sem`).
 /// Tuned to keep background refresh responsive while preventing the FD/CPU
 /// storm that a repo-changed burst across many repos would otherwise cause.
@@ -2186,10 +2201,15 @@ pub struct SessionMaps {
     pub(crate) term_aliases: DashMap<String, String>,
     /// Per-prefix counter for alias numbering (e.g. "tc" → 2 means next is tc-3).
     pub(crate) term_alias_counters: DashMap<String, u32>,
-    /// Per-session tab visibility (session_id → visible). Updated by the
-    /// frontend on tab focus changes. Read by the watcher engine to evaluate
-    /// the Unseen trigger (fires only when the terminal tab is not visible).
-    pub(crate) session_visibility: DashMap<String, bool>,
+    /// Per-session tab visibility, per VIEWER (session_id → viewer_id → last
+    /// asserted ms) — B.8. Was a single `bool` shared by every client, so a
+    /// browser tab blurring a session the desktop was actively displaying
+    /// could flip it not-visible and SIGSTOP the desktop's own live view.
+    /// "Visible" now means visible to ANY connected viewer — see
+    /// `AppState::is_session_visible`. Updated by the frontend on tab
+    /// focus/blur; read by the standby sweeper and the watcher engine's
+    /// Unseen trigger (fires only when no viewer has the tab visible).
+    pub(crate) session_visibility: DashMap<String, HashMap<String, u64>>,
     /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
     #[cfg(unix)]
     pub(crate) standby_sessions: DashMap<String, u64>,
@@ -2704,6 +2724,67 @@ impl AppState {
             is_custom,
         });
         true
+    }
+
+    /// Record `viewer_id`'s current visibility claim for `session_id` (B.8).
+    /// `visible: true` (re-)asserts it with a fresh timestamp — the caller is
+    /// expected to re-assert periodically (piggybacking on the existing 30s
+    /// snapshot timer), since `is_session_visible` expires an assertion after
+    /// `SESSION_VISIBILITY_TTL_MS`. `visible: false` removes the entry
+    /// immediately rather than waiting out the TTL, so a deliberate blur
+    /// takes effect right away.
+    pub(crate) fn set_session_visible(&self, session_id: &str, viewer_id: &str, visible: bool) {
+        if visible {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            self.session_maps
+                .session_visibility
+                .entry(session_id.to_string())
+                .or_default()
+                .insert(viewer_id.to_string(), now_ms);
+        } else if let Some(mut viewers) = self.session_maps.session_visibility.get_mut(session_id) {
+            viewers.remove(viewer_id);
+        }
+    }
+
+    /// Whether ANY viewer currently has `session_id` visible (B.8) — the
+    /// standby sweeper and the watcher engine's Unseen trigger both read
+    /// this instead of the raw per-viewer map, so a browser tab blurring a
+    /// session the desktop is actively displaying can no longer SIGSTOP it:
+    /// the desktop's own still-fresh assertion keeps it visible regardless.
+    ///
+    /// A session with NO entry at all (no viewer has ever reported) defaults
+    /// to visible — matching the pre-B.8 behavior of the standby sweeper
+    /// (which only ever considered sessions present in the map) and the
+    /// watcher's own `unwrap_or(true)` default.
+    pub(crate) fn is_session_visible(&self, session_id: &str) -> bool {
+        let Some(viewers) = self.session_maps.session_visibility.get(session_id) else {
+            return true;
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        viewers
+            .values()
+            .any(|&last_asserted| now_ms.saturating_sub(last_asserted) <= SESSION_VISIBILITY_TTL_MS)
+    }
+
+    /// Every live session `is_session_visible` currently answers `false` for
+    /// — the standby sweeper's iteration set. Walking every live session
+    /// (not just ones with a visibility entry) is what lets a session with
+    /// no entry at all correctly default to "visible" per
+    /// `is_session_visible`'s own doc comment, while still being excluded
+    /// here.
+    pub(crate) fn sessions_not_visible(&self) -> Vec<String> {
+        self.session_maps
+            .sessions
+            .iter()
+            .map(|entry| entry.key().clone())
+            .filter(|session_id| !self.is_session_visible(session_id))
+            .collect()
     }
 
     /// Subscribe to lifecycle events for one PTY session. Subscription happens
@@ -6315,6 +6396,93 @@ mod worktree_event_payloads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── B.8: per-viewer session_visibility ──
+
+    #[test]
+    fn two_viewers_keep_a_session_visible_when_one_goes_false() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        state.set_session_visible("s1", "desktop", true);
+        state.set_session_visible("s1", "browser", true);
+
+        state.set_session_visible("s1", "browser", false);
+
+        assert!(
+            state.is_session_visible("s1"),
+            "the desktop viewer's own assertion must keep the session visible"
+        );
+        assert!(!state.sessions_not_visible().contains(&"s1".to_string()));
+    }
+
+    #[test]
+    fn an_expired_viewer_stops_pinning_visibility() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        let stale_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+            - SESSION_VISIBILITY_TTL_MS
+            - 1_000;
+        state
+            .session_maps
+            .session_visibility
+            .entry("s1".to_string())
+            .or_default()
+            .insert("desktop".to_string(), stale_ms);
+
+        assert!(
+            !state.is_session_visible("s1"),
+            "an assertion older than the TTL must not count as visible"
+        );
+        assert!(state.sessions_not_visible().contains(&"s1".to_string()));
+    }
+
+    #[test]
+    fn a_session_no_viewer_ever_focused_is_never_swept() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        // No session_visibility entry at all for "s1".
+
+        assert!(
+            state.is_session_visible("s1"),
+            "no entry defaults to visible, matching the pre-B.8 sweeper behavior"
+        );
+        assert!(!state.sessions_not_visible().contains(&"s1".to_string()));
+    }
+
+    #[test]
+    fn a_legacy_client_with_no_viewer_id_still_works() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+
+        state.set_session_visible("s1", LEGACY_VIEWER_ID, true);
+        assert!(state.is_session_visible("s1"));
+
+        state.set_session_visible("s1", LEGACY_VIEWER_ID, false);
+        assert!(!state.is_session_visible("s1"));
+    }
+
+    #[test]
+    fn set_session_visible_false_removes_the_entry_immediately_rather_than_waiting_out_the_ttl() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "s1");
+        state.set_session_visible("s1", "desktop", true);
+        assert!(state.is_session_visible("s1"));
+
+        state.set_session_visible("s1", "desktop", false);
+
+        assert!(!state.is_session_visible("s1"));
+        assert!(
+            !state
+                .session_maps
+                .session_visibility
+                .get("s1")
+                .is_some_and(|v| v.contains_key("desktop")),
+            "a deliberate blur must drop the viewer's entry, not just be shadowed by a fresher TTL check"
+        );
+    }
 
     fn make_msg(id: &str) -> AgentMessage {
         AgentMessage {
