@@ -7,6 +7,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
+import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import { verifyAndBuildResumeCommand } from "../../utils/agentSession";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { markPerf } from "../../utils/perfTrace";
@@ -222,7 +223,7 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			);
 			appLogger.debug(
 				"terminal",
-				`BranchSelect → ${workspaceId} valid=${validTerminals.length} saved=${branch?.savedTerminals?.length ?? 0}`,
+				`BranchSelect → ${workspaceId} valid=${validTerminals.length} saved=${branch ? savedTerminalsFor(branch).length : 0}`,
 			);
 			if (validTerminals.length === 0 && (branch?.terminals?.length ?? 0) > 0) {
 				appLogger.warn(
@@ -272,17 +273,24 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 						terminalsStore.setActive(validTerminals[0]);
 					}
 				}
-			} else if (branch?.savedTerminals && branch.savedTerminals.length > 0) {
+			} else if (branch && savedTerminalsFor(branch).length > 0) {
+				const saved = savedTerminalsFor(branch);
 				// Agent tabs restore with a resume banner (verified below). Shell
 				// tabs restore as a fresh live shell in their saved cwd when the
 				// setting is on; otherwise they're dropped — they have no session
 				// to resume and would just be empty shells duplicating the
 				// fallback spawn below.
 				const restorableTerminals = settingsStore.state.restoreShellTerminals
-					? branch.savedTerminals
-					: branch.savedTerminals.filter((t) => t.agentType != null);
-				// Clear savedTerminals (consume-once) regardless of filter result
-				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
+					? saved
+					: saved.filter((t) => t.agentType != null);
+				// Clear savedTerminals (consume-once) regardless of filter result.
+				// `saved` above is the UNION of every client's key
+				// (savedTerminalsFor) — this restore just consumed all of it, so
+				// every contributing key must be cleared, not just this client's
+				// own. Clearing only CLIENT_INSTANCE_ID's key would leave another
+				// client's still-populated key to be "restored" a second time
+				// (duplicate PTY spawn) the next time this workspace is selected.
+				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminalsByClient: {} });
 
 				if (restorableTerminals.length > 0) {
 					// Capture old terminal IDs from the pane layout (branch.terminals is cleared on hydration)

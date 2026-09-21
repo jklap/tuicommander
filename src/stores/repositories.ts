@@ -7,10 +7,13 @@ import { pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtil
 import { markPerf } from "../utils/perfTrace";
 import { type PromptTree, type RepoOwner, resolvePromptTreeIn, resolveRepoOwnerIn } from "../utils/repoOwnership";
 import { appLogger } from "./appLogger";
+import { CLIENT_INSTANCE_ID } from "./clientInstance";
 import { makeBranchKey } from "./tabManager";
 import {
 	migrateActiveWorkspaceId,
 	migrateRepoWorkspaces,
+	SAVED_TERMINALS_TTL_MS,
+	savedTerminalsFor,
 	type WorkspaceId,
 	type WorkspaceState,
 } from "./workspaceIdentity";
@@ -264,22 +267,45 @@ function normalizeLoadedRepo(repo: RepositoryState): void {
 	delete (repo as unknown as Record<string, unknown>).activeBranch;
 	for (const branch of Object.values(repo.workspaces)) {
 		branch.terminals = [];
+		// B.5 migration: a pre-`savedTerminalsByClient` record (or one echoed
+		// back by a client on an older build) carries the legacy flat
+		// `savedTerminals` array. Fold it into a `"legacy"` key rather than
+		// dropping it — repairIdentity's spread lets it survive onto the
+		// object even though it's no longer part of `WorkspaceState`'s type.
+		const legacy = (branch as unknown as { savedTerminals?: SavedTerminal[] }).savedTerminals;
+		if (legacy !== undefined) {
+			if (legacy.length > 0 && !branch.savedTerminalsByClient?.legacy) {
+				branch.savedTerminalsByClient = {
+					...branch.savedTerminalsByClient,
+					legacy: { savedAt: Date.now(), terminals: legacy },
+				};
+			}
+			delete (branch as unknown as { savedTerminals?: SavedTerminal[] }).savedTerminals;
+		}
+		// Drop any client's entry old enough that it almost certainly isn't
+		// coming back with the same terminal set — see SAVED_TERMINALS_TTL_MS.
+		if (branch.savedTerminalsByClient) {
+			const now = Date.now();
+			const fresh: typeof branch.savedTerminalsByClient = {};
+			for (const [clientId, entry] of Object.entries(branch.savedTerminalsByClient)) {
+				if (now - entry.savedAt <= SAVED_TERMINALS_TTL_MS) fresh[clientId] = entry;
+			}
+			branch.savedTerminalsByClient = fresh;
+		}
 		// Reset hadTerminals on startup: the flag only suppresses auto-spawn
 		// within a session (after user closes all terminals). Across restarts,
-		// auto-spawn should work unless savedTerminals will restore them.
-		branch.hadTerminals = !!branch.savedTerminals?.length;
-		if (branch.savedTerminals === undefined) {
-			branch.savedTerminals = [];
-		}
+		// auto-spawn should work unless savedTerminalsFor() will restore them.
+		const saved = savedTerminalsFor(branch);
+		branch.hadTerminals = saved.length > 0;
 		// A build that drops an agent leaves its name behind on disk — `fx`
 		// was first-class for five days before being reverted. `AGENT_DISPLAY`
 		// and `AGENTS` are exhaustive `Record<AgentType, …>` indexed without an
 		// existence check, so a stale name throws inside a render that no
 		// ErrorBoundary covers. Drop it once here rather than making every
 		// index site defend itself.
-		for (const saved of branch.savedTerminals) {
-			if (saved.agentType !== null && !AGENT_TYPES.includes(saved.agentType)) {
-				saved.agentType = null;
+		for (const s of saved) {
+			if (s.agentType !== null && !AGENT_TYPES.includes(s.agentType)) {
+				s.agentType = null;
 			}
 		}
 		if (branch.isMerged === undefined) {
@@ -368,6 +394,26 @@ function repositoryIntentView(record: RepositoryState | null): unknown {
 	return view;
 }
 
+/** Per-key merge of two `savedTerminalsByClient` maps (B.5) — newest
+ *  `savedAt` wins per client id, so a stale disk read racing this window's
+ *  own most recent save can never make that save vanish, and a genuinely
+ *  different client's key is simply unioned in rather than dropped. */
+function mergeSavedTerminalsByClient(
+	fresh: WorkspaceState["savedTerminalsByClient"],
+	live: WorkspaceState["savedTerminalsByClient"],
+): WorkspaceState["savedTerminalsByClient"] {
+	if (!fresh) return live;
+	if (!live) return fresh;
+	const merged: NonNullable<WorkspaceState["savedTerminalsByClient"]> = { ...fresh };
+	for (const [clientId, liveEntry] of Object.entries(live)) {
+		const freshEntry = merged[clientId];
+		if (!freshEntry || liveEntry.savedAt >= freshEntry.savedAt) {
+			merged[clientId] = liveEntry;
+		}
+	}
+	return merged;
+}
+
 /** Re-apply the fields this window owns onto a record read from disk.
  *  Tab placement, an in-flight CI heal and the derived stats exist only in this
  *  window's memory or its own refresh cycle, so a record another client wrote would
@@ -392,6 +438,17 @@ function withLiveBranchFields(fresh: RepositoryState, live: RepositoryState | un
 			lifecycleStatus: liveBranch.lifecycleStatus,
 			lastActiveTerminal: liveBranch.lastActiveTerminal,
 			lastCommitTs: liveBranch.lastCommitTs,
+			// Per-key merge (newest savedAt per client id wins), NOT a whole-map
+			// replace — `branch` (the freshly-adopted/loaded record) and
+			// `liveBranch` (this window's own in-memory state) can each hold a
+			// different, independently-written entry for the SAME client id
+			// when a stale disk read races this window's own most recent save.
+			// A whole-map replace previously meant this window's own unsaved
+			// write could vanish the moment a fresher record was adopted.
+			savedTerminalsByClient: mergeSavedTerminalsByClient(
+				branch.savedTerminalsByClient,
+				liveBranch.savedTerminalsByClient,
+			),
 			ciAutoHeal:
 				branch.ciAutoHeal && liveBranch.ciAutoHeal?.healing
 					? { ...branch.ciAutoHeal, healing: true }
@@ -1240,10 +1297,20 @@ function createRepositoriesStore() {
 					t.filter((id) => id !== terminalId),
 				);
 				// When last terminal is removed, clear stale savedTerminals so the periodic
-				// snapshot doesn't resurrect closed tabs on next branch click.
+				// snapshot doesn't resurrect closed tabs on next branch click. Only THIS
+				// client's own key — another client's saved set describes tabs it still
+				// has open, unaffected by what closed in this window.
 				const updated = state.repositories[repoPath]?.workspaces[workspaceId];
-				if (updated && updated.terminals.length === 0 && updated.savedTerminals && updated.savedTerminals.length > 0) {
-					setState("repositories", repoPath, "workspaces", workspaceId, "savedTerminals", []);
+				if (updated && updated.terminals.length === 0 && updated.savedTerminalsByClient?.[CLIENT_INSTANCE_ID]?.terminals.length) {
+					setState(
+						"repositories",
+						repoPath,
+						"workspaces",
+						workspaceId,
+						"savedTerminalsByClient",
+						CLIENT_INSTANCE_ID,
+						{ savedAt: Date.now(), terminals: [] },
+					);
 				}
 			});
 			save();
@@ -1282,7 +1349,7 @@ function createRepositoriesStore() {
 				appLogger.debug("terminal", `removeWorkspace "${workspaceId}" from ${repoPath}`, {
 					terminals: branch.terminals,
 					hadTerminals: branch.hadTerminals,
-					savedTerminals: branch.savedTerminals?.length ?? 0,
+					savedTerminals: savedTerminalsFor(branch).length,
 				});
 			}
 
@@ -1381,14 +1448,14 @@ function createRepositoriesStore() {
 					}
 					src.terminals = [];
 
-					// Transfer savedTerminals (only if target has none)
+					// Transfer savedTerminalsByClient (only if target has none)
 					if (
-						src.savedTerminals &&
-						src.savedTerminals.length > 0 &&
-						(!tgt.savedTerminals || tgt.savedTerminals.length === 0)
+						src.savedTerminalsByClient &&
+						Object.keys(src.savedTerminalsByClient).length > 0 &&
+						(!tgt.savedTerminalsByClient || Object.keys(tgt.savedTerminalsByClient).length === 0)
 					) {
-						tgt.savedTerminals = src.savedTerminals;
-						src.savedTerminals = [];
+						tgt.savedTerminalsByClient = src.savedTerminalsByClient;
+						src.savedTerminalsByClient = {};
 					}
 
 					// Carry over flags
@@ -1581,7 +1648,9 @@ function createRepositoriesStore() {
 			return repo.workspaces[repo.activeWorkspaceId]?.terminals || [];
 		},
 
-		/** Snapshot terminal metadata into each branch for persistence (called at quit time) */
+		/** Snapshot terminal metadata into each branch for persistence (called at
+		 *  quit time). Writes only THIS client's key (B.5) — two clients'
+		 *  snapshots merge instead of one clobbering the other on every save. */
 		snapshotTerminals(snapshots: Map<string, Map<string, SavedTerminal[]>>): void {
 			setState(
 				produce((s) => {
@@ -1591,7 +1660,10 @@ function createRepositoriesStore() {
 						for (const [branchName, terminals] of workspaces) {
 							const branch = repo.workspaces[branchName];
 							if (!branch) continue;
-							branch.savedTerminals = terminals;
+							branch.savedTerminalsByClient = {
+								...branch.savedTerminalsByClient,
+								[CLIENT_INSTANCE_ID]: { savedAt: Date.now(), terminals },
+							};
 						}
 					}
 				}),
@@ -1600,13 +1672,18 @@ function createRepositoriesStore() {
 			saveNow();
 		},
 
-		/** Clear savedTerminals from all workspaces (consume-once after restore) */
+		/** Clear savedTerminals from all workspaces (consume-once after restore).
+		 *  Only THIS client's own key — another client's saved set describes
+		 *  tabs it still needs to restore, unaffected by what this window just
+		 *  consumed. */
 		clearSavedTerminals(): void {
 			setState(
 				produce((s) => {
 					for (const repo of Object.values(s.repositories)) {
 						for (const branch of Object.values(repo.workspaces)) {
-							branch.savedTerminals = [];
+							if (branch.savedTerminalsByClient?.[CLIENT_INSTANCE_ID]) {
+								branch.savedTerminalsByClient[CLIENT_INSTANCE_ID] = { savedAt: Date.now(), terminals: [] };
+							}
 						}
 					}
 				}),

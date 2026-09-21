@@ -14,6 +14,11 @@ describe("repositoriesStore", () => {
 	let placementWorkspaceFor: typeof import("../../stores/repositories").placementWorkspaceFor;
 	let resolvePromptTree: typeof import("../../stores/repositories").resolvePromptTree;
 	let getDebugSnapshot: typeof import("../../stores/debugRegistry").getDebugSnapshot;
+	let savedTerminalsFor: typeof import("../../stores/workspaceIdentity").savedTerminalsFor;
+	// This session's own client id — used as the write key in fixtures so
+	// removeTerminalFromWorkspace's "clear only THIS client's key" (B.5)
+	// actually has something of this client's own to clear.
+	let TEST_CLIENT_ID: string;
 
 	function lastRepositoryMutation() {
 		const calls = mockInvoke.mock.calls.filter((call: unknown[]) => call[0] === "save_repositories");
@@ -48,6 +53,8 @@ describe("repositoriesStore", () => {
 		placementWorkspaceFor = mod.placementWorkspaceFor;
 		resolvePromptTree = mod.resolvePromptTree;
 		getDebugSnapshot = (await import("../../stores/debugRegistry")).getDebugSnapshot;
+		savedTerminalsFor = (await import("../../stores/workspaceIdentity")).savedTerminalsFor;
+		TEST_CLIENT_ID = (await import("../../stores/clientInstance")).CLIENT_INSTANCE_ID;
 		store._testSetHydrated(true);
 	});
 
@@ -361,21 +368,47 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setWorkspace("/repo", "main", {
-					savedTerminals: [
+					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [
 						{ name: "T1", cwd: "/repo", fontSize: 14, agentType: null },
 						{ name: "T2", cwd: "/repo", fontSize: 14, agentType: null },
-					],
+					] } },
 				});
 				store.addTerminalToWorkspace("/repo", "main", "term-1");
 				store.addTerminalToWorkspace("/repo", "main", "term-2");
 
 				// Remove first — savedTerminals should persist (still have one terminal)
 				store.removeTerminalFromWorkspace("/repo", "main", "term-1");
-				expect(store.get("/repo")!.workspaces["main"].savedTerminals).toHaveLength(2);
+				expect(savedTerminalsFor(store.get("/repo")!.workspaces["main"])).toHaveLength(2);
 
 				// Remove last — savedTerminals should be cleared
 				store.removeTerminalFromWorkspace("/repo", "main", "term-2");
-				expect(store.get("/repo")!.workspaces["main"].savedTerminals).toHaveLength(0);
+				expect(savedTerminalsFor(store.get("/repo")!.workspaces["main"])).toHaveLength(0);
+			});
+		});
+
+		it("removeTerminalFromWorkspace clears only THIS client's own saved-terminals key (B.5)", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "main", {
+					savedTerminalsByClient: {
+						[TEST_CLIENT_ID]: {
+							savedAt: Date.now(),
+							terminals: [{ name: "mine", cwd: "/repo", fontSize: 14, agentType: null }],
+						},
+						"another-client": {
+							savedAt: Date.now(),
+							terminals: [{ name: "theirs", cwd: "/repo", fontSize: 14, agentType: null }],
+						},
+					},
+				});
+				store.addTerminalToWorkspace("/repo", "main", "term-1");
+
+				store.removeTerminalFromWorkspace("/repo", "main", "term-1");
+
+				// This client's own key is cleared, but the OTHER client's key —
+				// describing tabs it still has open in its own window — survives.
+				const names = savedTerminalsFor(store.get("/repo")!.workspaces["main"]).map((t) => t.name);
+				expect(names).toEqual(["theirs"]);
 			});
 		});
 	});
@@ -495,14 +528,14 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setWorkspace("/repo", "old", {
-					savedTerminals: [{ name: "T", cwd: "/repo", fontSize: 14, agentType: null }],
+					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [{ name: "T", cwd: "/repo", fontSize: 14, agentType: null }] } },
 				});
 				store.setWorkspace("/repo", "new", {});
 
 				store.mergeWorkspaceState("/repo", "old", "new");
 
-				expect(store.get("/repo")!.workspaces["old"].savedTerminals).toEqual([]);
-				expect(store.get("/repo")!.workspaces["new"].savedTerminals?.length).toBe(1);
+				expect(savedTerminalsFor(store.get("/repo")!.workspaces["old"])).toEqual([]);
+				expect(savedTerminalsFor(store.get("/repo")!.workspaces["new"]).length).toBe(1);
 			});
 		});
 
@@ -510,16 +543,16 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "test" });
 				store.setWorkspace("/repo", "old", {
-					savedTerminals: [{ name: "Old", cwd: "/repo", fontSize: 14, agentType: null }],
+					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [{ name: "Old", cwd: "/repo", fontSize: 14, agentType: null }] } },
 				});
 				store.setWorkspace("/repo", "new", {
-					savedTerminals: [{ name: "Existing", cwd: "/repo", fontSize: 14, agentType: null }],
+					savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [{ name: "Existing", cwd: "/repo", fontSize: 14, agentType: null }] } },
 				});
 
 				store.mergeWorkspaceState("/repo", "old", "new");
 
 				// Target keeps its own savedTerminals
-				expect(store.get("/repo")!.workspaces["new"].savedTerminals?.[0]?.name).toBe("Existing");
+				expect(savedTerminalsFor(store.get("/repo")!.workspaces["new"])[0]?.name).toBe("Existing");
 			});
 		});
 
@@ -869,10 +902,10 @@ describe("repositoriesStore", () => {
 						displayName: "Repo",
 						workspaces: {
 							main: {
-								savedTerminals: [
+								savedTerminalsByClient: { [TEST_CLIENT_ID]: { savedAt: Date.now(), terminals: [
 									{ name: "t1", cwd: null, fontSize: 12, agentType: "fx" },
 									{ name: "t2", cwd: null, fontSize: 12, agentType: "claude" },
-								],
+								] } },
 							},
 						},
 					},
@@ -882,7 +915,8 @@ describe("repositoriesStore", () => {
 
 			await testInScopeAsync(async () => {
 				await store.hydrate();
-				const saved = store.get("/repo")?.workspaces.main?.savedTerminals ?? [];
+				const mainBranch = store.get("/repo")?.workspaces.main;
+				const saved = mainBranch ? savedTerminalsFor(mainBranch) : [];
 				expect(saved.map((t) => t.agentType)).toEqual([null, "claude"]);
 			});
 		});
@@ -1573,12 +1607,17 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "Repo" });
 				store.setWorkspace("/repo", "main", {
-					savedTerminals: [{ name: "T", cwd: "/repo", fontSize: 14, agentType: null }],
+					savedTerminalsByClient: {
+						[TEST_CLIENT_ID]: {
+							savedAt: Date.now(),
+							terminals: [{ name: "T", cwd: "/repo", fontSize: 14, agentType: null }],
+						},
+					},
 				});
 
 				store.clearSavedTerminals();
 
-				expect(store.get("/repo")!.workspaces["main"].savedTerminals).toEqual([]);
+				expect(savedTerminalsFor(store.get("/repo")!.workspaces["main"])).toEqual([]);
 			});
 		});
 	});

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { savedTerminalsFor } from "../../stores/workspaceIdentity";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 
 /**
@@ -373,7 +374,68 @@ describe("repositoriesStore remote sync", () => {
 			expect(adopted?.expanded).toBe(true);
 			expect(adopted?.parked).toBe(false);
 			expect(adopted?.workspaces["main"].isMerged).toBe(false);
-			expect(adopted?.workspaces["main"].savedTerminals?.[0]?.agentType).toBeNull();
+			expect(savedTerminalsFor(adopted!.workspaces["main"])[0]?.agentType).toBeNull();
+		});
+	});
+
+	/**
+	 * B.5: the restart-recovery snapshot used to be a single flat array every
+	 * open client overwrote wholesale on every save, so whichever client saved
+	 * last silently discarded every other client's terminal set. Verifies the
+	 * fix at the actual seam this bug lived in — adopting a fresher disk record
+	 * (`withLiveBranchFields`) must merge `savedTerminalsByClient` per-key, not
+	 * replace the whole map.
+	 */
+	it("merges savedTerminalsByClient per-key instead of one client's save clobbering another's", async () => {
+		setDisk({
+			repos: { "/repo": repoRecord("/repo", "Repo", { main: branchRecord("main") }) },
+			repoOrder: ["/repo"],
+		});
+
+		await testInScopeAsync(async () => {
+			await store.hydrate();
+
+			// This window saves its own terminal set for "main" FIRST, and the save
+			// is allowed to actually flush (advancing past SAVE_DEBOUNCE_MS) — this
+			// moves `persistedSnapshot` (this window's own baseline) to include
+			// "this-window"'s key, matching what a real client does before any
+			// remote update arrives. Adoption's own intent-guard
+			// (`repositoryIntentView`) would otherwise treat an UNSAVED local edit
+			// as "leave it to the save path" and skip merging entirely — this is
+			// deliberately not the race this test is about.
+			store.setWorkspace("/repo", "main", {
+				savedTerminalsByClient: {
+					"this-window": { savedAt: Date.now(), terminals: [{ name: "mine", cwd: "/repo", fontSize: 14, agentType: null }] },
+				},
+			});
+			await vi.advanceTimersByTimeAsync(500);
+
+			// Another client saved its OWN terminal set and the resulting disk
+			// write is what this window's broadcast handler re-reads. It carries
+			// no knowledge of "this-window"'s key at all — a real cross-client
+			// write never does.
+			setDisk({
+				repos: {
+					"/repo": repoRecord("/repo", "Repo", {
+						main: branchRecord("main", {
+							savedTerminalsByClient: {
+								"other-window": {
+									savedAt: Date.now(),
+									terminals: [{ name: "theirs", cwd: "/repo", fontSize: 14, agentType: null }],
+								},
+							},
+						}),
+					}),
+				},
+				repoOrder: ["/repo"],
+			});
+			await broadcast();
+
+			// Both clients' saves survive — neither clobbered the other.
+			const names = savedTerminalsFor(store.get("/repo")!.workspaces["main"])
+				.map((t) => t.name)
+				.sort();
+			expect(names).toEqual(["mine", "theirs"]);
 		});
 	});
 
