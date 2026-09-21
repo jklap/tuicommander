@@ -3010,10 +3010,10 @@ impl AppState {
     /// entirely, so only the broadcast arm ever sees it.
     pub(crate) fn emit_dual(&self, event: AppEvent) {
         #[cfg(feature = "desktop")]
-        if let Some(name) = crate::event_wire::window_event_name(&event) {
-            if let Some(app) = self.app_handle.read().as_ref() {
-                let _ = app.emit(name, crate::event_wire::event_payload(&event));
-            }
+        if let Some(name) = crate::event_wire::window_event_name(&event)
+            && let Some(app) = self.app_handle.read().as_ref()
+        {
+            let _ = app.emit(name, crate::event_wire::event_payload(&event));
         }
         if event.pty_session_id().is_some() {
             self.emit_pty_event(event); // per-session lane + per-session WS + bus

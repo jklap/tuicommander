@@ -153,6 +153,13 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .pty_accent_colors
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                #[cfg(unix)]
+                standby: state
+                    .session_maps
+                    .standby_sessions
+                    .contains_key(&session_id),
+                #[cfg(not(unix))]
+                standby: false,
                 state: None,
                 connection_id: None,
                 session_id,
