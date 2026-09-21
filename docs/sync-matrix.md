@@ -342,12 +342,12 @@ When modifying remote connection config, storage, or transport routing:
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport, RemoteConnectionStore, the password/token commands |
-| `src-tauri/src/remote_runtime.rs` | The live half: status, base URL, session token, the status poll and the SSH tunnel. Every status change is dual-emitted as `remote-connection-status` |
+| `src-tauri/src/remote_runtime.rs` | The live half: status, base URL, session token, the status poll and the SSH tunnel. Every status change is dual-emitted as `remote-connection-status`. **`teardown()` is the one way a connection goes down** — poll, mirror task, mirrored rows, tunnel and token, in that order, idempotent and safe on an id nothing knows. Disconnect and delete both call it, over IPC and over HTTP alike; a second stop path is how the tunnel came to outlive the delete that removed its profile |
 | `src-tauri/src/credentials.rs` | `Credential::RemoteConnection` — the password, keyed by the connection's UUID |
 | `src/stores/remoteConnections.ts` | Frontend remote connections store — a renderer of the backend status, plus the token it holds in memory for the transport |
 | `src/transportRuntime.ts` | `withRemoteToken` — the one place a credential is put on a URL; `resolveOwningConnection` — the one place a call's machine is decided |
 | `src/stores/repositories.ts` / `src/stores/terminals.ts` | the registered path→connection and session→connection lookups |
-| `src-tauri/src/remote_mirror.rs` | Mirrors a connected daemon's sessions and events onto the local bus |
+| `src-tauri/src/remote_mirror.rs` | Mirrors a connected daemon's sessions and events onto the local bus. The `/events` read carries an idle deadline (3× the daemon's 15 s keep-alive): a silent stream is a dead stream, and it re-seeds rather than waiting forever |
 | `src/transport.ts` | `owningConnectionFor` + connectionId-based routing in COMMAND_TABLE |
 | `src/invoke.ts` | the desktop IPC path's diversion to `rpc()` for a remotely-owned call |
 | `src/components/Terminal/canvasTerminalTransport.ts` | connectionId support for the remote WebSocket |

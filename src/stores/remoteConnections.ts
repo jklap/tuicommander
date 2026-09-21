@@ -222,16 +222,17 @@ function createRemoteConnectionsStore() {
 			}
 		},
 
-		/** Disconnect (if connected), delete from backend, and remove from state */
+		/** Delete from the backend and remove from state */
 		async removeConnection(id: string): Promise<void> {
 			const connState = state.connections[id];
 			if (!connState) return;
 
-			// Anything but "disconnected" may hold a tunnel, a poll or a bridge —
-			// an unauthenticated connection has a live SSH tunnel behind it too.
-			if (connState.status !== "disconnected") {
-				await actions.disconnect(id);
-			}
+			// No pre-delete disconnect. `delete_remote_connection` tears the
+			// connection down itself — poll, mirror, mirrored rows, tunnel and
+			// token — before it rewrites the store, so asking from here bought
+			// nothing and hid the fact that the HTTP route never did. Only this
+			// process's token cache is ours to clear.
+			remoteTokens.delete(id);
 
 			try {
 				await invoke("delete_remote_connection", { id });

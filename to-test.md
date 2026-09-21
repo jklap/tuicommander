@@ -2583,3 +2583,37 @@ idempotent, so the panel still calls it.
 
 - [ ] Start the app WITHOUT opening Settings. A down remote machine holding a
       repo must already show `Offline: <name>` in the status bar.
+
+## Deleting a remote machine must take its connection with it (#803-f875)
+
+Rust change — needs a `make dev` restart (or `make build`) to load; the running
+session will NOT have it.
+
+Deleting a connected machine used to leave the SSH tunnel, the status poll and
+the mirror task running against a machine that no longer existed in the config.
+There is now one teardown path (`remote_runtime::teardown`) and both the IPC and
+the HTTP delete route call it.
+
+- [ ] Connect an SSH-transport machine, confirm `ssh` is running
+      (`pgrep -fl ssh`), then delete the machine from Settings -> Remote
+      Machines. The `ssh` process must be gone within a second, and the app must
+      not show a status push for the deleted id afterwards.
+- [ ] Do the same over HTTP against the dev instance:
+      `curl -X DELETE http://127.0.0.1:9877/config/remote-connections/<id>` —
+      same result. Before this change the HTTP route stopped nothing.
+- [ ] Any sessions that machine had mirrored disappear from the session list on
+      delete, and no `session-state-changed` for them arrives after it.
+- [ ] Delete a machine that was never connected: no error, nothing logged as a
+      failure.
+
+## An errored remote machine recovers on its own (#803-f875)
+
+Same restart caveat — Rust.
+
+- [ ] Connect a machine, then stop `tuic-remote` on it. The badge goes to
+      `error` and its mirrored sessions retire from the list.
+- [ ] Start the daemon again and WAIT — do not press Connect. Within one poll
+      interval the badge must return to `connected` by itself and the machine's
+      sessions must reappear.
+- [ ] Wrong password: the badge reads `unauthenticated`, and for an SSH-transport
+      machine no `ssh` process is left behind (`pgrep -fl ssh`).

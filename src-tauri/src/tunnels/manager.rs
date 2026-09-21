@@ -159,6 +159,24 @@ impl TunnelManager {
         Ok(id)
     }
 
+    /// Start a tunnel that runs `ssh_binary` instead of the real `ssh`.
+    ///
+    /// For tests that need a tunnel to EXIST — so they can assert who stops it —
+    /// rather than to work. `start_with_binary` returns as soon as the
+    /// supervision loop is spawned, so a binary that cannot be executed puts a
+    /// real entry in the map without waiting on anything.
+    #[cfg(test)]
+    pub(crate) async fn start_with_binary_for_test(
+        &self,
+        profile: TunnelProfile,
+        ssh_binary: std::path::PathBuf,
+    ) -> Result<String, String> {
+        self.start_with(profile, move |profile, callback| async move {
+            TunnelSupervisor::start_with_binary(profile, ssh_binary, callback).await
+        })
+        .await
+    }
+
     /// Stop the tunnel with `id`, remove it from the map, and log a Stopped event.
     pub fn stop(&self, id: &str) -> Result<(), String> {
         let handle = self
@@ -290,11 +308,7 @@ mod tests {
         profile: TunnelProfile,
         ssh_path: PathBuf,
     ) -> Result<String, String> {
-        manager
-            .start_with(profile, move |profile, callback| async move {
-                TunnelSupervisor::start_with_binary(profile, ssh_path, callback).await
-            })
-            .await
+        manager.start_with_binary_for_test(profile, ssh_path).await
     }
 
     #[tokio::test]
