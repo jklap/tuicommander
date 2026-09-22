@@ -4,6 +4,11 @@
 
 Each terminal tab runs an independent PTY (pseudo-terminal) session with your shell. Up to 50 concurrent sessions.
 
+Accents sent separately from their base letters remain part of terminal text
+when you scroll, select, copy or search. Search matches the exact characters
+printed by the program: precomposed and decomposed spellings are not automatically
+normalized into each other.
+
 ### Creating Terminals
 
 - **Cmd+T** — New terminal for the active branch
@@ -44,6 +49,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - Explicit custom names persist through reconnects and are never replaced by agent output
 - Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase
 - Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
+- Captured intent and prompt are recovered when reconnecting to a live session, including an idle agent. **Prompt** retains the most recent submission with at least ten words; shorter follow-ups do not replace it.
 
 ### Tab Reordering
 
@@ -101,6 +107,14 @@ Hover a tab to see its shortcut badge: "Terminal N (Cmd+N)". Use `Cmd+1` through
 | `Cmd+End` | Scroll to bottom |
 | `Shift+PageUp` | Scroll one page up |
 | `Shift+PageDown` | Scroll one page down |
+
+### Selecting text during output
+
+Selections remain attached to the same retained text while new output arrives,
+including when the scrollback buffer reaches its limit. Once selected rows are
+evicted, the selection is cleared instead of moving onto their replacements.
+Resizing or switching between the primary and alternate screen also clears the
+selection because the row layout changes.
 
 ### Scrollback in fullscreen apps
 

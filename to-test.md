@@ -77,6 +77,29 @@ tab being closed.
 - [ ] Reload the browser tab while armed. The old conversation must disarm
       rather than follow the new socket.
 
+## ANSI edit-operation contract (2026-09-22) — **Rust, needs a `make dev` restart**
+
+Four handler fixes in the Alacritty fork: IL/DL reset the cursor column,
+IL/DL/ICH/DCH/ECH resolve a pending wrap, ED0 spares the cell behind one, and
+DCH blanks only the cells it removed. Replay evidence and 200 fork tests cover
+the parser; these items are the part a live terminal shows.
+
+- [ ] Run a full-screen TUI that edits lines in place (`htop`, `lazygit`, `vim`
+      with a long line at the right margin). No row may paint at the wrong
+      column after a redraw, and no character may disappear from the last column.
+- [ ] In a Claude/Codex tab, let an agent stream a tall frame that repaints.
+      Scrollback must not gain rows the agent did not print.
+- [ ] **[VISUAL]** Select and copy text ending at the right margin after such a
+      redraw. The copied text must keep its last character.
+
+## Recover captured terminal context (2026-09-22) — frontend
+
+- [x] Captured context reappears on the idle Grok tab after frontend reload.
+      _(verified: live DOM after automatic HMR, 2026-09-22: the same PTY session
+      shows `Intent: locking out hashtags` and its campaign prompt without
+      additional input; hook regressions cover delayed session attachment.
+      The existing nine-word follow-up retains the previous substantial prompt.)_
+
 ## Selection during output (2026-09-21) — **Rust, needs a `make dev` restart**
 
 - [x] Isolated browser verification passed: held and released multi-row

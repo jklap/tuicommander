@@ -35,6 +35,12 @@
 
 ## 1. Terminal Management
 
+Terminal text retains stored combining marks through rendering, scrolling,
+copy and exact-codepoint search, including marks arriving in a later output
+chunk. Search and link positions account for the difference between grid cells
+and Unicode string offsets. The existing bound of nine zero-width characters
+per cell and the configured history limit still apply.
+
 ### 1.1 PTY Sessions
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
 - Each tab runs an independent pseudo-terminal with the user's shell
@@ -87,6 +93,9 @@
 
 ### 1.5 Copy & Paste
 - Copy selection: `Cmd+C`
+- Selection follows retained text during output and history eviction; evicted
+  endpoints are cleared instead of selecting replacement rows. Copy requests
+  rebase against their displayed history snapshot under the backend grid lock.
 - Paste to terminal: `Cmd+V`
 - **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces from terminal rows
 - **Claude gutter normalization** — Multi-line terminal selections remove Claude's repeated non-breaking-space plus `▎` visual margin while preserving isolated block characters and the content's indentation
@@ -653,6 +662,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Custom scripts**: `$TUIC_SESSION` is available as a stable key for any tab-specific state
 
 ### 6.2 Agent Detection
+- Protocol completion survives terminal redraws and decorative idle animation; new input and recognized semantic working signals can reopen activity.
 - Auto-detection from terminal output patterns
 - Multi-agent status line detection via regex patterns anchored to line start: Claude Code (`*`/`✢`/`·` + task text + `...`/`…`), `[Running] Task` format, Aider (Knight Rider scanner `░█` + token reports), Codex CLI (`•`/`◦` bullet spinner with time suffix), Goose (`<message>... (Ctrl+C to interrupt)`), Copilot CLI (`∴`/`●`/`○` indicators), Gemini CLI (braille dots `⠋⠙⠹...`)
 - Movement-based activity: BUSY is normally latched/kept by text changing above the input area, user submission, and OSC lifecycle markers, which outrank silence. Ready prompts require a stable 1.5s observation before idle.
@@ -671,6 +681,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Auto-expire: rate limits are cleared automatically after `retry_after_ms` (or 120s default) without requiring agent output
 
 ### 6.4 Question Detection
+- An open Ink selection dialog restores a missing question badge with native hooks enabled, including after a later busy hook; repeated paints do not duplicate the notification.
 - Recognizes interactive prompts (yes/no, multiple choice, numbered options)
 - Tab dot turns orange (pulsing) when awaiting input; sidebar branch icon shows `?` in orange
 - Prompt overlay: keyboard navigation (↑/↓, Enter, number keys 1-9, Escape)
@@ -721,6 +732,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 ### 6.7 Intent Event Tracking
 - Agents declare work phases via `intent: text (Title)` tokens at the start of a row, colorized dim yellow in terminal output. The token is also read when it follows the ack sentence on one row, and when the agent's own wrapping split it across rows — that wrap used to drop the `(Title)`, which is the tab name
 - MCP instructions request an intent on its own line, at the start of every task and on each material phase change; the terminal Context bar shows it separately from the orchestrator assignment and user prompt
+- Session snapshots restore captured intent and the last substantial prompt after reconnect, even while the agent remains idle; live state updates use the same reconciliation path.
 - Intent titles may replace spawn-assigned tab labels; only an explicit user rename locks the tab title, including after reconnect
 - Colorization is agent-gated (only applied in sessions with a detected agent) to prevent false positives
 - Structural tokens stripped from log lines served to PWA/REST consumers via `LogLine::strip_structural_tokens()`
@@ -1080,7 +1092,7 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 ### 9.4 Streaming Transcription
 - Real-time partial results during push-to-talk via adaptive sliding windows
 - First partial within ~1.5s, subsequent windows grow to 3s for quality
-- VAD energy gate skips silence windows (prevents hallucination)
+- Streaming skips only all-zero audio windows; the shared RMS and speech-confidence gates reject quiet/no-speech audio. A trailing pause does not discard the preceding speech.
 - Floating toast shows partial text above status bar during recording, with a live microphone meter beside the partial text. The level is an RMS reading curved as `sqrt(rms * 20)` and clamped to 0–1 so ordinary speech is visible rather than pinned near zero, published through an atomic so the UI never blocks audio capture
 - 200ms audio window overlap (`keep_ms`) carries context across windows for continuity
 - Final transcription pass on full captured audio at key release
@@ -1285,7 +1297,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
 
 ### 11.2 Appearance
-- Terminal theme: multiple themes, color swatches. Bundled themes include **Deep Black** (near-true-black background with GitHub-style ANSI accents) and **Minimal Kiwi** (dark green-tinted background with muted warm accents)
+- Terminal theme: multiple themes, color swatches. Bundled themes include **Deep Black** (near-true-black background with GitHub-style ANSI accents), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Clean** (Orca-style neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette; the only theme that also switches the UI to `antialiased` font smoothing with 0.01em tracking, keyed on `html[data-theme]`)
 - Terminal font: 11 bundled monospace fonts (JetBrains Mono default)
 - Default font size: 8-32px slider
 - Split tab mode: separate / unified

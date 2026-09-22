@@ -74,6 +74,19 @@ TUICommander auto-detects **11 AI coding agents** (Claude Code, Codex CLI, Aider
 
 No other tool knows that your agent is stuck.
 
+### Progress — what happened while you were away
+
+Every project gets an append-only journal. Agents write two kinds of entry — `done` when the work they announced is finished, `blocked` when they cannot continue without you — and TUICommander writes a third, `intent`, read off the agent's own `intent:` marker, so an agent that never calls the tool still leaves a trail of what it set out to do.
+
+- **MCP `progress` tool** — `type`, `text`, and an optional free-text `step`. One call appends the entry and raises the toast.
+- **Toolbar bell** with the number of entries that arrived since your last visit; the dialog freezes the last-visit divider so it never moves under the line you are reading.
+- **Blocked entries in red**, a blocked-only filter, per-entry deletion. No pause, no clear, no correction — you read it and delete what you do not want to keep.
+- **Nothing is written inside your repositories** — one SQLite database in TUICommander's configuration directory, with the project as a column. No `.tuic` directory, nothing for Git to ignore, no file-watcher event.
+- A worktree files under its parent project, so a repository and its worktrees show one history.
+- One global switch plus a per-agent override; off globally removes the tool from every agent's tool list.
+
+[Project Progress →](docs/user-guide/project-progress.md)
+
 ### Git worktrees, fully managed
 
 Click a branch in the sidebar. TUICommander auto-creates a git worktree — a fully isolated copy of the repo. The terminal opens *inside* it. Switch to another branch: your previous terminals are preserved. Switch back: they're exactly as you left them.
@@ -125,6 +138,15 @@ A **mobile companion PWA** lets you monitor agents from your phone, answer quest
 - Tailscale auto-HTTPS or E2E-encrypted cloud relay — no VPN or port forwarding
 - Live WebSocket output, suggest follow-up chips, slash menu
 
+**`tuic-remote` headless daemon** *(beta)* — Run the backend where the code is: a Linux build host, a server, any machine with no desktop environment. Pure Rust binary, no Tauri and no GUI, serving the same HTTP/WebSocket API as the desktop app. Point a desktop TUICommander at it and its repositories, terminals and agents behave like local ones.
+
+- Published for Linux x64/ARM64, macOS ARM and Windows x64 — together with `tuic-bridge`, which gives the agents running on that machine the full `tuicommander` MCP tool surface
+- Every TCP request is authenticated: the headless build has no loopback bypass, so an SSH tunnel does not make the daemon local. `GET /health` is the only unauthenticated route
+- `--instance <id>` for a fully isolated configuration directory and keyring vault
+- Default port 9877 (`TUIC_PORT` to override), optional manual TLS
+
+[Remote Access →](docs/user-guide/remote-access.md) &bull; [`tuic-remote` setup →](docs/user-guide/remote-access.md#tuic-remote-beta)
+
 ### Agents that coordinate
 
 **Agent Teams** — Claude Code's sub-agents run as native TUICommander tabs instead of tmux panes. Full session awareness, output parsing, and question detection for each sub-agent.
@@ -165,7 +187,7 @@ TUICommander isn't a black box. Everything you click, you can also drive from a 
 
 - **`tuic` CLI companion** — Open files with cursor goto (`tuic src/main.rs:42:8`), manage sessions (`ls` / `new` / `kill` / `send`), orchestrate agents (`spawn` / `ls` / `send`), plus a tmux-compatibility alias mode. Installs from Settings, auto-updates on launch.
 - **HTTP API** — REST + WebSocket + SSE on a local port: list/create/close sessions, stream live output, spawn agents, read terminal grids and scrollback, query process CPU/RSS. Script TUIC from anything that can hit a socket.
-- **MCP control surface** — TUIC is itself an MCP server. Connected agents get `session`, `agent`, `repo`, and `ui` tools — including `drive_agent` (atomic send → wait-for-idle → read) and delta cursors that return only new output. *(Distinct from the MCP Proxy Hub above, which aggregates your upstream servers.)*
+- **MCP control surface** — TUIC is itself an MCP server. Connected agents get `session`, `agent`, `repo`, `ui`, and `progress` tools — including `drive_agent` (atomic send → wait-for-idle → read) and delta cursors that return only new output. *(Distinct from the MCP Proxy Hub above, which aggregates your upstream servers.)*
 - **Custom "Open in…" launchers** — Define your own editor/tool commands with placeholder tokens: `{file}`, `{repo}`, `{fileDir}`, `{cwd}`, `{home}`, `{line}`, `{column}`. iTerm2, Tower, and the full JetBrains family ship built in.
 
 [CLI guide →](docs/user-guide/cli.md) &bull; [HTTP API →](docs/api/http-api.md) &bull; [MCP server →](docs/backend/mcp-http.md)
@@ -238,6 +260,7 @@ TUICommander isn't a black box. Everything you click, you can also drive from a 
 - Ideas panel (`Cmd+Alt+N`): quick notes with image paste and send-to-terminal
 - Voice dictation: streaming on-device Whisper with partial results
 - Focus mode (`Cmd+Alt+Enter`): maximize active tab, hide sidebar and panels
+- Project Progress: append-only per-project journal of agent `done` / `blocked` reports plus captured `intent:` markers, with a toolbar bell for unseen entries
 </details>
 
 <details>
@@ -245,7 +268,8 @@ TUICommander isn't a black box. Everything you click, you can also drive from a 
 
 - `tuic` CLI: file open with cursor goto, session/agent orchestration, tmux-compat alias mode, auto-update
 - HTTP API (REST + WebSocket + SSE): sessions, live output stream, agent spawn, terminal grid/scrollback ops, process stats
-- MCP control surface: `session` / `agent` / `repo` / `ui` tools, `drive_agent` atomic send→wait→read, delta cursors for incremental reads
+- MCP control surface: `session` / `agent` / `repo` / `ui` / `progress` tools, `drive_agent` atomic send→wait→read, delta cursors for incremental reads
+- `tuic-remote` headless daemon (beta): same HTTP/WebSocket API with no Tauri and no GUI, `tuic-bridge` for the agents on that machine, isolated `--instance` config + keyring, authenticated on every TCP request
 - Custom launchers: user-defined exec + args with `{file}`/`{repo}`/`{fileDir}`/`{cwd}`/`{home}`/`{line}`/`{column}` placeholder tokens
 - Command blocks: terminal output segmented per prompt+output cycle — semantic scrollbar marks, fold (`Cmd+Shift+.`), block search (`Cmd+Shift+B`), navigate (`Cmd+Shift+Up/Down`)
 - Generators (command palette): Password, UUID v4/v7, ULID, CUID2, JWT secret, TOTP secret, Nano ID, Slug, Ed25519 keypair — generated natively in Rust
@@ -303,6 +327,8 @@ Rust + [Tauri v2](https://tauri.app) backend, [SolidJS](https://solidjs.com) UI,
 | [Getting Started](docs/user-guide/getting-started.md) | First-run guide |
 | [Features](docs/FEATURES.md) | Complete feature reference with all keyboard shortcuts |
 | [AI Agents](docs/user-guide/ai-agents.md) | Agent detection, rate limits, question detection |
+| [Project Progress](docs/user-guide/project-progress.md) | The per-project journal agents report into |
+| [Remote Access](docs/user-guide/remote-access.md) | Mobile PWA, SSH tunnels, remote connections, `tuic-remote` daemon |
 | [Plugins](https://github.com/sstraus/tuicommander-plugins) | Community plugin registry: browse and install ready-made plugins |
 | [Plugin API](docs/plugins.md) | Build plugins for TUICommander |
 | [HTTP API](docs/api/http-api.md) | REST/WebSocket/SSE endpoints |

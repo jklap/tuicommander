@@ -262,6 +262,7 @@
           </p>
           <ul class="feature-points">
             <li>Automatic worktree creation on branch click, per-branch isolation</li>
+            <li>Warm worktrees — <code>node_modules</code>, <code>target</code>, <code>.venv</code> and every other ignored build directory arrive copy-on-write, so the first build is incremental and the disk cost is near zero (30&nbsp;GB in ~38&nbsp;s here)</li>
             <li>Worktree Manager panel — PR status, dirty file counts, last commit at a glance</li>
             <li>Post-merge cleanup dialog — delete branch, archive worktree in one click</li>
             <li>Terminal auto-follows your <code>cd</code> — switch into a worktree and the tab reassigns</li>
@@ -326,6 +327,47 @@
 
   <span class="fn">52-Week Heatmap</span>
   <span class="var">░░▓▓██▓▓░░▓▓████▓▓░░</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================
+       FEATURE: PROJECT PROGRESS
+       ============================================ -->
+  <section class="feature" data-sal="slide-up">
+    <div class="container">
+      <div class="feature-inner">
+        <div class="feature-content">
+          <svg class="feature-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="9" y1="7" x2="16" y2="7"/><line x1="9" y1="11" x2="16" y2="11"/></svg>
+          <h3>Progress — what happened while you were away</h3>
+          <div class="feature-problem">
+            "I stepped away for two hours. What did the agents actually do?"
+          </div>
+          <p class="feature-solution">
+            Every project gets an append-only journal. Agents write <code>done</code> when the work they announced is finished and <code>blocked</code> when they cannot continue without you &mdash; and TUICommander records the <code>intent:</code> each agent announced, so even an agent that never reports leaves a trail.
+          </p>
+          <ul class="feature-points">
+            <li>One compact MCP <code>progress</code> tool &mdash; kind, one sentence, an optional step label</li>
+            <li>Toolbar bell counts the entries that arrived since your last visit</li>
+            <li>Blocked entries in red, blocked-only filter, per-entry deletion &mdash; no pause, no clear, no correction</li>
+            <li>Stored in TUICommander's own database: nothing is written inside your repositories</li>
+            <li>A worktree files under its parent repository, so one project shows one history</li>
+            <li>One global switch plus a per-agent override turn collection off</li>
+          </ul>
+        </div>
+        <div class="feature-visual">
+          <div class="code-block">
+<span class="cmt">  PROGRESS — tuicommander</span>
+
+  <span class="str">done</span>     Route parity gate is green    <span class="var">Release prep</span>
+  <span class="kw">blocked</span>  Needs the signing password    <span class="var">Notarization</span>
+  <span class="cmt">intent   auditing the docs coverage</span>
+<span class="cmt">  ──────────────── last visit ────────────────</span>
+  <span class="str">done</span>     WebSocket compression ack     <span class="var">Remote</span>
+  <span class="str">done</span>     Dropped request no longer      <span class="var">AI Chat</span>
+           leaks a live ego
           </div>
         </div>
       </div>
@@ -477,6 +519,15 @@
             <li>Cloud relay — AES-256-GCM encrypted, zero-knowledge server</li>
             <li>Answer agent questions with one tap, track rate limits live</li>
           </ul>
+          <div class="feature-highlight">
+            <strong><code>tuic-remote</code> headless daemon</strong> (beta) &mdash; run the backend where the code is: a Linux build host, a server, any machine with no desktop environment. Pure Rust binary, no Tauri and no GUI, serving the same HTTP/WebSocket API. Point a desktop TUICommander at it and its repositories, terminals and agents behave like local ones.
+          </div>
+          <ul class="feature-points">
+            <li>Linux x64/ARM64, macOS ARM and Windows x64 &mdash; shipped with <code>tuic-bridge</code>, which gives the agents on that machine the full <code>tuicommander</code> MCP tool surface</li>
+            <li>Every TCP request is authenticated: no loopback bypass, so an SSH tunnel does not make the daemon local</li>
+            <li><code>--instance &lt;id&gt;</code> for an isolated configuration directory and keyring vault</li>
+            <li>Default port 9877, optional manual TLS, graceful SIGINT/SIGTERM shutdown</li>
+          </ul>
         </div>
         <div class="feature-visual">
           <div class="code-block">
@@ -487,6 +538,12 @@
   <span class="fn">refactor/api</span>    <span class="kw">Rate limited</span> (2:41)
 
   <span class="cmt">Connected via Tailscale (HTTPS)</span>
+
+<span class="cmt">  HEADLESS DAEMON (build host)</span>
+
+  $ <span class="fn">./tuic-remote</span> <span class="var">--instance build-host</span>
+  <span class="str">listening on 0.0.0.0:9877</span>
+  <span class="cmt">MCP bridge ready · every request authenticated</span>
           </div>
         </div>
       </div>

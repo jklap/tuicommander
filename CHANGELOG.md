@@ -15,7 +15,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Voice progress reaches browser and remote clients** — Model and speech-asset download progress, and every state a spoken reply passes through, are pushed on the `/events` stream as well as to the desktop window. A browser tab no longer watches a download start and finish with nothing in between, and no longer polls to learn that a reply ended.
 - **Hands-free conversation from a browser tab** — A browser or PWA client uses its own microphone and speaker: Settings > Dictation now opens outside the desktop app, and starting a conversation there is heard and answered where you are. The two sides never mix — arming from a laptop cannot open the microphone on the machine running TUICommander, and the desktop cannot take audio from a browser — and a client that has no audio connection is refused rather than quietly served the server's hardware. Closing the tab ends the conversation it held, leaving nothing queued and nothing speaking. The global dictation hotkey and the microphone-device list stay desktop-only.
 
+### Removed
+
+- Retired the external Voice plugin that read terminal text through Web Speech synthesis. Native Kokoro voice conversation is planned separately in Dictation.
+
 ### Fixed
+
+- Restore captured agent intent and the last substantial prompt from backend
+  session snapshots, including reconnects and state updates. An idle Grok tab
+  no longer needs another parsed output event to recover its Context bar.
+
+- Keep a new terminal drag selection visible while output arrives after an
+  earlier selection was copied. The previous copied text no longer invalidates
+  the range currently being dragged.
+
+- Keep terminal selections attached to retained text when output rotates a full
+  scrollback buffer. Copying uses the displayed history snapshot so further
+  output cannot silently substitute a different row.
+
+- Use the newest visibility observation after terminal resize. A queued hidden
+  observation followed by a visible one must not leave the canvas ignoring live
+  frames while its backend rows remain intact.
+
+- Preserve terminal combining marks through text extraction, live and scrollback
+  grid frames, canvas painting, copy and search. Marks arriving after their base
+  letter now trigger a repaint; Unicode string offsets no longer displace links
+  or buffer-search highlights.
+
+- Dictation no longer drops a live transcription window merely because its final second is quiet. Whole-window speech gates remain active.
 
 - **A repainting agent no longer grows the scrollback it never printed.** `CSI M` (delete
   lines) and `CSI S` (scroll up) pushed the rows they removed into history, so a TUI that

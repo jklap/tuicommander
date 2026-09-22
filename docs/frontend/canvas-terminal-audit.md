@@ -1,9 +1,9 @@
 # CanvasTerminal Feature Audit
 
-**Last updated:** 2026-08-17
+**Last updated:** 2026-09-21
 **Branch:** refactor/solid-architecture
 
-CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel.
+CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel (desktop) or WebSocket (browser/PWA).
 
 ## Architecture
 
@@ -49,12 +49,72 @@ Each frame: 26-byte header + variable row data. The header ends with a `historyB
 
 Primary and alternate grids can reuse identical numeric row coordinates while representing unrelated content. A bit-5 transition therefore starts a new renderer generation: smooth-scroll animation, delayed row fetches, selection, search, link verification, reconciliation, and absolute-row caches are invalidated as one transaction. Partial transition frames wait for a full replacement instead of merging into the previous grid.
 
+### Cell text extension (`TCX1`)
+
+Live frames (including full resynchronization) and styled-row payloads retain
+their existing headers, row records and 11-byte cell core. When at least one
+transmitted cell has zero-width scalars, an optional trailer follows **all** row
+records. Every integer is little-endian:
+
+| Field | Type | Meaning |
+|---|---|---|
+| Magic | 4 bytes | ASCII `TCX1` |
+| Entry count | `u32` | Number of sparse cell extensions |
+| Row ordinal | `u16` | Zero-based ordinal in this payload's row records |
+| Column | `u16` | Absolute grid column, including for a partial row |
+| Scalar count | `u8` | 1–9 retained zero-width scalars |
+| Scalars | `u32[count]` | Unicode scalar values in stored order |
+
+The last four fields repeat per entry. No trailer means no extensions. New
+clients accept legacy payloads; legacy clients stop after the declared rows and
+ignore the trailer. The same serializer serves IPC and WebSocket delivery.
+Entries must name distinct cells inside their transmitted row spans and contain
+valid Unicode scalars (no surrogates or values above U+10FFFF). Truncated records,
+empty trailers, invalid bounds/counts, duplicate entries and trailing bytes are
+rejected and trigger full-frame recovery.
+
+Decoded rows retain sparse cell strings and cached UTF-16 cell boundaries.
+Partial updates clear prior extensions inside the transmitted span before
+installing new ones, so overwriting an accented cell cannot leave a stale mark.
+Complete cell strings feed painting, block-cursor repaint, selection/copy and
+link offsets. For offsets returned with backend row/logical text, the renderer
+omits wire-zero wide spacers, validates the reconstructed text against the
+backend string and declines a mapping on mismatch. Native blank cells contain
+a space; PTY NUL controls do not become printed cells. Marked box/block glyphs use font shaping rather than geometric
+painting, preserving their marks and variation selectors. Terminal search
+geometry remains in grid cells; buffer-search string ranges use UTF-16 offsets. Ranges cover whole
+matching cells: a regex matching only a combining mark still reports its base
+cell's full text span, since native search points have no subcell index.
+
 ## Performance Notes
+
+- **Selection row identity:** Endpoints use `historyBase + historySize -
+  displayOffset + viewportRow`, the same eviction-stable identity as the styled
+  row cache. Search and command-block coordinates keep their separate
+  grid-relative contract. Copy converts endpoints back to grid-relative rows
+  and includes the displayed `historyBase`; Rust rebases them under the grid
+  lock, rejecting evicted endpoints. Reflow and primary/alternate transitions
+  invalidate selection.
+- **Selection revalidation:** Every new gesture discards the previous copied
+  text snapshot. Full-frame content comparison applies only to released,
+  fully visible selections; a range still being dragged is expected to change.
+- **Coherent frame replacement:** A changed viewport origin cannot borrow
+  untouched columns from the previous viewport. A screenful of partial spans
+  is still a delta, not an authoritative replacement. While requesting a full
+  replacement, text and selection painting retain the same accepted viewport
+  instead of clearing the row map and exposing missing rows to mouse-driven
+  repaints. History growth that leaves the stable viewport origin unchanged
+  does not itself invalidate that row map.
 
 - **RAF coalescing:** All paint triggers (frame arrival, keydown selection clear, mousedown) go through `scheduleRepaint()` which schedules a single `requestAnimationFrame`. No synchronous paint calls — prevents double-paint in a single event loop turn.
 - **`send_grid_frame` clone guard:** Frame is only cloned for the `grid_watch` channel when `receiver_count() > 0` (i.e. WS clients connected). Desktop-only path (Tauri Channel) is zero-copy.
 - **Raw bytes over the IPC:** the channel carries `tauri::ipc::Response`, not `Vec<u8>`. A bare `Vec<u8>` matches Tauri's blanket `IpcResponse` impl and is serialised as a JSON array of decimal numbers — a 110 KB frame becomes a ~250 KB string plus an extra IPC round trip, and JS receives a `number[]` to walk instead of an `ArrayBuffer`. Same for `terminal_styled_rows`. `toBinaryPayload` still accepts `number[]`, because Tauri's postMessage fallback (custom-protocol IPC blocked) delivers that shape.
 - **Frame acks are counters, not a flag:** the frontend echoes its total receipt count, so an ack for a frame the ticker already abandoned is a number in the past and cannot release a burst. See `grid_gate.rs`.
+- **Visibility batches:** `IntersectionObserver` can deliver multiple states for
+  a terminal in one callback after resize/layout changes. `latestIntersectionVisibility`
+  selects the greatest `entry.time` (last entry wins ties), so a transient hidden
+  sample cannot suppress later frames while the canvas is visible. Existing
+  hidden-tab ACK throttling and the full-frame request on show remain unchanged.
 - **Hidden terminals:** a background tab is `display:none` and never unmounted, so its producer keeps running. It decodes each frame (the bell rides in the header) and skips paint, links and cache fill, then acks on a 400 ms trailing timer — enough to keep the gate moving at ~2 frames/s without making the backend log a stuck frontend. Reconciliation (`shouldFireReconcile`) is off for it entirely: each fire would build and drop a full frame.
 - **Row cache bounds:** `cacheRows()` evicts FIFO at `ROW_CACHE_MAX`, so the *fill* path is bounded too — trimming on scroll alone left an unbounded map for a session that only ever fetched forward.
 - **`screen_text_rows_ref()`:** `TerminalGrid` exposes a borrowed `&[String]` view of cached screen rows. Used in `process_chunk` for chrome cutoff detection to avoid cloning 50 Strings per PTY chunk. Downstream parsers (slash-menu, choice-prompt) share a single owned snapshot computed once per chunk.

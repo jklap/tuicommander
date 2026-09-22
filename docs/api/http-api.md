@@ -333,7 +333,7 @@ GET  /sessions/:id/input-buffer                        -> { "content": string }
 GET  /sessions/:id/leaf-pid                            -> { "pid": number|null }
 GET  /sessions/:id/has-foreground                      -> { "process": string|null }
 POST /sessions/:id/visible              { "visible": bool }   -> { "ok": true }
-GET  /sessions/:id/terminal/selection-text?startRow=&startCol=&endRow=&endCol=  -> { "text": string }
+GET  /sessions/:id/terminal/selection-text?startRow=&startCol=&endRow=&endCol=&historyBase=  -> { "text": string }
 GET  /sessions/:id/terminal/logical-line?row=N         -> [logicalStartRow, text]
 GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url] | null
 GET  /sessions/:id/terminal/styled-rows?start=N&count=N -> application/octet-stream (packed rows)
@@ -391,9 +391,16 @@ command's bare return (e.g. `Option<String>` → `null`). The desktop-only comma
 themselves are absent from the remote binary, so these handlers read `AppState`
 directly.
 
-`terminal/selection-text` reads absolute scrollback coordinates, rejoins
+`terminal/selection-text` reads grid-relative scrollback coordinates (row zero
+is the oldest retained row), rejoins
 soft-wrapped rows, trims terminal padding, and removes only coherent multi-line
 Claude `NBSP NBSP ▎` visual gutter runs. Desktop IPC returns the same string.
+The optional `historyBase` is the evicted-row count from the frame used to
+select the text. When supplied, the backend rebases both row coordinates against
+the current history while holding the grid lock; an evicted selection is
+rejected with HTTP `409` and `{"error":"selection rows are no longer retained"}`
+instead of reading replacement rows. Omitting it retains the original
+current-grid coordinate semantics.
 
 ### Pause/Resume
 
@@ -461,6 +468,20 @@ When `?format=log` is specified, the connection streams VT100-extracted log line
 - On connect: sends all accumulated lines as a single catch-up frame
 - While running: polls every 200ms and sends new lines batched by offset
 - PTY input passthrough is still available (write text/binary frames to send to PTY)
+
+#### Grid cell text and search offsets
+
+Packed styled rows and grid frames may end in a sparse
+[`TCX1` cell-text trailer](../frontend/canvas-terminal-audit.md#cell-text-extension-tcx1).
+It carries retained zero-width scalars without changing the 11-byte cell core.
+Absent trailers remain valid. Binary consumers must retain these extensions to
+reconstruct complete cell text, and clear previous extensions in replaced spans.
+Text row and selection endpoints return the same stored codepoint sequence.
+Buffer-search string ranges use UTF-16 offsets for JavaScript slicing; terminal
+search highlight coordinates remain grid-cell based. Matching is exact, without
+NFC normalization. Ranges cover whole
+matching cells: a regex matching only a combining mark still reports its base
+cell's full text span, since native search points have no subcell index.
 
 #### WebSocket format=grid
 
@@ -610,6 +631,9 @@ the server is back to the filter the connection was opened with.
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
 | `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
+| `dictation-download-progress` | `{downloaded, total, percent}` | A Whisper model is downloading. Dual-emitted on the Tauri window with the identical body |
+| `speech-download-progress` | `{asset, downloaded, total, percent}` | A speech asset is downloading. `asset` is the only difference from the line above, and it is what a client joins the bar against |
+| `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 | *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
 
@@ -661,9 +685,6 @@ GET /repo/diff-stats?path=/path/to/repo
 ```
 
 Returns `{ "additions": N, "deletions": N }`.
-| `dictation-download-progress` | `{downloaded, total, percent}` | A Whisper model is downloading. Dual-emitted on the Tauri window with the identical body |
-| `speech-download-progress` | `{asset, downloaded, total, percent}` | A speech asset is downloading. `asset` is the only difference from the line above, and it is what a client joins the bar against |
-| `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 
 ### Changed Files
 
