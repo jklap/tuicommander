@@ -3105,6 +3105,51 @@ model must never answer in a language the user is not speaking.
       `language`, and the tool schema must offer no way to pass a language or a
       voice.
 
+## Subagent execution map over HTTP (story `830-43a5`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+The swimlane page itself lands in story `831-0ef9`; these items check the
+transport and the data behind it. Run them against the worktree build on
+`:9877`, never against Boss's live instance.
+
+- [ ] `curl localhost:9877/agents/map` must answer HTML with the placeholder
+      heading, not a 404.
+- [ ] `curl 'localhost:9877/agents/map/data'` with no `?session=` must answer
+      `selected: null` and a `sessions` array — an error here means the
+      resolution chain threw instead of returning `None`.
+- [ ] In a throwaway Claude tab in that build, spawn two subagents (one `Agent`
+      call and one teammate). `sessions` must then list that tab, and
+      `?session=<its id>` must return `lanes[0].agent_id == "main"` plus one
+      lane per subagent, each with markers.
+- [ ] While a subagent is still working, poll twice ~2s apart: `events` for its
+      lane must GROW. If the count is frozen, the byte cursor is not advancing.
+- [ ] A **shell** tab (no agent) must never appear in `sessions`, and passing
+      its id as `?session=` must answer `selected: null`.
+- [ ] Grep the whole payload for a prompt or a tool result. There must be none:
+      labels are tool names and short state words only.
+
+## Subagent swimlane page (story `831-0ef9`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+The layout was verified by measuring the rendered DOM against a mock payload
+(10 lane cards, no overlap, 142px columns, horizontal scroll past 8 lanes,
+9 spawn arrows, no emoji, every marker icon `fill="currentColor"`). It was NOT
+verified by screenshot: `agent-browser`'s `Page.captureScreenshot` hangs on this
+machine. The items below are the part only eyes can settle.
+
+- [ ] Open `http://127.0.0.1:9877/agents/map` in a TUIC tab against the worktree
+      build. Header cards must read name, agent type · model · task kind, and a
+      green `running` or grey `done · Ns`.
+- [ ] **[VISUAL]** With 8 or more concurrent lanes: lane spacing, arrow routing
+      between distant lanes, and the contrast of running against done must stay
+      legible. Past 8 lanes the map scrolls sideways rather than crushing the
+      columns — confirm that reads as intended and not as a cut-off.
+- [ ] Spawn a subagent while the page is open. Its lane must appear within about
+      2 seconds and keep appending markers until it finishes.
+- [ ] A nested spawn (a subagent spawning its own) must draw its arrow from the
+      *parent subagent's* lane, not from `main`.
+- [ ] Switch terminals with the picker. The URL must follow (`?session=`), and a
+      reload must land on the same terminal.
+- [ ] The palette must match `/process/monitor` side by side.
+
 ## The model is told when hands-free starts and stops (story `821-842a`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
 Automated coverage is in place for the mechanism: the notice reaches the Compose

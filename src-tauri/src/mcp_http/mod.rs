@@ -862,6 +862,8 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/metrics", get(session::get_metrics))
         .route("/process/stats", get(session::get_process_stats))
         .route("/process/monitor", get(session::process_monitor_panel))
+        .route("/agents/map", get(session::subagent_map_panel))
+        .route("/agents/map/data", get(session::subagent_map_data))
         // Git operations
         .route("/repo/info", get(git_routes::repo_info))
         .route("/repo/remote-url", get(git_routes::remote_url))
@@ -2476,6 +2478,57 @@ mod tests {
         assert_eq!(json["ok"], true);
     }
 
+    /// The map page is static HTML served by `include_str!`, exactly like
+    /// `/process/monitor`.
+    #[tokio::test]
+    async fn subagent_map_panel_serves_the_page() {
+        let app = build_router(test_state(), false, true);
+        let resp = app
+            .oneshot(Request::get("/agents/map").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            content_type.starts_with("text/html"),
+            "served as {content_type}"
+        );
+    }
+
+    /// `?session=` is a session id looked up in `AppState`, never a path. A
+    /// value shaped like a traversal therefore resolves to nothing at all —
+    /// the same answer as any other unknown id, and never a filesystem read.
+    #[tokio::test]
+    async fn subagent_map_data_treats_an_unknown_session_as_no_selection() {
+        let app = build_router(test_state(), false, true);
+        let resp = app
+            .oneshot(
+                Request::get("/agents/map/data?session=..%2F..%2F..%2Fetc%2Fpasswd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "an unknown session is an empty map, not an error"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["selected"].is_null());
+        assert_eq!(json["lanes"].as_array().map(Vec::len), Some(0));
+        assert_eq!(json["events"].as_array().map(Vec::len), Some(0));
+        assert!(json["sessions"].is_array(), "the picker still gets its list");
+    }
+
     /// Every `/progress/*` route, with a body its extractors accept.
     ///
     /// The bodies must be VALID. An extractor runs before the handler, so a
@@ -2670,6 +2723,8 @@ mod tests {
             "/worktrees/x",
             "/agents",
             "/agents/detect",
+            "/agents/map",
+            "/agents/map/data",
             "/fs/list",
             "/fs/read",
             "/fs/write",

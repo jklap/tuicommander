@@ -129,6 +129,33 @@ uncapping the server.
 | `GET` | `/metrics` | Session metrics (spawned, failed, bytes) |
 | `GET` | `/process/stats` | CPU% and RSS memory for TUIC and all child process trees |
 | `GET` | `/process/monitor` | Self-contained HTML dashboard for process metrics (for remote/PWA/mobile) |
+| `GET` | `/agents/map` | Self-contained HTML swimlane of a Claude session's in-process subagents |
+| `GET` | `/agents/map/data?session=` | Lanes and markers behind that page |
+
+**The subagent map reads the subagent's own transcript, never the parent's.**
+Claude records an `Agent` spawn in the parent transcript but writes the
+subagent's turns to `<config>/projects/<cwd-slug>/<uuid>/subagents/agent-<id>.jsonl`
+— measured over 582 real transcripts: 833 spawns and zero `isSidechain:true`
+rows in any parent file. That is why a subagent is invisible in the terminal
+that spawned it. The parent transcript is read for one thing only: the
+timestamp of the `Agent` tool call, which times the spawn arrow. A lane whose
+join fails still renders in full from its own file.
+
+`?session=` is a TUIC session id looked up in `AppState`, **never a path**.
+Every path component comes from the session's own cwd, the agent process's
+`CLAUDE_CONFIG_DIR`, and the session uuid Claude published — so an unknown id
+returns the session list with `selected: null` rather than an error, and no
+request parameter can steer a filesystem read. Only sessions TUIC has already
+identified as `claude` are offered: Claude discovery falls back to "newest
+unclaimed session file under the project dir", so asking it about a shell tab
+would hand that session another tab's transcript (issue #119).
+
+Both files are read through per-path byte cursors held in
+`AppState.subagent_map_cache`, so a poll parses only what was appended since
+the last one — the biggest parent transcript on the development machine is
+31 MB, which a full re-read every 2s would turn into 15 MB/s of disk and JSON.
+Markers carry tool **names** and labels truncated to 64 characters; no prompt
+or tool-result body reaches the wire.
 
 ### Git Operations
 

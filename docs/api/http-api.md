@@ -338,7 +338,37 @@ GET  /sessions/:id/terminal/logical-line?row=N         -> [logicalStartRow, text
 GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url] | null
 GET  /sessions/:id/terminal/styled-rows?start=N&count=N -> application/octet-stream (packed rows)
 GET  /process/stats                                    -> ProcessStats[]
+GET  /agents/map                                       -> text/html (swimlane page)
+GET  /agents/map/data?session=<tuic-session-id>        -> MapPayload
 ```
+
+`MapPayload` is the subagent execution map for one Claude session:
+
+```
+{
+  "sessions": [{ "id": string, "title": string }],   // sessions that spawned subagents
+  "selected": string|null,                           // null for an unknown or absent ?session=
+  "origin_ms": number,                               // epoch ms the timeline starts from
+  "lanes":  [{ "agent_id", "name", "description", "agent_type", "model",
+               "task_kind", "color", "spawn_depth", "parent_agent_id",
+               "tool_use_id", "started_at_ms", "ended_at_ms", "running" }],
+  "events": [{ "lane", "at_ms", "offset_ms", "kind", "label", "count", "target" }]
+}
+```
+
+`lanes[0]` is always the terminal's own session (`agent_id: "main"`) — where
+every depth-0 spawn arrow starts. `kind` is one of `spawn`, `tool`, `text`,
+`complete`, `overflow`; `target` names the child lane on a `spawn` marker and is
+null otherwise. **`offset_ms` is computed in Rust** against `origin_ms`, so the
+page formats an offset and never derives one. These are the only snake_case
+payloads on this surface, matching the Rust structs they serialise.
+
+**HTTP-only, deliberately.** No `#[tauri::command]` backs either route, so there
+is no `COMMAND_TABLE` entry, no `src/transport.ts` change and no
+`command_table_paths.txt` regeneration — the Route Parity Gate below does not
+apply to them. Both are registered in `shared_routes()`, so the remote daemon
+serves them too, and both are pinned in
+`shared_routes_surface_is_locked_and_desktop_only_excluded`.
 
 `terminal/styled-rows` fills the CanvasTerminal client-side row cache and answers
 **binary**, not JSON: a 64-row chunk is ~141 KB of packed cells, which as a JSON
