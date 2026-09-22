@@ -8,20 +8,17 @@ TUICommander uses `alacritty_terminal` 0.26.0 as its terminal emulation backend.
 
 ## Our patches
 
-**Scope, measured against pristine 0.26.0** (`cargo` registry copy): 22 of the crate's
-`.rs` files differ, ~2,580 diff lines. Only **10** carry a semantic change —
-`event.rs`, `grid/mod.rs`, `grid/resize.rs`, `grid/row.rs`, `grid/storage.rs`,
-`grid/tests.rs`, `term/cell.rs`, `term/color.rs`, `term/mod.rs`, `tty/unix.rs`. The
-other 12 (`event_loop.rs`, `index.rs`, `lib.rs`, `selection.rs`, `sync.rs`,
-`term/search.rs`, `thread.rs`, `tty/mod.rs`, `tty/windows/*`, `vi_mode.rs`) differ
-**only in formatting** — ~856 lines of reflow, upstream's compact style rewritten in
-default rustfmt. The cause is mechanical: `patches/alacritty_terminal` is a workspace
-member (`src-tauri/Cargo.toml`) with no `rustfmt.toml` of its own, so `cargo fmt`
-reformats the vendored crate along with our code. That noise conflicts on whitespace
-in every rebase. Adding a `rustfmt.toml` matching upstream would stop it growing.
+The patch includes semantic changes listed below as well as rustfmt-only
+changes in other files. `term/search.rs` now has a semantic change: it searches
+retained zero-width scalars in addition to the base scalar. Do not classify it
+as formatting-only when rebasing. The crate is a workspace member with no
+local `rustfmt.toml`, so workspace formatting also rewrites upstream style;
+review semantic changes separately from that reflow.
 
 | File | Change | Why |
 |------|--------|-----|
+| `src/term/mod.rs` | Zero-width input damages the actual base cell | Separately received combining marks reach both parse-side changed rows and render frames, including marks attached to a wide base cell. |
+| `src/term/search.rs` | Feed base and zero-width scalars to the regex search automaton in both directions | Match exact stored Unicode sequences while returning cell coordinates; TUIC converts buffer-search ranges to UTF-16 for JavaScript consumers. |
 | `src/term/mod.rs` | `pub fn resize_reflow(size, reflow: crate::grid::ReflowMode)` | Choose the reflow policy on resize. Ink/Claude Code uses CUU cursor positioning that breaks when reflow merges/splits screen lines. |
 | `src/term/mod.rs` | `pub fn mark_fully_damaged()` (was `fn`) | Lets us force full-frame damage directly instead of maintaining a parallel flag. |
 | `src/term/mod.rs` | Parse-side damage: `TermParseDamage` enum, `TermDamageState.parse_lines`/`parse_full`, `pub fn parse_damage()`/`reset_parse_damage()`, damage recorded in `write_at_cursor` | A SECOND, independent damage view for TUIC's PTY parse path (`TerminalGrid::process` → `ChangedRow`), read+reset separately from the render damage so the two consumers never steal each other's damage. Lets `process()` diff only changed rows instead of rebuilding+diffing the whole screen per PTY chunk. `write_at_cursor` now damages the written cell (upstream reconstructs input damage lazily at `damage()` time from cursor deltas, which left the parse consumer blind to typed text); this is at worst a safe over-damage for the render consumer. Correctness pinned by the `process_damage_matches_full_diff` differential test. |

@@ -176,6 +176,15 @@ Frame emission is decoupled from PTY reading via a per-session **frame ticker** 
 3. **Frontend**: coalesces paint triggers via `requestAnimationFrame` (~60fps)
 4. **Ack handler**: credits the gate; the ticker sends any dirty rows accumulated while the prior frame was in flight
 
+**Cell text fidelity.** Text extraction and binary serialization retain each
+cell's base scalar plus its zero-width scalars. A separately received combining
+mark damages the cell it modifies, for both parse-side row snapshots and render
+frames. Live/full frames and styled-row fetches share the optional sparse
+[`TCX1` trailer](../frontend/canvas-terminal-audit.md#cell-text-extension-tcx1);
+the fixed cell core stays 11 bytes. The fork's existing nine-mark bound remains.
+Search matches exact stored codepoints; buffer-search results use UTF-16 string
+offsets, while terminal highlight coordinates remain grid columns.
+
 **Delivery gate (`grid_gate.rs`).** A frame is a *delta*, so a dropped one strands
 rows that exist nowhere else. Both transports are guarded, and both count rather
 than flag:
@@ -342,7 +351,15 @@ Each session gets its own `VtLogBuffer` stored in `AppState.vt_log_buffers: Dash
 
 ### Selection extraction
 
-`TerminalGrid::get_selection_text()` is the canonical desktop and HTTP selection path. It reads absolute scrollback coordinates, skips wide-character spacer cells, removes row padding, and joins rows carrying Alacritty's `WRAPLINE` flag so a visual wrap does not become a newline. Before returning clipboard text, it removes only contiguous multi-line Claude visual gutters with the exact `NBSP NBSP ▎` prefix. A lone marker, ASCII-indented block character, and non-breaking spaces inside the selected content remain unchanged.
+`TerminalGrid::get_selection_text()` reads grid-relative scrollback coordinates, skips wide-character spacer cells, removes row padding, and joins rows carrying Alacritty's `WRAPLINE` flag so a visual wrap does not become a newline. Before returning clipboard text, it removes only contiguous multi-line Claude visual gutters with the exact `NBSP NBSP ▎` prefix. A lone marker, ASCII-indented block character, and non-breaking spaces inside the selected content remain unchanged.
+
+Desktop and HTTP selection requests may carry the displayed frame's
+`historyBase` alongside those row coordinates. The shared backend read rebases
+them under the grid lock, preventing output-driven history eviction between
+frame delivery and copying from silently selecting another row. Requests whose
+endpoints have been evicted are rejected. The frontend retains selection in
+eviction-stable coordinates (`historyBase + grid-relative row`); legacy callers
+without a history snapshot continue to address the current retained grid.
 
 ## OSC 7 CWD Tracking
 
@@ -473,6 +490,7 @@ where slow consumers may reconnect after lag, but a dropped broadcast copy canno
 strand the sticky awaiting/idle state.
 
 **Transitions:**
+- **Completed turns:** A protocol idle marker survives ordinary output, decorative animation, and subsequent ready-screen timer ticks. Activity metadata must not clear idle evidence before `record_busy` compares ranks. New submitted input or accepted semantic working evidence can reopen the turn.
 - **Explicit markers:** OSC 133 shell markers and OSC 7770 agent hooks transition immediately. Output silence cannot override an observed hook `busy`; it ends on hook `idle`, a confirmed interruption, process exit, or a stable ready composer after the submitted turn produced real activity. The last path recovers safely when an idle hook is missed without letting the previous turn's composer cancel a fresh submission.
 - **→ busy:** A submitted agent prompt, real output, an animated spinner, or an agent-specific `Working` screen transitions via atomic CAS (`try_shell_transition`). Positive screen evidence is evaluated even while the stored state is idle, so false-idle is self-healing.
 - **→ idle:** The 1s silence timer is the sole heuristic idle path. Plain shells use 500ms; agents use 2.5s and must have no active sub-tasks. Agents with ready-screen adapters require the ready prompt to remain stable for 1.5s.

@@ -4,6 +4,11 @@
 
 Parses terminal output to detect structured events: rate limits, status lines, PR URLs, and progress indicators.
 
+Terminal-grid row snapshots retain the base character and all stored zero-width
+characters. A combining mark received in a later PTY chunk marks its base cell
+dirty, so changed-row consumers receive the updated text. This preserves the
+stored sequence without normalizing it or changing parser matching rules.
+
 ## Usage
 
 ```rust
@@ -131,6 +136,14 @@ event. Plan and skill pickers can instead be represented only by a qualifying
 OSC 777 notification, so raw-stream events bypass the heuristic-question
 suppression used for hook-instrumented sessions.
 
+The full-screen Ink-footer recovery also applies with hooks enabled. A later
+busy hook can clear awaiting while the dialog is still open. Before recovery,
+the reader evaluates the last pending Question/UserInput event in the current
+chunk: a Question followed by UserInput is a clear, not an existing question.
+An already-active badge or pending question suppresses duplicate recovery;
+indented quoted footers remain excluded. Once the dialog closes, normal user
+input and protocol transitions clear the badge.
+
 ### QuestionCleared
 
 The retraction of a low-confidence `Question`. It carries no payload:
@@ -234,6 +247,12 @@ Example: `intent: Reading auth module for token flow (Auth review)`
 
 The terminal Context bar shows intent separately from the orchestrator assignment and user prompt. The activity dashboard also shows intent (crosshair icon) when available, falling back to user prompt (speech bubble) otherwise.
 
+The frontend also reconciles `agent_intent` and `last_prompt` from authoritative
+session snapshots, both during catch-up and on `session-state-changed`. Captured
+context therefore does not depend on receiving the original parsed event. The
+last substantial prompt still requires at least ten whitespace-separated words;
+shorter submissions leave the previous qualifying prompt in place.
+
 **Colorization:** `colorize_intent()` wraps intent text in `\x1b[2;33m` (dim yellow) for the terminal output stream. The optional `(title)` suffix is stripped from the display. Colorization is agent-gated to prevent false positives.
 
 **PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients. It delegates to `output_parser::strip_plain_prefix_tokens`, which is built from the same bullet class and ack prefix the parser anchors on — a second copy of the grammar lived in `state.rs` and drifted, so Codex-bulleted tokens were parsed by TUIC and then shown to the user anyway. The ack sentence is kept; only the marker behind it is removed.
@@ -315,6 +334,11 @@ ParsedEvent::ShellState {
 ```
 
 Emitted by the reader thread on real-output→busy and idle transitions. The frontend consumes this instead of deriving busy/idle from raw PTY data. See `docs/backend/pty.md` for idle detection details.
+
+Ordinary output and spinner repaints cannot override a protocol idle marker.
+The reader preserves that evidence until the ranked busy decision, and the
+ready-screen timer preserves its rank. A new submission or accepted semantic
+working marker can start activity again.
 
 `session action=submit` uses these existing agent screen adapters only to label
 an acknowledgement after the raw child-output ring moves beyond its pre-Enter

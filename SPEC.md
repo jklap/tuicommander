@@ -26,6 +26,29 @@ TUICommander is a multi-agent terminal orchestrator designed to manage supported
 | Backend | Rust + Tauri | Native PTY management, file system access |
 | Build | Vite | Fast HMR development, optimized production builds with automatic code splitting and deferred loading |
 
+### Terminal character integrity
+
+The Alacritty cell is authoritative: its base scalar and retained zero-width
+scalars must survive text extraction, grid transport, row caches, rendering,
+selection and copy. Search uses the exact stored codepoint sequence, without
+canonical normalization. Grid coordinates stay cell-based; string offsets
+exposed to JavaScript use UTF-16. An accent arriving in a later PTY chunk must
+damage its base cell. Intentional terminal erasure/overwrite, history eviction,
+and the existing nine-zero-width-scalars-per-cell bound remain unchanged.
+The sparse wire extension is specified in
+[Binary Frame Format](docs/frontend/canvas-terminal-audit.md#binary-frame-format).
+
+### Terminal selection during output
+
+Selection endpoints identify retained text rows, including while new output
+arrives and the history buffer rotates. A stationary history viewport must not
+move its highlight onto different text. Evicted rows must not alias newly
+retained rows. Selection overlays and text painting must use the same accepted
+viewport; partial frames from a different viewport cannot be merged into its
+row cache. These guarantees apply both during a drag and after mouse release.
+Intentional ANSI edits, history eviction and resize/reflow remain distinct from
+renderer data loss.
+
 ### Backend Execution Model
 
 All Tauri commands that perform I/O (git subprocesses, network, bcrypt) are `async` and run inside `tokio::task::spawn_blocking` to avoid blocking Tokio worker threads. Git data is cached with a 60s TTL, invalidated immediately by `repo_watcher` on file system changes. PTY output is serialized once and reused for both Tauri IPC and event bus broadcast. Frontend coalesces paint triggers via `requestAnimationFrame` (~60 repaints/sec) to reduce canvas render passes during burst output.
@@ -466,6 +489,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
 - [x] One-call MCP managed-agent submission with bounded terminal-movement receipt
 - [x] Expandable terminal Context bar for agent intent, orchestrator assignment, and last user prompt
+- [x] Recover captured intent and substantial prompt through session snapshot catch-up and live state reconciliation
 - [x] Font selection setting
 - [x] Tab bar with keyboard navigation
 - [x] Density modes for readability
@@ -533,7 +557,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Settings > Dictation tab (model, hotkey, language, corrections)
 - [x] Shell integration inject_text stub (prepared for external triggers)
 - [x] Streaming transcription with adaptive sliding windows (1.5s→3s)
-- [x] VAD energy gate (ported from whisper.cpp vad_simple)
+- [x] Streaming preserves speech before trailing silence; shared RMS and speech-confidence gates reject no-speech audio
 - [x] Floating toast for partial transcription results
 - [x] Prompt token carry-forward across windows
 - [x] Hands-free conversation — one bound terminal, continuous VAD segmentation, optional activation phrase with a timed window, cancellable hold-back before sending. Disarms itself on target closure, owner disconnect or capture failure
@@ -541,6 +565,8 @@ Some frontend-only stores persist to localStorage:
 - [x] Spoken replies via local Kokoro (`speech/`), driven over IPC, HTTP and MCP by the same functions; downloadable per-language voice bundles verified by hash
 - [x] The conversation holds one language end to end — Whisper's detection picks the voice and the model is asked to answer in it
 - [x] Barge-in — WebRTC AEC3 (`echo.rs`) keeps our own reply out of the segmenter; the user talking stops playback and opens the next turn (measured: 50 ms stop latency, 0 false triggers)
+- [x] Download progress and utterance state are pushed on `/events` as well as to the desktop window, from one serialized payload per event; utterance transitions come from the render thread that performs them, through an observer port, so `finished` and `interrupted` reach a client that never polls
+- [x] A browser tab is its own microphone and speaker over one WebSocket (`dictation/browser.rs`), so a remote client holds a whole conversation on its own hardware. Neither owner falls back to the other's devices, a client that vanishes disarms on the same path as a dead local device, and the frontend half stays transport only — segmentation, the activation phrase and the hold-back all remain in Rust
 
 ### Completed (P2)
 - [x] Agent toast repository action — a toast from a different registered repository offers a keyboard-reachable action that selects its origin and focuses the still-live originating session; the action is absent for the active repository and for removed repositories (#835-314c)
@@ -566,8 +592,6 @@ Some frontend-only stores persist to localStorage:
 - [x] Task queue UI
 - [x] Advanced keyboard shortcuts
 
-- [x] Download progress and utterance state are pushed on `/events` as well as to the desktop window, from one serialized payload per event; utterance transitions come from the render thread that performs them, through an observer port, so `finished` and `interrupted` reach a client that never polls
-- [x] A browser tab is its own microphone and speaker over one WebSocket (`dictation/browser.rs`), so a remote client holds a whole conversation on its own hardware. Neither owner falls back to the other's devices, a client that vanishes disarms on the same path as a dead local device, and the frontend half stays transport only — segmentation, the activation phrase and the hold-back all remain in Rust
 ### Pending (P3)
 - [ ] Agent stats display
 - [ ] Config file support

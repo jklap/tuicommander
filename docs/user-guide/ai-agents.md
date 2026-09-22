@@ -62,6 +62,12 @@ For unrecognized agents, silence-based detection kicks in — if the terminal st
 
 Claude and Codex status signals are enabled by default and scoped to each TUIC launch. Claude receives an additional `--settings <config-dir>/agent-hooks/claude.json`; Codex receives `-c notify=["<config-dir>/agent-hooks/codex-notify.sh"]`. Existing explicit overrides win. The Codex adapter emits idle on `agent-turn-complete` and then chains the user's configured `notify` command with the original JSON payload. No global agent configuration is written by this default path.
 
+After a completion hook, decorative terminal animation and redraws keep the
+session idle. New input and recognized active work can start another turn.
+
+An open interactive selection dialog restores the question badge even when
+hooks are enabled and another hook cleared it before you answered.
+
 Disable this per agent with **Settings → Agents → Native status signals** to restore screen-only heuristics. Gemini, Grok, and OpenCode retain a separate, explicit **Install hooks globally** toggle.
 
 Instead of inferring busy/idle/waiting from terminal output, TUICommander can drive an agent's status directly from the agent's **own hook system**.
