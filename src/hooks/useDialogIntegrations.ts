@@ -1,6 +1,6 @@
 import { createEffect, onMount, type Setter } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
-import type { FolderDropRequest } from "./useFileDrop";
+import { type FolderDropRequest, setFolderDropConfirmHandler } from "./useFileDrop";
 import { markTccAlertShown, tccDeniedPaths } from "./useRepository";
 
 interface DialogIntegrationOptions {
@@ -17,9 +17,7 @@ interface DialogIntegrationOptions {
 /** Connects non-visual file-drop and permission events to application dialogs. */
 export function useDialogIntegrations(options: DialogIntegrationOptions): void {
 	onMount(() => {
-		void import("./useFileDrop").then(({ setFolderDropConfirmHandler }) => {
-			setFolderDropConfirmHandler((request) => options.setPendingFolderDrop(request));
-		});
+		setFolderDropConfirmHandler((request) => options.setPendingFolderDrop(request));
 	});
 
 	createEffect(() => {
