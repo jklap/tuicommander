@@ -3,34 +3,14 @@
   50% { opacity: 1; }
 }
 
-@keyframes branch-badge-alternate {
-  0%,
-  42% {
-    opacity: 1;
-    visibility: visible;
-  }
-  49% {
-    opacity: 0;
-    visibility: visible;
-  }
-  50%,
-  92% {
-    opacity: 0;
-    visibility: hidden;
-  }
-  93% {
-    opacity: 0;
-    visibility: visible;
-  }
-  100% {
-    opacity: 1;
-    visibility: visible;
-  }
-}
-
 
 /* Sidebar */
 .sidebar {
+  --row-pad-x: 7px;
+  --row-icon: 14px;
+  --row-gap: 5px;
+  --row-h: 22px;
+  --tree-indent: 10px;
   width: var(--sidebar-width);
   min-width: 200px;
   max-width: 500px;
@@ -182,21 +162,21 @@
 
 /* ── Repository Section ── */
 .repoSection {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .repoHeader {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px 4px;
+  gap: 6px;
+  padding: 6px 10px 3px;
   cursor: pointer;
   position: relative;
 }
 
 .repoInitials {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -217,7 +197,7 @@
 
 .repoName {
   flex: 1;
-  font-size: var(--font-xs);
+  font-size: var(--font-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -231,11 +211,11 @@
   display: flex;
   gap: 2px;
   position: absolute;
-  right: 20px;
+  right: 18px;
   top: 50%;
   transform: translateY(-50%);
   background: var(--bg-secondary);
-  padding-left: 4px;
+  padding-left: 3px;
   opacity: 0;
   pointer-events: none;
 }
@@ -247,13 +227,16 @@
   }
 }
 
-.repoChevron {
-  font-size: var(--font-2xl);
+/* Every disclosure chevron in the sidebar is the same 12px ChevronIcon;
+   only the rotation differs between collapsed and expanded. */
+.repoChevron,
+.groupChevron,
+.ghSectionChevron {
+  display: inline-flex;
   color: var(--fg-secondary);
   transition: transform 150ms ease;
   transform: rotate(0deg);
   flex-shrink: 0;
-  line-height: 1;
 }
 
 .repoChevron.expanded {
@@ -261,8 +244,8 @@
 }
 
 .repoActionBtn {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -283,7 +266,7 @@
 .addBtn {
   color: var(--accent);
   font-weight: 600;
-  margin-right: 5px;
+  margin-right: 4px;
 }
 
 .addBtn:hover {
@@ -304,14 +287,14 @@
 }
 
 .collapsed .repoHeader {
-  padding: 8px 6px;
+  padding: 6px 5px;
   justify-content: center;
 }
 
 .collapsed .repoInitials {
-  width: 32px;
-  height: 32px;
-  font-size: var(--font-md);
+  width: 28px;
+  height: 28px;
+  font-size: var(--font-sm);
 }
 
 .dragging {
@@ -360,11 +343,14 @@
   margin-bottom: 2px;
 }
 
+/* A section heading, not a peer of the repo header: smaller, wider-tracked text
+   and a hairline to the count, so a group reads as the container of the repos
+   below it. Extra top padding separates consecutive groups. */
 .groupHeader {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
+  gap: 5px;
+  padding: 8px 10px 2px;
   cursor: pointer;
   user-select: none;
   border-radius: var(--radius-md);
@@ -376,37 +362,36 @@
 }
 
 .groupColorDot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
 .groupName {
-  flex: 1;
-  font-size: var(--font-xs);
-  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--font-2xs);
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--fg-secondary);
+  letter-spacing: 0.12em;
+  color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.groupRule {
+  flex: 1;
+  min-width: 12px;
+  height: 1px;
+  background: var(--border);
+}
+
 .groupCount {
   font-size: var(--font-2xs);
   color: var(--fg-muted);
-  opacity: 0.6;
-}
-
-.groupChevron {
-  font-size: var(--font-md);
-  color: var(--fg-secondary);
-  transition: transform 150ms ease;
-  transform: rotate(0deg);
-  flex-shrink: 0;
-  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .groupChevron.expanded {
@@ -444,7 +429,7 @@
   display: flex;
   align-items: center;
   gap: var(--row-gap);
-  padding: 4px var(--row-pad-x);
+  padding: 3px var(--row-pad-x);
   cursor: pointer;
   border-radius: var(--radius-md);
   margin: 1px 0;
@@ -459,10 +444,25 @@
   }
 }
 
+/* A quiet tint, no outline: the selection only has to say where you are, and a
+   bordered accent box outweighed every status badge in the list. */
 .branchItem.active {
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-highlight));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}
+
+/* Tooltips inside a branch row anchor to the row, not to the badge: a bubble
+   right-aligned to the PR marker, which sits well left of the sidebar edge,
+   ran off the window on the left. The row spans the sidebar, so capping the
+   bubble at the row's width keeps it inside on both sides. */
+.branchItem [data-tooltip] {
+  position: static;
+}
+
+/* border-box: the cap must include the bubble's padding and border, or a
+   long tooltip is 18px wider than the row and pokes out on the left. */
+.branchItem [data-tooltip]::after {
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .branchPreparing {
@@ -479,6 +479,69 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Branch icon as the agents toggle: the chevron sits in the icon's own box and
+   swaps in on hover or focus, so the row gives up no width. */
+.branchIconToggle {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.branchIconChevron {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-primary);
+  opacity: 0;
+}
+
+.branchIconChevron svg {
+  transition: transform 150ms ease;
+}
+
+.branchIconToggle.expanded .branchIconChevron svg {
+  transform: rotate(90deg);
+}
+
+.branchIconToggle:hover .branchIcon,
+.branchIconToggle:focus-visible .branchIcon {
+  opacity: 0;
+}
+
+.branchIconToggle:hover .branchIconChevron,
+.branchIconToggle:focus-visible .branchIconChevron {
+  opacity: 1;
+}
+
+/* A bare digit below the icon's right edge, not a pill: at 12px a pill covered
+   the part of the glyph that tells main, branch and worktree apart. The halo in
+   the sidebar background keeps it legible where it touches the glyph. */
+.branchAgentCount {
+  position: absolute;
+  bottom: -4px;
+  right: -3px;
+  color: var(--fg-primary);
+  font-size: var(--font-3xs);
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  text-shadow:
+    0 0 1px var(--bg-secondary),
+    0 0 1px var(--bg-secondary),
+    0 0 2px var(--bg-secondary),
+    0 0 2px var(--bg-secondary);
+  pointer-events: none;
+}
+
+.branchIconToggle:hover .branchAgentCount,
+.branchIconToggle:focus-visible .branchAgentCount {
+  opacity: 0;
 }
 
 .branchIconMain {
@@ -536,57 +599,38 @@
 }
 
 
+/* A low-contrast surface groups the two values without turning every row into
+   a stack of bright pills. */
 .branchStats {
   display: flex;
   gap: 4px;
-  font-size: var(--font-3xs);
+  line-height: 1;
+  font-size: var(--font-2xs);
   font-family: var(--font-ui);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 2px 6px;
+  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
   margin-left: auto;
+  padding: 2px 4px;
+  background: color-mix(in srgb, var(--fg-primary) 6%, transparent);
+  border-radius: var(--radius-sm);
 }
 
+/* PR number and diff consume only their real width. A fixed empty diff column
+   used to truncate branch names even when a row had only a PR marker. */
 .branchBadgeStack {
-  display: grid;
-  align-items: center;
-  justify-items: end;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
   margin-left: auto;
   flex-shrink: 0;
 }
 
-.branchBadgeStack > * {
-  grid-area: 1 / 1;
-}
-
-.branchBadgeStack .prBadge,
 .branchBadgeStack .branchStats {
   margin-left: 0;
 }
 
-.branchBadgeStackAlternating > span,
-.branchBadgeStackAlternating > .branchStats {
-  animation: branch-badge-alternate 6s ease infinite;
-}
-
-.branchBadgeStackAlternating > .branchStats {
-  animation-delay: -3s;
-}
-
-.branchBadgeStackPinned > .branchStats {
-  display: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .branchBadgeStackAlternating > span {
-    animation: none;
-  }
-
-  .branchBadgeStackAlternating > .branchStats {
-    display: none;
-  }
+.branchBadgeStack .prBadge {
+  margin-left: 0;
 }
 
 .statAdd {
@@ -594,7 +638,7 @@
 }
 
 .statDel {
-  color: var(--error);
+  color: var(--diff-del);
 }
 
 /* Git merged badge — branch fully merged into main */
@@ -626,53 +670,22 @@
 }
 
 .branchGroupExpanded {
-  padding-bottom: 4px;
+  padding-bottom: 3px;
 }
 
 /* Branch tab list — collapsible terminal tab list under branch row */
-.branchTabsChevron {
-  background: none;
-  border: none;
-  color: var(--fg-secondary);
-  font-size: var(--font-xl);
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-  flex-shrink: 0;
-  transition: transform 150ms ease, color 0.1s;
-  transform: rotate(0deg);
-  opacity: 0.8;
-}
-
-.branchTabsChevron:hover {
-  color: var(--fg-primary);
-  opacity: 1;
-}
-
-.branchTabsChevron.expanded {
-  transform: rotate(90deg);
-  color: var(--fg-primary);
-  opacity: 1;
-}
-
 .branchTabList {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 1px 5px 3px;
-}
-
-.branchAgentSummary {
-  padding: 0 9px 2px 31px;
-  color: var(--fg-muted);
-  font-size: var(--font-2xs);
+  gap: 2px;
+  padding: 1px 4px 2px;
 }
 
 .branchTabItem {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 9px;
+  gap: 6px;
+  padding: 5px 7px;
   border-radius: var(--radius-md);
   cursor: pointer;
   font-size: var(--font-xs);
@@ -704,13 +717,11 @@
   }
 }
 
-/* Terminal status dot. Sized to match the UI Legend (8px) and, for the active
- * states, given a soft same-color glow so sessions that need attention are easy
- * to spot at a glance in the sidebar (issue #100). Busy stays animated so it is
- * still distinguishable from a static idle dot without relying on hue alone. */
+/* Terminal status dot. Match the TabBar's 6px visual footprint: the old glow
+ * made the sidebar dot appear much larger even when its core was the same size. */
 .branchTabDot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--fg-muted);
@@ -720,32 +731,27 @@
 .branchTabDotBusy {
   background: var(--activity);
   opacity: 1;
-  box-shadow: 0 0 4px var(--activity);
   animation: pulse-opacity 1.5s ease-in-out infinite;
 }
 
 .branchTabDotIdle {
   background: var(--success);
   opacity: 1;
-  box-shadow: 0 0 4px var(--success);
 }
 
 .branchTabDotUnseen {
   background: var(--unseen);
   opacity: 1;
-  box-shadow: 0 0 4px var(--unseen);
 }
 
 .branchTabDotError {
   background: var(--error);
   opacity: 1;
-  box-shadow: 0 0 4px var(--error);
 }
 
 .branchTabDotQuestion {
   background: var(--attention);
   opacity: 1;
-  box-shadow: 0 0 4px var(--attention);
 }
 
 .branchAgentIcon {
@@ -779,7 +785,7 @@
   align-items: center;
   padding: 1px 6px;
   margin-left: 4px;
-  font-size: var(--font-3xs);
+  font-size: var(--font-2xs);
   font-weight: 600;
   font-family: var(--font-ui);
   border-radius: var(--radius-pill);
@@ -807,7 +813,7 @@
   align-items: center;
   padding: 1px 6px;
   margin-left: 4px;
-  font-size: var(--font-3xs);
+  font-size: var(--font-2xs);
   font-weight: 600;
   font-family: var(--font-ui);
   border-radius: var(--radius-pill);
@@ -868,6 +874,59 @@
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--changes);
   color: var(--changes);
+  animation: pulse-opacity 2s ease-in-out infinite;
+}
+
+/* Compact PR marker for branch rows: a small square plus the number, both in
+   the state color. The state word lives in the tooltip. */
+.prBadgeCompact {
+  gap: 4px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  box-shadow: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.prMark {
+  width: 7px;
+  height: 7px;
+  border-radius: 1.5px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.prMarkOpen { color: var(--success); }
+.prMarkMerged { color: var(--merged); }
+.prMarkClosed { color: var(--diff-del); }
+.prMarkChanges { color: var(--changes); }
+
+/* Review required keeps the pill's distinction from Changes requested: same
+   hue, outlined instead of filled. */
+.prMarkReview { color: var(--changes); }
+.prMarkReview .prMark {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.prMarkDraft { color: var(--fg-secondary); }
+.prMarkDraft .prMark {
+  background: none;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* The one state that also changes shape, so it does not rely on color. */
+.prMarkConflict { color: var(--diff-del); }
+.prMarkConflict .prMark {
+  transform: rotate(45deg) scale(0.85);
+  animation: pulse-opacity 1.5s ease-in-out infinite;
+}
+
+.prMarkPending { color: var(--changes); }
+/* Same motion as the pill form: conflict pulses at 1.5s, checking and CI
+   running at 2s; only the marker moves, never the number. */
+.prMarkPending .prMark {
   animation: pulse-opacity 2s ease-in-out infinite;
 }
 
@@ -1119,24 +1178,6 @@
 .parkedPopoverUnpark:hover {
   background: var(--bg-tertiary);
   color: var(--fg-primary);
-}
-
-.parkedBadge {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-lg);
-  background: var(--accent);
-  color: var(--bg-primary);
-  font-size: var(--font-2xs);
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
 }
 
 /* Stale-temp repair popover (#763-d219) */
@@ -1587,17 +1628,6 @@
   flex-shrink: 0;
 }
 
-.ghSectionChevron {
-  display: inline-block;
-  font-size: var(--font-md);
-  color: var(--fg-muted);
-  transition: transform 0.15s ease;
-  transform: rotate(0deg);
-  flex-shrink: 0;
-  width: 12px;
-  text-align: center;
-}
-
 .ghSectionChevronOpen {
   transform: rotate(90deg);
 }
@@ -1846,22 +1876,29 @@
 
 /* ── GitHub badge button (replaces remoteOnlyBadgeBtn) ── */
 .ghBadgeBtn {
-  min-width: 20px;
+  min-width: 18px;
+  height: 18px;
   width: auto;
-  padding: 0 4px;
+  padding: 0 3px;
+  /* Same size as the branch stats badges; the fixed 18px height and line-height 1
+     keep the larger digits from growing the badge. */
   font-size: var(--font-2xs);
+  line-height: 1;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   color: var(--accent);
-  border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
+  /* Last in .repoActions (anchored at right: 18px), so it needs its own clearance
+     from the chevron: 6px, the header's gap. */
+  margin-right: 6px;
 }
 
 .ghBadgeBtn:hover {
-  background: var(--accent);
-  color: var(--text-on-accent);
+  /* A light tint, not a solid fill: a solid accent block outweighed the whole header. */
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  color: var(--accent);
 }
 
 .ghBadgeSep {
@@ -1870,8 +1907,8 @@
 }
 
 .ghBadgeBtn svg {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   flex-shrink: 0;
 }
 

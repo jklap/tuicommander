@@ -21,8 +21,7 @@ const {
 	mockReorderRepoInGroup,
 	mockMoveRepoBetweenGroups,
 	mockReorderGroups,
-	mockToggleBranchTabsExpanded,
-	mockSetBranchTabsExpanded,
+	mockToggleBranchTabsCollapsed,
 	mockNavigateToTerminal,
 } = vi.hoisted(() => ({
 	mockToggleExpanded: vi.fn(),
@@ -43,8 +42,7 @@ const {
 	mockReorderRepoInGroup: vi.fn(),
 	mockMoveRepoBetweenGroups: vi.fn(),
 	mockReorderGroups: vi.fn(),
-	mockToggleBranchTabsExpanded: vi.fn(),
-	mockSetBranchTabsExpanded: vi.fn(),
+	mockToggleBranchTabsCollapsed: vi.fn(),
 	mockNavigateToTerminal: vi.fn(),
 }));
 
@@ -82,8 +80,7 @@ vi.mock("../../stores/repositories", () => ({
 		isGroupFullyParked: vi.fn(() => false),
 		get: vi.fn(() => undefined),
 		setActive: vi.fn(),
-		toggleWorkspaceTabsExpanded: mockToggleBranchTabsExpanded,
-		setWorkspaceTabsExpanded: mockSetBranchTabsExpanded,
+		toggleWorkspaceTabsCollapsed: mockToggleBranchTabsCollapsed,
 	},
 }));
 
@@ -999,7 +996,7 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			expect(container.querySelector(".statAdd")?.textContent).toBe("+9.9k");
 			expect(container.querySelector(".statDel")?.textContent).toBe("-2.9k");
-			expect(container.querySelector(".branchStats")?.getAttribute("title")).toBe("Tracked line changes: +9876 -2913");
+			expect(container.querySelector(".branchStats")?.getAttribute("data-tooltip")).toBe("Tracked line changes: +9876 -2913");
 		});
 
 		it("does not show StatsBadge when both additions and deletions are 0", () => {
@@ -1099,7 +1096,7 @@ describe("Sidebar", () => {
 				lifecycleStatus: { dirtyFiles: 25, commitStatus: "in_sync", removalSafety: "requires_force" },
 			});
 			expect(container.querySelector(".lifecycleBadge")).toBeNull();
-			expect(container.querySelector(".branchStats")?.getAttribute("title")).toBe(
+			expect(container.querySelector(".branchStats")?.getAttribute("data-tooltip")).toBe(
 				"Tracked line changes: +429 -90 — 25 uncommitted files",
 			);
 		});
@@ -1113,7 +1110,7 @@ describe("Sidebar", () => {
 				lifecycleStatus: { dirtyFiles: 1, commitStatus: "in_sync", removalSafety: "requires_force" },
 			});
 			expect(container.querySelector(".lifecycleBadge")).toBeNull();
-			expect(container.querySelector(".prBadge")?.getAttribute("title")).toBe("PR #256 — 1 uncommitted file");
+			expect(container.querySelector(".prBadge")?.getAttribute("data-tooltip")).toBe("PR #256 — 1 uncommitted file");
 		});
 
 		it("explains the Unknown lifecycle badge and includes the inspection error", () => {
@@ -1198,10 +1195,10 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const prBadge = container.querySelector(".prBadge");
 			expect(prBadge).not.toBeNull();
-			expect(prBadge!.getAttribute("title")).toBe("PR #123");
+			expect(prBadge!.getAttribute("data-tooltip")).toBe("PR #123");
 		});
 
-		it("overlays and alternates a stable PR badge with the diff badge", () => {
+		it("shows the PR number beside the diff, never alternating the two", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1227,8 +1224,11 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const stack = container.querySelector(".branchBadgeStack");
 			expect(stack).not.toBeNull();
-			expect(stack!.classList.contains("branchBadgeStackAlternating")).toBe(true);
-			expect(stack!.querySelector(".prBadge")?.textContent).toBe("#256 Review");
+			// Both stay rendered and static: a value that disappears half the time
+			// cannot be read at a glance, and the diff is a click target.
+			expect(stack!.classList.contains("branchBadgeStackAlternating")).toBe(false);
+			expect(stack!.querySelector(".prBadge")?.textContent).toBe("#256");
+			expect(stack!.querySelector(".prBadge")?.getAttribute("data-tooltip")).toBe("PR #256 · Review");
 			expect(stack!.querySelector(".branchStats")?.textContent).toBe("+12-3");
 		});
 
@@ -1236,20 +1236,20 @@ describe("Sidebar", () => {
 			{
 				name: "mergeability checking",
 				pr: { conflict_state: "checking" },
-				label: "#256 Checking",
+				label: "PR #256 · Checking",
 			},
 			{
 				name: "conflicts",
 				pr: { conflict_state: "conflicting" },
-				label: "#256 Conflicts",
+				label: "PR #256 · Conflicts",
 			},
 			{
 				name: "CI running",
 				pr: {},
 				checks: { passed: 0, failed: 0, pending: 1 },
-				label: "#256 CI Running",
+				label: "PR #256 · CI Running",
 			},
-		])("pins a flashing PR badge instead of alternating for $name", ({ pr, checks, label }) => {
+		])("keeps the diff visible beside a PR in the $name state", ({ pr, checks, label }) => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1276,9 +1276,9 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const stack = container.querySelector(".branchBadgeStack");
 			expect(stack).not.toBeNull();
-			expect(stack!.classList.contains("branchBadgeStackPinned")).toBe(true);
-			expect(stack!.classList.contains("branchBadgeStackAlternating")).toBe(false);
-			expect(stack!.querySelector(".prBadge")?.textContent).toBe(label);
+			// The urgent states used to pin the PR and hide the diff outright.
+			expect(stack!.querySelector(".branchStats")?.textContent).toBe("+12-3");
+			expect(stack!.querySelector(".prBadge")?.getAttribute("data-tooltip")).toBe(label);
 		});
 
 		it("does not show PrStateBadge when branch has no PR data", () => {
@@ -1287,7 +1287,7 @@ describe("Sidebar", () => {
 			expect(prBadge).toBeNull();
 		});
 
-		it("shows Merged label and class when PR state is MERGED", () => {
+		it("shows the merged marker and moves the Merged label into the tooltip", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1299,8 +1299,9 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const prBadge = container.querySelector(".prBadge");
 			expect(prBadge).not.toBeNull();
-			expect(prBadge!.classList.contains("prMerged")).toBe(true);
-			expect(prBadge!.textContent).toBe("#42 Merged");
+			expect(prBadge!.classList.contains("prMarkMerged")).toBe(true);
+			expect(prBadge!.textContent).toBe("#42");
+			expect(prBadge!.getAttribute("data-tooltip")).toBe("PR #42 · Merged");
 		});
 
 		it("hides PR badge immediately for CLOSED PR", () => {
@@ -1317,7 +1318,7 @@ describe("Sidebar", () => {
 			expect(prBadge).toBeNull();
 		});
 
-		it("shows Draft label and class when PR is a draft", () => {
+		it("shows the draft marker and moves the Draft label into the tooltip", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1335,11 +1336,12 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const prBadge = container.querySelector(".prBadge");
 			expect(prBadge).not.toBeNull();
-			expect(prBadge!.classList.contains("prDraft")).toBe(true);
-			expect(prBadge!.textContent).toBe("#45 Draft");
+			expect(prBadge!.classList.contains("prMarkDraft")).toBe(true);
+			expect(prBadge!.textContent).toBe("#45");
+			expect(prBadge!.getAttribute("data-tooltip")).toBe("PR #45 · Draft");
 		});
 
-		it("shows open class with PR number when state is OPEN with no special conditions", () => {
+		it("shows the open marker with the PR number when state is OPEN with no special conditions", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1351,7 +1353,7 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const prBadge = container.querySelector(".prBadge");
 			expect(prBadge).not.toBeNull();
-			expect(prBadge!.classList.contains("prOpen")).toBe(true);
+			expect(prBadge!.classList.contains("prMarkOpen")).toBe(true);
 			expect(prBadge!.textContent).toBe("#44");
 		});
 	});
@@ -1394,7 +1396,7 @@ describe("Sidebar", () => {
 			return row as HTMLElement;
 		}
 
-		it("renders a chevron for every branch with at least one terminal", () => {
+		it("marks every branch with at least one terminal as expandable", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1430,7 +1432,7 @@ describe("Sidebar", () => {
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			// Both occupied branches can reveal activity; the empty branch cannot.
-			expect(container.querySelectorAll(".branchTabsChevron").length).toBe(2);
+			expect(container.querySelectorAll(".branchItem .branchIconToggle[aria-expanded]").length).toBe(2);
 		});
 
 		it("renders one subitem per terminal when expanded and >1 terminal", () => {
@@ -1451,13 +1453,55 @@ describe("Sidebar", () => {
 							terminals: ["t1", "t2"],
 							additions: 0,
 							deletions: 0,
-							tabsExpanded: true,
 						},
 					},
 				}),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			expect(container.querySelectorAll(".branchTabItem").length).toBe(2);
+		});
+
+		it("shows every branch's agents by default and hides a collapsed one", () => {
+			mockTerminalsGet.mockImplementation(() => ({
+				name: "term",
+				shellState: "idle",
+				unseen: false,
+				awaitingInput: null,
+			}));
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						"feature/open": {
+							workspaceId: "feature/open",
+							branchName: "feature/open",
+							isMain: false,
+							worktreePath: "/wt/open",
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+						"feature/closed": {
+							workspaceId: "feature/closed",
+							branchName: "feature/closed",
+							isMain: false,
+							worktreePath: "/wt/closed",
+							terminals: ["t2", "t3"],
+							additions: 0,
+							deletions: 0,
+							tabsCollapsed: true,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			// Only the untouched branch renders its one terminal; the collapsed one renders none.
+			expect(container.querySelectorAll(".branchTabItem").length).toBe(1);
+			expect(
+				branchRow(container, "feature/open").querySelector(".branchIconToggle")?.getAttribute("aria-expanded"),
+			).toBe("true");
+			expect(
+				branchRow(container, "feature/closed").querySelector(".branchIconToggle")?.getAttribute("aria-expanded"),
+			).toBe("false");
 		});
 
 		it("renders expanded terminal activity as one branch card", () => {
@@ -1520,7 +1564,6 @@ describe("Sidebar", () => {
 							terminals: ["t1", "t2", "t3"],
 							additions: 0,
 							deletions: 0,
-							tabsExpanded: true,
 						},
 					},
 				}),
@@ -1528,7 +1571,6 @@ describe("Sidebar", () => {
 
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 
-			expect(container.querySelector(".branchAgentSummary")?.textContent).toBe("3 agents");
 			expect(Array.from(container.querySelectorAll(".branchAgentActivity"), (el) => el.textContent)).toEqual([
 				"coordinating checkout validation",
 				"running EU tax validation",
@@ -1569,18 +1611,18 @@ describe("Sidebar", () => {
 							terminals: ["t1"],
 							additions: 0,
 							deletions: 0,
-							tabsExpanded: true,
 						},
 					},
 				}),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			expect(container.querySelectorAll(".branchTabItem").length).toBe(1);
-			expect(container.querySelector(".branchAgentSummary")).toBeNull();
 			expect(container.querySelector(".branchAgentActivity")?.textContent).toBe("term");
 		});
 
-		it("toggles the tab list when re-clicking the already-active branch (>1 terminal)", () => {
+		// Rule (AGENTS.md "Sidebar clicks"): a row click opens the branch and
+		// nothing else. Only the branch icon expands or collapses the agents.
+		it("row click on the already-active branch opens it and never toggles the agents", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
@@ -1606,11 +1648,10 @@ describe("Sidebar", () => {
 			fireEvent.click(branchRow(container, "main"));
 
 			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "main");
-			expect(mockToggleBranchTabsExpanded).toHaveBeenCalledWith("/repo1", "main");
-			expect(mockSetBranchTabsExpanded).not.toHaveBeenCalled();
+			expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
 		});
 
-		it("opens (never toggles) when focusing a branch that was not active", () => {
+		it("row click on an inactive branch opens it and never expands the agents", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
@@ -1633,22 +1674,22 @@ describe("Sidebar", () => {
 								terminals: ["t2", "t3"],
 								additions: 0,
 								deletions: 0,
-								tabsExpanded: false,
 							},
 						},
 					}),
 				},
 				"/repo1",
 			);
-			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const onBranchSelect = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
 
 			fireEvent.click(branchRow(container, "feature/x"));
 
-			expect(mockSetBranchTabsExpanded).toHaveBeenCalledWith("/repo1", "feature/x", true);
-			expect(mockToggleBranchTabsExpanded).not.toHaveBeenCalled();
+			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "feature/x");
+			expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
 		});
 
-		it("toggles the activity card when the branch has a single terminal", () => {
+		it("branch icon click toggles the agents without opening the branch", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
@@ -1663,17 +1704,75 @@ describe("Sidebar", () => {
 								additions: 0,
 								deletions: 0,
 							},
+							"feature/x": {
+								workspaceId: "feature/x",
+								branchName: "feature/x",
+								isMain: false,
+								worktreePath: "/wt/x",
+								terminals: ["t2"],
+								additions: 0,
+								deletions: 0,
+							},
 						},
 					}),
 				},
 				"/repo1",
 			);
+			const onBranchSelect = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+
+			fireEvent.click(branchRow(container, "feature/x").querySelector(".branchIconToggle")!);
+
+			expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledWith("/repo1", "feature/x");
+			expect(onBranchSelect).not.toHaveBeenCalled();
+		});
+
+		it("branch icon toggles the agents from the keyboard", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 
-			fireEvent.click(branchRow(container, "main"));
+			fireEvent.keyDown(branchRow(container, "main").querySelector(".branchIconToggle")!, { key: "Enter" });
 
-			expect(mockToggleBranchTabsExpanded).toHaveBeenCalledWith("/repo1", "main");
-			expect(mockSetBranchTabsExpanded).not.toHaveBeenCalled();
+			expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledWith("/repo1", "main");
+		});
+
+		it("branch icon counts the sessions its toggle reveals, even while collapsed", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						"feature/closed": {
+							workspaceId: "feature/closed",
+							branchName: "feature/closed",
+							isMain: false,
+							worktreePath: "/wt/closed",
+							terminals: ["t1", "t2", "t3"],
+							additions: 0,
+							deletions: 0,
+							tabsCollapsed: true,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const toggle = branchRow(container, "feature/closed").querySelector(".branchIconToggle")!;
+
+			// A collapsed list is exactly when the count is the only trace of the sessions.
+			expect(toggle.querySelector(".branchAgentCount")?.textContent).toBe("3");
+			expect(toggle.getAttribute("aria-label")).toContain("3");
 		});
 	});
 
@@ -1687,7 +1786,7 @@ describe("Sidebar", () => {
 			return row as HTMLElement;
 		}
 
-		it("renders no chevron even when a branch has more than one terminal", () => {
+		it("marks no branch expandable even when it has more than one terminal", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1704,7 +1803,7 @@ describe("Sidebar", () => {
 				}),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			expect(container.querySelectorAll(".branchTabsChevron").length).toBe(0);
+			expect(container.querySelectorAll(".branchIconToggle").length).toBe(0);
 		});
 
 		it("renders no subitems even when expanded with more than one terminal", () => {
@@ -1725,7 +1824,6 @@ describe("Sidebar", () => {
 							terminals: ["t1", "t2"],
 							additions: 0,
 							deletions: 0,
-							tabsExpanded: true,
 						},
 					},
 				}),
@@ -1760,8 +1858,7 @@ describe("Sidebar", () => {
 			fireEvent.click(branchRow(container, "main"));
 
 			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "main");
-			expect(mockToggleBranchTabsExpanded).not.toHaveBeenCalled();
-			expect(mockSetBranchTabsExpanded).not.toHaveBeenCalled();
+			expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
 		});
 	});
 
@@ -2344,7 +2441,7 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 
 			// The Conflicts badge should render for /repo2/feature
-			const badge = container.querySelector("[title='PR #99']");
+			const badge = container.querySelector("[data-tooltip='PR #99']");
 			expect(badge).not.toBeNull();
 
 			// Click the badge's parent span (which has the onClick handler)
@@ -2419,7 +2516,7 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 
 			// Click badge on /repo2/feature (manual open)
-			const badge = container.querySelector("[title='PR #99']");
+			const badge = container.querySelector("[data-tooltip='PR #99']");
 			expect(badge).not.toBeNull();
 			await fireEvent.click(badge!.parentElement!);
 

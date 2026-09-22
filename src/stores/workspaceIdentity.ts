@@ -60,8 +60,9 @@ export interface WorkspaceState {
 	savedTerminals?: SavedTerminal[]; // Persisted terminal metadata for session restore
 	/** CI auto-heal: when enabled, CI failures trigger automatic agent fix cycles */
 	ciAutoHeal?: { enabled: boolean; attempts: number; lastRunId?: number; healing?: boolean };
-	/** Whether the terminal tab list is expanded under this workspace row */
-	tabsExpanded?: boolean;
+	/** True once the user collapsed the agents under this workspace row. Absent
+	 *  means expanded: every branch shows its agents until someone hides them. */
+	tabsCollapsed?: boolean;
 }
 
 /** One entry as it may arrive off disk: any field may be absent. */

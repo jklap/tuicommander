@@ -915,30 +915,29 @@ describe("repositoriesStore", () => {
 		});
 	});
 
-	describe("toggleWorkspaceTabsExpanded()", () => {
-		it("toggles tabsExpanded from falsy to true", () => {
+	describe("toggleWorkspaceTabsCollapsed()", () => {
+		it("starts expanded: a new workspace carries no collapsed flag", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "My Repo" });
 				store.setWorkspace("/repo", "feat/foo");
-				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBeFalsy();
-				store.toggleWorkspaceTabsExpanded("/repo", "feat/foo");
-				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(true);
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsCollapsed).toBeFalsy();
 			});
 		});
 
-		it("toggles tabsExpanded from true to false", () => {
+		it("collapses on the first toggle and expands on the second", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "My Repo" });
 				store.setWorkspace("/repo", "feat/foo");
-				store.toggleWorkspaceTabsExpanded("/repo", "feat/foo");
-				store.toggleWorkspaceTabsExpanded("/repo", "feat/foo");
-				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(false);
+				store.toggleWorkspaceTabsCollapsed("/repo", "feat/foo");
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsCollapsed).toBe(true);
+				store.toggleWorkspaceTabsCollapsed("/repo", "feat/foo");
+				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsCollapsed).toBe(false);
 			});
 		});
 
 		it("no-ops on unknown repo/branch", () => {
 			testInScope(() => {
-				expect(() => store.toggleWorkspaceTabsExpanded("/nonexistent", "main")).not.toThrow();
+				expect(() => store.toggleWorkspaceTabsCollapsed("/nonexistent", "main")).not.toThrow();
 			});
 		});
 
@@ -946,47 +945,10 @@ describe("repositoriesStore", () => {
 			testInScope(() => {
 				store.add({ path: "/repo", displayName: "My Repo" });
 				store.setWorkspace("/repo", "feat/foo");
-				store.toggleWorkspaceTabsExpanded("/repo", "feat/foo");
+				store.toggleWorkspaceTabsCollapsed("/repo", "feat/foo");
 				vi.advanceTimersByTime(500);
 				const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
 				expect(calls.length).toBeGreaterThan(0);
-			});
-		});
-	});
-
-	describe("setWorkspaceTabsExpanded()", () => {
-		it("sets tabsExpanded to true", () => {
-			testInScope(() => {
-				store.add({ path: "/repo", displayName: "My Repo" });
-				store.setWorkspace("/repo", "feat/foo");
-				store.setWorkspaceTabsExpanded("/repo", "feat/foo", true);
-				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(true);
-			});
-		});
-
-		it("keeps tabsExpanded true when set true again (idempotent open)", () => {
-			testInScope(() => {
-				store.add({ path: "/repo", displayName: "My Repo" });
-				store.setWorkspace("/repo", "feat/foo");
-				store.setWorkspaceTabsExpanded("/repo", "feat/foo", true);
-				store.setWorkspaceTabsExpanded("/repo", "feat/foo", true);
-				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(true);
-			});
-		});
-
-		it("sets tabsExpanded to false", () => {
-			testInScope(() => {
-				store.add({ path: "/repo", displayName: "My Repo" });
-				store.setWorkspace("/repo", "feat/foo");
-				store.setWorkspaceTabsExpanded("/repo", "feat/foo", true);
-				store.setWorkspaceTabsExpanded("/repo", "feat/foo", false);
-				expect(store.state.repositories["/repo"].workspaces["feat/foo"].tabsExpanded).toBe(false);
-			});
-		});
-
-		it("no-ops on unknown repo/branch", () => {
-			testInScope(() => {
-				expect(() => store.setWorkspaceTabsExpanded("/nonexistent", "main", true)).not.toThrow();
 			});
 		});
 	});

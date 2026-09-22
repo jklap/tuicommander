@@ -1072,17 +1072,10 @@ function createRepositoriesStore() {
 			save();
 		},
 
-		/** Toggle branch terminal tab list expanded state */
-		toggleWorkspaceTabsExpanded(repoPath: string, workspaceId: string): void {
+		/** Collapse or re-expand the agents under a workspace row (expanded by default) */
+		toggleWorkspaceTabsCollapsed(repoPath: string, workspaceId: string): void {
 			if (!state.repositories[repoPath]?.workspaces[workspaceId]) return;
-			setState("repositories", repoPath, "workspaces", workspaceId, "tabsExpanded", (e) => !e);
-			save();
-		},
-
-		/** Set branch terminal tab list expanded state explicitly */
-		setWorkspaceTabsExpanded(repoPath: string, workspaceId: string, expanded: boolean): void {
-			if (!state.repositories[repoPath]?.workspaces[workspaceId]) return;
-			setState("repositories", repoPath, "workspaces", workspaceId, "tabsExpanded", expanded);
+			setState("repositories", repoPath, "workspaces", workspaceId, "tabsCollapsed", (c) => !c);
 			save();
 		},
 
@@ -1123,7 +1116,6 @@ function createRepositoriesStore() {
 					worktreePath: null,
 					terminals: [],
 					hadTerminals: false,
-					tabsExpanded: false,
 					lastActiveTerminal: null,
 					additions: 0,
 					deletions: 0,

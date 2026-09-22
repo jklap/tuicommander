@@ -1,5 +1,6 @@
 import { type Component, createEffect, createSignal, For, type JSX, Show } from "solid-js";
 import { cx } from "../../utils";
+import { ChevronIcon } from "../ui/ChevronIcon";
 import type { SearchOptions } from "./DomSearchEngine";
 import s from "./SearchBar.module.css";
 
@@ -72,13 +73,6 @@ const NextIcon = () => (
 const CloseIcon = () => (
 	<svg viewBox="0 0 16 16" fill="currentColor">
 		<path d="M8 8.707l3.646 3.647.708-.707L8.707 8l3.647-3.646-.707-.708L8 7.293 4.354 3.646l-.708.708L7.293 8l-3.647 3.646.708.708L8 8.707z" />
-	</svg>
-);
-
-/** Chevron that points right when collapsed, down when expanded (rotated via CSS). */
-const ChevronIcon = () => (
-	<svg viewBox="0 0 16 16" fill="currentColor">
-		<path d="M5.7 13.7l-.7-.7L9.3 8 5 3.7l.7-.7L10.7 8z" />
 	</svg>
 );
 

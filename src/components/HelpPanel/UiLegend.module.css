@@ -78,21 +78,6 @@
   flex-shrink: 0;
 }
 
-.badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-2xs);
-  font-weight: 600;
-  line-height: 1.4;
-  flex-shrink: 0;
-}
-
-.badgePulsing {
-  composes: badge;
-  animation: pulse-opacity 1.5s ease-in-out infinite;
-}
-
 @keyframes pulse-opacity {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

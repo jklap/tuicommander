@@ -69,8 +69,8 @@ Each branch row can show:
 | Indicator | Meaning |
 |-----------|---------|
 | **CI ring** | Proportional arc segments — green (passed), red (failed), yellow (pending) |
-| **PR badge** | Always shows the PR number plus its highest-priority state when applicable, such as Draft, Conflicts, or CI Failed. Click for detail popover. |
-| **Diff stats** | `+N / -N` additions and deletions |
+| **PR marker** | A colored square and the PR number. The color shows the highest-priority state; a conflict turns the square into a diamond. Hover or focus it for the state name, such as Draft, Conflicts, or CI Failed. Click for detail popover. |
+| **Diff stats** | `+N / -N` additions and deletions, always shown beside the PR marker. Hover for exact counts and uncommitted files. |
 | **Dirty badge** | The workspace contains staged, unstaged, or untracked changes. Hover or focus the badge for the removal-safety explanation. |
 | **Merged badge** | Branches merged into main show a "Merged" badge |
 | **Unknown badge** | TUICommander could not verify the workspace state, so removal is blocked. Hover or focus the badge for the inspection error. |
@@ -81,6 +81,19 @@ Each branch row can show:
 
 - **Double-click** the branch name to rename the branch
 - **Right-click** for context menu: Copy Path, Add Terminal, Create Worktree (for branches without a worktree), Delete Worktree, Open in IDE, Rename Branch/Worktree, Merge & Archive
+
+### Agent and session activity
+
+Nested agent and terminal rows are an opt-in feature and are disabled by default. Enable **Settings → Appearance → Tabs → Nested Terminal Tabs** to show them; the change applies immediately.
+
+When enabled, the branch icon of a branch with at least one open terminal session is a toggle: hover it and it turns into an arrow, click it to hide or show the agents. Agents are shown by default; a branch stays collapsed once you hide them. Clicking the row itself only opens the branch. Expanded, it shows a single activity card containing the sessions assigned to that branch:
+
+- Detected agents show their icon, terminal name, current intent or task, last-update age, and status.
+- Plain shells appear as terminal rows.
+- Clicking a row switches to that session.
+- A branch with one session can still expand.
+
+When the setting is off, the sidebar intentionally shows none of the activity card or nested rows. Enabling it does not create a session or detect an agent outside an open terminal assigned to the branch.
 
 ## Remote-Only PRs
 

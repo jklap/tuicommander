@@ -33,7 +33,8 @@ import { remoteUrlToGitHub } from "../GitPanel/BranchesTab";
 import { PromptDialog } from "../PromptDialog";
 import b from "../shared/branch.module.css";
 import { AgentIcon } from "../ui/AgentIcon";
-import { isPrBadgeFlashing, PrStateBadge } from "./PrStateBadge";
+import { ChevronIcon } from "../ui/ChevronIcon";
+import { PrStateBadge } from "./PrStateBadge";
 import s from "./Sidebar.module.css";
 import { SidebarPluginSection } from "./SidebarPluginSection";
 
@@ -159,9 +160,11 @@ export const StatsBadge: Component<{
 	<Show when={props.additions > 0 || props.deletions > 0}>
 		<div
 			class={s.branchStats}
-			title={`Tracked line changes: +${props.additions} -${props.deletions}${
+			data-tooltip={`Tracked line changes: +${props.additions} -${props.deletions}${
 				props.dirtyFiles ? ` — ${props.dirtyFiles} uncommitted file${props.dirtyFiles === 1 ? "" : "s"}` : ""
 			}`}
+			data-tooltip-pos="bottom"
+			data-tooltip-align="right"
 			role={props.onClick ? "button" : undefined}
 			tabIndex={props.onClick ? 0 : undefined}
 			onClick={props.onClick}
@@ -179,7 +182,7 @@ export { _resetMergedActivityAccum };
 /**
  * Whether a branch shows its nested terminal-tab list. Single source of truth for
  * the feature: gated by the `tabTreeEnabled` setting and available whenever the branch
- * has a terminal. When off, the chevron, aria state, row-click toggle and
+ * has a terminal. When off, the aria state, row-click toggle and
  * the list itself are all inert.
  */
 function getBranchTabsAvailable(branch: WorkspaceState): boolean {
@@ -198,18 +201,8 @@ function compactActivityAge(timestamp: number | null): string {
 
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
-	const agentCount = () => props.terminalIds.filter((id) => terminalsStore.get(id)?.agentType).length;
-	const summary = () => {
-		const agents = agentCount();
-		if (agents === props.terminalIds.length) return `${agents} agent${agents === 1 ? "" : "s"}`;
-		return `${props.terminalIds.length} session${props.terminalIds.length === 1 ? "" : "s"}`;
-	};
-
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
-			<Show when={props.terminalIds.length > 1}>
-				<div class={s.branchAgentSummary}>{summary()}</div>
-			</Show>
 			<For each={props.terminalIds}>
 				{(id) => {
 					const term = () => terminalsStore.get(id);
@@ -320,19 +313,6 @@ export const BranchItem: Component<{
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
 	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.branchName));
 	const hasDiff = () => props.branch.additions > 0 || props.branch.deletions > 0;
-	const prIsFlashing = () => {
-		const status = pr();
-		if (!status) return false;
-		return isPrBadgeFlashing({
-			state: status.state,
-			isDraft: status.is_draft,
-			mergeable: status.mergeable,
-			conflictState: status.conflict_state,
-			reviewDecision: status.review_decision,
-			ciFailed: checks()?.failed,
-			ciPending: checks()?.pending,
-		});
-	};
 
 	const hasError = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.awaitingInput === "error");
 
@@ -353,23 +333,12 @@ export const BranchItem: Component<{
 		}
 	};
 
-	// Clicking the row selects the branch and manages its tab list:
-	//  - Returning focus from elsewhere (branch was NOT active) → expand (open
-	//    stays open, never collapses on a focus-switch).
-	//  - Re-clicking the already-focused branch → toggle (so it can be closed).
-	// We read isActive BEFORE onSelect(), since onSelect synchronously flips the
-	// branch to active. Activity cards only exist when a branch has a terminal.
-	// Child controls that own an action (PR badge, diff stats, add-terminal,
-	// remove) stopPropagation, so they never reach here.
-	const handleRowClick = () => {
-		const wasActive = props.isActive;
-		props.onSelect();
-		if (!getBranchTabsAvailable(props.branch)) return;
-		if (wasActive) {
-			repositoriesStore.toggleWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId);
-		} else if (!props.branch.tabsExpanded) {
-			repositoriesStore.setWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId, true);
-		}
+	// A row click opens the branch and nothing else (AGENTS.md "Sidebar clicks").
+	// Only the branch icon expands or collapses the agents, and it stops
+	// propagation so the toggle never also opens the branch.
+	const toggleAgents = (e: MouseEvent | KeyboardEvent) => {
+		e.stopPropagation();
+		repositoriesStore.toggleWorkspaceTabsCollapsed(props.repoPath, props.branch.workspaceId);
 	};
 
 	const handleCopyPath = async () => {
@@ -496,6 +465,19 @@ export const BranchItem: Component<{
 		return out;
 	};
 
+	const branchIcon = () => (
+		<BranchIcon
+			isMainBranch={props.branch.isMain}
+			isMainWorktree={props.branch.worktreePath === props.repoPath}
+			isShell={props.branch.isShell}
+			hasError={hasError()}
+			hasQuestion={hasQuestion()}
+			hasBusy={hasBusy()}
+			hasUnseen={hasUnseen()}
+			branchHasTerminals={props.branch.terminals.length > 0}
+		/>
+	);
+
 	const isPendingOp = () => props.branch.isRemoving;
 	const pendingLabel = () => "Removing…";
 
@@ -529,20 +511,33 @@ export const BranchItem: Component<{
 		>
 			<div
 				class={cx(s.branchItem, props.isActive && s.active)}
-				onClick={handleRowClick}
+				onClick={() => props.onSelect()}
 				onContextMenu={ctxMenu.open}
-				aria-expanded={getBranchTabsAvailable(props.branch) ? (props.branch.tabsExpanded ?? false) : undefined}
 			>
-				<BranchIcon
-					isMainBranch={props.branch.isMain}
-					isMainWorktree={props.branch.worktreePath === props.repoPath}
-					isShell={props.branch.isShell}
-					hasError={hasError()}
-					hasQuestion={hasQuestion()}
-					hasBusy={hasBusy()}
-					hasUnseen={hasUnseen()}
-					branchHasTerminals={props.branch.terminals.length > 0}
-				/>
+				{/* The icon doubles as the agents toggle: it turns into a chevron on
+				    hover, so expanding costs no width in the row. */}
+				<Show when={getBranchTabsAvailable(props.branch)} fallback={branchIcon()}>
+					<span
+						class={cx(s.branchIconToggle, !props.branch.tabsCollapsed && s.expanded)}
+						role="button"
+						tabIndex={0}
+						aria-expanded={!props.branch.tabsCollapsed}
+						aria-label={`${t("sidebar.toggleAgents", "Show or hide agents")} (${props.branch.terminals.length})`}
+						title={t("sidebar.toggleAgents", "Show or hide agents")}
+						onClick={toggleAgents}
+						onKeyDown={onClickKeyDown(toggleAgents)}
+					>
+						{branchIcon()}
+						<span class={s.branchIconChevron}>
+							<ChevronIcon />
+						</span>
+						{/* Rides the icon's corner so the count costs no width; it is the
+						    only trace of the sessions while the list is collapsed. */}
+						<span class={s.branchAgentCount} aria-hidden="true">
+							{props.branch.terminals.length}
+						</span>
+					</span>
+				</Show>
 				<div class={s.branchContent}>
 					<span class={s.branchName} onDblClick={handleDoubleClick} title={rowTitle()}>
 						{branchLabel() ?? props.branch.branchName}
@@ -616,12 +611,7 @@ export const BranchItem: Component<{
 					}}
 				</Show>
 				<Show when={pr() || hasDiff()}>
-					<div
-						class={cx(
-							s.branchBadgeStack,
-							pr() && hasDiff() && (prIsFlashing() ? s.branchBadgeStackPinned : s.branchBadgeStackAlternating),
-						)}
-					>
+					<div class={s.branchBadgeStack}>
 						<Show when={pr()}>
 							<span
 								class={(() => {
@@ -634,6 +624,7 @@ export const BranchItem: Component<{
 								}}
 							>
 								<PrStateBadge
+									compact
 									prNumber={pr()!.number}
 									state={pr()!.state}
 									isDraft={pr()!.is_draft}
@@ -717,11 +708,6 @@ export const BranchItem: Component<{
 					visible={ctxMenu.visible()}
 					onClose={ctxMenu.close}
 				/>
-				<Show when={getBranchTabsAvailable(props.branch)}>
-					<span class={cx(s.branchTabsChevron, props.branch.tabsExpanded && s.expanded)} aria-hidden="true">
-						›
-					</span>
-				</Show>
 			</div>
 		</Show>
 	);
@@ -970,30 +956,6 @@ export const RepoSection: Component<{
 						</span>
 					</Show>
 					<div class={cx(s.repoActions, ghBadgeCount() > 0 && s.repoActionsWithBadge)}>
-						<Show when={ghBadgeCount() > 0}>
-							<button
-								class={cx(s.repoActionBtn, s.ghBadgeBtn)}
-								onClick={(e) => {
-									e.stopPropagation();
-									setRemoteOnlyPopoverVisible((v) => !v);
-								}}
-								title={t("sidebar.githubPanelTitle", "GitHub: PRs & Issues")}
-							>
-								<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-									<path
-										fill-rule="evenodd"
-										d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
-									/>
-								</svg>
-								<Show when={myPrsCount() > 0 && otherCount() > 0}>
-									{myPrsCount()}
-									<span class={s.ghBadgeSep}>◈</span>
-									{otherCount()}
-								</Show>
-								<Show when={myPrsCount() > 0 && otherCount() === 0}>{myPrsCount()}</Show>
-								<Show when={myPrsCount() === 0}>{otherCount()}</Show>
-							</button>
-						</Show>
 						<button
 							class={s.repoActionBtn}
 							onClick={handleMenuToggle}
@@ -1025,8 +987,36 @@ export const RepoSection: Component<{
 								{props.isCreatingWorktree ? "…" : "+"}
 							</button>
 						</Show>
+						{/* Last in the cluster, next to the chevron: the hover-only ⋯ and + keep
+						    their boxes while invisible, so a badge ahead of them floated in a gap. */}
+						<Show when={ghBadgeCount() > 0}>
+							<button
+								class={cx(s.repoActionBtn, s.ghBadgeBtn)}
+								onClick={(e) => {
+									e.stopPropagation();
+									setRemoteOnlyPopoverVisible((v) => !v);
+								}}
+								title={t("sidebar.githubPanelTitle", "GitHub: PRs & Issues")}
+							>
+								<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+									<path
+										fill-rule="evenodd"
+										d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+									/>
+								</svg>
+								<Show when={myPrsCount() > 0 && otherCount() > 0}>
+									{myPrsCount()}
+									<span class={s.ghBadgeSep}>◈</span>
+									{otherCount()}
+								</Show>
+								<Show when={myPrsCount() > 0 && otherCount() === 0}>{myPrsCount()}</Show>
+								<Show when={myPrsCount() === 0}>{otherCount()}</Show>
+							</button>
+						</Show>
 					</div>
-					<span class={cx(s.repoChevron, props.repo.expanded && s.expanded)}>{"\u203A"}</span>
+					<span class={cx(s.repoChevron, props.repo.expanded && s.expanded)}>
+						<ChevronIcon />
+					</span>
 				</Show>
 			</div>
 
@@ -1038,7 +1028,7 @@ export const RepoSection: Component<{
 							<div
 								class={cx(
 									s.branchGroup,
-									branch.tabsExpanded && getBranchTabsAvailable(branch) && s.branchGroupExpanded,
+									!branch.tabsCollapsed && getBranchTabsAvailable(branch) && s.branchGroupExpanded,
 								)}
 							>
 								<BranchItem
@@ -1081,7 +1071,7 @@ export const RepoSection: Component<{
 									currentBranch={branch.worktreePath === props.repo.path ? props.currentBranch : undefined}
 									githubBaseUrl={githubBaseUrl()}
 								/>
-								<Show when={branch.tabsExpanded && getBranchTabsAvailable(branch)}>
+								<Show when={!branch.tabsCollapsed && getBranchTabsAvailable(branch)}>
 									<BranchTabList terminalIds={branch.terminals} />
 								</Show>
 							</div>

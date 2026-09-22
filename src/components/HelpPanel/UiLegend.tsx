@@ -1,4 +1,5 @@
 import { type Component, For, type JSX } from "solid-js";
+import { PrStateBadge } from "../Sidebar/PrStateBadge";
 import { BranchIcon } from "../Sidebar/RepoSection";
 import s from "./UiLegend.module.css";
 
@@ -96,37 +97,46 @@ const SIDEBAR_SYMBOL_LEGEND: BranchIconEntry[] = [
 	},
 ];
 
-interface BadgeEntry {
+/** Rendered with the real sidebar component, so the legend cannot drift from
+ *  what a branch row shows — color, shape and pulse included. */
+interface PrLegendEntry {
 	label: string;
 	description: string;
-	bg: string;
-	fg: string;
-	border?: string;
-	pulsing?: boolean;
+	badge: Partial<Parameters<typeof PrStateBadge>[0]>;
 }
 
-const PR_BADGE_LEGEND: BadgeEntry[] = [
-	{ label: "#N", description: "Open PR (number)", bg: "var(--accent)", fg: "#000" },
-	{ label: "Ready", description: "Approved and mergeable", bg: "var(--success)", fg: "#000" },
-	{ label: "Draft", description: "PR is a draft", bg: "transparent", fg: "var(--fg-muted)", border: "var(--fg-muted)" },
-	{ label: "Conflicts", description: "Merge conflicts", bg: "var(--error)", fg: "#000", pulsing: true },
-	{ label: "CI Failed", description: "CI checks failed", bg: "var(--error)", fg: "#000" },
-	{ label: "Changes Req.", description: "Changes requested", bg: "#d29922", fg: "#000" },
-	{ label: "Review", description: "Awaiting review", bg: "transparent", fg: "#d29922", border: "#d29922" },
+const PR_BADGE_LEGEND: PrLegendEntry[] = [
+	{ label: "Open", description: "Open PR", badge: { state: "open" } },
 	{
-		label: "CI Running",
-		description: "CI in progress",
-		bg: "transparent",
-		fg: "#e3b341",
-		border: "#e3b341",
-		pulsing: true,
+		label: "Ready",
+		description: "Approved and mergeable",
+		badge: { state: "open", mergeable: "MERGEABLE", reviewDecision: "APPROVED" },
 	},
-	{ label: "Merged", description: "PR merged", bg: "#a371f7", fg: "#000" },
+	{ label: "Draft", description: "PR is a draft", badge: { state: "open", isDraft: true } },
+	{
+		label: "Conflicts",
+		description: "Merge conflicts (pulsing diamond)",
+		badge: { state: "open", conflictState: "conflicting" },
+	},
+	{
+		label: "Checking",
+		description: "GitHub is recomputing mergeability (pulsing)",
+		badge: { state: "open", conflictState: "checking" },
+	},
+	{ label: "CI Failed", description: "CI checks failed", badge: { state: "open", ciFailed: 1 } },
+	{
+		label: "Changes Req.",
+		description: "Changes requested",
+		badge: { state: "open", reviewDecision: "CHANGES_REQUESTED" },
+	},
+	{ label: "Review", description: "Awaiting review", badge: { state: "open", reviewDecision: "REVIEW_REQUIRED" } },
+	{ label: "CI Running", description: "CI in progress (pulsing)", badge: { state: "open", ciPending: 1 } },
+	{ label: "Merged", description: "PR merged", badge: { state: "merged" } },
 ];
 
 const STATS_LEGEND: SymbolEntry[] = [
 	{ symbol: "+N", label: "Additions", description: "Lines added vs main", color: "var(--success)" },
-	{ symbol: "-N", label: "Deletions", description: "Lines removed vs main", color: "var(--error)" },
+	{ symbol: "-N", label: "Deletions", description: "Lines removed vs main", color: "var(--diff-del)" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -207,21 +217,13 @@ export const UiLegend: Component = () => {
 			{/* PR badges */}
 			<div class={s.group}>
 				<label class={s.groupLabel}>PR Status Badges</label>
-				<p class={s.hint}>Shown next to branches with a pull request</p>
+				<p class={s.hint}>Shown next to branches with a pull request. Hover the marker for the state name</p>
 				<div class={s.grid}>
 					<For each={PR_BADGE_LEGEND}>
 						{(entry) => (
 							<div class={s.row}>
-								<span
-									class={entry.pulsing ? s.badgePulsing : s.badge}
-									style={{
-										background: entry.bg,
-										color: entry.fg,
-										border: entry.border ? `1px solid ${entry.border}` : undefined,
-									}}
-								>
-									{entry.label}
-								</span>
+								<PrStateBadge compact prNumber={42} {...entry.badge} />
+								<span class={s.label}>{entry.label}</span>
 								<span class={s.desc}>{entry.description}</span>
 							</div>
 						)}
