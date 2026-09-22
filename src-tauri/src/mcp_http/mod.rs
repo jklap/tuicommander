@@ -1797,6 +1797,13 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/dictation/hands-free/disarm",
             post(dictation_routes::disarm_hands_free_http),
+        )
+        // A WS rather than a route pair, because this one carries audio in
+        // both directions for as long as the client wants a conversation —
+        // the one dictation surface that is a stream and not a call.
+        .route(
+            "/dictation/hands-free/audio",
+            get(dictation_routes::hands_free_audio_ws),
         );
 
     // OS integration — desktop-only: the relay client, the audio output and the

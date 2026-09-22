@@ -443,7 +443,8 @@ When modifying `src-tauri/src/dictation/**` or the Dictation settings panel:
 | `docs/api/tauri-commands.md` | The Voice Dictation command table — including which config fields drop the voice built for the previous one |
 | `docs/api/http-api.md` | The `/dictation/**` routes and the wire shapes. **`SpeechAssetInfo` is snake_case**; `SpeechStatus`, `HandsFreeStatus`, `SpokenReply` and `HandsFreeDisarmed` are camelCase |
 | `docs/frontend/stores.md` | `dictationStore` — the speech assets, the polled hands-free/speech status, and the fields `saveConfig` reads off the stored config rather than store state |
-| `docs/frontend/components.md` | `DictationSettings` — and the fact that `SettingsPanel.tsx` hides the whole tab outside Tauri |
+| `docs/frontend/components.md` | `DictationSettings` — including which groups stay behind `isTauri()` now that the tab itself renders in browser mode |
+| `src/utils/browserVoice.ts` | The browser half of the hands-free audio socket. Transport only: any decision added here becomes a second segmenter that exists only in browsers |
 | `src/components/SettingsPanel/settingsSearchIndex.ts` | One row per new label, **in source order**: `extractSettings` reads the file, not the render tree |
 | `src/i18n/en.json` | Every `t("key", "double-quoted fallback")`, verbatim — `i18nKeyCollisions.test.ts` is the gate |
 | `docs/FEATURES.md` | Section 9 (Voice Dictation) |

@@ -59,8 +59,11 @@ const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 /** Tabs whose feature is switched off right now, so their nav entry is noise. */
 function hiddenTabs(): Set<string> {
 	const hidden = new Set<string>();
-	// Desktop-only: the browser build has no microphone capture path.
-	if (!isTauri()) hidden.add("dictation");
+	// Dictation is no longer desktop-only: a browser holds a hands-free
+	// conversation through its own microphone and speaker over a WS audio
+	// socket (#832-e730). The controls that really are local — the global
+	// hotkey and this machine's input devices — are hidden inside the tab
+	// rather than by hiding the whole tab.
 	// Providers configures ego, and ego is reachable only from the AI Chat panel.
 	// While that panel is behind the experimental toggle, this tab would let a
 	// person set a default model for an engine they cannot open.

@@ -288,17 +288,25 @@ Three details that are load-bearing rather than incidental:
 - `HandsFreeRuntime` stops and joins its thread on `Drop`, so dropping it out of
   `DictationState` is the only shutdown handshake there is.
 
-### The desktop endpoint, and the one that does not exist yet
+### Two endpoints, and no fallback between them (832-e730)
 
-`VoiceEndpoint` is the port: a microphone plus a recogniser. Today there is
-exactly one adapter, `DesktopVoiceEndpoint` (`commands.rs`), and `arm` accepts
-only the owner `DESKTOP_OWNER` (`"desktop"`). Any other owner is refused with
-`Audio endpoint '<owner>' is not available on this build` — the browser/remote
-endpoint is story 832-e730 and is deliberately absent rather than stubbed, so a
-remote client cannot silently be served Boss's local microphone. Nothing in the
-UI can reach that refusal either: `SettingsPanel.tsx` hides the whole Dictation
-tab outside Tauri, so a browser client is never offered a control that cannot
-work.
+`VoiceEndpoint` is the port: a microphone plus a recogniser. There are two
+adapters, and which one `open_endpoint` builds is decided by the owner name
+alone:
+
+| Owner | Adapter | Microphone | Speaker |
+|---|---|---|---|
+| `DESKTOP_OWNER` (`"desktop"`) | `DesktopVoiceEndpoint` (`commands.rs`) | `cpal` on this machine | `DeviceOutput` on this machine |
+| anything else | `BrowserVoiceEndpoint` (`browser.rs`) | the client's socket | `BrowserOutput` on the same socket |
+
+**Neither direction falls back.** An owner with no registered socket is refused
+with `No client is connected for audio owner '<owner>'` rather than handed the
+local microphone, and the desktop owner ignores a connected browser client even
+when one exists. A silent fallback here is not a degraded experience, it is a
+laptop user being listened to — or answered out loud — by the machine running
+TUICommander, in another room or another building. Both directions have a test,
+with the desktop case as the negative control
+(`a_desktop_conversation_ignores_a_connected_browser_client`).
 
 The desktop adapter shares push-to-talk's transcriber `Arc` (loading a second
 multi-gigabyte Whisper model would be absurd) and its permission and model
@@ -312,6 +320,57 @@ next `hands_free_status` poll, which is where the device is actually released.
 `DictationState::shutdown` clears the owner flag and disarms with
 `OwnerDisconnected` itself before dropping the runtime, rather than relying on
 the thread noticing — the thread may already be parked on its way out.
+
+### The browser endpoint (`browser.rs`, 832-e730)
+
+A browser tab has a microphone and a speaker; what it does not have is a way to
+be one. `BrowserEndpoints` is the registry that closes that gap: a `DashMap` of
+owner id to `Arc<BrowserLink>`, where a link is one client's audio socket seen
+from the conversation's side — a bounded capture queue, a broadcast channel for
+playback, an alive flag, and the deadline of whatever is currently speaking.
+`GET /dictation/hands-free/audio?owner=<id>` (`mcp_http/dictation_routes.rs`)
+registers one and serves it; the frontend half is `src/utils/browserVoice.ts`.
+
+**A link outlives its socket, and that is the whole design.** The socket handler
+owns the `Arc` it registered and drops it on close, but the conversation holds
+its own clone through `BrowserVoiceEndpoint`, so a tab that vanishes mid-turn
+leaves a link that answers `connected() == false` instead of a dangling lookup.
+`tick` then disarms with `OwnerDisconnected` on exactly the path a lost desktop
+device takes — no second shutdown route, no special case
+(`a_browser_client_that_closed_its_socket_disarms_the_conversation_it_owned`
+drives the real `tick` to prove it).
+
+**Eviction is by identity, not by key.** `disconnect(owner, link)` uses
+`remove_if(owner, |_, current| Arc::ptr_eq(current, link))`, because a reconnect
+under the same owner replaces the entry: without the pointer check, the *old*
+socket's late close would evict its successor and disarm a conversation that had
+just been re-established. `connect` deliberately disconnects the link it
+replaced, so the conversation armed against the old socket disarms rather than
+silently migrating to whoever reconnected under that name.
+
+**Capture is bounded and drops the oldest.** `MAX_CAPTURE_SAMPLES` is 60 s at
+16 kHz. A client that ships audio nobody drains — armed, then the runtime dies —
+must not grow without limit, and when the drain resumes the newest audio is what
+matters: the user is still talking now.
+
+**`is_speaking` has no device to ask.** A `cpal` stream knows whether it is still
+playing; a browser cannot be interrogated, only told. `BrowserOutput` therefore
+treats the rendered duration as the authority (`speaking_until`), takes the
+client's `playback-ended` ack as an early-out, and reports `false` outright for a
+dead link. Without the last of those, a closed tab would strand a reply in
+`Speaking` for ever and barge-in would never resolve.
+
+**The frontend decides nothing.** `browserVoice.ts` captures 1024-sample frames
+at 16 kHz and ships them, including silence — whether an utterance ended is the
+`Segmenter`'s call in Rust, and a frontend that dropped quiet frames would be a
+second segmenter that disagreed with the first one only on browsers. That is
+asserted directly (`sends silence too, rather than deciding the user stopped
+talking`), because it is the property that is invisible once it breaks.
+
+Since 832-e730 the Dictation tab renders in browser mode. Two groups stay behind
+`isTauri()`: the global hotkey, which the browser cannot register, and the
+microphone device list, which enumerates the *server's* devices — offering a
+browser user a device in another building is worse than offering nothing.
 
 ### The activation phrase
 

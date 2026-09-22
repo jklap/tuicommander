@@ -1481,6 +1481,7 @@ GET  /dictation/hands-free                          -> HandsFreeStatus
 POST /dictation/hands-free/arm   { "sessionId": "...", "owner": "..." }
                                                     -> HandsFreeStatus
 POST /dictation/hands-free/disarm                   -> HandsFreeDisarmed
+GET  /dictation/hands-free/audio?owner=<id>         -> WebSocket upgrade
 ```
 
 `POST /dictation/stop` stops the recording and transcribes it, returning
@@ -1562,7 +1563,10 @@ transports reject the same cases.
 
 `owner` is the caller's own endpoint identity: a remote client that arms here
 binds *itself*, so a later disconnect can disarm the mode it owns. Both fields
-are bounded at 256 bytes and may not be blank.
+are bounded at 256 bytes and may not be blank. **Open the audio socket below
+first** — arming an owner with no socket is refused with `No client is connected
+for audio owner '<owner>'`, because the backend will not substitute the server's
+own microphone for a client's (see `docs/backend/dictation.md`).
 
 `POST /dictation/hands-free/disarm` disarms the whole mode and cancels the voice
 entries the generation still owns. It is idempotent: the second call reports
@@ -1587,6 +1591,40 @@ which case no end notice is sent, because the model never read the start one.
 `error` carries the reason when the queue refuses a notice; arming still
 succeeds. Turning the setting off never leaves speech running: a disarm revokes
 it either way.
+
+### The client's microphone and speaker (832-e730)
+
+`GET /dictation/hands-free/audio?owner=<id>` upgrades to the WebSocket that
+*is* a browser client's audio hardware, seen from the conversation's side. It
+carries capture up and replies down on one socket, in both directions at once.
+
+| Direction | Frame | Meaning |
+|---|---|---|
+| up | binary | `f32` little-endian samples, mono, **16 kHz** |
+| up | `{"type":"playback-ended"}` | the reply finished playing |
+| down | binary | `u32` little-endian sample rate, then `f32` little-endian samples |
+| down | `{"type":"stop"}` | stop playing and drop anything queued |
+
+The downlink carries its own rate because it is not the uplink's: the engine
+renders at 24 kHz and the client resamples. A reply decoded at the capture rate
+plays 50% slow — audible to a person, invisible to an assertion about lengths.
+A trailing partial sample on the uplink is ignored rather than rejected.
+
+`owner` must be present, non-empty and **not** the literal `desktop`; both
+violations are a `400`. Registering as `desktop` would let a remote client
+impersonate the machine's own endpoint, which is the one owner that means local
+hardware.
+
+Opening a second socket under an owner that already has one replaces it and
+disconnects the first, so the conversation the first socket held disarms with
+`OwnerDisconnected` rather than silently following the new client. Closing the
+socket does the same. There is no reconnect window: a conversation belongs to a
+socket, not to a name.
+
+Playback here is best-effort by construction — the server can stop *sending*,
+but only the client can stop *playing*. The `playback-ended` ack is what lets
+the backend see the end of a reply; without it the utterance stays `speaking`
+until its rendered duration elapses.
 
 ## Desktop Integration Endpoints
 

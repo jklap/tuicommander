@@ -8,6 +8,34 @@
 
 # To Test
 
+## Hands-free from a browser tab (story `832-e730`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+A browser now has its own microphone and speaker for hands-free: the tab opens
+`GET /dictation/hands-free/audio?owner=<id>` and streams capture up and replies
+down on it. Rust refuses an owner with no socket rather than falling back to the
+server's hardware, in either direction, and every part of that is covered by
+tests — what no test can reach is a real microphone, a real speaker and a real
+tab being closed.
+
+- [ ] Open the web UI (`http://localhost:9877/`), go to **Settings > Dictation**.
+      The tab must be **present** — it used to be hidden outside Tauri. The
+      global hotkey and the microphone-device list must be **absent**.
+- [ ] Press Start on a terminal running an agent. The browser must ask for
+      microphone permission, and the phase must reach `waiting`.
+- [ ] **[HUMAN]** Hold a complete turn: speak, see the transcript delivered to
+      the agent, and hear the reply **through the browser's speakers** — not
+      through the machine running TUICommander. Check the other machine is
+      silent.
+- [ ] **[HUMAN]** Barge in mid-reply. The reply must stop where you are, not
+      merely stop being sent.
+- [ ] **[HUMAN]** Close the tab mid-utterance. The conversation must disarm
+      (`GET /dictation/hands-free` reports `armed: false`), nothing may stay
+      queued, and nothing may be left speaking.
+- [ ] Arm from the desktop app while a browser tab holds an audio socket. The
+      desktop must use its own microphone and ignore the browser entirely.
+- [ ] Reload the browser tab while armed. The old conversation must disarm
+      rather than follow the new socket.
+
 ## Selection during output (2026-09-21) — **Rust, needs a `make dev` restart**
 
 - [x] Isolated browser verification passed: held and released multi-row

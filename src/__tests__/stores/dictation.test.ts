@@ -4,12 +4,73 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
+/**
+ * The browser audio transport, stubbed. Its own behaviour is
+ * `browserVoice.test.ts`; what matters here is *whether* the store opens it,
+ * which is the difference between using this tab's microphone and using the
+ * one attached to the machine running TUICommander.
+ */
+const stopBrowserVoice = vi.fn();
+const connectBrowserVoice = vi.fn(async (_owner: string) => ({ stop: stopBrowserVoice }));
+vi.mock("../../utils/browserVoice", () => ({
+	connectBrowserVoice: (owner: string) => connectBrowserVoice(owner),
+}));
+
+/**
+ * Load the store the way a browser tab loads it: no Tauri internals, so
+ * `src/invoke.ts` routes every command over HTTP.
+ *
+ * The HTTP transport is the point rather than an obstacle — the browser owner
+ * has to survive the trip to the server, and a test that stubbed `invoke`
+ * itself would prove only that the store said the right word to itself.
+ */
+async function browserMode(options: { armFails?: boolean } = {}) {
+	const internals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+	const realFetch = globalThis.fetch;
+	delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+
+	const calls: { path: string; body: unknown }[] = [];
+	const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+		const path = new URL(String(input), "http://localhost").pathname;
+		calls.push({
+			path,
+			body: init?.body ? JSON.parse(String(init.body)) : undefined,
+		});
+		if (path.endsWith("/hands-free/arm") && options.armFails) {
+			return new Response("the terminal is gone", { status: 400 });
+		}
+		return new Response(JSON.stringify({ armed: true, phase: "waiting" }), {
+			status: 200,
+			headers: { "content-type": "application/json" },
+		});
+	});
+	globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+	vi.resetModules();
+	const module = await import("../../stores/dictation");
+	return {
+		store: module.dictationStore,
+		owner: module.browserAudioOwner,
+		fetched: (path: string) => calls.find((call) => call.path === path)?.body,
+		// Vitest numbers every mock call on one global counter, so these are
+		// comparable across the two mocks.
+		armCallOrder: () =>
+			fetchMock.mock.invocationCallOrder[calls.findIndex((call) => call.path.endsWith("/hands-free/arm"))],
+		restore() {
+			globalThis.fetch = realFetch;
+			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = internals;
+		},
+	};
+}
+
 describe("dictationStore", () => {
 	let store: typeof import("../../stores/dictation").dictationStore;
 
 	beforeEach(async () => {
 		vi.resetModules();
 		mockInvoke.mockReset();
+		connectBrowserVoice.mockClear();
+		stopBrowserVoice.mockClear();
 		// `get_dictation_config` answers with a config, never with nothing:
 		// `saveConfig` reads fields off it directly to hold the load-modify-save
 		// rule, so a bare `undefined` here would be a shape Rust cannot produce
@@ -896,6 +957,76 @@ describe("dictationStore", () => {
 				expect(store.state.handsFree).toBeNull();
 				expect(store.state.handsFreeError).toContain("not available on this build");
 				consoleSpy.mockRestore();
+			});
+		});
+
+		/**
+		 * Criterion 2 of 832-e730, from the side that decides it.
+		 *
+		 * The owner name is the whole binding: Rust opens this machine's
+		 * devices for `desktop` and the named client's socket for anything
+		 * else, with no fallback. A browser tab that sent `desktop` would be
+		 * listening through a microphone in another building, and nothing
+		 * downstream could tell.
+		 */
+		it("arms a browser tab under its own owner, with its own socket opened first", async () => {
+			const browser = await browserMode();
+			const owner = browser.owner;
+
+			try {
+				await testInScopeAsync(async () => {
+					expect(await browser.store.armHandsFree("sess-1")).toBe(true);
+					expect(connectBrowserVoice).toHaveBeenCalledWith(owner);
+					expect(owner).not.toBe("desktop");
+					const armed = browser.fetched("/dictation/hands-free/arm");
+					expect(armed).toEqual({ sessionId: "sess-1", owner });
+					// Opened before the arm, because Rust refuses an owner with
+					// no socket behind it rather than falling back to the
+					// server's microphone.
+					expect(connectBrowserVoice.mock.invocationCallOrder[0]).toBeLessThan(browser.armCallOrder());
+				});
+			} finally {
+				browser.restore();
+			}
+		});
+
+		/**
+		 * A refused arm leaves no conversation, so it must leave no open
+		 * microphone either — a device light that stays on for a conversation
+		 * that never started is the failure a user notices and cannot explain.
+		 */
+		it("closes the browser microphone when the arm is refused", async () => {
+			const browser = await browserMode({ armFails: true });
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			try {
+				await testInScopeAsync(async () => {
+					expect(await browser.store.armHandsFree("sess-1")).toBe(false);
+					expect(stopBrowserVoice).toHaveBeenCalled();
+				});
+			} finally {
+				consoleSpy.mockRestore();
+				browser.restore();
+			}
+		});
+
+		/**
+		 * The control for the pair above: the desktop never opens a socket, so
+		 * a browser transport that leaked into the desktop path — the way a
+		 * fallback would — is visible here rather than only on real hardware.
+		 */
+		it("opens no audio socket on the desktop", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(
+					command === "arm_hands_free_dictation"
+						? { armed: true, phase: "waiting", sessionId: "sess-1", owner: "desktop" }
+						: undefined,
+				),
+			);
+
+			await testInScopeAsync(async () => {
+				await store.armHandsFree("sess-1");
+				expect(connectBrowserVoice).not.toHaveBeenCalled();
 			});
 		});
 

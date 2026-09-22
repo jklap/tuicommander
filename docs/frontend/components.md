@@ -203,11 +203,17 @@ status poll, cleared in `onCleanup`. Push-to-talk (the hotkey) and continuous
 mode (Start) are rendered as the two distinct mechanisms they are — there is no
 "mode" config field behind them.
 
-The panel has **no browser branch**, because `SettingsPanel.tsx` hides the whole
-Dictation tab when `isTauri()` is false — a browser client never reaches it, and
-settings search reports no match rather than opening an empty tab. Rust refuses
-every audio owner but `desktop`; the browser microphone and speaker are story
-832-e730.
+Since 832-e730 the tab **renders in browser mode** and `HandsFreeControls` still
+has no browser branch — this time because none is needed. `armHandsFree` opens
+the tab's own audio socket and passes its own owner id, so the same control runs
+a conversation on either transport. Two groups stay behind `isTauri()`:
+
+- the **global hotkey** and its long-press slider, which a browser cannot
+  register; and
+- the **microphone device** list, which enumerates the devices of the machine
+  running TUICommander. A browser user picking from that list would be choosing
+  hardware in another building — the browser's own device picker is the
+  platform's, not ours.
 
 `SpeechSetup` and `HandsFreeControls` are defined at the **bottom** of the file,
 after `VoiceTuning`, because `extractSettings` builds the settings search index

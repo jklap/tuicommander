@@ -1,6 +1,7 @@
 import { createStore } from "solid-js/store";
 import { invoke, listen } from "../invoke";
 import { isTauri } from "../transport";
+import { type BrowserVoiceSession, connectBrowserVoice } from "../utils/browserVoice";
 import { appLogger } from "./appLogger";
 
 /** Dictation config persisted to ~/.tuicommander/dictation-config.json */
@@ -112,13 +113,24 @@ export interface SpokenReply {
 }
 
 /**
- * The only audio endpoint this build serves.
+ * This machine's own microphone and speakers.
  *
- * Rust refuses any other owner rather than opening the microphone on the
- * machine running TUICommander, so a browser tab cannot arm — see
- * `DESKTOP_OWNER` in `dictation/commands.rs`.
+ * Reserved: Rust opens the local devices for this name and looks up a
+ * connected socket for every other one — see `DESKTOP_OWNER` in
+ * `dictation/commands.rs`. A browser tab must therefore arm under a name of
+ * its own, never this one.
  */
 export const DESKTOP_AUDIO_OWNER = "desktop";
+
+/**
+ * This tab's audio owner name, for a conversation held in a browser.
+ *
+ * Per tab rather than per browser or per user: two tabs of the same app are
+ * two microphones and two speakers, and a shared name would let one tab's
+ * reply come out of the other's. Generated once per page load, because that is
+ * exactly the lifetime of the socket it names.
+ */
+export const browserAudioOwner = `browser-${Math.random().toString(36).slice(2, 10)}`;
 
 /** Whisper's own no_speech_thold default, mirrored from `transcribe.rs`. */
 export const DEFAULT_NO_SPEECH_THRESHOLD = 0.6;
@@ -278,6 +290,15 @@ interface DictationStoreState {
 }
 
 function createDictationStore() {
+	/**
+	 * This tab's audio socket while it owns a conversation, `null` otherwise.
+	 *
+	 * Outside the store because it is not rendered and not serialisable: it is
+	 * an open microphone and an open WebSocket, and putting it in reactive
+	 * state would make every subscriber re-run when a socket opened.
+	 */
+	let browserVoice: BrowserVoiceSession | null = null;
+
 	const [state, setState] = createStore<DictationStoreState>({
 		enabled: false,
 		hotkey: "F5",
@@ -760,24 +781,37 @@ function createDictationStore() {
 		 * Only ever from a user action — nothing here runs on mount, so a
 		 * restart never re-opens the microphone by itself.
 		 *
-		 * The owner is always the desktop endpoint: Rust refuses any other one
-		 * rather than opening the microphone on the machine running
-		 * TUICommander, so a browser tab gets the refusal verbatim instead of
-		 * silently arming somebody else's hardware.
+		 * The owner is the desktop endpoint on the desktop and this tab's own
+		 * name in a browser, and the difference decides whose hardware is used:
+		 * Rust opens the local devices for `desktop` and the named client's
+		 * socket for anything else, with no fallback between them. A browser
+		 * therefore opens its socket *first* — arming under a name no socket
+		 * has claimed is refused, which is what stops a laptop from listening
+		 * through the microphone of the machine running TUICommander.
 		 */
 		async armHandsFree(sessionId: string): Promise<boolean> {
 			setState("handsFreeError", null);
 			try {
+				const owner = isTauri() ? DESKTOP_AUDIO_OWNER : browserAudioOwner;
+				if (!isTauri()) {
+					browserVoice?.stop();
+					browserVoice = await connectBrowserVoice(owner);
+				}
 				setState(
 					"handsFree",
 					await invoke<HandsFreeStatus>("arm_hands_free_dictation", {
 						sessionId,
-						owner: DESKTOP_AUDIO_OWNER,
+						owner,
 					}),
 				);
 				await actions.refreshSpeechStatus();
 				return true;
 			} catch (err) {
+				// The socket is this tab's microphone: leaving it open after a
+				// refused arm would keep the device light on for a
+				// conversation that does not exist.
+				browserVoice?.stop();
+				browserVoice = null;
 				setState("handsFreeError", String(err));
 				appLogger.error("dictation", "Failed to arm hands-free", err);
 				return false;
@@ -806,6 +840,11 @@ function createDictationStore() {
 				setState("handsFreeError", String(err));
 				appLogger.error("dictation", "Failed to disarm hands-free", err);
 				return [];
+			} finally {
+				// Whether or not the backend answered: the conversation is over
+				// as far as this tab is concerned, and the microphone closes.
+				browserVoice?.stop();
+				browserVoice = null;
 			}
 		},
 

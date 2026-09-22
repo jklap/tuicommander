@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod browser;
 pub mod commands;
 pub mod continuous;
 pub mod corrections;
@@ -84,6 +85,13 @@ pub struct DictationState {
     /// that does. `None` in a test and in the headless build: a speaker nobody
     /// watches is the ordinary case for a unit test, not a misconfiguration.
     pub utterance_observer: Mutex<Option<Arc<dyn speaker::UtteranceObserver>>>,
+    /// Browser and remote clients holding an audio socket, by owner id.
+    ///
+    /// Lives here rather than in `AppState` because it is only ever reached
+    /// from the two dictation paths that already take this state: the socket
+    /// handler that registers a client, and arming, which looks one up. Empty
+    /// on a desktop-only install, which is the ordinary case.
+    pub browser_endpoints: Arc<browser::BrowserEndpoints>,
 }
 
 impl DictationState {
@@ -107,6 +115,7 @@ impl DictationState {
             speech: Arc::new(speech::library::SpeechLibrary::new()),
             speaker: Arc::new(Mutex::new(None)),
             utterance_observer: Mutex::new(None),
+            browser_endpoints: Arc::new(browser::BrowserEndpoints::default()),
         }
     }
 

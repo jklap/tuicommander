@@ -262,9 +262,18 @@ impl State {
     /// An aged-out id is not announced either: nothing can ask what became of
     /// it any more, so an event about it would name an utterance the speaker
     /// itself no longer knows.
+    ///
+    /// Nor is a transition to the state the reply is already in. Two callers
+    /// reach the same conclusion about an interrupted reply — `hush` marks it
+    /// as it drops the queue, and the render thread marks it again when the
+    /// synthesis it was waiting on returns for a turn that has ended — and an
+    /// observer told twice would report the reply ending twice.
     fn set(&mut self, id: UtteranceId, state: Utterance) {
         let generation = self.generation;
         if let Some(entry) = self.tracked.iter_mut().find(|(tracked, _)| *tracked == id) {
+            if entry.1 == state {
+                return;
+            }
             entry.1 = state.clone();
             self.changes.push((id, state, generation));
         }
@@ -1607,10 +1616,18 @@ mod tests {
         eventually("the interruption to be announced", || {
             watcher.states().contains(&"interrupted".to_string())
         });
+        // Joins the render thread, so nothing can announce anything after this
+        // line. Without it the assertion below is a race: `hush` marks the
+        // reply interrupted, and the render thread reaches the same conclusion
+        // when the synthesis it was blocked on returns for a turn that has
+        // ended.
+        drop(speaker);
+
         assert_eq!(
             watcher.states(),
             ["queued", "rendering", "interrupted"],
-            "a reply nobody heard never reports speaking or finished"
+            "a reply nobody heard never reports speaking or finished, and the \
+             two callers that both conclude it announce it once"
         );
         assert_eq!(
             watcher.seen.lock().last().expect("a transition").2,
