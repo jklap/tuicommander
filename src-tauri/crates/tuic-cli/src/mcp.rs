@@ -158,7 +158,9 @@ fn validate_delivery_report(payload: Value) -> Result<Value, String> {
     if valid {
         Ok(payload)
     } else {
-        Err(format!("Registry returned a malformed delivery report: {payload}"))
+        Err(format!(
+            "Registry returned a malformed delivery report: {payload}"
+        ))
     }
 }
 
