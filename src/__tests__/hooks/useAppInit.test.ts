@@ -1804,6 +1804,37 @@ describe("initApp", () => {
 			expect(terminalsStore.get(newId!)?.nameIsCustom).toBe(false);
 		});
 
+		/// Opening a diff/markdown/plugin tab runs the terminals pane deactivator, which
+		/// sets `activeId` to null while the terminals stay. A spawn arriving then used to
+		/// read that null as "no terminals" and call setActive, and setActive activates the
+		/// terminals pane exclusively — so a worker tab replaced the panel the user was
+		/// reading. Observed live: a MyWallet worker took over the wiz kanban tab.
+		it("setActive not called when terminals exist but a non-terminal tab holds the pane", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const existingId = terminalsStore.add({
+				sessionId: "existing",
+				fontSize: 14,
+				name: "Existing",
+				cwd: "/tmp",
+				awaitingInput: null,
+			});
+			terminalsStore.setActive(existingId);
+			// The user opens a panel: the pane deactivator clears activeId, terminals remain.
+			terminalsStore.setActive(null);
+			expect(terminalsStore.state.activeId).toBeNull();
+			expect(terminalsStore.getCount()).toBe(1);
+
+			const setActiveSpy = vi.spyOn(terminalsStore, "setActive");
+			getCallback()!({ payload: { session_id: "new-sess", cwd: null, agent_type: "claude" } });
+
+			expect(setActiveSpy).not.toHaveBeenCalled();
+			expect(terminalsStore.state.activeId).toBeNull();
+			setActiveSpy.mockRestore();
+		});
+
 		it("uses a spawned agent display name as an intent-replaceable base title", async () => {
 			const { getCallback } = captureSessionCreated();
 			const deps = createMockDeps();

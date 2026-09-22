@@ -533,6 +533,11 @@ export async function initApp(deps: AppInitDeps) {
 		if (existing) return;
 
 		appLogger.info("app", `Remote session created: ${session_id}`);
+		// `activeId` is null whenever the user is looking at a non-terminal tab, not
+		// only when no terminal exists: terminals.ts registers a pane deactivator that
+		// clears it. Read the count instead, before the add — reading `activeId` below
+		// would pull the user off the panel they opened and onto a worker tab.
+		const hadNoTerminals = terminalsStore.getCount() === 0;
 		const id = terminalsStore.add({
 			sessionId: session_id,
 			fontSize: deps.getDefaultFontSize(),
@@ -568,8 +573,8 @@ export async function initApp(deps: AppInitDeps) {
 				}
 			}
 			assignTabToActiveGroup(id, "terminal", false);
-			// Only steal focus when there is no existing active terminal.
-			if (!terminalsStore.state.activeId) {
+			// Only steal focus when the app had no terminals at all.
+			if (hadNoTerminals) {
 				terminalsStore.setActive(id);
 			}
 		}
