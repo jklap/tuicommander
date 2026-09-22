@@ -1740,8 +1740,12 @@ impl SilenceState {
         if since.elapsed() < AGENT_READY_CONFIRM {
             return false;
         }
+        // The guard above decides when Ready may release busy evidence. An
+        // existing idle marker still owns its rank: a timer tick must not
+        // downgrade a completed protocol turn so the next repaint reopens it.
+        self.evidence.busy = None;
         self.evidence
-            .force_idle(EvidenceRank::Screen, "agent-ready-screen");
+            .record_idle(EvidenceRank::Screen, "agent-ready-screen");
         self.last_status_line_at = None;
         self.interrupt_requested_at = None;
         self.evidence.activity_seen = false;
@@ -5138,12 +5142,11 @@ fn suppress_heuristic_question(hook_instrumented: bool, event: &ParsedEvent) -> 
 /// non-hook `AskUserQuestion`'s opening frame.
 fn rearm_awaiting_for_open_dialog(
     screen: &[String],
-    hook_instrumented: bool,
     awaiting_input: bool,
     has_choice_prompt: bool,
     question_this_tick: bool,
 ) -> Option<ParsedEvent> {
-    if hook_instrumented || awaiting_input || has_choice_prompt || question_this_tick {
+    if awaiting_input || has_choice_prompt || question_this_tick {
         return None;
     }
     crate::output_parser::ink_dialog_footer(screen).map(|footer| ParsedEvent::Question {
@@ -6168,14 +6171,9 @@ impl ChunkProcessor {
         // Presence of the footer is the whole signal — no title, option or tab-bar
         // parsing, none of which survives the wizard advancing. It re-arms only
         // when the badge is actually off, so a repaint cannot storm: one event per
-        // spurious clear, never one per frame. Hook-instrumented sessions are
-        // excluded for the same reason `suppress_heuristic_question` excludes them
-        // — OSC 7770 owns their state.
-        //
-        // DEFERRED (2026-08-21) — hook-instrumented agents keep the same gap: a
-        // multi-question AskUserQuestion fires PreToolUse once, so sub-questions 2+
-        // have no hook signal either. Needs a capture with hooks ON to confirm
-        // before widening this to them.
+        // spurious clear, never one per frame. This applies to hooked sessions
+        // too: later busy hooks can clear awaiting while the dialog stays open,
+        // and a multi-question tool emits its awaiting hook only once.
         if let Some(screen) = screen_cache {
             let (awaiting, has_choice) = state
                 .session_maps
@@ -6183,15 +6181,19 @@ impl ChunkProcessor {
                 .get(session_id)
                 .map(|s| (s.awaiting_input, s.choice_prompt.is_some()))
                 .unwrap_or((false, false));
-            let question_this_tick = events
-                .iter()
-                .any(|e| matches!(e, ParsedEvent::Question { .. }));
+            // The accumulator has not seen this chunk yet. Respect its LAST
+            // awaiting mutation: an earlier Question followed by hook-busy's
+            // UserInput no longer protects the badge from being cleared.
+            let pending_awaiting = events.iter().rev().find_map(|event| match event {
+                ParsedEvent::Question { .. } => Some(true),
+                ParsedEvent::UserInput { .. } => Some(false),
+                _ => None,
+            });
             if let Some(evt) = rearm_awaiting_for_open_dialog(
                 screen,
-                hook_instrumented,
-                awaiting,
+                pending_awaiting.unwrap_or(awaiting),
                 has_choice,
-                question_this_tick,
+                pending_awaiting == Some(true),
             ) {
                 // Clear the dedup: the badge is off, so this event must reach state.
                 self.last_question_text = None;
@@ -6558,21 +6560,26 @@ impl ChunkProcessor {
                     working_applied = true;
                 }
             }
-            if real_activity {
+            let activity_source = if has_spinner {
+                "spinner-active"
+            } else {
+                "real-activity"
+            };
+            // Arbitrate BEFORE updating activity metadata: those updates clear
+            // idle evidence. Doing them first bypasses record_busy's rank gate
+            // and lets decorative repaints reopen a hook-completed turn.
+            if real_activity
+                && (sl.evidence.busy.is_some()
+                    || sl
+                        .evidence
+                        .record_busy(EvidenceRank::Screen, activity_source))
+            {
                 if has_spinner {
                     sl.note_working_screen();
                 } else {
                     sl.note_real_activity();
                 }
                 invalidate_background_probe_boundary_locked(state, session_id);
-                if sl.evidence.busy.is_none() {
-                    let source = if has_spinner {
-                        "spinner-active"
-                    } else {
-                        "real-activity"
-                    };
-                    sl.evidence.record_busy(EvidenceRank::Screen, source);
-                }
             }
             // SIGWINCH reflow repaints content rows for longer than the initial 1s
             // resize grace, but a reflow never grows the buffer — it only repaints

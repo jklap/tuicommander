@@ -11760,6 +11760,95 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
     })
 }
 
+/// Live idle Codex animation from brainstorming (2026-09-21). The capture
+/// starts after turn completion: seed that observed protocol boundary, then
+/// replay the original repaint chunks through the production reader.
+#[test]
+fn protocol_idle_survives_captured_codex_animation() {
+    use std::sync::atomic::Ordering;
+
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-idle-animation-20260921.tcap",
+    ))
+    .unwrap();
+    assert!(capture.records.len() > 1);
+    let (rows, cols) = capture.geometry.unwrap();
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "idle-codex-animation";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk("\x1b]7770;state=idle\x07", &silence, sid, &state);
+    for (index, record) in capture.records.iter().enumerate() {
+        assert_eq!(
+            record.direction,
+            crate::pty_capture::CaptureDirection::Output
+        );
+        processor.process_chunk(
+            std::str::from_utf8(&record.data)
+                .expect("captured animation has complete UTF-8 chunks"),
+            &silence,
+            sid,
+            &state,
+        );
+        assert_eq!(
+            state
+                .session_maps
+                .shell_states
+                .get(sid)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_IDLE,
+            "idle animation reopened the turn at captured chunk {index}"
+        );
+        assert!(
+            silence.lock().explicit_idle(),
+            "chunk {index} erased completion"
+        );
+    }
+    // Preserving completion must not latch idle across the next submitted turn.
+    note_submitted_input(&state, sid);
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .load(Ordering::Acquire),
+        SHELL_BUSY
+    );
+    assert!(silence.lock().turn_started_by_input());
+    assert!(!silence.lock().explicit_idle());
+}
+
+#[test]
+fn protocol_idle_survives_ready_timer() {
+    let mut silence = SilenceState::new();
+    silence.note_explicit_state(SHELL_IDLE, true);
+    silence.screen_ready_pending_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+    assert!(silence.note_ready_screen());
+    assert!(
+        silence.explicit_idle(),
+        "Ready must not downgrade a completion hook"
+    );
+    assert!(
+        !silence
+            .evidence
+            .record_busy(EvidenceRank::Screen, "real-activity")
+    );
+    assert!(silence.explicit_idle());
+}
+
 #[test]
 fn historical_scenario_matrix_is_well_formed_and_fixture_backed() {
     let bytes = agent_prompt_fixture("scenario-matrix.json");
@@ -12964,7 +13053,7 @@ async fn open_dialog_rearms_awaiting_after_a_sub_question_is_answered() {
         "…but the footer did not — this is why the changed-rows parser is blind"
     );
 
-    let evt = rearm_awaiting_for_open_dialog(&second, false, false, false, false)
+    let evt = rearm_awaiting_for_open_dialog(&second, false, false, false)
         .expect("an open dialog with the badge off must re-arm");
     let ParsedEvent::Question {
         prompt_text,
@@ -12989,33 +13078,122 @@ async fn open_dialog_rearms_awaiting_after_a_sub_question_is_answered() {
     );
 }
 
-/// The re-arm must not fire per repaint, must not fight OSC 7770, and must not
+/// The re-arm must not fire per repaint, duplicate a pending question, or
 /// step on a live choice prompt — each of those was a separate storm in the
 /// history of this file.
 #[test]
 fn rearm_stays_silent_unless_the_badge_is_actually_off() {
     let screen = askuserquestion_wizard_screen(1);
     assert!(
-        rearm_awaiting_for_open_dialog(&screen, false, true, false, false).is_none(),
+        rearm_awaiting_for_open_dialog(&screen, true, false, false).is_none(),
         "already awaiting — re-arming every repaint would storm"
     );
     assert!(
-        rearm_awaiting_for_open_dialog(&screen, true, false, false, false).is_none(),
-        "hook-instrumented sessions get awaiting from OSC 7770"
-    );
-    assert!(
-        rearm_awaiting_for_open_dialog(&screen, false, false, true, false).is_none(),
+        rearm_awaiting_for_open_dialog(&screen, false, true, false).is_none(),
         "a live choice prompt owns awaiting through its own resolve path"
     );
     let no_dialog = vec!["· Gallivanting… (15m 12s)".to_string(), "❯".to_string()];
     assert!(
-        rearm_awaiting_for_open_dialog(&no_dialog, false, false, false, false).is_none(),
+        rearm_awaiting_for_open_dialog(&no_dialog, false, false, false).is_none(),
         "no dialog on screen, no badge"
     );
     let quoted = vec!["+  Enter to select · Esc to cancel".to_string()];
     assert!(
-        rearm_awaiting_for_open_dialog(&quoted, false, false, false, false).is_none(),
+        rearm_awaiting_for_open_dialog(&quoted, false, false, false).is_none(),
         "a diff line quoting the footer is not a dialog"
+    );
+}
+
+#[test]
+fn hook_instrumented_open_dialog_recovers_a_missing_question_badge() {
+    let screen = askuserquestion_wizard_screen(0);
+    assert!(
+        rearm_awaiting_for_open_dialog(&screen, false, false, false).is_some(),
+        "a visible dialog still needs the user when the hook's awaiting signal is absent"
+    );
+}
+
+/// Retained raw PTY bytes from md-2 / Story 131: awaiting is followed by
+/// fifteen busy hooks, then a still-open dialog. Original read boundaries are
+/// unavailable; a controlled split preserves the notification-before-busy order.
+#[tokio::test]
+async fn hooked_dialog_capture_preserves_question_until_the_dialog_is_answered() {
+    use crate::state::VtLogBuffer;
+    let sid = "hooked-dialog-capture";
+    let state = accumulating_state(sid);
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .hook_instrumented = true;
+    // Observed independently with stty on the session's PTY, not a default.
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(63, 236, 2000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let bytes = agent_prompt_fixture("claude-hooked-missing-question-20260921.raw");
+    let capture = std::str::from_utf8(&bytes).expect("complete UTF-8 capture suffix");
+    let notification = capture
+        .find("\x1b]777;notify;")
+        .expect("captured notification");
+    let split = notification
+        + capture[notification..]
+            .find("\x1b]7770;state=busy")
+            .expect("busy after notification");
+    processor.process_chunk(&capture[..split], &silence, sid, &state);
+    assert!(await_session(&state, sid, |s| s.awaiting_input).await);
+    processor.process_chunk(&capture[split..], &silence, sid, &state);
+    let screen = state
+        .grid
+        .vt_log_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .screen_rows();
+    let footer = crate::output_parser::ink_dialog_footer(&screen)
+        .expect("the captured dialog must be visible at the observed geometry");
+    assert!(silence.lock().hook_state_seen);
+    assert!(
+        await_session(&state, sid, |s| s.awaiting_input
+            && s.question_text.as_deref() == Some(footer))
+        .await,
+        "a hooked session with an open dialog must report question after all queued hooks"
+    );
+
+    let mut events = state.event_bus.subscribe();
+    processor.process_chunk("\x1b[?25h", &silence, sid, &state);
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).all(|event| !matches!(event,
+            crate::state::AppEvent::PtyParsed { parsed, .. } if parsed["type"] == "question")),
+        "an already-badged dialog must not emit a question on each repaint"
+    );
+
+    processor.process_chunk(
+        "\x1b]7770;state=awaiting\x07\x1b]7770;state=busy\x07\x1b[1;1HUpdated dialog",
+        &silence,
+        sid,
+        &state,
+    );
+    // Wait for this chunk's footer event, rather than accepting the old true bit.
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event,
+        crate::state::AppEvent::PtyParsed { parsed, .. } if parsed["type"] == "question"))
+    );
+    processor.process_chunk(
+        "\x1b[2J\x1b[H\x1b]7770;state=busy\x07",
+        &silence,
+        sid,
+        &state,
+    );
+    assert!(
+        await_session(&state, sid, |s| !s.awaiting_input
+            && s.question_text.is_none())
+        .await,
+        "once the dialog disappears and work resumes, question must clear"
     );
 }
 
@@ -13030,11 +13208,11 @@ fn rearm_stays_silent_unless_the_badge_is_actually_off() {
 fn rearm_yields_to_a_question_already_parsed_in_the_same_tick() {
     let screen = askuserquestion_wizard_screen(0);
     assert!(
-        rearm_awaiting_for_open_dialog(&screen, false, false, false, false).is_some(),
+        rearm_awaiting_for_open_dialog(&screen, false, false, false).is_some(),
         "precondition: this screen re-arms when nothing else spoke"
     );
     assert!(
-        rearm_awaiting_for_open_dialog(&screen, false, false, false, true).is_none(),
+        rearm_awaiting_for_open_dialog(&screen, false, false, true).is_none(),
         "the parsed question is the better text; the footer must not overwrite it"
     );
 }
