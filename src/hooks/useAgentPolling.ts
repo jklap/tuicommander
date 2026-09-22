@@ -13,6 +13,8 @@ const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
 type BackendSessionState = {
 	shell_state?: string;
 	agent_state?: string;
+	agent_intent?: string | null;
+	last_prompt?: string | null;
 	awaiting_input?: boolean;
 	question_confident?: boolean;
 	background_work?: boolean;
@@ -74,6 +76,10 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 	const isAwaiting = state?.awaiting_input === true;
 	terminalsStore.update(termId, {
 		agentState: toAgentLifecycleState(state?.agent_state),
+		// SessionState snapshots are complete. Rust omits Option::None fields,
+		// therefore absence retracts context instead of meaning "unchanged".
+		agentIntent: state?.agent_intent ?? null,
+		lastPrompt: state?.last_prompt ?? null,
 		awaitingInput: isAwaiting ? "question" : null,
 		awaitingInputConfident: state?.question_confident === true,
 		backgroundWork: state?.background_work === true,
@@ -119,11 +125,22 @@ export function syncAgentLifecycleStates(): Promise<void> {
 
 async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	const request = ++nextLifecycleRequest;
-	const requestedSessions = new Map<string, { sessionId: string; shellStateRevision: number }>();
+	const requestedSessions = new Map<
+		string,
+		{ sessionId: string; shellStateRevision: number; agentIntent: string | null; lastPrompt: string | null }
+	>();
 	for (const termId of terminalsStore.getIds()) {
-		const sessionId = terminalsStore.get(termId)?.sessionId;
+		const terminal = terminalsStore.get(termId);
+		const sessionId = terminal?.sessionId;
 		const revision = terminalsStore.getShellStateRevision(termId);
-		if (sessionId && revision !== null) requestedSessions.set(termId, { sessionId, shellStateRevision: revision });
+		if (sessionId && revision !== null) {
+			requestedSessions.set(termId, {
+				sessionId,
+				shellStateRevision: revision,
+				agentIntent: terminal?.agentIntent ?? null,
+				lastPrompt: terminal?.lastPrompt ?? null,
+			});
+		}
 	}
 	let sessions: SessionLifecycleResponse[];
 	try {
@@ -158,7 +175,9 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 		const requested = requestedSessions.get(termId);
 		const snapshotIsFresh =
 			requested?.sessionId === session.session_id &&
-			requested.shellStateRevision === terminalsStore.getShellStateRevision(termId);
+			requested.shellStateRevision === terminalsStore.getShellStateRevision(termId) &&
+			requested.agentIntent === (terminalsStore.get(termId)?.agentIntent ?? null) &&
+			requested.lastPrompt === (terminalsStore.get(termId)?.lastPrompt ?? null);
 		if (!snapshotIsFresh) continue;
 		applySessionState(termId, session.session_id, session.state);
 	}
@@ -327,6 +346,28 @@ export function useAgentPolling(): void {
 	// churn — during rapid tab churn it could starve indefinitely. A memo
 	// only notifies downstream when the boolean actually flips.
 	const hasTerminals = createMemo(() => terminalsStore.getIds().length > 0);
+	// Terminal rows are created before their backend PTY has necessarily been
+	// attached. Track the bindings themselves so the authoritative catch-up runs
+	// when a session id arrives, without tearing down the subscription or the
+	// independent 30s foreground-agent discovery timer below.
+	const lifecycleBindings = createMemo(() =>
+		terminalsStore
+			.getIds()
+			.map((id) => `${id}:${terminalsStore.get(id)?.sessionId ?? ""}`)
+			.join("\0"),
+	);
+
+	createEffect(() => {
+		const requestedBindings = lifecycleBindings();
+		if (!requestedBindings) return;
+		untrack(() => {
+			void syncAgentLifecycleStates().then(() => {
+				// A binding may land while an earlier catch-up is in flight. Calls are
+				// coalesced, so explicitly schedule the one trailing read it needs.
+				if (lifecycleBindings() !== requestedBindings) void syncAgentLifecycleStates();
+			});
+		});
+	});
 
 	createEffect(() => {
 		if (!hasTerminals()) return;
@@ -387,18 +428,6 @@ export function useAgentPolling(): void {
 				else unsubscribeState = unsubscribe;
 			})
 			.catch((err) => appLogger.debug("app", "[AgentLifecycle] state subscription failed", err));
-
-		// One catch-up, never repeated. A session that is already idle and quiet
-		// emits no transition, so a fresh mount (reload, HMR) would otherwise
-		// render whatever the store was last told — indefinitely.
-		//
-		// untrack: syncAgentLifecycleStates() synchronously reads
-		// terminalsStore.getIds() before its first await (list_active_sessions
-		// invoke). Called un-tracked, that raw read would subscribe THIS
-		// effect directly to the id-list signal — bypassing the `hasTerminals`
-		// memo above and reintroducing the exact restart-on-churn bug this
-		// effect exists to avoid (proven via a failing test without this).
-		untrack(() => void syncAgentLifecycleStates());
 
 		onCleanup(() => {
 			clearInterval(timer);

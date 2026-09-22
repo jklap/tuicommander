@@ -131,6 +131,40 @@ describe("createBranchSelectionCoordinator", () => {
 		});
 	});
 
+	/**
+	 * A restored tab used to say only "Agent session was active" — the user had to
+	 * resume it to find out what it was. The snapshot carries the last intent and
+	 * prompt so the banner can name the work before the click.
+	 */
+	it("carries the saved intent and prompt onto the terminal it restores", async () => {
+		await testInScope(async () => {
+			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+			repositoriesStore.setWorkspace("/Gits/alpha", "main", {
+				worktreePath: "/Gits/alpha",
+				savedTerminals: [
+					{
+						name: "claude",
+						cwd: "/Gits/alpha",
+						fontSize: 14,
+						agentType: "claude",
+						agentSessionId: null,
+						tuicSession: "tab-uuid",
+						agentLaunchCommand: null,
+						alias: null,
+						agentIntent: "finishing the resume banner",
+						lastPrompt: "show the intent on the recovery banner",
+					},
+				],
+			});
+
+			await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "main");
+
+			const restored = terminalsStore.getIds().map((id) => terminalsStore.get(id));
+			expect(restored.map((t) => t?.agentIntent)).toEqual(["finishing the resume banner"]);
+			expect(restored.map((t) => t?.lastPrompt)).toEqual(["show the intent on the recovery banner"]);
+		});
+	});
+
 	it("does not create a terminal when the spawn budget is exhausted", async () => {
 		await testInScope(async () => {
 			repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });

@@ -288,6 +288,15 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 							// fresh tab cannot be handed the same name.
 							alias: terminal.alias ?? null,
 						});
+						// What the tab was doing before the restart. Carried purely so the
+						// resume banner and the Context bar can say it — the next `intent:`
+						// or user prompt overwrites both.
+						if (terminal.agentIntent || terminal.lastPrompt) {
+							terminalsStore.update(id, {
+								agentIntent: terminal.agentIntent ?? null,
+								lastPrompt: terminal.lastPrompt ?? null,
+							});
+						}
 						// Same reason as handleAddTerminalToWorkspace: a restore knows its repo.
 						terminalsStore.setRepoPath(id, repoPath);
 						repositoriesStore.addTerminalToWorkspace(repoPath, workspaceId, id);

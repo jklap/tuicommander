@@ -68,6 +68,15 @@
   background: var(--bg-highlight);
 }
 
+.resumeContext {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+  font-style: italic;
+}
+
 .resumeDismiss {
   background: none;
   border: none;

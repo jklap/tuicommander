@@ -140,6 +140,10 @@ export interface AppInitDeps {
 }
 
 /** Collect terminal metadata from all repos/branches for persistence */
+/** A prompt is persisted only to remind the user what the tab was doing; the whole
+ *  text would bloat repositories.json, which is rewritten every 30s. */
+const SAVED_PROMPT_MAX_CHARS = 300;
+
 function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 	const snapshots = new Map<string, Map<string, SavedTerminal[]>>();
 
@@ -163,6 +167,8 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 					tuicSession: t.tuicSession ?? null,
 					agentLaunchCommand: t.agentLaunchCommand ?? null,
 					alias: t.alias ?? null,
+					agentIntent: t.agentIntent ?? null,
+					lastPrompt: t.lastPrompt ? t.lastPrompt.slice(0, SAVED_PROMPT_MAX_CHARS) : null,
 				});
 			}
 

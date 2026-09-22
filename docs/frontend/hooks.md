@@ -382,6 +382,15 @@ The three-attempt budget counts only prompts successfully delivered to the agent
 
 Polls agent status (foreground process detection) for all active terminal sessions at regular intervals.
 
+Lifecycle state arrives through `session-state-changed`, with a session snapshot
+catch-up on terminal/session attachment and browser stream resync. Attachment
+changes during an in-flight request schedule a trailing catch-up without
+restarting the discovery timer or event subscription. The common path also
+restores `agent_intent` and `last_prompt` into the terminal store, so an idle
+session's Context bar does not depend on replaying its original parsed events.
+A delayed catch-up is discarded if the terminal's session, shell revision, intent
+or prompt changed while the request was in flight.
+
 ---
 
 ## useLongPressHotkey

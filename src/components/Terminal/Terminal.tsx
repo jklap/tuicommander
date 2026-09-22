@@ -1154,6 +1154,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		}
 	};
 
+	/** What the tab was doing when it was saved — the intent if the agent declared one,
+	 *  otherwise the last prompt. Both are restored from the session snapshot. */
+	const resumeContext = () => {
+		const term = terminalsStore.get(props.id);
+		const intent = term?.agentIntent;
+		if (intent) return `Intent: ${intent}`;
+		const prompt = term?.lastPrompt;
+		return prompt ? `Prompt: ${prompt}` : null;
+	};
+
 	const handleDismissResume = (e: MouseEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
@@ -1231,6 +1241,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					onKeyDown={onClickKeyDown(handleResume)}
 				>
 					<span>Agent session was active — click to resume</span>
+					<Show when={resumeContext()}>
+						{(ctx) => (
+							<span class={s.resumeContext} title={ctx()}>
+								{ctx()}
+							</span>
+						)}
+					</Show>
 					<button class={s.resumeDismiss} onClick={handleDismissResume} title="Dismiss">
 						&times;
 					</button>

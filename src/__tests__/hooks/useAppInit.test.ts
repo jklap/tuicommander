@@ -911,6 +911,32 @@ describe("initApp", () => {
 		expect(branch?.savedTerminals?.[0].agentSessionId).toBeNull();
 	});
 
+	it("snapshots the intent and a truncated prompt so a restored tab can say what it was doing", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-3", cwd: "/repo" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const termId = terminalsStore.getIds()[0];
+		terminalsStore.update(termId, {
+			agentIntent: "finishing the resume banner",
+			lastPrompt: "x".repeat(500),
+		});
+
+		window.dispatchEvent(new Event("beforeunload"));
+
+		const saved = repositoriesStore.get("/repo")?.workspaces["main"]?.savedTerminals?.[0];
+		expect(saved?.agentIntent).toBe("finishing the resume banner");
+		expect(saved?.lastPrompt).toBe("x".repeat(300));
+	});
+
 	it("registers beforeunload handler to close PTY sessions", async () => {
 		const addListenerSpy = vi.spyOn(window, "addEventListener");
 		const deps = createMockDeps();

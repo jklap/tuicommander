@@ -197,6 +197,11 @@ export interface SavedTerminal {
 	/** Terminal alias (e.g. `tu-3`) — the address other agents already hold, so a
 	 *  restore reserves it instead of taking a fresh number */
 	alias?: string | null;
+	/** Last `intent:` the agent declared — restored so the resume banner can say what
+	 *  the session was doing, not just that it existed */
+	agentIntent?: string | null;
+	/** Last user prompt seen before the snapshot, truncated at persist time */
+	lastPrompt?: string | null;
 }
 
 /** GitHub Issue from GraphQL API */
