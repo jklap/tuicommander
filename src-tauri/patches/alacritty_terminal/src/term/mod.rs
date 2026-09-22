@@ -950,15 +950,6 @@ impl<T> Term<T> {
         self.mark_fully_damaged();
     }
 
-    /// Scroll screen up
-    ///
-    /// Text moves up; clear at top
-    /// Expects origin to be in scroll range.
-    #[inline]
-    fn scroll_up_relative(&mut self, origin: Line, lines: usize) {
-        self.scroll_up_relative_from(origin, lines, ScrollSource::Overflow);
-    }
-
     /// Scroll because content reached the bottom of the region — a linefeed, or
     /// an index past the bottom margin.
     ///
@@ -4004,7 +3995,7 @@ mod tests {
         assert!(term.damage.full);
         term.reset_damage();
 
-        term.scroll_up_relative(Line(3), 2);
+        term.scroll_up_relative_from(Line(3), 2, ScrollSource::Overflow);
         assert!(term.damage.full);
         term.reset_damage();
 
