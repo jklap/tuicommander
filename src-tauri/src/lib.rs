@@ -1624,6 +1624,9 @@ pub fn run() {
                 // Install Fn/Globe key monitor for push-to-talk dictation
                 dictation::fn_key_monitor::install(app.handle().clone());
 
+                // Before any conversation can be armed: a speaker built without
+                // this one reports its replies to nobody but a poller.
+                dictation::commands::install_utterance_observer(app.handle());
                 // Install the native key monitor (macOS swallows Ctrl+Tab and F13-F20
                 // before JS/WKWebView ever sees them)
                 native_keys::install(app.handle().clone());

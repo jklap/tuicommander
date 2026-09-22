@@ -565,6 +565,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Task queue UI
 - [x] Advanced keyboard shortcuts
 
+- [x] Download progress and utterance state are pushed on `/events` as well as to the desktop window, from one serialized payload per event; utterance transitions come from the render thread that performs them, through an observer port, so `finished` and `interrupted` reach a client that never polls
 ### Pending (P3)
 - [ ] Agent stats display
 - [ ] Config file support

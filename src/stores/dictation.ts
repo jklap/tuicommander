@@ -94,6 +94,24 @@ export interface SpeechStatus {
 }
 
 /**
+ * One reply, and what became of it.
+ *
+ * Pushed on `speech-utterance` as the speaker moves it, on every transport.
+ * `finished` and `interrupted` are decided on Rust's render thread long after
+ * the call that queued the reply returned, so a client that waited for a return
+ * value would have to poll for them instead.
+ */
+export interface SpokenReply {
+	utteranceId: string;
+	/** `queued`, `rendering`, `speaking`, `finished`, `interrupted` or `failed`. */
+	state: string;
+	/** Set only for `failed`. */
+	error: string | null;
+	/** The turn this reply belongs to. */
+	turn: number;
+}
+
+/**
  * The only audio endpoint this build serves.
  *
  * Rust refuses any other owner rather than opening the microphone on the
@@ -233,6 +251,15 @@ interface DictationStoreState {
 	handsFreeError: string | null;
 	/** Live speaker state, or null before anything has polled for it. */
 	speech: SpeechStatus | null;
+	/**
+	 * The most recent reply the backend pushed, or null before any.
+	 *
+	 * Beside `speech` rather than merged into it: `speech` is a snapshot of the
+	 * whole queue that only a poll can produce, while this is one reply moving.
+	 * Merging them would have a single utterance overwrite a queue depth it
+	 * knows nothing about.
+	 */
+	utterance: SpokenReply | null;
 	rmsThreshold: number;
 	noSpeechThreshold: number;
 	capturingHotkey: boolean;
@@ -279,6 +306,7 @@ function createDictationStore() {
 		handsFree: null,
 		handsFreeError: null,
 		speech: null,
+		utterance: null,
 		rmsThreshold: DEFAULT_RMS_THRESHOLD,
 		noSpeechThreshold: DEFAULT_NO_SPEECH_THRESHOLD,
 		capturingHotkey: false,
@@ -303,6 +331,26 @@ function createDictationStore() {
 	// and one shared percent would show each of them the other's.
 	listen<{ asset: string; percent: number }>("speech-download-progress", (event) => {
 		setState("speechDownloads", event.payload.asset, event.payload.percent);
+	});
+
+	// What the speaker is doing right now, pushed rather than polled. The states
+	// that matter — finished, interrupted — are decided on Rust's render thread
+	// after the call that queued the reply returned, so there is nothing to
+	// await and nothing would refresh the panel without this.
+	listen<SpokenReply>("speech-utterance", (event) => {
+		setState("utterance", event.payload);
+		// The queue snapshot beside it stays whatever the last poll said, except
+		// for the two booleans this event settles for certain.
+		setState("speech", (current) =>
+			current
+				? {
+						...current,
+						rendering: event.payload.state === "rendering",
+						speaking: event.payload.state === "speaking",
+						lastError: event.payload.error ?? current.lastError,
+					}
+				: current,
+		);
 	});
 
 	let audioLevelTimer: ReturnType<typeof setInterval> | null = null;

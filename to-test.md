@@ -3186,3 +3186,25 @@ Do not mark those items from a mock — record them as blocked.
       conversation that leaks per turn is the failure to look for.
 - [ ] **[HUMAN]** Repeat the first item on Windows and on Linux from a release
       build. Cross-platform evidence cannot come from this Mac.
+
+## Speech and download progress on `/events` (story `833-6fd4`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+The three pushes are dual-emitted: the desktop window gets an `emit`, the SSE
+stream gets the identical body. Only a restart loads them.
+
+- [ ] Open the web UI (`http://localhost:9877/`, browser mode) and start a
+      speech-asset download from the Dictation panel. The progress bar must move
+      in the **browser** tab, not only on the desktop — before 833 a browser
+      client saw the download start and finish with nothing in between.
+- [ ] `curl -N http://localhost:9877/events` while that download runs: frames
+      named `speech-download-progress` carrying `asset`, `downloaded`, `total`
+      and `percent`. A Whisper-model download on the same stream must be named
+      `dictation-download-progress` and must **not** carry `asset`.
+- [ ] Arm hands-free, let a reply play, and watch the same stream: one
+      `speech-utterance` frame per transition, in the order
+      `queued → rendering → speaking → finished`, with no polling of
+      `GET /dictation/speech/status`.
+- [ ] Talk over a reply and confirm the last frame for that utterance is
+      `interrupted` rather than `finished`, and that it arrives — the transition
+      happens on the render thread after `speak` has long returned, which is the
+      case a polling client used to miss entirely.

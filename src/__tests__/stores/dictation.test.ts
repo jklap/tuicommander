@@ -924,4 +924,77 @@ describe("dictationStore", () => {
 			});
 		});
 	});
+	/**
+	 * The push half of the speech contract (833-6fd4).
+	 *
+	 * `listen` in `src/invoke.ts` is one function over two transports: Tauri
+	 * events on the desktop, the shared SSE stream in a browser. A store that
+	 * subscribes therefore works on both, and a store that polls works on
+	 * neither without a timer. These tests hold the subscription and what it
+	 * does with what arrives.
+	 */
+	describe("events the backend pushes", () => {
+		/** The handler the store registered for `name`, or undefined. */
+		const subscribed = async (name: string) => {
+			const { listen } = await import("@tauri-apps/api/event");
+			const call = vi
+				.mocked(listen)
+				.mock.calls.filter(([event]) => event === name)
+				.pop();
+			return call?.[1] as ((event: { payload: unknown }) => void) | undefined;
+		};
+
+		it("renders a speech download percent from the event rather than a poll", async () => {
+			const handler = await subscribed("speech-download-progress");
+			expect(handler, "no subscription means a browser sees no progress at all").toBeDefined();
+
+			testInScope(() => {
+				handler?.({ payload: { asset: "italian", percent: 42 } });
+				expect(store.state.speechDownloads.italian).toBe(42);
+			});
+		});
+
+		it("applies a pushed utterance without asking the backend anything", async () => {
+			const handler = await subscribed("speech-utterance");
+			expect(handler, "finished and interrupted have no call to return from").toBeDefined();
+
+			await testInScopeAsync(async () => {
+				mockInvoke.mockClear();
+				handler?.({
+					payload: { utteranceId: "3", state: "speaking", error: null, turn: 9 },
+				});
+				expect(store.state.utterance?.utteranceId).toBe("3");
+				expect(store.state.utterance?.state).toBe("speaking");
+				expect(mockInvoke).not.toHaveBeenCalled();
+			});
+		});
+
+		/**
+		 * One reply says nothing about how many are waiting behind it. Letting
+		 * it overwrite the whole snapshot would have the panel report an empty
+		 * queue every time a reply started playing.
+		 */
+		it("leaves the queue depth alone while settling what the speaker is doing", async () => {
+			const handler = await subscribed("speech-utterance");
+
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementation((command: string) =>
+					Promise.resolve(
+						command === "get_speech_status"
+							? { available: true, queued: 3, rendering: true, speaking: false, turn: 9 }
+							: undefined,
+					),
+				);
+				await store.refreshSpeechStatus();
+
+				handler?.({
+					payload: { utteranceId: "4", state: "speaking", error: null, turn: 9 },
+				});
+
+				expect(store.state.speech?.speaking).toBe(true);
+				expect(store.state.speech?.rendering).toBe(false);
+				expect(store.state.speech?.queued).toBe(3);
+			});
+		});
+	});
 });

@@ -631,6 +631,9 @@ GET /repo/diff-stats?path=/path/to/repo
 ```
 
 Returns `{ "additions": N, "deletions": N }`.
+| `dictation-download-progress` | `{downloaded, total, percent}` | A Whisper model is downloading. Dual-emitted on the Tauri window with the identical body |
+| `speech-download-progress` | `{asset, downloaded, total, percent}` | A speech asset is downloading. `asset` is the only difference from the line above, and it is what a client joins the bar against |
+| `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 
 ### Changed Files
 
@@ -1487,9 +1490,11 @@ object as the whole body, not wrapped in a field.
 The speech-asset routes take `asset`, an id from the catalogue in
 `dictation::speech::assets`. That is an allowlist, not a hint: an unknown id is
 a `400`-shaped error string rather than a path or a URL built from what the
-caller sent. `download` is minutes long and streams nothing back — progress is
-a desktop `speech-download-progress` event today and is **not** yet on
-`/events`, which is recorded as a deferral at the emit site.
+caller sent. `download` is minutes long and streams nothing back — progress
+arrives as `speech-download-progress`, on the desktop window **and** on
+`/events`, carrying `{ asset, downloaded, total, percent }`. The Whisper-model
+download beside it pushes `dictation-download-progress` with the same body minus
+`asset`.
 
 `SpeechAssetInfo` is **snake_case on the wire** — it carries no serde rename,
 unlike `SpeechStatus` and `HandsFreeStatus` beside it. Its `language` is the
@@ -1519,8 +1524,14 @@ so the caller learns that turn.
 
 All three are answerable at any time: with nothing armed, or with no working
 voice, `status` reports `available: false` and names the reason rather than
-failing. State changes are **not** pushed on `/events` yet — the deferral is
-recorded at the would-be emit site in `dictation::commands::speak`.
+failing.
+
+Polling is no longer the only way to learn the outcome: every transition is
+pushed as `speech-utterance`, carrying the same `SpokenReply` body this route
+returns, on the desktop window and on `/events`. It is emitted by the render
+thread that performs the transition rather than by `speak` — `finished` and
+`interrupted` happen long after `speak` returned — so a client that subscribes
+sees `queued → rendering → speaking → finished` without asking.
 
 `SpeechStatus.language` is the two-letter code this conversation is being held
 in: the dictation setting when it names one, and what Whisper detected when the
