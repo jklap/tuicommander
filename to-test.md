@@ -2996,10 +2996,10 @@ Needs a `make dev` restart — the Rust backend does not hot-reload.
 Needs a `make dev` restart — the Rust backend does not hot-reload. There is no
 Dictation UI for these yet (#818-2a29), so drive them over HTTP.
 
-**The voices are not published yet.** `speech-voices-v1` does not exist, so the
-Italian download will fail on its last file with a 404 reported as a network
-error. Everything up to that point is real and worth checking; the voice item
-below stays open until the release is cut.
+**The voices are published.** `speech-voices-v1` was cut on 2026-09-22 and serves
+`italian-giovanni.safetensors` at the sha256 pinned in `assets.rs`, verified by
+downloading it back from the public URL. The Italian download is therefore
+expected to complete rather than 404 on its last file.
 
 - [ ] `curl localhost:9877/dictation/speech/assets` lists two assets,
       `onnxruntime` and `italian`, both `"state": "absent"` on a clean machine.
@@ -3018,21 +3018,23 @@ below stays open until the release is cut.
 - [ ] `POST /dictation/speech/assets/delete {"asset":"onnxruntime"}` removes the
       directory, and a second delete answers success rather than an error.
 - [ ] `{"asset":"italian"}` downloads about 125 MB into
-      `<config>/models/speech/italian/`. **Expected to fail today** on
-      `voices/giovanni.safetensors` with a 404 — check that the failure leaves
-      `state` at `absent` and no `.staging` directory behind, which is the
-      behaviour that matters.
-- [ ] _(blocked on the `speech-voices-v1` release)_ With the voice published,
-      the Italian download completes and the list reports `ready`.
+      `<config>/models/speech/italian/` and the list then reports `ready`,
+      including `voices/giovanni.safetensors`.
+- [ ] The failure path still needs checking, and no longer happens by itself:
+      interrupt the network mid-download (or point one `Fetch` at a bad URL) and
+      confirm the failure leaves `state` at `absent` with no `.staging`
+      directory behind. That behaviour was previously proven for free by the
+      missing voice, so it is now unobserved rather than known-good.
 - [ ] Corrupting one installed file afterwards (`truncate -s 100
       <config>/models/speech/italian/bundle.json`) must move the asset to
       `"state": "incomplete"` with that file named in `missing` — never `ready`.
 
 ## Spoken replies and the `voice` MCP tool (story `817-f67c`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
-Everything below is blocked on the `speech-voices-v1` release, because arming
-without an installed language bundle opens the conversation **without** a voice.
-Until then only the last two items are checkable.
+Everything below needs an installed Italian bundle, because arming without one
+opens the conversation **without** a voice. That is no longer a blocker: the
+`speech-voices-v1` release was cut on 2026-09-22, so install the bundle through
+the download items above first, then work through these.
 
 - [ ] Arm hands-free against a throwaway session on the restarted build, then
       `curl 'localhost:9877/dictation/speech/status'`. `available` must be
@@ -3067,9 +3069,10 @@ Until then only the last two items are checkable.
 
 ## One language, end to end (story `822-7d7a`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
-The first four items need the `speech-voices-v1` release, for the same reason as
-the block above: without an installed bundle there is no voice to listen to. The
-rest are checkable now, and the point of every one of them is the same — the
+The first four items need an installed Italian bundle, for the same reason as
+the block above: without one there is no voice to listen to. The release that
+serves it exists as of 2026-09-22, so install it first. The point of every one
+of these items is the same — the
 model must never answer in a language the user is not speaking.
 
 - [ ] Set Dictation language to **Italian**, arm hands-free, and say something in
@@ -3214,18 +3217,22 @@ The eight states a conversation has to survive are held by tests and indexed in
 survive". What is left here is what no test can reach: real Whisper and real
 Kokoro inference, a real microphone and speaker, and the browser endpoint.
 
-**Two of these are blocked on something that does not exist yet.** The Italian
-voice bundle is served from a `speech-voices-v1` release on
-`sstraus/tuicommander` that has not been created, so a first run cannot download
-a voice; and browser capture/playback is story `832-e730`, which is not built.
-Do not mark those items from a mock — record them as blocked.
+**One of these is still blocked.** The Italian voice is no longer: the
+`speech-voices-v1` release on `sstraus/tuicommander` was cut on 2026-09-22 and
+serves `italian-giovanni.safetensors` at the pinned sha256, so a first run can
+download a voice. Browser capture/playback is story `832-e730`, which is not
+built. Do not mark that item from a mock — record it as blocked.
 
 - [ ] **[HUMAN]** In an isolated instance (`TUIC_APP_INSTANCE=voice-check`) and
       against a throwaway terminal: download the speech assets, arm hands-free,
       speak a question, and let it run to the end — automatic end of turn, the
       agent answering out loud, and talking over the answer to interrupt it.
       Everything with the real assets, not the test doubles.
-      _Blocked: the `speech-voices-v1` release does not exist._
+      _Unblocked 2026-09-22: the voice is published. Real Pocket TTS synthesis
+      is already proven against a local bundle — `cargo nextest run --lib
+      --run-ignored ignored-only -E 'test(/dictation::speech::pocket/)'` with
+      `TUIC_POCKET_BUNDLE_DIR` and `ORT_DYLIB_PATH` set, 3/3 green. What is left
+      here is the microphone, the speaker and the interruption._
 - [ ] **[HUMAN]** Ask the **model** to speak through the `voice` MCP tool while
       that same conversation is armed, and confirm it reaches the same speaker
       and the same queue as a reply the desktop asked for.
