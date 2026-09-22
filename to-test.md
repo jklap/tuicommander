@@ -3239,3 +3239,15 @@ stream gets the identical body. Only a restart loads them.
       `interrupted` rather than `finished`, and that it arrives — the transition
       happens on the render thread after `speak` has long returned, which is the
       case a polling client used to miss entirely.
+
+## Agent toast repository action (story `835-314c`, 2026-09-22) — **frontend visual**
+
+The rendered DOM was exercised with the real Vite modules and contained two
+toasts at once: the different-repository toast had `Go to repo`; the current-
+repository toast did not. `agent-browser` navigation and DOM inspection worked,
+but `Page.captureScreenshot` timed out repeatedly, and CUA could not bind the
+headed test browser window.
+
+- [ ] **[VISUAL]** Capture the two toast states together after the screenshot
+      backend is available. Confirm the secondary button spacing, contrast and
+      wrapping at the normal window width and at a narrow width.

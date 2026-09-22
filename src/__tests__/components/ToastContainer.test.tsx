@@ -74,6 +74,61 @@ describe("ToastContainer", () => {
 		expect(repositoriesStore.get("/there")?.activeWorkspaceId).toBe("feature");
 	});
 
+	it("offers a repo action when the registered origin differs and focuses its live session", () => {
+		repositoriesStore.add({ path: "/toast-current", displayName: "Current" });
+		repositoriesStore.setWorkspace("/toast-current", "main", { worktreePath: "/toast-current" });
+		repositoriesStore.add({ path: "/toast-origin", displayName: "Origin" });
+		repositoriesStore.setWorkspace("/toast-origin", "feature", { worktreePath: "/toast-origin" });
+		const current = addTerminal("session-current-action");
+		const origin = addTerminal("session-origin-action");
+		repositoriesStore.addTerminalToWorkspace("/toast-current", "main", current);
+		repositoriesStore.addTerminalToWorkspace("/toast-origin", "feature", origin);
+		repositoriesStore.setActive("/toast-current");
+		terminalsStore.setActive(current);
+
+		toastsStore.add(
+			"ready",
+			"review it",
+			"info",
+			false,
+			undefined,
+			undefined,
+			"/toast-origin",
+			"session-origin-action",
+		);
+		render(() => <ToastContainer />);
+		const repoAction = screen.getByRole("button", { name: "Go to repo" });
+		expect(repoAction.tabIndex).toBe(0);
+		fireEvent.click(repoAction);
+
+		expect(repositoriesStore.state.activeRepoPath).toBe("/toast-origin");
+		expect(terminalsStore.state.activeId).toBe(origin);
+		expect(toastsStore.toasts).toHaveLength(0);
+	});
+
+	it("does not offer a repo action for the active repository", () => {
+		repositoriesStore.add({ path: "/toast-active", displayName: "Active" });
+		repositoriesStore.setActive("/toast-active");
+		toastsStore.add("local", "already here", "info", false, undefined, undefined, "/toast-active");
+
+		render(() => <ToastContainer />);
+
+		expect(screen.queryByRole("button", { name: "Go to repo" })).toBeNull();
+	});
+
+	it("does not offer a repo action after the origin repository is removed", () => {
+		repositoriesStore.add({ path: "/toast-present", displayName: "Present" });
+		repositoriesStore.add({ path: "/toast-removed", displayName: "Removed" });
+		repositoriesStore.setActive("/toast-present");
+		toastsStore.add("stale repo", "gone", "warn", false, undefined, undefined, "/toast-removed");
+
+		render(() => <ToastContainer />);
+		expect(screen.getByRole("button", { name: "Go to repo" })).toBeTruthy();
+		repositoriesStore.remove("/toast-removed");
+
+		expect(screen.queryByRole("button", { name: "Go to repo" })).toBeNull();
+	});
+
 	it("names the repo the toast came from", () => {
 		repositoriesStore.add({ path: "/Gits/personal/ego", displayName: "Ego" });
 

@@ -6,6 +6,7 @@ import styles from "./ToastContainer.module.css";
 interface ToastListProps {
 	onDismiss: (toast: Toast) => void;
 	repoName: (toast: Toast) => string | null;
+	repoAction?: (toast: Toast) => { label: string; onClick: () => void } | null;
 }
 
 /** Shared toast presentation. Navigation stays in the shell-specific wrapper. */
@@ -29,18 +30,36 @@ export const ToastList: Component<ToastListProps> = (props) => (
 						</span>
 						{toast.message && <span class={styles.message}>{toast.message}</span>}
 					</span>
-					<Show when={toast.action}>
-						<button
-							class={styles.action}
-							onClick={(event) => {
-								event.stopPropagation();
-								toast.action!.onClick();
-								toastsStore.remove(toast.id);
-							}}
-						>
-							{toast.action!.label}
-						</button>
-					</Show>
+					<span class={styles.actions}>
+						<Show when={toast.action} keyed>
+							{(action) => (
+								<button
+									class={styles.action}
+									onClick={(event) => {
+										event.stopPropagation();
+										action.onClick();
+										toastsStore.remove(toast.id);
+									}}
+								>
+									{action.label}
+								</button>
+							)}
+						</Show>
+						<Show when={props.repoAction?.(toast)} keyed>
+							{(action) => (
+								<button
+									class={`${styles.action} ${styles.repoAction}`}
+									onClick={(event) => {
+										event.stopPropagation();
+										action.onClick();
+										toastsStore.remove(toast.id);
+									}}
+								>
+									{action.label}
+								</button>
+							)}
+						</Show>
+					</span>
 				</div>
 			)}
 		</For>
