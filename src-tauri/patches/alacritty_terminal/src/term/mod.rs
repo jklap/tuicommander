@@ -1497,6 +1497,10 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn insert_blank(&mut self, count: usize) {
+        // ICH acts on the cell the cursor occupies, so a pending wrap is
+        // resolved rather than carried past the edit.
+        self.grid.cursor.input_needs_wrap = false;
+
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
 
@@ -1841,26 +1845,53 @@ impl<T: EventListener> Handler for Term<T> {
     fn insert_blank_lines(&mut self, lines: usize) {
         trace!("Inserting blank {lines} lines");
 
+        // A pending wrap is resolved even when the line is outside the scroll
+        // region and the insert itself does nothing.
+        self.grid.cursor.input_needs_wrap = false;
+
         let origin = self.grid.cursor.point.line;
         if self.scroll_region.contains(&origin) {
             self.scroll_down_relative(origin, lines);
+            // DEC returns the cursor to the left margin after IL.
+            self.grid.cursor.point.column = Column(0);
         }
     }
 
     #[inline]
     fn delete_lines(&mut self, lines: usize) {
+        // A pending wrap is resolved even when the line is outside the scroll
+        // region and the delete itself does nothing.
+        self.grid.cursor.input_needs_wrap = false;
+
         let origin = self.grid.cursor.point.line;
         let lines = cmp::min(self.screen_lines() - origin.0 as usize, lines);
 
         trace!("Deleting {lines} lines");
 
         if lines > 0 && self.scroll_region.contains(&origin) {
+            // DEFERRED (2026-09-22) — `scroll_up_relative` feeds `Grid::scroll_up`,
+            // which pushes the removed lines into scrollback whenever the region
+            // starts at line 0. A reference terminal grows its buffer only for an
+            // index past the bottom margin, so DL (and SU) here manufacture
+            // history rows: 279 of the retained ANSI differential failures are
+            // exactly this, each growing by the deleted line count. Not fixed
+            // with the handler contract because separating "scrolled off" from
+            // "deleted by a control" changes `Grid::scroll_up`, and TUIC's
+            // absolute row coordinate (`lines_scrolled`/`total_scrolled`) is
+            // built on its current meaning. Story #834-1878; evidence in
+            // `tests/terminal-stress/INTEGRITY_FINDINGS.md`.
             self.scroll_up_relative(origin, lines);
+            // DEC returns the cursor to the left margin after DL.
+            self.grid.cursor.point.column = Column(0);
         }
     }
 
     #[inline]
     fn erase_chars(&mut self, count: usize) {
+        // ECH acts on the cell the cursor occupies, so a pending wrap is
+        // resolved rather than carried past the edit.
+        self.grid.cursor.input_needs_wrap = false;
+
         let cursor = &self.grid.cursor;
 
         trace!(
@@ -1883,30 +1914,33 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn delete_chars(&mut self, count: usize) {
+        // DCH acts on the cell the cursor occupies, so a pending wrap is
+        // resolved rather than carried past the edit.
+        self.grid.cursor.input_needs_wrap = false;
+
         let columns = self.columns();
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
 
-        // Ensure deleting within terminal bounds.
-        let count = cmp::min(count, columns);
-
         let start = cursor.point.column.0;
-        let end = cmp::min(start + count, columns - 1);
-        let num_cells = columns - end;
+
+        // Only the cells to the right of the cursor can be deleted, so a count
+        // reaching past the right margin removes fewer cells than it asks for.
+        // Blanking `count` cells regardless eats text the delete never touched.
+        let removed = cmp::min(count, columns - start);
+        let shifted = columns - start - removed;
 
         let line = cursor.point.line;
         self.damage
             .damage_line(line.0 as usize, 0, self.columns() - 1);
         let row = &mut self.grid[line][..];
 
-        for offset in 0..num_cells {
-            row.swap(start + offset, end + offset);
+        for offset in 0..shifted {
+            row.swap(start + offset, start + removed + offset);
         }
 
-        // Clear last `count` cells in the row. If deleting 1 char, need to delete
-        // 1 cell.
-        let end = columns - count;
-        for cell in &mut row[end..] {
+        // The cells vacated at the right margin are exactly the ones removed.
+        for cell in &mut row[columns - removed..] {
             *cell = bg.into();
         }
     }
@@ -2126,8 +2160,13 @@ impl<T: EventListener> Handler for Term<T> {
             }
             ansi::ClearMode::Below => {
                 let cursor = self.grid.cursor.point;
-                for cell in &mut self.grid[cursor.line][cursor.column..] {
-                    *cell = bg.into();
+                // A pending wrap puts the erase origin past the right margin,
+                // so the last cell of the current line is not in range. Same
+                // reasoning as the `LineClearMode::Right` guard in `clear_line`.
+                if !self.grid.cursor.input_needs_wrap {
+                    for cell in &mut self.grid[cursor.line][cursor.column..] {
+                        *cell = bg.into();
+                    }
                 }
 
                 if (cursor.line.0 as usize) < screen_lines - 1 {
@@ -4037,6 +4076,229 @@ mod tests {
         term.title = Some("Test".into());
         term.set_title(None);
         assert_eq!(term.title, None);
+    }
+
+    /// Fill `line` to the right margin, which arms the pending wrap without
+    /// moving the cursor off the last column.
+    fn arm_pending_wrap(term: &mut Term<VoidListener>, line: i32) {
+        term.goto(line, 0);
+        for _ in 0..term.columns() {
+            term.input('B');
+        }
+        assert!(
+            term.grid.cursor.input_needs_wrap,
+            "the fixture must arm the pending wrap it exists to test"
+        );
+    }
+
+    /// The character written after an edit reveals where the cursor really is,
+    /// which a cursor field cannot: a pending wrap moves the next character
+    /// without moving the cursor.
+    fn next_char_lands_at(term: &mut Term<VoidListener>) -> Point {
+        term.input('X');
+        for line in 0..term.screen_lines() as i32 {
+            for column in 0..term.columns() {
+                if term.grid[Line(line)][Column(column)].c == 'X' {
+                    return Point::new(Line(line), Column(column));
+                }
+            }
+        }
+        panic!("the written character reached no cell");
+    }
+
+    #[test]
+    fn insert_lines_returns_the_cursor_to_the_left_margin() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        term.goto(1, 3);
+        term.insert_blank_lines(1);
+
+        // DEC resets the column after IL; leaving it stranded mid-row puts the
+        // next paint at the wrong offset for the rest of the line.
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(1), Column(0))
+        );
+    }
+
+    #[test]
+    fn delete_lines_returns_the_cursor_to_the_left_margin() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        term.goto(1, 3);
+        term.delete_lines(1);
+
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(1), Column(0))
+        );
+    }
+
+    #[test]
+    fn insert_lines_outside_the_scroll_region_keeps_the_column() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        term.set_scrolling_region(1, Some(2));
+        term.goto(3, 3);
+        term.insert_blank_lines(1);
+
+        // The insert does nothing outside the region, so it may not move the
+        // cursor either.
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(3), Column(3))
+        );
+    }
+
+    #[test]
+    fn insert_lines_outside_the_scroll_region_still_resolves_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        term.set_scrolling_region(1, Some(2));
+        arm_pending_wrap(&mut term, 3);
+        term.insert_blank_lines(1);
+
+        // Clearing the pending wrap is not conditional on the insert applying.
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(3), Column(4))
+        );
+    }
+
+    #[test]
+    fn insert_blank_resolves_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        arm_pending_wrap(&mut term, 1);
+        term.insert_blank(2);
+
+        // ICH edited the cell under the cursor, so the next character belongs
+        // on that same cell rather than on the following row.
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(1), Column(4))
+        );
+    }
+
+    /// Read a whole line as text, so a test can state the expected row instead
+    /// of asserting cell by cell.
+    fn line_text(term: &Term<VoidListener>, line: i32) -> String {
+        (0..term.columns())
+            .map(|column| term.grid[Line(line)][Column(column)].c)
+            .collect()
+    }
+
+    #[test]
+    fn delete_chars_past_the_right_margin_only_blanks_what_it_removed() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 2), VoidListener);
+
+        term.goto(0, 0);
+        for c in "abcdefghij".chars() {
+            term.input(c);
+        }
+        term.goto(0, 7);
+        term.delete_chars(5);
+
+        // Three cells sit right of the cursor, so three are removed. Blanking a
+        // full five would eat "ef", which the delete never reached.
+        assert_eq!(line_text(&term, 0), "abcdefg   ");
+    }
+
+    #[test]
+    fn delete_chars_within_the_row_shifts_the_tail_left() {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 2), VoidListener);
+
+        term.goto(0, 0);
+        for c in "abcdefghij".chars() {
+            term.input(c);
+        }
+        term.goto(0, 5);
+        term.delete_chars(3);
+
+        assert_eq!(line_text(&term, 0), "abcdeij   ");
+    }
+
+    #[test]
+    fn delete_chars_resolves_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        arm_pending_wrap(&mut term, 1);
+        term.delete_chars(2);
+
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(1), Column(4))
+        );
+    }
+
+    #[test]
+    fn erase_chars_resolves_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        arm_pending_wrap(&mut term, 1);
+        term.erase_chars(2);
+
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(1), Column(4))
+        );
+    }
+
+    #[test]
+    fn erase_in_display_below_spares_the_cell_behind_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        term.goto(2, 0);
+        term.input('C');
+        arm_pending_wrap(&mut term, 1);
+        term.clear_screen(ansi::ClearMode::Below);
+
+        // The pending wrap puts the erase origin past the right margin, so the
+        // last written cell is not in range — erasing it drops a character the
+        // user already saw.
+        assert_eq!(term.grid[Line(1)][Column(4)].c, 'B');
+        // Lines below are still cleared.
+        assert_eq!(term.grid[Line(2)][Column(0)].c, ' ');
+    }
+
+    #[test]
+    fn erase_in_display_keeps_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        arm_pending_wrap(&mut term, 1);
+        term.clear_screen(ansi::ClearMode::Below);
+
+        // ED erases without editing the cell under the cursor, so the pending
+        // wrap survives. xterm agrees; do not "fix" this alongside ICH/DCH/ECH.
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(2), Column(0))
+        );
+    }
+
+    #[test]
+    fn erase_in_display_above_clears_the_whole_line_behind_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        arm_pending_wrap(&mut term, 1);
+        term.clear_screen(ansi::ClearMode::Above);
+
+        // ED1 is inclusive of the cursor cell, and a pending wrap sits past it,
+        // so the whole line goes — the opposite of the ED0 case above.
+        assert_eq!(term.grid[Line(1)][Column(4)].c, ' ');
+    }
+
+    #[test]
+    fn erase_in_line_keeps_a_pending_wrap() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+
+        arm_pending_wrap(&mut term, 1);
+        term.clear_line(ansi::LineClearMode::Right);
+
+        assert_eq!(
+            next_char_lands_at(&mut term),
+            Point::new(Line(2), Column(0))
+        );
     }
 
     #[test]
