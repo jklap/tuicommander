@@ -8,6 +8,22 @@
 
 # To Test
 
+## Clean theme bundled (2026-09-22) — **Rust, needs a `make dev` restart**
+
+`clean.json` is in `BUILTIN_THEMES`, but `seed_builtin_themes` is a no-op once
+`<config>/themes` exists, so no existing install receives it from the bundle.
+Verified live on 2026-09-22 by copying the file into
+`~/Library/Application Support/com.tuic.commander/themes/` (the watcher picked
+it up): pure black chrome, white accent, `-webkit-font-smoothing: antialiased`
+and `letter-spacing: 0.01em` on `html[data-theme="clean"]`, toast clamp at four lines.
+
+- [ ] In a **restarted** instance with an empty `<config>/themes` (or
+      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Clean" without
+      any manual copy.
+- [x] Selecting "Clean" applies the black chrome and antialiased text at once.
+      _(verified: live screenshot + `document.documentElement.dataset.theme ===
+      "clean"`, computed `-webkit-font-smoothing: antialiased`, 2026-09-22)_
+
 ## DL and SU stop manufacturing scrollback (story `834-1878`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
 `delete_lines` and `scroll_up` used to push the rows they removed into history.

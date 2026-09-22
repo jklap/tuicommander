@@ -293,6 +293,26 @@
   --ansi-bright-white: #ffffff;
 }
 
+/* Clean theme: the Orca dark look. Same system font, but the lighter
+   "antialiased" rasterization every Electron app on macOS uses instead of
+   WebKit's dilated default, plus a touch of tracking. Colors live in
+   src-tauri/src/themes/clean.json; applyAppTheme() sets data-theme. */
+html[data-theme="clean"] {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: 0.01em;
+  /* Tab-type tints are fixed hues in :root (red diff, blue editor, green
+     markdown, purple panel, cyan remote). On a neutral palette they read as
+     six unrelated tab styles, so here they all tint with the muted gray and
+     only the icon keeps the semantic color. */
+  --tab-diff-rgb: 115, 115, 115;
+  --tab-edit-rgb: 115, 115, 115;
+  --tab-md-rgb: 115, 115, 115;
+  --tab-panel-rgb: 115, 115, 115;
+  --tab-html-rgb: 115, 115, 115;
+  --tab-remote-rgb: 115, 115, 115;
+}
+
 html, body {
   height: 100%;
   overflow: hidden;

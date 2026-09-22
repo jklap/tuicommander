@@ -51,7 +51,7 @@ Reference for all UI/CSS/layout work. Every visual change MUST follow this guide
 
 ## Color Palette
 
-Values shown are the **vscode-dark** theme defaults (defined in `:root` of `global.css`). The app supports **11 themes** — all core colors are CSS custom properties overridden at runtime by `applyAppTheme()` in `themes.ts`. When writing CSS, always use variables, never hardcode core palette values.
+Values shown are the **vscode-dark** theme defaults (defined in `:root` of `global.css`). The app supports **15 bundled themes** — all core colors are CSS custom properties overridden at runtime by `applyAppTheme()` in `themes.ts`, which also sets `html[data-theme="<key>"]` so a theme can carry typography rules in `global.css` (only `clean` does: antialiased smoothing, 0.01em tracking, and neutral gray `--tab-*-rgb` tints so typed tabs do not each bring their own hue). When writing CSS, always use variables, never hardcode core palette values.
 
 ### CSS Variables (`:root` in `global.css`)
 

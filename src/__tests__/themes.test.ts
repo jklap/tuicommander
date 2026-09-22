@@ -232,6 +232,26 @@ describe("themes", () => {
 			expect(style.getPropertyValue("--accent")).toBe("#bd93f9");
 		});
 
+		it("publishes --accent-rgb so rgba() tints follow the theme instead of a hardcoded fallback", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, applyAppTheme } = await import("../themes");
+			await loadThemes();
+
+			applyAppTheme("dracula");
+			expect(document.documentElement.style.getPropertyValue("--accent-rgb")).toBe("189, 147, 249");
+		});
+
+		it("exposes the theme key as data-theme so CSS can key per-theme typography on it", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, applyAppTheme } = await import("../themes");
+			await loadThemes();
+
+			applyAppTheme("dracula");
+			expect(document.documentElement.dataset.theme).toBe("dracula");
+			applyAppTheme("nord");
+			expect(document.documentElement.dataset.theme).toBe("nord");
+		});
+
 		it("falls back to vscode-dark for unknown theme", async () => {
 			invoke.mockResolvedValueOnce(FIXTURES);
 			const { loadThemes, applyAppTheme } = await import("../themes");
