@@ -976,6 +976,41 @@ The queue is built in `arm_hands_free_with` **before** the runtime is spawned
 whenever a language is already known, for this reason alone: a loop started
 first would spend its first ticks unable to interrupt anything.
 
+### What barge-in measures (816-cbbf)
+
+The barge-in tests above this one all use `Subtract`, a perfect non-adaptive
+canceller. It answers *is the wiring right* and cannot answer *how long does it
+take* or *how often does it fire when nobody spoke*, because a perfect
+subtraction leaves no residual to misjudge.
+`talking_over_the_reply_stops_it_without_losing_the_first_words` in
+`continuous.rs` drives the shipping AEC3 adapter through the same `tick` and
+turns those into numbers. Measured 2026-09-22, macOS 27 arm64:
+
+| | |
+|---|---|
+| Stop latency | **50 ms** — one `POLL_INTERVAL_MS`, the floor. Cancellation and detection add nothing measurable on top of the poll. |
+| False triggers | **0** over 1200 ms of reply reaching the microphone with no user speech at all |
+| Pre-roll preserved | **280 ms** of audio ahead of the user's first sample, out of the 300 ms ring |
+| Utterance length | **1720 ms**, against 280 ms of pre-roll plus 600 ms of speech — nothing was truncated |
+
+The fixture is a **room model, not a recording**: the microphone hears the
+rendered reply 40 ms late and at 0.35 of its level, with the user's voice added
+on top at a different pitch so the canceller cannot subtract the user by
+subtracting the echo and still look correct. That is the signal an echo
+canceller is specified against — a linear path with a delay — which is what
+makes the numbers comparable between runs. It deliberately does not model
+reverberation, the microphone's noise floor, or a speaker driven into
+distortion.
+
+`without_the_canceller_the_same_room_interrupts_the_reply_on_its_own_echo` is
+the control, and the only reason the zero above means anything: the same room
+with `PassThrough` installed *must* interrupt the reply before the user has said
+a word. Without it, a false-trigger count of zero would be equally consistent
+with a fixture too quiet to trip anything.
+
+**Neither is a substitute for a real microphone and a real speaker in a room.**
+That probe is in `to-test.md`.
+
 ## The language of the conversation
 
 Boss's requirement is one sentence: **the model and the voice use the language
