@@ -528,6 +528,60 @@ Do NOT flag these as security issues in reviews — they are intentional design 
 - **Iframe sandbox = `allow-scripts allow-same-origin`** — ALL iframes MUST use this. NEVER use bare `sandbox=""` — it kills JavaScript.
 - **Plugin capabilities do not isolate plugins from each other.** `plugin_id` is caller-supplied and plugins load into the same JS realm as the host, so any plugin can pass another plugin's id and inherit its grants. This is known, documented at the capability check in `plugins.rs`, at the `import()` in `pluginLoader.ts`, and in `docs/plugins.md`. A per-plugin token was considered and rejected — same-realm JS can read or proxy it, so it would be security theatre. Real isolation needs Worker/iframe + a host-created MessagePort; it is deferred, not overlooked. Do NOT propose the token.
 
-## Ideas
+## Ideas Tracker
 
-See CLAUDE.md for ideas folder rules (gitignored).
+**`ideas/`** folder contains feature concepts under evaluation, one file per idea. **`ideas/index.md`** is the summary index — keep it in sync when adding, updating, or removing ideas.
+
+- **Adding a new idea:** Create `ideas/<slug>.md`, then add a row to the appropriate table in `ideas/index.md`
+- **Updating status:** Change the status in the idea file AND update the corresponding row in `ideas/index.md` (move between tables if status category changes: Active / Shipped / Rejected)
+- When validating an idea, update its status (`concept` -> `validated` -> `designed` -> `moved`)
+- When rejecting an idea, mark it `rejected` with reasoning — don't delete the file, move the row to the Rejected table
+- When implementing an idea, move it to SPEC.md and mark it `moved` in the idea file + index
+
+
+## Deferred Work Rule
+**When you defer something** (skip a sub-fix, leave a known issue for later, identify a follow-up), **write it as a code comment at the relevant site, tagged `DEFERRED (YYYY-MM-DD)` with the current date and a short rationale.** Not in mdkb, not in a plan file, not in chat — inline comment where the future reader needs it. The date matters: stale deferrals get re-evaluated.
+
+Example:
+
+```ts
+// DEFERRED (2026-04-19) — layer 2 termios reset on agent→shell transition.
+// Rare (observed once); needs a reliable repro before wiring tcsetattr.
+```
+
+
+## `make check` Rule
+**When Boss says `make check`, you fix ALL errors — not just yours.** No "pre-existing" excuses. A clean check means zero errors, period.
+
+
+## Daily Check
+Handled by `.claude/hooks/daily-check.sh` (SessionStart hook). Runs automatically once per day — no model action needed. If the hook outputs something, relay it to Boss.
+
+
+## Drag & Drop
+D&D is strategic and fragile (tab reorder, split-pane moves, file drops, FileBrowser intra-tree moves). **Any change to D&D code, event handlers on drag/drop/pointer events, or `dragDrop.ts`/`useFileDrop.ts` requires explicit Boss approval before implementation.**
+
+
+## Security Scope
+TUICommander is a **local coding tool for professionals** — not a SaaS, not multi-tenant. The human user IS the trust boundary. Do NOT flag or "harden" the following as vulnerabilities:
+
+- Local file access across any path the user can already see (repo browser, `read_external_file`, `opener:allow-open-path`).
+- Symlinks inside registered repos resolving outside them — the user put them there.
+- Unix/TCP loopback sockets without extra auth/permission bits — the OS user is the auth boundary.
+- AI agent writing/keystroking into fullscreen TUIs (vim, lazygit, htop) without extra approval gates — agents driving TUIs is a *feature*.
+- CSP allowing wildcard localhost ports, `opener` scope `"**"`, `lazy_static` transitive deps — see AGENTS.md "Accepted Security Decisions".
+
+Hardening that would break pro workflows (blocking editor automation, restricting file scopes, requiring approval for normal agent ops) is over-engineering. Reject it unless Boss explicitly asks. When in doubt: the tool must stay usable for a senior engineer with full local-machine trust.
+
+
+## Alacritty Local Fork
+We maintain a patched `alacritty_terminal` at `src-tauri/patches/alacritty_terminal/`. When a CanvasTerminal feature needs terminal-level support (OSC handling, new grid queries, scroll APIs), **implement it in the fork first** rather than building JS workarounds. The fork is our code — treat it as a first-class module, not a fragile upstream dependency. See `docs/backend/alacritty-integration.md` for the patch inventory.
+
+@.claude/wiz-claude.md
+
+<!-- wiz-codex:start -->
+## Wiz Codex
+
+When using Codex, follow the Wiz Codex instructions in `.wiz/wiz-codex.md` for this repository, subject to the global instruction hierarchy.
+Those instructions are maintained by the Wiz SessionStart hook and complement this `AGENTS.md` file.
+<!-- wiz-codex:end -->
