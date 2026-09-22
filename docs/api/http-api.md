@@ -1491,6 +1491,13 @@ caller sent. `download` is minutes long and streams nothing back — progress is
 a desktop `speech-download-progress` event today and is **not** yet on
 `/events`, which is recorded as a deferral at the emit site.
 
+`SpeechAssetInfo` is **snake_case on the wire** — it carries no serde rename,
+unlike `SpeechStatus` and `HandsFreeStatus` beside it. Its `language` is the
+**Whisper language code** (`"it"`), null for the runtime library: the same
+alphabet as `DictationConfig.language` and `SpeechStatus.language`, so a client
+can join an asset to the configured language directly. `voices` lists the names
+`speech_voice` may be set to.
+
 ### Spoken replies
 
 The three speech routes are the browser/remote half of `speak_reply`,
@@ -1520,13 +1527,19 @@ in: the dictation setting when it names one, and what Whisper detected when the
 setting is `auto`. Empty means nobody has spoken yet under `auto` — the one
 state in which no reply can be spoken, reported as `available: false` with a
 reason naming Auto rather than filled in with a default. Neither the speak
-payload nor the `voice` MCP tool takes a language or a voice: both come from
-this field, and a second source would disagree with it the first time the user
-switched languages.
+payload nor the `voice` MCP tool takes a language or a voice: the language comes
+from this field and the voice from the `speech_voice` setting, and a second
+source would disagree with them the first time the user switched languages.
 
-`PUT /dictation/config` with a different `language` or `speechCommand` drops the
-voice built for the previous one, cancelling whatever it was speaking. Every
-other field leaves it alone.
+`speech_voice` names one of the voices the configured language ships, reported
+in `voices` by `GET /dictation/speech-assets`. Empty — what every configuration
+written before the setting existed says — means the first voice that language
+ships. A name the language does not ship is refused with a message that lists
+what it does ship, rather than being replaced by a voice nobody chose.
+
+`PUT /dictation/config` with a different `language`, `speechCommand` or
+`speech_voice` drops the voice built for the previous one, cancelling whatever
+it was speaking. Every other field leaves it alone.
 
 ### Hands-free
 

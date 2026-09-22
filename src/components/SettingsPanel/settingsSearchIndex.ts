@@ -216,6 +216,28 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Speech confidence gate",
 		labelKey: "dictation.noSpeechLabel",
 	},
+	// `SpeechSetup` and `HandsFreeControls` (818-2a29) are defined after
+	// `VoiceTuning` for the same reason, so their entries follow its.
+	{ tab: "dictation", section: "Dictation Settings", label: "Spoken replies", labelKey: "dictation.speechLabel" },
+	{ tab: "dictation", section: "Dictation Settings", label: "Voice", labelKey: "dictation.voiceLabel" },
+	{
+		tab: "dictation",
+		section: "Dictation Settings",
+		label: "Hands-free conversation",
+		labelKey: "dictation.handsFreeLabel",
+	},
+	{
+		tab: "dictation",
+		section: "Dictation Settings",
+		label: "Activation phrase",
+		labelKey: "dictation.activationPhraseLabel",
+	},
+	{
+		tab: "dictation",
+		section: "Dictation Settings",
+		label: "Hold-back before sending",
+		labelKey: "dictation.holdBackLabel",
+	},
 	// tabs/GitHubTab.tsx
 	{ tab: "github", section: "GitHub Authentication" },
 	{ tab: "github", section: "Pull Requests" },

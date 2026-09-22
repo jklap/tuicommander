@@ -100,7 +100,7 @@ own identity so the binding can be checked — see "Who may speak" below.
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model` and `speech_command`). Writes the whole document — see "Configuration persistence" |
+| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model`, `speech_command` and `speech_voice`). Writes the whole document — see "Configuration persistence" |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -294,8 +294,11 @@ Three details that are load-bearing rather than incidental:
 exactly one adapter, `DesktopVoiceEndpoint` (`commands.rs`), and `arm` accepts
 only the owner `DESKTOP_OWNER` (`"desktop"`). Any other owner is refused with
 `Audio endpoint '<owner>' is not available on this build` — the browser/remote
-endpoint is story 818 and is deliberately absent rather than stubbed, so a remote
-client cannot silently be served Boss's local microphone.
+endpoint is story 832-e730 and is deliberately absent rather than stubbed, so a
+remote client cannot silently be served Boss's local microphone. Nothing in the
+UI can reach that refusal either: `SettingsPanel.tsx` hides the whole Dictation
+tab outside Tauri, so a browser client is never offered a control that cannot
+work.
 
 The desktop adapter shares push-to-talk's transcriber `Arc` (loading a second
 multi-gigabyte Whisper model would be absurd) and its permission and model
@@ -1012,6 +1015,21 @@ answers `None` for Korean, and the status says `No speech bundle ships for
 language "ko"`. Picking the Italian voice because it is installed is how an
 assistant answers a Korean conversation in Italian.
 
+**Which of the language's voices speaks is a setting; which language speaks is
+not.** `speech_voice` names one of the voices the chosen language ships — the
+Dictation panel offers them from `voices` on the asset, and the setting is empty
+in an untouched configuration, which `choose_voice` reads as "whatever this
+language ships first". That is also what every configuration written before the
+setting existed says, so no migration is needed. A user-supplied engine ignores
+the setting: it names its own voices inside its command template.
+
+**A named voice the language does not ship is an error, not a fall back.**
+`choose_voice` answers with the offered names instead of speaking in the first
+one. Two things get you here — a catalogue that dropped a voice, and a language
+the user changed underneath the setting — and in both, speaking in a voice
+nobody chose is worse than saying why nothing was spoken. The message reaches
+the user through the hands-free status rather than a log.
+
 **The requirement travels in the Compose entry.** `esegui i test` is queued as
 `esegui i test (reply in Italian)`. In the entry rather than in a mode hint,
 because hints are optional and this is not; on one line, because the queue types
@@ -1021,9 +1039,11 @@ table is checked against `WHISPER_LANGUAGES` in `src/stores/dictation.ts` by a
 test that reads the TypeScript.
 
 **Changing the language stops the replies written for the old one.**
-`save_dictation_config` drops `DictationState.speaker` when `language` or
-`speech_command` moves — and on nothing else, because cutting a reply off
-mid-word because somebody moved a threshold slider would be the worse bug. The
+`save_dictation_config` drops `DictationState.speaker` when `language`,
+`speech_command` or `speech_voice` moves — and on nothing else, because cutting
+a reply off mid-word because somebody moved a threshold slider would be the
+worse bug. A voice belongs to a conversation as much as a language does: a
+sentence half said in one voice does not finish in another. The
 next `speak` opens a voice for the language now configured. The same rebuild
 happens mid-conversation under Auto: `speak` compares `Armed.language` against
 the turn language and, when they differ, hushes the old queue before building

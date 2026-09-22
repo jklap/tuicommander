@@ -434,6 +434,21 @@ When modifying git operations, worktree logic, or GitHub API:
 | `docs/FEATURES.md` | Sections 7 (Git) and 8 (GitHub) |
 | `docs/api/tauri-commands.md` | Git/worktree commands |
 
+### Voice dictation, spoken replies and hands-free
+When modifying `src-tauri/src/dictation/**` or the Dictation settings panel:
+
+| File | What to update |
+|------|----------------|
+| `docs/backend/dictation.md` | Commands, hands-free runtime, the speech port and its adapters, the speech-asset catalogue, and the one-language rule |
+| `docs/api/tauri-commands.md` | The Voice Dictation command table — including which config fields drop the voice built for the previous one |
+| `docs/api/http-api.md` | The `/dictation/**` routes and the wire shapes. **`SpeechAssetInfo` is snake_case**; `SpeechStatus`, `HandsFreeStatus`, `SpokenReply` and `HandsFreeDisarmed` are camelCase |
+| `docs/frontend/stores.md` | `dictationStore` — the speech assets, the polled hands-free/speech status, and the fields `saveConfig` reads off the stored config rather than store state |
+| `docs/frontend/components.md` | `DictationSettings` — and the fact that `SettingsPanel.tsx` hides the whole tab outside Tauri |
+| `src/components/SettingsPanel/settingsSearchIndex.ts` | One row per new label, **in source order**: `extractSettings` reads the file, not the render tree |
+| `src/i18n/en.json` | Every `t("key", "double-quoted fallback")`, verbatim — `i18nKeyCollisions.test.ts` is the gate |
+| `docs/FEATURES.md` | Section 9 (Voice Dictation) |
+| `to-test.md` | Anything needing real audio, a real download or Boss's eye — a Rust change here never reaches his live `make dev` session |
+
 ### Settings & Configuration
 When adding config fields or settings UI:
 

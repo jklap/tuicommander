@@ -173,7 +173,7 @@ Tabbed settings overlay.
 **Tabs:**
 - **General** — Font family, font size, shell, IDE, theme, confirmations
 - **Agents** — Agent detection, run configurations, Claude Usage toggle
-- **Services** — MCP server, remote access, dictation settings
+- **Services** — MCP server, remote access, dictation settings (see below)
 - **GitHub** — GitHub OAuth login (Device Flow), token management, diagnostics
 - **Plugins** — Plugin management, enable/disable, log viewer
 - **Keyboard Shortcuts** — Rebindable shortcuts (auto-populated from `actionRegistry.ts`)
@@ -181,6 +181,38 @@ Tabbed settings overlay.
 - **Notifications** — Sound and notification preferences
 - **Repo Scripts** — Setup script, run command per repository
 - **Repo Worktree** — Base branch, copy ignored/untracked files
+
+#### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
+
+Lives under **Services**. Below the Whisper model and voice-tuning controls it
+renders two sections:
+
+- **Spoken replies** (`SpeechSetup`) — the installable speech assets from
+  `get_speech_assets`, each with Download / Repair / Cancel / delete, and a voice
+  `<select>` for the language's voices. It offers **no language control**: the
+  spoken language is the Whisper language, and a second control would be a second
+  source that disagrees with it (see `docs/backend/dictation.md` → "The language
+  of the conversation"). The select is hidden unless the language asset ships
+  more than one voice.
+- **Hands-free conversation** (`HandsFreeControls`) — a terminal picker, Start /
+  Stop, the polled phase, the activation phrase and the hold-back slider.
+
+**Nothing here arms on mount.** Opening this panel must never open the
+microphone, and neither must starting the app: `onMount` only starts a 500 ms
+status poll, cleared in `onCleanup`. Push-to-talk (the hotkey) and continuous
+mode (Start) are rendered as the two distinct mechanisms they are — there is no
+"mode" config field behind them.
+
+The panel has **no browser branch**, because `SettingsPanel.tsx` hides the whole
+Dictation tab when `isTauri()` is false — a browser client never reaches it, and
+settings search reports no match rather than opening an empty tab. Rust refuses
+every audio owner but `desktop`; the browser microphone and speaker are story
+832-e730.
+
+`SpeechSetup` and `HandsFreeControls` are defined at the **bottom** of the file,
+after `VoiceTuning`, because `extractSettings` builds the settings search index
+from source order — their entries in `settingsSearchIndex.ts` follow in the same
+order.
 
 ### PrDetailPopover (`PrDetailPopover/`)
 

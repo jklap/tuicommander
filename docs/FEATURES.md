@@ -1097,6 +1097,7 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Audio device selection
 - Text correction dictionary (e.g., "new line" → `\n`)
 - **Auto-send** — Enable in Settings > Dictation to automatically submit (press Enter) after transcription completes.
+- Spoken-reply voice, hands-free activation phrase and hold-back delay — see 9.11.
 
 ### 9.7 Speech Assets
 - Spoken replies need two downloads beside the Whisper models: a **language bundle** (ONNX graphs, tokenizer, voices — about 125 MB) and **ONNX Runtime** itself (42 MB). Neither ships with the app.
@@ -1119,7 +1120,8 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Every hands-free turn reaches the model as `<what you said> (reply in <Language>)`. It is part of the queued entry, so turning optional hints off does not remove it.
 - With **Auto**, the language is the one Whisper actually detected, and it is shown. Before the first turn there is none — spoken replies are unavailable and say so, rather than falling back to English.
 - A language TUICommander transcribes but ships no voice for is **named, never substituted**: the status says which bundle is missing instead of answering in a language the user is not speaking.
-- Changing the language **stops the reply written for the previous one** mid-sentence. Changing any other dictation setting leaves the voice alone.
+- **Which voice** speaks is a setting; which *language* speaks is not. A language that ships several voices offers them in the Dictation panel; left untouched, the setting means "the first voice this language ships". A named voice the language does not ship is refused with the list of the ones it does, rather than replaced by a voice nobody chose.
+- Changing the language or the voice **stops the reply written for the previous one** mid-sentence — a sentence half said in one voice does not finish in another. Changing any other dictation setting leaves the voice alone.
 
 ### 9.10 The model is told when you start and stop talking
 - **Notify model when hands-free changes** (on by default): arming tells the agent that what arrives from now on was spoken and that it can answer out loud; disarming tells it to go back to text.
@@ -1127,6 +1129,14 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Change your mind before the agent reads the start notice and it is **withdrawn**, with no stop notice behind it. What the agent ends up holding always matches the mode you are actually in.
 - Turning the option off silences both notices and **nothing else**: disarming still stops the voice, drops queued audio and refuses late replies.
 - **Push-to-talk is untouched.** Holding the hotkey never starts continuous listening, never uses the activation phrase, never makes speech available and never notifies anyone.
+
+### 9.11 Driving it from Settings > Dictation
+- **Spoken replies** lists the speech languages and the ONNX runtime with their state, size and Download / Repair / Cancel / delete, plus the voice to speak with. There is **no** speech-language control — the language is the Whisper one, and a second control would be a second source that disagrees with it.
+- **Hands-free conversation** picks the terminal to talk to, starts and stops the mode, and shows the live phase (waiting, capturing, transcribing, holding back, delivered), what is queued, what is being spoken and any error. It also holds the activation phrase and the hold-back delay.
+- **Opening the panel never opens the microphone**, and neither does starting the app. Nothing arms by itself; the mode starts only when you press Start or say the activation phrase in a conversation you already armed.
+- **Push-to-talk and continuous listening are two mechanisms, not a mode switch.** Push-to-talk is the hotkey; continuous is Start. There is no setting that flips between them.
+- **The dictation hotkey is also the stop control.** Pressed while a conversation is running, it ends the whole thing — capture, the transcript waiting out its hold-back, the queue and whatever is being spoken — and says how many spoken entries had already been typed and could not be taken back. Pressed otherwise it records as usual.
+- **Hands-free is desktop-only in this build.** The Dictation tab is not shown at all in a browser — settings search reports no match rather than opening a panel whose controls cannot work — and the backend refuses any audio owner but the desktop one. Arming from a laptop must not open the microphone on the machine running TUICommander.
 
 ---
 
