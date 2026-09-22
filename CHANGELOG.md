@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A repainting agent no longer grows the scrollback it never printed.** `CSI M` (delete
+  lines) and `CSI S` (scroll up) pushed the rows they removed into history, so a TUI that
+  redraws with them added scrollback the agent never wrote. Lines now enter history only
+  when they leave the bottom of the screen; a linefeed past the bottom margin is unchanged.
+  (#834-1878)
 - **`tuic agent send` no longer reports a successful delivery as refused.** The
   registry removed its ambiguous `accepted` field when `delivered` and
   `delivery_path` became authoritative, but the CLI still required that removed

@@ -8,6 +8,28 @@
 
 # To Test
 
+## DL and SU stop manufacturing scrollback (story `834-1878`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+`delete_lines` and `scroll_up` used to push the rows they removed into history.
+The fork tests and the retained ANSI captures cover the buffer; what they cannot
+cover is what a real agent's repaint looks like on screen, and whether anything
+a user relies on scrolled away with it.
+
+- [ ] In a **restarted** instance, run an agent that repaints with DL — Claude
+      Code or any Ink TUI redrawing its box is enough. Scroll back afterwards:
+      the history must hold what the agent printed, with no duplicated frames of
+      the repainting box. Before the fix each repaint left its removed rows
+      behind.
+- [ ] Scroll back far enough to be off the live screen, then let the agent
+      repaint. The viewport must stay where you put it — a control scroll no
+      longer shifts a scrolled-back view, so the rows under your eyes must not
+      move.
+- [ ] Select text in the scrollback, let the agent repaint, then copy. The
+      selection must still yield the text it covered.
+- [ ] Run `less` or `man` on a long file and quit. Everything printed before it
+      must still be in the scrollback — this is the linefeed path, which must be
+      unchanged.
+
 ## Hands-free from a browser tab (story `832-e730`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
 A browser now has its own microphone and speaker for hands-free: the tab opens

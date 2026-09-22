@@ -79,6 +79,22 @@ pub enum Scroll {
     Bottom,
 }
 
+/// Why lines are moving up, which decides whether they become history.
+///
+/// The distinction is invisible on screen and decisive in the buffer, so it is
+/// named at the call site rather than inferred from the region: both sources
+/// can present a region starting at line 0.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollSource {
+    /// Content reached the bottom and was pushed off — a linefeed, or an index
+    /// past the bottom margin. It was printed, so it belongs in history.
+    Overflow,
+    /// A control removed lines: DL (`CSI M`) or SU (`CSI S`). Nothing scrolled
+    /// anywhere, so nothing may enter history and the absolute row coordinate
+    /// must not move.
+    Control,
+}
+
 /// Grid based terminal content storage.
 ///
 /// ```notrust
@@ -271,11 +287,33 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
     }
 
-    /// Move lines at the bottom toward the top.
+    /// Move lines at the bottom toward the top, treating the removed lines as
+    /// content that left the screen.
     ///
     /// This is the performance-sensitive part of scrolling.
     pub fn scroll_up<D>(&mut self, region: &Range<Line>, positions: usize)
     where
+        T: ResetDiscriminant<D>,
+        D: PartialEq,
+    {
+        self.scroll_up_with(region, positions, ScrollSource::Overflow);
+    }
+
+    /// Move lines at the bottom toward the top, saying where the scroll came
+    /// from.
+    ///
+    /// The two sources differ in one thing only, and it is not cosmetic: a line
+    /// that overflowed the bottom was printed and then pushed off, so it
+    /// belongs in history, while a line a control removed was never scrolled
+    /// anywhere and must leave no trace. Routing DL and SU through `Overflow`
+    /// is what made an agent TUI that repaints with DL manufacture scrollback
+    /// rows it never printed (#834-1878).
+    pub fn scroll_up_with<D>(
+        &mut self,
+        region: &Range<Line>,
+        positions: usize,
+        source: ScrollSource,
+    ) where
         T: ResetDiscriminant<D>,
         D: PartialEq,
     {
@@ -299,13 +337,19 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             return;
         }
 
-        // Update display offset when not pinned to active area.
-        if self.display_offset != 0 {
+        // Update display offset when not pinned to active area. A control
+        // scroll adds nothing to history, so a user who is scrolled back must
+        // stay where they are — shifting them would move the viewport under a
+        // buffer that did not grow.
+        if self.display_offset != 0 && source == ScrollSource::Overflow {
             self.display_offset = min(self.display_offset + positions, self.max_scroll_limit);
         }
 
-        // Only rotate the entire history if the active region starts at the top.
-        if region.start == 0 {
+        // Only rotate the entire history if the active region starts at the top
+        // *and* the lines are leaving the screen rather than being removed. A
+        // control scroll takes the branch below, which rotates within the
+        // region and touches neither history nor the counters.
+        if region.start == 0 && source == ScrollSource::Overflow {
             // These lines scroll off the top of the active region into history.
             // Count them before `increase_scroll_limit` clamps to the cap, so the
             // total keeps climbing even once history is full and the oldest lines
