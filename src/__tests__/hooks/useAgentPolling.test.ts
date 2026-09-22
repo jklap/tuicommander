@@ -44,6 +44,29 @@ describe("useAgentPolling", () => {
 		expect(store.get(id)?.backgroundWork).toBe(false);
 	});
 
+	it("hydrates prompt and intent from the authoritative session snapshot", async () => {
+		const id = store.add(makeTerminal({ name: "Custom Grok", sessionId: "sess-1" }));
+		store.update(id, { nameIsCustom: true });
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "sess-1",
+				state: {
+					shell_state: "idle",
+					agent_intent: "locking out hashtags",
+					last_prompt: "write a campaign with enough words to remain the relevant prompt",
+				},
+			},
+		]);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		await syncAgentLifecycleStates();
+
+		expect(store.get(id)?.agentIntent).toBe("locking out hashtags");
+		expect(store.get(id)?.lastPrompt).toBe("write a campaign with enough words to remain the relevant prompt");
+		expect(store.get(id)?.name).toBe("Custom Grok");
+		expect(store.get(id)?.nameIsCustom).toBe(true);
+	});
+
 	it("tracks the queued-command depth, treating an omitted field as an empty queue", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		mockInvoke.mockResolvedValueOnce([
@@ -653,6 +676,70 @@ describe("useAgentPolling", () => {
 	});
 
 	describe("timer lifecycle", () => {
+		it("catches up after a terminal receives its backend session id", async () => {
+			const { listen } = await import("@tauri-apps/api/event");
+			vi.mocked(listen).mockClear();
+			mockInvoke.mockResolvedValueOnce([]).mockResolvedValueOnce([
+				{
+					session_id: "sess-late",
+					state: {
+						agent_intent: "locking out hashtags",
+						last_prompt: "write a campaign with enough words to remain the relevant prompt",
+					},
+				},
+			]);
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "Grok" }));
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				expect(store.get(id)?.agentIntent).toBeNull();
+				const subscriptionCalls = vi.mocked(listen).mock.calls.length;
+				const timerCount = vi.getTimerCount();
+
+				store.update(id, { sessionId: "sess-late" });
+				await tick(0);
+
+				expect(mockInvoke).toHaveBeenCalledTimes(2);
+				expect(store.get(id)?.agentIntent).toBe("locking out hashtags");
+				expect(store.get(id)?.lastPrompt).toBe("write a campaign with enough words to remain the relevant prompt");
+				expect(vi.mocked(listen).mock.calls).toHaveLength(subscriptionCalls);
+				expect(vi.getTimerCount()).toBe(timerCount);
+			});
+		});
+
+		it("runs one trailing catch-up when more session bindings arrive during the initial request", async () => {
+			let resolveInitial!: (value: unknown) => void;
+			const snapshot = [
+				{ session_id: "sess-1", state: { agent_intent: "first intent" } },
+				{ session_id: "sess-2", state: { agent_intent: "second intent" } },
+			];
+			mockInvoke
+				.mockImplementationOnce(
+					() =>
+						new Promise((resolve) => {
+							resolveInitial = resolve;
+						}),
+				)
+				.mockResolvedValueOnce(snapshot);
+
+			await testInScopeAsync(async () => {
+				const first = store.add(makeTerminal({ name: "First", sessionId: "sess-1" }));
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+
+				const second = store.add(makeTerminal({ name: "Second", sessionId: "sess-2" }));
+				resolveInitial(snapshot);
+				await tick(0);
+
+				expect(mockInvoke).toHaveBeenCalledTimes(2);
+				expect(store.get(first)?.agentIntent).toBe("first intent");
+				expect(store.get(second)?.agentIntent).toBe("second intent");
+			});
+		});
+
 		it("does not restart the 30s fallback poll when a terminal is added mid-cycle", async () => {
 			mockInvoke.mockImplementation((cmd: string) => {
 				if (cmd === "get_session_foreground_process") return Promise.resolve(null);
@@ -762,6 +849,88 @@ describe("useAgentPolling", () => {
 				expect(store.get(id)?.shellState).toBe("busy");
 				expect(store.get(id)?.queuedCommands).toBe(2);
 				expect(mockInvoke).not.toHaveBeenCalled();
+			});
+		});
+
+		it("hydrates and clears prompt and intent from complete session-state pushes", async () => {
+			mockInvoke.mockResolvedValue(catchUpSnapshot);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "Custom Grok", sessionId: "sess-1" }));
+				store.update(id, { nameIsCustom: true });
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+				const push = listeners.get("session-state-changed");
+
+				push?.({
+					payload: {
+						session_id: "sess-1",
+						state: {
+							agent_intent: "locking out hashtags",
+							last_prompt: "write a campaign with enough words to remain the relevant prompt",
+						},
+					},
+				});
+				expect(store.get(id)?.agentIntent).toBe("locking out hashtags");
+				expect(store.get(id)?.lastPrompt).toBe("write a campaign with enough words to remain the relevant prompt");
+				expect(store.get(id)?.name).toBe("Custom Grok");
+
+				// SessionState serializes Option::None by omitting these fields. Each
+				// push is a complete snapshot, so omission retracts prior context.
+				push?.({ payload: { session_id: "sess-1", state: { shell_state: "idle" } } });
+				expect(store.get(id)?.agentIntent).toBeNull();
+				expect(store.get(id)?.lastPrompt).toBeNull();
+
+				push?.({
+					payload: {
+						session_id: "sess-1",
+						state: { agent_intent: "temporary intent", last_prompt: "temporary retained prompt" },
+					},
+				});
+				push?.({ payload: { session_id: "sess-1", state: null } });
+				expect(store.get(id)?.agentIntent).toBeNull();
+				expect(store.get(id)?.lastPrompt).toBeNull();
+			});
+		});
+
+		it("does not let an older catch-up overwrite context from a later push", async () => {
+			let resolveSnapshot!: (value: unknown) => void;
+			mockInvoke.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveSnapshot = resolve;
+					}),
+			);
+			const listeners = await captureWindowEvents();
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "Grok", sessionId: "sess-1" }));
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+				await tick(0);
+
+				listeners.get("session-state-changed")?.({
+					payload: {
+						session_id: "sess-1",
+						state: {
+							agent_intent: "new intent",
+							last_prompt: "new prompt with ten complete words for capture here now",
+						},
+					},
+				});
+				resolveSnapshot([
+					{
+						session_id: "sess-1",
+						state: { agent_intent: "old intent", last_prompt: "old prompt from the delayed backend snapshot" },
+					},
+				]);
+				await tick(0);
+
+				expect(store.get(id)?.agentIntent).toBe("new intent");
+				expect(store.get(id)?.lastPrompt).toBe("new prompt with ten complete words for capture here now");
 			});
 		});
 
