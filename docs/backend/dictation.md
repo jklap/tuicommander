@@ -931,6 +931,42 @@ would let any client speak into whichever conversation happened to be armed.
 conversation is doing, and a model that can see a queue will try to speak into
 it.
 
+### The same speech contract on every transport (817-f67c)
+
+There is one implementation per operation and every transport reaches it. That
+is the parity, and it is structural rather than mirrored by hand:
+
+| Transport | Entry point | Caller |
+|---|---|---|
+| Tauri IPC | `#[tauri::command] speak_reply` / `stop_speech` / `get_speech_status` | `Owner` |
+| HTTP | `dictation_routes.rs` → the **same** `dictation::commands` functions | `Owner` |
+| MCP (HTTP and the collapsed `call_tool` path) | `mcp_transport.rs::handle_voice` | `Model(session)` |
+
+The `Owner` surfaces are the user's own UI on either transport; the MCP surface
+is the model's, and the split is the ownership rule in *Who may speak* above.
+There is no WebSocket surface for speech and none is wanted: a WS lane is for
+high-frequency streams, and a reply produces a handful of state changes.
+
+Three tests hold it. `command_table_paths_all_hit_a_registered_route` proves
+every `COMMAND_TABLE` speech path resolves to a registered route.
+`the_speech_status_wire_shape_names_every_field_a_client_reads` and
+`a_reply_looks_the_same_whether_it_was_accepted_or_polled_for` pin the two wire
+shapes — the second compares the *keys* of an accepted reply against the keys of
+the same reply polled for, because the render thread moves the state between the
+two reads and a value comparison would be a race dressed as a contract.
+`voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths` proves
+the MCP identity survives both dispatch paths.
+
+**The push half is missing, on purpose and under protest.** Nothing is emitted
+when an utterance changes state, so every consumer polls `speech_status`; that
+part is at least equal on all transports. What is *not* equal is
+`speech-download-progress`, a desktop-only `emit` with no `/events` arm — a
+browser or PWA client sees an asset download start and finish with nothing in
+between, and `dictation-download-progress` beside it has the same gap. Bridging
+either one needs a new `AppEvent` variant, and `state.rs` has been held
+uncommitted by another agent since 2026-09-21. Both sites carry a dated
+`DEFERRED` comment saying so. Story **833-6fd4** owns the work.
+
 ### The engine's own sample rate reaches the device
 
 `DeviceOutput` passes `SpeechAudio::sample_rate` straight through and lets
