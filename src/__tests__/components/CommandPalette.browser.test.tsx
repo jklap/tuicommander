@@ -86,19 +86,22 @@ describe("CommandPalette browser mode", () => {
 
 	it("exposes only actions explicitly verified for browser execution", () => {
 		const supported = action("search-files", "Search Files");
+		const designMode = action("start-design-mode", "Start Design Mode");
 		const nativeDialog = action("open-file", "Open file");
 		const hostAdministration = action("show-remote-qr", "QR for Remote Mobile Connection");
 		const unknown = action("future-native-action", "Future native action");
 		const { container } = render(() => (
-			<CommandPalette actions={[supported, nativeDialog, hostAdministration, unknown]} browserMode />
+			<CommandPalette actions={[supported, designMode, nativeDialog, hostAdministration, unknown]} browserMode />
 		));
 
 		commandPaletteStore.open();
 
 		expect(isBrowserCommandPaletteAction(supported)).toBe(true);
+		expect(isBrowserCommandPaletteAction(designMode)).toBe(true);
 		expect(isBrowserCommandPaletteAction(nativeDialog)).toBe(false);
 		expect(isBrowserCommandPaletteAction(hostAdministration)).toBe(false);
 		expect(container.textContent).toContain("Search Files");
+		expect(container.textContent).toContain("Start Design Mode");
 		expect(container.textContent).not.toContain("Open file");
 		expect(container.textContent).not.toContain("QR for Remote Mobile Connection");
 		expect(container.textContent).not.toContain("Future native action");

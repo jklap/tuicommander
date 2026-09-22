@@ -515,6 +515,7 @@ Per-repository fields:
 | `auto_fetch_interval_minutes` | `u32` | `0` | Auto-fetch interval in minutes (0 = disabled) |
 | `auto_delete_on_pr_close` | `AutoDeleteOnPrClose` | `"off"` | Auto-delete branch when PR merged/closed (`off`/`ask`/`auto`) |
 | `archive_script` | `String` | `""` | Script to run before archive/delete (non-zero exit blocks) |
+| `dev_server_url` | `Option<String>` | `None` | URL opened by Design Mode for this repository; when unset, opens `about:blank`. Stored locally and excluded from `.tuic.json` and repository defaults |
 
 **Commands:** `load_repo_settings()`, `save_repo_settings(config)`, `check_has_custom_settings(path)`
 
@@ -826,6 +827,8 @@ This is an internal cache file, not user-editable. It is automatically pruned wh
 **Module:** `src-tauri/src/config.rs`
 
 A `.tuic.json` file in the repository root provides team-shareable settings. It is read-only from the app — teams edit it directly in their repo and commit it.
+
+The Design Mode `dev_server_url` is deliberately absent from this format: a committed repository file cannot choose the browser destination on another user's machine. Set it in the repository's Scripts tab instead.
 
 **Precedence chain:** `.tuic.json` > per-repo app settings (`repo-settings.json`) > global defaults (`repo-defaults.json`)
 

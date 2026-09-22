@@ -52,6 +52,7 @@
     "@solidjs/testing-library": "^0.8.10",
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/jest-dom": "^6.10.0",
+    "@types/jsdom": "^30.0.0",
     "@types/qrcode": "^1.5.6",
     "@typescript/typescript6": "^6.0.2",
     "@vitest/coverage-v8": "^5.0.0",

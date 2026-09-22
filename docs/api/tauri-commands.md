@@ -75,6 +75,24 @@ injection claim, writer, input FSM, and output ring, then keeps the MCP response
 open for a bounded terminal-movement receipt. Desktop `write_pty` and
 `write_pty_parts` remain raw input primitives and make no acknowledgement claim.
 
+## Design Mode (`design_mode/tauri_commands.rs`)
+
+The desktop commands and their HTTP equivalents control the same per-repository
+Chrome inspector. A start is bound to the named agent session; a second start
+for the repository rebinds its existing Chrome window. A grab is inserted into
+that session's input draft without submitting it.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `start_design_mode` | `sessionId: String` | `DesignModeStatus` | Start or rebind inspection for an agent terminal; opens the repository's configured URL or `about:blank` |
+| `stop_design_mode` | `repoPath: String` | `DesignModeStatus` | Stop inspection for a repository |
+| `get_design_mode_status` | -- | `Vec<DesignModeStatus>` | Read the active per-repository modes |
+
+Command responses use `{ repoPath, sessionId, status }`, with `status` equal
+to `armed` or `stopped`. The backend also emits `design-mode-changed` with a
+snake_case event payload `{ repo_path, session_id, status }`; browser clients
+receive it on `/events`.
+
 ## Generators (`generators.rs`)
 
 | Command | Args | Returns | Description |

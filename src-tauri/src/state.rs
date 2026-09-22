@@ -238,6 +238,12 @@ pub enum AppEvent {
     },
     #[serde(rename = "session-closed")]
     SessionClosed { session_id: String, reason: String },
+    #[serde(rename = "design-mode-changed")]
+    DesignModeChanged {
+        repo_path: String,
+        session_id: String,
+        status: String,
+    },
     #[serde(rename = "pty-parsed")]
     PtyParsed {
         session_id: String,
@@ -1967,6 +1973,8 @@ pub struct AppState {
     pub(crate) auth_rate_limits: DashMap<std::net::IpAddr, (u32, Instant)>,
     #[cfg(feature = "desktop")]
     pub(crate) app_handle: parking_lot::RwLock<Option<AppHandle>>,
+    #[cfg(feature = "desktop")]
+    pub(crate) design_mode: tokio::sync::OnceCell<crate::design_mode::manager::DesignModeManager>,
     /// Last time the desktop WebView's main JS thread proved it was running.
     /// Read by the diagnostics thread; see `frontend_liveness`.
     pub(crate) frontend_liveness: crate::frontend_liveness::FrontendLiveness,
@@ -3011,6 +3019,8 @@ impl AppState {
             auth_rate_limits: DashMap::new(),
             #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
+            #[cfg(feature = "desktop")]
+            design_mode: tokio::sync::OnceCell::new(),
             frontend_liveness: Default::default(),
             webview_boot_url: parking_lot::RwLock::new(None),
             plugin_watchers: DashMap::new(),
@@ -4331,6 +4341,7 @@ impl AppState {
             | AppEvent::GitHubTransition { .. }
             | AppEvent::GitHubIssuesUpdate { .. }
             | AppEvent::CloseHtmlTabs { .. }
+            | AppEvent::DesignModeChanged { .. }
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProgressRecorded { .. }
             | AppEvent::ReviewProgress { .. }

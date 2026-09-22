@@ -478,6 +478,7 @@ Some frontend-only stores persist to localStorage:
 - [x] SolidJS migration
 
 ### Completed (P2)
+- [x] Design Mode opens a dedicated Chrome window per repository and pre-fills selected element context into the bound agent terminal without submitting the draft; local per-repository URL, status events, HTTP parity and bounded/redacted payloads
 - [x] Split pane layout
 - [x] Multi-repository sidebar
 - [x] Git diff panel

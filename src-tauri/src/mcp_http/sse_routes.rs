@@ -262,6 +262,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::RepoChanged { .. } => "repo-changed",
         AppEvent::SessionCreated { .. } => "session-created",
         AppEvent::SessionClosed { .. } => "session-closed",
+        AppEvent::DesignModeChanged { .. } => "design-mode-changed",
         AppEvent::PtyParsed { .. } => "pty-parsed",
         AppEvent::PtyExit { .. } => "pty-exit",
         AppEvent::PtyActivity { .. } => "pty-activity",
@@ -337,6 +338,13 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::SessionClosed { session_id, reason } => {
             serde_json::json!({ "session_id": session_id, "reason": reason })
+        }
+        AppEvent::DesignModeChanged {
+            repo_path,
+            session_id,
+            status,
+        } => {
+            serde_json::json!({ "repo_path": repo_path, "session_id": session_id, "status": status })
         }
         AppEvent::PtyParsed { session_id, parsed } => {
             serde_json::json!({ "session_id": session_id, "parsed": parsed })
@@ -803,6 +811,22 @@ mod tests {
         // Not flattened: the frontend reads `payload.state.*`, exactly as it
         // reads `session.state.*` from the polled snapshot it replaces.
         assert!(body.get("awaiting_input").is_none());
+    }
+
+    #[test]
+    fn design_mode_changed_carries_the_bound_session_and_status() {
+        let event = AppEvent::DesignModeChanged {
+            repo_path: "/repo".into(),
+            session_id: "agent-1".into(),
+            status: "armed".into(),
+        };
+        assert_eq!(event_type_name(&event), "design-mode-changed");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({
+                "repo_path": "/repo", "session_id": "agent-1", "status": "armed"
+            })
+        );
     }
 
     /// An ACP wake signal reaches a browser unchanged.
