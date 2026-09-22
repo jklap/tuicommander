@@ -23,13 +23,14 @@ const {
 	mockReorderGroups,
 	mockToggleBranchTabsExpanded,
 	mockSetBranchTabsExpanded,
+	mockNavigateToTerminal,
 } = vi.hoisted(() => ({
 	mockToggleExpanded: vi.fn(),
 	mockToggleCollapsed: vi.fn(),
 	mockGetActive: vi.fn<() => unknown>(() => null),
 	mockGetOrderedRepos: vi.fn<() => unknown[]>(() => []),
 	mockReorderRepo: vi.fn(),
-	mockTerminalsGet: vi.fn<() => unknown>(() => null),
+	mockTerminalsGet: vi.fn<(id: string) => unknown>(() => null),
 	mockGetCheckSummary: vi.fn<() => unknown>(() => null),
 	mockGetPrStatus: vi.fn<(...args: unknown[]) => unknown>(() => null),
 	mockGetGroupedLayout: vi.fn<() => unknown>(() => ({ groups: [], ungrouped: [] })),
@@ -44,6 +45,7 @@ const {
 	mockReorderGroups: vi.fn(),
 	mockToggleBranchTabsExpanded: vi.fn(),
 	mockSetBranchTabsExpanded: vi.fn(),
+	mockNavigateToTerminal: vi.fn(),
 }));
 
 // Mock stores before importing the component
@@ -101,6 +103,10 @@ vi.mock("../../stores/terminals", () => ({
 		onRemove: vi.fn(() => () => {}),
 		state: { activeId: null as string | null },
 	},
+}));
+
+vi.mock("../../utils/navigateToTerminal", () => ({
+	navigateToTerminal: mockNavigateToTerminal,
 }));
 
 vi.mock("../../stores/github", () => ({
@@ -198,6 +204,8 @@ describe("Sidebar", () => {
 		setRepos({});
 		mockGetActive.mockReturnValue(null);
 		mockTerminalsGet.mockReturnValue(null);
+		mockGetCheckSummary.mockReturnValue(null);
+		mockGetPrStatus.mockReturnValue(null);
 		mockLastActivityAt.mockReturnValue(0);
 		// Nested terminal tabs are opt-in and off by default — reset per test so the
 		// feature-behavior block can enable it and the gating block can rely on off.
@@ -1193,6 +1201,86 @@ describe("Sidebar", () => {
 			expect(prBadge!.getAttribute("title")).toBe("PR #123");
 		});
 
+		it("overlays and alternates a stable PR badge with the diff badge", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 12,
+							deletions: 3,
+						},
+					},
+				}),
+			});
+			mockGetPrStatus.mockReturnValue({
+				state: "OPEN",
+				number: 256,
+				title: "Review me",
+				url: "https://example.com",
+				review_decision: "REVIEW_REQUIRED",
+			});
+
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const stack = container.querySelector(".branchBadgeStack");
+			expect(stack).not.toBeNull();
+			expect(stack!.classList.contains("branchBadgeStackAlternating")).toBe(true);
+			expect(stack!.querySelector(".prBadge")?.textContent).toBe("#256 Review");
+			expect(stack!.querySelector(".branchStats")?.textContent).toBe("+12-3");
+		});
+
+		it.each([
+			{
+				name: "mergeability checking",
+				pr: { conflict_state: "checking" },
+				label: "#256 Checking",
+			},
+			{
+				name: "conflicts",
+				pr: { conflict_state: "conflicting" },
+				label: "#256 Conflicts",
+			},
+			{
+				name: "CI running",
+				pr: {},
+				checks: { passed: 0, failed: 0, pending: 1 },
+				label: "#256 CI Running",
+			},
+		])("pins a flashing PR badge instead of alternating for $name", ({ pr, checks, label }) => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: [],
+							additions: 12,
+							deletions: 3,
+						},
+					},
+				}),
+			});
+			mockGetPrStatus.mockReturnValue({
+				state: "OPEN",
+				number: 256,
+				title: "Review me",
+				url: "https://example.com",
+				...pr,
+			});
+			mockGetCheckSummary.mockReturnValue(checks ?? null);
+
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const stack = container.querySelector(".branchBadgeStack");
+			expect(stack).not.toBeNull();
+			expect(stack!.classList.contains("branchBadgeStackPinned")).toBe(true);
+			expect(stack!.classList.contains("branchBadgeStackAlternating")).toBe(false);
+			expect(stack!.querySelector(".prBadge")?.textContent).toBe(label);
+		});
+
 		it("does not show PrStateBadge when branch has no PR data", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const prBadge = container.querySelector(".prBadge");
@@ -1306,7 +1394,7 @@ describe("Sidebar", () => {
 			return row as HTMLElement;
 		}
 
-		it("renders a chevron only when the branch has more than one terminal", () => {
+		it("renders a chevron for every branch with at least one terminal", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -1328,12 +1416,21 @@ describe("Sidebar", () => {
 							additions: 0,
 							deletions: 0,
 						},
+						"feature/empty": {
+							workspaceId: "feature/empty",
+							branchName: "feature/empty",
+							isMain: false,
+							worktreePath: "/wt/empty",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
 					},
 				}),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			// Single-terminal "main" → no chevron; multi-terminal "feature/x" → one chevron.
-			expect(container.querySelectorAll(".branchTabsChevron").length).toBe(1);
+			// Both occupied branches can reveal activity; the empty branch cannot.
+			expect(container.querySelectorAll(".branchTabsChevron").length).toBe(2);
 		});
 
 		it("renders one subitem per terminal when expanded and >1 terminal", () => {
@@ -1363,7 +1460,98 @@ describe("Sidebar", () => {
 			expect(container.querySelectorAll(".branchTabItem").length).toBe(2);
 		});
 
-		it("does not render subitems when branch has a single terminal even if tabsExpanded", () => {
+		it("renders expanded terminal activity as one branch card", () => {
+			vi.setSystemTime(new Date("2026-09-22T12:10:00Z"));
+			mockTerminalsGet.mockImplementation((id: string) => {
+				const terminals = {
+					t1: {
+						name: "Claude checkout",
+						agentType: "claude",
+						agentIntent: "coordinating checkout validation",
+						currentTask: null,
+						lastPrompt: null,
+						lastDataAt: Date.now() - 8 * 60_000,
+						shellState: "busy",
+						agentState: "working",
+						backgroundWork: false,
+						sessionId: "s1",
+						unseen: false,
+						awaitingInput: null,
+					},
+					t2: {
+						name: "Codex taxes",
+						agentType: "codex",
+						agentIntent: null,
+						currentTask: "running EU tax validation",
+						lastPrompt: null,
+						lastDataAt: Date.now() - 14 * 60_000,
+						shellState: "busy",
+						agentState: "working",
+						backgroundWork: false,
+						sessionId: "s2",
+						unseen: false,
+						awaitingInput: null,
+					},
+					t3: {
+						name: "Gemini handoff",
+						agentType: "gemini",
+						agentIntent: null,
+						currentTask: null,
+						lastPrompt: "preparing the checkout handoff",
+						lastDataAt: Date.now() - 31 * 60_000,
+						shellState: "idle",
+						agentState: "idle",
+						backgroundWork: false,
+						sessionId: "s3",
+						unseen: false,
+						awaitingInput: null,
+					},
+				};
+				return terminals[id as keyof typeof terminals];
+			});
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1", "t2", "t3"],
+							additions: 0,
+							deletions: 0,
+							tabsExpanded: true,
+						},
+					},
+				}),
+			});
+
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+
+			expect(container.querySelector(".branchAgentSummary")?.textContent).toBe("3 agents");
+			expect(Array.from(container.querySelectorAll(".branchAgentActivity"), (el) => el.textContent)).toEqual([
+				"coordinating checkout validation",
+				"running EU tax validation",
+				"preparing the checkout handoff",
+			]);
+			expect(container.querySelectorAll(".branchAgentName")).toHaveLength(0);
+			expect(Array.from(container.querySelectorAll(".branchTabItem"), (el) => el.getAttribute("aria-label"))).toEqual([
+				"Claude checkout: coordinating checkout validation",
+				"Codex taxes: running EU tax validation",
+				"Gemini handoff: preparing the checkout handoff",
+			]);
+			expect(Array.from(container.querySelectorAll(".branchAgentTime"), (el) => el.textContent)).toEqual([
+				"8m",
+				"14m",
+				"31m",
+			]);
+			expect(container.querySelectorAll(".branchAgentIcon svg")).toHaveLength(3);
+
+			fireEvent.click(container.querySelectorAll(".branchTabItem")[1]);
+			expect(mockNavigateToTerminal).toHaveBeenCalledWith("t2");
+		});
+
+		it("renders the activity card for a single terminal", () => {
 			mockTerminalsGet.mockImplementation(() => ({
 				name: "term",
 				shellState: "idle",
@@ -1387,7 +1575,9 @@ describe("Sidebar", () => {
 				}),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			expect(container.querySelectorAll(".branchTabItem").length).toBe(0);
+			expect(container.querySelectorAll(".branchTabItem").length).toBe(1);
+			expect(container.querySelector(".branchAgentSummary")).toBeNull();
+			expect(container.querySelector(".branchAgentActivity")?.textContent).toBe("term");
 		});
 
 		it("toggles the tab list when re-clicking the already-active branch (>1 terminal)", () => {
@@ -1458,7 +1648,7 @@ describe("Sidebar", () => {
 			expect(mockToggleBranchTabsExpanded).not.toHaveBeenCalled();
 		});
 
-		it("does not open or toggle when the branch has a single terminal", () => {
+		it("toggles the activity card when the branch has a single terminal", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
@@ -1482,7 +1672,7 @@ describe("Sidebar", () => {
 
 			fireEvent.click(branchRow(container, "main"));
 
-			expect(mockToggleBranchTabsExpanded).not.toHaveBeenCalled();
+			expect(mockToggleBranchTabsExpanded).toHaveBeenCalledWith("/repo1", "main");
 			expect(mockSetBranchTabsExpanded).not.toHaveBeenCalled();
 		});
 	});

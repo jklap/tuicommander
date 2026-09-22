@@ -2,6 +2,16 @@ import type { Component } from "solid-js";
 import { cx } from "../../utils";
 import s from "./Sidebar.module.css";
 
+interface PrBadgeState {
+	state?: string;
+	isDraft?: boolean;
+	mergeable?: string;
+	conflictState?: string;
+	reviewDecision?: string;
+	ciFailed?: number;
+	ciPending?: number;
+}
+
 const PR_BADGE_CLASSES: Record<string, string> = {
 	ready: s.prReady,
 	open: s.prOpen,
@@ -15,6 +25,25 @@ const PR_BADGE_CLASSES: Record<string, string> = {
 	"review-required": s.prReviewRequired,
 	"ci-pending": s.prCiPending,
 };
+
+function prBadgeKind(props: PrBadgeState): string {
+	if (props.isDraft) return "draft";
+	const state = props.state?.toLowerCase();
+	if (state === "merged") return "merged";
+	if (state === "closed") return "closed";
+	if (props.conflictState === "conflicting") return "conflict";
+	if (props.conflictState === "checking") return "checking";
+	if ((props.ciFailed ?? 0) > 0) return "ci-failed";
+	if (props.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
+	if (props.reviewDecision === "REVIEW_REQUIRED") return "review-required";
+	if ((props.ciPending ?? 0) > 0) return "ci-pending";
+	if (props.mergeable === "MERGEABLE" && props.reviewDecision === "APPROVED") return "ready";
+	return "open";
+}
+
+export function isPrBadgeFlashing(props: PrBadgeState): boolean {
+	return ["conflict", "checking", "ci-pending"].includes(prBadgeKind(props));
+}
 
 /** PR state badge — keeps the PR identity visible alongside its highest-priority state. */
 export const PrStateBadge: Component<{
@@ -37,24 +66,20 @@ export const PrStateBadge: Component<{
 }> = (props) => {
 	const badge = (): { label: string; cls: string } => {
 		const withNumber = (state: string) => `#${props.prNumber} ${state}`;
-		if (props.isDraft) return { label: withNumber("Draft"), cls: "draft" };
-		const state = props.state?.toLowerCase();
-		if (state === "merged") return { label: withNumber("Merged"), cls: "merged" };
-		if (state === "closed") return { label: withNumber("Closed"), cls: "closed" };
-		if (props.conflictState === "conflicting") return { label: withNumber("Conflicts"), cls: "conflict" };
-		if (props.conflictState === "checking") return { label: withNumber("Checking"), cls: "checking" };
-		if ((props.ciFailed ?? 0) > 0) return { label: withNumber("CI Failed"), cls: "ci-failed" };
-		if (props.reviewDecision === "CHANGES_REQUESTED") {
-			return { label: withNumber("Changes Req."), cls: "changes-requested" };
-		}
-		if (props.reviewDecision === "REVIEW_REQUIRED") {
-			return { label: withNumber("Review"), cls: "review-required" };
-		}
-		if ((props.ciPending ?? 0) > 0) return { label: withNumber("CI Running"), cls: "ci-pending" };
-		if (props.mergeable === "MERGEABLE" && props.reviewDecision === "APPROVED") {
-			return { label: withNumber("Ready"), cls: "ready" };
-		}
-		return { label: `#${props.prNumber}`, cls: "open" };
+		const cls = prBadgeKind(props);
+		const labels: Record<string, string> = {
+			draft: "Draft",
+			merged: "Merged",
+			closed: "Closed",
+			conflict: "Conflicts",
+			checking: "Checking",
+			"ci-failed": "CI Failed",
+			"changes-requested": "Changes Req.",
+			"review-required": "Review",
+			"ci-pending": "CI Running",
+			ready: "Ready",
+		};
+		return { label: labels[cls] ? withNumber(labels[cls]) : `#${props.prNumber}`, cls };
 	};
 
 	return (

@@ -732,7 +732,7 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     pub(crate) tab_cycling_all_types: bool,
     /// Show a branch's open terminals as a nested list under its sidebar row
-    /// (only when a branch has more than one terminal). Opt-in, off by default.
+	/// Opt-in, off by default; available whenever a branch has an open terminal.
     #[serde(default)]
     pub(crate) tab_tree_enabled: bool,
     /// Auto-show PR detail popover when a branch has PR data
