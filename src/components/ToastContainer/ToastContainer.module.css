@@ -115,6 +115,13 @@
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
+  /* A progress report can be 500 characters; unclamped it covered the whole
+     terminal. Four lines is enough to know what happened, and the full text
+     is one click away in the Progress panel. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
 }
 
 .action {
