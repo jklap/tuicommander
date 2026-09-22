@@ -1,14 +1,13 @@
 import { type Accessor, createEffect, lazy, onCleanup, type Setter, Show, Suspense } from "solid-js";
 import releaseNotes from "../../assets/release-notes.json";
 import type { useConfirmDialog } from "../../hooks/useConfirmDialog";
-import type { FolderDropRequest } from "../../hooks/useFileDrop";
+import { confirmFolderDrop, type FolderDropRequest } from "../../hooks/useFileDrop";
 import type { useGitOperations } from "../../hooks/useGitOperations";
 import { invoke } from "../../invoke";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type createContextMenu } from "../ContextMenu";
-import { CreateBranchDialog } from "../CreateBranchDialog";
 import { McpConfirmHost } from "../McpConfirmHost/McpConfirmHost";
 import {
 	type CleanupStep,
@@ -19,12 +18,7 @@ import {
 import { PromptDialog } from "../PromptDialog";
 import { PtyOpenUrlHost } from "../PtyOpenUrlHost/PtyOpenUrlHost";
 import qd from "../QuitDialog/QuitDialog.module.css";
-import { RenameBranchDialog } from "../RenameBranchDialog";
-import { RunCommandDialog } from "../RunCommandDialog";
 import type { SettingsContext, SettingsSearchTarget } from "../SettingsPanel";
-import { StateExplainHost } from "../StateExplainModal/StateExplainHost";
-import { UpdateProgressDialog } from "../UpdateProgressDialog";
-import { WhatsNewDialog } from "../WhatsNewDialog/WhatsNewDialog";
 
 const SettingsPanel = lazy(() => import("../SettingsPanel").then((module) => ({ default: module.SettingsPanel })));
 const HelpPanel = lazy(() => import("../HelpPanel").then((module) => ({ default: module.HelpPanel })));
@@ -39,6 +33,24 @@ const GeneratorsModal = lazy(() =>
 );
 const RemoteQrDialog = lazy(() => import("../RemoteQrDialog").then((module) => ({ default: module.RemoteQrDialog })));
 const TaskQueuePanel = lazy(() => import("../TaskQueuePanel").then((module) => ({ default: module.TaskQueuePanel })));
+const CreateBranchDialog = lazy(() =>
+	import("../CreateBranchDialog").then((module) => ({ default: module.CreateBranchDialog })),
+);
+const RenameBranchDialog = lazy(() =>
+	import("../RenameBranchDialog").then((module) => ({ default: module.RenameBranchDialog })),
+);
+const RunCommandDialog = lazy(() =>
+	import("../RunCommandDialog").then((module) => ({ default: module.RunCommandDialog })),
+);
+const StateExplainHost = lazy(() =>
+	import("../StateExplainModal/StateExplainHost").then((module) => ({ default: module.StateExplainHost })),
+);
+const UpdateProgressDialog = lazy(() =>
+	import("../UpdateProgressDialog").then((module) => ({ default: module.UpdateProgressDialog })),
+);
+const WhatsNewDialog = lazy(() =>
+	import("../WhatsNewDialog/WhatsNewDialog").then((module) => ({ default: module.WhatsNewDialog })),
+);
 
 type GitOperations = ReturnType<typeof useGitOperations>;
 type ConfirmDialogs = ReturnType<typeof useConfirmDialog>;
@@ -157,18 +169,22 @@ function GitDialogOverlays(props: { contract: GitOverlaysContract }) {
 	const git = props.contract;
 	return (
 		<>
-			<RenameBranchDialog
-				visible={git.renameVisible()}
-				currentName={git.branchToRename()?.branchName || ""}
-				onClose={git.closeRename}
-				onRename={git.onRename}
-			/>
-			<CreateBranchDialog
-				visible={git.createVisible()}
-				startPoint={git.branchToCreate()?.startPoint}
-				onClose={git.closeCreate}
-				onCreate={git.onCreate}
-			/>
+			<Suspense>
+				<RenameBranchDialog
+					visible={git.renameVisible()}
+					currentName={git.branchToRename()?.branchName || ""}
+					onClose={git.closeRename}
+					onRename={git.onRename}
+				/>
+			</Suspense>
+			<Suspense>
+				<CreateBranchDialog
+					visible={git.createVisible()}
+					startPoint={git.branchToCreate()?.startPoint}
+					onClose={git.closeCreate}
+					onCreate={git.onCreate}
+				/>
+			</Suspense>
 			<Suspense>
 				<CreateWorktreeDialog
 					visible={git.worktreeState() !== null}
@@ -184,15 +200,17 @@ function GitDialogOverlays(props: { contract: GitOverlaysContract }) {
 					onCreate={git.onCreateWorktree}
 				/>
 			</Suspense>
-			<RunCommandDialog
-				visible={git.runVisible()}
-				savedCommand={git.activeRunCommand() || ""}
-				onClose={git.closeRun}
-				onSaveAndRun={(command) => {
-					git.closeRun();
-					git.onRun(command);
-				}}
-			/>
+			<Suspense>
+				<RunCommandDialog
+					visible={git.runVisible()}
+					savedCommand={git.activeRunCommand() || ""}
+					onClose={git.closeRun}
+					onSaveAndRun={(command) => {
+						git.closeRun();
+						git.onRun(command);
+					}}
+				/>
+			</Suspense>
 		</>
 	);
 }
@@ -225,7 +243,6 @@ function ConfirmationOverlays(props: { contract: ConfirmationOverlaysContract })
 					const request = confirmations.pendingFolderDrop();
 					confirmations.setPendingFolderDrop(null);
 					if (!request) return;
-					const { confirmFolderDrop } = await import("../../hooks/useFileDrop");
 					await confirmFolderDrop(request);
 				}}
 			/>
@@ -304,7 +321,9 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 			<GitDialogOverlays contract={props.git} />
 			<McpConfirmHost />
 			<PtyOpenUrlHost />
-			<StateExplainHost />
+			<Suspense>
+				<StateExplainHost />
+			</Suspense>
 			<PromptDialog
 				visible={props.prompts.terminalRenameVisible()}
 				title="Terminal Title"
@@ -351,18 +370,22 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 					<RemoteQrDialog onClose={props.utilities.closeRemoteQr} />
 				</Suspense>
 			</Show>
-			<WhatsNewDialog
-				visible={props.utilities.whatsNewVersion() !== null && (whatsNewEntry()?.highlights.length ?? 0) > 0}
-				version={props.utilities.whatsNewVersion() ?? ""}
-				highlights={whatsNewEntry()?.highlights ?? []}
-				contributions={whatsNewEntry()?.contributions ?? []}
-				onClose={() => {
-					const version = props.utilities.whatsNewVersion();
-					if (version) invoke("set_last_seen_version", { version }).catch(() => {});
-					props.utilities.setWhatsNewVersion(null);
-				}}
-			/>
-			<UpdateProgressDialog />
+			<Suspense>
+				<WhatsNewDialog
+					visible={props.utilities.whatsNewVersion() !== null && (whatsNewEntry()?.highlights.length ?? 0) > 0}
+					version={props.utilities.whatsNewVersion() ?? ""}
+					highlights={whatsNewEntry()?.highlights ?? []}
+					contributions={whatsNewEntry()?.contributions ?? []}
+					onClose={() => {
+						const version = props.utilities.whatsNewVersion();
+						if (version) invoke("set_last_seen_version", { version }).catch(() => {});
+						props.utilities.setWhatsNewVersion(null);
+					}}
+				/>
+			</Suspense>
+			<Suspense>
+				<UpdateProgressDialog />
+			</Suspense>
 			<CleanupOverlay contract={props.cleanup} />
 			<Suspense>
 				<HelpPanel visible={props.panels.helpVisible()} onClose={props.panels.closeHelp} />
