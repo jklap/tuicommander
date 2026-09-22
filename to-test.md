@@ -17,9 +17,12 @@ server's hardware, in either direction, and every part of that is covered by
 tests — what no test can reach is a real microphone, a real speaker and a real
 tab being closed.
 
-- [ ] Open the web UI (`http://localhost:9877/`), go to **Settings > Dictation**.
-      The tab must be **present** — it used to be hidden outside Tauri. The
-      global hotkey and the microphone-device list must be **absent**.
+- [ ] Open the web UI of the **restarted** instance in a real browser — port
+      9876 if it took it, else 9877 — and go to **Settings > Dictation**. Check
+      the port first: an instance started before this commit serves the old
+      frontend and has no audio route, so testing it proves nothing. The tab
+      must be **present** — it used to be hidden outside Tauri. The global
+      hotkey and the microphone-device list must be **absent**.
 - [ ] Press Start on a terminal running an agent. The browser must ask for
       microphone permission, and the phase must reach `waiting`.
 - [ ] **[HUMAN]** Hold a complete turn: speak, see the transcript delivered to
