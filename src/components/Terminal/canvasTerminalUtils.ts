@@ -29,6 +29,63 @@ const ROW_WRAPPED_FLAG = 0x8000;
  *  why this is a flag and not a header version. A backend that predates it never
  *  sets the bit, so this decoder keeps taking the whole-row path unchanged. */
 const ROW_PARTIAL_FLAG = 0x4000;
+const CELL_EXTRAS_MAGIC = [0x54, 0x43, 0x58, 0x31] as const; // TCX1
+
+interface WireDecodedRow {
+	row: DecodedRow | null;
+	startCol: number;
+	wireCount: number;
+	maxCols: number;
+}
+
+/** Decode the optional sparse cell-extension trailer shared by both row formats. */
+function decodeCellExtrasTrailer(view: DataView, offset: number, wireRows: WireDecodedRow[]): boolean {
+	if (offset === view.byteLength) return true;
+	if (view.byteLength - offset < 8) return false;
+	for (const byte of CELL_EXTRAS_MAGIC) {
+		if (view.getUint8(offset++) !== byte) return false;
+	}
+	const entryCount = view.getUint32(offset, true);
+	offset += 4;
+	if (entryCount === 0) return false;
+	// Every entry needs two u16 fields, a non-zero count, and at least one u32.
+	if (entryCount > Math.floor((view.byteLength - offset) / 9)) return false;
+	const seen = new Set<number>();
+
+	for (let entry = 0; entry < entryCount; entry++) {
+		if (offset + 5 > view.byteLength) return false;
+		const ordinal = view.getUint16(offset, true);
+		offset += 2;
+		const col = view.getUint16(offset, true);
+		offset += 2;
+		const count = view.getUint8(offset++);
+		const target = wireRows[ordinal];
+		if (!target || count < 1 || count > 9 || col >= target.maxCols) return false;
+		if (col < target.startCol || col >= target.startCol + target.wireCount) return false;
+		if (offset + count * 4 > view.byteLength) return false;
+		const key = ordinal * 0x1_0000 + col;
+		if (seen.has(key)) return false;
+		seen.add(key);
+
+		let extras = "";
+		for (let index = 0; index < count; index++) {
+			const cp = view.getUint32(offset, true);
+			offset += 4;
+			if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return false;
+			extras += String.fromCodePoint(cp);
+		}
+		if (target.row) {
+			let targetExtras = target.row.cellExtras as Map<number, string> | undefined;
+			if (!targetExtras) {
+				targetExtras = new Map();
+				target.row.cellExtras = targetExtras;
+			}
+			targetExtras.set(col, extras);
+		}
+	}
+
+	return offset === view.byteLength;
+}
 
 export interface DecodedRow {
 	index: number;
@@ -37,6 +94,8 @@ export interface DecodedRow {
 	wrapped: boolean;
 	/** Unicode codepoints; 0 = empty cell */
 	codepoints: Uint32Array;
+	/** Zero-width codepoints appended to a cell's primary codepoint. Sparse by column. */
+	cellExtras?: ReadonlyMap<number, string>;
 	/** Packed fg color: r<<16|g<<8|b (valid when ATTR_DEFAULT_FG not set) */
 	fg: Uint32Array;
 	/** Packed bg color: r<<16|g<<8|b (valid when ATTR_DEFAULT_BG not set) */
@@ -56,18 +115,119 @@ export interface DecodedRow {
  * always describes the same cells. A `WeakMap` means a row that scrolls out of
  * the frame takes its entry with it — no eviction policy to get wrong.
  */
-const rowTextCache = new WeakMap<DecodedRow, string>();
+interface RowTextLayout {
+	text: string;
+	/** UTF-16 offset at the start of each cell, plus the row-end sentinel. */
+	utf16Starts: Uint32Array;
+}
 
-export function rowText(row: DecodedRow): string {
+const rowTextCache = new WeakMap<DecodedRow, RowTextLayout>();
+
+/** Complete contents of one terminal cell, excluding the display-only empty-cell space. */
+export function cellText(row: DecodedRow, col: number): string {
+	const cp = row.codepoints[col] ?? 0;
+	const primary = cp === 0 ? "" : String.fromCodePoint(cp);
+	return primary + (row.cellExtras?.get(col) ?? "");
+}
+
+/** Complete row text and the grid-cell to UTF-16 offset mapping used by string consumers. */
+export function rowTextLayout(row: DecodedRow): RowTextLayout {
 	const cached = rowTextCache.get(row);
 	if (cached !== undefined) return cached;
 	let text = "";
+	const utf16Starts = new Uint32Array(row.count + 1);
 	for (let ci = 0; ci < row.count; ci++) {
-		const cp = row.codepoints[ci];
-		text += cp === 0 ? " " : String.fromCodePoint(cp);
+		utf16Starts[ci] = text.length;
+		const contents = cellText(row, ci);
+		text += contents === "" ? " " : contents;
 	}
-	rowTextCache.set(row, text);
-	return text;
+	utf16Starts[row.count] = text.length;
+	const layout = { text, utf16Starts };
+	rowTextCache.set(row, layout);
+	return layout;
+}
+
+export function rowText(row: DecodedRow): string {
+	return rowTextLayout(row).text;
+}
+
+/** Convert a JS UTF-16 string span into the terminal cells it intersects. */
+export function utf16SpanToCellRange(row: DecodedRow, start: number, end: number): [number, number] {
+	const starts = rowTextLayout(row).utf16Starts;
+	const clampedStart = Math.max(0, Math.min(start, starts[row.count]));
+	const clampedEnd = Math.max(clampedStart, Math.min(end, starts[row.count]));
+
+	let colStart = 0;
+	while (colStart < row.count && starts[colStart + 1] <= clampedStart) colStart++;
+	let colEnd = colStart;
+	while (colEnd < row.count && starts[colEnd] < clampedEnd) colEnd++;
+	return [colStart, Math.max(colStart, colEnd)];
+}
+
+export interface TextCellSpan {
+	row: number;
+	colStart: number;
+	colEnd: number;
+}
+
+interface AlignedCell {
+	row: number;
+	col: number;
+	start: number;
+	end: number;
+}
+
+/**
+ * Align backend-extracted text to wire cells.
+ *
+ * Native PTY output stores default blanks as U+0020. In reachable frames a zero
+ * core codepoint is therefore the legacy encoding of WIDE_CHAR_SPACER, which
+ * backend text omits. Reconstruct once with those cells skipped and refuse the
+ * mapping if it does not exactly match the authoritative, trailing-trimmed text.
+ */
+function alignCellsToText(rows: readonly { index: number; row: DecodedRow }[], text: string): AlignedCell[] | null {
+	const aligned: AlignedCell[] = [];
+	let reconstructed = "";
+	for (const { index, row } of rows) {
+		for (let col = 0; col < row.count; col++) {
+			const start = reconstructed.length;
+			if (row.codepoints[col] !== 0) reconstructed += cellText(row, col);
+			aligned.push({ row: index, col, start, end: reconstructed.length });
+		}
+	}
+	return reconstructed.trimEnd() === text ? aligned : null;
+}
+
+/** Convert an authoritative backend UTF-16 span to one or more grid-row spans. */
+export function textSpanToCellRanges(
+	rows: readonly { index: number; row: DecodedRow }[],
+	text: string,
+	start: number,
+	end: number,
+): TextCellSpan[] | null {
+	const aligned = alignCellsToText(rows, text);
+	if (!aligned) return null;
+	const spans: TextCellSpan[] = [];
+	for (const cell of aligned) {
+		if (cell.end <= start || cell.start >= end || cell.start === cell.end) continue;
+		const last = spans[spans.length - 1];
+		if (last && last.row === cell.row && last.colEnd === cell.col) last.colEnd++;
+		else spans.push({ row: cell.row, colStart: cell.col, colEnd: cell.col + 1 });
+	}
+	return spans;
+}
+
+/** UTF-16 offset in authoritative backend text at the start of one grid cell. */
+export function cellToTextOffset(
+	rows: readonly { index: number; row: DecodedRow }[],
+	text: string,
+	row: number,
+	col: number,
+): number | null {
+	const aligned = alignCellsToText(rows, text);
+	if (!aligned) return null;
+	const cell = aligned.find((candidate) => candidate.row === row && candidate.col === col);
+	return cell?.start ?? null;
 }
 
 export interface DecodedFrame {
@@ -95,6 +255,8 @@ export interface DecodedFrame {
 	screenRows: number;
 	screenCols: number;
 	rows: DecodedRow[];
+	/** At least one row was reconstructed from a partial-column wire record. */
+	hasPartialRows?: boolean;
 	/** A ROW_PARTIAL_FLAG row arrived with no row on screen to merge into, so its
 	 *  untouched columns are unknown and it was dropped. The caller must pull a
 	 *  full frame rather than paint a row with holes in it. */
@@ -107,7 +269,9 @@ export interface FrameGridPrev {
 	lastScreenCols: number;
 	lastDisplayOffset: number;
 	lastHistorySize: number;
+	lastHistoryBase: number;
 	lastAltScreen: boolean;
+	awaitingFullFrame: boolean;
 }
 
 /** What a newly-decoded frame means for the rowMap. */
@@ -118,8 +282,12 @@ export interface FrameGridDecision {
 	screenChanged: boolean;
 	/** The frame carries a full screen of rows → replace the rowMap wholesale. */
 	fullReplace: boolean;
-	/** Partial frame after a scroll → clear and wait for a full frame; do NOT merge. */
+	/** Partial frame after the viewport origin changes; do not merge it into the old row map. */
 	scrollWait: boolean;
+	/** Keep the last coherent row map and frame until an authoritative replacement arrives. */
+	holdPreviousFrame: boolean;
+	/** Pull one replacement frame; false for later deltas while the request is outstanding. */
+	requestFullFrame: boolean;
 }
 
 /**
@@ -133,12 +301,37 @@ export interface FrameGridDecision {
  */
 export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallbackRows: number): FrameGridDecision {
 	const geomChanged = frame.screenRows !== prev.lastScreenRows || frame.screenCols !== prev.lastScreenCols;
-	const scrollChanged = frame.displayOffset !== prev.lastDisplayOffset || frame.historySize !== prev.lastHistorySize;
+	const previousViewportTop = prev.lastHistoryBase + prev.lastHistorySize - prev.lastDisplayOffset;
+	const viewportTop = frame.historyBase + frame.historySize - frame.displayOffset;
+	const scrollChanged = viewportTop !== previousViewportTop;
 	const screenChanged = frame.altScreen !== prev.lastAltScreen;
 	const screenRowCount = frame.screenRows || fallbackRows || 24;
-	const fullReplace = frame.rows.length >= screenRowCount;
+	const fullReplace = frame.rows.length >= screenRowCount && frame.hasPartialRows !== true;
 	const scrollWait = !fullReplace && (screenChanged || (scrollChanged && !geomChanged));
-	return { geomChanged, scrollChanged, screenChanged, fullReplace, scrollWait };
+	const holdPreviousFrame =
+		!fullReplace && (prev.awaitingFullFrame || scrollWait || geomChanged || frame.needsFullFrame);
+	const requestFullFrame = holdPreviousFrame && !prev.awaitingFullFrame;
+	return {
+		geomChanged,
+		scrollChanged,
+		screenChanged,
+		fullReplace,
+		scrollWait,
+		holdPreviousFrame,
+		requestFullFrame,
+	};
+}
+
+/** Install only a frame whose row coordinates are coherent with the accepted viewport. */
+export function installFrameRows(
+	rowMap: Map<number, DecodedRow>,
+	frame: DecodedFrame,
+	decision: FrameGridDecision,
+): boolean {
+	if (decision.holdPreviousFrame) return false;
+	if (decision.fullReplace) rowMap.clear();
+	for (const row of frame.rows) rowMap.set(row.index, row);
+	return true;
 }
 
 /** Inputs to the reconcile-fire gate (see shouldFireReconcile). */
@@ -411,19 +604,29 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 	// its glyph-run batching was deliberately rejected there, because `cellWidth`
 	// is rounded and batched `fillText` runs accumulate sub-pixel cursor drift.
 	const rows: DecodedRow[] = [];
+	const wireRows: WireDecodedRow[] = [];
 	let needsFullFrame = false;
+	let hasPartialRows = false;
+	let recordsValid = true;
 	for (let r = 0; r < numRows; r++) {
-		if (offset + 4 > buffer.byteLength) break;
+		if (offset + 4 > buffer.byteLength) {
+			recordsValid = false;
+			break;
+		}
 		const rowIndex = view.getUint16(offset, true);
 		offset += 2;
 		const rawColCount = view.getUint16(offset, true);
 		offset += 2;
 		const wrapped = (rawColCount & ROW_WRAPPED_FLAG) !== 0;
 		const partial = (rawColCount & ROW_PARTIAL_FLAG) !== 0;
+		if (partial) hasPartialRows = true;
 		const colCount = rawColCount & ~(ROW_WRAPPED_FLAG | ROW_PARTIAL_FLAG);
 		let startCol = 0;
 		if (partial) {
-			if (offset + 2 > buffer.byteLength) break;
+			if (offset + 2 > buffer.byteLength) {
+				recordsValid = false;
+				break;
+			}
 			startCol = view.getUint16(offset, true);
 			offset += 2;
 		}
@@ -435,7 +638,12 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 		const previous = partial ? base?.get(rowIndex) : undefined;
 		if (partial && !previous) {
 			needsFullFrame = true;
+			if (offset + colCount * CELL_SIZE > buffer.byteLength) {
+				recordsValid = false;
+				break;
+			}
 			offset += colCount * CELL_SIZE;
+			wireRows.push({ row: null, startCol, wireCount: colCount, maxCols: screenCols });
 			continue;
 		}
 
@@ -444,9 +652,16 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 		const fg = previous ? new Uint32Array(previous.fg) : new Uint32Array(colCount);
 		const bg = previous ? new Uint32Array(previous.bg) : new Uint32Array(colCount);
 		const attrs = previous ? new Uint8Array(previous.attrs) : new Uint8Array(colCount);
+		const cellExtras = previous?.cellExtras ? new Map(previous.cellExtras) : undefined;
+		if (cellExtras) {
+			for (let c = startCol; c < Math.min(width, startCol + colCount); c++) cellExtras.delete(c);
+		}
 
 		for (let i = 0; i < colCount; i++) {
-			if (offset + CELL_SIZE > buffer.byteLength) break;
+			if (offset + CELL_SIZE > buffer.byteLength) {
+				recordsValid = false;
+				break;
+			}
 			const c = startCol + i;
 			const cp = view.getUint32(offset, true);
 			offset += 4;
@@ -466,8 +681,28 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 			fg[c] = (fgR << 16) | (fgG << 8) | fgB;
 			bg[c] = (bgR << 16) | (bgG << 8) | bgB;
 		}
+		if (!recordsValid) break;
 
-		rows.push({ index: rowIndex, count: width, wrapped, codepoints, fg, bg, attrs });
+		const row: DecodedRow = {
+			index: rowIndex,
+			count: width,
+			wrapped,
+			codepoints,
+			cellExtras: cellExtras?.size ? cellExtras : undefined,
+			fg,
+			bg,
+			attrs,
+		};
+		rows.push(row);
+		wireRows.push({ row, startCol, wireCount: colCount, maxCols: screenCols });
+	}
+
+	if (!recordsValid || wireRows.length !== numRows || !decodeCellExtrasTrailer(view, offset, wireRows)) {
+		// The fixed records may still be readable, but applying them without their
+		// promised cell extensions would briefly display incomplete text. Keep the
+		// current row map intact and use the existing full-frame repair path.
+		rows.length = 0;
+		needsFullFrame = true;
 	}
 
 	return {
@@ -489,6 +724,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer, base?: ReadonlyMap<number
 		screenRows,
 		screenCols,
 		rows,
+		hasPartialRows,
 		needsFullFrame,
 	};
 }
@@ -527,8 +763,13 @@ export function decodeStyledRange(buffer: ArrayBuffer): StyledRange | null {
 	offset += 2;
 
 	const rows: StyledRangeRow[] = [];
+	const wireRows: WireDecodedRow[] = [];
+	let recordsValid = true;
 	for (let r = 0; r < rowCount; r++) {
-		if (offset + 6 > buffer.byteLength) break;
+		if (offset + 6 > buffer.byteLength) {
+			recordsValid = false;
+			break;
+		}
 		const abs = view.getUint32(offset, true);
 		offset += 4;
 		const rawColCount = view.getUint16(offset, true);
@@ -543,7 +784,10 @@ export function decodeStyledRange(buffer: ArrayBuffer): StyledRange | null {
 		const bg = new Uint32Array(colCount);
 		const attrs = new Uint8Array(colCount);
 		for (let c = 0; c < colCount; c++) {
-			if (offset + CELL_SIZE > buffer.byteLength) break;
+			if (offset + CELL_SIZE > buffer.byteLength) {
+				recordsValid = false;
+				break;
+			}
 			codepoints[c] = view.getUint32(offset, true);
 			offset += 4;
 			const fgR = view.getUint8(offset++);
@@ -556,8 +800,20 @@ export function decodeStyledRange(buffer: ArrayBuffer): StyledRange | null {
 			fg[c] = (fgR << 16) | (fgG << 8) | fgB;
 			bg[c] = (bgR << 16) | (bgG << 8) | bgB;
 		}
-		rows.push({ abs, row: { index: 0, count: colCount, wrapped, codepoints, fg, bg, attrs } });
+		if (!recordsValid) break;
+		const row = {
+			index: 0,
+			count: colCount,
+			wrapped,
+			codepoints,
+			fg,
+			bg,
+			attrs,
+		};
+		rows.push({ abs, row });
+		wireRows.push({ row, startCol: 0, wireCount: colCount, maxCols: cols });
 	}
+	if (!recordsValid || wireRows.length !== rowCount || !decodeCellExtrasTrailer(view, offset, wireRows)) return null;
 	return { startAbs, historySize, cols, rows };
 }
 

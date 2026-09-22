@@ -1,8 +1,54 @@
-import type { DecodedRow } from "./canvasTerminalUtils";
+import { cellText, type DecodedRow } from "./canvasTerminalUtils";
 
 export interface SelectionPoint {
 	col: number;
 	row: number;
+}
+
+export interface SelectionViewport {
+	historyBase: number;
+	historySize: number;
+	displayOffset: number;
+	screenRows: number;
+}
+
+/** Eviction-stable row id for a cell in the current viewport. */
+export function viewportRowToSelectionRow(viewport: SelectionViewport, viewportRow: number): number {
+	return viewport.historyBase + viewport.historySize - viewport.displayOffset + viewportRow;
+}
+
+/** Current viewport row for an eviction-stable selection row, or null when off-screen. */
+export function selectionRowToViewport(viewport: SelectionViewport, selectionRow: number): number | null {
+	const viewportTop = viewport.historyBase + viewport.historySize - viewport.displayOffset;
+	const viewportRow = selectionRow - viewportTop;
+	return viewportRow >= 0 && viewportRow < viewport.screenRows ? viewportRow : null;
+}
+
+/** Backend grid-relative row for a retained selection row. */
+export function selectionRowToGridRow(viewport: SelectionViewport, selectionRow: number): number | null {
+	const gridRow = selectionRow - viewport.historyBase;
+	const retainedRows = viewport.historySize + viewport.screenRows;
+	return gridRow >= 0 && gridRow < retainedRows ? gridRow : null;
+}
+
+export function isSelectionRowsExpiredError(error: unknown): boolean {
+	return String(error).includes("selection rows are no longer retained");
+}
+
+export async function commitSelectionCopy(
+	readText: () => Promise<string>,
+	writeText: (text: string) => Promise<void>,
+): Promise<{ kind: "copied"; text: string } | { kind: "empty" } | { kind: "expired" }> {
+	let text: string;
+	try {
+		text = await readText();
+	} catch (error) {
+		if (isSelectionRowsExpiredError(error)) return { kind: "expired" };
+		throw error;
+	}
+	if (!text) return { kind: "empty" };
+	await writeText(text);
+	return { kind: "copied", text };
 }
 
 export interface SearchMatch {
@@ -22,6 +68,7 @@ export interface CanvasSelectionController {
 	start: SelectionPoint | null;
 	end: SelectionPoint | null;
 	cachedText: string;
+	invalidateSnapshot: () => void;
 	clear: () => void;
 	hasRange: () => boolean;
 	spansOffscreen: (toViewportRow: (absoluteRow: number) => number | null) => boolean;
@@ -36,6 +83,21 @@ export interface CanvasSearchController {
 	dropRows: (rows: Set<number>) => boolean;
 	next: () => SearchMatch | null;
 	previous: () => SearchMatch | null;
+}
+
+/** Completed selections may be checked against replacement content; live drags may not. */
+export function shouldValidateSelectionSnapshot(
+	selection: CanvasSelectionController,
+	fullReplace: boolean,
+	toViewportRow: (absoluteRow: number) => number | null,
+): boolean {
+	return Boolean(
+		selection.start &&
+			selection.cachedText &&
+			!selection.selecting &&
+			fullReplace &&
+			!selection.spansOffscreen(toViewportRow),
+	);
 }
 
 export function createCanvasSelectionController(): CanvasSelectionController {
@@ -68,6 +130,9 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 		},
 		set cachedText(value) {
 			cachedText = value;
+		},
+		invalidateSnapshot() {
+			cachedText = "";
 		},
 		clear() {
 			selecting = false;
@@ -114,8 +179,7 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 
 				let text = "";
 				for (let col = startCol; col <= endCol; col++) {
-					const codepoint = row.codepoints[col];
-					text += codepoint === 0 ? " " : String.fromCodePoint(codepoint);
+					text += cellText(row, col) || " ";
 				}
 				lines.push(text.replace(/\s+$/, ""));
 			}

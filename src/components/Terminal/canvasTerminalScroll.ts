@@ -2,9 +2,10 @@ import type { DecodedRow } from "./canvasTerminalUtils";
 
 /**
  * How many decoded rows the smooth-scroll cache may hold. At roughly 2.6 KB per
- * row (three `Uint32Array(cols)` plus a `Uint8Array(cols)`) this is ~15 MB of
- * scrollback available to paint locally, which covers a fast flick over several
- * screens without a round trip.
+ * row in the base typed arrays (three `Uint32Array(cols)` plus a
+ * `Uint8Array(cols)`) this is ~15 MB of scrollback available to paint locally.
+ * Sparse cell extras and lazily cached UTF-16 layouts add content-dependent
+ * memory beyond that base estimate.
  */
 export const ROW_CACHE_MAX = 6000;
 

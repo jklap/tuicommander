@@ -64,6 +64,14 @@ describe("canvas terminal scroll controller", () => {
 	describe("cacheRows", () => {
 		const row = (n: number) => ({ index: n }) as never;
 
+		it("preserves sparse multi-codepoint cell content", () => {
+			const scroll = createCanvasScrollController();
+			const cached = { index: 4, cellExtras: new Map([[2, "\u0301"]]) } as never;
+			scroll.cacheRows([{ abs: 40, row: cached }]);
+			expect(scroll.rowCache.get(40)).toBe(cached);
+			expect(scroll.rowCache.get(40)?.cellExtras?.get(2)).toBe("\u0301");
+		});
+
 		it("bounds the cache however many rows are written", () => {
 			const scroll = createCanvasScrollController();
 			for (let abs = 0; abs < ROW_CACHE_MAX + 500; abs++) {

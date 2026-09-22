@@ -1367,6 +1367,7 @@ impl<T: EventListener> Handler for Term<T> {
             }
 
             self.grid[line][column].push_zerowidth(c);
+            self.damage.damage_line(line.0 as usize, column.0, column.0);
             return;
         }
 
@@ -3689,6 +3690,31 @@ mod tests {
             })
         );
         assert_eq!(damaged_lines.next(), None);
+    }
+
+    #[test]
+    fn combining_input_damages_the_base_cell() {
+        let size = TermSize::new(10, 2);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        term.input('e');
+        term.reset_damage();
+        term.reset_parse_damage();
+
+        term.input('\u{0301}');
+
+        assert_eq!(
+            term.damage.lines[0],
+            LineDamageBounds {
+                line: 0,
+                left: 0,
+                right: 0,
+            },
+            "the stored base cell, not the unchanged cursor column, must be damaged"
+        );
+        match term.parse_damage() {
+            TermParseDamage::Partial(lines) => assert_eq!(lines, vec![0]),
+            TermParseDamage::Full => panic!("expected partial parse damage for a combining mark"),
+        }
     }
 
     #[test]

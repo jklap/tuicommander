@@ -2104,11 +2104,22 @@ pub(super) async fn terminal_get_selection_text(
     Query(q): Query<super::types::TerminalSelectionQuery>,
 ) -> impl IntoResponse {
     match crate::pty::vt_try_read(&state, session_id, move |vt| {
-        vt.grid_get_selection_text(q.start_row, q.start_col, q.end_row, q.end_col)
+        vt.grid_get_selection_text(
+            q.start_row,
+            q.start_col,
+            q.end_row,
+            q.end_col,
+            q.history_base,
+        )
     })
     .await
     {
-        Ok(Some(text)) => Json(serde_json::json!({"text": text})).into_response(),
+        Ok(Some(Ok(text))) => Json(serde_json::json!({"text": text})).into_response(),
+        Ok(Some(Err(error))) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": error})),
+        )
+            .into_response(),
         Ok(None) => not_found_response(),
         Err(e) => read_failed_response(&e),
     }

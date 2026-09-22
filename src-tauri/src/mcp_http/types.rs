@@ -885,6 +885,8 @@ pub(super) struct TerminalSelectionQuery {
     pub end_row: usize,
     #[serde(rename = "endCol")]
     pub end_col: usize,
+    #[serde(rename = "historyBase")]
+    pub history_base: Option<usize>,
 }
 
 #[derive(Deserialize)]

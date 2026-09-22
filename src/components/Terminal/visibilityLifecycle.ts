@@ -12,6 +12,25 @@
 export const SIZE_RETRY_MAX_FRAMES = 120;
 
 /**
+ * Return the newest visibility state from one IntersectionObserver delivery.
+ *
+ * A fast viewport/layout resize can cross the threshold twice before the
+ * callback runs, so the delivery may contain both the transient hidden entry
+ * and the final visible entry. Reading `entries[0]` leaves the terminal stuck
+ * hidden even though its canvas is on screen; live grid frames are then decoded
+ * but deliberately skipped before they update the row map or schedule a paint.
+ */
+export function latestIntersectionVisibility(
+	entries: readonly Pick<IntersectionObserverEntry, "isIntersecting" | "time">[],
+): boolean {
+	let latest: Pick<IntersectionObserverEntry, "isIntersecting" | "time"> | undefined;
+	for (const entry of entries) {
+		if (!latest || entry.time >= latest.time) latest = entry;
+	}
+	return latest?.isIntersecting ?? false;
+}
+
+/**
  * Wait for a terminal container to get a real box, then run `onSized` once.
  *
  * A container can mount with a zero box — a tab that becomes visible one frame

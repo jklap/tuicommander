@@ -545,6 +545,99 @@ fn encode_cell(buf: &mut Vec<u8>, cell: &Cell, colors: &Colors) {
     buf.push(attrs);
 }
 
+/// Append the complete textual content of one grid cell.
+///
+/// Alacritty stores zero-width codepoints on the preceding base cell. Every
+/// text extraction path must read the pair together or decomposed Unicode is
+/// silently reduced to its base character.
+fn push_cell_text(text: &mut String, cell: &Cell) {
+    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+        return;
+    }
+
+    text.push(if cell.c == '\0' { ' ' } else { cell.c });
+    if let Some(zerowidth) = cell.zerowidth() {
+        text.extend(zerowidth.iter().copied());
+    }
+}
+
+fn cell_text_utf8_len(cell: &Cell) -> usize {
+    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+        return 0;
+    }
+    let base_len = if cell.c == '\0' { 1 } else { cell.c.len_utf8() };
+    base_len
+        + cell
+            .zerowidth()
+            .into_iter()
+            .flatten()
+            .map(|ch| ch.len_utf8())
+            .sum::<usize>()
+}
+
+fn cell_text_utf16_len(cell: &Cell) -> usize {
+    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+        return 0;
+    }
+    let base_len = if cell.c == '\0' {
+        1
+    } else {
+        cell.c.len_utf16()
+    };
+    base_len
+        + cell
+            .zerowidth()
+            .into_iter()
+            .flatten()
+            .map(|ch| ch.len_utf16())
+            .sum::<usize>()
+}
+
+const CELL_EXTRAS_MAGIC: &[u8; 4] = b"TCX1";
+
+/// Append the optional sparse zero-width trailer for rows already encoded in
+/// the fixed-width cell format. Row indices are ordinals in wire order; columns
+/// remain absolute grid columns even for partial rows.
+fn append_cell_extras_trailer(
+    buf: &mut Vec<u8>,
+    grid: &alacritty_terminal::grid::Grid<Cell>,
+    rows: &[(Line, usize, usize)],
+) {
+    let entry_count = rows
+        .iter()
+        .flat_map(|&(line, start, end)| {
+            (start..end).filter(move |&col| {
+                grid[line][Column(col)]
+                    .zerowidth()
+                    .is_some_and(|chars| !chars.is_empty())
+            })
+        })
+        .count();
+    if entry_count == 0 {
+        return;
+    }
+
+    buf.extend_from_slice(CELL_EXTRAS_MAGIC);
+    buf.extend_from_slice(&(entry_count as u32).to_le_bytes());
+    for (row_ordinal, &(line, start, end)) in rows.iter().enumerate() {
+        for col in start..end {
+            let Some(chars) = grid[line][Column(col)].zerowidth() else {
+                continue;
+            };
+            if chars.is_empty() {
+                continue;
+            }
+
+            buf.extend_from_slice(&(row_ordinal as u16).to_le_bytes());
+            buf.extend_from_slice(&(col as u16).to_le_bytes());
+            buf.push(chars.len() as u8);
+            for &ch in chars {
+                buf.extend_from_slice(&(ch as u32).to_le_bytes());
+            }
+        }
+    }
+}
+
 /// Wraps `alacritty_terminal::Term` with a TUICommander-specific API.
 ///
 /// Provides `process() → Vec<ChangedRow>` + `screen_text_rows()`
@@ -935,11 +1028,10 @@ impl TerminalGrid {
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
                 }
-                let ch = if cell.c == '\0' { ' ' } else { cell.c };
-                if text.len() + ch.len_utf8() > MAX_BYTES {
+                if text.len() + cell_text_utf8_len(cell) > MAX_BYTES {
                     return None;
                 }
-                text.push(ch);
+                push_cell_text(&mut text, cell);
             }
         }
 
@@ -972,11 +1064,10 @@ impl TerminalGrid {
             if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
             }
-            let ch = if cell.c == '\0' { ' ' } else { cell.c };
-            if text.len() + ch.len_utf8() > MAX_BYTES {
+            if text.len() + cell_text_utf8_len(cell) > MAX_BYTES {
                 return None;
             }
-            text.push(ch);
+            push_cell_text(&mut text, cell);
         }
         Some(LogicalPrefix {
             text,
@@ -1086,11 +1177,7 @@ impl TerminalGrid {
             cur_italic = italic;
             cur_underline = underline;
 
-            if cell.c == ' ' || cell.c == '\0' {
-                cur_text.push(' ');
-            } else {
-                cur_text.push(cell.c);
-            }
+            push_cell_text(&mut cur_text, cell);
         }
 
         if !cur_text.is_empty() {
@@ -1217,11 +1304,7 @@ impl TerminalGrid {
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
                 }
-                if cell.c == '\0' {
-                    row_text.push(' ');
-                } else {
-                    row_text.push(cell.c);
-                }
+                push_cell_text(&mut row_text, cell);
             }
             let trimmed = row_text.trim_start();
             if !(trimmed.starts_with('❯') || trimmed == ">" || trimmed.starts_with("> ")) {
@@ -1253,11 +1336,7 @@ impl TerminalGrid {
                 if cell.flags.contains(Flags::DIM) {
                     break;
                 }
-                if ch == '\0' {
-                    result_text.push(' ');
-                } else {
-                    result_text.push(ch);
-                }
+                push_cell_text(&mut result_text, cell);
             }
             return Some(result_text.trim_end().to_string());
         }
@@ -1509,8 +1588,15 @@ impl TerminalGrid {
                 matches.push(BufferSearchMatch {
                     line_index: abs_row,
                     line_text,
-                    match_start: m_start.column.0,
-                    match_end: m_end.column.0 + 1,
+                    match_start: self.row_utf16_offset(m_start.line, m_start.column.0),
+                    match_end: if m_end.line == m_start.line {
+                        self.row_utf16_offset(m_end.line, m_end.column.0 + 1)
+                    } else {
+                        self.row_to_text(m_start.line)
+                            .unwrap_or_default()
+                            .encode_utf16()
+                            .count()
+                    },
                 });
 
                 if m_end.column < last_col {
@@ -1582,7 +1668,7 @@ impl TerminalGrid {
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
                 }
-                text.push(cell.c);
+                push_cell_text(&mut text, cell);
             }
             let last_col = Column(num_cols - 1);
             if grid[line][last_col].flags.contains(Flags::WRAPLINE) {
@@ -1682,7 +1768,7 @@ impl TerminalGrid {
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
                 }
-                text.push(cell.c);
+                push_cell_text(&mut text, cell);
             }
             let trimmed_len = text.trim_end().len();
             text.truncate(trimmed_len);
@@ -1700,6 +1786,50 @@ impl TerminalGrid {
         Self::normalize_copied_selection(result.trim_end_matches('\n'), num_cols)
     }
 
+    /// Extract selection text using grid-relative rows from an optional frame snapshot.
+    ///
+    /// Without `history_base`, this preserves [`Self::get_selection_text`]'s legacy
+    /// contract. With a snapshot, the supplied rows are first converted to stable
+    /// all-time coordinates and then rebased into the grid's current retained-row
+    /// space. This conversion and the cell read happen through the same `&self`
+    /// borrow, which callers hold under the VT lock, so scrollback eviction cannot
+    /// race between rebasing and extraction.
+    pub fn get_selection_text_with_history_base(
+        &self,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+        history_base: Option<usize>,
+    ) -> Result<String, String> {
+        let Some(snapshot_base) = history_base else {
+            return Ok(self.get_selection_text(start_row, start_col, end_row, end_col));
+        };
+
+        let grid = self.term.grid();
+        let current_base = grid.total_scrolled().saturating_sub(grid.history_size());
+        if snapshot_base > current_base {
+            return Err("selection rows are no longer retained".to_string());
+        }
+        let retained_end = current_base
+            .checked_add(grid.history_size())
+            .and_then(|end| end.checked_add(grid.screen_lines()))
+            .ok_or_else(|| "selection rows are no longer retained".to_string())?;
+        let rebase = |row: usize| {
+            let absolute = snapshot_base
+                .checked_add(row)
+                .ok_or_else(|| "selection rows are no longer retained".to_string())?;
+            if absolute < current_base || absolute >= retained_end {
+                return Err("selection rows are no longer retained".to_string());
+            }
+            Ok(absolute - current_base)
+        };
+
+        let start_row = rebase(start_row)?;
+        let end_row = rebase(end_row)?;
+        Ok(self.get_selection_text(start_row, start_col, end_row, end_col))
+    }
+
     /// Serialize dirty rows as a compact binary frame.
     ///
     /// Uses alacritty's built-in damage tracking to identify changed rows.
@@ -1710,6 +1840,9 @@ impl TerminalGrid {
     ///         [keyboard_flags: u8] [frame_flags: u8] [num_lines: u16] [num_cols: u16]
     /// Per row: [row_index: u16] [col_count: u16] ([start_col: u16]) [cells...]
     /// Per cell: [char: u32 LE] [fg_r, fg_g, fg_b] [bg_r, bg_g, bg_b] [attrs: u8]
+    /// Optional trailer after all rows: ["TCX1"] [entry_count: u32], then
+    /// [wire_row_ordinal: u16] [absolute_col: u16] [count: u8]
+    /// [count × codepoint: u32 LE] for each cell with zero-width extensions.
     /// ```
     /// `col_count` carries two flags in its top bits: [`ROW_WRAPPED_FLAG`] (the
     /// line continues onto the next display row) and [`ROW_PARTIAL_FLAG`]. Only
@@ -1918,6 +2051,7 @@ impl TerminalGrid {
 
         let grid = self.term.grid();
         let colors = self.term.colors();
+        let mut extras_rows = Vec::with_capacity(rows.len());
         for &(row_idx, left, right) in rows {
             let line = Line(row_idx as i32 - display_offset as i32);
             // A span shorter than the row saves 11 bytes per column dropped and
@@ -1939,7 +2073,10 @@ impl TerminalGrid {
             for col in left..num_cols.min(right + 1) {
                 encode_cell(&mut buf, &grid[line][Column(col)], colors);
             }
+            extras_rows.push((line, left, num_cols.min(right + 1)));
         }
+
+        append_cell_extras_trailer(&mut buf, grid, &extras_rows);
 
         buf
     }
@@ -2015,7 +2152,8 @@ impl TerminalGrid {
     /// Layout (little-endian):
     ///   start_abs: u32, history_size: u32, num_cols: u16, row_count: u16,
     ///   then per row: abs: u32, col_count: u16, cells (col_count × 11; see
-    ///   `encode_cell`).
+    ///   `encode_cell`), followed by the same optional `TCX1` trailer as live
+    ///   frames.
     pub fn serialize_styled_range(&self, start_abs: usize, count: usize) -> Vec<u8> {
         let grid = self.term.grid();
         let colors = self.term.colors();
@@ -2038,6 +2176,7 @@ impl TerminalGrid {
         buf.extend_from_slice(&(history_size as u32).to_le_bytes());
         buf.extend_from_slice(&(num_cols as u16).to_le_bytes());
         buf.extend_from_slice(&(rows.len() as u16).to_le_bytes());
+        let mut extras_rows = Vec::with_capacity(rows.len());
         for rel in rows {
             let line = Line(rel as i32 - history_size as i32);
             buf.extend_from_slice(&((rel + history_base) as u32).to_le_bytes());
@@ -2048,7 +2187,9 @@ impl TerminalGrid {
             for col in 0..num_cols {
                 encode_cell(&mut buf, &grid[line][Column(col)], colors);
             }
+            extras_rows.push((line, 0, num_cols));
         }
+        append_cell_extras_trailer(&mut buf, grid, &extras_rows);
         buf
     }
 
@@ -2065,7 +2206,7 @@ impl TerminalGrid {
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
                 }
-                text.push(cell.c);
+                push_cell_text(&mut text, cell);
             }
             let trimmed_len = text.trim_end().len();
             text.truncate(trimmed_len);
@@ -2086,11 +2227,21 @@ impl TerminalGrid {
             if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
             }
-            text.push(cell.c);
+            push_cell_text(&mut text, cell);
         }
         let trimmed_len = text.trim_end().len();
         text.truncate(trimmed_len);
         Some(text)
+    }
+
+    /// Translate a terminal cell boundary into the UTF-16 string offset used by
+    /// browser consumers. Geometry stays cell-based; only text offsets include
+    /// supplementary and zero-width codepoints.
+    fn row_utf16_offset(&self, line: Line, column: usize) -> usize {
+        let grid = self.term.grid();
+        (0..column.min(grid.columns()))
+            .map(|col| cell_text_utf16_len(&grid[line][Column(col)]))
+            .sum()
     }
 
     #[cfg(test)]
@@ -3427,6 +3578,108 @@ mod tests {
         )
     }
 
+    fn decode_cell_extras(buf: &[u8]) -> Vec<(u16, u16, Vec<u32>)> {
+        let Some(magic) = buf.windows(4).rposition(|bytes| bytes == CELL_EXTRAS_MAGIC) else {
+            return Vec::new();
+        };
+        let mut offset = magic + CELL_EXTRAS_MAGIC.len();
+        let count = u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap()) as usize;
+        offset += 4;
+        let mut entries = Vec::with_capacity(count);
+        for _ in 0..count {
+            let row = u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap());
+            offset += 2;
+            let col = u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap());
+            offset += 2;
+            let scalar_count = buf[offset] as usize;
+            offset += 1;
+            let mut scalars = Vec::with_capacity(scalar_count);
+            for _ in 0..scalar_count {
+                scalars.push(u32::from_le_bytes(
+                    buf[offset..offset + 4].try_into().unwrap(),
+                ));
+                offset += 4;
+            }
+            entries.push((row, col, scalars));
+        }
+        assert_eq!(offset, buf.len(), "TCX1 trailer must consume the payload");
+        entries
+    }
+
+    #[test]
+    fn combining_extensions_roundtrip_through_every_binary_frame_kind() {
+        let mut grid = TerminalGrid::new(2, 10, 0);
+        let _ = grid.process(b"cafe");
+        let plain = grid.serialize_dirty_rows();
+        assert!(decode_cell_extras(&plain).is_empty());
+
+        let changed = grid.process("\u{0301}\u{0327}".as_bytes());
+        assert_eq!(
+            changed.len(),
+            1,
+            "separate combining input must damage its row"
+        );
+        assert_eq!(changed[0].text, "cafe\u{0301}\u{0327}");
+
+        let expected = vec![(0, 3, vec![0x0301, 0x0327])];
+        assert_eq!(decode_cell_extras(&grid.serialize_dirty_rows()), expected);
+        assert_eq!(decode_cell_extras(&grid.serialize_full_frame()), expected);
+        assert_eq!(
+            decode_cell_extras(&grid.serialize_styled_range(0, 2)),
+            expected
+        );
+
+        let _ = grid.process(b"\x1b[1;4HX");
+        assert!(
+            decode_cell_extras(&grid.serialize_dirty_rows()).is_empty(),
+            "overwriting the base cell removes its old extensions"
+        );
+    }
+
+    #[test]
+    fn partial_frame_omits_extensions_outside_its_transmitted_span() {
+        let mut grid = TerminalGrid::new(2, 12, 0);
+        let _ = grid.process("cafe\u{0301}".as_bytes());
+        let _ = grid.serialize_dirty_rows();
+
+        let _ = grid.process(b"\x1b[1;10HX");
+        let partial = grid.serialize_dirty_rows();
+        assert!(decode_cell_extras(&partial).is_empty());
+
+        assert_eq!(
+            decode_cell_extras(&grid.serialize_full_frame()),
+            vec![(0, 3, vec![0x0301])],
+            "the omitted extension still exists outside the partial span"
+        );
+    }
+
+    #[test]
+    fn delayed_combining_mark_damages_a_wide_base_at_the_margin() {
+        let mut grid = TerminalGrid::new(1, 2, 0);
+        let _ = grid.process("🦇".as_bytes());
+        let _ = grid.serialize_dirty_rows();
+
+        let changed = grid.process("\u{0301}".as_bytes());
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].text, "🦇\u{0301}");
+        assert_eq!(
+            decode_cell_extras(&grid.serialize_dirty_rows()),
+            vec![(0, 0, vec![0x0301])]
+        );
+    }
+
+    #[test]
+    fn cell_extras_trailer_respects_the_nine_mark_storage_bound() {
+        let mut grid = TerminalGrid::new(1, 4, 0);
+        let input = format!("e{}", "\u{0301}".repeat(10));
+        let _ = grid.process(input.as_bytes());
+
+        assert_eq!(
+            decode_cell_extras(&grid.serialize_dirty_rows()),
+            vec![(0, 0, vec![0x0301; 9])]
+        );
+    }
+
     /// A `suggest:` line longer than the terminal is one logical line split over
     /// two display rows. The frontend overlay has to know that to mask the block
     /// (#8fc7) — and the frame is its only source of truth about the grid.
@@ -3733,6 +3986,30 @@ mod tests {
     }
 
     #[test]
+    fn search_matches_decomposed_unicode_without_normalizing() {
+        let mut grid = TerminalGrid::new(2, 20, 0);
+        let _ = grid.process("cafe\u{0301}".as_bytes());
+
+        let matches = grid.search("e\u{0301}");
+        assert_eq!(matches.len(), 1);
+        assert_eq!((matches[0].col_start, matches[0].col_end), (3, 4));
+        assert!(grid.search("é").is_empty());
+    }
+
+    #[test]
+    fn buffer_search_offsets_address_utf16_line_text() {
+        let mut grid = TerminalGrid::new(2, 20, 0);
+        let _ = grid.process("🦇 cafe\u{0301}".as_bytes());
+
+        let matches = grid.search_buffer("e\u{0301}");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_text, "🦇 cafe\u{0301}");
+        assert_eq!((matches[0].match_start, matches[0].match_end), (6, 8));
+        let utf16: Vec<u16> = matches[0].line_text.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&utf16[6..8]).unwrap(), "e\u{0301}");
+    }
+
+    #[test]
     fn search_empty_query() {
         let grid = TerminalGrid::new(5, 40, 0);
         let matches = grid.search("");
@@ -4000,6 +4277,41 @@ mod tests {
     }
 
     #[test]
+    fn get_row_text_preserves_decomposed_combining_codepoints() {
+        let mut grid = TerminalGrid::new(1, 20, 0);
+        let expected = "cafe\u{0301}";
+        let _ = grid.process(expected.as_bytes());
+
+        let base_cell = &grid.term().grid()[Line(0)][Column(3)];
+        assert_eq!(base_cell.c as u32, 0x0065);
+        assert_eq!(
+            base_cell.zerowidth(),
+            Some(&['\u{0301}'][..]),
+            "the parser must retain U+0301 before TUIC extracts row text"
+        );
+
+        let actual = grid.get_row_text(0);
+        assert_eq!(
+            actual.chars().map(u32::from).collect::<Vec<_>>(),
+            expected.chars().map(u32::from).collect::<Vec<_>>(),
+            "row text must include the cell's zero-width extension"
+        );
+    }
+
+    #[test]
+    fn text_extractors_preserve_decomposed_combining_codepoints() {
+        let mut grid = TerminalGrid::new(2, 20, 0);
+        let expected_row = "> cafe\u{0301}";
+        let _ = grid.process(expected_row.as_bytes());
+
+        assert_eq!(grid.screen_text_rows()[0], expected_row);
+        assert_eq!(grid.extract_log_line(Line(0)).text(), expected_row);
+        assert_eq!(grid.get_logical_line(0), (0, expected_row.to_string()));
+        assert_eq!(grid.get_selection_text(0, 0, 0, 5), expected_row);
+        assert_eq!(grid.prompt_input_text().as_deref(), Some("cafe\u{0301}"));
+    }
+
+    #[test]
     fn get_selection_text_single_row() {
         let mut grid = TerminalGrid::new(5, 20, 0);
         let _ = grid.process(b"hello world");
@@ -4024,6 +4336,79 @@ mod tests {
         // absRow 0 = line1, absRow 1 = line2, absRow 2 = line3, ...
         let text = grid.get_selection_text(0, 0, 4, 4);
         assert_eq!(text, "line1\nline2\nline3\nline4\nline5");
+    }
+
+    #[test]
+    fn selection_snapshot_rebases_across_scrollback_eviction() {
+        const ROW_COUNT_OFFSET: usize = 0;
+        const HISTORY_BASE_OFFSET: usize = 22;
+
+        let mut grid = TerminalGrid::new(2, 20, 2);
+        let _ = grid.process(b"row0\r\nrow1\r\nrow2\r\nrow3");
+        grid.scroll_to_offset(1);
+
+        // Snapshot coordinates use the retained-grid space: G = H - O + row.
+        // At this point B=0, H=2, O=1, so viewport row zero is G=1 ("row1").
+        assert_eq!(
+            grid.get_selection_text_with_history_base(1, 0, 1, 3, Some(0)),
+            Ok("row1".to_string())
+        );
+        let _ = grid.serialize_dirty_rows();
+
+        // One more scroll fills the same two-line history window by evicting row0.
+        // The parked viewport remains on row1, but its current grid coordinate is
+        // now G=0 because B advanced to 1. The stale snapshot must be rebased.
+        let _ = grid.process(b"\r\nrow4");
+        assert_eq!(grid.scrollback_count(), 2);
+        assert_eq!(grid.display_offset(), 2);
+        assert_eq!(
+            grid.get_selection_text_with_history_base(1, 0, 1, 3, Some(0)),
+            Ok("row1".to_string())
+        );
+
+        // Omitting the snapshot preserves the legacy grid-relative contract: G=1
+        // now names row2, rather than being interpreted as an all-time row id.
+        assert_eq!(grid.get_selection_text(1, 0, 1, 3), "row2");
+        assert_eq!(
+            grid.get_selection_text_with_history_base(1, 0, 1, 3, None),
+            Ok("row2".to_string())
+        );
+        assert_eq!(
+            grid.get_selection_text_with_history_base(0, 0, 0, 3, Some(2)),
+            Err("selection rows are no longer retained".to_string()),
+            "a snapshot from a reset/future history era must not alias retained rows"
+        );
+
+        let frame = grid.serialize_dirty_rows();
+        assert_eq!(
+            u16::from_le_bytes(
+                frame[ROW_COUNT_OFFSET..ROW_COUNT_OFFSET + 2]
+                    .try_into()
+                    .unwrap()
+            ),
+            2,
+            "eviction must send a full viewport frame"
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                frame[HISTORY_BASE_OFFSET..HISTORY_BASE_OFFSET + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            1
+        );
+
+        // A second eviction removes row1 itself. Its stable row id must be
+        // rejected instead of aliasing the replacement at current G=0.
+        let _ = grid.process(b"\r\nrow5");
+        assert_eq!(
+            grid.get_selection_text_with_history_base(1, 0, 1, 3, Some(0)),
+            Err("selection rows are no longer retained".to_string())
+        );
+        assert_eq!(
+            grid.get_selection_text_with_history_base(99, 0, 99, 0, Some(0)),
+            Err("selection rows are no longer retained".to_string())
+        );
     }
 
     #[test]
@@ -4651,6 +5036,34 @@ mod tests {
         assert_eq!(
             history_after_grow, history_before,
             "history should restore after grow reflow: {history_before} -> {history_after_grow}"
+        );
+    }
+
+    #[test]
+    fn scroll_and_reflow_preserve_combining_extensions() {
+        let mut grid = TerminalGrid::new(2, 10, 100);
+        grid.reflow_history = true;
+        let _ = grid.process("cafe\u{0301}-one\r\ncafe\u{0301}-two\r\nplain\r\ncurrent".as_bytes());
+
+        let history = grid.scrollback_count();
+        let before = grid.read_rows_in_range(0, history - 1);
+        assert!(before.iter().any(|row| row == "cafe\u{0301}-one"));
+        assert!(before.iter().any(|row| row == "cafe\u{0301}-two"));
+
+        grid.scroll_to_offset(history);
+        assert!(
+            (0..grid.screen_lines()).any(|row| grid.get_row_text(row).contains("cafe\u{0301}")),
+            "scrolling must expose the retained exact codepoints"
+        );
+        grid.scroll_to_offset(0);
+
+        grid.resize(2, 5);
+        grid.resize(2, 10);
+        let history_after = grid.scrollback_count();
+        assert_eq!(
+            grid.read_rows_in_range(0, history_after - 1),
+            before,
+            "a shrink-grow reflow cycle must preserve the stored codepoint sequence"
         );
     }
 

@@ -4947,9 +4947,15 @@ impl VtLogBuffer {
         start_col: usize,
         end_row: usize,
         end_col: usize,
-    ) -> String {
-        self.grid
-            .get_selection_text(start_row, start_col, end_row, end_col)
+        history_base: Option<usize>,
+    ) -> Result<String, String> {
+        self.grid.get_selection_text_with_history_base(
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+            history_base,
+        )
     }
 
     pub(crate) fn grid_get_lines(&self, start: usize, end: usize) -> Vec<String> {

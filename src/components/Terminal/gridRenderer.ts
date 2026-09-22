@@ -24,6 +24,7 @@ import {
 	ATTR_STRIKEOUT,
 	ATTR_UNDERLINE,
 	type CellMetrics,
+	cellText,
 	type DecodedFrame,
 	type DecodedRow,
 	GUTTER_PX,
@@ -1211,7 +1212,7 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		let lastVisibleCol = -1;
 		for (let c = row.count - 1; c >= 0; c--) {
 			const cp = row.codepoints[c];
-			if (cp !== 0 && cp !== 0x20) {
+			if ((cp !== 0 && cp !== 0x20) || row.cellExtras?.has(c)) {
 				lastVisibleCol = c;
 				break;
 			}
@@ -1244,14 +1245,15 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 
 		for (let c = 0; c < row.count; c++) {
 			const cp = row.codepoints[c];
-			if (cp === 0 || cp === 0x20) continue;
+			const extras = row.cellExtras?.get(c) ?? "";
+			if ((cp === 0 || cp === 0x20) && extras === "") continue;
 
 			const a = row.attrs[c];
 			const fgP = row.fg[c];
 			const bgP = row.bg[c];
 			const x = c * m.cellWidth;
 
-			if (cp >= 0x2500 && cp <= 0x257f) {
+			if (extras === "" && cp >= 0x2500 && cp <= 0x257f) {
 				ctx.fillStyle = resolveFg(fgP, bgP, a);
 				ctx.strokeStyle = ctx.fillStyle;
 				if (!drawBoxDrawingChar(cp, x, y, m)) {
@@ -1261,25 +1263,25 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 				lastFg = "";
 				continue;
 			}
-			if ((cp >= 0x2580 && cp <= 0x2593) || (cp >= 0x2596 && cp <= 0x259f)) {
+			if (extras === "" && ((cp >= 0x2580 && cp <= 0x2593) || (cp >= 0x2596 && cp <= 0x259f))) {
 				ctx.fillStyle = resolveFg(fgP, bgP, a);
 				drawBlockChar(cp, x, y, m);
 				lastFg = "";
 				continue;
 			}
-			if (cp >= 0xe0b0 && cp <= 0xe0bf) {
+			if (extras === "" && cp >= 0xe0b0 && cp <= 0xe0bf) {
 				if (drawPowerlineChar(cp, x, y, m, fgP, bgP, a)) {
 					lastFg = "";
 					continue;
 				}
 			}
-			if (cp >= 0x2800 && cp <= 0x28ff) {
+			if (extras === "" && cp >= 0x2800 && cp <= 0x28ff) {
 				ctx.fillStyle = resolveFg(fgP, bgP, a);
 				drawBrailleChar(cp, x, y, m);
 				lastFg = "";
 				continue;
 			}
-			if (cp >= 0x1fb00 && cp <= 0x1fb8b) {
+			if (extras === "" && cp >= 0x1fb00 && cp <= 0x1fb8b) {
 				ctx.fillStyle = resolveFg(fgP, bgP, a);
 				if (drawLegacyComputingChar(cp, x, y, m)) {
 					lastFg = "";
@@ -1304,7 +1306,10 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 				lastDim = dim;
 			}
 
-			const glyph = EMOJI_PRESENTATION_CPS.has(cp) ? String.fromCodePoint(cp) + VS15 : String.fromCodePoint(cp);
+			const contents = cellText(row, c);
+			const hasExplicitVariation = extras.includes("\uFE0E") || extras.includes("\uFE0F");
+			const glyph =
+				EMOJI_PRESENTATION_CPS.has(cp) && !hasExplicitVariation ? String.fromCodePoint(cp) + VS15 + extras : contents;
 			ctx.fillText(glyph, x, y + m.baseline);
 		}
 		if (lastDim) ctx.globalAlpha = 1.0;
