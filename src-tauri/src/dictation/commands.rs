@@ -3411,6 +3411,89 @@ mod tests {
         );
     }
 
+    /// A device that keeps playing until it is told to stop, and remembers
+    /// being told.
+    ///
+    /// `QuietOutput` cannot answer the question below: it is never speaking, so
+    /// a disarm that silenced nothing looks exactly like one that silenced
+    /// everything.
+    #[derive(Default)]
+    struct LoudOutput {
+        speaking: std::sync::atomic::AtomicBool,
+        stops: std::sync::atomic::AtomicUsize,
+    }
+
+    impl speaker::Output for LoudOutput {
+        fn play(&self, _audio: &speech::SpeechAudio) -> Result<(), String> {
+            self.speaking
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        fn stop(&self) {
+            self.stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.speaking
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn is_speaking(&self) -> bool {
+            self.speaking.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// Disarming silences the speaker, it does not merely forget it
+    /// (820-21a5 criterion 2, the playback half of "no stale playback").
+    ///
+    /// The test above asserts the slot is empty, which is what a *caller* sees.
+    /// A user hears the device. Those are the same thing only because dropping
+    /// the `Speaker` stops its output, and nothing that looks at the slot alone
+    /// can tell a silenced room from a handle dropped while the audio played
+    /// on.
+    #[test]
+    fn disarming_while_a_reply_is_playing_stops_the_device() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let _config = config_of_this_test(DictationConfig {
+            language: "it".to_string(),
+            ..Default::default()
+        });
+        let dictation = DictationState::new();
+        let generation = dictation
+            .hands_free
+            .lock()
+            .arm("session-a", "desktop", true)
+            .expect("arm");
+        let device = Arc::new(LoudOutput::default());
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech {
+                    gate: Arc::new(parking_lot::Mutex::new(())),
+                }),
+                Arc::clone(&device) as Arc<dyn speaker::Output>,
+                generation,
+            )),
+            voice: "giovanni".to_string(),
+            language: "it".to_string(),
+        });
+
+        let reply = speak(&dictation, Caller::Owner, "una risposta", None).expect("accepted");
+        wait_for_utterance(&dictation, &reply.utterance_id, "speaking");
+        assert!(
+            device.speaking.load(std::sync::atomic::Ordering::SeqCst),
+            "the fixture has nothing coming out of it, so silencing it would prove nothing"
+        );
+
+        disarm_hands_free(&state, &dictation);
+
+        assert!(
+            !device.speaking.load(std::sync::atomic::Ordering::SeqCst),
+            "the conversation ended while the reply was still audible"
+        );
+        assert_eq!(
+            device.stops.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "exactly one stop, from the drop: disarm silences by taking the speaker away, \
+             not by hushing it, and a second stop would mean two paths do the same job"
+        );
+    }
+
     // --- Telling the model the mode changed (821-842a) --------------------
 
     /// Criterion 1, end to end against a real terminal: the model is told it

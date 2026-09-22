@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Hands-free voice conversation** — Settings > Dictation binds one terminal, keeps the microphone open and sends each utterance by itself. An optional activation phrase gates which speech is sent and is stripped before sending; a configurable hold-back shows a finished utterance before it goes, so one you did not mean can be stopped. Speech reaches the agent through the Compose queue, so a busy agent or an open permission dialog holds the turn instead of receiving it. The conversation ends by itself when the bound terminal closes, the owner disconnects or the capture device fails.
+- **Spoken replies** — Agents answer out loud through local Kokoro synthesis, over IPC, HTTP and MCP alike. Runtime library and per-language voice bundles are downloaded and verified from Settings > Dictation. Replies use the language of the conversation rather than defaulting to English, and the agent is told when it may answer out loud and when to go back to text.
+- **Talking over a reply stops it** — Echo cancellation runs on the captured audio, so the reply coming out of the speaker neither interrupts itself nor becomes a turn, while the user's own speech stops playback and opens the next turn.
+
 ### Fixed
 
 - **`tuic agent send` no longer reports a successful delivery as refused.** The
