@@ -2533,6 +2533,11 @@ mod tests {
         /// What the recogniser says this speech was, per call.
         language: RefCell<Option<String>>,
         calls: std::cell::Cell<usize>,
+        /// The audio of every utterance handed to `transcribe`. `tick` consumes
+        /// the utterances itself, so this is the only place a test can see what
+        /// the segmenter decided to send — which is what a pre-roll assertion
+        /// has to look at.
+        heard: RefCell<Vec<Vec<f32>>>,
         /// Run inside `transcribe`, to model work that lands while a whisper
         /// pass is still running.
         during_transcribe: RefCell<Option<Box<dyn Fn() + Send>>>,
@@ -2547,6 +2552,7 @@ mod tests {
                 transcript: transcript.to_string(),
                 language: RefCell::new(None),
                 calls: std::cell::Cell::new(0),
+                heard: RefCell::new(Vec::new()),
                 during_transcribe: RefCell::new(None),
             }
         }
@@ -2573,8 +2579,9 @@ mod tests {
             self.connected.get()
         }
 
-        fn transcribe(&self, _audio: &[f32]) -> Result<Transcript, String> {
+        fn transcribe(&self, audio: &[f32]) -> Result<Transcript, String> {
             self.calls.set(self.calls.get() + 1);
+            self.heard.borrow_mut().push(audio.to_vec());
             if let Some(during) = self.during_transcribe.borrow().as_ref() {
                 during();
             }
@@ -3269,6 +3276,313 @@ mod tests {
         assert!(
             mode.lock().owned_ids().is_empty(),
             "and it may not leave an entry behind to cancel"
+        );
+    }
+
+    // --- Barge-in, measured against the real canceller (816-cbbf) ----------
+    //
+    // Everything above this line proves barge-in with `Subtract`, a perfect
+    // non-adaptive canceller. That answers "is the wiring right" and cannot
+    // answer "how long does it take" or "how often does it fire when nobody
+    // spoke", because a perfect subtraction leaves no residual to misjudge.
+    // The block below drives the shipping AEC3 adapter through the same `tick`
+    // and turns those two questions into numbers.
+
+    /// What one run of [`play_over_the_user`] observed, in ticks and samples.
+    ///
+    /// Raw rather than interpreted, because the two tests below read it in
+    /// opposite directions: one asks how *well* the canceller did, the other
+    /// asks whether the same room breaks without it.
+    struct Run {
+        /// The tick at the end of which each `hush()` was issued, in order.
+        hushes: Vec<usize>,
+        /// Every utterance that reached the recogniser: the tick at the end of
+        /// which it closed, and its audio.
+        utterances: Vec<(usize, Vec<f32>)>,
+        /// The user's first sample, counted from the start of the run.
+        onset: usize,
+    }
+
+    /// The numbers story 816-cbbf asks for out loud.
+    ///
+    /// The test that bounds them prints them too: a regression that stays
+    /// inside the bounds is still worth seeing move.
+    #[derive(Debug)]
+    struct BargeIn {
+        /// Milliseconds from the user's first sample to the tick that hushed
+        /// the speaker.
+        stop_latency_ms: u32,
+        /// Times the speaker was hushed while only the reply was audible.
+        false_triggers: usize,
+        /// Milliseconds the utterance kept from *before* the user's first
+        /// sample — what the pre-roll ring saved while the gate was still shut.
+        pre_roll_ms: u32,
+        /// The whole utterance handed to the recogniser, trailing silence
+        /// included.
+        utterance_ms: u32,
+    }
+
+    /// The microphone hears the speaker this much later than we rendered it:
+    /// output buffering plus about a metre of air.
+    const ROOM_DELAY_MS: u32 = 40;
+    /// And this much quieter.
+    const ROOM_GAIN: f32 = 0.35;
+    const REPLY_MS: u32 = 1_800;
+    const USER_ONSET_MS: u32 = 1_200;
+    const USER_MS: u32 = 600;
+    const TIMELINE_MS: u32 = 3_000;
+    /// One device chunk per tick, at the cadence the runtime actually polls.
+    const TICK_SAMPLES: usize = (SAMPLE_RATE as usize * POLL_INTERVAL_MS as usize) / 1_000;
+
+    /// A sine of a chosen pitch at half scale.
+    fn tone(ms: u32, hz: f32) -> Vec<f32> {
+        (0..ms_to_samples(ms))
+            .map(|i| (2.0 * std::f32::consts::PI * hz * i as f32 / SR).sin() * 0.5)
+            .collect()
+    }
+
+    /// Samples the segmenter has consumed after tick `tick`.
+    ///
+    /// Not `(tick + 1) * TICK_SAMPLES`: a 50 ms chunk is not a whole number of
+    /// 20 ms segmenter frames, so every other tick leaves half a frame behind.
+    /// Utterance boundaries land on this grid, and computing one from the tick
+    /// alone would put them up to 10 ms out.
+    fn consumed(tick: usize) -> usize {
+        ((tick + 1) * TICK_SAMPLES / FRAME_SAMPLES) * FRAME_SAMPLES
+    }
+
+    /// One rendered reply, one room, one user talking over it.
+    ///
+    /// The room is a model, and the model *is* the fixture: the microphone
+    /// hears the reply [`ROOM_DELAY_MS`] late and [`ROOM_GAIN`] quieter, with
+    /// the user added on top. That is the signal an echo canceller is specified
+    /// against — a linear path with a delay — which is what makes these numbers
+    /// comparable from run to run. What it deliberately does not model is a
+    /// real room's reverberation, the microphone's own noise floor, and a
+    /// speaker driven into distortion. Those are why the story also asks for a
+    /// pass with real hardware, and why this function is not a substitute for
+    /// one.
+    ///
+    /// One tick is one [`POLL_INTERVAL_MS`] chunk, which is what the runtime
+    /// loop does, so the stop latency this reports is the one a person in front
+    /// of the machine waits through rather than the detection stage on its own.
+    /// The device's own capture latency is on top of it and is not ours to
+    /// measure here.
+    fn play_over_the_user(canceller: Box<dyn super::super::echo::Canceller>) -> Run {
+        let mode = armed_shared();
+        let speaker = std::sync::Arc::new(CountingSpeaker::default());
+        let echo = std::sync::Arc::new(parking_lot::Mutex::new(
+            super::super::echo::EchoGuard::new(canceller),
+        ));
+        // The shipping boundaries, not `test_config`: a latency measured
+        // against a pre-roll nobody runs is a measurement of the test.
+        let mut capture = Capture::new(
+            SegmenterConfig::default(),
+            5_000,
+            0,
+            echo.clone(),
+            Some(speaker.clone() as std::sync::Arc<dyn Interruptible>),
+        );
+        let mut endpoint = FakeEndpoint::new("no, stop");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        // Handed over whole, exactly as `speaker` hands it over. It has to fit
+        // the far end's two-second buffer: a longer one loses its head, and the
+        // two streams would start the run already out of step.
+        let reply = tone(REPLY_MS, 440.0);
+        echo.lock()
+            .note_rendered(&crate::dictation::speech::SpeechAudio {
+                samples: reply.clone(),
+                sample_rate: SAMPLE_RATE,
+            });
+
+        // A different pitch from the reply, so a canceller cannot subtract the
+        // user by subtracting the echo and still look like it worked.
+        let user = tone(USER_MS, 220.0);
+        let delay = ms_to_samples(ROOM_DELAY_MS);
+        let onset = ms_to_samples(USER_ONSET_MS);
+
+        // How much of the reply the speaker has actually emitted. Unbounded
+        // until it is hushed; after that the room goes quiet one delay later.
+        // A hush the user did not ask for stops playback just the same — that
+        // is what makes a false trigger cost them the rest of the answer.
+        let mut emitted = usize::MAX;
+        let mut run = Run {
+            hushes: Vec::new(),
+            utterances: Vec::new(),
+            onset,
+        };
+        let ticks = ms_to_samples(TIMELINE_MS) / TICK_SAMPLES;
+
+        for tick_index in 0..ticks {
+            let chunk: Vec<f32> = (tick_index * TICK_SAMPLES..(tick_index + 1) * TICK_SAMPLES)
+                .map(|sample| {
+                    let mut heard = 0.0;
+                    if let Some(played) = sample.checked_sub(delay)
+                        && played < reply.len().min(emitted)
+                    {
+                        heard += ROOM_GAIN * reply[played];
+                    }
+                    if let Some(spoken) = sample.checked_sub(onset)
+                        && spoken < user.len()
+                    {
+                        heard += user[spoken];
+                    }
+                    heard
+                })
+                .collect();
+
+            endpoint.feed(chunk);
+            let hushes = speaker.hushes();
+            let transcriptions = endpoint.calls.get();
+            tick(
+                &mut capture,
+                &mode,
+                &mut endpoint,
+                &target,
+                &queue,
+                tick_index as u64 * POLL_INTERVAL_MS,
+            );
+
+            if speaker.hushes() > hushes {
+                run.hushes.push(tick_index);
+                if emitted == usize::MAX {
+                    emitted = (tick_index + 1) * TICK_SAMPLES;
+                    echo.lock().note_stopped();
+                }
+            }
+            if endpoint.calls.get() > transcriptions {
+                let audio = endpoint
+                    .heard
+                    .borrow()
+                    .last()
+                    .cloned()
+                    .expect("a transcription has audio");
+                run.utterances.push((tick_index, audio));
+            }
+        }
+        run
+    }
+
+    fn samples_to_ms(samples: usize) -> u32 {
+        (samples * 1_000 / SAMPLE_RATE as usize) as u32
+    }
+
+    impl Run {
+        /// The numbers, read out of one run.
+        ///
+        /// Panics rather than reporting a zero when the reply was never
+        /// interrupted or the words were lost: those are the failures the
+        /// story is about, and a number that reads well because nothing
+        /// happened is the one outcome worth refusing to print.
+        fn measured(&self) -> BargeIn {
+            let onset = self.onset;
+            let hushed_at = *self
+                .hushes
+                .iter()
+                .find(|tick| !self.before_the_user(**tick))
+                .expect("the user talked over the reply and it kept playing");
+            let (closed_at, utterance) = self
+                .utterances
+                .iter()
+                .find(|(tick, _)| !self.before_the_user(*tick))
+                .expect("what the user said never reached the recogniser");
+
+            // A hush is issued after its tick's chunk is processed, so the end
+            // of that chunk is the honest moment the reply stopped. An
+            // utterance instead ends on the segmenter's own frame grid, which
+            // is what `consumed` tracks, so its first sample is a subtraction
+            // rather than an estimate.
+            let stopped_at = (hushed_at + 1) * TICK_SAMPLES;
+            let began_at = consumed(*closed_at) - utterance.len();
+            assert!(
+                began_at <= onset,
+                "the utterance began {}ms after the user did, so their first words are gone",
+                samples_to_ms(began_at - onset)
+            );
+
+            BargeIn {
+                stop_latency_ms: samples_to_ms(stopped_at - onset),
+                false_triggers: self
+                    .hushes
+                    .iter()
+                    .filter(|tick| self.before_the_user(**tick))
+                    .count(),
+                pre_roll_ms: samples_to_ms(onset - began_at),
+                utterance_ms: samples_to_ms(utterance.len()),
+            }
+        }
+
+        /// Did this tick end before the user's first sample? Only then is
+        /// whatever it did attributable to the reply alone.
+        fn before_the_user(&self, tick: usize) -> bool {
+            (tick + 1) * TICK_SAMPLES <= self.onset
+        }
+    }
+
+    /// Criterion 3 of 816-cbbf, measured rather than satisfied by construction.
+    ///
+    /// The bounds are deliberately loose — they are a regression fence around
+    /// measured behaviour, not a specification somebody tuned the canceller to
+    /// meet. The numbers themselves are in the failure messages and in the
+    /// printed line, which nextest shows when this test fails.
+    #[test]
+    fn talking_over_the_reply_stops_it_without_losing_the_first_words() {
+        let measured = play_over_the_user(Box::new(
+            super::super::echo::webrtc::WebRtc::new().expect("the bundled APM starts"),
+        ))
+        .measured();
+        println!("816-cbbf barge-in over a real AEC3 canceller: {measured:?}");
+
+        assert_eq!(
+            measured.false_triggers, 0,
+            "the reply interrupted itself {} times before the user said anything",
+            measured.false_triggers
+        );
+        assert!(
+            measured.stop_latency_ms <= 200,
+            "the user had to talk for {}ms before the reply stopped",
+            measured.stop_latency_ms
+        );
+        assert!(
+            measured.pre_roll_ms >= measured.stop_latency_ms,
+            "the pre-roll saved {}ms but the gate opened {}ms late, so the words in \
+             between reached nobody",
+            measured.pre_roll_ms,
+            measured.stop_latency_ms
+        );
+        // Reaching back far enough is not the same as keeping what is there.
+        // An utterance that starts before the user and is then truncated would
+        // satisfy every bound above and still hand the recogniser half a
+        // sentence.
+        assert!(
+            measured.utterance_ms >= measured.pre_roll_ms + USER_MS,
+            "the utterance is {}ms, too short to hold {}ms of pre-roll and {USER_MS}ms of speech",
+            measured.utterance_ms,
+            measured.pre_roll_ms
+        );
+    }
+
+    /// The control, and the only reason the zero above means anything.
+    ///
+    /// A false-trigger count of zero has two explanations: the canceller
+    /// removed the echo, or the fixture never put enough echo in the room to
+    /// trip anything. The same room with no canceller at all separates them —
+    /// it must interrupt the reply before the user has said a word.
+    #[test]
+    fn without_the_canceller_the_same_room_interrupts_the_reply_on_its_own_echo() {
+        let run = play_over_the_user(Box::new(super::super::echo::PassThrough));
+        let spurious = run
+            .hushes
+            .iter()
+            .filter(|tick| run.before_the_user(**tick))
+            .count();
+
+        assert!(
+            spurious > 0,
+            "the room is too quiet to prove anything: {USER_ONSET_MS}ms of reply reached \
+             the microphone uncancelled and never opened the gate"
         );
     }
 }

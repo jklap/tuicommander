@@ -3127,3 +3127,29 @@ sessions.
       Settings. The **Dictation** tab must be absent entirely, and searching
       settings for "Hands-free" must report no match rather than opening an
       empty panel. The browser microphone and speaker are story `832-e730`.
+
+## Barge-in over a real speaker (story `816-cbbf`, 2026-09-22) — **[HUMAN]**
+
+Criterion 3 of the story asks for a real audio probe, and this is the half of it
+no test can reach. Everything that can be measured offline already is —
+`talking_over_the_reply_stops_it_without_losing_the_first_words` in
+`continuous.rs` reports 50 ms stop latency and 0 false triggers against the real
+AEC3 canceller, over a **modelled** room (40 ms delay, 0.35 gain, no
+reverberation, no noise floor, no speaker distortion). See
+`docs/backend/dictation.md` → "What barge-in measures".
+
+Needs a real microphone and a real speaker, in a room, with no headphones.
+
+- [ ] **[HUMAN]** Arm hands-free, ask something with a long answer, and let the
+      reply play **out of the laptop speaker**. Say nothing for the whole reply.
+      The reply must finish. A reply that cuts itself off is the echo path
+      failing on real reverberation, which the modelled room cannot produce.
+- [ ] **[HUMAN]** Same again, and talk over it after a couple of seconds. The
+      reply must stop within about a quarter of a second, and the transcript
+      that reaches the terminal must contain your **first** word — that is the
+      pre-roll doing its job. A transcript that starts mid-sentence is the
+      failure to report.
+- [ ] **[HUMAN]** Repeat both at a high speaker volume, close to the
+      microphone. This is the case the linear room model is least like: a
+      driven speaker clips, and AEC3 cannot subtract what the amplifier added.
+      Report whether false interruptions appear and at roughly what volume.
