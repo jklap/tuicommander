@@ -5,6 +5,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
+import { ChevronIcon } from "../ui/ChevronIcon";
 import s from "./Sidebar.module.css";
 
 /** Group section component — accordion header with collapsible repo list */
@@ -44,8 +45,11 @@ export const GroupSection: Component<{
 					<span class={s.groupColorDot} style={{ background: props.group.color }} />
 				</Show>
 				<span class={s.groupName}>{props.group.name}</span>
+				<span class={s.groupRule} aria-hidden="true" />
 				<span class={s.groupCount}>{props.repos.length}</span>
-				<span class={cx(s.groupChevron, !props.group.collapsed && s.expanded)}>{"\u203A"}</span>
+				<span class={cx(s.groupChevron, !props.group.collapsed && s.expanded)}>
+					<ChevronIcon />
+				</span>
 			</div>
 			<Show when={!props.group.collapsed}>
 				<div class={s.groupRepos}>

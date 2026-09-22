@@ -73,6 +73,7 @@ Values shown are the **vscode-dark** theme defaults (defined in `:root` of `glob
 | `--error` | `#f48771` | Errors, failures, closed PRs (coral) |
 | `--merged` | `#a371f7` | PR merged badge (purple) |
 | `--unseen` | `#c084fc` | Terminal completed while user wasn't viewing (purple, clears on view) |
+| `--diff-del` | `--error` mixed 25% with white | Deleted-line counts in the sidebar stats badge. Lighter than `--error` so a negative diff does not read as an alarm; `vscode-light` resets it to `--error` |
 | `--border` | `#3e3e42` | All borders and dividers |
 | `--text-on-accent` | `#000000` | Black text on colored badge backgrounds |
 | `--text-on-error` | `#000000` | Black text on error backgrounds |
@@ -117,7 +118,7 @@ Every surface uses exactly one of these four levels. Elevation = lighter.
 | `--font-sm` | 12px | Section titles (REPOS), secondary labels |
 | `--font-md` | 13px | Branch names, tab names, settings labels — **default for UI** |
 | `--font-base` | 14px | Body text, document default |
-| `--font-lg` | 15px | Panel headings, chevrons |
+| `--font-lg` | 15px | Panel headings |
 | `--font-xl` | 17px | Dialog titles |
 | `--font-2xl` | 20px | Large headings |
 | `--font-3xl` | 24px | Hero text, splash screens |
@@ -235,7 +236,7 @@ Always use `ease` timing. Respect `prefers-reduced-motion`. Never `transition: a
 - Flex row, `gap: 6px`, `padding: 6px 12px 3px`
 - Repo initials: 28×28px circle, `--accent` bg, `--text-on-accent` text, `--font-xs`, semibold
 - Repo name: `--font-sm`, semibold, uppercase, `--fg-secondary`, truncated with ellipsis
-- Chevron: `--font-lg`, `--fg-muted`, rotates 0→90° on expand (150ms ease)
+- Chevron: the shared `ChevronIcon` (`src/components/ui/ChevronIcon.tsx`, 12px SVG), `--fg-secondary`, rotates 0→90° on expand (150ms ease). Group headers, repo headers and GitHub panel sections use the same component and the same CSS block, so every disclosure arrow in the sidebar has one shape and one size. Branch rows carry no chevron column: the branch icon is the agents toggle and swaps to the chevron on hover or focus inside its own 14px box, so the row gives up no width and every badge keeps one right edge. The row click only opens the branch.
 - Actions (⋯, +): hidden by default (`opacity: 0`), shown on repo-header hover
 
 **Branch item** (the most complex sidebar element):
@@ -259,13 +260,14 @@ Always use `ease` timing. Respect `prefers-reduced-motion`. Never `transition: a
 
 Branch item anatomy (left to right):
 ```
-[icon 18px] [name flex:1] [stats badge?] [PR badge?] [actions on hover]
+[icon 14px + agent count?] [name flex:1] [PR marker?] [diff numbers?] [actions on hover]
 ```
 
 - **Icon** (18px wide, centered): `★` yellow for main, `Y` muted for feature, `Y` accent+pulse when agent active, `Y` green when shell idle, `?` warning (orange)+pulse when awaiting input
 - **Name**: `--font-md`, weight 500, `--fg-primary`, ellipsis on overflow
-- **Stats badge** (optional): `--font-xs`, monospace, `--bg-tertiary` bg, `--border` border, `--radius-lg`, shows `+N -N` in green/red
-- **PR badge** (optional): `--font-xs`, monospace, semibold, `--radius-pill`, colored by state (see Status Badges below)
+- **Agent count** (when the tab tree is on): a bare `--font-3xs` digit at the icon's bottom-right corner with a `--bg-secondary` halo. Never a pill: a pill covers the glyph that tells main, branch and worktree apart
+- **PR marker** (optional): a 7px square plus `#N`, both in the state color, no fill or border. A conflict rotates the square into a diamond so it does not rely on color. Draft and Review outline the square instead of filling it, as their pills did (Review vs Changes requested differ only by fill). Motion matches the pill form: the conflict marker pulses at 1.5s, Checking and CI Running at 2s; the number never moves. The UI Legend renders this same component The state word (Review, Conflicts, …) and any uncommitted-file count live in the `data-tooltip`
+- **Diff numbers** (optional): plain `+N -N` in `--font-2xs`, `--success` / `--diff-del`, no chip. Always shown beside the PR marker, never alternating with it
 - **Actions** (on hover only): `max-width: 0 → 44px`, two 20×20px buttons (+, ×)
 
 ### Tab Bar
@@ -334,7 +336,7 @@ Three sections: left (zoom, status info, CWD, agent badge, ticker), center (PR +
 
 **Pendulum overflow** (`.infoTickerActive`): When the status info text is wider than its container, a CSS `pendulum` keyframe animation scrolls the text left then back. Duration is computed dynamically from overflow width (~50px/s). Click dismisses.
 
-**Notes toggle badge** (`.toggleBadge`): Small accent-colored pill positioned over the toggle button, showing the filtered note count.
+**Count badges** (`CountBadge` in `components/ui`): the one counter for every icon button: status bar toggles (errors, ideas, git changes) and the sidebar footer (parked, stale, tunnels). 12px high, `--radius-sm`, 9px bold tabular digits, top-right corner at -3px of a `position: relative` button. Color is a `tone` (`accent`, `error`, `success`), never an inline style. It renders nothing for a zero count.
 
 **PR badges** (center section): `PrBadge` + `CiBadge` components in `.githubStatus`, separated by a left border. CLOSED PRs are hidden; MERGED PRs have a 5-minute activity-based grace period.
 
@@ -503,7 +505,7 @@ Text symbols and Unicode are still correct where the glyph *is* the content rath
 | `⋯` | Context menu | Repo header |
 | `✎` | Edit/rename | Branch double-click |
 | `▶` | Send/execute | Notes panel send button |
-| `>` | Chevron (expand/collapse) | Repo sections |
+| `ChevronIcon` | Chevron (expand/collapse), SVG not text | Sidebar groups, repos, GitHub sections, search bar |
 | `●` | Tab status dot | Tab bar (grey=running, green=idle, purple=unseen, blue-pulse=activity, orange-pulse=awaiting, red-pulse=error) |
 | `⎇` | Git branch symbol | Status bar |
 | `💡` | Ideas panel | Status bar, panel header |
@@ -609,7 +611,7 @@ When updating core palette colors in `global.css`, **also update `mobile.css`** 
 - **No new shadows** — only the three defined levels exist.
 - **No `transition: all`** — always list specific properties.
 - **No hardcoded core colors** — use CSS variables for the four bg levels, three fg levels, and status colors.
-- **No icon libraries** — text/unicode/emoji only.
+- **No icon libraries, no emoji** — monochrome inline SVG with `fill="currentColor"`.
 - **No off-scale radius** — only `--radius-xs` through `--radius-full`.
 - **No `!important`** — except terminal scrollbar overrides.
 - **No pixel values outside the spacing scale** unless component-specific dimension (like 28px repo initials).

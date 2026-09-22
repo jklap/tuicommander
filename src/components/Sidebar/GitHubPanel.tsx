@@ -26,6 +26,7 @@ import {
 	type StepStatus,
 } from "../PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
+import { ChevronIcon } from "../ui/ChevronIcon";
 import { PrSection } from "./PrSection";
 import s from "./Sidebar.module.css";
 
@@ -500,7 +501,7 @@ export const GitHubPanel: Component<{
 									onKeyDown={onClickKeyDown(() => toggleSection("issues", false))}
 								>
 									<span class={cx(s.ghSectionChevron, !sectionCollapsed("issues", false) && s.ghSectionChevronOpen)}>
-										{"›"}
+										<ChevronIcon />
 									</span>
 									<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 										<path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />

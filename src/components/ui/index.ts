@@ -1,9 +1,12 @@
 // Re-export UI components
 
+export { ChevronIcon } from "./ChevronIcon";
 export type { CiRingProps } from "./CiRing";
 export { CiRing } from "./CiRing";
 export type { ContentRendererProps } from "./ContentRenderer";
 export { ContentRenderer } from "./ContentRenderer";
+export type { CountBadgeProps, CountBadgeTone } from "./CountBadge";
+export { CountBadge } from "./CountBadge";
 export type { DiffViewerProps } from "./DiffViewer";
 export { DiffViewer } from "./DiffViewer";
 export type { DropdownItem, DropdownProps } from "./Dropdown";

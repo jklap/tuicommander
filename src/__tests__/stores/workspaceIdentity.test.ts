@@ -37,7 +37,7 @@ function legacyRepoRecord() {
 				isMerged: false,
 				lastCommitTs: 1788000000,
 				savedTerminals: [{ id: "term-1", name: "zsh", cwd: "/Users/x/Gits/acme", fontSize: 13, agentType: null }],
-				tabsExpanded: true,
+				tabsCollapsed: true,
 			},
 			"feat/shared-identity": {
 				name: "feat/shared-identity",
@@ -96,7 +96,7 @@ describe("workspace identity migration", () => {
 			{ id: "term-1", name: "zsh", cwd: "/Users/x/Gits/acme", fontSize: 13, agentType: null },
 		]);
 		expect(main.lastActiveTerminal).toBe("term-1");
-		expect(main.tabsExpanded).toBe(true);
+		expect(main.tabsCollapsed).toBe(true);
 		expect(main.lastCommitTs).toBe(1788000000);
 
 		expect(workspaces["POC-000006"].ciAutoHeal).toEqual({ enabled: true, attempts: 2 });
@@ -193,7 +193,6 @@ describe("workspace identity migration", () => {
 					deletions: 422,
 					isMerged: false,
 					lastCommitTs: 1788776823000,
-					tabsExpanded: false,
 				},
 				"POC-00004-no-containers": {
 					workspaceId: "POC-00004-no-containers",

@@ -8,6 +8,14 @@
 
 # To Test
 
+## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
+
+- [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift.
+- [ ] Click the icon: agents expand/collapse, the branch does NOT open. Click the row: the branch opens, agents do NOT expand/collapse.
+- [ ] Tab to the icon + Enter/Space toggles; focus ring shows the chevron.
+- [ ] Every branch with terminals starts expanded after the reload; a branch collapsed via its icon stays collapsed after a restart.
+- [ ] [VISUAL] Repo header: GitHub badge sits right next to the repo chevron; on hover ⋯ and + appear to its left, nothing shifts.
+
 ## Clean theme bundled (2026-09-22) — **Rust, needs a `make dev` restart**
 
 `clean.json` is in `BUILTIN_THEMES`, but `seed_builtin_themes` is a no-op once

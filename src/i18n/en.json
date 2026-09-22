@@ -757,6 +757,7 @@
 	"settings.title": "Settings",
 	"sidebar.addRepository": "Add Repository",
 	"sidebar.addTerminal": "Add terminal",
+	"sidebar.toggleAgents": "Show or hide agents",
 	"sidebar.addWorktree": "Add worktree",
 	"sidebar.approve": "Approve",
 	"sidebar.approvePr": "Approve this pull request",

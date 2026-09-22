@@ -270,11 +270,13 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Branch sorting: main/master/develop always first, then alphabetical; merged PR branches sorted last
 
 ### 2.3.1 Nested Terminal Tabs (opt-in)
-- Off by default. Enable via **Settings → Appearance → Tabs → "Nested Terminal Tabs"** (`tab_tree_enabled`).
-- When on, every branch with an open session can expand into a single activity card. Agent rows show the agent icon, terminal name, current intent/task (falling back to the last substantial prompt), compact activity age, and the same effective status used by the Activity Dashboard; plain shells remain visible as terminal rows.
-- Clicking a row switches to that session. The card summary reports agent count when every row is an agent, otherwise total session count.
-- The caret toggles the list; clicking an unfocused branch focuses it and opens the list (never collapses on a focus-switch), while re-clicking the already-focused branch toggles it.
-- Single-session branches can expand too; the whole feature remains inert when the setting is off.
+- **Disabled by default.** Enable it via **Settings → Appearance → Tabs → Nested Terminal Tabs** (`tab_tree_enabled`). The change applies immediately; no restart is required.
+- While disabled, the sidebar keeps the normal branch rows and does not render the activity card or nested agent/session rows. Missing nested agents therefore usually means this opt-in setting is still off.
+- When enabled, every branch with at least one open terminal session gets an expandable activity card. Enabling the setting does not create sessions: an agent appears only after it is running in a terminal assigned to that branch.
+- Agent rows show the agent icon, terminal name, current intent/task (falling back to the last substantial prompt), compact activity age, and the same effective status used by the Activity Dashboard. Plain shells remain visible as terminal rows.
+- Clicking a row switches to that session.
+- Every branch shows its list by default (`tabsCollapsed` absent); collapsing is remembered per workspace. The branch icon toggles the list: it swaps to a chevron on hover or keyboard focus (Enter/Space), inside the icon's own box, so branch rows have no chevron column and badges keep one right edge. Clicking the row only opens the branch — it never expands or collapses the list.
+- Single-session branches can expand too.
 
 ### 2.4 Git Quick Actions
 - Bottom of sidebar when a repo is active

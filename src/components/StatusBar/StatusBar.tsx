@@ -30,6 +30,7 @@ import { keyFor } from "../../utils/hotkey";
 import { activePrStatus } from "../../utils/mergedPrGrace";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { AgentIcon } from "../ui/AgentIcon";
+import { CountBadge } from "../ui/CountBadge";
 import { CiBadge, PrBadge } from "../ui/StatusBadge";
 import { ZoomIndicator } from "../ui/ZoomIndicator";
 import s from "./StatusBar.module.css";
@@ -413,9 +414,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 						<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
 							<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
 						</svg>
-						<span class={s.toggleBadge} style={{ background: "var(--error)", color: "#000" }}>
-							{appLogger.unseenErrorCount()}
-						</span>
+						<CountBadge count={appLogger.unseenErrorCount()} tone="error" />
 					</button>
 				</Show>
 				<button
@@ -427,9 +426,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
 						<path d="M9 21c0 .5.4 1 1 1h4c.6 0 1-.5 1-1v-1H9v1zm3-19C8.1 2 5 5.1 5 9c0 2.4 1.2 4.5 3 5.7V17c0 .5.4 1 1 1h6c.6 0 1-.5 1-1v-2.3c1.8-1.3 3-3.4 3-5.7 0-3.9-3.1-7-7-7z" />
 					</svg>
-					<Show when={notesBadgeCount() > 0}>
-						<span class={s.toggleBadge}>{notesBadgeCount()}</span>
-					</Show>
+					<CountBadge count={notesBadgeCount()} />
 				</button>
 				<button
 					class={s.toggleBtn}
@@ -461,9 +458,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
 						<path d="M9 7H7v2H5v2h2v2h2v-2h2V9H9V7zm7 2h4v2h-4V9zm0 4h4v2h-4v-2zM5 19h14v2H5v-2zM5 3h14v2H5V3z" />
 					</svg>
-					<Show when={changesCount() > 0}>
-						<span class={s.toggleBadge}>{changesCount()}</span>
-					</Show>
+					<CountBadge count={changesCount()} />
 				</button>
 
 				<Show when={settingsStore.isAiChatEnabled()}>

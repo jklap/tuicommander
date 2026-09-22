@@ -51,7 +51,6 @@ function branchRecord(name: string, overrides: Record<string, unknown> = {}): Re
 		worktreePath: null,
 		terminals: [],
 		hadTerminals: false,
-		tabsExpanded: false,
 		lastActiveTerminal: null,
 		additions: 0,
 		deletions: 0,

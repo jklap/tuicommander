@@ -213,6 +213,9 @@
   --urgent: #ffd700;
   --merged: #a371f7;
   --unseen: #c084fc;
+  /* Deleted-line counts. Lighter than --error so a negative diff does not read
+     as an alarm, and legible at 10px (#ef4444 on --bg-tertiary is 3.65:1). */
+  --diff-del: color-mix(in srgb, var(--error) 75%, #fff);
   --text-on-accent: #000000;
   --text-on-error: #000000;
   --text-on-success: #000000;
@@ -311,6 +314,11 @@ html[data-theme="clean"] {
   --tab-panel-rgb: 115, 115, 115;
   --tab-html-rgb: 115, 115, 115;
   --tab-remote-rgb: 115, 115, 115;
+}
+
+/* On a light surface lightening the red lowers its contrast instead. */
+[data-theme="vscode-light"] {
+  --diff-del: var(--error);
 }
 
 html, body {

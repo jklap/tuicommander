@@ -14,6 +14,7 @@ import { ContextMenu, type ContextMenuItem, createContextMenu } from "../Context
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { PromptDialog } from "../PromptDialog";
 import { ColorPickerDialog } from "../shared/ColorPickerDialog";
+import { CountBadge } from "../ui/CountBadge";
 import { GlobalWorkspaceEntry } from "./GlobalWorkspaceEntry";
 import { GroupSection } from "./GroupSection";
 import { ParkedReposPopover } from "./ParkedReposPopover";
@@ -571,7 +572,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 								<path d="M2 3h12v2H2zM3 5v8h10V5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
 								<path d="M5 8h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
 							</svg>
-							<span class={s.parkedBadge}>{parkedCount()}</span>
+							<CountBadge count={parkedCount()} />
 						</button>
 					</Show>
 					<Show when={repositoriesStore.state.staleTempCandidates.length > 0}>
@@ -586,7 +587,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 								<path d="M8 6v3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
 								<circle cx="8" cy="11.2" r="0.7" fill="currentColor" />
 							</svg>
-							<span class={s.parkedBadge}>{repositoriesStore.state.staleTempCandidates.length}</span>
+							<CountBadge count={repositoriesStore.state.staleTempCandidates.length} tone="error" />
 						</button>
 					</Show>
 					<Show when={tunnelsStore.state.profiles.length > 0}>
@@ -603,11 +604,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 									<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
 										<path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z" />
 									</svg>
-									<Show when={connectedCount() > 0}>
-										<span class={s.parkedBadge} style={{ background: "var(--accent-green, #22c55e)", color: "#000" }}>
-											{connectedCount()}
-										</span>
-									</Show>
+									<CountBadge count={connectedCount()} tone="success" />
 								</button>
 							);
 						})()}
