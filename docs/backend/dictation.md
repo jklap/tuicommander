@@ -1047,6 +1047,46 @@ with a fixture too quiet to trip anything.
 **Neither is a substitute for a real microphone and a real speaker in a room.**
 That probe is in `to-test.md`.
 
+### The eight states the conversation has to survive (820-21a5)
+
+Story 820 names eight scenarios and asks for each one to be verified rather than
+argued about. They are spread across `continuous.rs` and `commands.rs` because
+they belong to two different layers — the mode's own bookkeeping, and the
+commands that arm and disarm it — so this table is the index. A row with no test
+beside it is a gap, not an omission from the documentation.
+
+| Scenario | Held by |
+|---|---|
+| Optional activation, on and off | `an_empty_activation_phrase_lets_every_turn_through`, `speech_without_the_activation_phrase_never_reaches_the_queue`, `a_configured_phrase_gates_a_turn_and_is_stripped_from_what_is_sent` |
+| Phrase-only timeout | `the_phrase_alone_opens_the_window_without_sending_anything`, `follow_up_speech_inside_the_window_needs_no_phrase`, `speech_after_the_window_expires_needs_the_phrase_again` |
+| Hold-back cancellation | `nothing_is_enqueued_before_the_hold_back_expires`, `an_abort_inside_the_hold_back_sends_nothing` |
+| Manual disarm | `a_manual_abort_disarms_the_whole_mode_and_discards_the_pending_send`, `disarming_a_mode_that_was_never_armed_reports_no_work` |
+| Busy or dialog target | `a_busy_target_or_one_holding_a_dialog_parks_the_turn_and_stays_a_target`, `arming_against_a_target_that_cannot_take_a_compose_entry_is_refused` |
+| Target closure | `a_closed_target_disarms_the_running_mode`, `a_closed_target_disarms_and_a_different_session_does_not`, `closing_the_bound_session_disarms_the_running_mode_and_releases_the_device` |
+| Owner disconnect | `a_disconnected_owner_disarms_the_running_mode`, `a_disconnected_owner_disarms_and_a_different_owner_does_not` |
+| No stale submission | `a_transcript_from_a_previous_generation_cannot_send`, `a_transcription_that_finishes_after_a_disarm_never_reaches_the_queue`, `an_abort_during_transcription_lands_and_its_result_is_refused` |
+| No stale playback | `disarming_while_a_reply_is_playing_stops_the_device`, `a_reply_written_for_a_turn_the_user_talked_over_is_refused` |
+
+Two of those rows are worth reading before changing anything near them.
+
+**Busy is not closed.** `PtyTargetProbe::accepts` asks whether the target exists
+and can take voice at all — never what it is doing. A probe that also answered
+"is it free right now" would end the conversation on the first reply the user
+asked for. Waiting is the Compose queue's job, and it is the *only* exit from
+this module: a second delivery path would be a way to type into a working agent
+or an open permission prompt. That is why the busy row asserts on
+`VoiceEnqueued::typed` for three sessions at once — idle, busy, and idle with a
+confident question — with the idle one as the control. On its own, "it parked"
+is equally consistent with a fixture that could never deliver anything.
+
+**Disarming silences by dropping, not by hushing.** `disarm_hands_free` sets the
+speaker slot to `None`; `Drop for Speaker` cancels the render in flight and calls
+`Output::stop`. Asserting that the slot is empty is therefore not the same
+assertion as asserting the room went quiet, and only the second one is what a
+user experiences. The test uses an output that reports itself speaking until it
+is stopped, because `QuietOutput` is never speaking and cannot tell a silenced
+device from one nobody ever asked to stop.
+
 ## The language of the conversation
 
 Boss's requirement is one sentence: **the model and the voice use the language

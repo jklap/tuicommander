@@ -25,6 +25,46 @@ Pauses do not discard preceding speech from the live preview. Streaming passes
 non-zero audio windows through the same speech gates used by the final
 transcription; the final pass processes the complete retained recording.
 
+## Hands-Free Conversation
+
+Push-to-talk sends one dictation to whatever has focus. Hands-free is the other
+mode: it binds **one** terminal, keeps the microphone open, and sends each
+utterance by itself. Open it in **Settings → Dictation → Hands-free
+conversation**, choose a terminal and select **Start conversation**.
+
+While it runs, the panel shows the state, the bound terminal, where the audio
+comes from, and the text that is about to be sent. The dictation hotkey stops
+the conversation, and so does **Stop conversation**.
+
+| Control | What it does |
+|---------|--------------|
+| Activation phrase | When set, only speech that opens with this phrase is sent, and the phrase is removed first. Leave it empty to send every utterance. The match runs on your machine. |
+| Hold-back before sending | How long a finished utterance stays visible before it goes to the terminal, so you can stop one you did not mean. It applies to the next conversation, not to the one already running. |
+| Notify model when hands-free changes | Tells the agent that it can answer out loud when the conversation starts, and to go back to text when it ends. |
+
+Speech goes to the bound terminal through the same queue as the Compose panel.
+A busy agent, or one that shows a permission prompt, therefore **keeps** your
+turn until it can read it — your speech is never typed into a dialog. The
+conversation ends by itself when the bound terminal closes or the audio device
+goes away.
+
+Say the activation phrase on its own to open a short window in which the
+following turns need no phrase.
+
+## Spoken Replies
+
+The agent can answer out loud. **Settings → Dictation → Spoken replies** lists
+the downloads this needs: one shared runtime library, plus one bundle for each
+language, each with its own voices.
+
+Replies are spoken in the language of the conversation. When the dictation
+language is set to auto-detect, nothing is spoken until somebody speaks — the
+language of the first utterance decides.
+
+Talk over a reply and it stops immediately, and what you say becomes the next
+turn. Echo cancellation runs on the captured audio, so the reply coming out of
+your own speaker does not interrupt itself and does not become a turn.
+
 ## Models
 
 | Model | Size | Quality |

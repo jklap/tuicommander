@@ -536,6 +536,11 @@ Some frontend-only stores persist to localStorage:
 - [x] VAD energy gate (ported from whisper.cpp vad_simple)
 - [x] Floating toast for partial transcription results
 - [x] Prompt token carry-forward across windows
+- [x] Hands-free conversation — one bound terminal, continuous VAD segmentation, optional activation phrase with a timed window, cancellable hold-back before sending. Disarms itself on target closure, owner disconnect or capture failure
+- [x] Speech reaches the agent only through the Compose queue — a busy agent or an open permission dialog holds the turn; there is deliberately no second delivery path
+- [x] Spoken replies via local Kokoro (`speech/`), driven over IPC, HTTP and MCP by the same functions; downloadable per-language voice bundles verified by hash
+- [x] The conversation holds one language end to end — Whisper's detection picks the voice and the model is asked to answer in it
+- [x] Barge-in — WebRTC AEC3 (`echo.rs`) keeps our own reply out of the segmenter; the user talking stops playback and opens the next turn (measured: 50 ms stop latency, 0 false triggers)
 
 ### Completed (P2)
 - [x] Alternate-screen scrollback — isolated bounded history for fullscreen apps, primary-only durable logs, and atomic renderer-generation transitions

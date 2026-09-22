@@ -2359,6 +2359,70 @@ mod tests {
         );
     }
 
+    /// A target that cannot take the entry *right now* is not a target that has
+    /// gone away (820-21a5 criterion 2).
+    ///
+    /// Three states down one path, in one test, because the interesting claim
+    /// is the difference between them. The idle case is the control: on its own
+    /// "it parked" is equally consistent with a fixture that cannot type at
+    /// all, and both assertions that matter would pass against a broken
+    /// harness.
+    ///
+    /// The dialog row is the one with a user-visible failure behind it. A
+    /// second delivery path — anything that wrote to the terminal instead of
+    /// queueing — would answer an open permission prompt with whatever the user
+    /// happened to say in the room.
+    #[cfg(unix)]
+    #[test]
+    fn a_busy_target_or_one_holding_a_dialog_parks_the_turn_and_stays_a_target() {
+        let state = crate::state::tests_support::make_test_app_state();
+        for (session, shell) in [
+            ("voice-idle", crate::pty::SHELL_IDLE),
+            ("voice-busy", crate::pty::SHELL_BUSY),
+            ("voice-dialog", crate::pty::SHELL_IDLE),
+        ] {
+            crate::test_support::agent_session(&state, session, shell);
+            crate::test_support::insert_recording_session(&state, session);
+        }
+        // Idle, but a confident question owns the composer.
+        state
+            .session_maps
+            .session_states
+            .get_mut("voice-dialog")
+            .expect("the session was just inserted")
+            .question_confident = true;
+
+        let spoken = |session: &str| {
+            crate::pty::enqueue_voice_command(&state, session, "esegui i test", 1)
+                .expect("a live agent session takes the entry")
+        };
+
+        assert!(
+            spoken("voice-idle").typed,
+            "an idle agent is typed into straight away; without this the two \
+             assertions below are true of a harness that can never deliver"
+        );
+        assert!(
+            !spoken("voice-busy").typed,
+            "a working agent must not have a spoken turn spliced into what it is doing"
+        );
+        assert!(
+            !spoken("voice-dialog").typed,
+            "an open prompt must not be answered with speech the user aimed at the agent"
+        );
+
+        // And none of the three is a reason to end the conversation. The probe
+        // answers whether the target exists and can take voice at all, never
+        // what it happens to be doing — a mode that disarmed on a busy agent
+        // would end itself on the first reply it asked for.
+        for session in ["voice-idle", "voice-busy", "voice-dialog"] {
+            assert!(
+                PtyTargetProbe(&state).accepts(session),
+                "{session} is still a target"
+            );
+        }
+    }
+
     /// Late asynchronous work is the failure this whole generation scheme
     /// exists for: a whisper pass that finishes after the abort must not send.
     #[test]

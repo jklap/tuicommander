@@ -3153,3 +3153,36 @@ Needs a real microphone and a real speaker, in a room, with no headphones.
       microphone. This is the case the linear room model is least like: a
       driven speaker clips, and AEC3 cannot subtract what the amplifier added.
       Report whether false interruptions appear and at roughly what volume.
+
+## A whole voice conversation, on real hardware (story `820-21a5`, 2026-09-22) — **[HUMAN]**
+
+The eight states a conversation has to survive are held by tests and indexed in
+`docs/backend/dictation.md` → "The eight states the conversation has to
+survive". What is left here is what no test can reach: real Whisper and real
+Kokoro inference, a real microphone and speaker, and the browser endpoint.
+
+**Two of these are blocked on something that does not exist yet.** The Italian
+voice bundle is served from a `speech-voices-v1` release on
+`sstraus/tuicommander` that has not been created, so a first run cannot download
+a voice; and browser capture/playback is story `832-e730`, which is not built.
+Do not mark those items from a mock — record them as blocked.
+
+- [ ] **[HUMAN]** In an isolated instance (`TUIC_APP_INSTANCE=voice-check`) and
+      against a throwaway terminal: download the speech assets, arm hands-free,
+      speak a question, and let it run to the end — automatic end of turn, the
+      agent answering out loud, and talking over the answer to interrupt it.
+      Everything with the real assets, not the test doubles.
+      _Blocked: the `speech-voices-v1` release does not exist._
+- [ ] **[HUMAN]** Ask the **model** to speak through the `voice` MCP tool while
+      that same conversation is armed, and confirm it reaches the same speaker
+      and the same queue as a reply the desktop asked for.
+- [ ] **[HUMAN]** The same conversation from a browser tab against the same
+      instance: the microphone and the speaker must be the **browser's**, not
+      the desktop's, and the desktop must behave identically.
+      _Blocked: browser audio transport is story `832-e730`._
+- [ ] **[HUMAN]** Record, with numbers: time from the end of speech to the
+      first audible word of the reply, and the process footprint before arming,
+      while speaking and after disarming (`GET /diagnostics/memory`). A
+      conversation that leaks per turn is the failure to look for.
+- [ ] **[HUMAN]** Repeat the first item on Windows and on Linux from a release
+      build. Cross-platform evidence cannot come from this Mac.
