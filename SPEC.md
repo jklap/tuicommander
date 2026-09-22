@@ -566,6 +566,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Advanced keyboard shortcuts
 
 - [x] Download progress and utterance state are pushed on `/events` as well as to the desktop window, from one serialized payload per event; utterance transitions come from the render thread that performs them, through an observer port, so `finished` and `interrupted` reach a client that never polls
+- [x] A browser tab is its own microphone and speaker over one WebSocket (`dictation/browser.rs`), so a remote client holds a whole conversation on its own hardware. Neither owner falls back to the other's devices, a client that vanishes disarms on the same path as a dead local device, and the frontend half stays transport only — segmentation, the activation phrase and the hold-back all remain in Rust
 ### Pending (P3)
 - [ ] Agent stats display
 - [ ] Config file support

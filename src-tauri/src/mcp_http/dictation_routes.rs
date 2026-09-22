@@ -300,3 +300,133 @@ pub(super) async fn set_dictation_config_http(
         dictation.as_deref(),
     ))
 }
+
+/// The audio socket a browser client holds while it wants a conversation.
+///
+/// One socket, both directions, because they share the client's lifetime: the
+/// microphone that feeds a conversation and the speaker that answers it are the
+/// same tab, and splitting them would let one of the two survive the other.
+///
+/// ## Wire format
+///
+/// | Direction | Frame | Meaning |
+/// |---|---|---|
+/// | client → server | binary | `f32` little-endian samples, mono, 16 kHz |
+/// | client → server | text `{"type":"playback-ended"}` | the reply finished playing |
+/// | server → client | binary | `u32` little-endian sample rate, then `f32` samples |
+/// | server → client | text `{"type":"stop"}` | stop playing and drop the queue |
+///
+/// Binary for audio and text for control, so a frame's kind already says which
+/// it is: a length-prefixed union would put the whole conversation behind one
+/// parser, and a mis-framed control message would then be played as sound.
+///
+/// Resampling to 16 kHz happens in the browser. Its `AudioContext` resamples
+/// anyway, and sending 48 kHz here to downsample on this side would triple the
+/// bytes for audio the segmenter discards.
+pub(super) async fn hands_free_audio_ws(
+    ws: axum::extract::WebSocketUpgrade,
+    axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let Some(owner) = query
+        .get("owner")
+        .filter(|owner| !owner.is_empty())
+        .cloned()
+    else {
+        return (StatusCode::BAD_REQUEST, "owner is required").into_response();
+    };
+    // The desktop microphone is opened by `arm`, not by a socket. Accepting
+    // this name would register a link nothing can ever reach, and hide the
+    // mistake behind a socket that looks connected.
+    if owner == dictation::commands::DESKTOP_OWNER {
+        return (
+            StatusCode::BAD_REQUEST,
+            "'desktop' is this machine's own audio and has no socket",
+        )
+            .into_response();
+    }
+    let app_handle = state.app_handle.read().clone();
+    let Some(app) = app_handle else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    ws.on_upgrade(move |socket| serve_hands_free_audio(socket, owner, app))
+}
+
+async fn serve_hands_free_audio(
+    socket: axum::extract::ws::WebSocket,
+    owner: String,
+    app: tauri::AppHandle,
+) {
+    use axum::extract::ws::Message;
+    use futures_util::{SinkExt, StreamExt};
+
+    let dictation = app.state::<DictationState>();
+    let endpoints = dictation.browser_endpoints.clone();
+    let link = endpoints.connect(&owner);
+    let mut replies = link.subscribe();
+    let (mut sender, mut receiver) = socket.split();
+
+    // Two halves of one socket, joined below so either ending closes the
+    // other: a client that stops sending audio has stopped talking, and a
+    // client whose downlink failed cannot hear the answer to what it says next.
+    let downlink = {
+        let link = link.clone();
+        tokio::spawn(async move {
+            while let Ok(message) = replies.recv().await {
+                let frame = match message {
+                    dictation::browser::Downlink::Speak(audio) => {
+                        let mut bytes = Vec::with_capacity(4 + audio.samples.len() * 4);
+                        bytes.extend_from_slice(&audio.sample_rate.to_le_bytes());
+                        for sample in &audio.samples {
+                            bytes.extend_from_slice(&sample.to_le_bytes());
+                        }
+                        Message::Binary(bytes.into())
+                    }
+                    dictation::browser::Downlink::Stop => {
+                        Message::Text(r#"{"type":"stop"}"#.into())
+                    }
+                };
+                if sender.send(frame).await.is_err() {
+                    break;
+                }
+            }
+            // Whatever ended the downlink — a closed socket or a dropped
+            // sender — the client can no longer be spoken to, and a
+            // conversation it still owns has to end.
+            link.disconnect();
+        })
+    };
+
+    while let Some(Ok(message)) = receiver.next().await {
+        match message {
+            Message::Binary(bytes) => {
+                link.push_capture(&decode_samples(&bytes));
+            }
+            // Anything else is a control message this server does not know.
+            // Ignored rather than fatal: a newer client must be able to send
+            // one without losing its microphone.
+            Message::Text(text) => {
+                if text.contains("playback-ended") {
+                    link.note_playback_ended();
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    endpoints.disconnect(&owner, &link);
+    downlink.abort();
+}
+
+/// Little-endian `f32` samples, ignoring a trailing partial sample.
+///
+/// A truncated frame is a transport accident, not a message: the whole frame
+/// would otherwise be discarded and the conversation would lose the speech in
+/// it, which is a worse answer than one missing sample.
+fn decode_samples(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}

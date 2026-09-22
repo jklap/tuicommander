@@ -5,6 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import type { ModelInfo, SpeechAsset } from "../../stores/dictation";
 import { dictationStore, WHISPER_LANGUAGES } from "../../stores/dictation";
 import { terminalsStore } from "../../stores/terminals";
+import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
 import d from "./DictationSettings.module.css";
@@ -194,39 +195,42 @@ export const DictationSettings: Component = () => {
 				</div>
 			</div>
 
-			{/* Hotkey */}
-			<div class={s.group}>
-				<label>{t("dictation.hotkeyLabel", "Hotkey")}</label>
-				<div class={d.hotkeyRow}>
-					<KeyComboCapture
-						value={dictationStore.state.hotkey}
-						onChange={(combo) => dictationStore.setHotkey(combo)}
-						placeholder={t("dictation.hotkeyPlaceholder", "Press a key combination...")}
-						onCapturingChange={(capturing) => dictationStore.setCapturingHotkey(capturing)}
-					/>
+			{/* Hotkey — a global hotkey belongs to the machine running
+			    TUICommander, so a browser tab has none to configure. */}
+			<Show when={isTauri()}>
+				<div class={s.group}>
+					<label>{t("dictation.hotkeyLabel", "Hotkey")}</label>
+					<div class={d.hotkeyRow}>
+						<KeyComboCapture
+							value={dictationStore.state.hotkey}
+							onChange={(combo) => dictationStore.setHotkey(combo)}
+							placeholder={t("dictation.hotkeyPlaceholder", "Press a key combination...")}
+							onCapturingChange={(capturing) => dictationStore.setCapturingHotkey(capturing)}
+						/>
+					</div>
+					<p class={s.hint}>
+						{t(
+							"dictation.hotkeyHint",
+							"Hold the hotkey to start recording, release to stop. Short presses pass through as normal input.",
+						)}
+					</p>
 				</div>
-				<p class={s.hint}>
-					{t(
-						"dictation.hotkeyHint",
-						"Hold the hotkey to start recording, release to stop. Short presses pass through as normal input.",
-					)}
-				</p>
-			</div>
 
-			{/* Long-press threshold */}
-			<SettingSlider
-				label={t("dictation.longPressLabel", "Long-press threshold")}
-				value={dictationStore.state.longPressMs}
-				onChange={(v) => dictationStore.setLongPressMs(v)}
-				min={0}
-				max={1000}
-				step={50}
-				formatValue={(v) => (v === 0 ? t("dictation.instant", "Instant") : `${v}ms`)}
-				hint={t(
-					"dictation.longPressHint",
-					"How long to hold the key before dictation starts. 0 = instant (no short-press pass-through), higher = fewer accidental triggers.",
-				)}
-			/>
+				{/* Long-press threshold */}
+				<SettingSlider
+					label={t("dictation.longPressLabel", "Long-press threshold")}
+					value={dictationStore.state.longPressMs}
+					onChange={(v) => dictationStore.setLongPressMs(v)}
+					min={0}
+					max={1000}
+					step={50}
+					formatValue={(v) => (v === 0 ? t("dictation.instant", "Instant") : `${v}ms`)}
+					hint={t(
+						"dictation.longPressHint",
+						"How long to hold the key before dictation starts. 0 = instant (no short-press pass-through), higher = fewer accidental triggers.",
+					)}
+				/>
+			</Show>
 
 			{/* Auto-send */}
 			<div class={s.group}>
@@ -273,45 +277,50 @@ export const DictationSettings: Component = () => {
 				<p class={s.hint}>{t("dictation.languageHint", "Auto-detect works well for most languages.")}</p>
 			</div>
 
-			{/* Audio devices */}
-			<div class={s.group}>
-				<label>{t("dictation.microphoneLabel", "Microphone")}</label>
-				<Show
-					when={dictationStore.state.devices.length > 0}
-					fallback={
-						<div>
-							<button
-								class={s.downloadBtn}
-								onClick={() => dictationStore.refreshDevices()}
-								style={{
-									background: "var(--bg-tertiary)",
-									color: "var(--fg-secondary)",
-									border: "1px solid var(--border)",
-								}}
-							>
-								{t("dictation.detectMicrophones", "Detect Microphones")}
-							</button>
-							<p class={s.hint}>
-								{t("dictation.detectMicrophonesHint", "Triggers macOS microphone permission dialog.")}
-							</p>
-						</div>
-					}
-				>
-					<select
-						value={dictationStore.state.selectedDevice ?? ""}
-						onChange={(e) => {
-							const val = e.currentTarget.value;
-							dictationStore.setDevice(val === "" ? null : val);
-						}}
+			{/* Audio devices — this list is the *server's* hardware. A browser
+			    captures from its own device, chosen by the browser's own
+			    permission prompt, so offering these names there would let a
+			    user pick a microphone in another building. */}
+			<Show when={isTauri()}>
+				<div class={s.group}>
+					<label>{t("dictation.microphoneLabel", "Microphone")}</label>
+					<Show
+						when={dictationStore.state.devices.length > 0}
+						fallback={
+							<div>
+								<button
+									class={s.downloadBtn}
+									onClick={() => dictationStore.refreshDevices()}
+									style={{
+										background: "var(--bg-tertiary)",
+										color: "var(--fg-secondary)",
+										border: "1px solid var(--border)",
+									}}
+								>
+									{t("dictation.detectMicrophones", "Detect Microphones")}
+								</button>
+								<p class={s.hint}>
+									{t("dictation.detectMicrophonesHint", "Triggers macOS microphone permission dialog.")}
+								</p>
+							</div>
+						}
 					>
-						<option value="">{t("dictation.systemDefault", "System Default")}</option>
-						<For each={dictationStore.state.devices}>
-							{(device) => <option value={device.name}>{device.name}</option>}
-						</For>
-					</select>
-					<p class={s.hint}>{t("dictation.microphoneHint", "Select the input device to use for dictation.")}</p>
-				</Show>
-			</div>
+						<select
+							value={dictationStore.state.selectedDevice ?? ""}
+							onChange={(e) => {
+								const val = e.currentTarget.value;
+								dictationStore.setDevice(val === "" ? null : val);
+							}}
+						>
+							<option value="">{t("dictation.systemDefault", "System Default")}</option>
+							<For each={dictationStore.state.devices}>
+								{(device) => <option value={device.name}>{device.name}</option>}
+							</For>
+						</select>
+						<p class={s.hint}>{t("dictation.microphoneHint", "Select the input device to use for dictation.")}</p>
+					</Show>
+				</div>
+			</Show>
 
 			{/* Voice tuning */}
 			<VoiceTuning />
@@ -649,12 +658,12 @@ const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
  * activation phrase opened it, when the hold-back expires, what may be spoken.
  * This renders the answers and offers the two buttons.
  *
- * There is deliberately **no** browser branch here. `SettingsPanel.tsx` hides
- * the whole Dictation tab when `isTauri()` is false, so a browser client never
- * reaches this component and a `Show` fallback explaining that hands-free is
- * desktop-only could not render. Rust refuses every owner but `desktop`, and
- * the browser microphone and speaker are story 832-e730; until that lands, "not
- * served at all" is the honest shape rather than a control that cannot work.
+ * There is deliberately **no** browser branch here, and since 832-e730 that is
+ * because none is needed: a browser tab arms under its own owner name and holds
+ * the conversation through its own microphone and speaker, so the same two
+ * buttons do the same thing on both transports. What differs is which hardware
+ * the store opens before arming, and that decision lives in
+ * `dictation.ts armHandsFree` rather than in a control.
  */
 const HandsFreeControls: Component = () => {
 	const [target, setTarget] = createSignal(terminalsStore.getActive()?.sessionId ?? "");

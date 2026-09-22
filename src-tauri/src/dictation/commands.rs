@@ -1,6 +1,6 @@
 use super::{
-    DictationState, audio, continuous, corrections, echo, model, permission, speaker, speech,
-    streaming, transcribe,
+    DictationState, audio, browser, continuous, corrections, echo, model, permission, speaker,
+    speech, streaming, transcribe,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -618,7 +618,46 @@ pub(crate) fn open_speaker(
 ) -> Result<speaker::Armed, String> {
     let config = get_dictation_config();
     let language = speech_language(&config, dictation)?;
-    open_speaker_for(dictation, generation, &config, &language)
+    let owner = conversation_owner(dictation);
+    open_speaker_for(dictation, generation, &config, &language, owner.as_deref())
+}
+
+/// Who armed the conversation, if one is armed.
+///
+/// Read through the mode lock and handed on as a plain string rather than
+/// re-read deeper in: the reply queue is built with the speaker lock held, and
+/// taking the mode lock there would invert the order every other path uses.
+fn conversation_owner(dictation: &DictationState) -> Option<String> {
+    dictation
+        .hands_free
+        .lock()
+        .binding()
+        .map(|binding| binding.owner.clone())
+}
+
+/// Where a conversation's replies come out.
+///
+/// The owner decides, and there is no fallback: a reply for a browser-owned
+/// conversation whose client has gone is a failure, never something the server
+/// speakers pick up. Somebody in another room hearing the answer to a question
+/// they did not ask is worse than a reply that is reported failed.
+fn open_reply_output(
+    dictation: &DictationState,
+    owner: Option<&str>,
+) -> Result<Arc<dyn speaker::Output>, String> {
+    match owner {
+        Some(owner) if owner != DESKTOP_OWNER => {
+            let link = dictation
+                .browser_endpoints
+                .get(owner)
+                .ok_or_else(|| format!("No client is connected for audio owner '{owner}'"))?;
+            Ok(Arc::new(browser::BrowserOutput::new(link)))
+        }
+        // The system default device. Picking one is the Dictation panel's job
+        // (#818-2a29); `config.device` is the *microphone* and using it here
+        // would route replies to a capture device.
+        _ => Ok(Arc::new(speaker::DeviceOutput::open(None)?)),
+    }
 }
 
 /// [`open_speaker`] with the language already resolved.
@@ -631,16 +670,18 @@ fn open_speaker_for(
     generation: u64,
     config: &DictationConfig,
     language: &str,
+    owner: Option<&str>,
 ) -> Result<speaker::Armed, String> {
     let (engine, voice) = open_voice(config, &dictation.speech, language)?;
-    // The output device is the system default. Picking one is the Dictation
-    // panel's job (#818-2a29); `config.device` is the *microphone* and using
-    // it here would route replies to a capture device.
-    let device = speaker::DeviceOutput::open(None)?;
+    let device = open_reply_output(dictation, owner)?;
     // Wrapped so the canceller learns what is being played. Without this the
     // microphone hears the reply and the VAD opens a turn on the application's
     // own voice.
-    let tapped = speech_far_end(Arc::new(device), dictation);
+    //
+    // A browser-owned conversation is tapped too: its microphone and its
+    // speaker are in the same room as each other, which is the situation the
+    // canceller exists for. Only the *devices* moved.
+    let tapped = speech_far_end(device, dictation);
     let queue = Arc::new(speaker::Speaker::new(engine, tapped, generation));
     // Before the first reply can be queued, which is the whole requirement:
     // `observe` is set-once, and nothing has transitioned yet.
@@ -836,6 +877,7 @@ pub(crate) fn speak(
     let config = get_dictation_config();
     let language = speech_language(&config, dictation)?;
     let armed_at = dictation.hands_free.lock().generation();
+    let owner = conversation_owner(dictation);
 
     let mut slot = dictation.speaker.lock();
     // The queue is per language, so a conversation that changed language needs
@@ -850,7 +892,13 @@ pub(crate) fn speak(
         None => Some(armed_at),
     };
     if let Some(turn) = rebuild_at {
-        *slot = Some(open_speaker_for(dictation, turn, &config, &language)?);
+        *slot = Some(open_speaker_for(
+            dictation,
+            turn,
+            &config,
+            &language,
+            owner.as_deref(),
+        )?);
     }
     let armed = slot.as_ref().expect("a queue was just built or kept");
     // The speaker's own counter, not the caller's guess: it is what `say`
@@ -1574,20 +1622,12 @@ fn check_binding_field(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The one audio endpoint this build implements.
+/// The owner name that means "this machine".
 ///
-/// Any other owner is a browser or remote client. It is refused here rather
-/// than served by the desktop microphone: arming from a laptop must not open
-/// the microphone on the machine running TUICommander.
-///
-// DEFERRED (2026-09-22) — the browser endpoint adapter is story 832-e730.
-// Step 8 of the voice-conversation plan allowed shipping the Dictation UI with
-// browser activation explicitly unavailable, and Boss took that option: the
-// panel says so in words rather than letting the refusal reach the user as a
-// raw error. Two things make it a story of its own rather than a follow-up
-// here — it needs a WS audio transport that does not exist yet, and it has to
-// reroute synthesised replies away from the server speakers, which is the path
-// story 816-cbbf still has open.
+/// Any other owner is a browser or remote client, and is served by the socket
+/// it connected on — never by the desktop microphone. Arming from a laptop must
+/// not open the microphone on the machine running TUICommander, so an owner
+/// with no socket behind it is refused rather than fallen back.
 pub(crate) const DESKTOP_OWNER: &str = "desktop";
 
 /// The desktop microphone plus the loaded whisper model.
@@ -1613,40 +1653,73 @@ impl continuous::VoiceEndpoint for DesktopVoiceEndpoint {
     }
 
     fn transcribe(&self, audio: &[f32]) -> Result<continuous::Transcript, String> {
-        let result = self
-            .transcriber
-            .transcribe(audio, self.language.as_deref(), self.gates)?;
-        // A gated segment is not an error and not a message: whisper decided
-        // this was not speech, so the utterance is dropped the same way an
-        // empty transcript is — and with it goes the language, which would
-        // otherwise be whatever whisper made of room noise.
-        Ok(if result.skip_reason.is_some() {
-            continuous::Transcript::default()
-        } else {
-            continuous::Transcript {
-                text: result.text,
-                language: result.language,
-            }
-        })
+        transcribe_utterance(
+            self.transcriber.as_ref(),
+            audio,
+            self.language.as_deref(),
+            self.gates,
+        )
     }
 }
 
-/// Open the desktop capture endpoint for an armed session.
-fn open_desktop_endpoint(
+/// Recognise one closed utterance, the same way for every endpoint.
+///
+/// Shared rather than duplicated per endpoint because the gate handling below
+/// is a decision, not plumbing: where the audio came from changes nothing about
+/// what a gated segment means.
+pub(crate) fn transcribe_utterance(
+    transcriber: &dyn transcribe::Transcriber,
+    audio: &[f32],
+    language: Option<&str>,
+    gates: transcribe::VoiceGates,
+) -> Result<continuous::Transcript, String> {
+    let result = transcriber.transcribe(audio, language, gates)?;
+    // A gated segment is not an error and not a message: whisper decided
+    // this was not speech, so the utterance is dropped the same way an
+    // empty transcript is — and with it goes the language, which would
+    // otherwise be whatever whisper made of room noise.
+    Ok(if result.skip_reason.is_some() {
+        continuous::Transcript::default()
+    } else {
+        continuous::Transcript {
+            text: result.text,
+            language: result.language,
+        }
+    })
+}
+
+/// Open the capture endpoint the named owner is entitled to.
+///
+/// The owner decides which device is opened, and there is deliberately no
+/// fallback between the two: an unknown owner is refused, not served by
+/// whatever this machine happens to have.
+fn open_endpoint(
     dictation: &DictationState,
     owner: &str,
 ) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
+    let config = get_dictation_config();
+    let language = (config.language != "auto").then(|| config.language.clone());
+    let gates = config.gates();
     if owner != DESKTOP_OWNER {
-        return Err(format!(
-            "Audio endpoint '{owner}' is not available on this build"
-        ));
+        let link = dictation
+            .browser_endpoints
+            .get(owner)
+            .ok_or_else(|| format!("No client is connected for audio owner '{owner}'"))?;
+        // The model is loaded here for the same reason as below: recognition
+        // runs on this machine whichever microphone fed it. Only the audio is
+        // remote.
+        let transcriber = ensure_transcriber(None, dictation, resolve_model(&config.model))?;
+        return Ok(Box::new(browser::BrowserVoiceEndpoint::new(
+            link,
+            transcriber,
+            language,
+            gates,
+        )));
     }
     ensure_microphone_access()?;
-    let config = get_dictation_config();
     let transcriber = ensure_transcriber(None, dictation, resolve_model(&config.model))?;
     let device_name = config.device.as_deref().filter(|name| !name.is_empty());
     let capture = audio::AudioCapture::start_with_device(device_name)?;
-    let gates = config.gates();
     let buffer = capture.buffer_handle();
     *dictation.hands_free_audio.lock() = Some(capture);
     dictation
@@ -1656,7 +1729,7 @@ fn open_desktop_endpoint(
         buffer,
         alive: dictation.hands_free_owner_alive.clone(),
         transcriber,
-        language: (config.language != "auto").then_some(config.language),
+        language,
         gates,
     }))
 }
@@ -1708,7 +1781,7 @@ pub(crate) fn arm_hands_free(
     session_id: &str,
     owner: &str,
 ) -> Result<HandsFreeStatus, String> {
-    arm_hands_free_with(state, dictation, session_id, owner, &open_desktop_endpoint)
+    arm_hands_free_with(state, dictation, session_id, owner, &open_endpoint)
 }
 
 /// `arm_hands_free` with the capture endpoint supplied.
@@ -2555,27 +2628,115 @@ mod tests {
     }
 
     /// Arming from a browser must not open the microphone on the machine
-    /// running TUICommander. The remote endpoint adapter is story 818; until it
-    /// exists that owner is unavailable, not quietly served by the desktop mic.
+    /// running TUICommander (832-e730 criterion 2). An owner with no socket
+    /// behind it is refused, not quietly served by the desktop mic — the
+    /// failure to fear here is a fallback, because it is silent and the user
+    /// who armed from a laptop would never learn the room being listened to is
+    /// not theirs.
     #[cfg(unix)]
     #[test]
-    fn an_owner_without_an_endpoint_is_refused_rather_than_given_the_desktop_microphone() {
+    fn an_owner_without_a_connected_client_is_refused_rather_than_given_the_desktop_microphone() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::test_support::agent_session(&state, "voice-remote", crate::pty::SHELL_BUSY);
         crate::test_support::insert_recording_session(&state, "voice-remote");
         let dictation = DictationState::new();
 
         let refused = arm_hands_free(&state, &dictation, "voice-remote", "browser-42")
-            .expect_err("a remote owner has no endpoint on this build");
+            .expect_err("a remote owner with no socket has no endpoint");
 
         assert_eq!(
             refused,
-            "Audio endpoint 'browser-42' is not available on this build"
+            "No client is connected for audio owner 'browser-42'"
         );
         assert!(!hands_free_status(&dictation).armed);
         assert!(
             dictation.hands_free_audio.lock().is_none(),
             "a refused owner must not have opened a capture device"
+        );
+    }
+
+    /// The capture side of the same rule, one step lower: with a client
+    /// connected the browser owner resolves to *that* client's audio, and the
+    /// desktop capture slot is still untouched.
+    ///
+    /// Asserting the slot rather than the endpoint's type, because the slot is
+    /// what holds the physical microphone open — a browser endpoint that also
+    /// opened the local device would satisfy any check on what was returned.
+    #[test]
+    fn a_connected_browser_owner_is_served_by_its_own_socket() {
+        let dictation = DictationState::new();
+        let link = dictation.browser_endpoints.connect("browser-42");
+        link.push_capture(&[0.25, 0.5]);
+
+        // Recognition needs a downloaded model, which an unattended run does
+        // not have, so the endpoint cannot be built here. What can be checked
+        // is the half that decides *whose* audio it would carry.
+        assert!(
+            dictation
+                .browser_endpoints
+                .get("browser-42")
+                .is_some_and(|found| found.drain_capture() == vec![0.25, 0.5]),
+            "the owner resolves to the socket that registered it"
+        );
+        assert!(
+            dictation.hands_free_audio.lock().is_none(),
+            "resolving a browser owner must not open the local microphone"
+        );
+    }
+
+    /// The other direction of criterion 2: a desktop conversation must not be
+    /// handed a browser's microphone just because one happens to be connected.
+    #[cfg(unix)]
+    #[test]
+    fn a_desktop_conversation_ignores_a_connected_browser_client() {
+        let dictation = DictationState::new();
+        let link = dictation.browser_endpoints.connect("browser-42");
+        link.push_capture(&[0.9; 32]);
+
+        // `desktop` never looks at the registry: the request either opens this
+        // machine's device or fails on it, and either way the browser's audio
+        // is still sitting there afterwards.
+        let _ = open_endpoint(&dictation, DESKTOP_OWNER);
+
+        assert_eq!(
+            link.drain_capture().len(),
+            32,
+            "the browser's audio was not consumed by a desktop arm"
+        );
+    }
+
+    /// Criterion 4: replies for a browser-owned conversation leave the machine.
+    /// A missing client is a failure rather than a fallback, for the same
+    /// reason as the microphone — somebody in another room must not hear the
+    /// answer to a question they did not ask.
+    #[test]
+    fn replies_follow_the_owner_and_never_fall_back_to_the_server_speakers() {
+        let dictation = DictationState::new();
+        let link = dictation.browser_endpoints.connect("browser-42");
+        let mut client = link.subscribe();
+
+        let output = open_reply_output(&dictation, Some("browser-42"))
+            .expect("a connected client can be spoken to");
+        output
+            .play(&speech::SpeechAudio {
+                samples: vec![0.0; 2_400],
+                sample_rate: 24_000,
+            })
+            .expect("the client takes it");
+        assert!(
+            matches!(
+                client.try_recv().expect("the client was told"),
+                browser::Downlink::Speak(_)
+            ),
+            "the reply went to the browser"
+        );
+
+        let Err(refused) = open_reply_output(&dictation, Some("browser-99")) else {
+            panic!("an owner with no client has no speaker");
+        };
+        assert_eq!(
+            refused,
+            "No client is connected for audio owner 'browser-99'"
         );
     }
 

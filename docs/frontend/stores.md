@@ -433,9 +433,13 @@ settings panel renders.
   leaves the key exactly where it was.
 - `handsFree` / `speech` — polled status, never pushed. `refreshHandsFree` is
   deliberately **one** command, because the dictation hotkey asks on every press.
-- `armHandsFree(sessionId)` always sends `owner: DESKTOP_AUDIO_OWNER`. Rust
-  refuses every other owner, so a browser tab cannot arm; the refusal is stored
-  in `handsFreeError` rather than thrown.
+- `armHandsFree(sessionId)` sends `DESKTOP_AUDIO_OWNER` on the desktop and
+  `browserAudioOwner` — a per-tab random id — in a browser. In browser mode it
+  opens the audio socket (`utils/browserVoice.ts`) **before** arming, because
+  Rust refuses an owner with no connected client rather than falling back to the
+  server's microphone. A refused arm closes that socket again in the `catch`, so
+  a failure never leaves the device light on; `disarmHandsFree` closes it in a
+  `finally`. The refusal is stored in `handsFreeError` rather than thrown.
 - `saveConfig` abandons the save when `get_dictation_config` cannot be read or
   answers something that is not a config. `hands_free_hold_back_ms`,
   `hands_free_activation_phrase` and `speech_voice` fall back to the **stored**

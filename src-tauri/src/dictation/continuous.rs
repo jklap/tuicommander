@@ -3122,6 +3122,71 @@ mod tests {
         }
     }
 
+    /// The browser half of the rule above (832-e730 criterion 3).
+    ///
+    /// A `FakeEndpoint` proves the *runtime* disarms when an endpoint says it
+    /// is gone; it cannot prove the browser endpoint ever says so. Driven
+    /// through the real `BrowserVoiceEndpoint` over a closed link, this asks
+    /// the question that matters: a tab that closed must end the conversation
+    /// it owned, by the same path and with the same reason as a desktop
+    /// endpoint released on shutdown — including the cancellation of the
+    /// entries it had queued.
+    #[test]
+    fn a_browser_client_that_closed_its_socket_disarms_the_conversation_it_owned() {
+        /// Recognises nothing: whether the tab is gone is decided before any
+        /// audio is looked at, and a recogniser here would need a model.
+        struct Deaf;
+
+        impl super::super::transcribe::Transcriber for Deaf {
+            fn transcribe(
+                &self,
+                _audio: &[f32],
+                _language: Option<&str>,
+                _gates: super::super::transcribe::VoiceGates,
+            ) -> Result<super::super::transcribe::TranscribeResult, String> {
+                Ok(super::super::transcribe::TranscribeResult {
+                    text: String::new(),
+                    skip_reason: None,
+                    language: None,
+                })
+            }
+        }
+
+        let endpoints = super::super::browser::BrowserEndpoints::default();
+        let link = endpoints.connect("browser-42");
+        let mut endpoint = super::super::browser::BrowserVoiceEndpoint::new(
+            link.clone(),
+            std::sync::Arc::new(Deaf),
+            None,
+            super::super::transcribe::VoiceGates::default(),
+        );
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        // Still connected, so the conversation survives a tick — the control
+        // that keeps the assertion below from passing against an endpoint that
+        // was never alive.
+        assert!(matches!(
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0),
+            Tick::Running { .. }
+        ));
+
+        endpoints.disconnect("browser-42", &link);
+
+        match tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0) {
+            Tick::Disarmed(disarmed) => {
+                assert_eq!(disarmed.reason, DisarmReason::OwnerDisconnected);
+            }
+            other => panic!("a closed browser socket must disarm, got {other:?}"),
+        }
+        assert!(
+            mode.lock().binding().is_none(),
+            "nothing stays bound to a tab that is gone"
+        );
+    }
+
     /// A hard capture error is a device failure, and the message reaches the
     /// status rather than a log nobody reads.
     #[test]
