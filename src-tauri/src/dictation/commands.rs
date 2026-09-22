@@ -275,7 +275,16 @@ pub struct SpeechAssetInfo {
     pub display_name: String,
     /// `"language"` or `"runtime"`.
     pub kind: String,
-    /// The language this speaks, absent for the runtime library.
+    /// The **Whisper language code** this speaks (`"it"`), absent for the
+    /// runtime library.
+    ///
+    /// The code rather than the engine's own name for the language
+    /// (`"italian"`), because this is the field a caller joins against: the
+    /// dictation setting, `SpeechStatus.language` and `for_language_code` all
+    /// speak in codes. Publishing the engine name here made the settings panel
+    /// compare `"italian"` against `"it"`, find no asset for the configured
+    /// language, and report that no bundle ships for it while listing the
+    /// bundle one row above.
     pub language: Option<String>,
     pub voices: Vec<String>,
     pub download_bytes: u64,
@@ -307,7 +316,7 @@ fn describe(asset: &speech::assets::Asset, downloading: bool) -> SpeechAssetInfo
         } else {
             "runtime".to_string()
         },
-        language: asset.language().map(str::to_string),
+        language: asset.code().map(str::to_string),
         voices: asset.voices().iter().map(|v| (*v).to_string()).collect(),
         download_bytes: asset.download_bytes(),
         state,
@@ -376,10 +385,14 @@ pub async fn download_speech_asset(app: AppHandle, asset: String) -> Result<Stri
 // Not done here because bridging means a new `AppEvent` variant, and
 // `src-tauri/src/state.rs` is being edited by another agent right now; adding
 // a variant touches four exhaustive matches in a file I must not move under
-// them. Land it with the Dictation UI (#818-2a29), which is the first
-// consumer that will actually render the bar in browser mode, and bridge the
-// whisper event at the same time — they are one arm each and should not be
-// two commits.
+// them.
+//
+// Still not done on 2026-09-22, when #818-2a29 gave the Dictation panel the
+// download rows that render this bar: `state.rs` was still held. The panel
+// works either way — a browser sees the row go from Not Downloaded to
+// Downloaded with no percent in between — so this stays a missing progress
+// bar rather than a missing feature. Bridge the whisper event at the same
+// time; they are one arm each and should not be two commits.
 pub const SPEECH_DOWNLOAD_PROGRESS: &str = "speech-download-progress";
 
 #[tauri::command]
@@ -454,15 +467,49 @@ fn open_voice(
             }
         }
     }
-    let voice = asset
-        .voices()
-        .first()
-        .ok_or_else(|| format!("{} ships no voice", asset.display_name))?;
+    let voice = choose_voice(asset, &config.speech_voice)?;
     // From the library rather than built here: it is the one instance that
     // serialises replacing a language against speaking it, and an engine built
     // beside it would hold the very files a download is about to rename away.
     let engine = library.engine(asset.language().unwrap_or_default());
-    Ok((engine, (*voice).to_string()))
+    Ok((engine, voice.to_string()))
+}
+
+/// Which of a language's voices to speak with.
+///
+/// Empty means "whatever this language ships first", which is what an
+/// untouched configuration says and what every configuration said before the
+/// setting existed.
+///
+/// A named voice the language does not ship is an error rather than a silent
+/// fall back to the first one. The two ways to get here are a catalogue that
+/// dropped a voice and a language the user changed underneath the setting;
+/// both are cases where speaking in a voice nobody chose is worse than saying
+/// why nothing was spoken, and the message reaches the user through the
+/// hands-free status rather than being buried in a log.
+fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<&'static str, String> {
+    let offered = asset.voices();
+    if configured.is_empty() {
+        return offered
+            .first()
+            .copied()
+            .ok_or_else(|| format!("{} ships no voice", asset.display_name));
+    }
+    offered
+        .iter()
+        .copied()
+        .find(|voice| *voice == configured)
+        .ok_or_else(|| {
+            format!(
+                "{} does not ship a voice called \"{configured}\"; it offers {}",
+                asset.display_name,
+                if offered.is_empty() {
+                    "none".to_string()
+                } else {
+                    offered.join(", ")
+                }
+            )
+        })
 }
 
 /// The language this conversation is being held in.
@@ -1470,12 +1517,20 @@ fn check_binding_field(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The one audio endpoint this story implements.
+/// The one audio endpoint this build implements.
 ///
-/// Any other owner is a browser or remote client, whose endpoint adapter is
-/// Step 8 (story 818). It is refused here rather than served by the desktop
-/// microphone: arming from a laptop must not open the microphone on the machine
-/// running TUICommander.
+/// Any other owner is a browser or remote client. It is refused here rather
+/// than served by the desktop microphone: arming from a laptop must not open
+/// the microphone on the machine running TUICommander.
+///
+// DEFERRED (2026-09-22) — the browser endpoint adapter is story 832-e730.
+// Step 8 of the voice-conversation plan allowed shipping the Dictation UI with
+// browser activation explicitly unavailable, and Boss took that option: the
+// panel says so in words rather than letting the refusal reach the user as a
+// raw error. Two things make it a story of its own rather than a follow-up
+// here — it needs a WS audio transport that does not exist yet, and it has to
+// reroute synthesised replies away from the server speakers, which is the path
+// story 816-cbbf still has open.
 pub(crate) const DESKTOP_OWNER: &str = "desktop";
 
 /// The desktop microphone plus the loaded whisper model.
@@ -1850,6 +1905,12 @@ pub struct DictationConfig {
     /// markers and for what it means that this runs as the user.
     #[serde(default)]
     pub speech_command: Vec<String>,
+    /// Which of the language's voices to speak with. Empty means the first one
+    /// it ships, which is what a configuration written before this setting
+    /// existed says. Ignored by a user-supplied engine, which names its own
+    /// voices inside its command template. See [`choose_voice`].
+    #[serde(default)]
+    pub speech_voice: String,
 }
 
 fn default_model() -> String {
@@ -1905,6 +1966,7 @@ impl Default for DictationConfig {
             hands_free_activation_phrase: String::new(),
             hands_free_notify_model: default_notify_model(),
             speech_command: Vec::new(),
+            speech_voice: String::new(),
         }
     }
 }
@@ -1950,11 +2012,12 @@ pub(crate) fn save_dictation_config(
     // stops the device and cancels what is in flight; the next reply opens a
     // voice for the language now configured.
     //
-    // Only on those two fields. Every other setting here is a threshold or a
+    // Only on those three fields. Every other setting here is a threshold or a
     // hotkey, and cutting a reply off mid-word because somebody moved a slider
     // would be a worse bug than the one this prevents.
-    let voice_changed =
-        previous.language != config.language || previous.speech_command != config.speech_command;
+    let voice_changed = previous.language != config.language
+        || previous.speech_command != config.speech_command
+        || previous.speech_voice != config.speech_voice;
     if voice_changed && let Some(dictation) = dictation {
         *dictation.speaker.lock() = None;
     }
@@ -3138,6 +3201,82 @@ mod tests {
         assert!(
             !status.available,
             "and nothing is speakable until a voice for the new language opens"
+        );
+    }
+
+    // --- Choosing a voice (818-2a29) ---------------------------------------
+
+    /// The one field a caller joins an asset to a conversation by.
+    ///
+    /// The settings panel looks the configured language up in this list to
+    /// learn which voices it may offer. Published as the engine's own name for
+    /// the language (`"italian"`) it matched nothing, so the panel offered no
+    /// voice and said no bundle shipped for Italian directly under the row
+    /// offering the Italian bundle.
+    #[test]
+    fn an_asset_names_its_language_by_the_code_whisper_uses() {
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        assert_eq!(describe(italian, false).language.as_deref(), Some("it"));
+        assert_eq!(
+            describe(speech::assets::runtime(), false).language,
+            None,
+            "the runtime library speaks nothing"
+        );
+    }
+
+    /// What an untouched configuration and every configuration written before
+    /// the setting existed both say.
+    #[test]
+    fn no_chosen_voice_means_the_first_one_the_language_ships() {
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        assert_eq!(
+            choose_voice(italian, "").expect("a language ships at least one voice"),
+            italian.voices()[0]
+        );
+    }
+
+    #[test]
+    fn a_chosen_voice_is_the_one_that_speaks() {
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        let wanted = italian.voices()[0];
+        assert_eq!(choose_voice(italian, wanted).expect("shipped"), wanted);
+    }
+
+    /// Never a silent fall back to the first voice: the user hears a voice
+    /// nobody chose and has nothing on screen saying why.
+    #[test]
+    fn a_voice_the_language_does_not_ship_is_named_rather_than_replaced() {
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        let error = choose_voice(italian, "nessuno").expect_err("not shipped");
+        assert!(error.contains("nessuno"), "{error}");
+        assert!(
+            error.contains(italian.voices()[0]),
+            "the message has to say what there is instead: {error}"
+        );
+    }
+
+    /// A voice belongs to a conversation exactly as much as a language does,
+    /// so it obeys the same rule: change it and the replies written for the
+    /// old one stop rather than finishing in the new one.
+    #[test]
+    fn changing_the_voice_takes_it_away_from_the_replies_written_for_it() {
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+        assert!(dictation.speaker.lock().is_some());
+
+        save_dictation_config(
+            DictationConfig {
+                language: "it".to_string(),
+                speech_voice: "giovanni".to_string(),
+                ..Default::default()
+            },
+            Some(&dictation),
+        )
+        .expect("config save");
+
+        assert!(
+            dictation.speaker.lock().is_none(),
+            "the queue built for the old voice may not speak in the new one"
         );
     }
 

@@ -421,7 +421,27 @@ all types share the same audio output and separate per-type gates allowed tones
 from a notification burst to overlap.
 
 ### dictationStore (`dictation.ts`)
-Whisper dictation config, model management, recording state.
+Whisper dictation config, model management, recording state — plus the speech
+assets, the hands-free conversation and the spoken-reply status the Dictation
+settings panel renders.
+
+- `speechAssets` / `speechDownloads` — the installable languages and ONNX
+  runtime, and a percent per asset **keyed by asset id**, because the runtime
+  library and a language are separate downloads a user can start together.
+  `downloadSpeechAsset` clears its key with `setState("speechDownloads", id,
+  undefined)`: a store update at a path *merges*, so returning a smaller object
+  leaves the key exactly where it was.
+- `handsFree` / `speech` — polled status, never pushed. `refreshHandsFree` is
+  deliberately **one** command, because the dictation hotkey asks on every press.
+- `armHandsFree(sessionId)` always sends `owner: DESKTOP_AUDIO_OWNER`. Rust
+  refuses every other owner, so a browser tab cannot arm; the refusal is stored
+  in `handsFreeError` rather than thrown.
+- `saveConfig` abandons the save when `get_dictation_config` cannot be read or
+  answers something that is not a config. `hands_free_hold_back_ms`,
+  `hands_free_activation_phrase` and `speech_voice` fall back to the **stored**
+  value, not to store state: their controls live in one panel, so a save from
+  anywhere else would otherwise write this session's default over a setting the
+  user had chosen.
 
 ### errorHandlingStore (`errorHandling.ts`)
 Error retry configuration and active retry tracking.

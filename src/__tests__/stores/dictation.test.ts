@@ -10,7 +10,14 @@ describe("dictationStore", () => {
 	beforeEach(async () => {
 		vi.resetModules();
 		mockInvoke.mockReset();
-		mockInvoke.mockResolvedValue(undefined);
+		// `get_dictation_config` answers with a config, never with nothing:
+		// `saveConfig` reads fields off it directly to hold the load-modify-save
+		// rule, so a bare `undefined` here would be a shape Rust cannot produce
+		// failing a save that works. Empty is enough — the fields a test cares
+		// about come from its own `mockResolvedValueOnce`.
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(command === "get_dictation_config" ? {} : undefined),
+		);
 		store = (await import("../../stores/dictation")).dictationStore;
 	});
 
@@ -118,9 +125,6 @@ describe("dictationStore", () => {
 
 	describe("setModel()", () => {
 		it("saves model to config and updates selectedModel", async () => {
-			// First call: get_dictation_config returns current config
-			mockInvoke.mockResolvedValueOnce(undefined); // set_dictation_config
-
 			await testInScopeAsync(async () => {
 				await store.setModel("small");
 				expect(store.state.selectedModel).toBe("small");
@@ -267,8 +271,6 @@ describe("dictationStore", () => {
 
 	describe("saveConfig()", () => {
 		it("includes model and device in config when saving", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				await store.saveConfig({ language: "en" });
 				expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
@@ -530,8 +532,6 @@ describe("dictationStore", () => {
 
 	describe("saveCorrections()", () => {
 		it("saves corrections to backend", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				await store.saveCorrections({ foo: "bar" });
 				expect(mockInvoke).toHaveBeenCalledWith("set_correction_map", { map: { foo: "bar" } });
@@ -576,8 +576,6 @@ describe("dictationStore", () => {
 
 	describe("setEnabled()", () => {
 		it("saves config with enabled flag", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				// The setters are fire-and-forget by design, and `saveConfig`
 				// now reads the stored config before writing it, so the save
@@ -595,8 +593,6 @@ describe("dictationStore", () => {
 
 	describe("setHotkey()", () => {
 		it("saves config with new hotkey", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				store.setHotkey("F8");
 				await vi.waitFor(() =>
@@ -622,8 +618,6 @@ describe("dictationStore", () => {
 
 	describe("setLanguage()", () => {
 		it("saves config with new language", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				store.setLanguage("fr");
 				await vi.waitFor(() =>
@@ -638,8 +632,6 @@ describe("dictationStore", () => {
 
 	describe("setDevice()", () => {
 		it("saves config with specific device", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				store.setDevice("USB Microphone");
 				await vi.waitFor(() =>
@@ -654,8 +646,6 @@ describe("dictationStore", () => {
 		});
 
 		it("saves null device to use system default", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				store.setDevice(null);
 				await vi.waitFor(() =>
@@ -675,8 +665,6 @@ describe("dictationStore", () => {
 		 * be written false is indistinguishable from a flag nobody reads.
 		 */
 		it("writes the flag off and remembers it", async () => {
-			mockInvoke.mockResolvedValueOnce(undefined);
-
 			await testInScopeAsync(async () => {
 				expect(store.state.notifyModelOnHandsFree, "on by default, as in Rust").toBe(true);
 				store.setNotifyModelOnHandsFree(false);
@@ -719,6 +707,12 @@ describe("dictationStore", () => {
 	 * `hands_free_activation_phrase` (815-7c76) would have done the same, which
 	 * is worse: a gate the user configured and the UI quietly disarmed.
 	 *
+	 * Both have controls since 818-2a29, and that does not retire the rule: the
+	 * controls are in one panel, so a save from any other surface still runs
+	 * with store state that was never loaded from disk. What changed is only
+	 * which field carries the test — `speech_command` is now the one with no
+	 * control at all.
+	 *
 	 * The fix is the load-modify-save rule already recorded for `save_config`:
 	 * read the stored config, change only what this surface owns, write it
 	 * back. So the assertion is not "TypeScript lists the same fields as Rust"
@@ -757,10 +751,15 @@ describe("dictationStore", () => {
 
 				expect(Object.keys(sent).sort()).toEqual([...fields].sort());
 				expect(sent.auto_send, "the caller's own change must win").toBe(true);
-				expect(sent.hands_free_activation_phrase, "a field no UI control models must survive untouched").toBe(
-					"stored:hands_free_activation_phrase",
+				expect(sent.speech_command, "a field no UI control models must survive untouched").toBe(
+					"stored:speech_command",
 				);
+				// These three have controls now (818-2a29), all of them in one
+				// panel — so a save from anywhere else must still leave them
+				// alone rather than writing this session's defaults over them.
+				expect(sent.hands_free_activation_phrase).toBe("stored:hands_free_activation_phrase");
 				expect(sent.hands_free_hold_back_ms).toBe("stored:hands_free_hold_back_ms");
+				expect(sent.speech_voice).toBe("stored:speech_voice");
 			});
 		});
 
@@ -779,6 +778,149 @@ describe("dictationStore", () => {
 					"a failed load must abort the save, not write a config built from defaults",
 				).toBe(false);
 				consoleSpy.mockRestore();
+			});
+		});
+
+		it("does not write a config that came back as something other than one", async () => {
+			mockInvoke.mockReset();
+			mockInvoke.mockResolvedValue(undefined);
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.saveConfig({ auto_send: true });
+
+				expect(
+					mockInvoke.mock.calls.some(([name]) => name === "set_dictation_config"),
+					"nothing is not a config, and a save built on it writes defaults over real settings",
+				).toBe(false);
+				consoleSpy.mockRestore();
+			});
+		});
+	});
+
+	// --- Spoken replies and the conversation (818-2a29) ---------------------
+
+	describe("speech assets", () => {
+		it("loads the catalogue", async () => {
+			const catalogue = [
+				{
+					id: "onnxruntime",
+					display_name: "Speech runtime",
+					kind: "runtime",
+					language: null,
+					voices: [],
+					download_bytes: 20_000_000,
+					state: "absent",
+					missing: [],
+				},
+			];
+			mockInvoke.mockResolvedValueOnce(catalogue);
+
+			await testInScopeAsync(async () => {
+				await store.refreshSpeechAssets();
+				expect(mockInvoke).toHaveBeenCalledWith("get_speech_assets");
+				expect(store.state.speechAssets).toEqual(catalogue);
+			});
+		});
+
+		/**
+		 * A bar left at its last percent reads as a download still running, and
+		 * the row then offers Cancel for something that already gave up.
+		 */
+		it("clears the progress bar when a download fails", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				command === "download_speech_asset"
+					? Promise.reject(new Error("network down"))
+					: Promise.resolve(command === "get_speech_assets" ? [] : undefined),
+			);
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.downloadSpeechAsset("italian");
+				expect(store.state.speechDownloads.italian).toBeUndefined();
+				expect(consoleSpy).toHaveBeenCalled();
+				consoleSpy.mockRestore();
+			});
+		});
+
+		it("persists the chosen voice", async () => {
+			await testInScopeAsync(async () => {
+				store.setSpeechVoice("giovanni");
+				await vi.waitFor(() =>
+					expect(mockInvoke).toHaveBeenCalledWith(
+						"set_dictation_config",
+						expect.objectContaining({ config: expect.objectContaining({ speech_voice: "giovanni" }) }),
+					),
+				);
+			});
+		});
+	});
+
+	describe("hands-free conversation", () => {
+		/**
+		 * The owner is the whole point of the binding: Rust refuses anything
+		 * that is not the desktop endpoint rather than opening the microphone
+		 * on the machine running TUICommander. Sending the session id as the
+		 * owner, or a browser client id, would be how that guard gets bypassed.
+		 */
+		it("arms the desktop endpoint against the chosen terminal", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(
+					command === "arm_hands_free_dictation"
+						? { armed: true, phase: "waiting", sessionId: "sess-1", owner: "desktop" }
+						: undefined,
+				),
+			);
+
+			await testInScopeAsync(async () => {
+				expect(await store.armHandsFree("sess-1")).toBe(true);
+				expect(mockInvoke).toHaveBeenCalledWith("arm_hands_free_dictation", {
+					sessionId: "sess-1",
+					owner: "desktop",
+				});
+				expect(store.state.handsFree?.armed).toBe(true);
+				expect(store.state.handsFreeError).toBeNull();
+			});
+		});
+
+		it("keeps a refused arm visible instead of showing a conversation that never started", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				command === "arm_hands_free_dictation"
+					? Promise.reject("Audio endpoint 'browser-42' is not available on this build")
+					: Promise.resolve(undefined),
+			);
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				expect(await store.armHandsFree("sess-1")).toBe(false);
+				expect(store.state.handsFree).toBeNull();
+				expect(store.state.handsFreeError).toContain("not available on this build");
+				consoleSpy.mockRestore();
+			});
+		});
+
+		/**
+		 * Voice entries the composer already typed cannot be pulled back.
+		 * Reporting them is the difference between an honest outcome and a
+		 * claim, and the caller is what puts that on screen.
+		 */
+		it("reports the entries a stop could not take back", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(
+					command === "disarm_hands_free_dictation"
+						? {
+								wasArmed: true,
+								cancelled: [11],
+								alreadyDelivered: [9, 10],
+								status: { armed: false, phase: "disarmed" },
+							}
+						: undefined,
+				),
+			);
+
+			await testInScopeAsync(async () => {
+				expect(await store.disarmHandsFree()).toEqual([9, 10]);
+				expect(store.state.handsFree?.armed).toBe(false);
 			});
 		});
 	});

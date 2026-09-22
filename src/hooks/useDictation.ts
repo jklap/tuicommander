@@ -24,10 +24,14 @@ export interface DictationDeps {
 			processing: boolean;
 			loading: boolean;
 			modelStatus: "not_downloaded" | "downloaded" | "ready";
+			/** Null before anything polled; see the store's own doc comment. */
+			handsFree: { armed: boolean } | null;
 		};
 		refreshStatus: () => Promise<void>;
 		startRecording: () => Promise<void>;
 		stopRecording: () => Promise<TranscribeResponse | null>;
+		refreshHandsFree: () => Promise<void>;
+		disarmHandsFree: () => Promise<number[]>;
 	};
 	setStatusInfo: (msg: string) => void;
 	openSettings: (tab?: string) => void;
@@ -47,6 +51,28 @@ export function useDictation(deps: DictationDeps) {
 
 	const handleDictationStart = async () => {
 		if (!deps.dictation.state.enabled) return;
+
+		// The hotkey is the stop control for a conversation as well as the
+		// start control for a push-to-talk recording, and a hands-free
+		// conversation is already holding the microphone. Asked while one is
+		// running, the key ends it — all of it: the capture, the transcript
+		// waiting out its hold-back, whatever is queued and whatever is being
+		// spoken. Rust decides what that means; this only asks.
+		//
+		// Re-read first rather than trusting the stored flag: the mode ends by
+		// itself when its terminal closes, and a stale `armed` here would eat
+		// the keypress that was meant to start a recording.
+		await deps.dictation.refreshHandsFree();
+		if (deps.dictation.state.handsFree?.armed) {
+			const delivered = await deps.dictation.disarmHandsFree();
+			deps.setStatusInfo(
+				delivered.length > 0
+					? `Hands-free: stopped — ${delivered.length} spoken ${delivered.length === 1 ? "entry" : "entries"} had already been typed`
+					: "Hands-free: stopped",
+			);
+			return;
+		}
+
 		if (deps.dictation.state.recording || deps.dictation.state.processing || deps.dictation.state.loading) return;
 
 		// Snapshot focus target before any async work

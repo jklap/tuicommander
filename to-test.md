@@ -3087,3 +3087,43 @@ changes** (on by default).
       action=status` must still report `available: false`.
 - [ ] **[VISUAL]** Settings > Dictation: the new toggle must sit with the other
       dictation toggles and its hint must read clearly at the panel's width.
+
+## Voice conversation controls in the Dictation panel (story `818-2a29`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+Settings > Dictation now carries two new sections below Voice tuning: **Spoken
+replies** (the speech assets, the language replies are spoken in, and the voice)
+and **Hands-free conversation** (terminal picker, Start/Stop, live phase,
+activation phrase, hold-back). The dictation hotkey now also stops a running
+conversation.
+
+Everything mechanical is covered by tests; these items need real audio, a real
+download, or Boss's eye. Run them against the worktree build, never Boss's live
+sessions.
+
+- [ ] Download **ONNX Runtime** and **Italian** from Spoken replies. The percent
+      must climb on each row independently — starting both at once must not show
+      one row the other's progress — and each row must end at Downloaded.
+- [ ] Cancel a download halfway. The row must go back to Not Downloaded with no
+      progress bar left behind, and no partially installed files may remain.
+- [ ] With Italian ready, the **Voice** control must appear and list `giovanni`.
+      Pick it, then arm a conversation and hear a reply in that voice.
+- [ ] Change the voice while a reply is being spoken. The reply must stop
+      mid-sentence rather than finish in the other voice.
+- [ ] **Opening Settings > Dictation must not light the microphone indicator.**
+      Neither must starting the app. Nothing arms by itself.
+- [ ] Start a conversation from the panel, then press the dictation hotkey. The
+      conversation must stop — capture, queue and voice — and the status line
+      must say how many spoken entries had already been typed.
+- [ ] Press the hotkey with nothing armed. It must record as usual, not report a
+      stopped conversation.
+- [ ] Let a conversation end by itself (close the bound terminal), then press the
+      hotkey. It must record — a stale armed flag must not eat the keypress.
+- [ ] Set an activation phrase, then speak a sentence without it: nothing may be
+      sent. Speak one with it: the phrase itself must not reach the terminal.
+- [ ] **[VISUAL]** Both new sections at the panel's width: the asset rows must
+      line up with the Whisper model rows above them, and the phase line must
+      stay readable while it changes.
+- [ ] Open the app in a browser tab (`http://localhost:9877/`) and open
+      Settings. The **Dictation** tab must be absent entirely, and searching
+      settings for "Hands-free" must report no match rather than opening an
+      empty panel. The browser microphone and speaker are story `832-e730`.

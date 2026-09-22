@@ -1,9 +1,10 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
-import type { ModelInfo } from "../../stores/dictation";
+import type { ModelInfo, SpeechAsset } from "../../stores/dictation";
 import { dictationStore, WHISPER_LANGUAGES } from "../../stores/dictation";
+import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { KeyComboCapture } from "../shared/KeyComboCapture";
 import d from "./DictationSettings.module.css";
@@ -315,6 +316,12 @@ export const DictationSettings: Component = () => {
 			{/* Voice tuning */}
 			<VoiceTuning />
 
+			{/* Spoken replies */}
+			<SpeechSetup />
+
+			{/* Hands-free conversation */}
+			<HandsFreeControls />
+
 			{/* Correction map */}
 			<div class={s.group}>
 				<label>{t("dictation.correctionsLabel", "Auto-Corrections")}</label>
@@ -490,6 +497,342 @@ const VoiceTuning: Component = () => {
 				hint={t(
 					"dictation.noSpeechHint",
 					"Discards a transcript when Whisper itself reports it probably heard no speech. Lower is stricter; 100% turns the gate off.",
+				)}
+			/>
+		</div>
+	);
+};
+
+/** Bytes as the megabytes a download dialog would quote. */
+function megabytes(bytes: number): string {
+	return `${Math.round(bytes / 1_000_000)} MB`;
+}
+
+/**
+ * Setting up the voice that speaks replies back.
+ *
+ * Defined below the panel for the same reason as `VoiceTuning`: the settings
+ * search index is built from source order and assigns each label to the
+ * nearest preceding `<h3>`.
+ *
+ * There is no language control here on purpose. A conversation is held in one
+ * language, and that is the Whisper language above — picking a second one is
+ * how you get a reply in English to a question asked in Italian. What the user
+ * chooses here is which of that language's voices speaks it.
+ */
+const SpeechSetup: Component = () => {
+	onMount(() => {
+		dictationStore.refreshSpeechAssets();
+	});
+
+	const languageAsset = (): SpeechAsset | undefined =>
+		dictationStore.state.speechAssets.find((asset) => asset.language === dictationStore.state.language);
+
+	/** Which language replies are spoken in, in the user's terms. */
+	const spokenLanguage = (): string => {
+		const code = dictationStore.state.language;
+		if (code === "auto") {
+			return t("dictation.speechLanguageAuto", "Whatever Whisper hears — nothing is spoken until somebody speaks");
+		}
+		const asset = languageAsset();
+		return asset
+			? asset.display_name
+			: t("dictation.speechLanguageMissing", "{lang} — no speech bundle ships for it").replace(
+					"{lang}",
+					WHISPER_LANGUAGES[code] ?? code,
+				);
+	};
+
+	return (
+		<div class={s.group}>
+			<label>{t("dictation.speechLabel", "Spoken replies")}</label>
+			<p class={s.hint} style={{ "margin-bottom": "8px" }}>
+				{t(
+					"dictation.speechHint",
+					"Downloads needed to let an agent answer out loud. The runtime library is shared; each language is a separate bundle and brings its own voices.",
+				)}
+			</p>
+
+			<div class={d.modelList}>
+				<For each={dictationStore.state.speechAssets}>{(asset) => <SpeechAssetRow asset={asset} />}</For>
+			</div>
+
+			<div class={d.conversation}>
+				<div class={d.conversationRow}>
+					<span>{t("dictation.speechLanguageLabel", "Replies are spoken in")}</span>
+					<span class={d.conversationValue}>{spokenLanguage()}</span>
+				</div>
+			</div>
+
+			<Show when={(languageAsset()?.voices.length ?? 0) > 0}>
+				<label style={{ "margin-top": "8px" }}>{t("dictation.voiceLabel", "Voice")}</label>
+				<select
+					value={dictationStore.state.speechVoice}
+					onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
+				>
+					<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
+					<For each={languageAsset()?.voices ?? []}>{(voice) => <option value={voice}>{voice}</option>}</For>
+				</select>
+				<p class={s.hint}>
+					{t(
+						"dictation.voiceHint",
+						"Changing the voice stops any reply already being spoken — a sentence half said in one voice does not finish in another.",
+					)}
+				</p>
+			</Show>
+		</div>
+	);
+};
+
+/** One catalogue entry: what it is, what state it is in, and what to do next. */
+const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
+	const percent = () => dictationStore.state.speechDownloads[props.asset.id];
+	const downloading = () => props.asset.state === "downloading" || percent() !== undefined;
+
+	return (
+		<div class={cx(d.modelRow, props.asset.state === "ready" && d.active)}>
+			<div class={d.modelInfo}>
+				<span class={d.modelName}>{props.asset.display_name}</span>
+				<span class={d.modelSize}>{megabytes(props.asset.download_bytes)}</span>
+			</div>
+			<Show when={!downloading()}>
+				<span class={cx(d.modelBadge, props.asset.state === "ready" && d.downloaded)}>
+					{props.asset.state === "ready"
+						? t("dictation.downloaded", "Downloaded")
+						: props.asset.state === "incomplete"
+							? t("dictation.speechIncomplete", "Incomplete")
+							: t("dictation.notDownloaded", "Not Downloaded")}
+				</span>
+			</Show>
+			<div class={d.modelActions}>
+				<Show when={downloading()}>
+					<div class={d.downloadProgress}>
+						<div class={d.progressBar}>
+							<div class={d.progressFill} style={{ transform: `scaleX(${(percent() ?? 0) / 100})` }} />
+						</div>
+						<span class={d.progressText}>{percent() ?? 0}%</span>
+					</div>
+					<button class={d.modelDelete} onClick={() => dictationStore.cancelSpeechDownload(props.asset.id)}>
+						{t("dictation.cancel", "Cancel")}
+					</button>
+				</Show>
+				<Show when={!downloading() && props.asset.state !== "ready"}>
+					<button class={d.modelDownload} onClick={() => dictationStore.downloadSpeechAsset(props.asset.id)}>
+						{props.asset.state === "incomplete"
+							? t("dictation.speechRepair", "Repair")
+							: t("dictation.download", "Download")}
+					</button>
+				</Show>
+				<Show when={!downloading() && props.asset.state !== "absent"}>
+					<button
+						class={d.modelDelete}
+						onClick={() => dictationStore.deleteSpeechAsset(props.asset.id)}
+						title={t("dictation.speechDelete", "Delete this download")}
+					>
+						&times;
+					</button>
+				</Show>
+			</div>
+		</div>
+	);
+};
+
+/**
+ * Starting, watching and stopping a hands-free conversation.
+ *
+ * Nothing here arms on mount. Opening this panel must never open the
+ * microphone, and neither must starting the app: a conversation begins because
+ * somebody pressed Start, and ends because somebody pressed Stop, pressed the
+ * dictation hotkey, or closed the terminal it was bound to.
+ *
+ * Every decision below belongs to Rust — when an utterance ends, whether the
+ * activation phrase opened it, when the hold-back expires, what may be spoken.
+ * This renders the answers and offers the two buttons.
+ *
+ * There is deliberately **no** browser branch here. `SettingsPanel.tsx` hides
+ * the whole Dictation tab when `isTauri()` is false, so a browser client never
+ * reaches this component and a `Show` fallback explaining that hands-free is
+ * desktop-only could not render. Rust refuses every owner but `desktop`, and
+ * the browser microphone and speaker are story 832-e730; until that lands, "not
+ * served at all" is the honest shape rather than a control that cannot work.
+ */
+const HandsFreeControls: Component = () => {
+	const [target, setTarget] = createSignal(terminalsStore.getActive()?.sessionId ?? "");
+
+	// Polled rather than pushed: hands-free state has no SSE arm yet, and a
+	// panel that shows a stale phase is worse than one that lags a beat. Only
+	// while this panel is open — see `onCleanup`.
+	let timer: ReturnType<typeof setInterval> | null = null;
+	onMount(() => {
+		dictationStore.refreshHandsFree();
+		dictationStore.refreshSpeechStatus();
+		timer = setInterval(() => {
+			dictationStore.refreshHandsFree();
+			dictationStore.refreshSpeechStatus();
+		}, 500);
+	});
+	onCleanup(() => {
+		if (timer) clearInterval(timer);
+	});
+
+	const status = () => dictationStore.state.handsFree;
+	const speech = () => dictationStore.state.speech;
+	const armed = () => status()?.armed === true;
+
+	/** Terminals that have a live PTY session, which is what can be bound. */
+	const targets = () =>
+		terminalsStore
+			.getIds()
+			.map((id) => terminalsStore.get(id))
+			.filter((term): term is NonNullable<typeof term> => !!term?.sessionId);
+
+	/** The phase in the user's words, and whether it needs attention. */
+	const phaseLabel = (): string => {
+		switch (status()?.phase) {
+			case "waiting":
+				return t("dictation.phaseWaiting", "Listening");
+			case "capturing":
+				return t("dictation.phaseCapturing", "Hearing you");
+			case "transcribing":
+				return t("dictation.phaseTranscribing", "Transcribing");
+			case "holding_back":
+				return t("dictation.phaseHoldingBack", "About to send");
+			case "delivered":
+				return t("dictation.phaseDelivered", "Sent");
+			case "error":
+				return t("dictation.phaseError", "Error");
+			default:
+				return t("dictation.phaseDisarmed", "Stopped");
+		}
+	};
+
+	/** What the speaker is doing, or empty when it is doing nothing. */
+	const speakingLabel = (): string => {
+		const current = speech();
+		if (!current) return "";
+		if (current.speaking) return t("dictation.speechPlaying", "Playing a reply");
+		if (current.rendering) return t("dictation.speechRendering", "Synthesising a reply");
+		if (current.queued > 0)
+			return t("dictation.speechQueued", "{n} replies waiting").replace("{n}", String(current.queued));
+		return "";
+	};
+
+	const start = async () => {
+		const sessionId = target();
+		if (!sessionId) return;
+		await dictationStore.armHandsFree(sessionId);
+	};
+
+	return (
+		<div class={s.group}>
+			<label>{t("dictation.handsFreeLabel", "Hands-free conversation")}</label>
+			<p class={s.hint} style={{ "margin-bottom": "8px" }}>
+				{t(
+					"dictation.handsFreeHint",
+					"Push-to-talk is the hotkey above: hold it, speak, release. Hands-free is the other mode — it binds one terminal, keeps the microphone open and sends each utterance by itself. The hotkey stops it.",
+				)}
+			</p>
+
+			<div class={s.actions}>
+				<Show
+					when={armed()}
+					fallback={
+						<>
+							<select value={target()} onChange={(e) => setTarget(e.currentTarget.value)}>
+								<option value="">{t("dictation.handsFreeNoTarget", "Choose a terminal…")}</option>
+								<For each={targets()}>{(term) => <option value={term.sessionId ?? ""}>{term.name}</option>}</For>
+							</select>
+							<button onClick={start} disabled={!target()}>
+								{t("dictation.handsFreeStart", "Start conversation")}
+							</button>
+						</>
+					}
+				>
+					<button onClick={() => dictationStore.disarmHandsFree()}>
+						{t("dictation.handsFreeStop", "Stop conversation")}
+					</button>
+				</Show>
+			</div>
+
+			<Show when={status()}>
+				{(current) => (
+					<div class={d.conversation}>
+						<div class={d.conversationRow}>
+							<span>{t("dictation.handsFreeState", "State")}</span>
+							<span
+								class={cx(
+									d.phase,
+									current().phase === "error" && d.failed,
+									current().armed && current().phase !== "error" && d.live,
+								)}
+							>
+								{phaseLabel()}
+							</span>
+						</div>
+						<Show when={current().sessionId}>
+							<div class={d.conversationRow}>
+								<span>{t("dictation.handsFreeTarget", "Bound terminal")}</span>
+								<span class={d.conversationValue}>
+									{terminalsStore.get(terminalsStore.getTerminalForSession(current().sessionId ?? "") ?? "")?.name ??
+										current().sessionId}
+								</span>
+							</div>
+						</Show>
+						<Show when={current().owner}>
+							<div class={d.conversationRow}>
+								<span>{t("dictation.handsFreeOwner", "Audio from")}</span>
+								<span class={d.conversationValue}>{current().owner}</span>
+							</div>
+						</Show>
+						<Show when={speakingLabel()}>
+							<div class={d.conversationRow}>
+								<span>{t("dictation.handsFreeSpeaker", "Speaker")}</span>
+								<span class={d.conversationValue}>{speakingLabel()}</span>
+							</div>
+						</Show>
+						<Show when={current().armed && speech() && !speech()?.available}>
+							<div class={d.conversationRow}>
+								<span>{t("dictation.handsFreeNoVoice", "Cannot speak")}</span>
+								<span class={d.conversationValue}>{speech()?.unavailableReason}</span>
+							</div>
+						</Show>
+						<Show when={current().pendingText}>
+							<p class={d.conversationPending}>
+								{t("dictation.handsFreePending", "About to send")}: {current().pendingText}
+							</p>
+						</Show>
+						<Show when={current().error ?? dictationStore.state.handsFreeError}>
+							<p class={d.conversationError}>{current().error ?? dictationStore.state.handsFreeError}</p>
+						</Show>
+					</div>
+				)}
+			</Show>
+
+			<label style={{ "margin-top": "8px" }}>{t("dictation.activationPhraseLabel", "Activation phrase")}</label>
+			<input
+				type="text"
+				value={dictationStore.state.handsFreeActivationPhrase}
+				placeholder={t("dictation.activationPhrasePlaceholder", "Leave empty to send every utterance")}
+				onChange={(e) => dictationStore.setHandsFreeActivationPhrase(e.currentTarget.value)}
+			/>
+			<p class={s.hint}>
+				{t(
+					"dictation.activationPhraseHint",
+					"When set, only speech that opens with this phrase is sent, and the phrase itself is removed first. The match runs on this machine, so unrelated speech never leaves it.",
+				)}
+			</p>
+
+			<SettingSlider
+				label={t("dictation.holdBackLabel", "Hold-back before sending")}
+				value={dictationStore.state.handsFreeHoldBackMs}
+				onChange={(v) => dictationStore.setHandsFreeHoldBackMs(v)}
+				min={0}
+				max={5000}
+				step={250}
+				formatValue={(v) => (v === 0 ? t("dictation.instant", "Instant") : `${v}ms`)}
+				hint={t(
+					"dictation.holdBackHint",
+					"How long a finished utterance is shown before it is sent, so you can stop one you did not mean. Applies to the next conversation, not the one already running.",
 				)}
 			/>
 		</div>

@@ -32,10 +32,13 @@ describe("useDictation", () => {
 			processing: false,
 			loading: false,
 			modelStatus: "ready" as "not_downloaded" | "downloaded" | "ready",
+			handsFree: null as { armed: boolean } | null,
 		},
 		refreshStatus: vi.fn().mockResolvedValue(undefined),
 		startRecording: vi.fn().mockResolvedValue(undefined),
 		stopRecording: vi.fn().mockResolvedValue(transcribeOk("hello world")),
+		refreshHandsFree: vi.fn().mockResolvedValue(undefined),
+		disarmHandsFree: vi.fn().mockResolvedValue([]),
 	};
 
 	const mockSetStatusInfo = vi.fn();
@@ -56,6 +59,7 @@ describe("useDictation", () => {
 			processing: false,
 			loading: false,
 			modelStatus: "ready",
+			handsFree: null,
 		};
 
 		// Default: startRecording sets recording=true (mimics real store behavior)
@@ -90,6 +94,47 @@ describe("useDictation", () => {
 
 			expect(mockDictationStore.refreshStatus).not.toHaveBeenCalled();
 			expect(mockDictationStore.startRecording).not.toHaveBeenCalled();
+		});
+
+		// Criterion 2: the hotkey is the stop control for a conversation, not a
+		// second microphone opened on top of the one hands-free already holds.
+		it("stops a running hands-free conversation instead of recording", async () => {
+			mockDictationStore.refreshHandsFree.mockImplementation(async () => {
+				mockDictationStore.state.handsFree = { armed: true };
+			});
+
+			await dictation.handleDictationStart();
+
+			expect(mockDictationStore.disarmHandsFree).toHaveBeenCalled();
+			expect(mockDictationStore.startRecording).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Hands-free: stopped");
+		});
+
+		// Entries the composer already typed cannot be pulled back, and the one
+		// place the user can learn that is the message the stop leaves behind.
+		it("says how many spoken entries the stop could not take back", async () => {
+			mockDictationStore.refreshHandsFree.mockImplementation(async () => {
+				mockDictationStore.state.handsFree = { armed: true };
+			});
+			mockDictationStore.disarmHandsFree.mockResolvedValue([7]);
+
+			await dictation.handleDictationStart();
+
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Hands-free: stopped — 1 spoken entry had already been typed");
+		});
+
+		// The mode ends by itself when its terminal closes. Trusting the stored
+		// flag would eat the keypress that was meant to start a recording.
+		it("re-reads hands-free state rather than trusting a stale armed flag", async () => {
+			mockDictationStore.state.handsFree = { armed: true };
+			mockDictationStore.refreshHandsFree.mockImplementation(async () => {
+				mockDictationStore.state.handsFree = { armed: false };
+			});
+
+			await dictation.handleDictationStart();
+
+			expect(mockDictationStore.disarmHandsFree).not.toHaveBeenCalled();
+			expect(mockDictationStore.startRecording).toHaveBeenCalled();
 		});
 
 		it("does nothing when already recording", async () => {

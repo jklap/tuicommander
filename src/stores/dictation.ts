@@ -14,21 +14,107 @@ interface DictationConfig {
 	auto_send: boolean;
 	rms_threshold: number;
 	no_speech_threshold: number;
-	/** Hands-free hold-back before a transcript is enqueued. No UI control. */
+	/** Hands-free hold-back before a transcript is enqueued. */
 	hands_free_hold_back_ms: number;
-	/** Hands-free activation phrase; empty means ungated. No UI control. */
+	/** Hands-free activation phrase; empty means ungated. */
 	hands_free_activation_phrase: string;
 	/** Tell the bound model when hands-free starts and stops. On by default. */
 	hands_free_notify_model: boolean;
 	/** A user-supplied speech engine as argv; empty means the bundled one. No UI control. */
 	speech_command: string[];
+	/** Which of the language's voices speaks. Empty means the first one it ships. */
+	speech_voice: string;
 }
+
+/**
+ * A downloadable speech asset: the ONNX runtime, or one language bundle.
+ *
+ * Snake_case because `SpeechAssetInfo` carries no serde rename, unlike the
+ * hands-free and speech status structs below it.
+ */
+export interface SpeechAsset {
+	id: string;
+	display_name: string;
+	/** `"language"` or `"runtime"`. */
+	kind: string;
+	/**
+	 * The Whisper language code this speaks (`"it"`); null for the runtime
+	 * library. The same alphabet as `DictationConfig.language`, so the two can
+	 * be compared directly — which is the whole reason it is a code.
+	 */
+	language: string | null;
+	voices: string[];
+	download_bytes: number;
+	/** `"absent"`, `"downloading"`, `"incomplete"` or `"ready"`. */
+	state: string;
+	/** Which files an incomplete asset is missing. Empty otherwise. */
+	missing: string[];
+}
+
+/** What the hands-free conversation is doing. Mirrors `Phase::as_wire`. */
+export type HandsFreePhase =
+	| "disarmed"
+	| "waiting"
+	| "capturing"
+	| "transcribing"
+	| "holding_back"
+	| "delivered"
+	| "error";
+
+/** Live hands-free state, mirroring Rust's `HandsFreeStatus`. */
+export interface HandsFreeStatus {
+	armed: boolean;
+	phase: HandsFreePhase;
+	/** The bound terminal. Unchanged by focus for as long as it is set. */
+	sessionId: string | null;
+	/** The bound audio endpoint. */
+	owner: string | null;
+	generation: number;
+	/** The transcript waiting out its hold-back, while there is still time to stop it. */
+	pendingText: string | null;
+	queuedIds: number[];
+	holdBackMs: number;
+	error: string | null;
+}
+
+/** Whether a reply can be spoken, and what the speaker is doing. */
+export interface SpeechStatus {
+	available: boolean;
+	unavailableReason: string;
+	sessionId: string | null;
+	language: string;
+	turn: number;
+	voice: string;
+	queued: number;
+	/** Synthesis is running. */
+	rendering: boolean;
+	/** Audio is playing. */
+	speaking: boolean;
+	lastError: string | null;
+}
+
+/**
+ * The only audio endpoint this build serves.
+ *
+ * Rust refuses any other owner rather than opening the microphone on the
+ * machine running TUICommander, so a browser tab cannot arm — see
+ * `DESKTOP_OWNER` in `dictation/commands.rs`.
+ */
+export const DESKTOP_AUDIO_OWNER = "desktop";
 
 /** Whisper's own no_speech_thold default, mirrored from `transcribe.rs`. */
 export const DEFAULT_NO_SPEECH_THRESHOLD = 0.6;
 
 /** The historical hardcoded RMS floor, mirrored from `transcribe.rs`. */
 export const DEFAULT_RMS_THRESHOLD = 0.001;
+
+/**
+ * The hands-free hold-back default, mirrored from `default_hold_back_ms`.
+ *
+ * Long enough to read a transcript and stop it, short enough not to feel like
+ * a delay. Only where the slider starts — Rust owns the number that is used.
+ */
+export const DEFAULT_HOLD_BACK_MS = 1500;
 
 /** GPU/CPU backend reported by whisper after model load. */
 export type DictationBackend = "cpu" | "gpu";
@@ -125,6 +211,28 @@ interface DictationStoreState {
 	 * in text.
 	 */
 	notifyModelOnHandsFree: boolean;
+	/** Hold-back between a hands-free transcript and its enqueue, in ms. */
+	handsFreeHoldBackMs: number;
+	/** Phrase that must open each hands-free turn; empty means ungated. */
+	handsFreeActivationPhrase: string;
+	/** Which voice speaks. Empty means the language's first, decided in Rust. */
+	speechVoice: string;
+	/** The speech catalogue and what state each entry is in. */
+	speechAssets: SpeechAsset[];
+	/** Download percent per asset id, present only while one is downloading. */
+	speechDownloads: Record<string, number | undefined>;
+	/**
+	 * Live hands-free state, or null before anything has polled for it.
+	 *
+	 * Null is not "disarmed": nothing here ever arms by itself, and the
+	 * difference between "not asked yet" and "asked, and nothing is armed"
+	 * decides whether the panel may show a phase at all.
+	 */
+	handsFree: HandsFreeStatus | null;
+	/** What the last arm or disarm refused to do, cleared by the next one. */
+	handsFreeError: string | null;
+	/** Live speaker state, or null before anything has polled for it. */
+	speech: SpeechStatus | null;
 	rmsThreshold: number;
 	noSpeechThreshold: number;
 	capturingHotkey: boolean;
@@ -163,6 +271,14 @@ function createDictationStore() {
 		longPressMs: 400,
 		autoSend: false,
 		notifyModelOnHandsFree: true,
+		handsFreeHoldBackMs: DEFAULT_HOLD_BACK_MS,
+		handsFreeActivationPhrase: "",
+		speechVoice: "",
+		speechAssets: [],
+		speechDownloads: {},
+		handsFree: null,
+		handsFreeError: null,
+		speech: null,
 		rmsThreshold: DEFAULT_RMS_THRESHOLD,
 		noSpeechThreshold: DEFAULT_NO_SPEECH_THRESHOLD,
 		capturingHotkey: false,
@@ -180,6 +296,13 @@ function createDictationStore() {
 	// Listen for streaming partial transcription results
 	listen<string>("dictation-partial", (event) => {
 		setState("partialText", event.payload);
+	});
+
+	// Per-asset speech download progress. Keyed by asset id because the runtime
+	// library and a language are separate downloads a user can start together,
+	// and one shared percent would show each of them the other's.
+	listen<{ asset: string; percent: number }>("speech-download-progress", (event) => {
+		setState("speechDownloads", event.payload.asset, event.payload.percent);
 	});
 
 	let audioLevelTimer: ReturnType<typeof setInterval> | null = null;
@@ -216,6 +339,9 @@ function createDictationStore() {
 					longPressMs: config.long_press_ms ?? 400,
 					autoSend: config.auto_send ?? false,
 					notifyModelOnHandsFree: config.hands_free_notify_model ?? true,
+					handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
+					handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
+					speechVoice: config.speech_voice ?? "",
 					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
 					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
 				});
@@ -239,7 +365,14 @@ function createDictationStore() {
 			try {
 				// A save that cannot read first is abandoned: writing a config
 				// assembled from defaults is how the fields below got lost.
+				// "Could not read" includes an answer that is not a config —
+				// the fields below are read off it by name, and a save built on
+				// nothing is the very thing this guard exists to stop.
 				const stored = await invoke<DictationConfig>("get_dictation_config");
+				if (!stored || typeof stored !== "object") {
+					appLogger.error("dictation", "Refusing to save: the stored config could not be read");
+					return;
+				}
 				const config: DictationConfig = {
 					...stored,
 					enabled: partial.enabled ?? state.enabled,
@@ -250,6 +383,16 @@ function createDictationStore() {
 					long_press_ms: partial.long_press_ms ?? state.longPressMs,
 					auto_send: partial.auto_send ?? state.autoSend,
 					hands_free_notify_model: partial.hands_free_notify_model ?? state.notifyModelOnHandsFree,
+					// These three fall back to the *stored* value, not to store
+					// state. Their controls live in one panel, so a save from
+					// anywhere else runs with store state that was never loaded
+					// from disk — and the fallback would then write this
+					// session's default over a setting the user had chosen. The
+					// fields above are kept in sync by every surface that owns
+					// them, which is why they may read from state.
+					hands_free_hold_back_ms: partial.hands_free_hold_back_ms ?? stored.hands_free_hold_back_ms,
+					hands_free_activation_phrase: partial.hands_free_activation_phrase ?? stored.hands_free_activation_phrase,
+					speech_voice: partial.speech_voice ?? stored.speech_voice,
 					rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
 					no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
 				};
@@ -265,6 +408,11 @@ function createDictationStore() {
 				if (partial.auto_send !== undefined) storeUpdate.autoSend = partial.auto_send;
 				if (partial.hands_free_notify_model !== undefined)
 					storeUpdate.notifyModelOnHandsFree = partial.hands_free_notify_model;
+				if (partial.hands_free_hold_back_ms !== undefined)
+					storeUpdate.handsFreeHoldBackMs = partial.hands_free_hold_back_ms;
+				if (partial.hands_free_activation_phrase !== undefined)
+					storeUpdate.handsFreeActivationPhrase = partial.hands_free_activation_phrase;
+				if (partial.speech_voice !== undefined) storeUpdate.speechVoice = partial.speech_voice;
 				if (partial.rms_threshold !== undefined) storeUpdate.rmsThreshold = partial.rms_threshold;
 				if (partial.no_speech_threshold !== undefined) storeUpdate.noSpeechThreshold = partial.no_speech_threshold;
 				setState(storeUpdate);
@@ -291,6 +439,25 @@ function createDictationStore() {
 
 		setNotifyModelOnHandsFree(value: boolean): void {
 			actions.saveConfig({ hands_free_notify_model: value });
+		},
+
+		setHandsFreeHoldBackMs(value: number): void {
+			actions.saveConfig({ hands_free_hold_back_ms: value });
+		},
+
+		/**
+		 * Set the phrase that must open each hands-free turn.
+		 *
+		 * Trimmed here because the matching is Rust's and it compares words:
+		 * a phrase saved with a trailing space would be a phrase no utterance
+		 * ever opens with, and nothing on screen would say why.
+		 */
+		setHandsFreeActivationPhrase(value: string): void {
+			actions.saveConfig({ hands_free_activation_phrase: value.trim() });
+		},
+
+		setSpeechVoice(value: string): void {
+			actions.saveConfig({ speech_voice: value });
 		},
 
 		setAutoSend(value: boolean): void {
@@ -451,6 +618,146 @@ function createDictationStore() {
 				setState("audioLevel", 0);
 				setState("lastSkipReason", "transcription failed");
 				return null;
+			}
+		},
+
+		// --- Speech assets (818-2a29) ---------------------------------------
+
+		/** Load the speech catalogue and what state each entry is in. */
+		async refreshSpeechAssets(): Promise<void> {
+			try {
+				setState("speechAssets", await invoke<SpeechAsset[]>("get_speech_assets"));
+			} catch (err) {
+				appLogger.error("dictation", "Failed to list speech assets", err);
+			}
+		},
+
+		/**
+		 * Download one asset, then re-read the catalogue.
+		 *
+		 * The percent comes from the `speech-download-progress` event rather
+		 * than from here; this only marks the asset as started so the bar
+		 * appears before the first event, and clears it either way — a failed
+		 * download that left its last percent behind would read as one still
+		 * running.
+		 */
+		async downloadSpeechAsset(id: string): Promise<void> {
+			setState("speechDownloads", id, 0);
+			try {
+				await invoke<string>("download_speech_asset", { asset: id });
+			} catch (err) {
+				appLogger.error("dictation", `Speech asset download failed: ${id}`, err);
+			} finally {
+				// By key, not by returning a smaller object: a store update at
+				// a path merges, so a rest-spread that drops the key leaves it
+				// exactly where it was.
+				setState("speechDownloads", id, undefined);
+				await actions.refreshSpeechAssets();
+			}
+		},
+
+		/**
+		 * Ask Rust to stop a download.
+		 *
+		 * The bar is left alone: the download is still running until the
+		 * in-flight `downloadSpeechAsset` returns, and clearing it here would
+		 * show a finished download that is still writing to disk.
+		 */
+		async cancelSpeechDownload(id: string): Promise<void> {
+			try {
+				await invoke<string>("cancel_speech_download", { asset: id });
+			} catch (err) {
+				appLogger.error("dictation", `Failed to cancel download: ${id}`, err);
+			}
+		},
+
+		async deleteSpeechAsset(id: string): Promise<void> {
+			try {
+				await invoke<string>("delete_speech_asset", { asset: id });
+			} catch (err) {
+				appLogger.error("dictation", `Failed to delete speech asset: ${id}`, err);
+			}
+			await actions.refreshSpeechAssets();
+		},
+
+		// --- Hands-free conversation (818-2a29) -----------------------------
+
+		/**
+		 * Read the live hands-free state.
+		 *
+		 * Deliberately one call. The hotkey asks this on every press to find
+		 * out whether it is starting a recording or ending a conversation, and
+		 * the speaker state below is not part of that answer.
+		 */
+		async refreshHandsFree(): Promise<void> {
+			try {
+				setState("handsFree", await invoke<HandsFreeStatus>("get_hands_free_status"));
+			} catch (err) {
+				appLogger.error("dictation", "Failed to get hands-free status", err);
+			}
+		},
+
+		/** Read what the speaker is doing: queued, synthesising, playing. */
+		async refreshSpeechStatus(): Promise<void> {
+			try {
+				setState("speech", await invoke<SpeechStatus>("get_speech_status"));
+			} catch (err) {
+				appLogger.error("dictation", "Failed to get speech status", err);
+			}
+		},
+
+		/**
+		 * Bind hands-free to a terminal and open the microphone.
+		 *
+		 * Only ever from a user action — nothing here runs on mount, so a
+		 * restart never re-opens the microphone by itself.
+		 *
+		 * The owner is always the desktop endpoint: Rust refuses any other one
+		 * rather than opening the microphone on the machine running
+		 * TUICommander, so a browser tab gets the refusal verbatim instead of
+		 * silently arming somebody else's hardware.
+		 */
+		async armHandsFree(sessionId: string): Promise<boolean> {
+			setState("handsFreeError", null);
+			try {
+				setState(
+					"handsFree",
+					await invoke<HandsFreeStatus>("arm_hands_free_dictation", {
+						sessionId,
+						owner: DESKTOP_AUDIO_OWNER,
+					}),
+				);
+				await actions.refreshSpeechStatus();
+				return true;
+			} catch (err) {
+				setState("handsFreeError", String(err));
+				appLogger.error("dictation", "Failed to arm hands-free", err);
+				return false;
+			}
+		},
+
+		/**
+		 * Stop the conversation: the microphone, the pending transcript and
+		 * anything queued or being spoken.
+		 *
+		 * Reports what it could not take back. Voice entries the composer
+		 * already typed cannot be retracted, and saying so is the difference
+		 * between an honest outcome and a claim.
+		 */
+		async disarmHandsFree(): Promise<number[]> {
+			setState("handsFreeError", null);
+			try {
+				const result = await invoke<{
+					alreadyDelivered: number[];
+					status: HandsFreeStatus;
+				}>("disarm_hands_free_dictation");
+				setState("handsFree", result.status);
+				await actions.refreshSpeechStatus();
+				return result.alreadyDelivered;
+			} catch (err) {
+				setState("handsFreeError", String(err));
+				appLogger.error("dictation", "Failed to disarm hands-free", err);
+				return [];
 			}
 		},
 
