@@ -1197,11 +1197,16 @@ pub(crate) async fn terminal_get_selection_text(
     start_col: usize,
     end_row: usize,
     end_col: usize,
+    history_base: Option<usize>,
 ) -> Result<String, String> {
-    vt_read(&state, session_id, move |vt| {
-        vt.grid_get_selection_text(start_row, start_col, end_row, end_col)
+    match vt_try_read(&state, session_id, move |vt| {
+        vt.grid_get_selection_text(start_row, start_col, end_row, end_col, history_base)
     })
-    .await
+    .await?
+    {
+        Some(result) => result,
+        None => Ok(String::new()),
+    }
 }
 
 #[cfg(feature = "desktop")]

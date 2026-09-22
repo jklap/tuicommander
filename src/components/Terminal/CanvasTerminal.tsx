@@ -19,12 +19,22 @@ import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import { createCanvasLinkController } from "./canvasTerminalLinks";
 import { createCanvasScrollController, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
-import { createCanvasSearchController, createCanvasSelectionController } from "./canvasTerminalSelection";
+import {
+	commitSelectionCopy,
+	createCanvasSearchController,
+	createCanvasSelectionController,
+	selectionRowToGridRow,
+	selectionRowToViewport,
+	shouldValidateSelectionSnapshot,
+	viewportRowToSelectionRow,
+} from "./canvasTerminalSelection";
 import { installTouchHandlers } from "./canvasTerminalTouch";
 import { createTransport, type TerminalTransport, toBinaryPayload } from "./canvasTerminalTransport";
 import {
 	type CellMetrics,
 	type CursorShape,
+	cellText,
+	cellToTextOffset,
 	computeCursorRect,
 	createHiddenAckThrottle,
 	createLeadingThrottle,
@@ -36,10 +46,13 @@ import {
 	GUTTER_PX,
 	gridDimsForBox,
 	HIDDEN_ACK_INTERVAL_MS,
+	installFrameRows,
 	reconcileDelay,
 	rowText,
 	shouldFireReconcile,
 	snapLineHeight,
+	textSpanToCellRanges,
+	utf16SpanToCellRange,
 } from "./canvasTerminalUtils";
 import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
 import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } from "./glyphCache";
@@ -56,7 +69,7 @@ import {
 	shouldReportMouseUp,
 } from "./terminalInput";
 import { cssColorToRgb, publishTerminalPalette } from "./terminalPalette";
-import { retryUntilMeasured, SIZE_RETRY_MAX_FRAMES } from "./visibilityLifecycle";
+import { latestIntersectionVisibility, retryUntilMeasured, SIZE_RETRY_MAX_FRAMES } from "./visibilityLifecycle";
 
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame };
@@ -191,8 +204,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const ipcErr = (cmd: string) => (e: unknown) =>
 		appLogger.debug("terminal", `${cmd} failed`, { sessionId: props.sessionId, error: e });
 
-	// Selection state — row coordinates are absolute (viewportTop + viewportRow)
-	// so the highlight stays anchored to the original content when scrolling.
+	// Selection rows use eviction-stable indices (historyBase + grid-relative row)
+	// so output cannot alias a selected line onto its replacement at the scrollback cap.
 	const selection = createCanvasSelectionController();
 	let selectionScrollTimer: ReturnType<typeof setInterval> | null = null;
 	let selectionScrollDelta = 0;
@@ -261,6 +274,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let fullRepaintNeeded = true;
 	let hidden = false;
 	let lastHistorySize = -1;
+	let lastHistoryBase = -1;
+	let awaitingFullFrame = false;
 	// How many grid frames this transport has delivered. The ack echoes it so Rust
 	// can tell "the frontend caught up" from "a late ack for a frame the ticker
 	// already gave up on" — without an id, the second one reopened the gate and
@@ -386,7 +401,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function viewportRowToAbs(viewportRow: number): number | null {
 		if (!currentFrame) return null;
-		return currentFrame.historySize - currentFrame.displayOffset + viewportRow;
+		return viewportRowToSelectionRow(
+			{ ...currentFrame, screenRows: currentFrame.screenRows || lastResizeRows },
+			viewportRow,
+		);
 	}
 
 	/**
@@ -672,6 +690,25 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		return viewportRow;
 	}
 
+	function selectionAbsRowToViewport(absRow: number): number | null {
+		if (!currentFrame) return null;
+		const offset = overlayScrollOffset ?? currentFrame.displayOffset;
+		return selectionRowToViewport(
+			{ ...currentFrame, displayOffset: offset, screenRows: currentFrame.screenRows || lastResizeRows },
+			absRow,
+		);
+	}
+
+	function clearSelectionIfEvicted(frame: DecodedFrame): void {
+		if (
+			(selection.start && selectionRowToGridRow(frame, selection.start.row) === null) ||
+			(selection.end && selectionRowToGridRow(frame, selection.end.row) === null)
+		) {
+			selection.clear();
+			stopSelectionScroll();
+		}
+	}
+
 	function paintSearchHighlights(m: CellMetrics) {
 		if (search.matches.length === 0) return;
 		for (let i = 0; i < search.matches.length; i++) {
@@ -776,14 +813,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		octx.fillStyle = "rgba(58, 130, 220, 0.35)";
 
 		for (let absRi = absStartRow; absRi <= absEndRow; absRi++) {
-			const vpRow = absRowToViewport(absRi);
+			const vpRow = selectionAbsRowToViewport(absRi);
 			if (vpRow === null) continue;
-			// During a gesture rows come from the cache (keyed by the eviction-stable
-			// all-time index = historyBase + grid-relative abs); at rest from the live
-			// rowMap (keyed by viewport row). `absRi` is the grid-relative selection
-			// coordinate, so bridge it into the cache's space with historyBase.
-			const row =
-				overlayScrollOffset != null ? rowCache.get((currentFrame?.historyBase ?? 0) + absRi) : rowMap.get(vpRow);
+			// During a gesture both the selection and row cache use the same
+			// eviction-stable all-time row index. At rest rowMap is viewport-relative.
+			const row = overlayScrollOffset != null ? rowCache.get(absRi) : rowMap.get(vpRow);
 			if (!row) continue;
 			const y = vpRow * m.cellHeight;
 
@@ -807,7 +841,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function getLocalSelectionText(): string {
 		return selection.getLocalText((absRi) => {
-			const vpRow = absRowToViewport(absRi);
+			const vpRow = selectionAbsRowToViewport(absRi);
 			return vpRow !== null ? (rowMap.get(vpRow) ?? null) : null;
 		});
 	}
@@ -835,11 +869,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const col = frame.cursorCol;
 			if (row && col < row.count) {
 				const cp = row.codepoints[col];
-				if (cp !== 0 && cp !== 0x20) {
+				const glyph = cellText(row, col);
+				if (glyph !== "" && (cp !== 0x20 || row.cellExtras?.has(col))) {
 					const fontFamily = settingsStore.getFontFamily();
 					octx.font = gridRenderer.buildFontStyle(row.attrs[col], m.fontSize, fontFamily);
 					octx.fillStyle = cachedBgDefault;
-					octx.fillText(String.fromCodePoint(cp), rect.x, frame.cursorRow * m.cellHeight + m.baseline);
+					octx.fillText(glyph, rect.x, frame.cursorRow * m.cellHeight + m.baseline);
 				}
 			}
 		}
@@ -1245,7 +1280,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const buffer = toBinaryPayload(res);
 			if (!buffer) return;
 			const decoded = decodeStyledRange(buffer);
-			if (!decoded) return;
+			if (!decoded) {
+				// Leave the range uninstalled and release its request key so the next
+				// cache-band pass can fetch it again. A live full frame is the normal
+				// synchronization barrier and also guarantees another render pass.
+				requestedChunks.delete(chunk);
+				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+				return;
+			}
 			scroll.cacheRows(decoded.rows);
 			if (scroll.position != null) scheduleSmoothRender();
 		} catch (e) {
@@ -1414,8 +1456,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (timing) recordFrameTiming(props.sessionId, "decode", performance.now() - decodeT0);
 		if (!frame) {
 			// The only way to land here is a buffer shorter than the 26-byte header:
-			// truncated row data decodes into the rows that did survive. The backend
-			// never sends one, so this is a wire-format bug and must not be silent.
+			// declared row/trailer truncation returns an empty frame with
+			// needsFullFrame instead. The backend never sends an undersized header, so
+			// this is a wire-format bug and must not be silent.
 			// DEFERRED (2026-08-18) — no resync request on this path. The rows of a
 			// dropped frame are gone (damage was consumed backend-side), but asking
 			// for a full frame on a stream that is producing malformed buffers turns
@@ -1437,15 +1480,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// Grid decision: geom/scroll/full-replace/scroll-wait for the rowMap.
 		const decision = decideFrameGrid(
-			{ lastScreenRows, lastScreenCols, lastDisplayOffset, lastHistorySize, lastAltScreen },
+			{
+				lastScreenRows,
+				lastScreenCols,
+				lastDisplayOffset,
+				lastHistorySize,
+				lastHistoryBase,
+				lastAltScreen,
+				awaitingFullFrame,
+			},
 			frame,
 			lastResizeRows,
 		);
 		const { geomChanged, scrollChanged, screenChanged } = decision;
 
 		// A primary/alternate swap replaces the entire absolute-row universe. Reset
-		// every stateful consumer as one transaction, and never repaint the old smooth
-		// frame while adopting the new one.
+		// every stateful consumer as one transaction. A partial first frame cannot
+		// inherit either rows or interaction state from the previous screen era.
 		if (screenChanged) {
 			screenGeneration++;
 			resetSmoothScroll(false);
@@ -1469,22 +1520,55 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// When geometry changes, viewport is entirely different — must clear and repaint
 		if (geomChanged) {
 			selection.clear();
+			stopSelectionScroll();
 			rowMap.clear();
 			clearDetectedLinks();
 			fullRepaintNeeded = true;
 		}
 
+		if (decision.holdPreviousFrame) {
+			// Same-generation viewport shifts retain the last coherent frame until its
+			// replacement arrives. Screen-era and geometry changes are hard boundaries:
+			// keep currentFrame null so pointer/copy paths cannot act on stale coordinates.
+			if (screenChanged || geomChanged) {
+				currentFrame = null;
+				if (screenChanged) lastAltScreen = frame.altScreen;
+				if (geomChanged) {
+					lastScreenRows = frame.screenRows;
+					lastScreenCols = frame.screenCols;
+				}
+			}
+			awaitingFullFrame = true;
+			if (decision.requestFullFrame) {
+				const request = invokeRef?.("terminal_request_frame", { sessionId: props.sessionId });
+				if (!request) {
+					awaitingFullFrame = false;
+				} else {
+					request.catch((error) => {
+						// Keep the coherent frame, but let the next delta retry the pull.
+						awaitingFullFrame = false;
+						ipcErr("terminal_request_frame")(error);
+					});
+				}
+			}
+			return;
+		}
+		awaitingFullFrame = false;
+
 		if (scrollChanged || geomChanged || screenChanged) {
-			lastDisplayOffset = frame.displayOffset;
-			lastHistorySize = frame.historySize;
-			lastScreenRows = frame.screenRows;
-			lastScreenCols = frame.screenCols;
-			lastAltScreen = frame.altScreen;
 			if (hoveredLink) {
 				hoveredLink = null;
 				canvasRef.style.cursor = "text";
 			}
 		}
+		// These describe the merge origin for the next frame even when history and
+		// display offset advanced together and left the visible all-time top stable.
+		lastDisplayOffset = frame.displayOffset;
+		lastHistorySize = frame.historySize;
+		lastHistoryBase = frame.historyBase;
+		lastScreenRows = frame.screenRows;
+		lastScreenCols = frame.screenCols;
+		lastAltScreen = frame.altScreen;
 
 		// [dup] desync detector (perfDebug): if this full frame is the one pulled by a
 		// reconcile at rest (no scroll/geom change), snapshot the partial-accumulated
@@ -1500,24 +1584,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// When backend sends all screen rows, replace rowMap to discard stale entries
 		if (decision.fullReplace) {
 			reconcileHealPending = false;
-			rowMap.clear();
 			clearDetectedLinks();
 
 			fullRepaintNeeded = true;
-		} else if (decision.scrollWait) {
-			// Scroll changed but only partial rows arrived. Old rowMap entries are keyed
-			// to the previous viewportTop — rendering them with the new displayOffset maps
-			// them to wrong screen positions, producing ghost content.
-			// Clear immediately (brief blank < ~5ms) and request a full frame.
-			rowMap.clear();
-			clearDetectedLinks();
-			fullRepaintNeeded = true;
-			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
-			currentFrame = frame;
-			return;
 		}
+		installFrameRows(rowMap, frame, decision);
 		for (const row of frame.rows) {
-			rowMap.set(row.index, row);
 			pendingDirtyRows.add(row.index);
 			scanRowForLinks(row.index);
 		}
@@ -1569,6 +1641,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		currentFrame = frame;
+		clearSelectionIfEvicted(frame);
 
 		// Re-anchor the soft-keyboard lift to the new cursor row (touch + keyboard
 		// open only; a cheap no-op otherwise). currentFrame is a plain ref, so the
@@ -1614,12 +1687,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// Only compare content when the selection is fully on-screen — off-screen rows return empty
 		// strings from getLocalSelectionText() causing spurious mismatches that clear the selection.
-		if (
-			selection.start &&
-			selection.cachedText &&
-			decision.fullReplace &&
-			!selection.spansOffscreen(absRowToViewport)
-		) {
+		if (shouldValidateSelectionSnapshot(selection, decision.fullReplace, selectionAbsRowToViewport)) {
 			const nowText = getLocalSelectionText();
 			if (nowText !== selection.cachedText) selection.clear();
 		}
@@ -1638,6 +1706,33 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const FILE_LINK_RECHECK_MS = 3_000;
 	const FILE_LINK_CACHE_MAX = 500;
 
+	const rowStringSpanToCells = (rowIndex: number, start: number, end: number): [number, number] | null => {
+		const row = rowMap.get(rowIndex);
+		return row ? utf16SpanToCellRange(row, start, end) : null;
+	};
+
+	const logicalRows = (startRow: number): { index: number; row: DecodedRow }[] => {
+		const rows: { index: number; row: DecodedRow }[] = [];
+		for (let rowIndex = startRow; ; rowIndex++) {
+			const row = rowMap.get(rowIndex);
+			if (!row) return [];
+			rows.push({ index: rowIndex, row });
+			if (!row.wrapped) return rows;
+		}
+	};
+
+	const logicalStringSpanToCells = (
+		startRow: number,
+		text: string,
+		start: number,
+		end: number,
+	): { row: number; colStart: number; colEnd: number }[] => {
+		return textSpanToCellRanges(logicalRows(startRow), text, start, end) ?? [];
+	};
+
+	const logicalCellToStringOffset = (startRow: number, text: string, rowIndex: number, col: number): number | null =>
+		cellToTextOffset(logicalRows(startRow), text, rowIndex, col);
+
 	function scanRowForLinks(rowIndex: number) {
 		const row = rowMap.get(rowIndex);
 		if (!row) {
@@ -1648,7 +1743,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const spans: { colStart: number; colEnd: number }[] = [];
 
 		for (const url of matchWebUrls(text)) {
-			spans.push({ colStart: url.index, colEnd: url.index + url.text.length });
+			const cells = rowStringSpanToCells(rowIndex, url.index, url.index + url.text.length);
+			if (cells) spans.push({ colStart: cells[0], colEnd: cells[1] });
 		}
 
 		// File paths: only underline if previously verified to exist
@@ -1676,7 +1772,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!ref || !alive) return;
 		const generation = screenGeneration;
 		const maxRow = currentFrame?.screenRows || lastResizeRows;
-		const cols = lastScreenCols > 0 ? lastScreenCols : currentFrame?.screenCols || 80;
 		const now = Date.now();
 		const toCheck: { text: string; candidates: { colStart: number; colEnd: number; raw: string }[] }[] = [];
 
@@ -1696,11 +1791,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			let m: RegExpExecArray | null;
 			while ((m = FILE_PATH_RE.exec(text)) !== null) {
 				const idx = text.indexOf(m[1], m.index);
-				candidates.push({ colStart: idx, colEnd: idx + m[1].length, raw: m[1] });
+				const cells = rowStringSpanToCells(i, idx, idx + m[1].length);
+				if (cells) candidates.push({ colStart: cells[0], colEnd: cells[1], raw: m[1] });
 			}
 			FILE_URL_RE.lastIndex = 0;
 			while ((m = FILE_URL_RE.exec(text)) !== null) {
-				candidates.push({ colStart: m.index, colEnd: m.index + m[0].length, raw: m[1] });
+				const cells = rowStringSpanToCells(i, m.index, m.index + m[0].length);
+				if (cells) candidates.push({ colStart: cells[0], colEnd: cells[1], raw: m[1] });
 			}
 			if (candidates.length > 0) toCheck.push({ text, candidates });
 		}
@@ -1750,20 +1847,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// so they survive the per-frame rebuild). Rebuilt fresh each pass.
 		wrappedLinkSpans.clear();
 		// Record a match's per-row spans into wrappedLinkSpans.
-		const recordWrappedSpans = (startRow: number, matchIndex: number, matchEnd: number) => {
-			for (let offset = matchIndex; offset < matchEnd; ) {
-				const spanRow = startRow + Math.floor(offset / cols);
-				const spanColStart = offset % cols;
-				const remaining = matchEnd - offset;
-				const spanColEnd = Math.min(spanColStart + remaining, cols);
-				const existing = wrappedLinkSpans.get(spanRow) || [];
-				existing.push({ colStart: spanColStart, colEnd: spanColEnd });
-				wrappedLinkSpans.set(spanRow, existing);
-				offset += spanColEnd - spanColStart;
+		const recordWrappedSpans = (startRow: number, text: string, matchIndex: number, matchEnd: number) => {
+			for (const span of logicalStringSpanToCells(startRow, text, matchIndex, matchEnd)) {
+				const existing = wrappedLinkSpans.get(span.row) || [];
+				existing.push({ colStart: span.colStart, colEnd: span.colEnd });
+				wrappedLinkSpans.set(span.row, existing);
 			}
 		};
-		const spansMultipleRows = (matchIndex: number, matchEnd: number) =>
-			Math.floor(matchIndex / cols) !== Math.floor((matchEnd - 1) / cols);
+		const spansMultipleRows = (startRow: number, text: string, matchIndex: number, matchEnd: number) =>
+			logicalStringSpanToCells(startRow, text, matchIndex, matchEnd).length > 1;
 
 		// Candidate rows: full-width rows that might be part of a soft-wrapped
 		// web/file:// URL. Collected up front (no IPC) so every logical-line
@@ -1773,7 +1865,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const row = rowMap.get(i);
 			if (!row) continue;
 			const text = rowToText(row);
-			if (text.length < cols) continue; // not full-width, not wrapped
+			if (!row.wrapped) continue;
 			if (!text.includes("file://") && !/https?:\/\//.test(text)) continue;
 			wrapCandidateRows.push(i);
 		}
@@ -1800,7 +1892,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const checkedLogicalStarts = new Set<number>();
 			// file:// candidates across every logical line, resolved in ONE call —
 			// the same batching the single-row pass above already does.
-			const fileCandidates: { startRow: number; index: number; matchEnd: number; raw: string }[] = [];
+			const fileCandidates: { startRow: number; logicalText: string; index: number; matchEnd: number; raw: string }[] =
+				[];
 
 			for (const result of logicalLines) {
 				if (!result) continue;
@@ -1814,8 +1907,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				// Web URLs — no path resolution needed.
 				for (const url of matchWebUrls(logicalText)) {
 					const matchEnd = url.index + url.text.length;
-					if (!spansMultipleRows(url.index, matchEnd)) continue;
-					recordWrappedSpans(startRow, url.index, matchEnd);
+					if (!spansMultipleRows(startRow, logicalText, url.index, matchEnd)) continue;
+					recordWrappedSpans(startRow, logicalText, url.index, matchEnd);
 					anyFound = true;
 				}
 
@@ -1824,8 +1917,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				let m: RegExpExecArray | null;
 				while ((m = FILE_URL_RE.exec(logicalText)) !== null) {
 					const matchEnd = m.index + m[0].length;
-					if (!spansMultipleRows(m.index, matchEnd)) continue;
-					fileCandidates.push({ startRow, index: m.index, matchEnd, raw: m[1] });
+					if (!spansMultipleRows(startRow, logicalText, m.index, matchEnd)) continue;
+					fileCandidates.push({ startRow, logicalText, index: m.index, matchEnd, raw: m[1] });
 				}
 			}
 
@@ -1846,7 +1939,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (!alive || generation !== screenGeneration) return;
 				fileCandidates.forEach((c, idx) => {
 					if (resolved[idx]) {
-						recordWrappedSpans(c.startRow, c.index, c.matchEnd);
+						recordWrappedSpans(c.startRow, c.logicalText, c.index, c.matchEnd);
 						anyFound = true;
 					}
 				});
@@ -1999,12 +2092,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		hoveredLink = null;
+		const decodedRow = rowMap.get(row);
 		if (links) {
 			for (const link of links) {
 				const start = link.index ?? 0;
 				const end = start + link.text.length;
-				if (col >= start && col < end) {
-					hoveredLink = { row, colStart: start, colEnd: end, path: link.path, line: link.line, col: link.col };
+				const cells = decodedRow
+					? textSpanToCellRanges([{ index: row, row: decodedRow }], rowText, start, end)?.[0]
+					: null;
+				if (cells && col >= cells.colStart && col < cells.colEnd) {
+					hoveredLink = {
+						row,
+						colStart: cells.colStart,
+						colEnd: cells.colEnd,
+						path: link.path,
+						line: link.line,
+						col: link.col,
+					};
 					break;
 				}
 			}
@@ -2024,9 +2128,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				})) as [number, string];
 				if (!alive || !linkController.isCurrent(gen)) return;
 				if (startRow !== row || logicalText !== rowText || rowHasEdgeUrl) {
-					const cols = lastScreenCols > 0 ? lastScreenCols : currentFrame?.screenCols || 80;
-					const colOffset = (row - startRow) * cols;
-					const logicalCol = colOffset + col;
+					const logicalOffset = logicalCellToStringOffset(startRow, logicalText, row, col);
 					const fuRe = FILE_URL_RE;
 					const fpRe = FILE_PATH_RE;
 					const logicalMatches: { text: string; candidate: string; index: number; isUrl: boolean }[] = [];
@@ -2047,7 +2149,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 					for (const lm of logicalMatches) {
 						const matchEnd = lm.index + lm.text.length;
-						if (logicalCol >= lm.index && logicalCol < matchEnd) {
+						if (logicalOffset !== null && logicalOffset >= lm.index && logicalOffset < matchEnd) {
 							let resolvedPath = lm.candidate;
 							if (!lm.isUrl) {
 								const termId = terminalsStore.getTerminalForSession(props.sessionId);
@@ -2061,16 +2163,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 								if (!r) break;
 								resolvedPath = r.absolute_path;
 							}
-							// Build multi-row spans
-							const spans: { row: number; colStart: number; colEnd: number }[] = [];
-							for (let offset = lm.index; offset < matchEnd; ) {
-								const spanRow = startRow + Math.floor(offset / cols);
-								const spanColStart = offset % cols;
-								const remaining = matchEnd - offset;
-								const spanColEnd = Math.min(spanColStart + remaining, cols);
-								spans.push({ row: spanRow, colStart: spanColStart, colEnd: spanColEnd });
-								offset += spanColEnd - spanColStart;
-							}
+							const spans = logicalStringSpanToCells(startRow, logicalText, lm.index, matchEnd);
+							if (spans.length === 0) break;
 							const firstSpan = spans[0];
 							hoveredLink = {
 								row: firstSpan.row,
@@ -2194,9 +2288,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Flow control: ack on a trailing timer when hidden, request full frame on show
 		visibilityObserver = new IntersectionObserver(
 			(entries) => {
-				const isVisible = entries[0]?.isIntersecting ?? false;
+				const isVisible = latestIntersectionVisibility(entries);
 				if (isVisible && hidden) {
 					hidden = false;
+					awaitingFullFrame = false;
 					// Back to full rate: clear the gate now instead of waiting out the
 					// hidden interval, so the frame requested below is not queued behind it.
 					hiddenAck.cancel();
@@ -2450,6 +2545,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				clearDetectedLinks();
 				fullRepaintNeeded = true;
 				currentFrame = null;
+				awaitingFullFrame = false;
 				lastDisplayOffset = -1;
 				remeasure();
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
@@ -2686,6 +2782,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const pos = canvasToGrid(e);
 			const absRow = viewportRowToAbs(pos.row);
 			if (absRow === null) return;
+			// cachedText belongs to the last completed/copied range. A new gesture
+			// must not compare its evolving range against that previous snapshot.
+			selection.invalidateSnapshot();
 
 			// Gutter click: select entire block output
 			{
@@ -2693,14 +2792,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const rawX = e.clientX - rect.left;
 				if (rawX < GUTTER_PX) {
 					const term = terminalsStore.get(props.terminalId);
-					if (term) {
+					const historyBase = currentFrame?.historyBase;
+					const gridRow = currentFrame ? selectionRowToGridRow(currentFrame, absRow) : null;
+					if (term && historyBase !== undefined && gridRow !== null) {
 						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
 							Boolean,
 						) as import("../../stores/terminals").CommandBlock[];
-						const block = allBlocks.find((b) => b.promptLine <= absRow && (b.endLine ?? Infinity) >= absRow);
+						const block = allBlocks.find((b) => b.promptLine <= gridRow && (b.endLine ?? Infinity) >= gridRow);
 						if (block) {
-							const startRow = (block.executionLine ?? block.promptLine) + 1;
-							const endRow = (block.endLine ?? absRow) - 1;
+							const startRow = historyBase + (block.executionLine ?? block.promptLine) + 1;
+							const endRow = historyBase + (block.endLine ?? gridRow) - 1;
 							if (endRow >= startRow) {
 								selection.start = { row: startRow, col: 0 };
 								selection.end = { row: endRow, col: lastResizeCols - 1 };
@@ -2736,14 +2837,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			lastClickTime = now;
 
 			if (clickCount === 2) {
-				const vpRow = absRowToViewport(absRow);
+				const vpRow = selectionAbsRowToViewport(absRow);
 				const row = vpRow !== null ? rowMap.get(vpRow) : null;
 				if (row) {
 					const isWordChar = (col: number) => {
 						if (col < 0 || col >= row.count) return false;
-						const cp = row.codepoints[col];
-						if (cp === 0 || cp === 32) return false;
-						const ch = String.fromCodePoint(cp);
+						const ch = cellText(row, col);
+						if (ch === "" || /^\s+$/.test(ch)) return false;
 						return !/[\s\t\x00-\x1f\x7f "'`(){}[\]<>|;:,.!?@#$%^&*~=+/\\]/.test(ch);
 					};
 					let left = pos.col;
@@ -3066,6 +3166,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// count has to start from zero with it.
 			hiddenAck.cancel();
 			framesReceived = 0;
+			awaitingFullFrame = false;
 			await transport.subscribe((data) => onFrame(data));
 			if (!alive) {
 				// Unmounted while subscribe() was in flight. onCleanup already ran and
@@ -3100,6 +3201,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				clearDetectedLinks();
 				fullRepaintNeeded = true;
 				currentFrame = null;
+				awaitingFullFrame = false;
 				lastDisplayOffset = -1;
 				lastResizeCols = 0;
 				lastResizeRows = 0;
@@ -3111,6 +3213,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				// against the fresh gate Rust installs on resubscribe.
 				hiddenAck.cancel();
 				framesReceived = 0;
+				awaitingFullFrame = false;
 				await transport?.resubscribe();
 			},
 			searchFind: async (query: string, blockScope?: boolean) => {
@@ -3213,31 +3316,50 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			| ((msg: string) => void)
 			| undefined;
 		try {
-			let text: string;
-			// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
-			// WRAPLINE flag (grid_get_selection_text), so copying a line the terminal merely
-			// wrapped for width doesn't insert a spurious newline. The JS fallback below has
-			// no wrap info (see getLocalSelectionText DEFERRED) and only runs when invoke or
-			// the selection coords are unavailable.
-			if (invokeRef && selection.start && selection.end) {
-				text = (await invokeRef("terminal_get_selection_text", {
-					sessionId: props.sessionId,
-					startRow: selection.start.row,
-					startCol: selection.start.col,
-					endRow: selection.end.row,
-					endCol: selection.end.col,
-				})) as string;
-				// Fall back to the local read if the IPC path yields nothing (transient error,
-				// grid not ready). Loses wrap-unwrapping, but a wrapped copy beats a silent
-				// no-op — the onscreen path could always satisfy a copy before this routing.
-				if (!text) text = getLocalSelectionText();
-			} else {
-				text = getLocalSelectionText();
-			}
-			if (text) {
-				selection.cachedText = text;
-				await writeClipboard(text);
+			const result = await commitSelectionCopy(
+				async () => {
+					// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
+					// WRAPLINE flag. The snapshot base lets Rust rebase the grid-relative rows
+					// under the same lock that reads them, so eviction cannot alias replacements.
+					const startRow =
+						currentFrame && selection.start ? selectionRowToGridRow(currentFrame, selection.start.row) : null;
+					const endRow = currentFrame && selection.end ? selectionRowToGridRow(currentFrame, selection.end.row) : null;
+					const historyBase = currentFrame?.historyBase;
+					if (
+						invokeRef &&
+						selection.start &&
+						selection.end &&
+						startRow !== null &&
+						endRow !== null &&
+						historyBase !== undefined
+					) {
+						const text = (await invokeRef("terminal_get_selection_text", {
+							sessionId: props.sessionId,
+							startRow,
+							startCol: selection.start.col,
+							endRow,
+							endCol: selection.end.col,
+							historyBase,
+						})) as string;
+						// Legacy/empty response fallback; an eviction rejection throws and is
+						// deliberately handled without a local or cached copy below.
+						return text || getLocalSelectionText();
+					}
+					return selection.cachedText || getLocalSelectionText();
+				},
+				async (text) => {
+					selection.cachedText = text;
+					await writeClipboard(text);
+				},
+			);
+			if (result.kind === "copied") {
 				setStatus?.("Copied to clipboard");
+			} else if (result.kind === "expired") {
+				selection.clear();
+				stopSelectionScroll();
+				const m = metrics();
+				if (currentFrame && m) repaintOverlay(currentFrame, m);
+				setStatus?.("Selection expired — text left scrollback");
 			}
 		} catch (e) {
 			appLogger.warn("terminal", "Clipboard write failed", { error: e });

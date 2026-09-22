@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { ATTR_BOLD, ATTR_DEFAULT_BG, ATTR_DEFAULT_FG, ATTR_INVERSE, ATTR_ITALIC } from "../canvasTerminalUtils";
+import {
+	ATTR_BOLD,
+	ATTR_DEFAULT_BG,
+	ATTR_DEFAULT_FG,
+	ATTR_INVERSE,
+	ATTR_ITALIC,
+	type CellMetrics,
+	type DecodedRow,
+} from "../canvasTerminalUtils";
 import { createGridRenderer } from "../gridRenderer";
 
 // resolveFg/resolveBg/buildFontStyle never touch the 2D context, so a stub ctx
@@ -84,5 +92,48 @@ describe("gridRenderer font style", () => {
 	it("prefixes italic for italic cells", () => {
 		const gr = makeRenderer(400);
 		expect(gr.buildFontStyle(ATTR_ITALIC, 16, "Hack")).toBe("italic 400 16px Hack");
+	});
+});
+
+describe("gridRenderer multi-codepoint cells", () => {
+	const metrics: CellMetrics = {
+		cellWidth: 8,
+		cellHeight: 16,
+		baseline: 12,
+		fontSize: 14,
+		dpr: 1,
+		scaledCellWidth: 8,
+		scaledCellHeight: 16,
+	};
+
+	function paint(codepoint: number, extras: string) {
+		const fillText = vi.fn();
+		const ctx = { fillText, globalAlpha: 1 } as unknown as CanvasRenderingContext2D;
+		const renderer = createGridRenderer(ctx, { fontWeight: () => 400, getFontFamily: () => "monospace" });
+		renderer.setTheme(DEF_BG, DEF_FG);
+		const row: DecodedRow = {
+			index: 0,
+			count: 1,
+			wrapped: false,
+			codepoints: Uint32Array.of(codepoint),
+			cellExtras: new Map([[0, extras]]),
+			fg: new Uint32Array(1),
+			bg: new Uint32Array(1),
+			attrs: Uint8Array.of(ATTR_DEFAULT_BG | ATTR_DEFAULT_FG),
+		};
+		renderer.paintRow(row, 0, metrics);
+		return fillText;
+	}
+
+	it("shapes a decomposed accent as one font glyph string", () => {
+		expect(paint(0x65, "\u0301")).toHaveBeenCalledWith("e\u0301", 0, 12);
+	});
+
+	it("routes marked box-drawing cells through font shaping", () => {
+		expect(paint(0x2500, "\u0301")).toHaveBeenCalledWith("─\u0301", 0, 12);
+	});
+
+	it("preserves an explicit emoji variation selector", () => {
+		expect(paint(0x25cf, "\uFE0F")).toHaveBeenCalledWith("●\uFE0F", 0, 12);
 	});
 });

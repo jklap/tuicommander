@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	latestIntersectionVisibility,
 	needsGridResubscribe,
 	REATTACH_PHASE_INITIAL,
 	type ReattachPhase,
@@ -8,6 +9,30 @@ import {
 	SIZE_RETRY_MAX_FRAMES,
 	stepReattachPhase,
 } from "../../../components/Terminal/visibilityLifecycle";
+
+describe("latestIntersectionVisibility", () => {
+	it("uses the final state after a resize queues hidden and visible crossings together", () => {
+		expect(
+			latestIntersectionVisibility([
+				{ isIntersecting: false, time: 10 },
+				{ isIntersecting: true, time: 11 },
+			]),
+		).toBe(true);
+	});
+
+	it("uses entry time rather than assuming callback entries are already ordered", () => {
+		expect(
+			latestIntersectionVisibility([
+				{ isIntersecting: true, time: 11 },
+				{ isIntersecting: false, time: 10 },
+			]),
+		).toBe(true);
+	});
+
+	it("treats an empty delivery as hidden", () => {
+		expect(latestIntersectionVisibility([])).toBe(false);
+	});
+});
 
 /**
  * A hand-driven `requestAnimationFrame`. The real one never fires in happy-dom,
