@@ -543,6 +543,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Barge-in — WebRTC AEC3 (`echo.rs`) keeps our own reply out of the segmenter; the user talking stops playback and opens the next turn (measured: 50 ms stop latency, 0 false triggers)
 
 ### Completed (P2)
+- [x] Agent toast repository action — a toast from a different registered repository offers a keyboard-reachable action that selects its origin and focuses the still-live originating session; the action is absent for the active repository and for removed repositories (#835-314c)
 - [x] Alternate-screen scrollback — isolated bounded history for fullscreen apps, primary-only durable logs, and atomic renderer-generation transitions
 - [x] Task completion detection
 - [x] Audio notification when agent awaits input

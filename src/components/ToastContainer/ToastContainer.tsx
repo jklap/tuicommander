@@ -39,6 +39,26 @@ function toastRepoName(toast: Toast): string | null {
 	return repoPath ? pathBasename(repoPath) : null;
 }
 
+function toastRepoAction(toast: Toast): { label: string; onClick: () => void } | null {
+	const repoPath = toast.repoPath;
+	if (!repoPath || repoPath === repositoriesStore.state.activeRepoPath || !repositoriesStore.get(repoPath)) {
+		return null;
+	}
+
+	return {
+		label: "Go to repo",
+		onClick: () => {
+			// The repository can disappear while the toast is visible. Re-check at
+			// activation time so the button never selects a stale path.
+			if (!repositoriesStore.get(repoPath)) return;
+			repositoriesStore.setActive(repoPath);
+			if (!toast.sessionId) return;
+			const terminalId = terminalsStore.findBySessionId(toast.sessionId);
+			if (terminalId) navigateToTerminal(terminalId);
+		},
+	};
+}
+
 export const ToastContainer: Component = () => {
-	return <ToastList onDismiss={dismissAndReveal} repoName={toastRepoName} />;
+	return <ToastList onDismiss={dismissAndReveal} repoName={toastRepoName} repoAction={toastRepoAction} />;
 };
