@@ -35,6 +35,20 @@ const mockStore = vi.hoisted(() => ({
 		audioLevel: 0,
 		partialText: "",
 		lastSkipReason: null as string | null,
+		// The spoken-reply and hands-free half of the store. The panel reads
+		// these unconditionally — `languageAsset()` calls `.find` on
+		// `speechAssets` while deciding what to render — so leaving them out
+		// does not merely skip those sections, it throws before the model list
+		// this file is about is ever drawn.
+		notifyModelOnHandsFree: true,
+		handsFreeHoldBackMs: 1500,
+		handsFreeActivationPhrase: "",
+		speechVoice: "",
+		speechAssets: [] as unknown[],
+		speechDownloads: {} as Record<string, number | undefined>,
+		handsFree: null as unknown,
+		handsFreeError: null as string | null,
+		speech: null as unknown,
 	},
 	refreshConfig: vi.fn(),
 	refreshStatus: vi.fn(),
@@ -58,6 +72,18 @@ const mockStore = vi.hoisted(() => ({
 	setAutoSend: vi.fn(),
 	setRmsThreshold: vi.fn(),
 	setNoSpeechThreshold: vi.fn(),
+	refreshSpeechAssets: vi.fn(),
+	refreshSpeechStatus: vi.fn(),
+	downloadSpeechAsset: vi.fn(),
+	cancelSpeechDownload: vi.fn(),
+	deleteSpeechAsset: vi.fn(),
+	setSpeechVoice: vi.fn(),
+	refreshHandsFree: vi.fn(),
+	armHandsFree: vi.fn(),
+	disarmHandsFree: vi.fn(),
+	setHandsFreeHoldBackMs: vi.fn(),
+	setHandsFreeActivationPhrase: vi.fn(),
+	setNotifyModelOnHandsFree: vi.fn(),
 }));
 
 vi.mock("../../stores/dictation", () => ({
