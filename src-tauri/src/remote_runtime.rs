@@ -41,6 +41,28 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TUNNEL_POLL: Duration = Duration::from_millis(250);
 
+/// First wait after a connect attempt that failed, and the ceiling it doubles
+/// towards. The floor is not zero on purpose: a machine that is off answers its
+/// TCP connect instantly with a refusal, so a retry with no floor is a hot loop
+/// wearing a backoff's clothes.
+const RETRY_BACKOFF_MIN: Duration = Duration::from_secs(2);
+const RETRY_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// Fraction of the current backoff spread randomly across each wait.
+///
+/// Without it, N machines registered against one laptop all fail at the same
+/// suspend and then retry in lockstep for as long as they stay down — the
+/// thundering herd is self-inflicted and costs nothing to avoid.
+const RETRY_JITTER: f64 = 0.25;
+/// How often a supervisor re-reads a status somebody else is moving.
+///
+/// Short because it is the gap between an explicit connect settling and the
+/// supervisor taking over, and it costs one in-memory read of a status it
+/// already holds — never a request. A handshake over SSH can take
+/// [`TUNNEL_CONNECT_TIMEOUT`], so a heartbeat-sized wait here would be a
+/// two-minute hole in the retry schedule for a machine that failed at second
+/// one.
+const CONNECTING_POLL: Duration = Duration::from_millis(250);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -94,7 +116,12 @@ struct Entry {
     protocol_version: Option<u64>,
     error: Option<String>,
     tunnel_id: Option<String>,
-    poll: Option<tokio::task::JoinHandle<()>>,
+    /// The task that owns this connection's whole lifecycle: bring it up, keep
+    /// it up, retry while it is down. Its presence IS the desired state — there
+    /// is deliberately no second `wanted_up` flag to fall out of sync with it,
+    /// because `teardown` removes the entry and a connection absent from the map
+    /// is one nobody asked for.
+    supervisor: Option<tokio::task::JoinHandle<()>>,
     /// The task that mirrors this daemon's sessions and events (#791-055e).
     mirror: Option<tokio::task::JoinHandle<()>>,
 }
@@ -128,6 +155,27 @@ impl Entry {
 /// happening, not what is configured. `connections.json` is the list.
 pub(crate) struct RemoteRuntime {
     entries: DashMap<String, Entry>,
+    /// Bumped by [`teardown`], read by every supervisor.
+    ///
+    /// `teardown` removes the entry and aborts, but an abort only lands at the
+    /// task's next await — and a supervisor sitting inside `connect_inner` has
+    /// several, after which `claim_for_connect` inserts the entry again. Without
+    /// this the window is small and the consequence is not: an explicit
+    /// Disconnect silently undone a moment later by the task that was supposed
+    /// to have stopped. A supervisor holding a stale generation cleans up after
+    /// itself and returns instead.
+    generations: DashMap<String, u64>,
+    /// Serialises the two operations that decide whether an entry EXISTS:
+    /// [`claim_and_supervise`] inserting one and [`teardown`] removing one.
+    ///
+    /// DashMap's per-entry lock cannot do this, because the two read and write
+    /// different maps: `teardown` bumps the generation and then removes the
+    /// entry, while a claim reads the generation and then inserts one. Ordered
+    /// `bump, remove, read, insert` the claim is refused; interleaved
+    /// `read, bump, remove, insert` it is not, and the entry the user asked to
+    /// remove is back. One mutex over both steps is the whole fix. Nothing
+    /// awaits while holding it, so it can be a plain `std::sync::Mutex`.
+    lifecycle: std::sync::Mutex<()>,
     /// One client for every probe, seed and event stream this module makes.
     ///
     /// A `reqwest::Client` owns the connection pool; building one per call threw
@@ -140,6 +188,8 @@ impl Default for RemoteRuntime {
     fn default() -> Self {
         Self {
             entries: DashMap::new(),
+            generations: DashMap::new(),
+            lifecycle: std::sync::Mutex::new(()),
             // No client-wide timeout on purpose: the probes set their own, and
             // the mirror's `/events` stream is long-lived by design — a deadline
             // here would cut it every time it succeeded.
@@ -189,6 +239,44 @@ impl RemoteRuntime {
     /// reason as [`probe_base_url`](Self::probe_base_url).
     fn probe_token(&self, id: &str) -> Option<String> {
         self.entries.get(id).and_then(|e| e.token.clone())
+    }
+
+    /// The generation a supervisor spawned now belongs to.
+    fn generation(&self, id: &str) -> u64 {
+        self.generations.get(id).map(|g| *g).unwrap_or(0)
+    }
+
+    /// Retire every supervisor currently running for `id`.
+    fn retire_generation(&self, id: &str) {
+        *self.generations.entry(id.to_string()).or_default() += 1;
+    }
+
+    /// The guard over "does this entry exist", held by the three places that
+    /// decide it. See the [`lifecycle`](Self::lifecycle) field.
+    ///
+    /// A poisoned mutex is recovered rather than propagated: it guards the
+    /// ordering of two map operations, not an invariant a panic could have left
+    /// half-written, and refusing to manage connections for the rest of the
+    /// process is a worse answer than carrying on.
+    fn lifecycle(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lifecycle.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Take back an entry that a retired supervisor put here after its
+    /// `teardown`, and only that.
+    ///
+    /// The predicate is the whole point. Every legitimate owner installs its
+    /// supervisor handle under the [`lifecycle`](Self::lifecycle) lock, in the
+    /// same critical section that creates the entry, so an entry carrying no
+    /// handle cannot belong to anyone: it is the husk an aborted handshake left
+    /// behind when its `update` re-created what `teardown` had just removed. An
+    /// entry that does carry one belongs to a Connect that arrived after the
+    /// teardown, and is not the retired task's to remove.
+    fn discard_unowned(&self, id: &str) -> Option<Entry> {
+        let _lifecycle = self.lifecycle();
+        self.entries
+            .remove_if(id, |_, e| e.supervisor.is_none())
+            .map(|(_, entry)| entry)
     }
 
     fn status_of(&self, id: &str) -> RemoteStatus {
@@ -427,11 +515,34 @@ impl ConnectFailure {
 }
 
 /// Bring a connection up: resolve where it answers, prove it is reachable,
-/// authenticate, then start the status poll and the mirror.
+/// authenticate, then start the mirror.
 ///
 /// Idempotent while in flight: a second call on a connecting or connected
 /// connection is a no-op, so a double click cannot open two tunnels.
+///
+/// The caller gets the outcome of THIS attempt, which is what a person pressing
+/// Connect is owed — but the attempt is not the whole story. A
+/// [`spawn_supervisor`] is left running either way, so a failure returned here
+/// is one the app will keep working on by itself rather than a final answer.
+///
+/// **The claim is taken before the supervisor exists, and that ordering is the
+/// contract.** Spawned first, the supervisor's own loop woke on `Disconnected`,
+/// won the claim, and did the connecting — leaving this function to find a
+/// `Connecting` connection and return `Ok(())` for an attempt it never made. A
+/// person pressing Connect on a machine that is off then saw success. With the
+/// claim held first the supervisor sees `Connecting` and parks, which is what
+/// its `Connecting` arm is for.
 pub(crate) async fn connect(state: &Arc<AppState>, id: &str) -> Result<(), String> {
+    // Resolved here as well as in `attempt`, so an id that is not configured is
+    // an error for the caller rather than a supervisor spawned for nothing.
+    let connection = load_connection(state, id)?;
+    let generation = state.remote.generation(id);
+    let Some(connecting) = claim_and_supervise(state, id, generation) else {
+        // Someone already owns this: a double click, or a supervisor mid-retry.
+        // It is up or on its way, and a second tunnel is exactly what the claim
+        // exists to prevent.
+        return Ok(());
+    };
     // Run on its own task, so a caller that goes away cannot stop this halfway.
     //
     // `POST /config/remote-connections/{id}/connect` is awaited inside an axum
@@ -443,7 +554,11 @@ pub(crate) async fn connect(state: &Arc<AppState>, id: &str) -> Result<(), Strin
     // be brought up again without restarting the app.
     let state = Arc::clone(state);
     let id = id.to_string();
-    match tokio::spawn(async move { connect_inner(&state, &id).await }).await {
+    match tokio::spawn(
+        async move { attempt(&state, &id, connection, connecting, generation).await },
+    )
+    .await
+    {
         Ok(outcome) => outcome,
         // Re-raised for the same reason as the unattended turn's: with the body
         // inline a panic unwound through the caller, and "failed to connect" is
@@ -452,22 +567,52 @@ pub(crate) async fn connect(state: &Arc<AppState>, id: &str) -> Result<(), Strin
     }
 }
 
-async fn connect_inner(state: &Arc<AppState>, id: &str) -> Result<(), String> {
+/// Take the claim and make the attempt, for a caller that is not reporting the
+/// outcome to anyone — the supervisor's retry.
+async fn connect_inner(state: &Arc<AppState>, id: &str, generation: u64) -> Result<(), String> {
     let connection = load_connection(state, id)?;
-    let Some(connecting) = claim_for_connect(state, id) else {
+    let Some(connecting) = claim_and_supervise(state, id, generation) else {
         return Ok(());
     };
+    attempt(state, id, connection, connecting, generation).await
+}
+
+/// Everything between a held claim and a settled status.
+///
+/// Split from [`connect_inner`] so that `connect` can hold the claim itself —
+/// see its doc comment — without the two growing separate handshakes.
+async fn attempt(
+    state: &Arc<AppState>,
+    id: &str,
+    connection: RemoteConnection,
+    connecting: RemoteConnectionStatus,
+    generation: u64,
+) -> Result<(), String> {
     publish(state, &connecting);
     tracing::info!(source = "remote", connection = id, name = %connection.name, "Connecting");
 
-    match handshake(state, id, &connection).await {
+    let settled = handshake(state, id, &connection).await;
+    // A Disconnect that arrived while we were in flight wins, and must be seen
+    // BEFORE either branch below writes: both go through `update`, which
+    // re-creates the entry `teardown` removed. Without this, a handshake started
+    // a moment before a Disconnect still published `Connected`, with its token
+    // and its tunnel, over a connection the user had just put down.
+    if state.remote.generation(id) != generation {
+        if let Some(husk) = state.remote.discard_unowned(id) {
+            dispose(state, id, husk);
+        }
+        return Err("disconnected while connecting".to_string());
+    }
+    match settled {
         Ok(token) => {
             update(state, id, |e| {
                 e.status = Some(RemoteStatus::Connected);
                 e.token = token;
                 e.error = None;
             });
-            spawn_status_poll(state, id.to_string());
+            // No heartbeat is started here on purpose: the supervisor owns it,
+            // and it is already running — either because `connect` spawned it
+            // or because this call came from inside it.
             spawn_mirror(state, id.to_string());
             tracing::info!(source = "remote", connection = id, "Connected");
             Ok(())
@@ -488,7 +633,8 @@ async fn connect_inner(state: &Arc<AppState>, id: &str) -> Result<(), String> {
     }
 }
 
-/// Move a connection to `Connecting`, or report that someone else already has.
+/// Move a connection to `Connecting` and make sure something is supervising it,
+/// or report that someone else already has.
 ///
 /// The check and the transition share ONE `entry()` scope, so the shard lock
 /// holds across both. Read-then-write across two DashMap calls is a TOCTOU: two
@@ -496,19 +642,45 @@ async fn connect_inner(state: &Arc<AppState>, id: &str) -> Result<(), String> {
 /// startup — both read `Disconnected`, both wrote `Connecting`, and both went on
 /// to open a tunnel.
 ///
+/// `generation` is the caller's, and a caller whose generation has been retired
+/// is refused: it is a supervisor that a [`teardown`] already stopped, and the
+/// entry it would insert here is the Disconnect being silently undone. The
+/// [`lifecycle`](RemoteRuntime::lifecycle) lock is what makes that check mean
+/// something — it holds across the generation read AND the insert, on the same
+/// mutex `teardown` holds across its bump and its removal.
+///
+/// The supervisor is started in the same critical section so that an entry
+/// never exists without one, which is the predicate
+/// [`discard_unowned`](RemoteRuntime::discard_unowned) decides ownership by.
+///
 /// Returns the snapshot to announce, or `None` when the connection is already up
-/// or on its way.
-fn claim_for_connect(state: &Arc<AppState>, id: &str) -> Option<RemoteConnectionStatus> {
-    let mut entry = state.remote.entries.entry(id.to_string()).or_default();
-    if matches!(
-        entry.status,
-        Some(RemoteStatus::Connecting | RemoteStatus::Connected)
-    ) {
+/// or on its way — or when the caller has been retired.
+fn claim_and_supervise(
+    state: &Arc<AppState>,
+    id: &str,
+    generation: u64,
+) -> Option<RemoteConnectionStatus> {
+    let _lifecycle = state.remote.lifecycle();
+    if state.remote.generation(id) != generation {
         return None;
     }
-    entry.status = Some(RemoteStatus::Connecting);
-    entry.error = None;
-    Some(entry.snapshot(id))
+    let claimed = {
+        let mut entry = state.remote.entries.entry(id.to_string()).or_default();
+        if matches!(
+            entry.status,
+            Some(RemoteStatus::Connecting | RemoteStatus::Connected)
+        ) {
+            None
+        } else {
+            entry.status = Some(RemoteStatus::Connecting);
+            entry.error = None;
+            Some(entry.snapshot(id))
+        }
+    };
+    // Whether or not we took the claim: a connection somebody is connecting is
+    // still one that needs something to keep it up afterwards.
+    spawn_supervisor(state, id.to_string());
+    claimed
 }
 
 /// Resolve, prove, authenticate — everything between `Connecting` and
@@ -666,11 +838,37 @@ async fn wait_for_tunnel(state: &Arc<AppState>, tunnel_id: &str) -> Result<(), S
 /// configured, and the reason `disconnect` on an unknown id used to conjure one
 /// and announce it.
 pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
-    let Some((_, mut entry)) = state.remote.entries.remove(id) else {
+    // The bump and the removal are one critical section, under the same mutex
+    // `claim_and_supervise` holds across its generation read and its insert.
+    // Separately they interleave: a supervisor that read its generation before
+    // the bump can insert after the removal, and the connection the user put
+    // down is back up.
+    //
+    // The bump is unconditional and comes first: a supervisor may be mid-connect
+    // with no entry in the map yet, and retiring its generation is the only
+    // thing that stops it. Bumping only when an entry exists would miss exactly
+    // the task that is about to create one.
+    let removed = {
+        let _lifecycle = state.remote.lifecycle();
+        state.remote.retire_generation(id);
+        state.remote.entries.remove(id)
+    };
+    // Outside the lock: nothing in `dispose` decides whether an entry exists,
+    // and it aborts tasks, stops a tunnel and publishes.
+    let Some((_, entry)) = removed else {
         return;
     };
-    if let Some(poll) = entry.poll.take() {
-        poll.abort();
+    dispose(state, id, entry);
+}
+
+/// Stop everything one entry owns and announce the departure.
+///
+/// Split out of [`teardown`] because a retired supervisor has to run the same
+/// steps on an entry it resurrected, while NOT retiring a generation — doing
+/// that would take down the supervisor of a Connect that arrived in between.
+fn dispose(state: &Arc<AppState>, id: &str, mut entry: Entry) {
+    if let Some(supervisor) = entry.supervisor.take() {
+        supervisor.abort();
     }
     // Abort before dropping the rows: a frame still in flight would otherwise
     // re-seed the map we just cleared.
@@ -714,33 +912,147 @@ fn poll_survives(status: RemoteStatus) -> bool {
     matches!(status, RemoteStatus::Connected | RemoteStatus::Error)
 }
 
-/// Re-prove a connection every [`STATUS_POLL`] for as long as
-/// [`poll_survives`] says it is worth asking.
+/// The wait before the next connect attempt, grown and jittered.
 ///
-/// The daemon mints its token in memory and forgets it on restart, so ours goes
-/// stale while `/health` keeps answering 200. One re-authentication on a 401 is
-/// what turns that restart into a reconnect instead of a dead panel.
-fn spawn_status_poll(state: &Arc<AppState>, id: String) {
-    let previous = {
-        let mut entry = state.remote.entries.entry(id.clone()).or_default();
-        entry.poll.take()
-    };
-    if let Some(previous) = previous {
-        previous.abort();
+/// Split out so the growth is testable without waiting for it: the property
+/// that matters is that it doubles, stops at the ceiling, and never returns the
+/// same value twice in a row for two connections that failed together.
+fn next_backoff(current: Duration) -> Duration {
+    let doubled = current.saturating_mul(2).min(RETRY_BACKOFF_MAX);
+    doubled.max(RETRY_BACKOFF_MIN)
+}
+
+/// `base` with up to [`RETRY_JITTER`] of itself added.
+fn jittered(base: Duration) -> Duration {
+    // Nanos of the monotonic clock: a cheap, dependency-free source of spread.
+    // This picks WHEN to retry, never WHAT is sent, so it does not need to be a
+    // cryptographic random and must not pull in a generator that is.
+    let spread = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| f64::from(d.subsec_nanos()) / 1e9)
+        .unwrap_or(0.0);
+    base + base.mul_f64(RETRY_JITTER * spread)
+}
+
+/// One task per connection, owning its whole lifecycle.
+///
+/// **Why one task and not two.** Before this, the heartbeat was spawned only
+/// from the SUCCESS branch of [`connect_inner`], so a connection that failed its
+/// first attempt got no task at all and never retried — the self-heal documented
+/// on [`poll_survives`] only ever protected a connection that had been up once
+/// in this process. Adding a second, retry-only task beside the heartbeat would
+/// have left two loops racing to own one connection. This is the same loop:
+///
+/// * not connected -> [`connect_inner`], then back off and try again;
+/// * connected     -> [`poll_once`] every [`STATUS_POLL`], backoff reset.
+///
+/// `connect_inner` is what retries must call, not `poll_once`: the error path
+/// runs `stop_tunnel`, so on the SSH transport the stored base URL points at a
+/// forwarded port that is no longer listening. Only a real connect rebuilds the
+/// tunnel, and a probe-only retry would spin against that dead port forever.
+///
+/// Racing with an explicit connect is free: an explicit [`connect`] takes the
+/// claim before it spawns us, so the `Connecting` arm below parks rather than
+/// starting a second handshake — and the caller keeps the outcome that is
+/// rightfully theirs to report.
+///
+/// The entry guard is held across the `tokio::spawn`, so the entry and its
+/// handle appear together. There is no await in between, and the atomicity is
+/// load bearing: an entry seen without a handle is what
+/// [`discard_unowned`](RemoteRuntime::discard_unowned) removes.
+fn spawn_supervisor(state: &Arc<AppState>, id: String) {
+    let mut entry = state.remote.entries.entry(id.clone()).or_default();
+    // A live supervisor already IS the desired state; replacing it would
+    // reset a backoff that is deliberately wide. A finished one is the
+    // `Unauthenticated` exit below, and a fresh credential must be able to
+    // start it again.
+    match entry.supervisor.as_ref() {
+        Some(handle) if !handle.is_finished() => return,
+        _ => entry.supervisor = None,
     }
     let task_state = Arc::clone(state);
     let task_id = id.clone();
+    let generation = state.remote.generation(&id);
     let handle = tokio::spawn(async move {
+        let mut backoff = RETRY_BACKOFF_MIN;
         loop {
-            tokio::time::sleep(STATUS_POLL).await;
-            if !poll_survives(task_state.remote.status_of(&task_id)) {
+            // First thing after every await, including the connect below. A
+            // stale generation means `teardown` ran while we were mid-flight, so
+            // anything this task put back has to come out again — `teardown` is
+            // idempotent and total, which is exactly the cleanup needed.
+            if task_state.remote.generation(&task_id) != generation {
+                if let Some(entry) = task_state.remote.discard_unowned(&task_id) {
+                    dispose(&task_state, &task_id, entry);
+                }
                 return;
             }
-            poll_once(&task_state, &task_id).await;
+            match task_state.remote.status_of(&task_id) {
+                RemoteStatus::Connected => {
+                    backoff = RETRY_BACKOFF_MIN;
+                    tokio::time::sleep(STATUS_POLL).await;
+                    // Re-read rather than trusting the status we slept on: a
+                    // teardown during the sleep must not be followed by a probe
+                    // that re-conjures the entry it just removed.
+                    if !poll_survives(task_state.remote.status_of(&task_id)) {
+                        return;
+                    }
+                    poll_once(&task_state, &task_id).await;
+                }
+                // The credential is wrong. Retrying the same one only asks the
+                // daemon to rate-limit us, and no amount of waiting turns a bad
+                // password into a good one — this needs a person. `connect`
+                // spawns us again once they supply one.
+                RemoteStatus::Unauthenticated => return,
+                // Somebody else's attempt is in flight — an explicit `connect`,
+                // which claims before it spawns us. Watch, do not join in, and
+                // do not grow the backoff on an attempt that is not ours.
+                RemoteStatus::Connecting => tokio::time::sleep(CONNECTING_POLL).await,
+                // Disconnected or Error. Disconnected is also where a fresh
+                // supervisor starts, so this arm must attempt rather than bail:
+                // a teardown is recognised by the generation above, never by the
+                // absence of an entry, which is indistinguishable from the boot
+                // state `autoconnect_all` spawns into.
+                _ => {
+                    let _ = connect_inner(&task_state, &task_id, generation).await;
+                    if task_state.remote.status_of(&task_id) != RemoteStatus::Connected {
+                        tokio::time::sleep(jittered(backoff)).await;
+                        backoff = next_backoff(backoff);
+                    }
+                }
+            }
         }
     });
-    let mut entry = state.remote.entries.entry(id).or_default();
-    entry.poll = Some(handle);
+    entry.supervisor = Some(handle);
+}
+
+/// Ensure every configured connection has a supervisor, so a machine the user
+/// registered is one the app brings up by itself.
+///
+/// Called once at startup. Nothing used to connect a remote machine on boot —
+/// `auto_connect_saved_upstreams` next door covers upstream MCP servers and not
+/// these — so every restart left every remote repository pointing at a machine
+/// the app had decided not to talk to, and the only cure was a trip into
+/// Settings.
+///
+/// Registered means wanted: there is no per-connection opt-out today, and the
+/// desired-state shape above is what makes adding one later a single condition.
+pub(crate) fn autoconnect_all(state: &Arc<AppState>) {
+    let connections = match RemoteConnectionStore::load(&state.data_dir) {
+        Ok(connections) => connections,
+        Err(e) => {
+            tracing::warn!(source = "remote", error = %e, "Cannot read remote connections to autoconnect");
+            return;
+        }
+    };
+    for connection in connections {
+        tracing::info!(
+            source = "remote",
+            connection = %connection.id,
+            name = %connection.name,
+            "Autoconnecting remote machine"
+        );
+        spawn_supervisor(state, connection.id);
+    }
 }
 
 /// Start (or restart) the task that mirrors this daemon's sessions.
@@ -856,6 +1168,27 @@ mod tests {
     /// client shaped differently from the real one.
     fn test_client() -> reqwest::Client {
         RemoteRuntime::default().http_client()
+    }
+
+    /// Whether the connection's supervisor ends on its own within a bound.
+    ///
+    /// A bound rather than one `yield_now`: the task may still be queued when
+    /// the assertion runs, and "not finished yet" would read exactly like "it is
+    /// still probing". The budget is setup reaching a state, not the behaviour
+    /// under test, so it is sized so it cannot plausibly fail.
+    async fn supervisor_finishes(state: &Arc<AppState>, id: &str) -> bool {
+        for _ in 0..200 {
+            let finished = state
+                .remote
+                .entries
+                .get(id)
+                .and_then(|e| e.supervisor.as_ref().map(|h| h.is_finished()));
+            if finished == Some(true) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        false
     }
 
     #[test]
@@ -1053,6 +1386,11 @@ mod tests {
     }
 
     /// Save a Direct connection pointing at `url`, where `connect` will find it.
+    ///
+    /// Appended, not written over the store: `save` takes the WHOLE list, so a
+    /// second call used to delete the first connection. Only a test that reads
+    /// the store as a list — `autoconnect_all` — could see it, and it saw one
+    /// machine where it had registered two.
     fn direct_connection(state: &Arc<AppState>, url: &str) -> String {
         let connection = crate::remote_connection::RemoteConnection::new_direct(
             "vps",
@@ -1060,7 +1398,9 @@ mod tests {
             "boss",
         );
         let id = connection.id.clone();
-        RemoteConnectionStore::save(&state.data_dir, std::slice::from_ref(&connection)).unwrap();
+        let mut connections = RemoteConnectionStore::load(&state.data_dir).unwrap_or_default();
+        connections.push(connection);
+        RemoteConnectionStore::save(&state.data_dir, &connections).unwrap();
         id
     }
 
@@ -1224,9 +1564,13 @@ mod tests {
         // routing to it. Nothing may: every call would 401.
         assert!(state.remote.base_url(&id).is_none());
         assert!(state.remote.token(&id).is_none());
+        // The supervisor is spawned by `connect` before the attempt, so the
+        // invariant is no longer "no task exists" but "the task gave up": a bad
+        // password must not be re-sent every five seconds until the daemon
+        // rate-limits us. It ends by itself on `Unauthenticated`.
         assert!(
-            state.remote.entries.get(&id).unwrap().poll.is_none(),
-            "a rejected connection must not poll"
+            supervisor_finishes(&state, &id).await,
+            "a rejected connection must not keep probing"
         );
     }
 
@@ -1280,8 +1624,15 @@ mod tests {
     /// returned `Ok(())` without doing anything, and the machine could not be
     /// brought up again short of restarting the app.
     ///
-    /// The 1 ms is the drop, not a budget on the handshake — `timeout` polls
-    /// the inner future before it sleeps, so the spawn always happens.
+    /// **The budget is zero on purpose, and that makes the drop deterministic.**
+    /// `timeout` polls the inner future before it polls its own sleep, so
+    /// `connect` always runs far enough to spawn; a deadline already in the past
+    /// is then unconditionally ready, so the caller is dropped at its first
+    /// await every time. A 1 ms budget read the same on an idle machine and did
+    /// not under load — the spawned handshake answered a local mock before the
+    /// timer wheel was next inspected, `timeout` found the inner future ready,
+    /// and the test failed claiming a caller had not been dropped when what had
+    /// really happened is that it succeeded.
     #[tokio::test]
     async fn a_dropped_connect_does_not_strand_a_connection_in_connecting() {
         let mut server = mockito::Server::new_async().await;
@@ -1299,7 +1650,7 @@ mod tests {
         let state = test_state();
         let id = direct_connection(&state, &server.url());
 
-        tokio::time::timeout(Duration::from_millis(1), connect(&state, &id))
+        tokio::time::timeout(Duration::ZERO, connect(&state, &id))
             .await
             .expect_err("the handshake must still be in flight when the caller is dropped");
 
@@ -1428,11 +1779,11 @@ mod tests {
     /// The check and the transition share one `entry()` scope so the shard lock
     /// holds across both; read-then-write across two DashMap calls let two
     /// concurrent connects both see `Disconnected` and both open a tunnel.
-    #[test]
-    fn only_one_connect_can_claim_a_connection() {
+    #[tokio::test]
+    async fn only_one_connect_can_claim_a_connection() {
         let state = test_state();
 
-        let first = claim_for_connect(&state, "vps").expect("a fresh connection is free");
+        let first = claim_and_supervise(&state, "vps", 0).expect("a fresh connection is free");
         assert_eq!(first.status, RemoteStatus::Connecting);
         assert_eq!(
             state.remote.status_of("vps"),
@@ -1440,18 +1791,37 @@ mod tests {
             "the claim must land in the map, not only in the caller's hand"
         );
         assert!(
-            claim_for_connect(&state, "vps").is_none(),
+            state
+                .remote
+                .entries
+                .get("vps")
+                .is_some_and(|e| e.supervisor.is_some()),
+            "an entry without a supervisor is one `discard_unowned` may remove"
+        );
+        assert!(
+            claim_and_supervise(&state, "vps", 0).is_none(),
             "a second connect claimed a connection that is already coming up"
         );
 
         // A connected one is equally claimed, and a failed one is free again.
         update(&state, "vps", |e| e.status = Some(RemoteStatus::Connected));
-        assert!(claim_for_connect(&state, "vps").is_none());
+        assert!(claim_and_supervise(&state, "vps", 0).is_none());
         update(&state, "vps", |e| e.status = Some(RemoteStatus::Error));
         assert!(
-            claim_for_connect(&state, "vps").is_some(),
+            claim_and_supervise(&state, "vps", 0).is_some(),
             "a connection that failed must be retryable"
         );
+
+        // And a caller `teardown` already retired is refused, whatever the
+        // status: its claim would be the Disconnect undone.
+        state.remote.retire_generation("vps");
+        update(&state, "vps", |e| e.status = Some(RemoteStatus::Error));
+        assert!(
+            claim_and_supervise(&state, "vps", 0).is_none(),
+            "a retired supervisor claimed a connection it no longer owns"
+        );
+
+        teardown(&state, "vps");
     }
 
     /// Eight connects racing on real threads still produce one handshake.
@@ -1778,5 +2148,152 @@ mod tests {
             assert_eq!(payload["id"], "abc");
             assert!(payload.get("status").is_some());
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Supervisor: autoconnect, retry, and the two ways it must stop
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_backoff_doubles_up_to_the_ceiling_and_stops_there() {
+        let mut wait = RETRY_BACKOFF_MIN;
+        let mut seen = vec![wait];
+        for _ in 0..12 {
+            wait = next_backoff(wait);
+            seen.push(wait);
+        }
+        assert_eq!(seen[0], RETRY_BACKOFF_MIN);
+        assert_eq!(seen[1], RETRY_BACKOFF_MIN * 2);
+        assert!(
+            seen.windows(2).all(|w| w[1] >= w[0]),
+            "a backoff that shrinks re-hammers a machine that is still down: {seen:?}"
+        );
+        assert_eq!(
+            *seen.last().unwrap(),
+            RETRY_BACKOFF_MAX,
+            "the wait must settle at the ceiling instead of growing without bound"
+        );
+    }
+
+    #[test]
+    fn jitter_only_ever_adds_and_stays_inside_its_share() {
+        for base in [RETRY_BACKOFF_MIN, RETRY_BACKOFF_MAX] {
+            let jittered = jittered(base);
+            assert!(
+                jittered >= base,
+                "jitter that subtracts can retry sooner than the backoff allows"
+            );
+            assert!(
+                jittered <= base.mul_f64(1.0 + RETRY_JITTER),
+                "jitter must spread the herd, not extend the outage"
+            );
+        }
+    }
+
+    /// The gap this whole mechanism exists to close.
+    ///
+    /// The heartbeat used to be spawned only from the success branch of
+    /// `connect_inner`, so a connection whose FIRST attempt failed got no task
+    /// at all: it sat in `Error` until a person pressed Connect. Measured on a
+    /// live instance — mac-mint answered 200 throughout while the app showed it
+    /// unreachable for forty minutes.
+    #[tokio::test]
+    async fn a_connect_that_fails_still_leaves_something_retrying() {
+        let state = test_state();
+        // A port nothing answers on, so the attempt fails at connect time rather
+        // than on a status code — the same shape as a machine that is asleep.
+        let id = direct_connection(&state, "http://127.0.0.1:1");
+
+        connect(&state, &id).await.unwrap_err();
+
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        let supervising = state
+            .remote
+            .entries
+            .get(&id)
+            .and_then(|e| e.supervisor.as_ref().map(|h| !h.is_finished()));
+        assert_eq!(
+            supervising,
+            Some(true),
+            "a failed connect left nothing to try again, so the machine can only \
+             come back if a person notices the red badge"
+        );
+        teardown(&state, &id);
+    }
+
+    /// Registered means wanted: nothing used to connect a remote machine at boot.
+    #[tokio::test]
+    async fn autoconnect_supervises_every_configured_machine() {
+        let state = test_state();
+        let first = direct_connection(&state, "http://127.0.0.1:1");
+        let second = direct_connection(&state, "http://127.0.0.1:2");
+
+        autoconnect_all(&state);
+
+        for id in [&first, &second] {
+            assert!(
+                state
+                    .remote
+                    .entries
+                    .get(id)
+                    .and_then(|e| e.supervisor.as_ref().map(|h| !h.is_finished()))
+                    .unwrap_or(false),
+                "{id} was registered but nothing is bringing it up"
+            );
+            teardown(&state, id);
+        }
+    }
+
+    /// The failure mode a retry loop introduces, and the reason for the
+    /// generation counter: a Disconnect the user asked for must stay done.
+    ///
+    /// Without it the supervisor wakes from its backoff, calls `connect_inner`,
+    /// and `claim_for_connect` inserts the entry `teardown` just removed — the
+    /// machine reconnects itself moments after being told not to.
+    #[tokio::test]
+    async fn an_explicit_disconnect_is_not_undone_by_the_retry() {
+        let state = test_state();
+        let id = direct_connection(&state, "http://127.0.0.1:1");
+
+        connect(&state, &id).await.unwrap_err();
+        teardown(&state, &id);
+
+        // Longer than the first backoff, so a supervisor that ignored the
+        // teardown has had its chance to wake up and reconnect.
+        tokio::time::sleep(RETRY_BACKOFF_MIN + Duration::from_millis(500)).await;
+
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Disconnected);
+        assert!(
+            state.remote.entries.get(&id).is_none(),
+            "a retired supervisor put the entry back: {:?}",
+            state.remote.snapshot()
+        );
+    }
+
+    /// Connect after Disconnect must work, which is what the generation counter
+    /// is at risk of breaking: the retired supervisor and the new one share an
+    /// id, and cleanup that is not scoped to its own task takes down the wrong
+    /// one.
+    #[tokio::test]
+    async fn a_reconnect_after_a_disconnect_gets_its_own_supervisor() {
+        let state = test_state();
+        let id = direct_connection(&state, "http://127.0.0.1:1");
+
+        connect(&state, &id).await.unwrap_err();
+        teardown(&state, &id);
+        connect(&state, &id).await.unwrap_err();
+
+        tokio::time::sleep(RETRY_BACKOFF_MIN + Duration::from_millis(500)).await;
+
+        assert!(
+            state
+                .remote
+                .entries
+                .get(&id)
+                .and_then(|e| e.supervisor.as_ref().map(|h| !h.is_finished()))
+                .unwrap_or(false),
+            "the retired supervisor took the new one down with it"
+        );
+        teardown(&state, &id);
     }
 }
