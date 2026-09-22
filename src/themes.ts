@@ -317,6 +317,11 @@ export function applyAppTheme(key: string): void {
 	for (const [prop, value] of Object.entries(theme)) {
 		root.setProperty(camelToKebab(prop), value);
 	}
+	// rgba(var(--accent-rgb), a) consumers need the channels, not the hex.
+	root.setProperty("--accent-rgb", hexToRgb(theme.accent).join(", "));
+	// Typography that belongs to one theme (font smoothing, tracking) has no
+	// field in the theme JSON; global.css keys it on this attribute instead.
+	document.documentElement.dataset.theme = key;
 	const termTheme = getTerminalTheme(key);
 	const ansiRgb: [number, number, number][] = [];
 	for (const k of ANSI_KEYS) {

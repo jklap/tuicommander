@@ -333,6 +333,7 @@ const BUILTIN_THEMES: &[(&str, &str)] = &[
         "minimal-kiwi.json",
         include_str!("themes/minimal-kiwi.json"),
     ),
+    ("clean.json", include_str!("themes/clean.json")),
 ];
 
 /// Seed the themes directory with built-in themes (only when the dir doesn't exist).
