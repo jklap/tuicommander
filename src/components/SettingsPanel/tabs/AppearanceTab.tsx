@@ -480,7 +480,7 @@ export const AppearanceTab: Component = () => {
 				label={t("appearance.label.tabTreeEnabled", "Nested Terminal Tabs")}
 				hint={t(
 					"appearance.hint.tabTreeEnabled",
-					"Show a branch's open terminals as a collapsible list under its sidebar row — only when the branch has more than one terminal",
+					"Show each branch's open sessions and agent activity in a collapsible card under its sidebar row",
 				)}
 			/>
 

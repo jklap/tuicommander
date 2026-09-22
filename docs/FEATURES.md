@@ -271,9 +271,10 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 
 ### 2.3.1 Nested Terminal Tabs (opt-in)
 - Off by default. Enable via **Settings → Appearance → Tabs → "Nested Terminal Tabs"** (`tab_tree_enabled`).
-- When on, a branch with **more than one** terminal shows a collapsible list of its terminals directly under the branch row, each with a status dot (busy / idle / unseen / error / question) and the terminal name. Clicking a sub-item switches to that terminal.
+- When on, every branch with an open session can expand into a single activity card. Agent rows show the agent icon, terminal name, current intent/task (falling back to the last substantial prompt), compact activity age, and the same effective status used by the Activity Dashboard; plain shells remain visible as terminal rows.
+- Clicking a row switches to that session. The card summary reports agent count when every row is an agent, otherwise total session count.
 - The caret toggles the list; clicking an unfocused branch focuses it and opens the list (never collapses on a focus-switch), while re-clicking the already-focused branch toggles it.
-- Single-terminal branches stay compact — no caret, no list — and the whole feature is inert when the setting is off.
+- Single-session branches can expand too; the whole feature remains inert when the setting is off.
 
 ### 2.4 Git Quick Actions
 - Bottom of sidebar when a repo is active

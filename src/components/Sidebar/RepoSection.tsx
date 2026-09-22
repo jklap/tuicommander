@@ -14,12 +14,14 @@ export { effectiveMergeMethod };
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
+import { rateLimitStore } from "../../stores/ratelimit";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
+import { displayTask, effectiveActivityState } from "../../utils/activitySnapshot";
 import { compareBranches } from "../../utils/branchSort";
 import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
@@ -30,7 +32,8 @@ import { ContextMenu, createContextMenu } from "../ContextMenu";
 import { remoteUrlToGitHub } from "../GitPanel/BranchesTab";
 import { PromptDialog } from "../PromptDialog";
 import b from "../shared/branch.module.css";
-import { PrStateBadge } from "./PrStateBadge";
+import { AgentIcon } from "../ui/AgentIcon";
+import { isPrBadgeFlashing, PrStateBadge } from "./PrStateBadge";
 import s from "./Sidebar.module.css";
 import { SidebarPluginSection } from "./SidebarPluginSection";
 
@@ -175,30 +178,65 @@ export { _resetMergedActivityAccum };
 
 /**
  * Whether a branch shows its nested terminal-tab list. Single source of truth for
- * the feature: gated by the `tabTreeEnabled` setting and only when the branch has
- * more than one terminal. When off, the chevron, aria state, row-click toggle and
+ * the feature: gated by the `tabTreeEnabled` setting and available whenever the branch
+ * has a terminal. When off, the chevron, aria state, row-click toggle and
  * the list itself are all inert.
  */
 function getBranchTabsAvailable(branch: WorkspaceState): boolean {
-	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 1;
+	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 0;
 }
 
-/** Collapsible list of terminal tabs under a branch row */
+function compactActivityAge(timestamp: number | null): string {
+	if (!timestamp) return "";
+	const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+	if (minutes < 1) return "<1m";
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+	return `${Math.floor(hours / 24)}d`;
+}
+
+/** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
+	const agentCount = () => props.terminalIds.filter((id) => terminalsStore.get(id)?.agentType).length;
+	const summary = () => {
+		const agents = agentCount();
+		if (agents === props.terminalIds.length) return `${agents} agent${agents === 1 ? "" : "s"}`;
+		return `${props.terminalIds.length} session${props.terminalIds.length === 1 ? "" : "s"}`;
+	};
+
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
+			<Show when={props.terminalIds.length > 1}>
+				<div class={s.branchAgentSummary}>{summary()}</div>
+			</Show>
 			<For each={props.terminalIds}>
 				{(id) => {
 					const term = () => terminalsStore.get(id);
 					const isActive = () => terminalsStore.state.activeId === id;
+					const activity = () => {
+						const t = term();
+						return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt ?? t.name) : null;
+					};
+					const accessibleLabel = () => {
+						const t = term();
+						return t ? `${t.name}: ${activity()}` : undefined;
+					};
 					const dotClass = () => {
 						const t = term();
 						if (!t) return s.branchTabDot;
-						if (t.awaitingInput === "error") return cx(s.branchTabDot, s.branchTabDotError);
-						if (t.awaitingInput === "question") return cx(s.branchTabDot, s.branchTabDotQuestion);
-						if (terminalsStore.isBusy(id)) return cx(s.branchTabDot, s.branchTabDotBusy);
+						const state = effectiveActivityState(
+							t.shellState,
+							t.awaitingInput,
+							!!(t.sessionId && rateLimitStore.isRateLimited(t.sessionId)),
+							t.agentState,
+							t.backgroundWork,
+						);
+						if (state === "error") return cx(s.branchTabDot, s.branchTabDotError);
+						if (state === "awaiting_input") return cx(s.branchTabDot, s.branchTabDotQuestion);
+						if (state === "working" || state === "rate_limited") return cx(s.branchTabDot, s.branchTabDotBusy);
 						if (t.unseen) return cx(s.branchTabDot, s.branchTabDotUnseen);
-						if (t.shellState === "idle") return cx(s.branchTabDot, s.branchTabDotIdle);
+						if (state === "idle" || state === "completed") return cx(s.branchTabDot, s.branchTabDotIdle);
 						return s.branchTabDot;
 					};
 
@@ -208,10 +246,28 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 								<button
 									class={cx(s.branchTabItem, isActive() && s.active)}
 									onClick={() => navigateToTerminal(id)}
-									title={t().name}
+									title={accessibleLabel()}
+									aria-label={accessibleLabel()}
 								>
 									<span class={dotClass()} aria-hidden="true" />
-									<span class={s.branchTabName}>{t().name}</span>
+									<Show
+										when={t().agentType}
+										fallback={
+											<span class={s.branchAgentIcon} aria-hidden="true">
+												<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+													<path d="M1 3l5 5-5 5h2l5-5-5-5H1zm7 9h7v2H8v-2z" />
+												</svg>
+											</span>
+										}
+									>
+										{(agent) => (
+											<span class={s.branchAgentIcon} aria-hidden="true">
+												<AgentIcon agent={agent()} size={14} />
+											</span>
+										)}
+									</Show>
+									<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
+									<span class={s.branchAgentTime}>{compactActivityAge(t().lastDataAt)}</span>
 								</button>
 							)}
 						</Show>
@@ -263,6 +319,20 @@ export const BranchItem: Component<{
 
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
 	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.branchName));
+	const hasDiff = () => props.branch.additions > 0 || props.branch.deletions > 0;
+	const prIsFlashing = () => {
+		const status = pr();
+		if (!status) return false;
+		return isPrBadgeFlashing({
+			state: status.state,
+			isDraft: status.is_draft,
+			mergeable: status.mergeable,
+			conflictState: status.conflict_state,
+			reviewDecision: status.review_decision,
+			ciFailed: checks()?.failed,
+			ciPending: checks()?.pending,
+		});
+	};
 
 	const hasError = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.awaitingInput === "error");
 
@@ -288,7 +358,7 @@ export const BranchItem: Component<{
 	//    stays open, never collapses on a focus-switch).
 	//  - Re-clicking the already-focused branch → toggle (so it can be closed).
 	// We read isActive BEFORE onSelect(), since onSelect synchronously flips the
-	// branch to active. Tabs only exist when a branch has more than one terminal.
+	// branch to active. Activity cards only exist when a branch has a terminal.
 	// Child controls that own an action (PR badge, diff stats, add-terminal,
 	// remove) stopPropagation, so they never reach here.
 	const handleRowClick = () => {
@@ -545,48 +615,57 @@ export const BranchItem: Component<{
 						);
 					}}
 				</Show>
-				<Show when={pr()}>
-					<span
-						class={(() => {
-							const st = pr()?.state?.toLowerCase();
-							return st === "closed" || st === "merged" ? s.prBadgeDimmed : undefined;
-						})()}
-						onClick={(e) => {
-							e.stopPropagation();
-							props.onShowPrDetail();
-						}}
+				<Show when={pr() || hasDiff()}>
+					<div
+						class={cx(
+							s.branchBadgeStack,
+							pr() && hasDiff() && (prIsFlashing() ? s.branchBadgeStackPinned : s.branchBadgeStackAlternating),
+						)}
 					>
-						<PrStateBadge
-							prNumber={pr()!.number}
-							state={pr()!.state}
-							isDraft={pr()!.is_draft}
-							mergeable={pr()!.mergeable}
-							conflictState={pr()!.conflict_state}
-							reviewDecision={pr()!.review_decision}
-							ciPassed={checks()?.passed}
-							ciFailed={checks()?.failed}
-							ciPending={checks()?.pending}
-							dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
-						/>
-					</span>
-				</Show>
-				<StatsBadge
-					additions={props.branch.additions}
-					deletions={props.branch.deletions}
-					dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
-					onClick={
-						props.onShowChanges
-							? (e) => {
+						<Show when={pr()}>
+							<span
+								class={(() => {
+									const st = pr()?.state?.toLowerCase();
+									return st === "closed" || st === "merged" ? s.prBadgeDimmed : undefined;
+								})()}
+								onClick={(e) => {
 									e.stopPropagation();
-									// Select this branch/worktree first so the Git panel targets it
-									// (it follows activeWorktreePath), then open the changes tab —
-									// otherwise the badge always shows the active branch's diff.
-									props.onSelect();
-									props.onShowChanges?.();
-								}
-							: undefined
-					}
-				/>
+									props.onShowPrDetail();
+								}}
+							>
+								<PrStateBadge
+									prNumber={pr()!.number}
+									state={pr()!.state}
+									isDraft={pr()!.is_draft}
+									mergeable={pr()!.mergeable}
+									conflictState={pr()!.conflict_state}
+									reviewDecision={pr()!.review_decision}
+									ciPassed={checks()?.passed}
+									ciFailed={checks()?.failed}
+									ciPending={checks()?.pending}
+									dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
+								/>
+							</span>
+						</Show>
+						<StatsBadge
+							additions={props.branch.additions}
+							deletions={props.branch.deletions}
+							dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
+							onClick={
+								props.onShowChanges
+									? (e) => {
+											e.stopPropagation();
+											// Select this branch/worktree first so the Git panel targets it
+											// (it follows activeWorktreePath), then open the changes tab —
+											// otherwise the badge always shows the active branch's diff.
+											props.onSelect();
+											props.onShowChanges?.();
+										}
+									: undefined
+							}
+						/>
+					</div>
+				</Show>
 				<div class={s.branchActions} style={{ display: props.shortcutIndex !== undefined ? "none" : undefined }}>
 					<button
 						class={s.branchAddBtn}
