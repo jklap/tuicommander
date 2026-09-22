@@ -297,6 +297,9 @@ fn event_type_name(event: &AppEvent) -> &str {
         // event from a local one, and a `?types=` filter has to match the name
         // the client asked for.
         AppEvent::RemoteMirrored { event, .. } => event,
+        AppEvent::DictationDownloadProgress { .. } => "dictation-download-progress",
+        AppEvent::SpeechDownloadProgress { .. } => "speech-download-progress",
+        AppEvent::SpeechUtterance { .. } => "speech-utterance",
     }
 }
 
@@ -487,6 +490,12 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::RemoteConnectionStatusChanged { payload } => payload.clone(),
         // The daemon's own body, untouched.
         AppEvent::RemoteMirrored { payload, .. } => payload.clone(),
+        // Built once by the producer and handed to both transports, for the
+        // same reason as `SessionStateChanged` above: the frontend applies one
+        // shape, and a pair built from separate code in separate files drifts.
+        AppEvent::DictationDownloadProgress { payload }
+        | AppEvent::SpeechDownloadProgress { payload }
+        | AppEvent::SpeechUtterance { payload } => payload.clone(),
     }
 }
 

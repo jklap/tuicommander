@@ -76,6 +76,14 @@ pub struct DictationState {
     /// barge-in port: it must interrupt whatever is speaking *now*, which
     /// under Auto is a voice that did not exist when the loop started.
     pub speaker: Arc<Mutex<Option<speaker::Armed>>>,
+    /// Where an utterance transition goes once a conversation is armed.
+    ///
+    /// Held here rather than passed in because the two places that build a
+    /// reply queue — arming, and the first `speak` under Auto — have no
+    /// `AppHandle` between them. Installed once at startup by the one caller
+    /// that does. `None` in a test and in the headless build: a speaker nobody
+    /// watches is the ordinary case for a unit test, not a misconfiguration.
+    pub utterance_observer: Mutex<Option<Arc<dyn speaker::UtteranceObserver>>>,
 }
 
 impl DictationState {
@@ -98,6 +106,7 @@ impl DictationState {
             echo: Arc::new(Mutex::new(echo::install())),
             speech: Arc::new(speech::library::SpeechLibrary::new()),
             speaker: Arc::new(Mutex::new(None)),
+            utterance_observer: Mutex::new(None),
         }
     }
 

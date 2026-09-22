@@ -210,6 +210,18 @@ struct InFlight {
     cancel: SpeechCancel,
 }
 
+/// Told about every state change an utterance makes.
+///
+/// A port rather than an `AppHandle` because the transitions that matter happen
+/// on the render thread, long after the call that queued the reply returned:
+/// `Finished` and `Interrupted` have no caller to return to. It is also the
+/// only thing a test can watch — polling cannot prove an event was *pushed*.
+pub trait UtteranceObserver: Send + Sync {
+    /// `generation` is the turn the reply belongs to, read at the moment of the
+    /// transition rather than when the reply was accepted.
+    fn changed(&self, id: UtteranceId, state: &Utterance, generation: u64);
+}
+
 struct State {
     generation: u64,
     queue: VecDeque<Reply>,
@@ -219,6 +231,9 @@ struct State {
     /// Next identity to hand out. Never reused, so a stale caller polling an
     /// old id gets that id's own fate rather than a newer reply's.
     next_id: u64,
+    /// Transitions recorded under the lock, waiting to be handed to the
+    /// observer with the lock released. See [`Shared::notify`].
+    changes: Vec<(UtteranceId, Utterance, u64)>,
     /// What became of each reply, oldest first, capped at [`MAX_TRACKED`].
     tracked: VecDeque<(UtteranceId, Utterance)>,
     /// Handed to the device and not yet known to have finished, in the order
@@ -233,6 +248,7 @@ impl State {
     fn track(&mut self, state: Utterance) -> UtteranceId {
         let id = UtteranceId(self.next_id);
         self.next_id += 1;
+        self.changes.push((id, state.clone(), self.generation));
         self.tracked.push_back((id, state));
         while self.tracked.len() > MAX_TRACKED {
             self.tracked.pop_front();
@@ -242,9 +258,15 @@ impl State {
 
     /// Record a transition. Silently ignores an id that has aged out, which is
     /// the only way it can be missing.
+    ///
+    /// An aged-out id is not announced either: nothing can ask what became of
+    /// it any more, so an event about it would name an utterance the speaker
+    /// itself no longer knows.
     fn set(&mut self, id: UtteranceId, state: Utterance) {
+        let generation = self.generation;
         if let Some(entry) = self.tracked.iter_mut().find(|(tracked, _)| *tracked == id) {
-            entry.1 = state;
+            entry.1 = state.clone();
+            self.changes.push((id, state, generation));
         }
     }
 
@@ -260,6 +282,44 @@ struct Shared {
     state: Mutex<State>,
     /// Woken by a new reply, by an interruption and by shutdown.
     wake: Condvar,
+    /// Set once, before the first reply. See [`Speaker::observe`].
+    observer: std::sync::OnceLock<Arc<dyn UtteranceObserver>>,
+}
+
+impl Shared {
+    /// Hand the transitions recorded under the lock to the observer, with the
+    /// lock released.
+    ///
+    /// Buffered rather than dispatched from `State::set`, because `set` runs
+    /// inside the render thread's critical section: several times in one pass
+    /// when `hush` resolves a whole queue, and once in `next_reply` just before
+    /// it blocks on the condvar. An observer called from there would hold the
+    /// speaker's lock for as long as its consumer takes, and one that asked the
+    /// speaker anything back would deadlock against itself.
+    ///
+    /// The drain happens whether or not anybody is watching, so a speaker with
+    /// no observer does not accumulate a transition per reply forever.
+    fn notify(&self) {
+        let changes = {
+            let mut state = self.state.lock();
+            if state.changes.is_empty() {
+                return;
+            }
+            std::mem::take(&mut state.changes)
+        };
+        self.dispatch(changes);
+    }
+
+    /// The other half of [`Shared::notify`], for the one caller that already
+    /// holds the lock and releases it around this.
+    fn dispatch(&self, changes: Vec<(UtteranceId, Utterance, u64)>) {
+        let Some(observer) = self.observer.get() else {
+            return;
+        };
+        for (id, state, generation) in changes {
+            observer.changed(id, &state, generation);
+        }
+    }
 }
 
 /// A reply queue bound to one armed conversation.
@@ -303,10 +363,12 @@ impl Speaker {
                 last_error: None,
                 shutdown: false,
                 next_id: 1,
+                changes: Vec::new(),
                 tracked: VecDeque::new(),
                 playing: VecDeque::new(),
             }),
             wake: Condvar::new(),
+            observer: std::sync::OnceLock::new(),
         });
         let worker = std::thread::Builder::new()
             .name("speech-queue".to_string())
@@ -331,28 +393,43 @@ impl Speaker {
     /// The returned [`UtteranceId`] is how the caller finds out what happened
     /// next: accepting a reply says nothing about whether anybody heard it.
     pub fn say(&self, generation: u64, text: &str, voice: &str) -> Result<UtteranceId, SpeakError> {
-        let mut state = self.shared.state.lock();
-        if state.shutdown {
-            return Err(SpeakError::Stopped);
-        }
-        if generation != state.generation {
-            return Err(SpeakError::Stale {
+        let id = {
+            let mut state = self.shared.state.lock();
+            if state.shutdown {
+                return Err(SpeakError::Stopped);
+            }
+            if generation != state.generation {
+                return Err(SpeakError::Stale {
+                    generation,
+                    current: state.generation,
+                });
+            }
+            if state.queue.len() >= MAX_QUEUED {
+                return Err(SpeakError::Full);
+            }
+            let id = state.track(Utterance::Queued);
+            state.queue.push_back(Reply {
+                id,
                 generation,
-                current: state.generation,
+                text: text.to_string(),
+                voice: voice.to_string(),
             });
-        }
-        if state.queue.len() >= MAX_QUEUED {
-            return Err(SpeakError::Full);
-        }
-        let id = state.track(Utterance::Queued);
-        state.queue.push_back(Reply {
-            id,
-            generation,
-            text: text.to_string(),
-            voice: voice.to_string(),
-        });
+            id
+        };
         self.shared.wake.notify_all();
+        self.shared.notify();
         Ok(id)
+    }
+
+    /// Watch every transition from now on.
+    ///
+    /// Set once and only before the first reply, which is why a missed
+    /// transition is not possible: nothing has been queued yet, so `Queued` is
+    /// still the first thing that can happen. Production installs it
+    /// immediately after `new`; a second call is ignored rather than allowed to
+    /// replace a live consumer's stream halfway through a conversation.
+    pub fn observe(&self, observer: Arc<dyn UtteranceObserver>) {
+        let _ = self.shared.observer.set(observer);
     }
 
     /// What became of a reply, or `None` if this speaker never issued that id
@@ -399,6 +476,7 @@ impl Speaker {
         // and an interruption must not wait for that.
         self.output.stop();
         self.shared.wake.notify_all();
+        self.shared.notify();
         generation
     }
 
@@ -450,6 +528,7 @@ fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
         let Some((reply, cancel)) = next_reply(shared, output) else {
             return;
         };
+        shared.notify();
 
         let rendered = speech.synthesize(&reply.text, &reply.voice, &cancel);
 
@@ -468,6 +547,8 @@ fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
                 reply.generation,
                 state.generation
             );
+            drop(state);
+            shared.notify();
             continue;
         }
 
@@ -501,6 +582,8 @@ fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
                 state.last_error = Some(error.to_string());
             }
         }
+        drop(state);
+        shared.notify();
     }
 }
 
@@ -531,6 +614,16 @@ fn next_reply(shared: &Shared, output: &dyn Output) -> Option<(Reply, SpeechCanc
             return None;
         }
         note_playback_drained(&mut state, output);
+        // Announce before the wait arms below can block. A reply the device has
+        // just finished is marked `Finished` on the line above and then this
+        // loop goes to sleep; without draining here that transition would wait
+        // for the *next* reply, which on the last reply of a conversation never
+        // comes. The lock is released around the dispatch for the same reason
+        // `Shared::notify` exists.
+        if !state.changes.is_empty() {
+            let changes = std::mem::take(&mut state.changes);
+            parking_lot::MutexGuard::unlocked(&mut state, || shared.dispatch(changes));
+        }
         match state.queue.pop_front() {
             Some(reply) if reply.generation == state.generation => {
                 let cancel = SpeechCancel::new();
@@ -1422,6 +1515,132 @@ mod tests {
             output.speaking_queries(),
             before,
             "the render thread woke up with nothing playing"
+        );
+    }
+
+    // --- Watching the transitions (833-6fd4) -------------------------------
+
+    /// Every transition, in order, with the turn it happened in.
+    #[derive(Default)]
+    struct Watcher {
+        seen: Mutex<Vec<(UtteranceId, Utterance, u64)>>,
+    }
+
+    impl Watcher {
+        fn states(&self) -> Vec<String> {
+            self.seen
+                .lock()
+                .iter()
+                .map(|(_, state, _)| state.to_string())
+                .collect()
+        }
+    }
+
+    impl UtteranceObserver for Watcher {
+        fn changed(&self, id: UtteranceId, state: &Utterance, generation: u64) {
+            self.seen.lock().push((id, state.clone(), generation));
+        }
+    }
+
+    /// A reply's whole life is pushed, not polled for.
+    ///
+    /// `Finished` is the one that matters and the one a caller cannot be told:
+    /// it happens on the render thread after the device drains, long after
+    /// `say` returned. A consumer that had to discover it would have to poll.
+    #[test]
+    fn every_state_a_reply_passes_through_is_announced_in_order() {
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 7);
+        let watcher = Arc::new(Watcher::default());
+        speaker.observe(Arc::clone(&watcher) as Arc<dyn UtteranceObserver>);
+
+        let id = speaker.say(7, "ciao", "alba").unwrap();
+        eventually("the reply to reach the device", || {
+            speaker.utterance(id) == Some(Utterance::Speaking)
+        });
+        output.finish_playing();
+        eventually("the finish to be announced", || {
+            watcher
+                .states()
+                .last()
+                .is_some_and(|last| last == "finished")
+        });
+
+        assert_eq!(
+            watcher.states(),
+            ["queued", "rendering", "speaking", "finished"],
+            "the states a client renders, in the order they happened"
+        );
+        assert!(
+            watcher
+                .seen
+                .lock()
+                .iter()
+                .all(|(seen, _, turn)| *seen == id && *turn == 7),
+            "one reply, one turn: a consumer keys on the id and refuses a stale turn"
+        );
+    }
+
+    /// The interruption path is announced too, and it is the one where nobody
+    /// is waiting on a return value at all.
+    #[test]
+    fn a_reply_the_user_talked_over_is_announced_as_interrupted() {
+        let hold = Arc::new(Mutex::new(()));
+        let held = hold.lock();
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(
+            Arc::new(FakeSpeech::blocking(Arc::clone(&hold))),
+            Arc::clone(&output) as _,
+            1,
+        );
+        let watcher = Arc::new(Watcher::default());
+        speaker.observe(Arc::clone(&watcher) as Arc<dyn UtteranceObserver>);
+
+        speaker.say(1, "una risposta lunga", "alba").unwrap();
+        eventually("the render to start", || {
+            watcher.states().contains(&"rendering".to_string())
+        });
+
+        let turn = speaker.hush();
+        drop(held);
+
+        eventually("the interruption to be announced", || {
+            watcher.states().contains(&"interrupted".to_string())
+        });
+        assert_eq!(
+            watcher.states(),
+            ["queued", "rendering", "interrupted"],
+            "a reply nobody heard never reports speaking or finished"
+        );
+        assert_eq!(
+            watcher.seen.lock().last().expect("a transition").2,
+            turn,
+            "the interruption is reported in the turn that ended it, not the one that queued it"
+        );
+    }
+
+    /// A speaker nobody is watching must not keep a transition per reply
+    /// forever. The buffer exists to move events off the lock, not to store
+    /// them.
+    #[test]
+    fn transitions_are_dropped_rather_than_accumulated_when_nobody_is_watching() {
+        let output = Arc::new(FakeOutput::default());
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+
+        for _ in 0..5 {
+            let id = speaker.say(0, "ciao", "alba").unwrap();
+            eventually("the reply to reach the device", || {
+                speaker.utterance(id) == Some(Utterance::Speaking)
+            });
+            output.finish_playing();
+            eventually("playback to be resolved", || {
+                speaker.utterance(id) == Some(Utterance::Finished)
+            });
+        }
+
+        assert!(
+            speaker.shared.state.lock().changes.is_empty(),
+            "the drain runs whether or not anybody is listening"
         );
     }
 }

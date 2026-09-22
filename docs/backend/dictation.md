@@ -957,15 +957,49 @@ two reads and a value comparison would be a race dressed as a contract.
 `voice_binds_to_the_calling_terminal_on_the_direct_and_collapsed_paths` proves
 the MCP identity survives both dispatch paths.
 
-**The push half is missing, on purpose and under protest.** Nothing is emitted
-when an utterance changes state, so every consumer polls `speech_status`; that
-part is at least equal on all transports. What is *not* equal is
-`speech-download-progress`, a desktop-only `emit` with no `/events` arm — a
-browser or PWA client sees an asset download start and finish with nothing in
-between, and `dictation-download-progress` beside it has the same gap. Bridging
-either one needs a new `AppEvent` variant, and `state.rs` has been held
-uncommitted by another agent since 2026-09-21. Both sites carry a dated
-`DEFERRED` comment saying so. Story **833-6fd4** owns the work.
+### The push half, on both transports (833-6fd4)
+
+Three pushes leave the backend, and each one is dual-emitted: a desktop
+`app.emit(name, payload)` **and** `state.event_bus.send(AppEvent::…{ payload })`
+for the `/events` SSE stream. There is no bus→window forwarder, so a producer
+that emits only one of the two reaches only one kind of client.
+
+| Event | Fires when | Payload |
+|---|---|---|
+| `dictation-download-progress` | a Whisper model is downloading | `{ downloaded, total, percent }` |
+| `speech-download-progress` | a speech asset is downloading | the same, plus `asset` |
+| `speech-utterance` | a reply changes state | the `SpokenReply` shape `speak_reply` returns |
+
+**One serializer feeds both.** Each `AppEvent` variant carries an
+already-built `serde_json::Value`; the desktop `emit` gets `payload.clone()` and
+the SSE arm returns `payload.clone()`. The two cannot drift, because there is
+only one place the body is built. `every_dictation_push_names_and_shapes_itself_the_same_on_both_transports`
+pins the half that still can — the SSE event name, and its refusal to re-wrap a
+body that is already the payload.
+
+**`asset` distinguishes the two downloads, and only the speech one carries it.**
+A client that renders both bars needs to know which one moved; a Whisper model
+download has no asset id to give. `only_a_speech_download_names_its_asset` holds
+that.
+
+**Utterance state is pushed by the speaker, not by `speak_reply`.** The
+transitions that matter happen on the render thread, seconds after the call that
+queued the reply returned: `Finished` and `Interrupted` have no caller to return
+to. So `speaker.rs` carries an `UtteranceObserver` port, `commands.rs` installs
+the `AppHandle`-backed adapter at startup, and every `track`/`set` is announced.
+Two details are load-bearing:
+
+- **Transitions are buffered and dispatched with the lock released.**
+  `State::set` runs inside the render thread's critical section — several times
+  per `hush` — so calling an observer there would run arbitrary caller code under
+  the speaker's mutex.
+- **`next_reply` drains before it waits.** The last reply of a conversation is
+  marked `Finished` and then the loop blocks on the condvar; without a drain at
+  that point the final transition would wait for a next reply that never comes.
+
+A speaker nobody watches is the ordinary case for a unit test and for the
+headless build, so the observer slot is a `OnceLock` that stays empty and the
+buffered transitions are dropped rather than accumulated.
 
 ### The engine's own sample rate reaches the device
 

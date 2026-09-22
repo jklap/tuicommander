@@ -493,6 +493,32 @@ pub enum AppEvent {
         event: String,
         payload: serde_json::Value,
     },
+    /// A Whisper model download moved. `payload` is the body the desktop
+    /// `dictation-download-progress` emit carries, built once so the two
+    /// transports cannot describe the same download differently.
+    #[serde(rename = "dictation-download-progress")]
+    DictationDownloadProgress { payload: serde_json::Value },
+    /// A speech asset download moved — the runtime library or one language
+    /// bundle. Keyed by asset inside the payload, because a user can start two
+    /// downloads at once and one shared percent would show each of them the
+    /// other's.
+    #[serde(rename = "speech-download-progress")]
+    SpeechDownloadProgress { payload: serde_json::Value },
+    /// A spoken reply changed state: queued, rendering, speaking, finished,
+    /// interrupted or failed.
+    ///
+    /// `payload` is a serialized `dictation::commands::SpokenReply`, the same
+    /// shape `speak` returns and `speech_status` nests. Carried as a value
+    /// rather than as fields for the reason above: one serializer, so a client
+    /// polling the status and a client reading the stream cannot be told two
+    /// different things about one reply.
+    ///
+    /// Pushed from the speaker's own transitions, never from `speak` — the
+    /// interesting ones (`finished`, `interrupted`) happen on the render thread
+    /// long after `speak` returned, and a consumer that had to discover them
+    /// would be polling.
+    #[serde(rename = "speech-utterance")]
+    SpeechUtterance { payload: serde_json::Value },
 }
 
 /// The wire body of [`AppEvent::SessionStateChanged`], shared by the desktop
@@ -4316,7 +4342,13 @@ impl AppState {
             // A mirrored event is the far end's accumulator output. Feeding it
             // in here would build a second, local row for a session this
             // machine does not run.
-            | AppEvent::RemoteMirrored { .. } => {}
+            | AppEvent::RemoteMirrored { .. }
+            // Dictation is bound to a session but says nothing about it: a
+            // download belongs to the installation, and a spoken reply belongs
+            // to the conversation rather than to the terminal it will reach.
+            | AppEvent::DictationDownloadProgress { .. }
+            | AppEvent::SpeechDownloadProgress { .. }
+            | AppEvent::SpeechUtterance { .. } => {}
         }
     }
 

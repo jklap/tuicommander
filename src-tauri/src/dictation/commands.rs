@@ -221,13 +221,11 @@ pub async fn download_whisper_model(app: AppHandle, model_name: String) -> Resul
 
     let app_clone = app.clone();
     let path = model::download_model(whisper_model, move |downloaded, total| {
-        let _ = app_clone.emit(
-            "dictation-download-progress",
-            serde_json::json!({
-                "downloaded": downloaded,
-                "total": total,
-                "percent": if total > 0 { (downloaded as f64 / total as f64 * 100.0) as u32 } else { 0 },
-            }),
+        let payload = download_progress(None, downloaded, total);
+        let _ = app_clone.emit(DICTATION_DOWNLOAD_PROGRESS, payload.clone());
+        push_to_bus(
+            &app_clone,
+            crate::state::AppEvent::DictationDownloadProgress { payload },
         );
     })
     .await?;
@@ -358,14 +356,11 @@ pub async fn download_speech_asset(app: AppHandle, asset: String) -> Result<Stri
     let progress_id = id.clone();
     let path = library
         .install(target, move |downloaded, total| {
-            let _ = progress_app.emit(
-                SPEECH_DOWNLOAD_PROGRESS,
-                serde_json::json!({
-                    "asset": progress_id,
-                    "downloaded": downloaded,
-                    "total": total,
-                    "percent": if total > 0 { (downloaded as f64 / total as f64 * 100.0) as u32 } else { 0 },
-                }),
+            let payload = download_progress(Some(&progress_id), downloaded, total);
+            let _ = progress_app.emit(SPEECH_DOWNLOAD_PROGRESS, payload.clone());
+            push_to_bus(
+                &progress_app,
+                crate::state::AppEvent::SpeechDownloadProgress { payload },
             );
         })
         .await
@@ -374,31 +369,86 @@ pub async fn download_speech_asset(app: AppHandle, asset: String) -> Result<Stri
     Ok(format!("Installed to {}", path.display()))
 }
 
-/// The event a download reports progress on.
-///
-// DEFERRED (2026-09-21) — this is a desktop-only `emit`, with no `/events` SSE
-// arm, so a browser or PWA client sees a download start and finish with
-// nothing in between. That matches `dictation-download-progress` beside it,
-// which has the same gap, so this is not a new hole — but the parity rule in
-// CLAUDE.md says a new push gets bridged, and this one is not.
-//
-// Not done here because bridging means a new `AppEvent` variant, and
-// `src-tauri/src/state.rs` is being edited by another agent right now; adding
-// a variant touches four exhaustive matches in a file I must not move under
-// them.
-//
-// Still not done on 2026-09-22, when #818-2a29 gave the Dictation panel the
-// download rows that render this bar: `state.rs` was still held. The panel
-// works either way — a browser sees the row go from Not Downloaded to
-// Downloaded with no percent in between — so this stays a missing progress
-// bar rather than a missing feature. Bridge the whisper event at the same
-// time; they are one arm each and should not be two commits.
-//
-// Still held on 2026-09-22 when #817-f67c reached its transport-parity
-// criterion, which is the same gap seen from the other end. Both arms and the
-// utterance push below are now story **833-6fd4** rather than three comments
-// waiting on the same file.
+/// The event a speech-asset download reports progress on.
 pub const SPEECH_DOWNLOAD_PROGRESS: &str = "speech-download-progress";
+
+/// The event a Whisper-model download reports progress on.
+pub const DICTATION_DOWNLOAD_PROGRESS: &str = "dictation-download-progress";
+
+/// The event a spoken reply reports its state on.
+pub const SPEECH_UTTERANCE: &str = "speech-utterance";
+
+/// The body both download events carry, built once.
+///
+/// `asset` is present only for a speech asset: a Whisper download has no id
+/// because only one runs at a time, while the runtime library and a language
+/// bundle can download together and a shared percent would show each of them
+/// the other's.
+fn download_progress(asset: Option<&str>, downloaded: u64, total: u64) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "downloaded": downloaded,
+        "total": total,
+        "percent": if total > 0 { (downloaded as f64 / total as f64 * 100.0) as u32 } else { 0 },
+    });
+    if let Some(asset) = asset {
+        payload["asset"] = serde_json::Value::String(asset.to_string());
+    }
+    payload
+}
+
+/// Publish on the `/events` bus beside the desktop `emit`.
+///
+/// Both, never one: there is no bus-to-window forwarder, so a producer that
+/// sends only to the bus goes silent on the desktop, and one that only emits
+/// goes silent in a browser. A missing `AppState` is not an error — the
+/// headless `tuic-remote` build has a bus and no window, and a test harness has
+/// neither.
+#[cfg(feature = "desktop")]
+fn push_to_bus(app: &AppHandle, event: crate::state::AppEvent) {
+    use tauri::Manager;
+    if let Some(state) = app.try_state::<Arc<crate::state::AppState>>() {
+        let _ = state.event_bus.send(event);
+    }
+}
+
+/// Reports every utterance transition on both transports.
+///
+/// It exists because the transitions worth reporting have no caller to return
+/// to: `finished` is decided by the render thread once the device drains, and
+/// `interrupted` by whoever talked over the reply. A client without this is a
+/// client that polls `speech_status`.
+#[cfg(feature = "desktop")]
+struct PushUtterance {
+    app: AppHandle,
+}
+
+#[cfg(feature = "desktop")]
+impl speaker::UtteranceObserver for PushUtterance {
+    fn changed(&self, id: speaker::UtteranceId, state: &speaker::Utterance, generation: u64) {
+        // The same struct `speak` returns and `speech_status` nests, serialized
+        // once for both transports. Three builders for one shape is how the
+        // three descriptions of a reply would drift.
+        let Ok(payload) = serde_json::to_value(SpokenReply::new(id, state, generation)) else {
+            return;
+        };
+        let _ = self.app.emit(SPEECH_UTTERANCE, payload.clone());
+        push_to_bus(
+            &self.app,
+            crate::state::AppEvent::SpeechUtterance { payload },
+        );
+    }
+}
+
+/// Send utterance transitions to the desktop window and the `/events` bus.
+///
+/// Called once at startup, before any conversation can be armed. Installing it
+/// later would be a conversation whose replies are invisible to a browser.
+#[cfg(feature = "desktop")]
+pub fn install_utterance_observer(app: &AppHandle) {
+    use tauri::Manager;
+    *app.state::<DictationState>().utterance_observer.lock() =
+        Some(Arc::new(PushUtterance { app: app.clone() }));
+}
 
 #[tauri::command]
 pub fn cancel_speech_download(
@@ -591,8 +641,14 @@ fn open_speaker_for(
     // microphone hears the reply and the VAD opens a turn on the application's
     // own voice.
     let tapped = speech_far_end(Arc::new(device), dictation);
+    let queue = Arc::new(speaker::Speaker::new(engine, tapped, generation));
+    // Before the first reply can be queued, which is the whole requirement:
+    // `observe` is set-once, and nothing has transitioned yet.
+    if let Some(observer) = dictation.utterance_observer.lock().clone() {
+        queue.observe(observer);
+    }
     Ok(speaker::Armed {
-        speaker: Arc::new(speaker::Speaker::new(engine, tapped, generation)),
+        speaker: queue,
         voice,
         language: language.to_string(),
     })
@@ -810,19 +866,12 @@ pub(crate) fn speak(
         .speaker
         .utterance(id)
         .unwrap_or(speaker::Utterance::Queued);
-    // DEFERRED (2026-09-21) — the push half of the contract. A client learns an
-    // utterance's fate by polling `speech_status`, which every transport has;
-    // nothing is emitted when it changes, so a desktop window and an SSE/WS
-    // consumer both have to ask. Emitting here needs a new `AppEvent` variant in
-    // `state.rs`, which another agent holds uncommitted — landing a half-written
-    // variant in somebody else's change set is worse than a poll. The shape is
-    // settled: one event carrying this same `SpokenReply`, emitted from the
-    // speaker's own transitions rather than from here, so `interrupted` and
-    // `finished` — which happen on the render thread, long after this returns —
-    // are reported too. Wire it as soon as `state.rs` is free.
-    //
-    // Still held on 2026-09-22. Tracked as story **833-6fd4** with the two
-    // download-progress arms, which are blocked on the same variant.
+    // Nothing is emitted from here, on purpose (833-6fd4). The push comes from
+    // the speaker's own transitions — see `PushUtterance` — because the states
+    // worth reporting have no caller to return to: `finished` is decided by the
+    // render thread once the device drains, and `interrupted` by whoever talked
+    // over the reply. An emit here would report `queued` twice and the rest
+    // never.
     Ok(SpokenReply::new(id, &state, wanted))
 }
 
@@ -3147,6 +3196,93 @@ mod tests {
             keys(&accepted),
             "a field added to one construction site and not the other reads as a \
              reply that changed while nobody touched it"
+        );
+    }
+
+    // --- The push half, on both transports (833-6fd4) ---------------------
+
+    /// The desktop window and an SSE consumer are told the same thing, under
+    /// the same name, about the same action.
+    ///
+    /// Equality of the bodies is by construction — one value is cloned to both
+    /// transports — so what this really pins is the half that can still drift:
+    /// the SSE arm's event name, and its refusal to re-wrap the body. A bare
+    /// object on one transport and `{"payload": {...}}` on the other is a store
+    /// that works on the desktop and renders nothing in a browser, which is
+    /// exactly the failure the three events were opened for.
+    #[test]
+    fn every_dictation_push_names_and_shapes_itself_the_same_on_both_transports() {
+        use crate::mcp_http::sse_routes::{event_payload_for_test, event_type_name_for_test};
+        use crate::state::AppEvent;
+
+        let whisper = download_progress(None, 512, 2_048);
+        let asset = download_progress(Some("italian"), 1, 4);
+        let reply = serde_json::to_value(SpokenReply::new(
+            "3".parse().expect("an utterance id"),
+            &speaker::Utterance::Finished,
+            9,
+        ))
+        .expect("serialize");
+
+        for (event, name, desktop) in [
+            (
+                AppEvent::DictationDownloadProgress {
+                    payload: whisper.clone(),
+                },
+                DICTATION_DOWNLOAD_PROGRESS,
+                &whisper,
+            ),
+            (
+                AppEvent::SpeechDownloadProgress {
+                    payload: asset.clone(),
+                },
+                SPEECH_DOWNLOAD_PROGRESS,
+                &asset,
+            ),
+            (
+                AppEvent::SpeechUtterance {
+                    payload: reply.clone(),
+                },
+                SPEECH_UTTERANCE,
+                &reply,
+            ),
+        ] {
+            assert_eq!(
+                event_type_name_for_test(&event),
+                name,
+                "the SSE stream must offer the name the frontend already listens for"
+            );
+            assert_eq!(
+                &event_payload_for_test(&event),
+                desktop,
+                "{name} arrives in a different shape over SSE than through the window"
+            );
+        }
+    }
+
+    /// The two downloads differ in one field, and the difference is
+    /// load-bearing.
+    #[test]
+    fn only_a_speech_download_names_its_asset() {
+        let whisper = download_progress(None, 512, 2_048);
+        let asset = download_progress(Some("italian"), 1, 4);
+
+        assert_eq!(whisper["percent"], serde_json::json!(25));
+        assert!(
+            whisper.get("asset").is_none(),
+            "one Whisper model downloads at a time, so there is nothing to key on"
+        );
+        assert_eq!(
+            asset["asset"],
+            serde_json::json!("italian"),
+            "the runtime library and a language download together; a shared percent \
+             would show each of them the other's"
+        );
+        assert_eq!(asset["percent"], serde_json::json!(25));
+        assert_eq!(
+            download_progress(None, 7, 0)["percent"],
+            serde_json::json!(0),
+            "a server that sent no length must not divide by it"
         );
     }
 
