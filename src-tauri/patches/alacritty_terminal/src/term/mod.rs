@@ -14,7 +14,7 @@ use log::{debug, trace};
 use unicode_width::UnicodeWidthChar;
 
 use crate::event::{Event, EventListener};
-use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
+use crate::grid::{Dimensions, Grid, GridIterator, Scroll, ScrollSource};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
 use crate::term::cell::{Cell, Flags, LineLength};
@@ -956,7 +956,27 @@ impl<T> Term<T> {
     /// Text moves up; clear at top
     /// Expects origin to be in scroll range.
     #[inline]
-    fn scroll_up_relative(&mut self, origin: Line, mut lines: usize) {
+    fn scroll_up_relative(&mut self, origin: Line, lines: usize) {
+        self.scroll_up_relative_from(origin, lines, ScrollSource::Overflow);
+    }
+
+    /// Scroll because content reached the bottom of the region — a linefeed, or
+    /// an index past the bottom margin.
+    ///
+    /// Deliberately **not** `Handler::scroll_up`. That method is the SU control
+    /// and removes lines; sharing it with this path is what made the two
+    /// indistinguishable, so a fix aimed at SU would silently stop linefeed
+    /// from feeding history too (#834-1878).
+    #[inline]
+    fn scroll_up_overflow(&mut self, lines: usize) {
+        let origin = self.scroll_region.start;
+        self.scroll_up_relative_from(origin, lines, ScrollSource::Overflow);
+    }
+
+    /// `scroll_up_relative`, saying whether the lines left the screen or were
+    /// removed by a control. See `grid::ScrollSource`.
+    #[inline]
+    fn scroll_up_relative_from(&mut self, origin: Line, mut lines: usize, source: ScrollSource) {
         trace!("Scrolling up relative: origin={origin}, lines={lines}");
 
         lines = cmp::min(
@@ -972,7 +992,7 @@ impl<T> Term<T> {
             .take()
             .and_then(|s| s.rotate(self, &region, lines as i32));
 
-        self.grid.scroll_up(&region, lines);
+        self.grid.scroll_up_with(&region, lines, source);
 
         // Scroll vi mode cursor.
         let viewport_top = Line(-(self.grid.display_offset() as i32));
@@ -1181,7 +1201,7 @@ impl<T> Term<T> {
         if next >= self.scroll_region.end {
             self.grid.cursor.point.column = Column(0);
             self.grid.cursor.input_needs_wrap = false;
-            self.scroll_up(1);
+            self.scroll_up_overflow(1);
         } else if next < self.screen_lines() {
             self.damage_cursor();
             self.grid.cursor.point.line += 1;
@@ -1201,7 +1221,7 @@ impl<T> Term<T> {
     {
         let next = self.grid.cursor.point.line + 1;
         if next >= self.scroll_region.end {
-            self.scroll_up(1);
+            self.scroll_up_overflow(1);
         } else if next < self.screen_lines() {
             self.damage_cursor();
             self.grid.cursor.point.line += 1;
@@ -1832,7 +1852,11 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn scroll_up(&mut self, lines: usize) {
         let origin = self.scroll_region.start;
-        self.scroll_up_relative(origin, lines);
+        // SU (`CSI S`). Nothing is scrolled off the bottom: the control removes
+        // lines, so nothing may enter history. `linefeed`/`index` overflow does
+        // NOT come through here — it calls `scroll_up_overflow`, which is the
+        // whole point of the split (#834-1878).
+        self.scroll_up_relative_from(origin, lines, ScrollSource::Control);
     }
 
     #[inline]
@@ -1880,7 +1904,12 @@ impl<T: EventListener> Handler for Term<T> {
             // absolute row coordinate (`lines_scrolled`/`total_scrolled`) is
             // built on its current meaning. Story #834-1878; evidence in
             // `tests/terminal-stress/INTEGRITY_FINDINGS.md`.
-            self.scroll_up_relative(origin, lines);
+            // DL removes lines; it does not scroll them off the bottom. Routing
+            // this through the overflow path is what pushed the removed rows
+            // into scrollback, and it accounted for 279 of the retained ANSI
+            // differential failures — an agent TUI that repaints with DL grew
+            // scrollback rows it never printed (#834-1878).
+            self.scroll_up_relative_from(origin, lines, ScrollSource::Control);
             // DEC returns the cursor to the left margin after DL.
             self.grid.cursor.point.column = Column(0);
         }
@@ -4299,6 +4328,132 @@ mod tests {
             next_char_lands_at(&mut term),
             Point::new(Line(2), Column(0))
         );
+    }
+
+    /// Fill every row with a distinct letter, so a row that moved is
+    /// identifiable rather than merely present.
+    fn fill_rows(term: &mut Term<VoidListener>, rows: usize) {
+        for row in 0..rows {
+            term.goto(row as i32, 0);
+            term.input(char::from(b'a' + row as u8));
+        }
+    }
+
+    #[test]
+    fn delete_lines_at_the_top_row_does_not_manufacture_history() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+        fill_rows(&mut term, 4);
+        let before = term.grid.total_scrolled();
+
+        term.goto(0, 0);
+        term.delete_lines(2);
+
+        // DL removes rows from the screen; it does not scroll them off the
+        // bottom. A reference terminal grows its buffer only for an index past
+        // the bottom margin, so history must not move — every row DL removes
+        // here would otherwise be a scrollback row the agent never printed.
+        assert_eq!(term.grid.history_size(), 0, "DL created scrollback");
+        assert_eq!(
+            term.grid.total_scrolled(),
+            before,
+            "DL moved the absolute row coordinate"
+        );
+    }
+
+    #[test]
+    fn scroll_up_control_does_not_manufacture_history() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+        fill_rows(&mut term, 4);
+        let before = term.grid.total_scrolled();
+
+        term.goto(0, 0);
+        <Term<VoidListener> as Handler>::scroll_up(&mut term, 2);
+
+        assert_eq!(term.grid.history_size(), 0, "SU created scrollback");
+        assert_eq!(
+            term.grid.total_scrolled(),
+            before,
+            "SU moved total_scrolled"
+        );
+    }
+
+    /// The negative control, and the whole reason the two paths are separated
+    /// rather than both disabled: a linefeed past the bottom margin is content
+    /// leaving the screen, and it must still become history.
+    #[test]
+    fn a_linefeed_past_the_bottom_margin_still_feeds_history() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+        fill_rows(&mut term, 4);
+        let before = term.grid.total_scrolled();
+
+        term.goto(3, 0);
+        term.linefeed();
+
+        assert_eq!(
+            term.grid.history_size(),
+            1,
+            "a linefeed lost its history row"
+        );
+        assert_eq!(
+            term.grid.total_scrolled(),
+            before + 1,
+            "a linefeed must advance the absolute row coordinate"
+        );
+    }
+
+    /// The same criterion read the way its consumers read it. TUIC resolves a
+    /// selection snapshot, a search offset and an eviction rebase against
+    /// `total_scrolled() - history_size()` — the count of rows already dropped
+    /// off the top. Both terms moving together hides a DL that moved neither
+    /// individually, so the base is asserted directly, and the retained rows
+    /// are compared as text: a base that survives while the rows underneath it
+    /// change is the same bug wearing the invariant as a disguise.
+    #[test]
+    fn delete_lines_leaves_a_scrollback_snapshot_resolving_to_the_same_text() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+        fill_rows(&mut term, 4);
+
+        // Earn the history the legitimate way first, so there is a snapshot to
+        // invalidate at all.
+        term.goto(3, 0);
+        term.linefeed();
+        term.linefeed();
+        assert_eq!(term.grid.history_size(), 2, "the snapshot would be empty");
+
+        let retained = |term: &Term<VoidListener>| -> Vec<char> {
+            (1..=term.grid.history_size())
+                .map(|back| term.grid[Line(-(back as i32))][Column(0)].c)
+                .collect()
+        };
+        let base_before = term.grid.total_scrolled() - term.grid.history_size();
+        let snapshot = retained(&term);
+
+        term.goto(0, 0);
+        term.delete_lines(2);
+
+        assert_eq!(
+            term.grid.total_scrolled() - term.grid.history_size(),
+            base_before,
+            "DL moved the base a snapshot resolves against"
+        );
+        assert_eq!(retained(&term), snapshot, "DL rewrote retained scrollback");
+    }
+
+    #[test]
+    fn delete_lines_keeps_the_rows_it_did_not_remove() {
+        let mut term = Term::new(Config::default(), &TermSize::new(5, 4), VoidListener);
+        fill_rows(&mut term, 4);
+
+        term.goto(0, 0);
+        term.delete_lines(2);
+
+        // Rows below the deleted ones move up; the vacated rows at the bottom
+        // are blank. Without this, "no new history" could be satisfied by a
+        // DL that simply did nothing.
+        assert_eq!(term.grid[Line(0)][Column(0)].c, 'c');
+        assert_eq!(term.grid[Line(1)][Column(0)].c, 'd');
+        assert_eq!(term.grid[Line(2)][Column(0)].c, ' ');
+        assert_eq!(term.grid[Line(3)][Column(0)].c, ' ');
     }
 
     #[test]

@@ -167,13 +167,40 @@ and the oracle is not, and the other four are a single unfixed mechanism:
 > shape of the duplication the `ink-repaint` and `scrollout` scenarios exist to
 > catch.
 
-That one is **deliberately not fixed here.** Separating "scrolled off the
+That one was **deliberately not fixed here.** Separating "scrolled off the
 bottom" from "deleted by a control" changes `Grid::scroll_up`, and TUIC's
 absolute row coordinate (`lines_scrolled` / `total_scrolled`) is built on its
 current meaning — selection snapshots, search offsets and eviction rebasing all
 read it. It is a fork architecture decision, not a handler patch, and it removes
 scrollback a user may currently be relying on. Tracked as story `#834-1878`,
 with a `DEFERRED (2026-09-22)` marker at the `delete_lines` call site.
+
+### Resolved by #834-1878 (2026-09-22)
+
+`Grid::scroll_up_with` now takes a `ScrollSource`, and only `Overflow` feeds
+history. Re-measured by replaying every retained `raw.bin` under
+`.tmp/terminal-integrity/failures/` through `replay_capture_from_env` twice —
+once with the two control call sites routed back through `Overflow`, once with
+the fix — so the before and after come from the same driver over the same set:
+
+| | Match | Rows grew, payload has DL or SU | Other residual |
+|---|---|---|---|
+| Control scrolls as overflow (pre-fix) | 873 | 205 | 292 |
+| Control scrolls as control (fixed) | 1032 | **0** | 338 |
+
+The bucket the story exists to close is empty. Two cautions on reading the rest
+of that table. The set is **1,371 directories**, not the 1,266 counted above, so
+these totals are not comparable to the pre-fix figures in the previous section —
+only to each other. And "other residual" grows by 46 because those captures
+stopped differing by row count and now differ only in content: removing the
+manufactured rows revealed a mismatch it had been masking, it did not create
+one. They need minimisation, the same as the 18 already unclassified.
+
+One ordered pair was in the DL/SU class on this set,
+`pair-reverse-index-delete-lines`, and it now matches exactly. The nine that
+still fail are untouched by this change: eight are tab-stop cases with identical
+row counts, and `pair-text-erase-display` grows by 11 with no DL or SU in the
+payload.
 
 ## Passing boundaries
 
