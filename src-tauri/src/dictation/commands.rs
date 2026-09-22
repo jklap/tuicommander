@@ -393,6 +393,11 @@ pub async fn download_speech_asset(app: AppHandle, asset: String) -> Result<Stri
 // Downloaded with no percent in between — so this stays a missing progress
 // bar rather than a missing feature. Bridge the whisper event at the same
 // time; they are one arm each and should not be two commits.
+//
+// Still held on 2026-09-22 when #817-f67c reached its transport-parity
+// criterion, which is the same gap seen from the other end. Both arms and the
+// utterance push below are now story **833-6fd4** rather than three comments
+// waiting on the same file.
 pub const SPEECH_DOWNLOAD_PROGRESS: &str = "speech-download-progress";
 
 #[tauri::command]
@@ -815,6 +820,9 @@ pub(crate) fn speak(
     // speaker's own transitions rather than from here, so `interrupted` and
     // `finished` — which happen on the render thread, long after this returns —
     // are reported too. Wire it as soon as `state.rs` is free.
+    //
+    // Still held on 2026-09-22. Tracked as story **833-6fd4** with the two
+    // download-progress arms, which are blocked on the same variant.
     Ok(SpokenReply::new(id, &state, wanted))
 }
 
@@ -3087,6 +3095,59 @@ mod tests {
             serde_json::json!(accepted.utterance_id)
         );
         assert!(wire["utterance"]["state"].is_string());
+    }
+
+    /// Answering a caller and answering its poll must describe a reply the same
+    /// way (817-f67c criterion 5).
+    ///
+    /// `speak` returns a `SpokenReply`, `status` nests one, and the deferred
+    /// `/events` arm will carry one — three surfaces, one shape. The assertion
+    /// is on the *keys* rather than the values, and deliberately so: the render
+    /// thread advances the state between the two reads, so a value comparison
+    /// would be a race dressed up as a contract.
+    #[test]
+    fn a_reply_looks_the_same_whether_it_was_accepted_or_polled_for() {
+        fn keys(reply: &SpokenReply) -> Vec<String> {
+            let mut keys: Vec<String> = serde_json::to_value(reply)
+                .expect("serialize")
+                .as_object()
+                .expect("an object")
+                .keys()
+                .cloned()
+                .collect();
+            keys.sort();
+            keys
+        }
+
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        let accepted = speak(&dictation, Caller::Owner, "hello", None).expect("accepted");
+
+        let answered = serde_json::to_value(&accepted).expect("serialize");
+        assert_eq!(
+            answered["utteranceId"],
+            serde_json::json!(accepted.utterance_id)
+        );
+        assert!(answered["state"].is_string());
+        assert!(answered["turn"].is_u64());
+        assert_eq!(
+            keys(&accepted),
+            ["error", "state", "turn", "utteranceId"],
+            "these are the four fields every transport carries for one reply"
+        );
+
+        let polled = speech_status(&dictation, Some(&accepted.utterance_id))
+            .utterance
+            .expect("the id was asked about");
+        assert_eq!(
+            polled.utterance_id, accepted.utterance_id,
+            "polling by id must answer about that id"
+        );
+        assert_eq!(
+            keys(&polled),
+            keys(&accepted),
+            "a field added to one construction site and not the other reads as a \
+             reply that changed while nobody touched it"
+        );
     }
 
     /// Auto has no language until somebody speaks, and a voice assistant that
