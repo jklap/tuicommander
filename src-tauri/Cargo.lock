@@ -699,6 +699,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64-simd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339abbe78e73178762e23bea9dfd08e697eb3f3301cd4be981c0f78ba5859195"
+dependencies = [
+ "outref",
+ "vsimd",
+]
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -771,6 +781,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "bitvec"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddcec3d12c579d40898fe0a9a358a803c23e9c52ca3c425707f81c9436211837"
+dependencies = [
+ "funty",
+ "radium",
+ "tap",
+ "wyz",
 ]
 
 [[package]]
@@ -1024,6 +1046,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "case_insensitive_string"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d1e5af1533db1cecb562d78ac47fe7125d9c729cc8d5bb484db90ad78c8a3d9"
+dependencies = [
+ "compact_str 0.8.2",
+ "serde",
+]
+
+[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1107,6 +1139,41 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "chromey"
+version = "2.58.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81c967b80cb61038057b2731abc0b0f264ec37592e83006212526ccede90cb46"
+dependencies = [
+ "aho-corasick",
+ "base64 0.22.1",
+ "case_insensitive_string",
+ "dashmap",
+ "dunce",
+ "fnv",
+ "futures-util",
+ "hashbrown 0.16.1",
+ "lazy_static",
+ "libc",
+ "memchr",
+ "phf 0.13.1",
+ "pin-project-lite",
+ "rand 0.10.2",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "spider_chromiumoxide_cdp",
+ "spider_chromiumoxide_types",
+ "spider_fingerprint",
+ "spider_network_blocker",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "tracing",
+ "url",
+ "winreg 0.56.0",
 ]
 
 [[package]]
@@ -1256,6 +1323,21 @@ dependencies = [
 
 [[package]]
 name = "compact_str"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fd622ebbb56a5b2ccb651b32b911cdeb2a9b4b11776b2473bf26a26a286244e"
+dependencies = [
+ "castaway",
+ "cfg-if",
+ "itoa",
+ "rustversion",
+ "ryu",
+ "serde",
+ "static_assertions",
+]
+
+[[package]]
+name = "compact_str"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9dfdd1c2274d9aa354115b09dc9a901d6c5576818cdf70d14cae2bdb47df00ab"
@@ -1396,6 +1478,15 @@ name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affbf0190ed2caf063e3def54ff444b449371d55c58e513a95ab98eca50adb49"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -1867,6 +1958,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "debugid"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
+dependencies = [
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1980,7 +2081,7 @@ version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
 dependencies = [
- "convert_case",
+ "convert_case 0.10.0",
  "proc-macro2",
  "quote",
  "rustc_version",
@@ -2592,6 +2693,12 @@ checksum = "76ee7a02da4d231650c7cea31349b889be2f45ddb3ef3032d2ec8185f6313fd2"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "funty"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
 name = "futures"
@@ -4400,6 +4507,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "if_chain"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd62e6b5e86ea8eeeb8db1de02880a6abc01a397b2ebb64b5d74ac255318f5cb"
+
+[[package]]
 name = "ignore"
 version = "0.4.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5987,6 +6100,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "outref"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
+
+[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6718,6 +6837,12 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "radium"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rand"
@@ -7892,6 +8017,94 @@ dependencies = [
 ]
 
 [[package]]
+name = "sourcemap"
+version = "9.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "314d62a489431668f719ada776ca1d49b924db951b7450f8974c9ae51ab05ad7"
+dependencies = [
+ "base64-simd",
+ "bitvec",
+ "data-encoding",
+ "debugid",
+ "if_chain",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "unicode-id-start",
+ "url",
+]
+
+[[package]]
+name = "spider_chromiumoxide_cdp"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "425d07927c18fd157c4680cee8c7868e4a9bf4723bda1a4951c3316e3abdea4b"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spider_chromiumoxide_pdl",
+ "spider_chromiumoxide_types",
+]
+
+[[package]]
+name = "spider_chromiumoxide_pdl"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4090793264cfc7533186505f7cc2198ef03325dfcbfe32d0e6814c6ca759051f"
+dependencies = [
+ "either",
+ "heck 0.4.1",
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "serde",
+ "serde_json",
+ "spider_chromiumoxide_types",
+]
+
+[[package]]
+name = "spider_chromiumoxide_types"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7be30fbd75f45897bedcecde72e67ccad7cb4e8d11b92f34b7301c0f62592bf3"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "spider_fingerprint"
+version = "2.39.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a74484e5e741d794810fa463c1b276d8913edf797abbfe83cbd55c4a6f141c40"
+dependencies = [
+ "aho-corasick",
+ "case_insensitive_string",
+ "http",
+ "lazy_static",
+ "phf 0.11.3",
+ "rand 0.9.5",
+ "serde",
+ "url",
+]
+
+[[package]]
+name = "spider_network_blocker"
+version = "0.0.86"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cb9d0d693e6ecaa44ec7733348edb9b0edd2605c9573cc889ad798ca8d90068"
+dependencies = [
+ "arc-swap",
+ "convert_case 0.11.0",
+ "hashbrown 0.17.1",
+ "phf 0.13.1",
+ "phf_codegen",
+ "serde",
+ "url",
+]
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8185,6 +8398,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "tap"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tar"
@@ -8790,7 +9009,7 @@ checksum = "b238e22d44a15349529690fb07bd645cf58149a1b1e44d6cb5bd1641ff1a6223"
 dependencies = [
  "ahash",
  "aho-corasick",
- "compact_str",
+ "compact_str 0.9.1",
  "dary_heap",
  "derive_builder",
  "esaxx-rs",
@@ -9292,6 +9511,7 @@ dependencies = [
  "bcrypt",
  "block2",
  "bm25",
+ "chromey",
  "chrono",
  "console-subscriber",
  "cpal",
@@ -9344,6 +9564,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "sha2 0.11.0",
+ "sourcemap",
  "ssh2-config",
  "strip-ansi-escapes",
  "tar",
@@ -9506,6 +9727,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7eec5d1121208364f6793f7d2e222bf75a915c19557537745b195b253dd64217"
 
 [[package]]
+name = "unicode-id-start"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0825d2e09dcae814a4273c1e1435979d414ede25b2ee235b1545da6682483765"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9663,6 +9890,12 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vsimd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vswhom"
@@ -10740,6 +10973,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10811,6 +11054,15 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-version",
  "x11-dl",
+]
+
+[[package]]
+name = "wyz"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
+dependencies = [
+ "tap",
 ]
 
 [[package]]

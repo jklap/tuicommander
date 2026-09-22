@@ -89,6 +89,9 @@
 /config/repositories/stale-temp
 /config/themes
 /config/ui-prefs
+/design-mode
+/design-mode/start
+/design-mode/stop
 /diagnostics/capture
 /dictation/config
 /dictation/corrections

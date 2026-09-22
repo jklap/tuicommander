@@ -622,6 +622,7 @@ const API_PREFIXES: &[&str] = &[
     "config",
     "debug",
     "diagnostics",
+    "design-mode",
     "dictation",
     "ego",
     "events",
@@ -1679,6 +1680,20 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/api/push/test", post(push_test))
         // SSH tunnel management
         .nest("/tunnels", tunnel_routes());
+
+    #[cfg(feature = "desktop")]
+    {
+        routes = routes
+            .route(
+                "/design-mode/start",
+                post(crate::design_mode::commands::start),
+            )
+            .route(
+                "/design-mode/stop",
+                post(crate::design_mode::commands::stop),
+            )
+            .route("/design-mode", get(crate::design_mode::commands::statuses));
+    }
 
     // MCP Streamable HTTP transport — only when MCP is enabled
     if mcp_enabled {

@@ -30,6 +30,8 @@ pub(crate) mod cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) mod credentials;
 #[cfg(feature = "desktop")]
+pub(crate) mod design_mode;
+#[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
 pub(crate) mod ego_cli;
@@ -2097,6 +2099,9 @@ pub fn run() {
             tunnels::tauri_commands::list_ssh_config_hosts,
             tunnels::tauri_commands::list_ssh_agent_keys,
             tunnels::tauri_commands::get_tunnel_audit,
+            design_mode::tauri_commands::start_design_mode,
+            design_mode::tauri_commands::stop_design_mode,
+            design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_connect,
             acp_commands::acp_reconnect,
             acp_commands::acp_disconnect,
@@ -2180,6 +2185,9 @@ pub fn run() {
                     // Kill all SSH tunnel processes so ports are freed for restart
                     if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
                         state.tunnel_manager.shutdown_all();
+                        if let Some(manager) = state.design_mode.get() {
+                            tauri::async_runtime::block_on(manager.stop_all());
+                        }
                         crate::ai_agent::knowledge::flush_dirty(state.inner());
                     }
                     // Flush the last buffered log lines to disk before the

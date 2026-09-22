@@ -7614,6 +7614,22 @@ fn injection_payload(text: &str) -> String {
     }
 }
 
+/// Paste into an agent composer without clearing or submitting existing input.
+pub(crate) fn prefill_agent_input(
+    state: &Arc<AppState>,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    if !session_is_agent(state, session_id) {
+        return Err("Session is not running an agent".into());
+    }
+    crate::mcp_http::session::write_pty_input_parts(
+        state,
+        session_id,
+        &["\x1b[200~", text, "\x1b[201~"],
+    )
+}
+
 /// Real-time gap inserted between the payload write and the Enter write of an
 /// injection. Ink/raw-mode agents (Codex, Claude Code) only treat the trailing
 /// CR as a submit when it arrives in a SEPARATE `read()` from the text; a

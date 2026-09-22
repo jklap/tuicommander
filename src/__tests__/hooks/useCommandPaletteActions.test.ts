@@ -36,7 +36,7 @@ const { mockContextActions, mockGetActionEntries, mockPluginStore, mockPrompt, m
 			isGroupFullyParked: vi.fn(() => false),
 			setParkGroup: vi.fn(),
 		},
-		mockTerminals: { state: { activeId: "term-1" as string | null }, get: vi.fn() },
+		mockTerminals: { state: { activeId: "term-1" as string | null }, get: vi.fn(), findTerminalWithSession: vi.fn() },
 	}));
 
 vi.mock("../../actions/actionRegistry", () => ({ getActionEntries: mockGetActionEntries }));
@@ -49,9 +49,14 @@ vi.mock("../../stores/promptLibrary", () => ({
 }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: mockRepositories }));
 vi.mock("../../stores/terminals", () => ({ terminalsStore: mockTerminals }));
+vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 vi.mock("../../stores/updater", () => ({ updaterStore: { checkForUpdate: vi.fn().mockResolvedValue(undefined) } }));
 
 import { useCommandPaletteActions } from "../../hooks/useCommandPaletteActions";
+import { invoke } from "../../invoke";
+import { toastsStore } from "../../stores/toasts";
+import * as transport from "../../transport";
 
 describe("useCommandPaletteActions", () => {
 	let dispose: (() => void) | undefined;
@@ -68,7 +73,68 @@ describe("useCommandPaletteActions", () => {
 			{ id: "inspect", label: "Inspect", action: vi.fn(), disabled: vi.fn() },
 		]);
 		mockTerminals.get.mockReturnValue({ sessionId: "session-1" });
+		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "session-1", agentType: "claude" });
 		vi.clearAllMocks();
+	});
+
+	it("starts design mode from the session finder, never the active terminal", async () => {
+		mockTerminals.get.mockReturnValue({ sessionId: "wrong-session", agentType: "claude" });
+		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "chosen-session", agentType: "claude" });
+		let actions: ReturnType<typeof useCommandPaletteActions> | undefined;
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			actions = useCommandPaletteActions({
+				shortcutHandlers: {} as never,
+				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
+				splitPanes: { resetLayout: vi.fn() } as never,
+				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+			});
+		});
+		const action = actions?.().find((entry) => entry.id === "start-design-mode");
+		expect(action).toBeDefined();
+		action?.execute();
+		await Promise.resolve();
+		expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "chosen-session" });
+		expect(mockTerminals.get).not.toHaveBeenCalled();
+	});
+
+	it("reports a design mode start failure with the backend message", async () => {
+		vi.mocked(invoke).mockRejectedValueOnce(new Error("No dev server"));
+		let actions: ReturnType<typeof useCommandPaletteActions> | undefined;
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			actions = useCommandPaletteActions({
+				shortcutHandlers: {} as never,
+				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
+				splitPanes: { resetLayout: vi.fn() } as never,
+				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+			});
+		});
+		actions?.()
+			.find((entry) => entry.id === "start-design-mode")
+			?.execute();
+		await Promise.resolve();
+		expect(toastsStore.add).toHaveBeenCalledWith(expect.any(String), "No dev server", "error");
+	});
+
+	it("explains the browser host after starting design mode from the palette", async () => {
+		const tauri = vi.spyOn(transport, "isTauri").mockReturnValue(false);
+		let actions: ReturnType<typeof useCommandPaletteActions> | undefined;
+		createRoot((rootDispose) => {
+			dispose = rootDispose;
+			actions = useCommandPaletteActions({
+				shortcutHandlers: {} as never,
+				gitOps: { getWorktreeTargets: vi.fn(() => []) } as never,
+				splitPanes: { resetLayout: vi.fn() } as never,
+				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
+			});
+		});
+		actions?.()
+			.find((entry) => entry.id === "start-design-mode")
+			?.execute();
+		await Promise.resolve();
+		expect(toastsStore.add).toHaveBeenCalledWith("Design Mode", "Chrome opened on the host machine.", "info");
+		tauri.mockRestore();
 	});
 
 	afterEach(() => {

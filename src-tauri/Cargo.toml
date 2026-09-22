@@ -303,6 +303,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 console-subscriber = { version = "0.5", optional = true }
 cron = "0.17"
+chromey = { version = "2.58", default-features = false, features = ["bytes"], optional = true }
+sourcemap = { version = "9.3.2", optional = true }
 toml = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ssh2-config = "0.7"
@@ -310,6 +312,8 @@ ssh2-config = "0.7"
 [features]
 default = ["desktop"]
 desktop = [
+    "dep:chromey",
+    "dep:sourcemap",
     "dep:tauri",
     "dep:tauri-build",
     "dep:tauri-plugin-opener",

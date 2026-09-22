@@ -87,6 +87,7 @@ const AWAITING_CLASSES: Record<string, string> = {
 
 interface TerminalTabViewProps extends SharedTabViewProps {
 	index: number;
+	designModeStatus?: "armed" | "stopped";
 	quickSwitcherActive: boolean;
 	isEditing: boolean;
 	showWorkspaceMetadata: boolean;
@@ -157,6 +158,18 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 				}}
 			>
 				<span class={s.tabIcon}>●</span>
+				<Show when={props.designModeStatus}>
+					<span
+						class={cx(s.designModeBadge, props.designModeStatus === "armed" ? s.designModeArmed : s.designModeStopped)}
+						title={
+							props.designModeStatus === "armed"
+								? t("tabBar.designModeArmed", "Design Mode armed")
+								: t("tabBar.designModeStopped", "Design Mode stopped")
+						}
+					>
+						{props.designModeStatus === "armed" ? "D" : "D·"}
+					</span>
+				</Show>
 				<Show
 					when={props.isEditing}
 					fallback={

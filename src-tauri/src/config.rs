@@ -1310,6 +1310,9 @@ pub(crate) struct RepoSettingsEntry {
     /// repo, and a global default would consolidate repos you never asked about.
     #[serde(default)]
     pub(crate) auto_consolidate_worktrees: bool,
+    /// Repo-specific browser URL for Design Mode; never exported to .tuic.json.
+    #[serde(default)]
+    pub(crate) dev_server_url: Option<String>,
 }
 
 impl RepoSettingsEntry {
@@ -1334,6 +1337,7 @@ impl RepoSettingsEntry {
             || self.mcp_upstreams.is_some()
             || !self.branch_labels.is_empty()
             || self.auto_consolidate_worktrees
+            || self.dev_server_url.is_some()
     }
 }
 
@@ -4744,6 +4748,7 @@ mod tests {
                 path: "/my/repo".to_string(),
                 display_name: "my-repo".to_string(),
                 auto_consolidate_worktrees: true,
+                dev_server_url: None,
                 base_branch: Some("main".to_string()),
                 copy_ignored_files: Some(true),
                 copy_untracked_files: None,
@@ -5291,6 +5296,25 @@ mod tests {
         assert_eq!(entry.prompt_on_create, None);
         assert_eq!(entry.delete_branch_on_remove, None);
         assert_eq!(entry.orphan_cleanup, None);
+    }
+
+    #[test]
+    fn dev_server_url_round_trips_without_changing_older_repo_settings() {
+        let old: RepoSettingsEntry = serde_json::from_str(r#"{"path":"/my/repo"}"#).unwrap();
+        assert_eq!(old.dev_server_url, None);
+        assert!(!old.has_custom_settings());
+        let configured = RepoSettingsEntry {
+            path: "/my/repo".into(),
+            dev_server_url: Some("http://localhost:5173".into()),
+            ..Default::default()
+        };
+        assert!(configured.has_custom_settings());
+        let json = serde_json::to_string(&configured).unwrap();
+        let loaded: RepoSettingsEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.dev_server_url.as_deref(),
+            Some("http://localhost:5173")
+        );
     }
 
     #[test]

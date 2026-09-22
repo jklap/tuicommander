@@ -27,6 +27,7 @@ export interface CommandPaletteProps {
  * until their HTTP or browser implementation has been verified explicitly.
  */
 const BROWSER_ACTION_IDS = new Set([
+	"start-design-mode",
 	"new-terminal",
 	"close-terminal",
 	"reopen-closed-tab",

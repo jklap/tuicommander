@@ -93,6 +93,7 @@ describe("SettingsPanel — repo context", () => {
 			path: "/repo",
 			displayName: "my-repo",
 			autoConsolidateWorktrees: false,
+			devServerUrl: null,
 			baseBranch: "automatic",
 			copyIgnoredFiles: false,
 			copyUntrackedFiles: false,
@@ -130,6 +131,13 @@ describe("SettingsPanel — repo context", () => {
 		const activeItem = container.querySelector(".navItem.active");
 		expect(activeItem!.classList.contains("navItemRepo")).toBe(true);
 		expect(activeItem!.textContent).toBe("my-repo");
+	});
+
+	it("shows a repo-specific Design Mode URL field", () => {
+		const { container } = render(() => <SettingsPanel {...defaultProps} />);
+		const field = container.querySelector<HTMLInputElement>("#repo-dev-server-url");
+		expect(field).not.toBeNull();
+		expect(field?.type).toBe("url");
 	});
 
 	it("shows repo settings content when repo nav item is active", () => {

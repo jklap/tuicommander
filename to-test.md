@@ -8,6 +8,35 @@
 
 # To Test
 
+## Design Mode (2026-09-23) — **Rust, needs a `make dev` restart**
+
+The existing `make dev` process does not hot-reload Rust. Restart it when the
+current agent sessions can be closed, or use a separate debug instance with
+`TUIC_APP_INSTANCE=<id>` to keep its configuration isolated. Targeted tests
+cover the individual contracts; this check joins them in a real Chrome and
+agent session.
+
+An isolated `make dev` attempt on 2026-09-23 stopped before launch because
+port 1421 was already serving a different checkout's Vite server. Do not stop
+that checkout merely to run this check.
+
+- [ ] In the restarted instance, set a repository's **Dev Server URL** to a
+      local page with a click handler. Start Design Mode from an agent tab: a
+      dedicated Chrome window opens the configured URL, hovering highlights an
+      element, and clicking selects it without firing the page handler.
+- [ ] Begin typing a note in the bound agent's composer, select two elements,
+      and confirm both grab blocks appear alongside the untouched note without
+      submitting. Check selector, path, style subset, rectangle, HTML snippet,
+      nearby text, source location when the dev build supplies one, and a valid
+      `[image: …]` PNG path.
+- [ ] Start Design Mode from another agent terminal in the same repository.
+      Confirm the existing Chrome window is reused and subsequent grabs go to
+      the newly bound terminal. Close that terminal, then Chrome: the status
+      indicator must show Stopped and no further grab may be delivered.
+- [ ] With a separate debug instance, check that quitting TUICommander closes
+      only the Chrome windows it owns. A browser/PWA start must explain that
+      Chrome opens on the host machine.
+
 ## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
 
 - [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift.

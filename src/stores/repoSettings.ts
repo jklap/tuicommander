@@ -33,6 +33,8 @@ export interface RepoSettings {
 	 *  Repo-specific, not inheritable — it describes how you want to look at THIS
 	 *  repo, and a global default would consolidate repos you never asked about. */
 	autoConsolidateWorktrees: boolean;
+	/** Repo-specific URL opened by Design Mode; null opens about:blank. */
+	devServerUrl: string | null;
 	/** null = inherit global default (true on macOS). When false: left-Option sends composition chars instead of meta sequences */
 	terminalMetaHotkeys: boolean | null;
 	/** null = inherit from repoDefaultsStore */
@@ -196,6 +198,7 @@ function blankSettings(path: string, displayName: string): RepoSettings {
 		displayName,
 		color: "",
 		autoConsolidateWorktrees: false,
+		devServerUrl: null,
 		branchLabels: {},
 		...OVERRIDABLE_NULL_DEFAULTS,
 	};
