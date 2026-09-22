@@ -10419,6 +10419,26 @@ fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
     result
 }
 
+/// PID of a session's deepest foreground process — the agent itself, not the
+/// shell that launched it.
+///
+/// On Unix the process group leader answers it directly; on Windows there is no
+/// such notion, so the process tree is walked. Both the Tauri command and the
+/// HTTP handler call this rather than keeping a copy of the split.
+pub(crate) fn session_leaf_pid(state: &AppState, session_id: &str) -> Option<u32> {
+    let entry = state.session_maps.sessions.get(session_id)?;
+    let session = entry.value().lock();
+    #[cfg(not(windows))]
+    {
+        let pgid = session.master.process_group_leader()?;
+        u32::try_from(pgid).ok()
+    }
+    #[cfg(windows)]
+    {
+        deepest_descendant_pid(session._child.process_id()?)
+    }
+}
+
 /// the chain: shell → agent CLI (e.g. claude.exe).
 #[cfg(windows)]
 pub(crate) fn deepest_descendant_pid(root_pid: u32) -> Option<u32> {

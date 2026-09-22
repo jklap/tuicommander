@@ -239,6 +239,15 @@ pub(crate) fn read_agent_env_overrides(agent_type: &str, pid: u32) -> HashMap<St
     overrides
 }
 
+/// Claude Code's project directory for `cwd`, as a path.
+///
+/// The `String`-returning `claude_project_dir` below is the IPC face of this;
+/// callers inside the backend want a `PathBuf` to `join` onto and should use
+/// this one rather than round-tripping through a `Result<String, _>`.
+pub(crate) fn claude_project_dir_path(cwd: &str, config_dir: Option<&str>) -> Option<PathBuf> {
+    Some(claude_projects_dir(config_dir)?.join(path_to_claude_slug(cwd)))
+}
+
 /// Return the absolute path to Claude Code's project directory for a given CWD.
 /// E.g. `/Users/foo/bar` → `~/.claude/projects/-Users-foo-bar`.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -246,9 +255,8 @@ pub(crate) fn claude_project_dir(
     cwd: String,
     claude_config_dir: Option<String>,
 ) -> Result<String, String> {
-    let base = claude_projects_dir(claude_config_dir.as_deref())
+    let path = claude_project_dir_path(&cwd, claude_config_dir.as_deref())
         .ok_or_else(|| "Could not determine home directory".to_string())?;
-    let path = base.join(path_to_claude_slug(&cwd));
     path.to_str()
         .map(|s| s.to_string())
         .ok_or_else(|| "Project path contains non-UTF-8 characters".to_string())

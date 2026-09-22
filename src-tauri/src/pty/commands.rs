@@ -649,18 +649,7 @@ pub(crate) fn get_session_leaf_pid(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<u32> {
-    let entry = state.session_maps.sessions.get(&session_id)?;
-    let session = entry.value().lock();
-    #[cfg(not(windows))]
-    {
-        let pgid = session.master.process_group_leader()?;
-        Some(pgid as u32)
-    }
-    #[cfg(windows)]
-    {
-        let child_pid = session._child.process_id()?;
-        deepest_descendant_pid(child_pid)
-    }
+    super::session_leaf_pid(&state, &session_id)
 }
 
 /// Check if a PTY session has a non-shell foreground process running.

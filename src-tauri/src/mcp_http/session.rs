@@ -883,20 +883,7 @@ pub(super) async fn get_session_leaf_pid(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let pid = (|| -> Option<u32> {
-        let entry = state.session_maps.sessions.get(&session_id)?;
-        let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            let pgid = session.master.process_group_leader()?;
-            Some(pgid as u32)
-        }
-        #[cfg(windows)]
-        {
-            let child_pid = session._child.process_id()?;
-            crate::pty::deepest_descendant_pid(child_pid)
-        }
-    })();
+    let pid = crate::pty::session_leaf_pid(&state, &session_id);
     Json(serde_json::json!({ "pid": pid }))
 }
 
@@ -978,6 +965,148 @@ pub(super) async fn get_process_stats(State(state): State<Arc<AppState>>) -> imp
 
 pub(super) async fn process_monitor_panel() -> impl IntoResponse {
     axum::response::Html(include_str!("process_monitor.html"))
+}
+
+pub(super) async fn subagent_map_panel() -> impl IntoResponse {
+    axum::response::Html(include_str!("subagent_map.html"))
+}
+
+/// A session the map can be drawn for, for the page's picker.
+#[derive(serde::Serialize)]
+pub(crate) struct MapSessionRef {
+    pub id: String,
+    pub title: String,
+}
+
+/// The whole map payload. Field names are snake_case on the wire, matching
+/// [`crate::subagent_map::Lane`] and `LaneEvent`, so the page reads one casing.
+#[derive(serde::Serialize)]
+pub(crate) struct MapPayload {
+    /// Only sessions that have spawned at least one subagent.
+    pub sessions: Vec<MapSessionRef>,
+    pub selected: Option<String>,
+    pub origin_ms: i64,
+    pub lanes: Vec<crate::subagent_map::Lane>,
+    pub events: Vec<crate::subagent_map::LaneEvent>,
+}
+
+/// Where one TUIC session's Claude transcripts live on disk.
+struct MapSource {
+    subagents_dir: std::path::PathBuf,
+    parent_transcript: std::path::PathBuf,
+    title: String,
+}
+
+/// Resolve a TUIC session id to the files its subagents write.
+///
+/// The id is a key into `AppState` and never reaches the filesystem: every path
+/// component comes from the session's own cwd, the agent process's
+/// `CLAUDE_CONFIG_DIR`, and the session uuid Claude itself published. An unknown
+/// id therefore resolves to `None` rather than to a path.
+///
+/// `None` is the ordinary answer — for a shell tab, for a Claude tab that has
+/// spawned nothing, and for a session whose agent has exited.
+fn resolve_map_source(state: &AppState, session_id: &str) -> Option<MapSource> {
+    // Gate on the agent type TUIC already detected. Claude discovery falls back
+    // to "newest unclaimed session file under the project dir" when the pid is
+    // not in Claude's registry, so asking it about a shell tab would hand this
+    // session another tab's transcript (issue #119).
+    let is_claude = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| s.agent_type.clone())
+        .is_some_and(|t| t == "claude");
+    if !is_claude {
+        return None;
+    }
+
+    let (cwd, title) = {
+        let entry = state.session_maps.sessions.get(session_id)?;
+        let session = entry.value().lock();
+        (
+            session.cwd.clone()?,
+            session
+                .display_name
+                .clone()
+                .unwrap_or_else(|| session_id.to_owned()),
+        )
+    };
+    let pid = crate::pty::session_leaf_pid(state, session_id)?;
+    let config_dir = crate::agent_session::read_agent_env_overrides("claude", pid)
+        .remove("CLAUDE_CONFIG_DIR");
+    let uuid = crate::agent_session::discover_agent_session(
+        "claude".to_owned(),
+        cwd.clone(),
+        Vec::new(),
+        Some(pid),
+        std::collections::HashMap::new(),
+    )?
+    .session_id;
+
+    Some(MapSource {
+        subagents_dir: crate::subagent_map::subagents_dir(&cwd, config_dir.as_deref(), &uuid)?,
+        parent_transcript: crate::agent_session::claude_project_dir_path(
+            &cwd,
+            config_dir.as_deref(),
+        )?
+        .join(format!("{uuid}.jsonl")),
+        title,
+    })
+}
+
+/// The swimlane data for one session, plus the list the picker offers.
+///
+/// An unknown or absent `?session=` is not an error: the page opens before a
+/// session is chosen, and a session can stop qualifying between two polls.
+pub(super) async fn subagent_map_data(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let mut sources: Vec<(String, MapSource)> = state
+        .session_maps
+        .sessions
+        .iter()
+        .map(|e| e.key().clone())
+        .filter_map(|id| resolve_map_source(&state, &id).map(|s| (id, s)))
+        .collect();
+    sources.sort_by(|a, b| a.1.title.cmp(&b.1.title).then_with(|| a.0.cmp(&b.0)));
+
+    let sessions: Vec<MapSessionRef> = sources
+        .iter()
+        .map(|(id, s)| MapSessionRef {
+            id: id.clone(),
+            title: s.title.clone(),
+        })
+        .collect();
+
+    // An id naming no candidate selects nothing. It is never used to build a
+    // path, so there is nothing to reject and nothing to sanitise.
+    let selected = params
+        .get("session")
+        .filter(|id| sources.iter().any(|(sid, _)| &sid == id))
+        .cloned();
+
+    let body = selected
+        .as_ref()
+        .and_then(|id| sources.iter().find(|(sid, _)| sid == id))
+        .map(|(_, source)| {
+            crate::subagent_map::build_map(
+                &mut state.subagent_map_cache.lock(),
+                &source.subagents_dir,
+                &source.parent_transcript,
+                &source.title,
+            )
+        })
+        .unwrap_or_default();
+
+    Json(MapPayload {
+        sessions,
+        selected,
+        origin_ms: body.origin_ms,
+        lanes: body.lanes,
+        events: body.events,
+    })
 }
 
 pub(super) async fn create_session_with_worktree(
