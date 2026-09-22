@@ -39,6 +39,26 @@ in every rebase. Adding a `rustfmt.toml` matching upstream would stop it growing
 | `src/grid/tests.rs` | Upstream resize tests migrated to `ReflowMode`; new `shrink_reflow_history_only` case | Keeps upstream's reflow coverage green after the signature change and pins the new mode. |
 | `src/term/cell.rs` | `CellExtra.zerowidth: ArrayVec<char, MAX_ZEROWIDTH_CHARS>` (was `Vec<char>`), `push_zerowidth` uses `try_push`, `clear_wide` assigns `ArrayVec::new()`; direct `arrayvec` dep | **Backport of upstream `ede2ac14`** (2026-08-26, master only — 0.26.0 predates it, so this is not yet available from crates.io). The unbounded `Vec` let a single cell absorb combining marks forever (`echo -en a; while true; do echo -en '\xcc\x81'; done`), a memory-exhaustion vector any PTY child can reach. Overflow now drops the character instead of allocating. Bound is 9, upstream's value — no glyph cluster we render needs more, and `zerowidth()` still hands out a `&[char]` so no caller changed. **This row exists to stop the next rebase silently reverting the fix:** delete it only once the version we pin actually contains `ede2ac14`. `arrayvec` was already in the lock via `vte`, so the dep costs no new crate. |
 | `src/tty/unix.rs` | `ShellUser::from_env` calls `getpwuid_r` only when `USER`/`HOME`/`SHELL` is missing | Upstream resolves the passwd entry unconditionally on every PTY spawn. TUIC spawns many PTYs; the lookup is skipped when the environment already answers. |
+| `src/term/mod.rs` | IL/DL reset the cursor column; ICH/DCH/ECH clear the pending wrap; ED0 spares the cell behind a pending wrap | Three inherited divergences from the DEC contract, found by the ANSI differential harness (`tests/terminal-stress/INTEGRITY_FINDINGS.md`). They are described one row below; each is pinned by a `term::tests` case that names the operation. |
+
+### The pending wrap and the edit operations
+
+A character written into the last column leaves the cursor there and arms
+`input_needs_wrap` instead of moving past the margin. Which operations resolve
+that pending state is not a matter of taste — it decides where the next
+character lands and whether the last visible cell survives. Upstream Alacritty
+answers three of them differently from DEC and from xterm:
+
+| Operation | Contract | What upstream did |
+|---|---|---|
+| IL (`CSI Ps L`), DL (`CSI Ps M`) | return the cursor to the left margin, but only when the line is inside the scroll region; clear the pending wrap either way | left the column stranded mid-row, so the rest of the line painted at the wrong offset |
+| ICH (`CSI Ps @`), DCH (`CSI Ps P`), ECH (`CSI Ps X`) | edit the cell under the cursor, therefore resolve the pending wrap | carried the wrap past the edit, so the next character jumped to the following row |
+| ED0 (`CSI 0 J`) | the erase origin is past the right margin, so the current line keeps its last cell; lines below still clear | erased that cell, dropping a character the user had already seen |
+
+ED1, EL0, EL1 and EL2 already agreed with the reference and are deliberately
+unchanged — `clear_line` has carried the `LineClearMode::Right` guard all along.
+Do not "fix" them alongside the three rows above; `term::tests` pins their
+current behaviour for exactly that reason.
 
 ## VTE patch (`src-tauri/patches/vte/`)
 
