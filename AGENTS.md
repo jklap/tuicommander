@@ -446,7 +446,8 @@ nothing to retract it.
 
 A hook-instrumented agent showing a picker that is *not* AskUserQuestion (plan
 pickers, skill menus, anything with `Type something` / `Chat about this`) reports
-through OSC 777 and nothing else. Prefer protocol signals over screen scraping,
+through OSC 777; an open Ink footer also supplies the presence-recovery backstop.
+Prefer protocol signals over screen scraping,
 and parse them off the **raw** stream — the VT parser consumes escape sequences,
 so they never reach the clean rows.
 
@@ -481,6 +482,13 @@ which is precisely why the footer is the key.
 `.tcap` captures include user input and can replay SET/CLEAR ordering, but the
 `Awaiting RETRACTION` block must still drive the real event-bus accumulator and
 assert `SessionState` — the thing a tab actually renders.
+
+**Do not exclude hook-instrumented sessions from dialog recovery.** A retained
+PTY capture on 2026-09-21 showed `state=awaiting`, then fifteen `state=busy`
+markers, then an open dialog while the session reported working. Recovery must
+use the last pending Question/UserInput event in a chunk, not the presence of
+any Question: a later clear supersedes it. Keep the column-0 footer anchor and
+the guards against an existing badge, choice prompt, or pending question.
 
 ## Frontend performance instrumentation (`perfDebug`)
 
