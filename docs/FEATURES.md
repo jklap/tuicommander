@@ -273,6 +273,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
 - Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there)
 - Merged badge: branches merged into main show a "Merged" badge
+- Unmerged mark: a small neutral outlined square shows commits outside the default branch even when the diff and dirty counts are zero
 - Question indicator: `?` icon (orange, pulsing) when agent asks a question
 - Idle indicator: branch icons turn grey when the repo has no active terminals
 - Quick switcher badge: numbered index shown when `Cmd+Ctrl` held
