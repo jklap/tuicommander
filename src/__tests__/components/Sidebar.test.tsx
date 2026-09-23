@@ -1087,6 +1087,66 @@ describe("Sidebar", () => {
 			expect(badge?.getAttribute("title")).toBeNull();
 		});
 
+		/** Both chips point at uncommitted work, so either one opens the diff of
+		 *  that workspace — never the diff of whichever branch was active. */
+		it("opens the changes panel for the row when the dirty chip is clicked", () => {
+			uiStore.setGitPanelVisible(false);
+			const onBranchSelect = vi.fn();
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						feature: {
+							workspaceId: "feature",
+							branchName: "feature",
+							isMain: false,
+							worktreePath: "/repo1__wt/feature",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+							lifecycleStatus: { dirtyFiles: 113, commitStatus: "in_sync", removalSafety: "requires_force" },
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+			const badge = container.querySelector(".lifecycleBadge") as HTMLElement;
+			expect(badge.textContent).toBe("113 dirty");
+			fireEvent.click(badge);
+			expect(onBranchSelect).toHaveBeenCalledTimes(1);
+			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "feature");
+			expect(uiStore.state.gitPanelVisible).toBe(true);
+			expect(uiStore.state.gitPanelRequestedTab).toBe("changes");
+		});
+
+		it("keeps the changes panel open when a chip is clicked while it already shows", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: { branchName: "main", isMain: true, worktreePath: null, terminals: [], additions: 3, deletions: 1 },
+					},
+				}),
+			});
+			uiStore.setGitPanelVisible(false);
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const stats = container.querySelector(".branchStats") as HTMLElement;
+			fireEvent.click(stats);
+			fireEvent.click(stats);
+			expect(uiStore.state.gitPanelVisible).toBe(true);
+			expect(uiStore.state.gitPanelRequestedTab).toBe("changes");
+		});
+
+		it("gives the Merged chip no click action", () => {
+			uiStore.setGitPanelVisible(false);
+			const onBranchSelect = vi.fn();
+			renderLifecycle({ lifecycleStatus: { dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" } });
+			const badge = document.querySelector(".lifecycleBadge") as HTMLElement;
+			expect(badge.textContent).toBe("Merged");
+			fireEvent.click(badge);
+			expect(uiStore.state.gitPanelVisible).toBe(false);
+			expect(badge.getAttribute("role")).toBeNull();
+			expect(onBranchSelect).not.toHaveBeenCalled();
+		});
+
 		/** When the stats chip takes the row, the count is not dropped — it moves
 		 *  into that chip's tooltip, so the answer is still one hover away. */
 		it("carries the file count in the stats tooltip when the stats chip is shown", () => {

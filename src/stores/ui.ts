@@ -308,6 +308,12 @@ function createUIStore() {
 			setExclusivePanel("gitPanelVisible", visible);
 		},
 
+		/** Open the git panel on the given tab; never closes it. */
+		openGitPanelOnTab(tab: GitPanelTab): void {
+			setState("gitPanelRequestedTab", tab);
+			setExclusivePanel("gitPanelVisible", true);
+		},
+
 		/**
 		 * Open the git panel and switch to the given tab.
 		 * If the panel is already open on that tab, close it (toggle behaviour).
