@@ -8,11 +8,70 @@
 
 # To Test
 
+## Hands-free turns reach a busy agent at once (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, arm hands-free on a Claude Code tab, give it a long task, and speak while it works. The turn appears in the terminal within a second or two (Claude queues it or takes it mid-turn), not after the turn ends. `GET /logs?source=...` shows `hands-free turn typed now`.
+- [ ] While Claude shows a permission dialog, speak: nothing is typed into the dialog; the log shows `hands-free turn parked` with `reason="confident question on screen"`. Answer the dialog: the turn is typed.
+- [ ] Queue a typed command in the Compose panel while the agent is busy, then speak: the spoken turn waits behind the typed one and follows it right after the next idle.
+
+## Opening AI Chat no longer aborts the app (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, open the AI Chat panel (ego over ACP) and send a prompt. The app stays up and the reply streams in. Before the fix, `acp_subscribe` called `tokio::spawn` on the main thread, which panicked with `TryCurrentError` (SIGABRT, crash report `tuicommander-2026-09-23-164623.ips`) and killed every PTY session.
+
+## Voiceless dictation languages are marked (2026-09-23) — frontend via HMR
+
+- [ ] [VISUAL] Settings → Dictation → Language: languages without a speech bundle (e.g. Japanese) read "Japanese — no spoken replies"; Italian/English and Auto-detect carry no marker. Choosing Japanese shows a hint under the select that replies will not be spoken and suggests Auto-detect; choosing Italian or Auto-detect hides it.
+
+## Readable Design Mode tab badge (2026-09-23) — frontend via HMR
+
+- [ ] [VISUAL] Arm Design Mode on an agent tab, then stop it. The boxed `D·` badge in the tab is readable on the dark tab bar: letter and border in `--fg-primary`, 11px text. The armed `D` stays green.
+
+## Hands-free from the Command Palette (2026-09-23) — frontend only, Vite HMR
+
+- [ ] [HUMAN] With dictation enabled, open the Command Palette on an agent tab and run "Start hands-free conversation". Speak a sentence: it reaches that tab and the first earcon plays (priming happened inside the palette click). Switch tabs and reopen the palette: the entry reads "Stop hands-free conversation"; run it and the conversation stops.
+
+## Reply language stated once per hands-free conversation (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, with the dictation language on Auto-detect, arm hands-free on an idle agent tab and say two Italian sentences, then one English sentence. The terminal receives `<first> (reply in Italian)`, the second sentence with no suffix, and `<english> (reply in English)`.
+- [ ] After the same restart, set the dictation language to Italian and arm again: the start notice ends with `Reply in Italian.` and the first spoken turn carries no suffix.
+
+## Custom hands-free start notice (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, in Settings → Dictation → Hands-free, type a two-line start notice and arm hands-free on an idle agent tab: the agent receives your text as one line, not the built-in notice. Press **Reset to default**, disarm and arm again: the built-in notice is sent. `GET http://localhost:9876/dictation/hands-free/default-notice` returns the built-in text.
+- [ ] After the same restart, the **Start notice** textarea in Settings → Dictation shows the built-in text in grey as its placeholder. Before the restart it is empty and the log reads `Failed to load the default hands-free start notice`, because the old backend has no such endpoint.
+
+## Activation phrase survives Whisper's spelling (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] [HUMAN] After a `make dev` restart, with the activation phrase `senti mac`, arm hands-free and say three sentences that begin with "senti mac". Each one is queued, without the phrase. Then say "senti, ma che ore sono?" to someone else: it is dropped. For every dropped turn, `curl 'localhost:9876/logs?source=dictation'` shows the line `Hands-free turn dropped…` with a `heard=` field that holds the first four words Whisper wrote.
+
+## Parked voice turns leave together (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, arm hands-free on a Claude tab, give it a long task, and speak three short turns while it works. At the next idle the three turns arrive together as one message, in the order spoken, one `(reply in Italian)` line each — not one message per agent turn. A command typed into Compose between the turns still arrives as its own message.
+
 ## Settings consistency: Language, ego, Spoken replies (2026-09-23) — Rust part needs `make dev` restart
 
-- [ ] [VISUAL] Settings → General: no Language picker (only English ships). The AI Chat section (Experimental Features on) looks like TUIC CLI: `?` tooltip, green "Configured at …", **Select…** opens a file picker and saves the pick, **Clear** empties it.
-- [ ] [VISUAL] Settings → Dictation → Spoken replies: rows look like the Whisper list. Only the language replies are spoken in is highlighted with "Active"; a running download shows its bar and a × to cancel.
-- [ ] After the restart, start a speech download with `curl -X POST localhost:9876/dictation/speech/assets/download -H 'content-type: application/json' -d '{"asset":"german"}'` while Settings → Dictation is open. The bar climbs, then the row turns to Downloaded by itself instead of staying at 100% with a cancel control.
+- [x] [VISUAL] Settings → General: no Language picker (only English ships). The AI Chat section (Experimental Features on) looks like TUIC CLI: `?` tooltip, green "Configured at …", **Select…** opens a file picker and saves the pick, **Clear** empties it. _(verified 2026-09-23 by screenshot after restart: no Language row; AI Chat shows the `?` badge, the not-configured hint and Select…, matching TUIC CLI. Select/Clear not clicked — `ego_executable` is empty on disk)_
+- [x] [VISUAL] Settings → Dictation → Spoken replies: rows look like the Whisper list. Only the language replies are spoken in is highlighted with "Active"; a running download shows its bar and a × to cancel. _(verified 2026-09-23 by screenshot: Downloaded badges and × on every ready bundle, highlight and Active on Italian only, as on Whisper Large V3 Turbo. The in-progress bar was not observed on screen)_
+- [x] After the restart, start a speech download with `curl -X POST localhost:9876/dictation/speech/assets/download -H 'content-type: application/json' -d '{"asset":"german"}'` while Settings → Dictation is open. The bar climbs, then the row turns to Downloaded by itself instead of staying at 100% with a cancel control. _(verified 2026-09-23 on the restarted instance: German download over HTTP emitted 8000+ progress events on `/events`, then `{"asset":"german","done":true}`; catalogue reports `ready`. The store clearing the bar on `done` is covered by `dictation.test.ts` "clears a finished download this client never started")_
+
+## Echo reference covers the whole reply (2026-09-23) — Rust, needs a `make dev` restart
+
+- [ ] [HUMAN] After the restart, use the laptop speakers (no headphones). Arm hands-free with a voice and ask for a reply of at least 10 seconds. The reply plays to the end without cutting itself off, and no turn arrives that repeats its words. In `tuic.log`, no `speech: hushed` line appears during the reply, and there is no `echo: far-end reference full` warning.
+- [ ] [HUMAN] Talk over a long reply after its first 3 seconds. It stops. The log shows `speech: hushed` with `speaking=true` and an `into_playback_ms` above 3000, then `Hands-free turn accepted heard=` with your words.
+
+## Barge-in waits for sustained speech (2026-09-23) — Rust, needs a `make dev` restart
+
+- [ ] [HUMAN] After the restart, use the laptop speakers (no headphones). Arm hands-free with a voice and ask a question. The spoken reply plays to the end unless you talk over it. Talk over a second reply: it stops within about a quarter of a second, and your first words are in the transcript.
+- [ ] [HUMAN] After the restart, in hands-free, say half a sentence, pause about a second, and finish it before the hold-back ends. One turn arrives with both halves; the first half is not sent alone.
+
+## Calm hands-free voice meter (2026-09-23) — frontend via HMR; the Rust level fallback needs a `make dev` restart
+
+- [ ] [VISUAL] Arm hands-free. The toast shows one thin horizontal voice meter and the phase text — no pulsing dot and no moving dots after the text. Push-to-talk (dictation hotkey) still shows the bar meter, the dot and the dots.
+- [ ] Stay silent with normal room noise (fan, typing): the voice meter stays flat. Speak: it fills at once and falls back smoothly over about 1.5 s after you stop, with no flicker between words.
+
+## Unmerged worktree removal (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] After the restart, a clean worktree with commits not in the default branch shows `Unmerged` in the sidebar even with no diff or dirty badge. Choosing Delete Worktree while **Delete branch on remove** is on keeps the worktree and its terminals and explains that the branch has unmerged commits. With that setting off, removal keeps the local branch.
 
 ## Sub-agent tags and branch count (2026-09-23) — Rust, needs `make dev` restart
 
@@ -24,7 +83,11 @@
 
 ## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
 
-- [ ] Settings → Dictation → Spoken replies: remove Italian if installed, then Download it. It reaches Ready with no hash error, and a spoken reply uses the giovanni voice.
+- [x] Download reaches Ready with no hash error _(verified 2026-09-23: `POST /dictation/speech/assets/download` for onnxruntime, italian, english, french; all `ready`, sha256 checked during install)_
+- [ ] [HUMAN] A hands-free reply in Italian is spoken with the giovanni voice (`/dictation/speech/speak` refuses while hands-free is not armed).
+- [ ] **Rust, needs another `make dev` restart:** arm hands-free on a hand-opened Claude tab, then `voice action=status` from that tab reports `available: true` instead of "Speech is bound to another session" (caller now resolved to its live PTY, `resolve_mcp_origin_pty`).
+- [ ] Settings → Dictation → Spoken replies lists English, French, German, Italian, Portuguese and Spanish. Set the Whisper language to English, download English, and a hands-free reply is spoken in English with the alba voice.
+- [ ] French (24-layer, ~390 MB): download and speak one reply. The engine reads the layer count from `bundle.json`, but no 24-layer bundle has been run here before.
 
 ## Alias survives a WebView reload (2026-09-23) — Rust, needs `make dev` restart
 
@@ -38,6 +101,13 @@
 - [ ] Pinned: `Ctrl+Enter` sends, the editor empties and keeps the caret; the panel stays open. `Shift+Ctrl+Enter` does the same through the queue.
 - [ ] Pinned: click in the terminal and type — the caret stays in the terminal (not pulled back into the panel). `Cmd+I` and `Esc` move the caret between the panel and the terminal.
 - [ ] Pinned in one tab only: another tab's compose panel still closes after send.
+- [ ] The ✕ at the right of the status bar closes the panel, pinned or not; reopening with `Cmd+I` shows it unpinned.
+
+## Hands-free earcons (2026-09-23) — **Rust, needs a `make dev` restart**
+
+- [ ] Arm hands-free on the desktop, speak a turn: after the hold-back a short, quiet blip plays as it reaches the agent. Set an activation phrase and speak without it: a softer, lower blip plays and nothing is sent. Neither blip opens a turn or stops a spoken reply. Repeat from a browser tab at `:9876` — the tab beeps, the desktop stays silent. Also check the first blip after arming from the global hotkey is audible (WKWebView may keep an ungestured AudioContext suspended). Turn the Earcons setting off and repeat: no sound on the desktop, and none in a browser tab armed after the change.
+
+- [ ] Earcon redesign (frontend, live via HMR): a delivered turn plays two short **rising** notes; a dropped turn plays two softer **falling** notes. Each is recognisable without hearing the other, and neither opens a turn, appears as captured speech, or stops a spoken reply.
 
 ## Dictation auto-send on long text (2026-09-23) — frontend, live via HMR
 
@@ -55,14 +125,14 @@
 
 The List | Flow toggle is frontend and appears through HMR at once, but the running backend has no `progress_flow` until it restarts, so Flow shows an error line until then. The first open after the restart migrates `progress.sqlite3` (table rebuild for the new kinds).
 
-- [ ] After the restart, open Progress: the List still shows every older entry, and deleting one still works. _(NOTE 2026-09-23: FAILS on :9876. `POST /progress/list` and `POST /progress/flow` both answer `progress_store_unavailable: cannot read the progress id high-water mark: no such table: sqlite_sequence`. The live `progress.sqlite3` (1614 entries) was created with a bare `id INTEGER PRIMARY KEY` (no AUTOINCREMENT), so `sqlite_sequence` does not exist and `rebuild_for_hand_offs` (`progress/store.rs:146-153`) errors in every `ProgressStore::open()`. No entry has been written since the restart (newest `created_at_ms` 12:04). The migration test only covers an AUTOINCREMENT journal.)_
+- [ ] After the restart, open Progress: the List still shows every older entry, and deleting one still works. _(2026-09-23 after restart: `POST /progress/list` returns 200 with 349 entries, ids 388–1618, so older entries are back; delete not exercised on live data.)_ _(OLD NOTE 2026-09-23: FAILED on :9876. `POST /progress/list` and `POST /progress/flow` both answer `progress_store_unavailable: cannot read the progress id high-water mark: no such table: sqlite_sequence`. The live `progress.sqlite3` (1614 entries) was created with a bare `id INTEGER PRIMARY KEY` (no AUTOINCREMENT), so `sqlite_sequence` does not exist and `rebuild_for_hand_offs` (`progress/store.rs:146-153`) errors in every `ProgressStore::open()`. No entry has been written since the restart (newest `created_at_ms` 12:04). The migration test only covers an AUTOINCREMENT journal.)_
 - [ ] From a Claude terminal in a registered repo, `agent action=spawn` a peer with a prompt. List shows `delegated to <child>`; Flow shows a blue arrow from the parent's column to the child's, labelled with the prompt. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] Have the child `agent action=send` to the parent and report `done`. Flow shows a grey message arrow child → parent, then a green return arrow child → parent. No toast for the delegation or the message; one silent toast for `done`. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] Spawn the child into a managed worktree (`repo action=worktree_create spawn_session`). Its `intent:` now appears on its column (it was dropped before). _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] In a Claude terminal, run 2 subagents (one nested). Each gets a column under its terminal with a tool count; the dashed arrow carries its task and, once done, a green arrow carries its report. Clicking a long label fetches the full text, with any token shown as `[REDACTED]`. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] Select one terminal in the selector: Flow keeps that terminal, its parent and its children only. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] [VISUAL] With 6+ columns: the header row stays pinned while scrolling, every arrow ends on a lifeline, and the dialog scrolls sideways rather than squashing columns.
-- [ ] **Store fix, needs another `make dev` restart:** after the restart, one `progress` call (or `POST /progress/list`) succeeds, and the live journal's schema (`SELECT sql FROM sqlite_master WHERE name='entries'` on `<config dir>/progress.sqlite3`) contains `'delegated'`. The legacy no-AUTOINCREMENT journal is migrated with every id kept.
+- [x] **Store fix, needs another `make dev` restart:** after the restart, one `progress` call (or `POST /progress/list`) succeeds, and the live journal's schema (`SELECT sql FROM sqlite_master WHERE name='entries'` on `<config dir>/progress.sqlite3`) contains `'delegated'`. The legacy no-AUTOINCREMENT journal is migrated with every id kept. _(verified 2026-09-23 after restart: `progress` returned id 1617; schema now `INTEGER PRIMARY KEY AUTOINCREMENT` with `'delegated'` in the CHECK; `sqlite_sequence` = 1617 = MAX(id); `POST /progress/list` and `/progress/flow` answer 200, list ids 388–1618.)_
 - [ ] After the same restart: in a Claude session with 65+ subagents, the newest and every running one still get a Flow column; expand a Flow row, let a new entry arrive, and the same row stays expanded.
 - [x] `curl -s -o /dev/null -w '%{http_code}' localhost:9876/agents/map` answers `404`: the map page is removed. _(verified 2026-09-23: returned `404` on :9876.)_
 
