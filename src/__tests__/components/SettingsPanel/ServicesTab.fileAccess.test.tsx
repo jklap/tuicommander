@@ -16,6 +16,30 @@ vi.mock("../../../stores/settings", () => ({
 	},
 }));
 
+// `ServicesTab` unconditionally mounts `LocalServicesPanel`, which fetches
+// `get_local_ips` from a `createResource` on mount whose result nothing in
+// this test's rendered tree ever reads — same shape as the leak documented in
+// `DeepLinkSection.test.tsx`. The global Tauri mock has no case for it (it's
+// added on the fly by `RemoteQrDialog.test.tsx`'s own local switch), so it
+// falls through to `setup.ts`'s reject-everything stub; because nothing
+// subscribes to this resource's error, that rejection escapes as a genuinely
+// unhandled one, which fails this whole test FILE even though every
+// individual assertion in it passes. Intercept only this one command —
+// everything else keeps going through the real `rpc()`, so the load-bearing
+// "load_config resolves undefined" assumption the first test below documents
+// stays intact.
+vi.mock("../../../transport", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../../transport")>();
+	return {
+		...actual,
+		rpc: (async (command: string, ...rest: unknown[]) => {
+			if (command === "get_local_ips") return [];
+			// biome-ignore lint/suspicious/noExplicitAny: forwarding to the real overloaded rpc()
+			return (actual.rpc as any)(command, ...rest);
+		}) as typeof actual.rpc,
+	};
+});
+
 import { ServicesTab } from "../../../components/SettingsPanel/tabs/ServicesTab";
 
 /** ServicesTab's onMount fires several fire-and-forget rpc calls (status poll,
