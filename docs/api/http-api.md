@@ -161,7 +161,9 @@ GET /sessions
 
 Returns array of active session info (ID, cwd, worktree path, branch,
 `display_name`, `display_name_is_custom`, `is_remote`, optional
-`pty_description`, and nested state). The
+`pty_description`, optional terminal `alias`, and nested state). The
+`alias` field is the only record of a tab's alias after a WebView reload, because
+`term-alias-assigned` fires once, at spawn. The
 origin fields let browser and desktop clients preserve manual-title protection
 and remote-completion muting across reconnects. For detected agents,
 `state.agent_state` distinguishes PTY
@@ -622,8 +624,9 @@ the server is back to the filter the connection was opened with.
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `session-created` | `{session_id, cwd, agent_type, display_name}` | New session started; `display_name` is the optional stable assigned name |
+| `session-created` | `{session_id, cwd, agent_type, display_name, parent_session}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise) |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
+| `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id}` | Session ended |
 | `repo-changed` | `{repo_path, kind}` | Repository changed. `kind` is `"git-state"` (`.git/` was written — a commit, ref or index change) or `"working-tree"` (files changed and `.git` did not). A git-state emit cancels the pending working-tree one, so `"git-state"` does **not** mean "only `.git` changed" — a client that needs working-tree news must react to both kinds. |
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |

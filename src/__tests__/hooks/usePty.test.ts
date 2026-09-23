@@ -202,7 +202,11 @@ describe("usePty", () => {
 			expect(mockInvoke).toHaveBeenCalledWith("get_session_shell_family", { sessionId: "sess-review" });
 			expect(mockInvoke).toHaveBeenCalledWith("write_pty", {
 				sessionId: "sess-review",
-				data: "\x15review this prompt",
+				data: "\x15",
+			});
+			expect(mockInvoke).toHaveBeenCalledWith("write_pty", {
+				sessionId: "sess-review",
+				data: "review this prompt",
 			});
 			expect(mockInvoke).not.toHaveBeenCalledWith("write_pty", {
 				sessionId: "sess-review",

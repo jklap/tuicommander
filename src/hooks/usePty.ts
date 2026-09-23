@@ -78,6 +78,9 @@ export interface ActiveSessionInfo {
 	display_name_is_custom: boolean;
 	is_remote: boolean;
 	pty_description?: string | null;
+	/** Terminal alias (e.g. `tu-3`). The only record of it after a WebView reload:
+	 *  `term-alias-assigned` fires once, at spawn. */
+	alias?: string | null;
 	state?: {
 		shell_state?: "busy" | "idle";
 		agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";

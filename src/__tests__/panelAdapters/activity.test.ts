@@ -35,6 +35,7 @@ function terminal(over: Partial<ActivityTerminalRow> = {}): ActivityTerminalRow 
 		backgroundWork: false,
 		isBusy: false,
 		isPromoted: false,
+		subAgentTag: null,
 		...over,
 	};
 }
@@ -101,5 +102,21 @@ describe("snapshotToRows row identity", () => {
 		expect(second).not.toBe(first);
 		expect(second).toHaveLength(1);
 		expect(second[0]).toBe(first[0]);
+	});
+});
+
+describe("snapshotToRows sub-agent tag", () => {
+	it("carries the parent tag into the detached panel row", () => {
+		// The detached window never reads the store, so a tag missing from the
+		// snapshot would silently disappear from the popped-out dashboard only.
+		const [row] = snapshotToRows(snapshot(terminal({ subAgentTag: "Progress Flow" })));
+		expect(row.subAgentTag).toBe("Progress Flow");
+	});
+
+	it("rebuilds the row when only the tag changes (parent tab renamed)", () => {
+		const first = snapshotToRows(snapshot(terminal({ subAgentTag: "old" })));
+		const second = snapshotToRows(snapshot(terminal({ subAgentTag: "new" })), first);
+		expect(second[0]).not.toBe(first[0]);
+		expect(second[0].subAgentTag).toBe("new");
 	});
 });

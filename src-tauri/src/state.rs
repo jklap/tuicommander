@@ -235,6 +235,10 @@ pub enum AppEvent {
         cwd: Option<String>,
         agent_type: Option<String>,
         display_name: Option<String>,
+        /// `$TUIC_SESSION` of the agent that spawned this PTY, so every client can
+        /// mark it as a sub-agent. `None` for tabs a user or plain client opened.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_session: Option<String>,
     },
     #[serde(rename = "session-closed")]
     SessionClosed { session_id: String, reason: String },
@@ -284,6 +288,9 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// The address other agents reach a terminal by (e.g. `tu-3`).
+    #[serde(rename = "term-alias-assigned")]
+    TermAliasAssigned { session_id: String, alias: String },
     #[serde(rename = "plugin-changed")]
     #[allow(dead_code)] // reserved for future plugin hot-reload notifications
     PluginChanged { plugin_ids: Vec<String> },
@@ -547,6 +554,7 @@ impl AppEvent {
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
+            | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
         }
@@ -3164,11 +3172,16 @@ impl AppState {
     }
 
     /// File an alias against a session and tell the UI, so the tab shows the
-    /// address other agents can reach it by.
+    /// address other agents can reach it by. Dual-emitted: the bus carries it
+    /// to browser/PWA clients over `/events`, the window emit to the desktop.
     fn record_term_alias(&self, session_id: &str, alias: String) {
         self.session_maps
             .term_aliases
             .insert(session_id.to_string(), alias.clone());
+        self.emit_pty_event(AppEvent::TermAliasAssigned {
+            session_id: session_id.to_string(),
+            alias: alias.clone(),
+        });
         #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
             let _ = app.emit(
@@ -3946,6 +3959,7 @@ impl AppState {
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
+            AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
             AppEvent::PluginWatcherLines { .. } => {}
@@ -6690,6 +6704,26 @@ mod tests {
             None,
             "an unknown reference resolves to nothing rather than to a guess"
         );
+    }
+
+    /// Browser/PWA clients learn a tab's alias from the bus (`/events` SSE),
+    /// not from the desktop-only window emit — a spawn seen live in browser mode
+    /// otherwise shows no alias until the next reload lists it.
+    #[test]
+    fn assign_term_alias_publishes_the_alias_on_the_event_bus() {
+        let state = tests_support::make_test_app_state();
+        let mut bus = state.event_bus.subscribe();
+
+        let alias = state.assign_term_alias("pty-key", Some("tu-9"));
+
+        assert_eq!(alias, "tu-9");
+        match bus.try_recv() {
+            Ok(AppEvent::TermAliasAssigned { session_id, alias }) => {
+                assert_eq!(session_id, "pty-key");
+                assert_eq!(alias, "tu-9");
+            }
+            other => panic!("expected term-alias-assigned on the bus, got {other:?}"),
+        }
     }
 
     /// Mail is filed under the peer key, so an address that names the terminal

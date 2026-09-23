@@ -8,9 +8,22 @@
 
 # To Test
 
+## Sub-agent tags and branch count (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] [VISUAL] Sidebar: a branch whose agent list is expanded shows no number on its icon; collapse it and the number comes back.
+- [ ] After the restart, spawn an agent with `agent action=spawn` from an agent tab. In the Activity Dashboard (`Cmd+Shift+A`) the child row shows `↳ <parent tab name>`, and the parent row shows no tag. Rename the parent tab: the tag follows.
+- [ ] [VISUAL] Sidebar nested agent rows: the spawned child shows the same `↳ <parent>` tag; with a long parent name, the tab title stays readable.
+- [ ] Pop out the Activity Dashboard: the detached window shows the same tag.
+
 ## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
 
 - [ ] Settings → Dictation → Spoken replies: remove Italian if installed, then Download it. It reaches Ready with no hash error, and a spoken reply uses the giovanni voice.
+
+## Alias survives a WebView reload (2026-09-23) — Rust, needs `make dev` restart
+
+- [ ] After the restart, spawn an agent with `agent action=spawn`, then reload the WebView (`curl -X POST localhost:9876/debug/reload_webview`). The tab context menu still shows "Alias: …" and the tooltip shows the alias that `session list` returns for that session.
+- [ ] Browser mode (`http://localhost:9876/`): with the page open, spawn an agent. Its new tab shows the alias without a page reload (`term-alias-assigned` now arrives over `/events`).
+- [ ] Spawn a Claude agent with `name=call-map`. When Claude prints its session title, the tab still reads `call-map` (an `intent:` title may still replace it, a manual rename too). Reload the WebView: the name is still protected from the OSC title. _(frontend half is live via HMR; the reload check needs the restart)_
 
 ## Compose panel pin (2026-09-23) — frontend, live via HMR
 

@@ -289,6 +289,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
+        AppEvent::TermAliasAssigned { .. } => "term-alias-assigned",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
         AppEvent::McpOAuthStart { .. } => "mcp-oauth-start",
@@ -347,12 +348,14 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             cwd,
             agent_type,
             display_name,
+            parent_session,
         } => {
             serde_json::json!({
                 "session_id": session_id,
                 "cwd": cwd,
                 "agent_type": agent_type,
                 "display_name": display_name,
+                "parent_session": parent_session,
             })
         }
         AppEvent::SessionClosed { session_id, reason } => {
@@ -391,6 +394,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             description,
         } => {
             serde_json::json!({ "session_id": session_id, "description": description })
+        }
+        AppEvent::TermAliasAssigned { session_id, alias } => {
+            serde_json::json!({ "session_id": session_id, "alias": alias })
         }
         AppEvent::PluginChanged { plugin_ids } => {
             serde_json::json!({ "plugin_ids": plugin_ids })
@@ -718,6 +724,7 @@ mod tests {
             cwd: Some("/repo".into()),
             agent_type: Some("codex".into()),
             display_name: Some("linux-primary".into()),
+            parent_session: Some("tuic-parent".into()),
         };
 
         assert_eq!(event_type_name(&event), "session-created");
@@ -726,6 +733,8 @@ mod tests {
         assert_eq!(body["cwd"], "/repo");
         assert_eq!(body["agent_type"], "codex");
         assert_eq!(body["display_name"], "linux-primary");
+        // Browser clients tag sub-agent tabs from this field, as the desktop does.
+        assert_eq!(body["parent_session"], "tuic-parent");
     }
 
     #[test]
@@ -739,6 +748,20 @@ mod tests {
         assert_eq!(
             event_payload(&event),
             serde_json::json!({"session_id": "session-1", "description": null})
+        );
+    }
+
+    #[test]
+    fn term_alias_assigned_has_matching_sse_name_and_payload() {
+        let event = AppEvent::TermAliasAssigned {
+            session_id: "session-1".into(),
+            alias: "tu-3".into(),
+        };
+
+        assert_eq!(event_type_name(&event), "term-alias-assigned");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"session_id": "session-1", "alias": "tu-3"})
         );
     }
 

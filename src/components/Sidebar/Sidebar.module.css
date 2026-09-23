@@ -775,6 +775,18 @@
   color: var(--fg-secondary);
 }
 
+/* Parent of a spawned sub-agent PTY. Shrinks before the tab title does. */
+.branchSubAgentTag {
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  font-size: var(--font-2xs);
+  flex-shrink: 1;
+}
+
 .branchAgentTime {
   color: var(--fg-muted);
   font-size: var(--font-2xs);

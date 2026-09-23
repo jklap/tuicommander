@@ -138,6 +138,7 @@ export interface ActivityTerminalRow {
 	backgroundWork: boolean;
 	isBusy: boolean; // Debounced busy (2s hold) — calmer than raw shellState for badge/ordering
 	isPromoted: boolean;
+	subAgentTag: string | null;
 }
 
 export interface ActivitySnapshot {
@@ -175,6 +176,7 @@ export function buildActivitySnapshot(): ActivitySnapshot {
 			backgroundWork: t?.backgroundWork ?? false,
 			isBusy: terminalsStore.isBusy(id),
 			isPromoted: globalWorkspaceStore.isPromoted(id),
+			subAgentTag: terminalsStore.getSubAgentTag(id),
 		});
 	}
 	const isWorking = (id: string): boolean => {
