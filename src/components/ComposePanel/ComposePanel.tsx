@@ -55,6 +55,12 @@ export interface ComposePanelProps {
 	/** Drop a single queued command by id. */
 	onRemoveQueued: (id: number) => void | Promise<void>;
 	onTextChange?: (text: string) => void;
+	/** Pinned: the panel stays open after send and Esc, and takes its own slot
+	 *  under the terminal instead of overlaying it. */
+	pinned: Accessor<boolean>;
+	onTogglePin: () => void;
+	/** Bumped to move the caret into the editor while the panel stays open. */
+	focusRequest: Accessor<number>;
 }
 
 /** Who parked a queue entry, for the entries that are not the operator's own. */
@@ -77,6 +83,21 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 		onValueChange: (value) => props.onTextChange?.(value),
 	});
 
+	/** An unpinned panel is closed by the parent after a successful submit; a
+	 *  pinned one stays, so the editor is emptied here for the next message. A
+	 *  rejected submit keeps the text — the parent has already logged the error. */
+	const submit = (handler: (text: string) => void | Promise<void>, text: string) => {
+		Promise.resolve(handler(text)).then(
+			() => {
+				const view = editorView();
+				if (!props.pinned() || !view) return;
+				view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+				view.focus();
+			},
+			() => {},
+		);
+	};
+
 	createExtension(composeTheme);
 	createExtension(drawSelection());
 	createExtension(history());
@@ -89,7 +110,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				key: "Shift-Ctrl-Enter",
 				run: (view) => {
 					const text = view.state.doc.toString().trim();
-					if (text && props.canEnqueue()) props.onEnqueue(text);
+					if (text && props.canEnqueue()) submit(props.onEnqueue, text);
 					return true;
 				},
 			},
@@ -97,7 +118,7 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				key: "Ctrl-Enter",
 				run: (view) => {
 					const text = view.state.doc.toString().trim();
-					if (text) props.onSend(text);
+					if (text) submit(props.onSend, text);
 					return true;
 				},
 			},
@@ -147,8 +168,20 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 		}),
 	);
 
+	createEffect(
+		on(
+			props.focusRequest,
+			() => {
+				editorView()?.focus();
+			},
+			{ defer: true },
+		),
+	);
+
+	// Pull the caret back when it wanders off — but not while pinned: a pinned
+	// panel sits beside a terminal the user must be able to click into.
 	createEffect(() => {
-		if (!props.isOpen()) return;
+		if (!props.isOpen() || props.pinned()) return;
 		const handleFocusOut = (e: FocusEvent) => {
 			const related = e.relatedTarget as Node | null;
 			const panel = editorView()?.dom?.closest(`.${s.panel}`);
@@ -187,16 +220,19 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 
 	const handleSend = () => {
 		const text = currentText();
-		if (text) props.onSend(text);
+		if (text) submit(props.onSend, text);
 	};
 
 	const handleEnqueue = () => {
 		const text = currentText();
-		if (text && props.canEnqueue()) props.onEnqueue(text);
+		if (text && props.canEnqueue()) submit(props.onEnqueue, text);
 	};
 
 	return (
-		<div class={cx(s.panel, props.isOpen() && s.panelOpen)} onMouseDown={(e) => e.stopPropagation()}>
+		<div
+			class={cx(s.panel, props.isOpen() && s.panelOpen, props.pinned() && s.panelPinned)}
+			onMouseDown={(e) => e.stopPropagation()}
+		>
 			<div class={s.editor} ref={ref} />
 			<Show when={queueOpen() && props.queuedCount() > 0}>
 				<div class={s.queueList}>
@@ -228,7 +264,10 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				</div>
 			</Show>
 			<div class={s.statusBar}>
-				<span>Ctrl+Enter to send &middot; {props.canEnqueue() ? "Shift+Ctrl+Enter to queue · " : ""}Esc to close</span>
+				<span>
+					Ctrl+Enter to send &middot; {props.canEnqueue() ? "Shift+Ctrl+Enter to queue · " : ""}
+					{props.pinned() ? "Esc to terminal" : "Esc to close"}
+				</span>
 				<div class={s.actions}>
 					<Show when={props.queuedCount() > 0}>
 						<button
@@ -250,6 +289,16 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							</svg>
 						</button>
 					</Show>
+					<button
+						class={cx(s.pinButton, props.pinned() && s.pinButtonActive)}
+						onClick={() => props.onTogglePin()}
+						title={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
+						aria-pressed={props.pinned()}
+					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+							<path d="M10.5 1.5l4 4-1 1-.8-.3-2.6 2.6.4 2.7-1 1-2.8-2.8L3 13.4l-.4-.4 3.7-3.7-2.8-2.8 1-1 2.7.4 2.6-2.6-.3-.8z" />
+						</svg>
+					</button>
 					<Show when={props.canEnqueue()}>
 						<button
 							class={s.queueButton}

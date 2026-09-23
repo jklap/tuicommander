@@ -219,6 +219,7 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 - **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients
 - **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting
 - **Agents only** — queueing is hidden for a plain shell: its idle state says nothing about which program currently owns stdin
+- **Pin** — the pin button docks the panel under the terminal instead of over it: the terminal shrinks and the PTY resizes, so no output hides behind the panel. A pinned panel stays open after a send or a queue and empties itself for the next message, so it can replace the agent's own input box. `Esc` and `Cmd+I` move the caret between the panel and the terminal instead of closing it. Per tab, not persisted
 
 ### 1.21 Auto-Standby (Unix)
 
