@@ -28,13 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- Removed the `/agents/map` subagent map page and its `/agents/map/data` and `/agents/map/prompt` routes. The Progress dialog's Flow view replaces them.
 - Removed the Deep Black and Delicate One bundled themes: near-duplicates of Ink and of the neutral greys. An existing install keeps the files it already has in its themes folder.
 - Retired the external Voice plugin that read terminal text through Web Speech synthesis. Native Kokoro voice conversation is planned separately in Dictation.
 
 ### Fixed
 
 - **Progress records worktree terminals** — An `intent:` from a terminal running in a managed worktree outside the repository root was dropped because the directory matched no registered repository. It now resolves to its workspace and is recorded against the parent project.
-- **Subagent map joins multi-line teammate prompts** — A teammate subagent was matched to its spawn by comparing the prompt with the raw JSON line, where every newline is escaped, so any multi-line prompt never matched.
+- **Multi-line teammate prompts join their spawn** — A teammate subagent was matched to its spawn by comparing the prompt with the raw JSON line, where every newline is escaped, so any multi-line prompt never matched.
 - Dictation auto-send submits long transcriptions to Claude Code again. Claude
   treated a long text as a paste, stripped the Ctrl-U prefix inside it as an
   invisible character and refused the following Enter. Agents now receive

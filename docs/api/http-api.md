@@ -385,60 +385,11 @@ GET  /sessions/:id/terminal/logical-line?row=N         -> [logicalStartRow, text
 GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url] | null
 GET  /sessions/:id/terminal/styled-rows?start=N&count=N -> application/octet-stream (packed rows)
 GET  /process/stats                                    -> ProcessStats[]
-GET  /agents/map                                       -> text/html (call map page)
-GET  /agents/map/data                                  -> CallMap
-GET  /agents/map/prompt?session=<pty-session-id>&agent=<agent-id>  -> { "prompt": string } | 404
 ```
 
-`CallMap` is one tree of every agent terminal, the peers each spawned, and the
-Claude in-process subagents of each:
-
-```
-{
-  "roots": [MapNode],
-  "terminals": number, "subagents": number,
-  "running": number                      // subagents still running
-}
-MapNode = {
-  "kind": "terminal"|"subagent",
-  "id": string,                          // PTY session id, or subagent agent id
-  "session_id": string,                  // owning terminal — the prompt endpoint key
-  "title": string,
-  "agent_type": string|null,             // null when it would repeat the title
-  "model": string|null,
-  "description": string|null,            // subagent; null when it is the title
-  "intent": string|null,                 // terminal's current TUIC intent
-  "state": "running"|"done"|"busy"|"idle"|"awaiting",
-  "started_at_ms": number|null,
-  "duration_ms": number|null,            // now − start while running
-  "prompt_summary": string|null,         // redacted, ≤200 chars
-  "prompt_more": bool,                   // full prompt is longer
-  "tools": [{ "name": string, "count": number }],   // top 6, most-called first
-  "other_tools": number, "tool_calls": number,
-  "children": [MapNode]
-}
-```
-
-A terminal is listed when TUIC detected an agent in it or when it is on a
-recorded `agent action=spawn` link (`session_parent`). A terminal's children are
-its own subagents first, then the peers it spawned; subagents nest by
-`parentAgentId`. An unknown parent or a parent cycle makes a node a root, it is
-never dropped. Time is not an axis: there are no per-event markers.
-
-Prompts reach the payload only redacted with `redaction::redact_secrets` and cut
-to 200 characters (redacted **before** the cut). The full redacted prompt is
-returned only by `/agents/map/prompt`, which looks the terminal up in `AppState`
-and compares `agent` against the subagents found on disk — neither value becomes
-part of a path, so an unknown or traversal-shaped value answers 404. Tool-result
-bodies and subagent replies never reach either endpoint. All payloads are
-snake_case, matching the Rust structs they serialise.
-
-**HTTP-only, deliberately.** No `#[tauri::command]` backs any of these routes, so there
-is no `COMMAND_TABLE` entry, no `src/transport.ts` change and no
-`command_table_paths.txt` regeneration — the Route Parity Gate below does not
-apply to them. All three are registered in `shared_routes()`, so the remote daemon
-serves them too, and all three are pinned in
-`shared_routes_surface_is_locked_and_desktop_only_excluded`.
+The `/agents/map`, `/agents/map/data` and `/agents/map/prompt` routes were
+removed on 2026-09-23. The Progress Flow view (`/progress/flow`, see Project
+Progress above) replaced them.
 
 `terminal/styled-rows` fills the CanvasTerminal client-side row cache and answers
 **binary**, not JSON: a 64-row chunk is ~141 KB of packed cells, which as a JSON

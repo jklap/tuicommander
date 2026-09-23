@@ -202,6 +202,7 @@ impl ProgressStore {
 
     /// Append one entry. There is nothing to reconcile: the table is
     /// append-only and the rowid is identity, order and cursor in one.
+    #[cfg(test)]
     pub(crate) fn record(
         &self,
         project: &str,
@@ -210,6 +211,7 @@ impl ProgressStore {
         self.record_for_pty(project, entry, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn record_for_pty(
         &self,
         project: &str,
@@ -219,8 +221,8 @@ impl ProgressStore {
         self.record_hand_off(project, entry, pty_id, None, None)
     }
 
-    /// `record_for_pty`, plus the terminal a `delegated` or `message` entry
-    /// points at and that terminal's name at the time.
+    /// Append one entry for a PTY, plus — for a `delegated` or `message`
+    /// entry — the terminal it points at and that terminal's name at the time.
     pub(crate) fn record_hand_off(
         &self,
         project: &str,

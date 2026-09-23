@@ -1949,9 +1949,9 @@ pub struct AppState {
     pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
     /// File watcher for the themes/ directory — kept alive for the app lifetime.
     pub(crate) theme_watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
-    /// Byte cursors and per-subagent summaries behind `/agents/map/data`, so each poll
-    /// reads only what Claude appended to a subagent transcript since the last
-    /// one. Stays empty until the map page is first opened.
+    /// Byte cursors and per-subagent summaries behind the Progress Flow view,
+    /// so each refresh parses only what Claude appended to a subagent
+    /// transcript since the last one. Stays empty until Flow is first shown.
     pub(crate) subagent_map_cache: parking_lot::Mutex<crate::subagent_map::MapCache>,
     /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
     pub(crate) mdkb_daemon: crate::mdkb_daemon::SharedMdkbDaemon,
