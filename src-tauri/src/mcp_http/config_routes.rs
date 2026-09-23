@@ -807,7 +807,8 @@ pub(super) async fn probe_direct_tls_http(
         return resp.into_response();
     }
     json_result(
-        crate::direct_proxy::probe_direct_tls(&request.url, request.tls_fingerprint.as_deref()).await,
+        crate::direct_proxy::probe_direct_tls(&request.url, request.tls_fingerprint.as_deref())
+            .await,
     )
     .into_response()
 }
@@ -886,7 +887,159 @@ pub(super) async fn get_local_instance_port_http(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    json_result(crate::remote_connection::get_local_instance_port(instance_id)).into_response()
+    json_result(crate::remote_connection::get_local_instance_port(
+        instance_id,
+    ))
+    .into_response()
+}
+
+/// POST /config/remote-connections/{id}/configure-ssh-password — set an SSH
+/// remote connection's already-saved credentials on its remote daemon (plan
+/// Phase 5's "offer to configure" step). Gated like the sibling
+/// remote-connection routes: it can execute SSH commands against a
+/// caller-named connection.
+pub(super) async fn configure_ssh_daemon_password_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::remote_connection::configure_ssh_daemon_password_impl(&state, &id).await)
+        .into_response()
+}
+
+// --- SSH remote daemon provisioning (story: SSH Tunnels + Remote Servers
+// consolidation, Phase 5) ---
+//
+// Every handler here can make the backend execute commands on an arbitrary
+// caller-supplied SSH host (and, for install/start, download and run a
+// binary there) — gated like the other privileged remote-connection routes
+// in this file, never left open. All six commands are state-free (identical
+// to the password commands above), so the Tauri command and the HTTP handler
+// call the exact same function directly, no `_impl` split needed.
+
+#[derive(serde::Deserialize)]
+pub(super) struct SshDaemonProbeReq {
+    pub ssh: crate::ssh_connection::SshConnectionParams,
+    pub port: u16,
+}
+
+pub(super) async fn probe_ssh_daemon_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(req): Json<SshDaemonProbeReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::ssh_provision::probe_ssh_daemon(req.ssh, req.port).await).into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct InstallSshDaemonReq {
+    pub ssh: crate::ssh_connection::SshConnectionParams,
+}
+
+pub(super) async fn install_ssh_daemon_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(req): Json<InstallSshDaemonReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::ssh_provision::install_ssh_daemon(req.ssh).await).into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct StartSshDaemonReq {
+    pub ssh: crate::ssh_connection::SshConnectionParams,
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    pub port: u16,
+}
+
+pub(super) async fn start_ssh_daemon_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(req): Json<StartSshDaemonReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(
+        crate::ssh_provision::start_ssh_remote_daemon(req.ssh, req.instance_id, req.port).await,
+    )
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct StopSshDaemonReq {
+    pub ssh: crate::ssh_connection::SshConnectionParams,
+    pub port: u16,
+}
+
+pub(super) async fn stop_ssh_daemon_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(req): Json<StopSshDaemonReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::ssh_provision::stop_ssh_remote_daemon(req.ssh, req.port).await)
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct SetSshDaemonPasswordReq {
+    pub ssh: crate::ssh_connection::SshConnectionParams,
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    pub username: String,
+    pub password: String,
+}
+
+pub(super) async fn set_ssh_daemon_password_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(req): Json<SetSshDaemonPasswordReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(
+        crate::ssh_provision::set_ssh_remote_password(
+            req.ssh,
+            req.instance_id,
+            req.username,
+            req.password,
+        )
+        .await,
+    )
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct CheckRemoteVersionReq {
+    pub local_version: String,
+    pub remote_version: String,
+}
+
+/// Pure comparison, no SSH/network access — unlike its five siblings above,
+/// this is safe to leave ungated like the other pure-read routes in this file
+/// (e.g. `get_ai_prompts_http`).
+pub(super) async fn check_remote_version_http(
+    Json(req): Json<CheckRemoteVersionReq>,
+) -> impl IntoResponse {
+    Json(crate::ssh_provision::check_remote_version(
+        req.local_version,
+        req.remote_version,
+    ))
+    .into_response()
 }
 
 pub(super) async fn remote_connection_password_exists_http(
@@ -1591,13 +1744,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ssh_daemon_provisioning_routes_require_local_or_auth() {
+        let not_local = std::net::SocketAddr::from(([203, 0, 113, 5], 12345));
+        let ssh = crate::ssh_connection::SshConnectionParams::new("example.test", "alice");
+
+        let resp = probe_ssh_daemon_http(
+            ConnectInfo(not_local),
+            None,
+            Json(SshDaemonProbeReq {
+                ssh: ssh.clone(),
+                port: 9877,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = install_ssh_daemon_http(
+            ConnectInfo(not_local),
+            None,
+            Json(InstallSshDaemonReq { ssh: ssh.clone() }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = start_ssh_daemon_http(
+            ConnectInfo(not_local),
+            None,
+            Json(StartSshDaemonReq {
+                ssh: ssh.clone(),
+                instance_id: None,
+                port: 9877,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = stop_ssh_daemon_http(
+            ConnectInfo(not_local),
+            None,
+            Json(StopSshDaemonReq {
+                ssh: ssh.clone(),
+                port: 9877,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = set_ssh_daemon_password_http(
+            ConnectInfo(not_local),
+            None,
+            Json(SetSshDaemonPasswordReq {
+                ssh,
+                instance_id: None,
+                username: "alice".to_string(),
+                password: "hunter2".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn check_remote_version_http_is_ungated_and_pure() {
+        // No auth extension, non-loopback address — still succeeds, since
+        // this is a pure string comparison with no SSH/network access.
+        let not_local = std::net::SocketAddr::from(([203, 0, 113, 5], 12345));
+        let _ = not_local; // this handler doesn't even take an address
+        let resp = check_remote_version_http(Json(CheckRemoteVersionReq {
+            local_version: "1.7.7".to_string(),
+            remote_version: "1.7.6".to_string(),
+        }))
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["type"], "Outdated");
+        assert_eq!(json["remote_version"], "1.7.6");
+        assert_eq!(json["local_version"], "1.7.7");
+    }
+
+    #[tokio::test]
+    async fn probe_ssh_daemon_http_surfaces_ssh_failure_as_bad_gateway_or_error() {
+        // Port 1 / an unreachable host: the ssh subprocess itself will fail
+        // fast (no real network dependency needed to prove the error path
+        // reaches the client instead of panicking or hanging).
+        let ssh = crate::ssh_connection::SshConnectionParams::new("127.0.0.1", "nobody-real");
+        let mut ssh = ssh;
+        ssh.port = 1; // nothing listens here; ssh must fail quickly
+        let resp = probe_ssh_daemon_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(SshDaemonProbeReq { ssh, port: 9877 }),
+        )
+        .await
+        .into_response();
+        // Whatever the exact status, it must be a clean HTTP error response,
+        // not a panic/hang — the real assertion is that this test completes.
+        assert!(resp.status().is_client_error() || resp.status().is_server_error());
+    }
+
+    #[tokio::test]
     async fn get_local_instance_port_http_surfaces_a_clear_error_for_an_invalid_id() {
         // "default" is reserved by AppInstance::named — deterministic
         // InstanceNotFound with no real filesystem dependency, matching the
         // Tauri-command-side test of the same underlying function.
-        let resp = get_local_instance_port_http(ConnectInfo(loopback()), None, Path("default".to_string()))
-            .await
-            .into_response();
+        let resp = get_local_instance_port_http(
+            ConnectInfo(loopback()),
+            None,
+            Path("default".to_string()),
+        )
+        .await
+        .into_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await

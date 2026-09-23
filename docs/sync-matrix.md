@@ -452,18 +452,24 @@ policy, or the in-app supervisor/config/Settings UI:
 | `docs/api/http-api.md` | `/sessions/{id}/focus`, `/ui/action`, `/streamdock/status`, `/streamdock/devices` |
 | `docs/FEATURES.md` | StreamDock section |
 
-### Remote Connection Manager
-When modifying remote connection config, storage, or transport routing:
+### Remote Servers
+When modifying remote connection config, storage, transport routing, the self-signed HTTPS proxy for Direct, or SSH remote-daemon provisioning:
 
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport, RemoteConnectionStore |
-| `src/stores/remoteConnections.ts` | Frontend remote connections store |
+| `src-tauri/src/direct_proxy.rs` | Self-signed HTTPS TOFU pinning + loopback proxy for Direct connections |
+| `src-tauri/src/ssh_provision.rs` | SSH remote-daemon provisioning (probe/install/start/stop/set-password) + version comparison |
+| `src/stores/remoteConnections.ts` | Frontend remote connections store, incl. provisioning/version-check orchestration |
+| `src/components/shared/DirectCertConfirmDialog.tsx` | Self-signed-cert fingerprint confirmation dialog |
+| `src/components/shared/ProvisionConfirmDialog.tsx` | Remote-daemon-provisioning confirmation dialog |
+| `src/components/SettingsPanel/tabs/RemoteServersTab.tsx` | Connection list, version-warning/Update UI |
 | `src/utils/remoteEventBridge.ts` | SSE event bridge for remote daemons |
 | `src/transport.ts` | connectionId-based routing in COMMAND_TABLE |
 | `src/components/Terminal/canvasTerminalTransport.ts` | baseUrl support for remote WebSocket |
-| `docs/FEATURES.md` | Section 24 (Remote Connection Manager) |
-| `docs/user-guide/remote-access.md` | Remote Connection Manager section |
+| `docs/FEATURES.md` | Section 24 (Remote Servers) |
+| `docs/user-guide/remote-access.md` | Remote Servers section |
+| `docs/features/ssh-tunnels.md` | "Integration with Remote Servers" section |
 
 ### Project Progress (storage)
 

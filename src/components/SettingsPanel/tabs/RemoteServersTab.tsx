@@ -10,6 +10,7 @@ import {
 	remoteConnectionStatusLabel,
 } from "../../shared/ConnectionStatusBadge";
 import { DirectCertConfirmDialog } from "../../shared/DirectCertConfirmDialog";
+import { ProvisionConfirmDialog } from "../../shared/ProvisionConfirmDialog";
 import { TunnelProfileList } from "../../TunnelsPanel/TunnelProfileList";
 import s from "../Settings.module.css";
 import type { EditorTarget } from "./services/RemoteConnectionEditor";
@@ -62,6 +63,7 @@ export function transportBadgeLabel(transport: RemoteTransport): string {
 export const RemoteServersTab: Component = () => {
 	const [editorTarget, setEditorTarget] = createSignal<EditorTarget | null>(null);
 	const [deleting, setDeleting] = createSignal<string | null>(null);
+	const [updating, setUpdating] = createSignal<string | null>(null);
 
 	onMount(() => {
 		remoteConnectionsStore.hydrate();
@@ -96,9 +98,22 @@ export const RemoteServersTab: Component = () => {
 		}
 	}
 
+	/** SSH-only "Update" action for an outdated remote daemon (Phase 5). */
+	async function updateSshBinary(id: string) {
+		setUpdating(id);
+		try {
+			await remoteConnectionsStore.updateSshRemoteBinary(id);
+		} catch (err) {
+			appLogger.error("settings", "Failed to update remote daemon binary", { error: String(err) });
+		} finally {
+			setUpdating(null);
+		}
+	}
+
 	return (
 		<div class={s.section}>
 			<DirectCertConfirmDialog />
+			<ProvisionConfirmDialog />
 			<h3>{t("remoteServers.heading", "Remote Servers")}</h3>
 			{/* Corrected lifecycle wording (UI/copy fix from the doc audit): a saved
 			    SSH connection does NOT create a tunnel at Save time — the encrypted
@@ -183,6 +198,30 @@ export const RemoteServersTab: Component = () => {
 												style={{ margin: 0, "font-size": "11px", color: "var(--accent-red, #ef4444)" }}
 											>
 												{connState.error}
+											</div>
+										</Show>
+										<Show when={connState.versionWarning}>
+											<div
+												style={{
+													display: "flex",
+													"align-items": "center",
+													gap: "8px",
+													margin: 0,
+													"font-size": "11px",
+													color: "var(--warning, #d19a66)",
+												}}
+											>
+												<span>{connState.versionWarning}</span>
+												<Show when={conn().transport.type === "Ssh"}>
+													<button
+														class={s.copyBtn}
+														style={{ "flex-shrink": 0, "font-size": "11px", padding: "1px 6px" }}
+														disabled={updating() === conn().id}
+														onClick={() => updateSshBinary(conn().id)}
+													>
+														{updating() === conn().id ? "Updating…" : "Update"}
+													</button>
+												</Show>
 											</div>
 										</Show>
 									</div>

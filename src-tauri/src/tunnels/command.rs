@@ -119,6 +119,35 @@ pub fn build_ssh_test_args(ssh: &SshConnectionParams) -> Vec<String> {
     args
 }
 
+/// Build an ssh argv that connects and runs `remote_command` via the login
+/// shell, then exits — the same SSH posture as `build_ssh_test_args` (shares
+/// every identity/keepalive/host-key-policy flag via `build_ssh_option_args`,
+/// so remote-daemon provisioning can never drift from what a real tunnel or
+/// Test Connection does), but for an arbitrary caller-supplied command instead
+/// of the fixed `true` reachability probe. Story: SSH Tunnels + Remote
+/// Servers consolidation, Phase 5 ("Remote daemon provisioning").
+///
+/// `ConnectTimeout=5` bounds only the network/handshake phase — the remote
+/// command itself can run as long as it needs; callers that need an overall
+/// deadline (e.g. a slow `curl`/binary transfer) must apply their own
+/// `tokio::time::timeout` around the spawned process.
+pub fn build_ssh_remote_command_args(
+    ssh: &SshConnectionParams,
+    remote_command: &str,
+) -> Vec<String> {
+    let mut args = vec![
+        "ssh".to_string(),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ConnectTimeout=5".to_string(),
+    ];
+    args.extend(build_ssh_option_args(ssh));
+    args.push(format!("{}@{}", ssh.user, ssh.host));
+    args.push(remote_command.to_string());
+    args
+}
+
 /// Build environment variables for the ssh process.
 /// Sets SSH_AUTH_SOCK if agent_socket is provided.
 pub fn build_ssh_env(agent_socket: Option<&Path>) -> Vec<(String, String)> {

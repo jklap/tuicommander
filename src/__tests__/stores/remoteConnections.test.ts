@@ -29,6 +29,15 @@ const mockInvoke = vi.hoisted(() => vi.fn());
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
 mockInvoke.mockImplementation(defaultMockInvokeImpl);
 
+// The global test setup (`src/__tests__/setup.ts`) always makes `isTauri()`
+// return true, so `getLocalAppVersion`'s desktop branch (`@tauri-apps/api/app`'s
+// `getVersion()`) is what every test here actually exercises — never the
+// browser-mode `fetch("/api/version")` fallback. Mock it explicitly (same
+// pattern as `stores/updater.test.ts`) rather than relying on the unmocked
+// call throwing and being silently swallowed by `getLocalAppVersion`'s catch.
+const mockGetVersion = vi.hoisted(() => vi.fn(async () => "1.0.0"));
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: mockGetVersion }));
+
 /** `mockInvoke.mockReset()` (used throughout this file between describe
  * blocks/tests to clear call history AND any one-off `mockImplementation`)
  * also wipes the default handler, so every reset must be paired with
@@ -89,15 +98,19 @@ describe("remoteConnectionsStore connect/disconnect (Direct)", () => {
 		expect(remoteConnectionsStore.getBaseUrl("c1")).toBe("http://remote.test:9876");
 		expect(startBridge).toHaveBeenCalledTimes(1);
 		expect(startBridge).toHaveBeenCalledWith("c1", "http://remote.test:9876");
-		// The health poll keeps running on its interval.
-		expect(fetchMock).toHaveBeenCalledTimes(1);
-		await vi.advanceTimersByTimeAsync(5000);
+		// One fetch for the initial health check, plus one for
+		// checkRemoteVersionAfterConnect's post-connect remote-version fetch
+		// (Phase 5) — local version resolution goes through the mocked
+		// `getVersion()`/`invoke`, not `fetch`, so it doesn't add a third call.
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+		// The health poll keeps running on its interval.
+		await vi.advanceTimersByTimeAsync(5000);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
 	});
 
 	it("disconnect stops health polling, tears down the bridge, and resets state", async () => {
 		await connect("c1");
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 
 		await remoteConnectionsStore.disconnect("c1");
 
@@ -110,7 +123,7 @@ describe("remoteConnectionsStore connect/disconnect (Direct)", () => {
 		expect(remoteConnectionsStore.getBaseUrl("c1")).toBeUndefined();
 		// The interval is cleared: advancing time triggers no further health fetches.
 		await vi.advanceTimersByTimeAsync(15000);
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("reconnecting swaps the bridge: the previous cleanup runs before a new bridge", async () => {
@@ -134,6 +147,53 @@ describe("remoteConnectionsStore connect/disconnect (Direct)", () => {
 	it("disconnect on an unknown connection is a safe no-op", async () => {
 		await expect(remoteConnectionsStore.disconnect("ghost")).resolves.toBeUndefined();
 		expect(bridgeCleanup).not.toHaveBeenCalled();
+	});
+
+	it("sets versionWarning when the remote reports a different version (Phase 5 check_remote_version)", async () => {
+		fetchMock.mockImplementation(async (url: string) => {
+			if (typeof url === "string" && url.endsWith("/api/version")) {
+				return { ok: true, json: async () => ({ version: "2.0.0" }) };
+			}
+			return { ok: true, json: async () => ({ protocol_version: 2 }) };
+		});
+		mockInvoke.mockImplementation(async (cmd: string) => {
+			if (cmd === "check_remote_version") {
+				return { type: "Outdated", remote_version: "2.0.0", local_version: "1.0.0" };
+			}
+			return defaultMockInvokeImpl(cmd);
+		});
+
+		await connect("c1");
+
+		expect(mockGetVersion).toHaveBeenCalled();
+		expect(mockInvoke).toHaveBeenCalledWith("check_remote_version", {
+			localVersion: "1.0.0",
+			remoteVersion: "2.0.0",
+		});
+		const st = remoteConnectionsStore.getConnectionState("c1");
+		expect(st?.versionWarning).toContain("2.0.0");
+		expect(st?.versionWarning).toContain("1.0.0");
+	});
+
+	it("does not set versionWarning when check_remote_version reports a match", async () => {
+		fetchMock.mockImplementation(async (url: string) => {
+			if (typeof url === "string" && url.endsWith("/api/version")) {
+				return { ok: true, json: async () => ({ version: "1.0.0" }) };
+			}
+			return { ok: true, json: async () => ({ protocol_version: 2 }) };
+		});
+		mockInvoke.mockImplementation(async (cmd: string) => {
+			if (cmd === "check_remote_version") return { type: "Match" };
+			return defaultMockInvokeImpl(cmd);
+		});
+
+		await connect("c1");
+
+		expect(mockInvoke).toHaveBeenCalledWith("check_remote_version", {
+			localVersion: "1.0.0",
+			remoteVersion: "1.0.0",
+		});
+		expect(remoteConnectionsStore.getConnectionState("c1")?.versionWarning).toBeUndefined();
 	});
 });
 
@@ -228,7 +288,15 @@ describe("remoteConnectionsStore.connect() (Local)", () => {
 	});
 });
 
-function sshConn(id: string): RemoteConnection {
+function sshConn(
+	id: string,
+	overrides?: Partial<{
+		start_if_not_running: boolean;
+		leave_running_on_disconnect: boolean;
+		instance_id: string | null;
+		auth_username: string | null;
+	}>,
+): RemoteConnection {
 	return {
 		id,
 		name: `ssh-${id}`,
@@ -244,8 +312,11 @@ function sshConn(id: string): RemoteConnection {
 				strict_host_key_checking: "Yes",
 			},
 			remote_daemon_port: 9877,
+			start_if_not_running: overrides?.start_if_not_running ?? false,
+			leave_running_on_disconnect: overrides?.leave_running_on_disconnect ?? false,
+			instance_id: overrides?.instance_id ?? null,
 		},
-		auth_username: "boss",
+		auth_username: overrides?.auth_username ?? "boss",
 		enabled: true,
 	};
 }
@@ -444,6 +515,242 @@ describe("remoteConnectionsStore.connect() (SSH)", () => {
 
 		await expect(remoteConnectionsStore.disconnect(id)).resolves.toBeUndefined();
 		expect(remoteConnectionsStore.getConnectionState(id)?.status).toBe("disconnected");
+	});
+
+	it("provisioning: installs + starts the remote daemon after user confirms, then retries and connects", async () => {
+		const id = "ssh-prov1";
+		await remoteConnectionsStore.addConnection(sshConn(id, { start_if_not_running: true, auth_username: null }));
+		const createdProfile = tunnelProfileFixture("auto-provp1", `__remote_${id}`);
+		let daemonStarted = false;
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "save_tunnel_profile") return Promise.resolve();
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([createdProfile]);
+			if (cmd === "start_tunnel") return Promise.resolve();
+			if (cmd === "get_tunnel_status") {
+				return Promise.resolve({
+					id: createdProfile.id,
+					status: daemonStarted ? { type: "connected" } : { type: "error", message: "connection refused" },
+					started_at: "t",
+				});
+			}
+			if (cmd === "probe_ssh_daemon") return Promise.resolve({ type: "NotRunningBinaryMissing" });
+			if (cmd === "install_ssh_daemon") return Promise.resolve(null);
+			if (cmd === "start_ssh_remote_daemon") {
+				daemonStarted = true;
+				return Promise.resolve(null);
+			}
+			return Promise.resolve();
+		});
+
+		const connectDone = remoteConnectionsStore.connect(id);
+
+		// First attempt fails — the daemon isn't running yet.
+		await vi.advanceTimersByTimeAsync(2000);
+
+		// ensureSshDaemonRunning probes (binary missing) and asks to install it.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(remoteConnectionsStore.getPendingProvisionConfirmation()?.confirmLabel).toBe("Install");
+		remoteConnectionsStore.resolveProvisionConfirmation(true);
+
+		// Then asks to start it.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(remoteConnectionsStore.getPendingProvisionConfirmation()?.confirmLabel).toBe("Start");
+		remoteConnectionsStore.resolveProvisionConfirmation(true);
+
+		// Retry attempt succeeds now that the daemon is "running".
+		await vi.advanceTimersByTimeAsync(2000);
+		await connectDone;
+
+		const st = remoteConnectionsStore.getConnectionState(id);
+		expect(st?.status).toBe("connected");
+		expect(st?.sshDaemonStartedBySession).toBe(true);
+		expect(mockInvoke).toHaveBeenCalledWith("install_ssh_daemon", {
+			ssh: expect.objectContaining({ host: "example.test" }),
+		});
+		expect(mockInvoke).toHaveBeenCalledWith("start_ssh_remote_daemon", expect.objectContaining({ port: 9877 }));
+	});
+
+	it("provisioning: declining the install confirmation leaves the connection in error state with no install call", async () => {
+		const id = "ssh-prov2";
+		await remoteConnectionsStore.addConnection(sshConn(id, { start_if_not_running: true }));
+		const createdProfile = tunnelProfileFixture("auto-provp2", `__remote_${id}`);
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "save_tunnel_profile") return Promise.resolve();
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([createdProfile]);
+			if (cmd === "start_tunnel") return Promise.resolve();
+			if (cmd === "get_tunnel_status")
+				return Promise.resolve({
+					id: createdProfile.id,
+					status: { type: "error", message: "refused" },
+					started_at: "t",
+				});
+			if (cmd === "probe_ssh_daemon") return Promise.resolve({ type: "NotRunningBinaryMissing" });
+			return Promise.resolve();
+		});
+
+		const connectDone = remoteConnectionsStore.connect(id);
+		await vi.advanceTimersByTimeAsync(2000);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(remoteConnectionsStore.getPendingProvisionConfirmation()?.confirmLabel).toBe("Install");
+		remoteConnectionsStore.resolveProvisionConfirmation(false);
+		await connectDone;
+
+		const st = remoteConnectionsStore.getConnectionState(id);
+		expect(st?.status).toBe("error");
+		expect(st?.error).toBe("SSH tunnel failed to connect");
+		expect(mockInvoke).not.toHaveBeenCalledWith("install_ssh_daemon", expect.anything());
+		expect(mockInvoke).not.toHaveBeenCalledWith("start_ssh_remote_daemon", expect.anything());
+	});
+
+	it("offers to set the remote daemon's password only on a genuinely unconfigured daemon (401 'Scan the QR code'), never on a wrong password (401 'Invalid credentials')", async () => {
+		const id = "ssh-auth1";
+		await remoteConnectionsStore.addConnection(sshConn(id));
+		const createdProfile = tunnelProfileFixture("auto-authp1", `__remote_${id}`);
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "save_tunnel_profile") return Promise.resolve();
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([createdProfile]);
+			if (cmd === "start_tunnel") return Promise.resolve();
+			if (cmd === "get_tunnel_status")
+				return Promise.resolve({ id: createdProfile.id, status: { type: "connected" }, started_at: "t" });
+			return Promise.resolve();
+		});
+		// pollHealth's own `${baseUrl}/health` call succeeds (sets status
+		// "connected"); offerToConfigureIfUnconfigured makes its OWN, separate
+		// `${baseUrl}/health` call afterward — the second call is the one that
+		// must see the 401.
+		let healthCallCount = 0;
+		fetchMock.mockImplementation(async () => {
+			healthCallCount += 1;
+			if (healthCallCount === 1) return { ok: true, json: async () => ({ protocol_version: 2 }) };
+			return { ok: false, status: 401, text: async () => "Invalid credentials" };
+		});
+
+		const connectDone = remoteConnectionsStore.connect(id);
+		await vi.advanceTimersByTimeAsync(2000);
+		await connectDone;
+
+		// A wrong-password 401 must NEVER trigger the provisioning-confirmation offer.
+		expect(remoteConnectionsStore.getPendingProvisionConfirmation()).toBeNull();
+		expect(mockInvoke).not.toHaveBeenCalledWith("configure_ssh_daemon_password", expect.anything());
+	});
+
+	it("offers to set the remote daemon's password when its own health check 401s as genuinely unconfigured", async () => {
+		const id = "ssh-auth2";
+		await remoteConnectionsStore.addConnection(sshConn(id));
+		const createdProfile = tunnelProfileFixture("auto-authp2", `__remote_${id}`);
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "save_tunnel_profile") return Promise.resolve();
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([createdProfile]);
+			if (cmd === "start_tunnel") return Promise.resolve();
+			if (cmd === "get_tunnel_status")
+				return Promise.resolve({ id: createdProfile.id, status: { type: "connected" }, started_at: "t" });
+			if (cmd === "configure_ssh_daemon_password") return Promise.resolve();
+			return Promise.resolve();
+		});
+		let healthCallCount = 0;
+		fetchMock.mockImplementation(async () => {
+			healthCallCount += 1;
+			if (healthCallCount === 1) return { ok: true, json: async () => ({ protocol_version: 2 }) };
+			return { ok: false, status: 401, text: async () => "Scan the QR code or authenticate with Basic Auth" };
+		});
+
+		const connectDone = remoteConnectionsStore.connect(id);
+		await vi.advanceTimersByTimeAsync(2000);
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(remoteConnectionsStore.getPendingProvisionConfirmation()?.confirmLabel).toBe("Set password");
+		remoteConnectionsStore.resolveProvisionConfirmation(true);
+		await connectDone;
+
+		expect(mockInvoke).toHaveBeenCalledWith("configure_ssh_daemon_password", { connectionId: id });
+	});
+
+	it("disconnect stops a daemon this session started when leave_running_on_disconnect is false", async () => {
+		const id = "ssh-stop1";
+		await remoteConnectionsStore.addConnection(
+			sshConn(id, { start_if_not_running: true, leave_running_on_disconnect: false }),
+		);
+		const createdProfile = tunnelProfileFixture("auto-stopp1", `__remote_${id}`);
+		let daemonStarted = false;
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "save_tunnel_profile") return Promise.resolve();
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([createdProfile]);
+			if (cmd === "start_tunnel") return Promise.resolve();
+			if (cmd === "get_tunnel_status")
+				return Promise.resolve({
+					id: createdProfile.id,
+					status: daemonStarted ? { type: "connected" } : { type: "error", message: "refused" },
+					started_at: "t",
+				});
+			if (cmd === "probe_ssh_daemon") return Promise.resolve({ type: "NotRunningBinaryMissing" });
+			if (cmd === "install_ssh_daemon") return Promise.resolve(null);
+			if (cmd === "start_ssh_remote_daemon") {
+				daemonStarted = true;
+				return Promise.resolve(null);
+			}
+			return Promise.resolve();
+		});
+
+		const connectDone = remoteConnectionsStore.connect(id);
+		await vi.advanceTimersByTimeAsync(2000);
+		await vi.advanceTimersByTimeAsync(0);
+		remoteConnectionsStore.resolveProvisionConfirmation(true); // install
+		await vi.advanceTimersByTimeAsync(0);
+		remoteConnectionsStore.resolveProvisionConfirmation(true); // start
+		await vi.advanceTimersByTimeAsync(2000);
+		await connectDone;
+		expect(remoteConnectionsStore.getConnectionState(id)?.sshDaemonStartedBySession).toBe(true);
+
+		mockInvoke.mockClear();
+		mockInvoke.mockImplementation(() => Promise.resolve());
+		await remoteConnectionsStore.disconnect(id);
+
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"stop_ssh_remote_daemon",
+			expect.objectContaining({ port: 9877, ssh: expect.objectContaining({ host: "example.test" }) }),
+		);
+	});
+
+	it("disconnect does NOT stop the daemon when leave_running_on_disconnect is true", async () => {
+		const id = "ssh-stop2";
+		await remoteConnectionsStore.addConnection(
+			sshConn(id, { start_if_not_running: true, leave_running_on_disconnect: true }),
+		);
+		const createdProfile = tunnelProfileFixture("auto-stopp2", `__remote_${id}`);
+		let daemonStarted = false;
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "save_tunnel_profile") return Promise.resolve();
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([createdProfile]);
+			if (cmd === "start_tunnel") return Promise.resolve();
+			if (cmd === "get_tunnel_status")
+				return Promise.resolve({
+					id: createdProfile.id,
+					status: daemonStarted ? { type: "connected" } : { type: "error", message: "refused" },
+					started_at: "t",
+				});
+			if (cmd === "probe_ssh_daemon") return Promise.resolve({ type: "NotRunningBinaryMissing" });
+			if (cmd === "install_ssh_daemon") return Promise.resolve(null);
+			if (cmd === "start_ssh_remote_daemon") {
+				daemonStarted = true;
+				return Promise.resolve(null);
+			}
+			return Promise.resolve();
+		});
+
+		const connectDone = remoteConnectionsStore.connect(id);
+		await vi.advanceTimersByTimeAsync(2000);
+		await vi.advanceTimersByTimeAsync(0);
+		remoteConnectionsStore.resolveProvisionConfirmation(true); // install
+		await vi.advanceTimersByTimeAsync(0);
+		remoteConnectionsStore.resolveProvisionConfirmation(true); // start
+		await vi.advanceTimersByTimeAsync(2000);
+		await connectDone;
+
+		mockInvoke.mockClear();
+		mockInvoke.mockImplementation(() => Promise.resolve());
+		await remoteConnectionsStore.disconnect(id);
+
+		expect(mockInvoke).not.toHaveBeenCalledWith("stop_ssh_remote_daemon", expect.anything());
 	});
 });
 

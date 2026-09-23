@@ -31,11 +31,11 @@ pub(crate) mod content_index;
 pub(crate) mod cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) mod credentials;
-pub(crate) mod direct_proxy;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod diff_triage;
 pub(crate) mod dir_watcher;
+pub(crate) mod direct_proxy;
 pub(crate) mod error_classification;
 pub(crate) mod event_wire;
 #[cfg(feature = "desktop")]
@@ -121,6 +121,7 @@ mod shell_integration;
 pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
 pub(crate) mod ssh_connection;
+pub(crate) mod ssh_provision;
 pub(crate) mod state;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
@@ -2398,6 +2399,7 @@ pub fn run() {
             remote_connection::save_remote_connection,
             remote_connection::delete_remote_connection,
             remote_connection::get_local_instance_port,
+            remote_connection::configure_ssh_daemon_password,
             remote_connection::remote_connection_password_exists,
             remote_connection::save_remote_connection_password,
             remote_connection::delete_remote_connection_password,
@@ -2405,6 +2407,12 @@ pub fn run() {
             direct_proxy::probe_direct_tls_connection,
             direct_proxy::start_direct_proxy,
             direct_proxy::stop_direct_proxy,
+            ssh_provision::probe_ssh_daemon,
+            ssh_provision::install_ssh_daemon,
+            ssh_provision::start_ssh_remote_daemon,
+            ssh_provision::stop_ssh_remote_daemon,
+            ssh_provision::set_ssh_remote_password,
+            ssh_provision::check_remote_version,
             open_secondary_window,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,

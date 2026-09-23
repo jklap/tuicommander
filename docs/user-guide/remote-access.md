@@ -257,20 +257,42 @@ Editing an existing connection now always shows its **Name** field, so renaming 
 2. Set **Kind** to **Remote Server — SSH**
 3. Configure **Host**, **Port** (default 22), **User**, and an optional **Identity file** path — the same shared SSH fields as an SSH Tunnel, including agent detection and `~/.ssh/config` autocomplete
 4. Set the **Remote daemon port** — defaults to **9877**, matching what a freshly-started `tuic-remote` binary actually listens on by default
-5. Optionally enter an **Auth username** and **Auth password** — both are now optional (previously username was required but never actually used to authenticate anything). A password you enter is sent to the OS keyring, never written to `connections.json`
-6. Optionally click **Test Connection** to verify reachability (and, if you supplied credentials, that they're accepted) before saving
-7. Save
+5. Optionally set an **Instance ID** — passed as `--instance <id>` only when *this connection* launches or configures the remote daemon itself (see [Remote Daemon Provisioning](#remote-daemon-provisioning-ssh) below). It is never used to discover an existing port — that auto-discovery only exists for the Local kind, where the port is read directly off disk on the same machine
+6. Optionally check **Start remote daemon if not running** — if the tunnel fails to connect, TUICommander offers to install and start `tuic-remote` on the remote host itself, always with an explicit confirmation first
+7. When that's checked, optionally also check **Leave daemon running on disconnect** — otherwise Disconnect stops the daemon again, but only if this session actually started it
+8. Optionally enter an **Auth username** and **Auth password** — both are now optional (previously username was required but never actually used to authenticate anything). A password you enter is sent to the OS keyring, never written to `connections.json`
+9. Optionally click **Test Connection** to verify reachability (and, if you supplied credentials, that they're accepted) before saving
+10. Save
 
 Saving only writes the connection record — **no SSH tunnel is created at Save time.** The tunnel is created lazily the first time you click **Connect** on that connection: TUICommander creates a throwaway tunnel profile (named `__remote_<connection-id>`, not shown under a friendly name in the Tunnels Panel) with one Local forward from a random local port to `127.0.0.1:<remote_daemon_port>` on the far side, starts it, and waits up to 30s for it to connect. **Disconnect** stops that tunnel and deletes the throwaway profile again — nothing persists between connect/disconnect cycles.
+
+### Remote Daemon Provisioning (SSH)
+
+When **Start remote daemon if not running** is checked and a Connect attempt's tunnel fails (the remote end refuses the forwarded port, rather than an auth/host-key problem on an otherwise-live daemon), TUICommander walks through getting the daemon running itself — **every step that changes something on the remote host asks for confirmation first; nothing happens silently**:
+
+1. **Probe.** Checks over the same SSH connection whether `tuic-remote` is running, installed but not running, or missing entirely.
+2. **Install, if missing.** Confirms with you, then detects the remote's OS/architecture (`uname`), downloads the matching `tuic-remote` release artifact, and streams it to the remote host over the same SSH connection (no separate `scp`/network access needed on your end beyond the one download).
+3. **Start.** Confirms with you, then launches `tuic-remote` on the remote host (using your configured **Remote daemon port** and, if set, **Instance ID**), and retries the tunnel connection once it comes up.
+4. **Configure a password, if unconfigured.** If the daemon comes up but has never had a password set (distinguished from a *wrong* password — a genuinely unconfigured daemon never asks for the wrong-password case), and you've entered an Auth username/password on this connection, TUICommander confirms with you, then sets that password on the remote daemon over the same SSH connection.
+
+If you decline any confirmation, TUICommander stops there and reports the original connection error — it never falls back to a different action on your behalf.
+
+On Disconnect, if this session is the one that started the daemon (and **Leave daemon running on disconnect** isn't checked), TUICommander stops it the same way local tunnel cleanup does: verifying the remote process before signaling it, never a blind kill.
+
+### Version Checking
+
+After a successful Connect (SSH, Direct, or Local), TUICommander compares the remote's reported version against its own. A mismatch shows an inline warning next to that connection in the Remote Servers list. For an SSH connection, an **Update** button appears alongside the warning — it repeats the same download/replace step used for provisioning a missing binary, then restarts the remote daemon. Direct and Local connections don't get an Update button (there's no channel to act on the remote host without a real SSH connection to it); the warning is informational only for those.
 
 ### Adding a Direct Remote Server
 
 1. Open Settings → Remote Servers → **Add Connection**
 2. Set **Kind** to **Remote Server — Direct**
-3. Enter the URL of the remote daemon (e.g., `http://10.0.0.5:9877`)
+3. Enter the URL of the remote daemon (e.g., `http://10.0.0.5:9877` or `https://10.0.0.5:9877`)
 4. Optionally enter an **Auth username**/**Auth password** (see below)
 5. Optionally click **Test Connection**
 6. Save, then click **Connect** — health polling and the live-event bridge only start once you connect, not on save
+
+If the URL is `https://` and the certificate isn't signed by a CA your system already trusts (a self-signed cert on the remote daemon — the common case for a `tuic-remote` instance with no manually-configured TLS), TUICommander shows the same kind of one-time fingerprint-verification prompt used for its own self-signed HTTPS (see [HTTPS](#https) above): compare the shown fingerprint against the one on the remote machine, then accept to pin it. Once pinned, TUICommander refuses to connect automatically if the certificate ever changes — it never silently re-trusts a new one. Behind the scenes, this routes the connection through a small local loopback proxy that terminates the pinned TLS connection and also attaches your configured Basic Auth credentials, so plain `http://` and already-CA-trusted `https://` Direct connections are unaffected and keep talking to the remote URL directly.
 
 ### Adding a Local Remote Server
 

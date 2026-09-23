@@ -32,8 +32,8 @@
 //! already only know how to talk to a local loopback `baseUrl`, exactly the
 //! shape the SSH transport's tunnel already produces.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use dashmap::DashMap;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -107,7 +107,8 @@ impl ServerCertVerifier for CaptureVerifier {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        *self.captured.lock().unwrap_or_else(|e| e.into_inner()) = Some(end_entity.as_ref().to_vec());
+        *self.captured.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(end_entity.as_ref().to_vec());
         Ok(ServerCertVerified::assertion())
     }
 
@@ -117,7 +118,12 @@ impl ServerCertVerifier for CaptureVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -126,11 +132,18 @@ impl ServerCertVerifier for CaptureVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -187,7 +200,12 @@ impl ServerCertVerifier for PinnedVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -196,11 +214,18 @@ impl ServerCertVerifier for PinnedVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -256,7 +281,11 @@ fn parse_direct_target(url: &str) -> Result<(String, u16, bool), String> {
     let is_https = match parsed.scheme() {
         "https" => true,
         "http" => false,
-        other => return Err(format!("unsupported scheme {other:?} — expected http or https")),
+        other => {
+            return Err(format!(
+                "unsupported scheme {other:?} — expected http or https"
+            ));
+        }
     };
     let host = parsed
         .host_str()
@@ -337,7 +366,7 @@ async fn handshake_with_verifier(
         .with_safe_default_protocol_versions()
         .map_err(std::io::Error::other)?
         .dangerous()
-                .with_custom_certificate_verifier(verifier)
+        .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
     let tcp = TcpStream::connect((host, port)).await?;
@@ -380,7 +409,10 @@ async fn capture_presented_fingerprint(host: &str, port: u16) -> Result<String, 
 /// for TLS reasons, and if so, what the server's certificate fingerprint
 /// actually is. Does not consider whether auth is configured — that's a
 /// separate, additive reason to run a proxy (see `DirectProxyManager::start`).
-pub(crate) async fn probe_direct_tls(url: &str, pinned_fingerprint: Option<&str>) -> Result<ProbeResult, String> {
+pub(crate) async fn probe_direct_tls(
+    url: &str,
+    pinned_fingerprint: Option<&str>,
+) -> Result<ProbeResult, String> {
     let Some((host, port)) = parse_https_target(url)? else {
         return Ok(ProbeResult::NoTlsNeeded);
     };
@@ -616,7 +648,8 @@ async fn relay_with_auth_injection(
     let mut request_lines = read_header_block(&mut in_read).await?;
     if !request_lines.is_empty() {
         let credential = format!("{username}:{password}");
-        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, credential);
+        let encoded =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, credential);
         let blank_line = request_lines.pop();
         request_lines.push(format!("Authorization: Basic {encoded}\r\n"));
         if let Some(blank) = blank_line {
@@ -630,9 +663,9 @@ async fn relay_with_auth_injection(
     let (out_read, mut out_write) = tokio::io::split(outbound);
     let mut out_read = BufReader::new(out_read);
     let response_lines = read_header_block(&mut out_read).await?;
-    let saw_session_cookie = response_lines
-        .iter()
-        .any(|line| line.to_ascii_lowercase().starts_with("set-cookie:") && line.contains("tui-session"));
+    let saw_session_cookie = response_lines.iter().any(|line| {
+        line.to_ascii_lowercase().starts_with("set-cookie:") && line.contains("tui-session")
+    });
     for line in &response_lines {
         in_write.write_all(line.as_bytes()).await?;
     }
@@ -652,7 +685,9 @@ async fn relay_with_auth_injection(
 /// i.e. one HTTP header block. Returns whatever was read even if the stream
 /// closed before a blank line was seen (an empty vec if nothing was read at
 /// all) — callers treat an empty result as "nothing to forward."
-async fn read_header_block<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<Vec<String>> {
+async fn read_header_block<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<Vec<String>> {
     let mut lines = Vec::new();
     loop {
         let mut line = String::new();
@@ -682,7 +717,10 @@ async fn read_header_block<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -
 /// Probe a Direct connection's URL for TLS trust, exactly as `ProbeResult`
 /// describes. State-free — does not touch `AppState` or persist anything.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn probe_direct_tls_connection(url: String, tls_fingerprint: Option<String>) -> Result<ProbeResult, String> {
+pub async fn probe_direct_tls_connection(
+    url: String,
+    tls_fingerprint: Option<String>,
+) -> Result<ProbeResult, String> {
     probe_direct_tls(&url, tls_fingerprint.as_deref()).await
 }
 
@@ -706,13 +744,15 @@ pub(crate) async fn start_direct_proxy_impl(
 ) -> Result<Option<u16>, String> {
     let (host, port, is_https) = parse_direct_target(url)?;
 
-    let connections =
-        crate::remote_connection::RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
+    let connections = crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
+        .map_err(|e| e.to_string())?;
     let connection = connections
         .into_iter()
         .find(|c| c.id == connection_id)
         .ok_or_else(|| format!("connection '{connection_id}' not found"))?;
-    let password = crate::credentials::get(crate::credentials::Credential::RemoteConnection(connection_id))?;
+    let password = crate::credentials::get(crate::credentials::Credential::RemoteConnection(
+        connection_id,
+    ))?;
     let basic_auth = match (&connection.auth_username, password) {
         (Some(user), Some(pass)) if !user.trim().is_empty() && !pass.is_empty() => {
             Some((user.trim().to_string(), pass))
@@ -750,12 +790,22 @@ pub async fn start_direct_proxy(
     tls_fingerprint: Option<String>,
     use_native_roots: bool,
 ) -> Result<Option<u16>, String> {
-    start_direct_proxy_impl(&state, &connection_id, &url, tls_fingerprint.as_deref(), use_native_roots).await
+    start_direct_proxy_impl(
+        &state,
+        &connection_id,
+        &url,
+        tls_fingerprint.as_deref(),
+        use_native_roots,
+    )
+    .await
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub fn stop_direct_proxy(state: tauri::State<'_, std::sync::Arc<crate::AppState>>, connection_id: String) {
+pub fn stop_direct_proxy(
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    connection_id: String,
+) {
     state.direct_proxy_manager.stop(&connection_id);
 }
 
@@ -829,7 +879,9 @@ mod tests {
 
         // Bytes after the blank line remain in the reader for a later copy.
         let mut rest = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut rest).await.unwrap();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut rest)
+            .await
+            .unwrap();
         assert_eq!(rest, b"BODY-STARTS-HERE");
     }
 
@@ -924,9 +976,10 @@ mod tests {
     #[tokio::test]
     async fn capture_verifier_records_the_presented_certificate() {
         let server = start_test_tls_server().await;
-        let fingerprint = capture_presented_fingerprint(&server.addr.ip().to_string(), server.addr.port())
-            .await
-            .unwrap();
+        let fingerprint =
+            capture_presented_fingerprint(&server.addr.ip().to_string(), server.addr.port())
+                .await
+                .unwrap();
         assert_eq!(fingerprint, cert_fingerprint_sha256(&server.cert_der));
     }
 
@@ -938,8 +991,13 @@ mod tests {
             provider: crypto_provider(),
             expected_fingerprint: expected,
         });
-        let result = handshake_with_verifier(&server.addr.ip().to_string(), server.addr.port(), verifier).await;
-        assert!(result.is_ok(), "expected handshake to succeed, got {result:?}");
+        let result =
+            handshake_with_verifier(&server.addr.ip().to_string(), server.addr.port(), verifier)
+                .await;
+        assert!(
+            result.is_ok(),
+            "expected handshake to succeed, got {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -949,9 +1007,15 @@ mod tests {
             provider: crypto_provider(),
             expected_fingerprint: "0".repeat(64), // never a real SHA-256 hex digest of this cert
         });
-        let result = handshake_with_verifier(&server.addr.ip().to_string(), server.addr.port(), verifier).await;
-        let err = result.expect_err("a fingerprint mismatch must fail the handshake, never silently succeed");
-        assert!(is_certificate_error(&err), "expected a certificate error, got {err:?}");
+        let result =
+            handshake_with_verifier(&server.addr.ip().to_string(), server.addr.port(), verifier)
+                .await;
+        let err = result
+            .expect_err("a fingerprint mismatch must fail the handshake, never silently succeed");
+        assert!(
+            is_certificate_error(&err),
+            "expected a certificate error, got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -960,14 +1024,21 @@ mod tests {
         // `handshake_with_native_roots` correctly refuses it (the branch
         // `probe_direct_tls` relies on to fall through into the pinning flow).
         let server = start_test_tls_server().await;
-        let result = handshake_with_native_roots(&server.addr.ip().to_string(), server.addr.port()).await;
-        let err = result.expect_err("a self-signed cert must not be accepted by native-roots verification");
-        assert!(is_certificate_error(&err), "expected a certificate error, got {err:?}");
+        let result =
+            handshake_with_native_roots(&server.addr.ip().to_string(), server.addr.port()).await;
+        let err = result
+            .expect_err("a self-signed cert must not be accepted by native-roots verification");
+        assert!(
+            is_certificate_error(&err),
+            "expected a certificate error, got {err:?}"
+        );
     }
 
     #[tokio::test]
     async fn probe_direct_tls_no_tls_for_http_url() {
-        let result = probe_direct_tls("http://127.0.0.1:9877", None).await.unwrap();
+        let result = probe_direct_tls("http://127.0.0.1:9877", None)
+            .await
+            .unwrap();
         assert_eq!(result, ProbeResult::NoTlsNeeded);
     }
 
@@ -1000,8 +1071,13 @@ mod tests {
         let wrong = "0".repeat(64);
         let result = probe_direct_tls(&url, Some(&wrong)).await.unwrap();
         match result {
-            ProbeResult::PinnedMismatch { presented_fingerprint } => {
-                assert_eq!(presented_fingerprint, cert_fingerprint_sha256(&server.cert_der));
+            ProbeResult::PinnedMismatch {
+                presented_fingerprint,
+            } => {
+                assert_eq!(
+                    presented_fingerprint,
+                    cert_fingerprint_sha256(&server.cert_der)
+                );
             }
             other => panic!("expected PinnedMismatch, got {other:?}"),
         }
@@ -1069,11 +1145,23 @@ mod tests {
         let (remote_addr, _remote_shutdown) = start_echo_server().await;
         let manager = DirectProxyManager::new();
         let first_port = manager
-            .start("conn-2".to_string(), remote_addr.ip().to_string(), remote_addr.port(), OutboundTls::None, None)
+            .start(
+                "conn-2".to_string(),
+                remote_addr.ip().to_string(),
+                remote_addr.port(),
+                OutboundTls::None,
+                None,
+            )
             .await
             .unwrap();
         let second_port = manager
-            .start("conn-2".to_string(), remote_addr.ip().to_string(), remote_addr.port(), OutboundTls::None, None)
+            .start(
+                "conn-2".to_string(),
+                remote_addr.ip().to_string(),
+                remote_addr.port(),
+                OutboundTls::None,
+                None,
+            )
             .await
             .unwrap();
         assert!(manager.is_running("conn-2"));
@@ -1141,9 +1229,14 @@ mod tests {
         // they're read, which can arrive as separate TCP segments) — read to
         // EOF instead.
         let mut buf = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut client, &mut buf).await.unwrap();
+        tokio::io::AsyncReadExt::read_to_end(&mut client, &mut buf)
+            .await
+            .unwrap();
         let response = String::from_utf8_lossy(&buf);
-        assert!(response.contains("captured-authorization: "), "response: {response}");
+        assert!(
+            response.contains("captured-authorization: "),
+            "response: {response}"
+        );
 
         let expected = format!(
             "Basic {}",
@@ -1173,10 +1266,15 @@ mod tests {
         // First request: the fake server always echoes a Set-Cookie header
         // (see start_capturing_http_server) — this must flip cookie_seen.
         let mut first = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        first.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+        first
+            .write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
         first.shutdown().await.unwrap();
         let mut buf = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut first, &mut buf).await.unwrap();
+        tokio::io::AsyncReadExt::read_to_end(&mut first, &mut buf)
+            .await
+            .unwrap();
         drop(first);
 
         // Second, separate connection: must NOT get an injected Authorization
@@ -1188,7 +1286,9 @@ mod tests {
             .unwrap();
         second.shutdown().await.unwrap();
         let mut buf2 = Vec::new();
-        tokio::io::AsyncReadExt::read_to_end(&mut second, &mut buf2).await.unwrap();
+        tokio::io::AsyncReadExt::read_to_end(&mut second, &mut buf2)
+            .await
+            .unwrap();
         let response2 = String::from_utf8_lossy(&buf2);
         assert!(
             !response2.contains("captured-authorization: Basic"),
