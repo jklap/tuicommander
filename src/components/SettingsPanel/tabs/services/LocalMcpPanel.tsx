@@ -76,23 +76,19 @@ export const LocalMcpPanel: Component = () => {
 				</div>
 			</div>
 
-			<div class={s.group}>
-				<label>{t("services.label.mcpConnection", "MCP Connection")}</label>
-				<p class={s.hint}>
-					{t(
-						"services.hint.mcpConnection",
-						"AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
-					)}
-				</p>
-			</div>
-
-			{/* ── TUIC Tools ── */}
-			<h3>TUIC Tools</h3>
+			{/* ── TUIC MCP Server ── */}
+			<h3>TUIC MCP Server</h3>
 			<div class={s.group}>
 				<p class={s.hint}>Native tools exposed via MCP. Disable tools to restrict what AI agents can access.</p>
 			</div>
 
 			<div class={s.group}>
+				<p class={s.hint} style={{ margin: "0 0 8px" }}>
+					{t(
+						"services.hint.perAgentAutoConfigure",
+						"The MCP server can also be configured automatically for a specific agent from that agent's own settings, under Settings → Agents.",
+					)}
+				</p>
 				<button
 					class={s.mcpDisclosure}
 					onClick={() => {

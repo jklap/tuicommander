@@ -441,9 +441,11 @@ Enable the HTTP API server for external tool integration:
 - AI agents connect via the `tuic-bridge` sidecar (auto-installed on first launch for every supported agent that is installed on the machine — see [MCP bridge auto-install](../backend/config.md#mcp-bridge-auto-install))
 - Shows server status (running/stopped) and active session count
 
-#### TUIC Tools
+#### TUIC MCP Server
 
 Native tools exposed to AI agents via MCP. Each tool can be individually enabled or disabled to restrict what agents can access.
+
+A note above the manual configuration points to the per-agent auto-configure option: the MCP server can also be configured automatically for a specific agent from that agent's own settings, under **Settings → Agents**.
 
 **Manual MCP configuration** (expandable) — shows the `tuic-bridge` binary path and a ready-to-paste JSON snippet for manually configuring MCP clients that aren't auto-installed. Click "Copy" to copy the snippet to clipboard.
 
@@ -465,6 +467,10 @@ Proxy external MCP servers through TUICommander. Their tools appear prefixed as 
 - Per-repo scoping: each repo can define an allowlist of active upstream servers via **Cmd+Shift+I** popup (or repo settings). Empty/null allowlist = all servers active
 
 See [MCP Proxy](mcp-proxy.md) for the full guide.
+
+#### MCP integrations
+
+Shown (desktop only) when at least one MCP client holds a TUICommander bridge entry: lists those clients and offers **Remove all MCP integrations**, so uninstalling TUICommander does not leave a dangling `tuic-bridge` server behind. It used to sit at the bottom of the Agents page.
 
 ### Remote Access
 

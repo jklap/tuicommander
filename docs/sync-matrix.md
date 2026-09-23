@@ -287,7 +287,7 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 | `src-tauri/crates/tuic-cli/` | CLI callers of renamed or removed native actions |
 | `docs/user-guide/cli.md`, `CHANGELOG.md` | Public CLI examples and BREAKING migration instructions |
 | `docs/backend/config.md` | `collapse_tools` field in `AppConfig` table |
-| `docs/user-guide/settings.md` | MCP page → TUIC Tools — "Collapse tools" checkbox description |
+| `docs/user-guide/settings.md` | MCP page → TUIC MCP Server — "Collapse tools" checkbox description |
 
 #### Session tool actions added (swarm Layer 3–4)
 - `session action=submit` — submits one command to a confirmed-idle managed agent and returns a bounded terminal-movement receipt in the same response. It never queues or overwrites a partial composer; `session action=input` remains raw and write-only.
