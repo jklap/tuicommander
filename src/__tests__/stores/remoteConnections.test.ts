@@ -162,9 +162,37 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 		expect(store.getToken("c1")).toBe("tok-abc");
 	});
 
+	// Ported from wip ac4fe63f9 ("swallows a load error (stays retryable)…").
+	it("a failed load is swallowed and stays retryable; the next hydrate loads", async () => {
+		invokeMock.mockImplementation((command: string) => {
+			calls.push(command);
+			if (command === "list_remote_connections") return Promise.reject(new Error("offline"));
+			return Promise.resolve(undefined);
+		});
+		await expect(store.hydrate()).resolves.toBeUndefined();
+		expect(store.getConnections()).toEqual({});
+
+		invokeMock.mockImplementation((command: string) => {
+			calls.push(command);
+			if (command === "list_remote_connections") return Promise.resolve([directConn("c1")]);
+			if (command === "remote_connection_statuses") return Promise.resolve([]);
+			return Promise.resolve(undefined);
+		});
+		await store.hydrate();
+		expect(Object.keys(store.getConnections())).toEqual(["c1"]);
+	});
+
 	describe("once hydrated", () => {
 		beforeEach(async () => {
 			await store.hydrate();
+		});
+
+		// Ported from wip ac4fe63f9 ("addConnection rethrows on failure and never adds the connection to state").
+		it("a rejected save of a new connection never adds it", async () => {
+			invokeMock.mockRejectedValueOnce(new Error("nope"));
+
+			await expect(store.addConnection(directConn("c9"))).rejects.toThrow("nope");
+			expect(store.getConnectionState("c9")).toBeUndefined();
 		});
 
 		it("sends the loaded base for edits and null for a new connection", async () => {
