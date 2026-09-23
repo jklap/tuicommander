@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use super::profile::{ForwardSpec, StrictHostKeyChecking, TunnelProfile};
+use super::profile::{ForwardSpec, TunnelProfile};
+use crate::ssh_connection::StrictHostKeyChecking;
 
 /// Directory containing the multiplexed SSH control sockets owned by TUIC.
 pub(crate) fn ssh_control_dir() -> std::path::PathBuf {
@@ -28,15 +29,15 @@ pub(crate) fn build_ssh_base_args(profile: &TunnelProfile) -> Vec<String> {
     args.push("-o".to_string());
     args.push(format!(
         "ServerAliveInterval={}",
-        profile.options.server_alive_interval
+        profile.ssh.server_alive_interval
     ));
     args.push("-o".to_string());
     args.push(format!(
         "ServerAliveCountMax={}",
-        profile.options.server_alive_count_max
+        profile.ssh.server_alive_count_max
     ));
 
-    let shk_value = match profile.options.strict_host_key_checking {
+    let shk_value = match profile.ssh.strict_host_key_checking {
         StrictHostKeyChecking::Yes => "yes",
         StrictHostKeyChecking::AcceptNew => "accept-new",
     };
@@ -48,15 +49,11 @@ pub(crate) fn build_ssh_base_args(profile: &TunnelProfile) -> Vec<String> {
     args.push("-o".to_string());
     args.push(format!(
         "Compression={}",
-        if profile.options.compression {
-            "yes"
-        } else {
-            "no"
-        }
+        if profile.ssh.compression { "yes" } else { "no" }
     ));
 
     args.push("-o".to_string());
-    args.push(format!("Port={}", profile.port));
+    args.push(format!("Port={}", profile.ssh.port));
 
     args.push("-o".to_string());
     args.push("ControlMaster=auto".to_string());
@@ -69,7 +66,7 @@ pub(crate) fn build_ssh_base_args(profile: &TunnelProfile) -> Vec<String> {
     // acts as the shared master for concurrent one-shot commands.
     args.push("ControlPersist=no".to_string());
 
-    if let Some(identity) = &profile.identity_file {
+    if let Some(identity) = &profile.ssh.identity_file {
         args.push("-i".to_string());
         args.push(identity.to_string_lossy().into_owned());
     }
@@ -117,7 +114,7 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
 
     // Destination — must be last; `--` keeps a user starting with `-` from being an option
     args.push("--".to_string());
-    args.push(format!("{}@{}", profile.user, profile.host));
+    args.push(format!("{}@{}", profile.ssh.user, profile.ssh.host));
 
     args
 }
@@ -140,18 +137,15 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
+    use crate::ssh_connection::SshConnectionParams;
+    use crate::tunnels::profile::TunnelProfile;
 
     fn base_profile() -> TunnelProfile {
         TunnelProfile {
             id: uuid::Uuid::new_v4().to_string(),
             name: "test".to_string(),
-            host: "example.com".to_string(),
-            port: 22,
-            user: "alice".to_string(),
-            identity_file: None,
+            ssh: SshConnectionParams::new("example.com", "alice"),
             forwards: Vec::new(),
-            options: ProfileOptions::default(),
             auto_connect: false,
         }
     }
@@ -185,7 +179,7 @@ mod tests {
     #[test]
     fn compression_off_is_said_out_loud_rather_than_omitted() {
         let mut profile = base_profile();
-        profile.options.compression = false;
+        profile.ssh.compression = false;
 
         // Not "absent": ssh would then read `Compression` from the user's
         // ssh_config, and the operator who turned it off here would get it back
@@ -222,7 +216,7 @@ mod tests {
     #[test]
     fn tunnel_destination_follows_double_dash() {
         let mut profile = base_profile();
-        profile.user = "-oProxyCommand=evil".to_string();
+        profile.ssh.user = "-oProxyCommand=evil".to_string();
         let args = build_ssh_args(&profile);
         let n = args.len();
         assert_eq!(args[n - 2], "--", "{args:?}");
@@ -315,7 +309,7 @@ mod tests {
     #[test]
     fn with_identity_file() {
         let mut profile = base_profile();
-        profile.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
+        profile.ssh.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
 
         let args = build_ssh_args(&profile);
 
@@ -361,7 +355,7 @@ mod tests {
     #[test]
     fn strict_host_key_checking_accept_new() {
         let mut profile = base_profile();
-        profile.options.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
+        profile.ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
 
         let args = build_ssh_args(&profile);
 

@@ -879,7 +879,7 @@ What is compressed on a remote connection, and by what:
 |---|---|---|
 | HTTP request and response bodies over 860 bytes | `CompressionLayer` (gzip/br/deflate, from `Accept-Encoding`) | `mcp_http::build_router` |
 | Stream WebSocket frames, direct remote peer | raw deflate per frame, level 6, this option | `mcp_http::ws_compression` |
-| Stream WebSocket frames, SSH-tunnelled peer | `ssh -C` on the tunnel channel | `tunnels::command`, `ProfileOptions::compression` |
+| Stream WebSocket frames, SSH-tunnelled peer | `ssh -C` on the tunnel channel | `tunnels::command`, `SshConnectionParams::compression` |
 | Stream WebSocket frames, local peer | nothing — there is no link to save | — |
 
 The WebSocket half needs its own mechanism because `CompressionLayer` is an HTTP
@@ -1646,6 +1646,30 @@ daemon's in-memory session token.
 for a new machine, or the loaded connection as `base` when editing. The server
 merges only changed fields into that connection's latest locked record.
 
+A connection is
+`{ id, name, transport, auth_username, enabled, auto_update, deploy, survive_secs }`.
+`transport` is internally tagged by `type`:
+
+| `type` | Fields |
+|--------|--------|
+| `Ssh` | `ssh: { host, port, user, identity_file, server_alive_interval, server_alive_count_max, strict_host_key_checking: "Yes" \| "AcceptNew", compression }`, `remote_daemon_port` |
+| `Direct` | `url` |
+| `Local` | `port`, `instance_id` — exactly one set; not connectable yet (connect/update/deploy fail with `Local connections are not yet supported`) |
+
+The `ssh` object is the same `SshConnectionParams` a tunnel profile carries. The
+runtime always opens the tunnel with `StrictHostKeyChecking=accept-new`, whatever
+`strict_host_key_checking` says. **Shape change:** before the nested model the SSH
+fields were flat on the transport (`ssh_host`, `ssh_port`, `ssh_user`,
+`identity_file`) and `auth_username` was a required string. Responses now carry
+only the nested shape and `auth_username` may be `null`; requests in the old flat
+shape are still accepted (a transport mixing both shapes is rejected as
+unprocessable). `connections.json` itself is
+rewritten once at startup (see `docs/backend/config.md`).
+
+`auth_username` is optional. With a stored password and no username the token
+exchange sends an empty username, which every daemon refuses — a missing
+username fails closed, it never authenticates as anybody.
+
 The install pair is SSH-only. `POST .../install` stages the matching release
 binary, installs and starts a systemd user unit or launchd agent, and persists
 `deploy = "installed"`. `DELETE .../install` stops and removes the service
@@ -1668,7 +1692,10 @@ rewrites the store: status poll, mirror task, mirrored session rows, SSH tunnel
 and session token all go, through the same `remote_runtime::teardown` the
 disconnect route uses. Deleting a connected machine therefore needs no
 disconnect first — and must not be given one, because the tunnel is keyed by the
-profile the delete is about to remove.
+profile the delete is about to remove. It then forgets BOTH vault entries, the
+password and the pairing token (it used to leave the pairing token behind), via
+the same `remote_connection::delete_remote_connection_impl` the desktop command
+calls. A missing id answers 404 (the vault entries are cleared either way).
 
 ### Remote Connection Runtime
 
@@ -1702,6 +1729,24 @@ reconnect the user has to ask for.
 These three routes are desktop-only — they are registered on `build_router`, not
 in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote
 connection; it does not hold connections of its own.
+
+### Tunnel Profiles
+
+```
+GET    /tunnels/profiles
+POST   /tunnels/profiles
+DELETE /tunnels/profiles/{id}
+```
+
+A profile is `{ id, name, ssh, forwards, auto_connect }`, where `ssh` is the
+`SshConnectionParams` object described under Remote Connections (`compression`
+defaults to `true`). **Shape change:** the SSH fields used to be flat (`host`,
+`port`, `user`, `identity_file` plus an `options` object); responses now carry
+only `ssh`, and the flat shape is still accepted on input. `POST` mints a UUID
+when `id` is empty or missing — as the desktop command always did — and answers
+`{ "id": ... }`; a validation failure is a 400. `DELETE` stops a running tunnel
+and answers `{ "deleted": true }`, or 404 for a missing profile (the desktop
+command now errors for the same case).
 
 ### SSH Discovered Hosts
 

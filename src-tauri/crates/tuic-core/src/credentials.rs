@@ -672,6 +672,44 @@ mod tests {
     }
 
     #[test]
+    fn remote_connection_credential_has_no_legacy_entry() {
+        assert!(
+            Credential::RemoteConnection("conn-id")
+                .legacy_entry()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn remote_connection_credential_crud() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_vault();
+        set(Credential::RemoteConnection("conn-1"), "hunter2").unwrap();
+        assert_eq!(
+            get(Credential::RemoteConnection("conn-1")).unwrap(),
+            Some("hunter2".to_string())
+        );
+        delete(Credential::RemoteConnection("conn-1")).unwrap();
+        assert_eq!(get(Credential::RemoteConnection("conn-1")).unwrap(), None);
+    }
+
+    #[test]
+    fn remote_connection_credentials_are_scoped_per_connection_id() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_vault();
+        set(Credential::RemoteConnection("conn-a"), "pass-a").unwrap();
+        set(Credential::RemoteConnection("conn-b"), "pass-b").unwrap();
+        assert_eq!(
+            get(Credential::RemoteConnection("conn-a")).unwrap(),
+            Some("pass-a".to_string())
+        );
+        assert_eq!(
+            get(Credential::RemoteConnection("conn-b")).unwrap(),
+            Some("pass-b".to_string())
+        );
+    }
+
+    #[test]
     fn github_token_vault_key_is_account_scoped() {
         assert_eq!(
             Credential::GithubToken("ghe.acme.com").vault_key(),

@@ -391,7 +391,13 @@ A connection without credentials therefore reaches `/health` and nothing else.
 The password is kept in the OS credential vault, keyed by the connection's UUID.
 `connections.json` holds the username only, and neither the vault entry nor the
 daemon's token ever appears in `GET /config`. Deleting a connection deletes its
-vault entry with it.
+vault entries with it — the password and, for a deployed daemon, the pairing
+token — over the desktop app and over HTTP alike.
+
+The username is optional: a LAN desktop with `lan_auth_bypass`, or a daemon
+TUICommander deployed (pairing token), needs none. If you store a password but
+leave the username blank, the daemon refuses the login — it never signs you in
+as "any user".
 
 For a manually managed daemon, TUICommander trades the password for the daemon's
 session token over `GET /api/auth/session-token` (Basic Auth). For Connect and
@@ -457,7 +463,16 @@ Once a remote connection is configured:
 - **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection, a missing initial frame after 15 seconds, or an unreadable compressed frame shows a persistent error toast. The client retries the stream and replays the current viewport on reconnect; the toast remains until dismissed. An idle terminal whose viewport or explicit empty replay has arrived is not treated as stalled
 - **Health monitoring** — Connection health is polled periodically. Disconnected connections show a warning badge in the sidebar
 
-Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
+Connections are stored in `<config_dir>/connections.json` with SSH, Direct and
+Local transport types. An SSH connection keeps its SSH settings (host, port,
+user, identity file, keepalive, host-key policy, compression) in the same nested
+`ssh` block a tunnel profile uses. A `connections.json` or tunnel profile written
+by an older build is upgraded once at startup; the original is kept beside it as
+`<file>.pre-nested-ssh-<timestamp>.bak` (restore it if you go back to an older
+build, which cannot read the new shape). **Local** — another TUICommander
+instance on this same machine, by port or by instance id — is part of the
+stored model but cannot be connected yet: Connect reports "Local connections
+are not yet supported".
 
 #### Remote agent notices
 

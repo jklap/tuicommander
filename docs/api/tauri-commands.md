@@ -311,8 +311,8 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `list_tunnel_profiles` | -- | `Vec<TunnelProfile>` | Load all tunnel profiles (global + per-repo merged) |
-| `save_tunnel_profile` | `profile: JSON` | `String` (profile ID) | Create or update a tunnel profile. Auto-generates UUID if `id` is empty. Validates before saving |
-| `delete_tunnel_profile` | `id` | `bool` | Delete a tunnel profile by ID. Stops the tunnel if running |
+| `save_tunnel_profile` | `profile: JSON` | `String` (profile ID) | Create or update a tunnel profile (`{ id, name, ssh: SshConnectionParams, forwards, auto_connect }`; the pre-nested flat shape is still accepted on input). Auto-generates a UUID if `id` is empty or missing — same body as `POST /tunnels/profiles` (`tunnels::commands::save_tunnel_profile_impl`). Validates before saving |
+| `delete_tunnel_profile` | `id` | `()` | Delete a tunnel profile by ID, stopping the tunnel if running. A missing profile is an error (`profile not found`), as it is a 404 over HTTP — it used to return `Ok(false)` |
 | `start_tunnel` | `id` | `String` | Start a tunnel by profile ID. Loads the profile, validates, and spawns the SSH process |
 | `stop_tunnel` | `id` | `()` | Stop a running tunnel by profile ID |
 | `list_active_tunnels` | -- | `Vec<JSON>` | List all active tunnels with ID, status, and started_at |
@@ -329,8 +329,8 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
-| `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock |
-| `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
+| `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock. `connection.transport` is `Ssh { ssh: SshConnectionParams, remote_daemon_port }`, `Direct { url }` or `Local { port, instance_id }`; `auth_username` is optional (`null`) |
+| `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials (password and pairing token), and its ephemeral daemon best-effort; an installed service is left for explicit uninstall. Same body as `DELETE /config/remote-connections/{id}` (`remote_connection::delete_remote_connection_impl`); a missing id is not an error here (HTTP answers 404) |
 | `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json` |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
 | `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |

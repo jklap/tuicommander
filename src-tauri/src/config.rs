@@ -2793,6 +2793,19 @@ where
         Ok(result)
     }
 
+    /// Run `f` on this file's path while holding both of `update`'s locks, for a
+    /// caller that must read and rewrite the raw document rather than `T` — a
+    /// one-time shape migration that has to keep keys `T` does not model. `f`
+    /// does its own (atomic) writing.
+    pub(crate) fn with_locks<R, F>(&self, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&std::path::Path) -> Result<R, String>,
+    {
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        f(&self.path)
+    }
+
     /// Apply only the fields changed by this caller to the latest locked file.
     /// Arrays are replaced as values; a null delta removes an object key.
     pub(crate) fn save_delta(&self, base: &T, desired: &T) -> Result<(), String> {

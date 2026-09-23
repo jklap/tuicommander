@@ -15,17 +15,17 @@ function makeProfile(id: string, overrides: Partial<TunnelProfile> = {}): Tunnel
 	return {
 		id,
 		name: `profile-${id}`,
-		host: "example.test",
-		port: 22,
-		user: "boss",
-		identity_file: null,
-		forwards: [],
-		options: {
+		ssh: {
+			host: "example.test",
+			port: 22,
+			user: "boss",
+			identity_file: null,
 			server_alive_interval: 15,
 			server_alive_count_max: 3,
 			strict_host_key_checking: "AcceptNew",
 			compression: true,
 		},
+		forwards: [],
 		auto_connect: false,
 		...overrides,
 	};

@@ -1043,6 +1043,18 @@ mod tests {
         ));
     }
 
+    /// A remote connection's `auth_username` is optional; with a stored
+    /// password and no username the client sends `:<password>`. That must be
+    /// refused even with the right password, never treated as "any user".
+    #[test]
+    fn basic_auth_empty_username_fails_closed_even_with_the_right_password() {
+        let hash = bcrypt::hash("pass", 4).unwrap();
+        assert!(matches!(
+            validate_basic_auth(Some(&basic_header("", "pass")), "admin", &hash),
+            AuthResult::Invalid
+        ));
+    }
+
     #[test]
     fn basic_auth_no_colon_separator() {
         use base64::Engine;
