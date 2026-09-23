@@ -144,6 +144,20 @@ describe("RemoteMachinesPanel", () => {
 		expect(actions.disconnect).not.toHaveBeenCalled();
 	});
 
+	// Catches: offering to persist the per-connect loopback relay of a pinned self-signed https Direct target.
+	it("never offers the TLS relay's loopback address as a resolved address", () => {
+		connections["machine-1"] = {
+			connection: {
+				...sshConnection().connection,
+				transport: { type: "Direct", url: "https://box.example:9877", tls_fingerprint: "ab".repeat(32) },
+			},
+			status: "connected",
+			baseUrl: "http://127.0.0.1:53111",
+		};
+		const view = render(() => <RemoteMachinesPanel {...handlers} />);
+		expect(view.queryByRole("button", { name: "Save resolved address" })).toBeNull();
+	});
+
 	// Catches: address offers rewrite SSH aliases, unchanged URLs, or failed connections.
 	it("never offers address persistence for SSH, unchanged Direct URLs or failures", () => {
 		for (const state of [

@@ -63,6 +63,7 @@ pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 mod default_app;
 pub(crate) mod design_mode;
+pub(crate) mod direct_proxy;
 // Tests of the sidecar config override that build.rs also compiles; a build
 // script has no test harness.
 #[cfg(test)]
@@ -2780,6 +2781,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
             connection_test::test_connection,
+            direct_proxy::probe_direct_tls_connection,
             open_secondary_window,
             default_app::open_default_app,
             native_notification::show_native_notification,

@@ -74,7 +74,9 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteServersTab's merged editor: the "Named instance"/"Manual port" radio
 	// labels wrap a nested input; the connection rows' `ConnectionStatusBadge
-	// label={…}` is a runtime status, not a setting.
+	// label={…}` is a runtime status, not a setting. (The "Compress the channel" /
+	// "Connect automatically on startup" toggles are indexed: their caption is a
+	// static <span> after a self-closing input.)
 	"remote-servers": { dynamic: 3, orphans: 0 },
 	// StreamDockTab: the per-session pin toggles are labelled from a runtime <For>.
 	streamdock: { dynamic: 1, orphans: 0 },

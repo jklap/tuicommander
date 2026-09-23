@@ -5318,7 +5318,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 15,
+      "order": 16,
       "path": "/connections/{id}/auth_username",
       "labelKey": "settings.catalogue.connections.connections.{id}.auth_username.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.auth_username.help",
@@ -5353,7 +5353,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 17,
+      "order": 18,
       "path": "/connections/{id}/auto_update",
       "labelKey": "settings.catalogue.connections.connections.{id}.auto_update.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.auto_update.help",
@@ -5384,7 +5384,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 18,
+      "order": 19,
       "path": "/connections/{id}/deploy",
       "labelKey": "settings.catalogue.connections.connections.{id}.deploy.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.deploy.help",
@@ -5427,7 +5427,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 16,
+      "order": 17,
       "path": "/connections/{id}/enabled",
       "labelKey": "settings.catalogue.connections.connections.{id}.enabled.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.enabled.help",
@@ -5510,7 +5510,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 19,
+      "order": 20,
       "path": "/connections/{id}/survive_secs",
       "labelKey": "settings.catalogue.connections.connections.{id}.survive_secs.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.survive_secs.help",
@@ -5543,7 +5543,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 14,
+      "order": 15,
       "path": "/connections/{id}/transport/instance_id",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.instance_id.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.instance_id.help",
@@ -5576,7 +5576,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 13,
+      "order": 14,
       "path": "/connections/{id}/transport/port",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.port.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.port.help",
@@ -5888,6 +5888,40 @@ export const settingsCatalogue = {
         "set"
       ],
       "confirmationClass": "ordinary"
+    },
+    "connections.connections.{id}.transport.tls_fingerprint": {
+      "id": "connections.connections.{id}.transport.tls_fingerprint",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 13,
+      "path": "/connections/{id}/transport/tls_fingerprint",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.tls_fingerprint.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.tls_fingerprint.help",
+      "label": "tls fingerprint",
+      "schema": {
+        "description": "SHA-256 fingerprint (lowercase hex) of a pinned self-signed/\nuntrusted certificate, set only after the user explicitly confirms\nit (`direct_proxy::probe_direct_tls` → `NeedsConfirmation`). When\nset, Connect talks to the daemon only through a relay that accepts\nexactly this certificate (`direct_proxy::DirectProxies`). `None` for\n`http://`, a CA-trusted `https://`, or a target not yet confirmed —\nand then an untrusted certificate fails Connect closed. Omitted from\nthe file when `None`, so an unpinned connection keeps the exact shape\nolder builds wrote (they ignore the key when present).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates the pinned certificate fingerprint a Direct connection trusts.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
     },
     "connections.connections.{id}.transport.type": {
       "id": "connections.connections.{id}.transport.type",
@@ -14127,6 +14161,13 @@ export const settingsCatalogue = {
                 "properties": {
                   "url": {
                     "type": "string"
+                  },
+                  "tls_fingerprint": {
+                    "description": "SHA-256 fingerprint (lowercase hex) of a pinned self-signed/\nuntrusted certificate, set only after the user explicitly confirms\nit (`direct_proxy::probe_direct_tls` → `NeedsConfirmation`). When\nset, Connect talks to the daemon only through a relay that accepts\nexactly this certificate (`direct_proxy::DirectProxies`). `None` for\n`http://`, a CA-trusted `https://`, or a target not yet confirmed —\nand then an untrusted certificate fails Connect closed. Omitted from\nthe file when `None`, so an unpinned connection keeps the exact shape\nolder builds wrote (they ignore the key when present).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "type": {
                     "type": "string",

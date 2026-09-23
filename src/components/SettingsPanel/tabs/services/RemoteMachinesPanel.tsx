@@ -54,6 +54,22 @@ export function withStatus(statuses: SshHostStatus[], status: SshHostStatus): Ss
 	return [...statuses.filter((st) => !(st.target === status.target && st.port === status.port)), status];
 }
 
+/**
+ * The address a connected Direct connection actually answers on, when it is
+ * worth offering to save: it differs from the configured URL (e.g. the
+ * Tailscale FQDN the runtime fell back to). Never the loopback relay a pinned
+ * self-signed `https://` target is reached through (`direct_proxy.rs`): that
+ * port is per-connect and saving it would point the connection at nothing.
+ */
+export function resolvedDirectAddress(connState: ConnectionState): string | null {
+	const transport = connState.connection.transport;
+	if (connState.status !== "connected" || transport.type !== "Direct" || !connState.baseUrl) return null;
+	const configured = transport.url.replace(/\/$/, "");
+	if (connState.baseUrl === configured) return null;
+	if (/^https:\/\//i.test(configured) && /^http:\/\/127\.0\.0\.1:/.test(connState.baseUrl)) return null;
+	return connState.baseUrl;
+}
+
 export interface RemoteMachinesPanelProps {
 	/** Open the merged connection editor (`RemoteConnectionEditor`) on this connection. */
 	onEdit: (connection: RemoteConnection) => void;
@@ -97,13 +113,16 @@ export const RemoteMachinesPanel: Component<RemoteMachinesPanelProps> = (props) 
 	}
 
 	async function saveResolvedAddress(connState: ConnectionState) {
-		if (connState.connection.transport.type !== "Direct" || !connState.baseUrl) return;
+		const transport = connState.connection.transport;
+		const resolved = resolvedDirectAddress(connState);
+		if (transport.type !== "Direct" || !resolved) return;
 		setSaving(true);
 		setError("");
 		try {
 			await remoteConnectionsStore.addConnection({
 				...connState.connection,
-				transport: { type: "Direct", url: connState.baseUrl },
+				// A new URL drops any certificate pin, as editing the URL does.
+				transport: { type: "Direct", url: resolved },
 			});
 		} catch (error) {
 			setError(String(error));
@@ -334,14 +353,7 @@ export const RemoteMachinesPanel: Component<RemoteMachinesPanelProps> = (props) 
 									>
 										{transportSummary(conn().transport)}
 									</div>
-									<Show
-										when={
-											connState.status === "connected" &&
-											conn().transport.type === "Direct" &&
-											connState.baseUrl &&
-											connState.baseUrl !== (conn().transport as { url: string }).url.replace(/\/$/, "")
-										}
-									>
+									<Show when={resolvedDirectAddress(connState)}>
 										<div class={s.hint}>
 											Connected through {connState.baseUrl}
 											<button
