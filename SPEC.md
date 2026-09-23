@@ -392,13 +392,17 @@ Progress is one append-only journal per project, read from a dialog. The dialog
 opens on the active PTY and can switch to another PTY or the repository aggregate.
 It answers "what happened while I was not watching?" and nothing else.
 
-Three entry kinds. Agents report `done` and `blocked` through the compact MCP
+Five entry kinds. Agents report `done` and `blocked` through the compact MCP
 `progress` tool, whose `initialize` obligation is imperative rather than
 descriptive — the shipped descriptive version produced zero entries across 39
 repositories. TUICommander itself writes `intent` from the agent's `intent:`
 marker; that trigger fires on every task, so it is the reliability floor under an
 obligation the agent read hours earlier. An agent cannot report an `intent`: the
-kind exists because it is observed rather than claimed.
+kind exists because it is observed rather than claimed. For the same reason
+TUICommander writes `delegated` at `agent action=spawn` and `message` at an
+explicit `agent action=send` between terminals, attributed to the sender and
+naming the target terminal; their text is redacted and capped at 500
+characters, and that cap is the whole record. An agent cannot report either.
 
 The journal is append-only. There is no pause, clear, correction, revision,
 deduplication or Markdown export — an entry is written once and either kept or
@@ -422,16 +426,28 @@ The UI is a dialog, not a panel: one newest-first list for the active PTY, with 
 selector for other PTYs and the repository aggregate, a
 per-scope last-visit divider frozen while that view is open, blocked entries in red,
 `intent` entries muted, one blocked-only filter and per-entry deletion. No pages,
-no tabs, no per-repository fan-out. The toolbar bell carries one aggregate entry
+no per-repository fan-out.
+
+Boss decided on 2026-09-23 to evolve Progress into a structured delegation
+view. A **List | Flow** toggle draws the same journal as a sequence diagram: one
+column per terminal and per Claude subagent of an open terminal, order rather
+than time downward, delegations and messages as arrows, a child's
+`done`/`blocked` as its return arrow to the parent, and intents as notes. The
+backend builds the whole sequence (`progress_flow`); a subagent's full prompt or
+report is fetched on demand (`progress_flow_detail`), redacted. Hand-offs are
+journaled rather than read from `session_parent` or the agent inbox, because
+both are in memory and lost when the child closes or the app restarts. The toolbar bell carries one aggregate entry
 that opens it.
 
 The implementation contract is maintained in `plans/project-progress.md`. The
 reporting-quality evaluation of the short default against the optional prompt is
 recorded in [Progress reporting evaluation](docs/evaluations/progress-reporting.md).
 
-Periodic inference, workstream modelling, generated summaries, issue-tracker and
+Periodic inference, generated summaries, issue-tracker and
 remote-synchronization integrations, scheduled or manual Markdown export, and
-Markdown import stay outside this version by decision, not by omission.
+Markdown import stay outside this version by decision, not by omission. The
+delegation structure the Flow view draws is observed from spawns and sends; it
+is not inferred, and nothing groups entries into workstreams.
 
 ## Persistence
 

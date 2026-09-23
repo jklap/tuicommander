@@ -982,142 +982,117 @@ pub(super) async fn subagent_map_panel() -> impl IntoResponse {
     axum::response::Html(include_str!("subagent_map.html"))
 }
 
-/// A session the map can be drawn for, for the page's picker.
-#[derive(serde::Serialize)]
-pub(crate) struct MapSessionRef {
-    pub id: String,
-    pub title: String,
-}
+// DEFERRED (2026-09-23) — the Progress Flow view (`progress_flow`) supersedes
+// `/agents/map`, `/agents/map/data`, `/agents/map/prompt` and
+// `subagent_map.html`. They stay until Boss approves removing them.
 
-/// The whole map payload. Field names are snake_case on the wire, matching
-/// [`crate::subagent_map::Lane`] and `LaneEvent`, so the page reads one casing.
-#[derive(serde::Serialize)]
-pub(crate) struct MapPayload {
-    /// Only sessions that have spawned at least one subagent.
-    pub sessions: Vec<MapSessionRef>,
-    pub selected: Option<String>,
-    pub origin_ms: i64,
-    pub lanes: Vec<crate::subagent_map::Lane>,
-    pub events: Vec<crate::subagent_map::LaneEvent>,
-}
-
-/// Where one TUIC session's Claude transcripts live on disk.
-struct MapSource {
-    subagents_dir: std::path::PathBuf,
-    parent_transcript: std::path::PathBuf,
-    title: String,
-}
-
-/// Resolve a TUIC session id to the files its subagents write.
+/// The call map: every agent terminal, the peers it spawned, and the Claude
+/// subagents of each, as one tree.
 ///
-/// The id is a key into `AppState` and never reaches the filesystem: every path
-/// component comes from the session's own cwd, the agent process's
-/// `CLAUDE_CONFIG_DIR`, and the session uuid Claude itself published. An unknown
-/// id therefore resolves to `None` rather than to a path.
-///
-/// `None` is the ordinary answer — for a shell tab, for a Claude tab that has
-/// spawned nothing, and for a session whose agent has exited.
-fn resolve_map_source(state: &AppState, session_id: &str) -> Option<MapSource> {
-    // Gate on the agent type TUIC already detected. Claude discovery falls back
-    // to "newest unclaimed session file under the project dir" when the pid is
-    // not in Claude's registry, so asking it about a shell tab would hand this
-    // session another tab's transcript (issue #119).
-    let is_claude = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .and_then(|s| s.agent_type.clone())
-        .is_some_and(|t| t == "claude");
-    if !is_claude {
-        return None;
-    }
+/// A terminal is listed when TUIC detected an agent in it or when it sits on a
+/// recorded spawn link. The link is `session_parent` (child PTY session → the
+/// spawner's TUIC session), written by `agent action=spawn`; the spawner's
+/// identity is resolved back to its PTY through `live_pty_for_peer`, so a link
+/// to a closed terminal leaves the child a root.
+pub(super) async fn subagent_map_data(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use crate::subagent_map::{NodeState, TerminalInfo};
 
-    let (cwd, title) = {
-        let entry = state.session_maps.sessions.get(session_id)?;
-        let session = entry.value().lock();
-        (
-            session.cwd.clone()?,
-            session
-                .display_name
-                .clone()
-                .unwrap_or_else(|| session_id.to_owned()),
-        )
-    };
-    let pid = crate::pty::session_leaf_pid(state, session_id)?;
-    let config_dir = crate::agent_session::read_agent_env_overrides("claude", pid)
-        .remove("CLAUDE_CONFIG_DIR");
-    let uuid = crate::agent_session::discover_agent_session(
-        "claude".to_owned(),
-        cwd.clone(),
-        Vec::new(),
-        Some(pid),
-        std::collections::HashMap::new(),
-    )?
-    .session_id;
-
-    Some(MapSource {
-        subagents_dir: crate::subagent_map::subagents_dir(&cwd, config_dir.as_deref(), &uuid)?,
-        parent_transcript: crate::agent_session::claude_project_dir_path(
-            &cwd,
-            config_dir.as_deref(),
-        )?
-        .join(format!("{uuid}.jsonl")),
-        title,
-    })
-}
-
-/// The swimlane data for one session, plus the list the picker offers.
-///
-/// An unknown or absent `?session=` is not an error: the page opens before a
-/// session is chosen, and a session can stop qualifying between two polls.
-pub(super) async fn subagent_map_data(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
-    let mut sources: Vec<(String, MapSource)> = state
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let ids: Vec<String> = state
         .session_maps
         .sessions
         .iter()
         .map(|e| e.key().clone())
-        .filter_map(|id| resolve_map_source(&state, &id).map(|s| (id, s)))
         .collect();
-    sources.sort_by(|a, b| a.1.title.cmp(&b.1.title).then_with(|| a.0.cmp(&b.0)));
-
-    let sessions: Vec<MapSessionRef> = sources
+    let parents: std::collections::HashMap<String, String> = ids
         .iter()
-        .map(|(id, s)| MapSessionRef {
-            id: id.clone(),
-            title: s.title.clone(),
+        .filter_map(|id| {
+            let spawner = state.session_maps.session_parent.get(id)?.value().clone();
+            Some((id.clone(), state.live_pty_for_peer(&spawner)?))
         })
         .collect();
+    let spawners: std::collections::HashSet<&String> = parents.values().collect();
 
-    // An id naming no candidate selects nothing. It is never used to build a
-    // path, so there is nothing to reject and nothing to sanitise.
-    let selected = params
+    let mut terminals = Vec::new();
+    for id in &ids {
+        let snapshot = state.session_state_with_shell(id);
+        let agent_type = snapshot.as_ref().and_then(|s| s.agent_type.clone());
+        if agent_type.is_none() && !parents.contains_key(id) && !spawners.contains(id) {
+            continue;
+        }
+        let terminal_state = match &snapshot {
+            Some(s) if s.awaiting_input => NodeState::Awaiting,
+            Some(s) if s.shell_state.as_deref() == Some("busy") => NodeState::Busy,
+            _ => NodeState::Idle,
+        };
+        let Some(title) = state
+            .session_maps
+            .sessions
+            .get(id)
+            .map(|entry| entry.value().lock().display_name.clone())
+        else {
+            continue; // closed between the listing and now
+        };
+        let subagents = crate::subagent_map::transcript_source(&state, id)
+            .map(|source| {
+                crate::subagent_map::subagent_nodes(
+                    &mut state.subagent_map_cache.lock(),
+                    &source.subagents_dir,
+                    &source.parent_transcript,
+                    id,
+                    now_ms,
+                )
+            })
+            .unwrap_or_default();
+        terminals.push(TerminalInfo {
+            session_id: id.clone(),
+            title: title
+                .filter(|t| !t.trim().is_empty())
+                .or_else(|| agent_type.clone())
+                .unwrap_or_else(|| id.clone()),
+            agent_type,
+            intent: snapshot.and_then(|s| s.agent_intent),
+            state: terminal_state,
+            parent_session: parents.get(id).cloned(),
+            subagents,
+        });
+    }
+    Json(crate::subagent_map::assemble(terminals))
+}
+
+/// The full spawn prompt of one subagent, redacted — fetched only when a node
+/// is expanded.
+///
+/// `session` selects a terminal in `AppState` and `agent` is compared against
+/// the subagents found on disk for it. Neither ever becomes part of a path, so
+/// a traversal-shaped value finds nothing and answers 404 like any unknown id.
+pub(super) async fn subagent_map_prompt(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let prompt = params
         .get("session")
-        .filter(|id| sources.iter().any(|(sid, _)| &sid == id))
-        .cloned();
-
-    let body = selected
-        .as_ref()
-        .and_then(|id| sources.iter().find(|(sid, _)| sid == id))
-        .map(|(_, source)| {
-            crate::subagent_map::build_map(
+        .zip(params.get("agent"))
+        .and_then(|(session, agent)| {
+            let source = crate::subagent_map::transcript_source(&state, session)?;
+            crate::subagent_map::subagent_text(
                 &mut state.subagent_map_cache.lock(),
                 &source.subagents_dir,
                 &source.parent_transcript,
-                &source.title,
+                agent,
+                crate::subagent_map::TextPart::Prompt,
             )
-        })
-        .unwrap_or_default();
-
-    Json(MapPayload {
-        sessions,
-        selected,
-        origin_ms: body.origin_ms,
-        lanes: body.lanes,
-        events: body.events,
-    })
+        });
+    match prompt {
+        Some(prompt) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "prompt": prompt })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no prompt for that session and agent" })),
+        ),
+    }
 }
 
 pub(super) async fn create_session_with_worktree(

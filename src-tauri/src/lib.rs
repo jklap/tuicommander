@@ -411,6 +411,23 @@ fn progress_delete(
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
+fn progress_flow(
+    state: State<'_, Arc<AppState>>,
+    project: String,
+    input: progress::ProgressFlowInput,
+) -> Result<progress::ProgressFlow, String> {
+    progress::progress_flow(state.inner(), &project, input)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn progress_flow_detail(
+    state: State<'_, Arc<AppState>>,
+    input: progress::ProgressFlowDetailInput,
+) -> Result<progress::ProgressFlowDetail, String> {
+    progress::progress_flow_detail(state.inner(), input)
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
 fn progress_mark_viewed(project: String, pty_id: Option<String>) -> Result<progress::ProgressViewedReceipt, String> {
     progress::progress_mark_viewed(&project, pty_id.as_deref())
 }
@@ -1919,6 +1936,8 @@ pub fn run() {
             progress_list,
             progress_delete,
             progress_mark_viewed,
+            progress_flow,
+            progress_flow_detail,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

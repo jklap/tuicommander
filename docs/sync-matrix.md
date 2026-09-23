@@ -401,7 +401,9 @@ its Git-exclude/watcher interaction:
 | `src-tauri/src/progress/ownership.rs` | Registered and nested workspace ownership resolution |
 | `src-tauri/src/progress/model.rs` | Entry kinds, which of them are reportable, and validation limits |
 | `src-tauri/src/progress/service.rs` | The `progress_tracking` gate and the shared record/list/delete core |
+| `src-tauri/src/progress/flow.rs` | The Flow sequence: participants, arrow joining, scope, redaction |
 | `src-tauri/src/pty.rs` | `intent:` capture — the host's half of the journal |
+| `src-tauri/src/mcp_http/mcp_transport.rs` | `journal_hand_off` at `agent action=spawn` / `send` — the `delegated` and `message` entries |
 | `src-tauri/src/repo_watcher.rs` | The journal must stay outside every repository; the test asserts the tree is byte-identical after a write |
 | `docs/backend/config.md` | Progress Storage section |
 | `docs/api/http-api.md` | Project Progress section |
@@ -414,7 +416,7 @@ When modifying the Progress dialog, its store, or the surfaces that open it:
 
 | File | What to update |
 |------|----------------|
-| `src/components/ProgressDialog/` | The list, the frozen divider, the blocked filter, `embedded` mobile mode |
+| `src/components/ProgressDialog/` | The list, the frozen divider, the blocked filter, `embedded` mobile mode, the Flow view (`ProgressFlow.tsx`) |
 | `src/stores/progress.ts` | The one-project query, the frozen divider, live presentation |
 | `src/actions/actionRegistry.ts` | The `progress` action, and the browser allowlist in `CommandPalette.tsx` |
 | `src/components/Toolbar/Toolbar.tsx` | The aggregate unread bell row |

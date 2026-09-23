@@ -4645,6 +4645,20 @@ fn handle_messaging(
                 }
                 state.push_agent_inbox(to, msg)
             };
+            // DEFERRED (2026-09-23) — a recipient with no terminal (an external
+            // MCP client) has no Progress Flow column, so its mail is not
+            // journaled. Showing it needs a non-terminal participant kind.
+            if let Some(to_pty) = state.live_pty_for_peer(to) {
+                let to_name = state.peer_agents.get(to).map(|peer| peer.name.clone());
+                journal_hand_off(
+                    state,
+                    crate::progress::ProgressKind::Message,
+                    &sender_tuic,
+                    &to_pty,
+                    to_name.as_deref(),
+                    message,
+                );
+            }
             // Resolve, do not compare. A self-registering agent announces its
             // `$TUIC_SESSION`, which is not the key its PTY was filed under, so the
             // old `sessions.contains_key(to)` answered "no terminal" for every peer
@@ -5528,6 +5542,37 @@ pub(crate) fn emit_progress_entry(
         .event_bus
         .send(crate::state::AppEvent::ProgressRecorded { repo_path, payload });
     receipt
+}
+
+/// Journal a spawn or a send as a hand-off between two terminals, for the
+/// Progress Flow view.
+///
+/// Silent on every skip, like `intent:` capture: collection is off, the sender
+/// is in no registered project, or the sender is not a terminal. `from_peer` is
+/// a peer identity and is walked back to the PTY it runs in.
+pub(crate) fn journal_hand_off(
+    state: &AppState,
+    kind: crate::progress::ProgressKind,
+    from_peer: &str,
+    to_pty: &str,
+    to_name: Option<&str>,
+    text: &str,
+) {
+    let Some(from_pty) = state.live_pty_for_peer(from_peer) else {
+        return;
+    };
+    match crate::progress::record_hand_off(state, kind, &from_pty, to_pty, to_name, text) {
+        Ok(entry) => {
+            emit_progress_entry(state, entry);
+        }
+        Err(error) => tracing::debug!(
+            source = "progress",
+            from = %from_pty,
+            to = %to_pty,
+            error = %error,
+            "hand-off not recorded in the Progress journal"
+        ),
+    }
 }
 
 /// How many HTML tab ids one TUIC session may keep registered for auto-close.

@@ -47,13 +47,118 @@ fn append(
     entry: NewProgressEntry,
     agent_type: Option<&str>,
     pty_id: Option<&str>,
+    target: Option<(&str, Option<&str>)>,
 ) -> Result<ProgressEntry, String> {
     if !progress_tracking_enabled(state, agent_type) {
         return Err(TRACKING_DISABLED.to_string());
     }
     entry.validate()?;
     let project = resolve_owning_project(project_hint)?;
-    ProgressStore::open()?.record_for_pty(&project.to_string_lossy(), &entry, pty_id)
+    ProgressStore::open()?.record_hand_off(
+        &project.to_string_lossy(),
+        &entry,
+        pty_id,
+        target.map(|(pty, _)| pty),
+        target.and_then(|(_, name)| name),
+    )
+}
+
+/// The registered project a terminal's working directory belongs to.
+///
+/// A managed worktree outside the repository root answers with its workspace,
+/// which the store then files under the parent project.
+///
+/// `None` when the directory is inside no registered repository or workspace. That is never
+/// resolved to the focused UI repository: it would file one terminal's work
+/// under whatever the human happened to be looking at.
+pub(crate) fn project_for_session(
+    state: &crate::state::AppState,
+    session_id: &str,
+) -> Option<String> {
+    let cwd = state
+        .session_maps
+        .sessions
+        .get(session_id)?
+        .lock()
+        .cwd
+        .clone()?;
+    let known: Vec<String> = state
+        .repo_watchers
+        .iter()
+        .map(|entry| entry.key().clone())
+        .collect();
+    crate::mcp_http::mcp_transport::registered_repo_for_path(&cwd, &known).or_else(|| {
+        super::ownership::registered_workspace_for_path(std::path::Path::new(&cwd))
+            .map(|workspace| workspace.to_string_lossy().to_string())
+    })
+}
+
+/// What a hand-off entry keeps of a prompt or a message: redacted first, then
+/// cut to the journal's cap. The cap is the contract — the full text is not
+/// stored anywhere else.
+pub(crate) fn hand_off_text(text: &str) -> String {
+    let redacted = crate::redaction::redact_secrets(text);
+    let trimmed = redacted.trim();
+    if trimmed.chars().count() <= MAX_TEXT_CHARS {
+        return trimmed.to_string();
+    }
+    trimmed
+        .chars()
+        .take(MAX_TEXT_CHARS - 1)
+        .chain(['…'])
+        .collect()
+}
+
+/// Record that one terminal handed work to another: a `delegated` entry at
+/// `agent action=spawn`, a `message` entry at `agent action=send`.
+///
+/// Filed under the sender's project and gated by the sender's agent, exactly
+/// like an `intent:` from that terminal. Lifecycle mail TUIC posts on a
+/// child's behalf never comes through here — only an explicit spawn or send.
+pub fn record_hand_off(
+    state: &crate::state::AppState,
+    kind: ProgressKind,
+    from_pty: &str,
+    to_pty: &str,
+    to_name: Option<&str>,
+    text: &str,
+) -> Result<ProgressEntry, String> {
+    if !matches!(kind, ProgressKind::Delegated | ProgressKind::Message) {
+        return Err(format!("{} is not a hand-off kind", kind.as_str()));
+    }
+    let (agent_type, agent_name) = session_identity(state, from_pty);
+    let project = project_for_session(state, from_pty);
+    append(
+        state,
+        project.as_deref(),
+        NewProgressEntry {
+            kind,
+            text: hand_off_text(text),
+            step: None,
+            agent_name,
+        },
+        agent_type.as_deref(),
+        Some(from_pty),
+        Some((to_pty, to_name)),
+    )
+}
+
+/// A terminal's detected agent type and its display name.
+pub(crate) fn session_identity(
+    state: &crate::state::AppState,
+    session_id: &str,
+) -> (Option<String>, Option<String>) {
+    let agent_type = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    let name = state
+        .session_maps
+        .sessions
+        .get(session_id)
+        .and_then(|session| session.lock().display_name.clone());
+    (agent_type, name)
 }
 
 /// Shared reporting core for MCP, HTTP and Tauri IPC. `into_entry` is what
@@ -72,6 +177,7 @@ pub fn submit_progress_report(
         input.into_entry(agent_name)?,
         agent_type,
         pty_id,
+        None,
     )
 }
 
@@ -99,10 +205,11 @@ pub fn record_intent(
         },
         agent_type,
         pty_id,
+        None,
     )
 }
 
-fn project_of(project: &str) -> Result<String, String> {
+pub(crate) fn project_of(project: &str) -> Result<String, String> {
     Ok(resolve_owning_project(Some(project))?
         .to_string_lossy()
         .to_string())
@@ -252,6 +359,33 @@ mod tests {
                 .entries
                 .is_empty()
         );
+    }
+
+    /// A prompt handed to a child can carry a secret the parent was given. The
+    /// journal is a file read by a dialog, so the secret is redacted before the
+    /// 500-character cut — cutting first could split it past its pattern.
+    #[test]
+    fn a_hand_off_text_is_redacted_before_it_is_capped() {
+        let pad = "x".repeat(MAX_TEXT_CHARS - 10);
+        let text = format!("{pad} ghp_{}", "A".repeat(40));
+        let kept = hand_off_text(&text);
+        assert!(!kept.contains("ghp_"), "{kept}");
+        assert!(kept.chars().count() <= MAX_TEXT_CHARS);
+        assert_eq!(hand_off_text("  short  "), "short");
+    }
+
+    /// Only a spawn and a send are hand-offs; the other kinds have their own
+    /// writers and must not be forged through this one.
+    #[test]
+    fn record_hand_off_refuses_a_kind_that_is_not_a_hand_off() {
+        let state = crate::state::tests_support::make_test_app_state();
+        for kind in [
+            ProgressKind::Done,
+            ProgressKind::Blocked,
+            ProgressKind::Intent,
+        ] {
+            assert!(record_hand_off(&state, kind, "a", "b", None, "x").is_err());
+        }
     }
 
     /// A PTY runs wherever the user started it. When that directory belongs to

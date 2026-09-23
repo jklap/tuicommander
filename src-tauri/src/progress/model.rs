@@ -10,16 +10,22 @@ pub const LIST_LIMIT: usize = 500;
 
 /// What a journal entry is.
 ///
-/// Two kinds are reported by an agent and one is written by the host. The
+/// Two kinds are reported by an agent and three are written by the host. The
 /// distinction is not cosmetic: `Intent` is derived from the `intent:` marker
 /// the agent already emits, so accepting it from the reporting tool would file
-/// one announced task twice.
+/// one announced task twice. `Delegated` and `Message` are observed when one
+/// terminal spawns or messages another; an agent claiming one would draw an
+/// arrow for a hand-off that never happened.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressKind {
     Done,
     Blocked,
     Intent,
+    /// One terminal started another with `agent action=spawn`.
+    Delegated,
+    /// One terminal sent another a message with `agent action=send`.
+    Message,
 }
 
 impl ProgressKind {
@@ -28,26 +34,37 @@ impl ProgressKind {
             Self::Done => "done",
             Self::Blocked => "blocked",
             Self::Intent => "intent",
+            Self::Delegated => "delegated",
+            Self::Message => "message",
         }
     }
 
-    /// Parse a kind read back from the database. Accepts `intent`, which the
-    /// host writes; use [`ProgressKind::parse_reportable`] for caller input.
+    /// Parse a kind read back from the database. Accepts the kinds the host
+    /// writes; use [`ProgressKind::parse_reportable`] for caller input.
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
         match value {
             "done" => Ok(Self::Done),
             "blocked" => Ok(Self::Blocked),
             "intent" => Ok(Self::Intent),
+            "delegated" => Ok(Self::Delegated),
+            "message" => Ok(Self::Message),
             other => Err(format!("unknown progress type '{other}'")),
         }
     }
 
-    /// Parse a kind an agent may report. `intent` is refused here rather than
-    /// in the store, so the agent reads why instead of seeing its entry
-    /// silently filed under a kind it did not ask for.
+    /// Parse a kind an agent may report. A host-written kind is refused here
+    /// rather than in the store, so the agent reads why instead of seeing its
+    /// entry silently filed under a kind it did not ask for.
     pub(crate) fn parse_reportable(value: &str) -> Result<Self, String> {
-        match Self::parse(value)? {
+        Self::parse(value)?.reportable()
+    }
+
+    /// The one rule both input paths apply: only `done` and `blocked` come
+    /// from an agent.
+    fn reportable(self) -> Result<Self, String> {
+        match self {
             Self::Intent => Err(INTENT_IS_NOT_REPORTABLE.to_string()),
+            Self::Delegated | Self::Message => Err(HAND_OFF_IS_NOT_REPORTABLE.to_string()),
             reportable => Ok(reportable),
         }
     }
@@ -55,6 +72,8 @@ impl ProgressKind {
 
 pub(crate) const INTENT_IS_NOT_REPORTABLE: &str =
     "type must be 'done' or 'blocked' — 'intent' is recorded by TUIC from the intent: marker";
+
+pub(crate) const HAND_OFF_IS_NOT_REPORTABLE: &str = "type must be 'done' or 'blocked' — 'delegated' and 'message' are recorded by TUIC from agent action=spawn and action=send";
 
 /// An entry on its way into the store. `project` and `created_at_ms` are added
 /// by the store; nothing else is inferred.
@@ -128,6 +147,12 @@ pub struct ProgressEntry {
     pub step: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// The terminal a `delegated` or `message` entry points at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_pty_id: Option<String>,
+    /// That terminal's name when the entry was written, which outlives it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_name: Option<String>,
 }
 
 /// Everything the dialog renders in one response: the list and the divider.
@@ -192,9 +217,7 @@ impl ProgressReportInput {
     /// deserialises the enum first and lands here, and both must answer with
     /// the same sentence.
     pub fn into_entry(self, agent_name: Option<String>) -> Result<NewProgressEntry, String> {
-        if self.kind == ProgressKind::Intent {
-            return Err(INTENT_IS_NOT_REPORTABLE.to_string());
-        }
+        self.kind.reportable()?;
         Ok(NewProgressEntry {
             kind: self.kind,
             text: self.text,
@@ -273,6 +296,25 @@ mod tests {
             typed.into_entry(None).unwrap_err(),
             INTENT_IS_NOT_REPORTABLE
         );
+    }
+
+    /// A hand-off arrow is something TUIC saw happen. An agent that could
+    /// report one could draw a delegation that never took place.
+    #[test]
+    fn hand_off_kinds_are_refused_from_both_input_paths() {
+        for kind in ["delegated", "message"] {
+            assert_eq!(
+                ProgressKind::parse_reportable(kind).unwrap_err(),
+                HAND_OFF_IS_NOT_REPORTABLE
+            );
+            let typed: ProgressReportInput =
+                serde_json::from_value(serde_json::json!({"type": kind, "text": "x"})).unwrap();
+            assert_eq!(
+                typed.into_entry(None).unwrap_err(),
+                HAND_OFF_IS_NOT_REPORTABLE
+            );
+            assert_eq!(ProgressKind::parse(kind).unwrap().as_str(), kind);
+        }
     }
 
     #[test]

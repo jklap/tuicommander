@@ -44,6 +44,19 @@
 - [ ] A quick click on `+` still opens a plain terminal; right-click still shows New Tab / Split.
 - [ ] [VISUAL] Settings → Dictation → Voice tuning: "Level gate" no longer touches the "Start test recording" button. Also check the Import/Export row and the Notifications "Reset Defaults" footer.
 
+## Progress Flow view (2026-09-23) — **Rust, needs a `make dev` restart**
+
+The List | Flow toggle is frontend and appears through HMR at once, but the running backend has no `progress_flow` until it restarts, so Flow shows an error line until then. The first open after the restart migrates `progress.sqlite3` (table rebuild for the new kinds).
+
+- [ ] After the restart, open Progress: the List still shows every older entry, and deleting one still works.
+- [ ] From a Claude terminal in a registered repo, `agent action=spawn` a peer with a prompt. List shows `delegated to <child>`; Flow shows a blue arrow from the parent's column to the child's, labelled with the prompt.
+- [ ] Have the child `agent action=send` to the parent and report `done`. Flow shows a grey message arrow child → parent, then a green return arrow child → parent. No toast for the delegation or the message; one silent toast for `done`.
+- [ ] Spawn the child into a managed worktree (`repo action=worktree_create spawn_session`). Its `intent:` now appears on its column (it was dropped before).
+- [ ] In a Claude terminal, run 2 subagents (one nested). Each gets a column under its terminal with a tool count; the dashed arrow carries its task and, once done, a green arrow carries its report. Clicking a long label fetches the full text, with any token shown as `[REDACTED]`.
+- [ ] Select one terminal in the selector: Flow keeps that terminal, its parent and its children only.
+- [ ] [VISUAL] With 6+ columns: the header row stays pinned while scrolling, every arrow ends on a lifeline, and the dialog scrolls sideways rather than squashing columns.
+- [ ] `/agents/map` still works unchanged (superseded, kept until Boss approves removal).
+
 ## Markdown block review handoff (2026-09-23) — frontend, live via HMR
 
 - [ ] [VISUAL] Hover beside a Markdown block: its rule stays in the gutter with clear space before the text, and the comment button does not cover the block.
@@ -3228,6 +3241,8 @@ model must never answer in a language the user is not speaking.
 
 ## Subagent execution map over HTTP (story `830-43a5`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
+_(SUPERSEDED 2026-09-23 by "Agent Call Map" at the top of this file: the swimlane payload and page were replaced. Do not test these items.)_
+
 The swimlane page itself lands in story `831-0ef9`; these items check the
 transport and the data behind it. Run them against the worktree build on
 `:9877`, never against Boss's live instance.
@@ -3249,6 +3264,8 @@ transport and the data behind it. Run them against the worktree build on
       labels are tool names and short state words only.
 
 ## Subagent swimlane page (story `831-0ef9`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+_(SUPERSEDED 2026-09-23 by "Agent Call Map" at the top of this file: the swimlane payload and page were replaced. Do not test these items.)_
 
 The layout was verified by measuring the rendered DOM against a mock payload
 (10 lane cards, no overlap, 142px columns, horizontal scroll past 8 lanes,

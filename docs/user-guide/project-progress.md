@@ -8,13 +8,19 @@ what you do not want to keep. There is nothing else to operate.
 
 ## What lands in the journal
 
-Three kinds of entry.
+Five kinds of entry.
 
 | Kind | Written by | Meaning |
 |---|---|---|
 | `done` | the agent | The work an `intent:` announced is finished. |
 | `blocked` | the agent | The agent cannot continue without you. |
 | `intent` | TUICommander | The agent said what it was starting. Recorded from its `intent:` marker. |
+| `delegated` | TUICommander | The agent started another agent with `agent action=spawn`. The text is the task it handed over. |
+| `message` | TUICommander | The agent sent another agent a message with `agent action=send`. |
+
+A `delegated` or `message` entry keeps its text redacted and cut to 500
+characters. Status mail that TUICommander sends on an agent's behalf is not
+recorded.
 
 `intent` is the reliability floor. An agent's obligation to report sits in the
 `initialize` blob it read hours ago, but its `intent:` marker fires at the start
@@ -69,6 +75,28 @@ the dialog marks every view you visited during that opening.
 Blocked entries are red. `intent` entries are muted, because they are what an
 agent set out to do rather than a result. A checkbox narrows the list to blocked
 entries only. A row can be deleted, and deletion is permanent.
+
+### The Flow view
+
+**List | Flow** in the dialog header switches to a sequence diagram of the same
+journal. Each terminal is a column, and so is each Claude subagent of an open
+terminal. Rows run from oldest at the top to newest at the bottom; there is no
+time scale.
+
+- A delegation is an arrow from the parent to the child, labelled with the task.
+- A child's `done` (green) or `blocked` (red) is an arrow back to its parent.
+- A message is an arrow from sender to recipient.
+- A subagent's task (dashed) and its final report are arrows between it and its
+  terminal.
+- An `intent` is a muted note on its own column, and the newest one is also
+  shown under the column's name.
+
+Click a label to read all of it. A journal text opens in place; a subagent's
+full prompt or report is fetched when you click, with secrets redacted. **All
+repo** shows every terminal. One terminal shows itself, the terminal that
+started it, and the terminals it started. A closed terminal keeps its column,
+but its subagents disappear with it, because TUICommander can only find their
+transcripts while the agent runs.
 
 There is no export, no pause, no clear and no correction. An entry is appended
 once, and it is either there or deleted.

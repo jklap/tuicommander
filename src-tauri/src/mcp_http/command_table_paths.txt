@@ -163,6 +163,8 @@
 /plugins/list
 /process/stats
 /progress/delete
+/progress/flow
+/progress/flow/detail
 /progress/list
 /progress/report
 /progress/viewed

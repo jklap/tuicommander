@@ -5061,31 +5061,11 @@ const MAX_RAW_CARRY: usize = 512;
 /// the async executor, and an intent arrives a few times a minute against a
 /// sub-millisecond WAL insert.
 fn record_intent_in_journal(state: &AppState, session_id: &str, text: &str) {
-    let agent_type = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .and_then(|session| session.agent_type.clone());
+    let (agent_type, agent_name) = crate::progress::session_identity(state, session_id);
     if !crate::progress::progress_tracking_enabled(state, agent_type.as_deref()) {
         return;
     }
-    let (cwd, agent_name) = match state.session_maps.sessions.get(session_id) {
-        Some(session) => {
-            let session = session.lock();
-            (session.cwd.clone(), session.display_name.clone())
-        }
-        None => return,
-    };
-    let Some(cwd) = cwd else {
-        return;
-    };
-    let known: Vec<String> = state
-        .repo_watchers
-        .iter()
-        .map(|entry| entry.key().clone())
-        .collect();
-    let Some(project) = crate::mcp_http::mcp_transport::registered_repo_for_path(&cwd, &known)
-    else {
+    let Some(project) = crate::progress::project_for_session(state, session_id) else {
         return;
     };
     match crate::progress::record_intent(

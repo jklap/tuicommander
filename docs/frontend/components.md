@@ -304,6 +304,14 @@ Each PTY and the aggregate has a separate divider, frozen while that view is
 open. Switching views loads the new scope's mark; closing records every visited
 scope without moving a line under the reader's cursor.
 
+A **List | Flow** toggle switches to `ProgressFlow.tsx`, a sequence diagram of
+the same journal: one column per participant (terminal or Claude subagent), one
+row per event, arrows for delegations, returns and messages, and intents as
+muted notes. Every row is the same CSS grid, so lifelines, headers and arrow
+ends line up without measurement. Journal text expands in place; a subagent
+arrow fetches its full text through `progressStore.fetchFlowDetail`. The
+component only renders what `progress_flow` returns.
+
 `embedded` drops the overlay and the floating box so the mobile PWA's Progress
 tab can host the same component full-bleed; a whole bottom tab is already the
 modal surface a dialog would create.
