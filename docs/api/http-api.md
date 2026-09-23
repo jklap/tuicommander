@@ -1078,6 +1078,8 @@ under `/repo/`.
 
 `install_agent_mcp`/`remove_agent_mcp` (config-file writes, also no caller).
 
+`GET`/`PUT /config/agents` read and write `agents.json`. The route is in `shared_routes()`, so the `tuic-remote` daemon serves it too: a remote repository's agents run with that machine's `agents.json`, and the frontend loads it per connection. The `/config/agents/{agent}/…` sub-routes below stay desktop-only.
+
 `GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer.
 
 ### No provider keyring routes
