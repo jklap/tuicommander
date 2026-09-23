@@ -475,7 +475,8 @@ Content-Type: application/json
 ```
 
 Starting another terminal in the same repository reuses its Chrome window and
-changes the bound session. A plain shell or unknown session is refused.
+changes the bound session. A plain shell or unknown session is refused, and
+so is a second start while the repository's Chrome window is still launching.
 
 ### Stop inspection
 

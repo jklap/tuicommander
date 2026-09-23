@@ -94,6 +94,11 @@ that checkout merely to run this check.
 - [ ] With a separate debug instance, check that quitting TUICommander closes
       only the Chrome windows it owns. A browser/PWA start must explain that
       Chrome opens on the host machine.
+- [ ] Review fixes (2026-09-23): a page running `debugger;` keeps responding;
+      a Vite/webpack dev page resolves `source:` for most components, not only
+      the first four modules; closing the bound terminal turns the hover
+      highlight off, and a later start delivers no click made in between;
+      closing Chrome and starting again works on the first click.
 
 ## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
 

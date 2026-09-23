@@ -21,6 +21,8 @@ use super::payload::GrabPayload;
 use super::source::{self, ScriptMaps};
 
 const MAX_PNG_BYTES: usize = 2 * 1024 * 1024;
+/// One deadline for closing every browser at exit, not one per repository.
+const STOP_ALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub(crate) type Prefill = Arc<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
 pub(crate) type Notify = Arc<dyn Fn(&ModeStatus) + Send + Sync>;
@@ -69,6 +71,9 @@ pub(crate) struct Pick {
 
 pub(crate) trait InspectBrowser: Send + Sync {
     fn arm(&self) -> BoxFuture<'_, Result<(), String>>;
+    /// Leaves inspect mode and drops every pick queued while nobody listened,
+    /// so a later start cannot deliver a click the user made for another agent.
+    fn disarm(&self) -> BoxFuture<'_, Result<(), String>>;
     fn next_pick(&self) -> BoxFuture<'_, Option<Pick>>;
     fn capture(&self, rect: Rect) -> BoxFuture<'_, Result<Option<Vec<u8>>, String>>;
     fn close(&self) -> BoxFuture<'_, Result<(), String>>;
@@ -113,6 +118,7 @@ impl DesignModeManager {
             .lock()
             .await
             .values()
+            .filter(|mode| mode.status.status != STARTING)
             .map(|mode| mode.status.clone())
             .collect();
         statuses.sort_by(|left, right| left.repo_path.cmp(&right.repo_path));
@@ -121,6 +127,10 @@ impl DesignModeManager {
 
     /// The factory is called only when the repo has no usable browser. A second
     /// start on an armed repo simply changes the PTY bound to the same listener.
+    ///
+    /// Launching Chrome and arming take seconds, so the repo is marked
+    /// "starting" and the `modes` lock is released meanwhile: other repos'
+    /// picks, status reads and `stop` must not wait behind one launch.
     pub(crate) async fn start<F, Fut>(
         &self,
         repo_path: String,
@@ -131,49 +141,77 @@ impl DesignModeManager {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Arc<dyn InspectBrowser>, String>>,
     {
-        let mut modes = self.modes.lock().await;
-        if let Some(mode) = modes.get_mut(&repo_path) {
-            if mode.status.status == "armed" {
-                mode.status.session_id = session_id;
-                let status = mode.status.clone();
-                drop(modes);
-                (self.notify)(&status);
-                return Ok(status);
+        let (generation, reused, existed) = {
+            let mut modes = self.modes.lock().await;
+            match modes.get_mut(&repo_path) {
+                Some(mode) if mode.status.status == "armed" => {
+                    mode.status.session_id = session_id;
+                    let status = mode.status.clone();
+                    drop(modes);
+                    (self.notify)(&status);
+                    return Ok(status);
+                }
+                Some(mode) if mode.status.status == STARTING => {
+                    return Err("Design Mode is already starting for this repository".into());
+                }
+                Some(mode) => {
+                    mode.generation += 1;
+                    mode.status.status = STARTING;
+                    mode.status.session_id = session_id.clone();
+                    (mode.generation, mode.browser.take(), true)
+                }
+                None => {
+                    modes.insert(
+                        repo_path.clone(),
+                        Mode {
+                            status: ModeStatus {
+                                repo_path: repo_path.clone(),
+                                session_id: session_id.clone(),
+                                status: STARTING,
+                            },
+                            browser: None,
+                            listener: None,
+                            generation: 1,
+                        },
+                    );
+                    (1, None, false)
+                }
             }
-        }
+        };
 
-        let browser = match modes.get(&repo_path).and_then(|mode| mode.browser.clone()) {
-            Some(browser) => browser,
-            None => make_browser().await?,
-        };
-        if let Err(error) = browser.arm().await {
-            if let Some(mode) = modes.get_mut(&repo_path) {
-                mode.browser = None;
+        let armed = arm_browser(reused, make_browser).await;
+
+        let mut modes = self.modes.lock().await;
+        let Some(mode) = modes
+            .get_mut(&repo_path)
+            .filter(|mode| mode.generation == generation)
+        else {
+            drop(modes);
+            if let Ok(browser) = armed {
+                let _ = browser.close().await;
             }
-            let _ = browser.close().await;
-            return Err(error);
-        }
-        let generation = modes.get(&repo_path).map_or(1, |mode| mode.generation + 1);
-        let status = ModeStatus {
-            repo_path: repo_path.clone(),
-            session_id,
-            status: "armed",
+            return Err("Design Mode was stopped while it was starting".into());
         };
+        let browser = match armed {
+            Ok(browser) => browser,
+            Err(error) => {
+                if existed {
+                    mode.status.status = "stopped";
+                } else {
+                    modes.remove(&repo_path);
+                }
+                return Err(error);
+            }
+        };
+        mode.status.status = "armed";
+        let status = mode.status.clone();
         let manager = self.clone();
         let key = repo_path.clone();
         let listening_browser = browser.clone();
-        let listener = tokio::spawn(async move {
+        mode.listener = Some(tokio::spawn(async move {
             manager.listen(key, generation, listening_browser).await;
-        });
-        modes.insert(
-            repo_path,
-            Mode {
-                status: status.clone(),
-                browser: Some(browser),
-                listener: Some(listener),
-                generation,
-            },
-        );
+        }));
+        mode.browser = Some(browser);
         drop(modes);
         (self.notify)(&status);
         Ok(status)
@@ -253,6 +291,10 @@ impl DesignModeManager {
         Ok(Some(path))
     }
 
+    /// A browser that lost its connection or cannot re-arm is closed
+    /// explicitly. Dropping the last `Arc` instead would SIGKILL a Chrome that
+    /// TUIC launched (chromey sets `kill_on_drop`) and skip the graceful close.
+    /// Only a healthy browser whose terminal closed is kept (`session_closed`).
     async fn disconnected(&self, repo_path: &str, generation: u64) {
         let mut modes = self.modes.lock().await;
         let Some(mode) = modes.get_mut(repo_path) else {
@@ -262,30 +304,49 @@ impl DesignModeManager {
             return;
         }
         mode.status.status = "stopped";
-        mode.browser = None;
+        let browser = mode.browser.take();
         let status = mode.status.clone();
         drop(modes);
         (self.notify)(&status);
+        if let Some(browser) = browser {
+            if let Err(error) = browser.close().await {
+                tracing::warn!(repo_path, %error, "Design Mode browser could not close");
+            }
+        }
     }
 
     /// Closing the terminal disarms the mode but deliberately leaves Chrome
-    /// alive, so the user can keep browsing the page.
+    /// alive, so the user can keep browsing the page. Inspect mode is turned
+    /// off, otherwise the next click on the page would still be swallowed.
     pub(crate) async fn session_closed(&self, session_id: &str) {
-        let mut modes = self.modes.lock().await;
         let mut changed = Vec::new();
-        for mode in modes.values_mut() {
-            if mode.status.session_id == session_id && mode.status.status == "armed" {
-                mode.status.status = "stopped";
-                mode.generation += 1;
-                if let Some(listener) = mode.listener.take() {
-                    listener.abort();
+        let mut listeners = Vec::new();
+        let mut browsers = Vec::new();
+        {
+            let mut modes = self.modes.lock().await;
+            for mode in modes.values_mut() {
+                if mode.status.session_id == session_id
+                    && matches!(mode.status.status, "armed" | STARTING)
+                {
+                    mode.status.status = "stopped";
+                    mode.generation += 1;
+                    listeners.extend(mode.listener.take());
+                    browsers.extend(mode.browser.clone());
+                    changed.push(mode.status.clone());
                 }
-                changed.push(mode.status.clone());
             }
         }
-        drop(modes);
+        for listener in listeners {
+            listener.abort();
+            let _ = listener.await;
+        }
         for status in changed {
             (self.notify)(&status);
+        }
+        for browser in browsers {
+            if let Err(error) = browser.disarm().await {
+                tracing::warn!(%error, "Design Mode could not leave inspect mode");
+            }
         }
     }
 
@@ -312,14 +373,60 @@ impl DesignModeManager {
         Ok(Some(status))
     }
 
+    /// Closes every browser at once under one deadline, so exit waits at most
+    /// `STOP_ALL_TIMEOUT` however many repositories hang. A browser still open
+    /// at the deadline is dropped, and chromey's `kill_on_drop` ends it.
     pub(crate) async fn stop_all(&self) {
         let repos: Vec<String> = self.modes.lock().await.keys().cloned().collect();
-        for repo in repos {
-            if let Err(error) = self.stop(&repo).await {
+        let stops = repos.iter().map(|repo| async move {
+            if let Err(error) = self.stop(repo).await {
                 tracing::warn!(repo_path = repo, %error, "Design Mode browser could not close");
+            }
+        });
+        if tokio::time::timeout(STOP_ALL_TIMEOUT, futures_util::future::join_all(stops))
+            .await
+            .is_err()
+        {
+            tracing::warn!("Design Mode browsers did not close in time");
+        }
+    }
+}
+
+/// Status of a repo whose browser is launching. Internal only: `statuses()`
+/// hides it, because the public contract is `armed` or `stopped`.
+const STARTING: &str = "starting";
+
+/// Arms a reused browser, or makes a new one. A reused browser that cannot
+/// arm is dead (the user closed Chrome), so it is closed and replaced in the
+/// same click instead of failing it.
+async fn arm_browser<F, Fut>(
+    reused: Option<Arc<dyn InspectBrowser>>,
+    make_browser: F,
+) -> Result<Arc<dyn InspectBrowser>, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Arc<dyn InspectBrowser>, String>>,
+{
+    if let Some(browser) = reused {
+        match async {
+            browser.disarm().await?;
+            browser.arm().await
+        }
+        .await
+        {
+            Ok(()) => return Ok(browser),
+            Err(error) => {
+                tracing::info!(%error, "Design Mode replaces a browser that cannot arm");
+                let _ = browser.close().await;
             }
         }
     }
+    let browser = make_browser().await?;
+    if let Err(error) = browser.arm().await {
+        let _ = browser.close().await;
+        return Err(error);
+    }
+    Ok(browser)
 }
 
 /// The concrete headed Chrome adapter. A dedicated profile is reused on a
@@ -345,70 +452,69 @@ impl CdpInspectBrowser {
         for candidate in pages {
             let url = candidate.url().await.ok().flatten().unwrap_or_default();
             if url.starts_with("http://") || url.starts_with("https://") {
-                page = Some(candidate);
+                page = Some((candidate, url));
                 break;
             }
         }
         let new_page = page.is_none();
-        let page = match page {
-            Some(page) => page,
-            None => browser
-                .new_page("about:blank")
-                .await
-                .map_err(|error| error.to_string())?,
+        let (page, page_url) = match page {
+            Some((page, url)) => (page, Some(url)),
+            None => (
+                browser
+                    .new_page("about:blank")
+                    .await
+                    .map_err(|error| error.to_string())?,
+                None,
+            ),
         };
         let picks = page
             .event_listener::<overlay::EventInspectNodeRequested>()
             .await
             .map_err(|error| error.to_string())?;
-        let mut scripts = page
+        let scripts = page
             .event_listener::<debugger::EventScriptParsed>()
             .await
             .map_err(|error| error.to_string())?;
-        page.execute(dom::EnableParams::default())
+        let navigations = page
+            .event_listener::<page::EventFrameNavigated>()
             .await
             .map_err(|error| error.to_string())?;
-        page.execute(css::EnableParams::default())
-            .await
-            .map_err(|error| error.to_string())?;
-        page.execute(overlay::EnableParams::default())
-            .await
-            .map_err(|error| error.to_string())?;
-        page.execute(debugger::EnableParams::default())
-            .await
-            .map_err(|error| error.to_string())?;
+        enable_domains(&page).await?;
         if new_page {
             if let Some(url) = dev_server_url {
                 page.goto(url).await.map_err(|error| error.to_string())?;
             }
         }
-        let maps = Arc::new(Mutex::new(ScriptMaps::default()));
-        let task_maps = maps.clone();
-        let map_task = tokio::spawn(async move {
-            let permits = Arc::new(tokio::sync::Semaphore::new(4));
-            let mut jobs = tokio::task::JoinSet::new();
-            while let Some(event) = scripts.next().await {
-                while let Some(result) = jobs.try_join_next() {
-                    if let Err(error) = result {
-                        tracing::warn!(%error, "Design Mode source-map task failed");
-                    }
-                }
-                if let Some(map_url) = event.source_map_url.as_deref() {
-                    let Ok(permit) = permits.clone().try_acquire_owned() else {
-                        continue;
-                    };
-                    let maps = task_maps.clone();
-                    let script_url = event.url.clone();
-                    let map_url = map_url.to_owned();
-                    jobs.spawn(async move {
-                        let _permit = permit;
-                        if let Some(bytes) = source::fetch_source_map(&script_url, &map_url).await {
-                            maps.lock().await.insert(&script_url, &bytes);
-                        }
-                    });
-                }
-            }
+        let scripts = scripts.filter_map(|event| {
+            std::future::ready(
+                event
+                    .source_map_url
+                    .clone()
+                    .filter(|map| !map.is_empty())
+                    .map(|source_map_url| source::PageEvent::ScriptParsed {
+                        url: event.url.clone(),
+                        source_map_url,
+                        has_source_url: event.has_source_url.unwrap_or(false),
+                    }),
+            )
         });
+        let navigations = navigations.filter_map(|event| {
+            std::future::ready(
+                event
+                    .frame
+                    .parent_id
+                    .is_none()
+                    .then(|| source::PageEvent::Navigated(event.frame.url.clone())),
+            )
+        });
+        let events = Box::pin(futures_util::stream::select(scripts, navigations));
+        let maps = Arc::new(Mutex::new(ScriptMaps::default()));
+        let map_task = tokio::spawn(source::load_maps(
+            events,
+            maps.clone(),
+            dev_server_url.map(str::to_owned),
+            page_url,
+        ));
         Ok(Arc::new(Self {
             browser: Mutex::new(browser),
             page,
@@ -498,6 +604,23 @@ impl InspectBrowser for CdpInspectBrowser {
         })
     }
 
+    fn disarm(&self) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async {
+            self.page
+                .execute(overlay::SetInspectModeParams {
+                    mode: overlay::InspectMode::None,
+                    highlight_config: None,
+                })
+                .await
+                .map_err(|error| error.to_string())?;
+            // The handler routes events before the command reply, so every pick
+            // made before inspect mode went off is queued by now.
+            let mut picks = self.picks.lock().await;
+            while let Some(Some(_)) = futures_util::FutureExt::now_or_never(picks.next()) {}
+            Ok(())
+        })
+    }
+
     fn next_pick(&self) -> BoxFuture<'_, Option<Pick>> {
         Box::pin(async {
             loop {
@@ -564,6 +687,29 @@ impl InspectBrowser for CdpInspectBrowser {
     }
 }
 
+/// Enables the CDP domains Design Mode reads. Debugger is on only for
+/// `scriptParsed`, but while it is enabled Chrome stops at every `debugger;`
+/// statement and nothing here resumes, so the page would hang: skip all pauses.
+async fn enable_domains(page: &Page) -> Result<(), String> {
+    let error = |error: chromiumoxide::error::CdpError| error.to_string();
+    page.execute(dom::EnableParams::default())
+        .await
+        .map_err(error)?;
+    page.execute(css::EnableParams::default())
+        .await
+        .map_err(error)?;
+    page.execute(overlay::EnableParams::default())
+        .await
+        .map_err(error)?;
+    page.execute(debugger::EnableParams::default())
+        .await
+        .map_err(error)?;
+    page.execute(debugger::SetSkipAllPausesParams { skip: true })
+        .await
+        .map_err(error)?;
+    Ok(())
+}
+
 pub(crate) async fn live_browser(
     repo_root: &Path,
     dev_server_url: Option<&str>,
@@ -580,7 +726,11 @@ mod tests {
     struct FakeBrowser {
         picks: Mutex<mpsc::UnboundedReceiver<Pick>>,
         armed: AtomicUsize,
+        disarmed: AtomicUsize,
+        /// The next N `arm` calls fail, as on a dead or detached browser.
+        arm_failures: AtomicUsize,
         closed: AtomicUsize,
+        close_delay: std::time::Duration,
         image: Option<Vec<u8>>,
         capture_delay: std::time::Duration,
     }
@@ -588,7 +738,24 @@ mod tests {
     impl InspectBrowser for FakeBrowser {
         fn arm(&self) -> BoxFuture<'_, Result<(), String>> {
             Box::pin(async {
+                let failing = self
+                    .arm_failures
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok();
+                if failing {
+                    return Err("target detached".into());
+                }
                 self.armed.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+        fn disarm(&self) -> BoxFuture<'_, Result<(), String>> {
+            Box::pin(async {
+                self.disarmed.fetch_add(1, Ordering::SeqCst);
+                let mut picks = self.picks.lock().await;
+                while picks.try_recv().is_ok() {}
                 Ok(())
             })
         }
@@ -603,6 +770,7 @@ mod tests {
         }
         fn close(&self) -> BoxFuture<'_, Result<(), String>> {
             Box::pin(async {
+                tokio::time::sleep(self.close_delay).await;
                 self.closed.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             })
@@ -618,7 +786,10 @@ mod tests {
             Arc::new(FakeBrowser {
                 picks: Mutex::new(rx),
                 armed: AtomicUsize::new(0),
+                disarmed: AtomicUsize::new(0),
+                arm_failures: AtomicUsize::new(0),
                 closed: AtomicUsize::new(0),
+                close_delay: std::time::Duration::ZERO,
                 image,
                 capture_delay,
             }),
@@ -654,8 +825,12 @@ mod tests {
     }
 
     fn pick() -> Pick {
+        pick_of("#save")
+    }
+
+    fn pick_of(selector: &str) -> Pick {
         Pick {
-            raw: json!({"selector":"#save", "tagName":"button", "textContent":"Save"}),
+            raw: json!({"selector":selector, "tagName":"button", "textContent":"Save"}),
             styles: json!({"color":"red"}),
             rect: json!({"x":1.0,"y":2.0,"width":30.0,"height":20.0}),
             source: None,
@@ -799,6 +974,257 @@ mod tests {
         .await
         .unwrap();
         manager.stop_all().await;
+    }
+
+    async fn wait_until(condition: impl Fn() -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !condition() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    fn start_with(
+        manager: &DesignModeManager,
+        repo: &str,
+        session: &str,
+        browser: &Arc<FakeBrowser>,
+    ) -> impl Future<Output = Result<ModeStatus, String>> {
+        let browser = browser.clone();
+        let (manager, repo, session) = (manager.clone(), repo.to_owned(), session.to_owned());
+        async move {
+            manager
+                .start(repo, session, || async move {
+                    Ok(browser as Arc<dyn InspectBrowser>)
+                })
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn session_close_turns_inspect_off_and_restart_ignores_stale_picks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, mut prefilled, _) = manager(dir.path().to_path_buf());
+        let (browser, tx) = fake(None);
+        start_with(&manager, "/repo", "agent-1", &browser)
+            .await
+            .unwrap();
+        manager.session_closed("agent-1").await;
+        assert_eq!(
+            browser.disarmed.load(Ordering::SeqCst),
+            1,
+            "the page must leave inspect mode when its terminal closes"
+        );
+        // A click queued while no listener ran belongs to nobody.
+        tx.send(pick_of("#stale")).unwrap();
+        manager
+            .start("/repo".into(), "agent-2".into(), || async {
+                panic!("a live browser is reused");
+                #[allow(unreachable_code)]
+                Err(String::new())
+            })
+            .await
+            .unwrap();
+        tx.send(pick_of("#fresh")).unwrap();
+        let (session, prompt) = recv(&mut prefilled).await;
+        assert_eq!(session, "agent-2");
+        assert!(
+            prompt.contains("#fresh"),
+            "stale pick was delivered: {prompt}"
+        );
+        wait_until(|| browser.armed.load(Ordering::SeqCst) >= 3).await;
+        assert!(prefilled.try_recv().is_err());
+        manager.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn a_slow_browser_launch_does_not_block_other_repos() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, _, _) = manager(dir.path().to_path_buf());
+        let (slow, _slow_tx) = fake(None);
+        let (fast, _fast_tx) = fake(None);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let starting = {
+            let manager = manager.clone();
+            let slow = slow.clone();
+            tokio::spawn(async move {
+                manager
+                    .start("/slow".into(), "agent-a".into(), || async move {
+                        let _ = entered_tx.send(());
+                        let _ = release_rx.await;
+                        Ok(slow as Arc<dyn InspectBrowser>)
+                    })
+                    .await
+            })
+        };
+        entered_rx.await.unwrap();
+        let bound = std::time::Duration::from_secs(1);
+        let statuses = tokio::time::timeout(bound, manager.statuses())
+            .await
+            .expect("status read waited for another repo's Chrome launch");
+        assert!(
+            statuses.is_empty(),
+            "a starting repo is not reported: {statuses:?}"
+        );
+        tokio::time::timeout(bound, start_with(&manager, "/fast", "agent-b", &fast))
+            .await
+            .expect("start on another repo waited for the launch")
+            .unwrap();
+        assert!(
+            start_with(&manager, "/slow", "agent-c", &fast)
+                .await
+                .is_err(),
+            "a second start while launching must not launch another browser"
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(starting.await.unwrap().unwrap().status, "armed");
+        manager.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn stop_during_launch_closes_the_new_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, _, _) = manager(dir.path().to_path_buf());
+        let (browser, _tx) = fake(None);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let starting = {
+            let manager = manager.clone();
+            let browser = browser.clone();
+            tokio::spawn(async move {
+                manager
+                    .start("/repo".into(), "agent".into(), || async move {
+                        let _ = entered_tx.send(());
+                        let _ = release_rx.await;
+                        Ok(browser as Arc<dyn InspectBrowser>)
+                    })
+                    .await
+            })
+        };
+        entered_rx.await.unwrap();
+        assert_eq!(
+            manager.stop("/repo").await.unwrap().unwrap().status,
+            "stopped"
+        );
+        release_tx.send(()).unwrap();
+        assert!(starting.await.unwrap().is_err());
+        assert_eq!(browser.closed.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.status("/repo").await.unwrap().status, "stopped");
+    }
+
+    #[tokio::test]
+    async fn rearm_failure_closes_the_browser_instead_of_dropping_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, mut prefilled, mut events) = manager(dir.path().to_path_buf());
+        let (browser, tx) = fake(None);
+        start_with(&manager, "/repo", "agent", &browser)
+            .await
+            .unwrap();
+        assert_eq!(recv(&mut events).await.status, "armed");
+        browser.arm_failures.store(1, Ordering::SeqCst);
+        tx.send(pick()).unwrap();
+        recv(&mut prefilled).await;
+        assert_eq!(recv(&mut events).await.status, "stopped");
+        wait_until(|| browser.closed.load(Ordering::SeqCst) == 1).await;
+    }
+
+    #[tokio::test]
+    async fn a_dead_reused_browser_is_replaced_in_the_same_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, mut prefilled, _) = manager(dir.path().to_path_buf());
+        let (dead, _dead_tx) = fake(None);
+        let (fresh, fresh_tx) = fake(None);
+        start_with(&manager, "/repo", "agent", &dead).await.unwrap();
+        manager.session_closed("agent").await;
+        // The user closed Chrome while no terminal was bound.
+        dead.arm_failures.store(usize::MAX, Ordering::SeqCst);
+        let status = start_with(&manager, "/repo", "agent-2", &fresh)
+            .await
+            .unwrap();
+        assert_eq!(status.status, "armed");
+        assert_eq!(dead.closed.load(Ordering::SeqCst), 1);
+        fresh_tx.send(pick()).unwrap();
+        assert_eq!(recv(&mut prefilled).await.0, "agent-2");
+        manager.stop_all().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_all_closes_every_browser_at_once_under_one_deadline() {
+        let dir = tempfile::tempdir().unwrap();
+        let (manager, _, _) = manager(dir.path().to_path_buf());
+        let mut senders = Vec::new();
+        for repo in ["/a", "/b", "/c"] {
+            let (tx, rx) = mpsc::unbounded_channel();
+            senders.push(tx);
+            let hung = Arc::new(FakeBrowser {
+                picks: Mutex::new(rx),
+                armed: AtomicUsize::new(0),
+                disarmed: AtomicUsize::new(0),
+                arm_failures: AtomicUsize::new(0),
+                closed: AtomicUsize::new(0),
+                close_delay: std::time::Duration::from_secs(60),
+                image: None,
+                capture_delay: std::time::Duration::ZERO,
+            });
+            start_with(&manager, repo, "agent", &hung).await.unwrap();
+        }
+        let began = tokio::time::Instant::now();
+        manager.stop_all().await;
+        assert!(
+            began.elapsed() <= STOP_ALL_TIMEOUT + std::time::Duration::from_millis(100),
+            "exit waited {:?} for hung browsers",
+            began.elapsed()
+        );
+        assert!(
+            manager
+                .statuses()
+                .await
+                .iter()
+                .all(|status| status.status == "stopped")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs an installed Chrome (TUIC_DESIGN_CHROME)"]
+    async fn a_debugger_statement_does_not_freeze_the_inspected_page() {
+        let chrome = std::env::var_os("TUIC_DESIGN_CHROME")
+            .expect("TUIC_DESIGN_CHROME must point to an installed Chrome executable");
+        let profile = tempfile::tempdir().expect("temporary Chrome profile");
+        let config = chromiumoxide::BrowserConfig::builder()
+            .chrome_executable(chrome)
+            .user_data_dir(profile.path())
+            .port(0)
+            .build()
+            .expect("Chrome config");
+        let (mut browser, mut handler) = Browser::launch(config).await.expect("Chrome launches");
+        let handler_task = tokio::spawn(async move { while handler.next().await.is_some() {} });
+        let page = browser.new_page("about:blank").await.expect("test page");
+        enable_domains(&page)
+            .await
+            .expect("Design Mode domains enabled");
+        page.evaluate("setTimeout(() => { debugger; window.after = true; }, 0)")
+            .await
+            .expect("schedule a debugger statement");
+        let resumed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let after = page.evaluate("Boolean(window.after)").await;
+                if after.is_ok_and(|result| result.value() == Some(&json!(true))) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        let _ = browser.close().await;
+        let _ = browser.kill().await;
+        handler_task.abort();
+        assert!(
+            resumed.is_ok(),
+            "the page stopped at `debugger;` while Design Mode was attached"
+        );
     }
 
     #[test]

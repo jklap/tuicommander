@@ -1,10 +1,13 @@
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use serde_json::Value;
 use sourcemap::{DecodedMap, SourceMap};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{Mutex, Semaphore};
 
 const MAX_SCRIPTS: usize = 2_000;
+const MAX_CONCURRENT_FETCHES: usize = 4;
 const MAX_MAP_BYTES: usize = 5 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 
@@ -113,6 +116,22 @@ impl ScriptMaps {
     }
 }
 
+/// One client for every map, without system proxy discovery. Measured
+/// 2026-09-23 on macOS: a client per fetch cost ~0.5 s each, and proxy
+/// discovery alone 1.4-11 s — a burst of hundreds of modules would take minutes.
+fn map_client() -> Option<&'static reqwest::Client> {
+    static CLIENT: std::sync::LazyLock<Option<reqwest::Client>> = std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .redirect(reqwest::redirect::Policy::none())
+            // Loopback only: a system proxy has no business seeing these.
+            .no_proxy()
+            .build()
+            .ok()
+    });
+    CLIENT.as_ref()
+}
+
 /// Fetch without holding the ScriptMaps mutex: a slow local dev server must not
 /// block an inspect click while it resolves a source frame.
 pub(crate) async fn fetch_source_map(script_url: &str, source_map_url: &str) -> Option<Vec<u8>> {
@@ -133,12 +152,7 @@ pub(crate) async fn fetch_source_map(script_url: &str, source_map_url: &str) -> 
         let script = loopback_url(script_url)?;
         let resolved = script.join(source_map_url).ok()?;
         loopback_url(resolved.as_str())?;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .ok()?;
-        let response = client.get(resolved).send().await.ok()?;
+        let response = map_client()?.get(resolved).send().await.ok()?;
         if !response.status().is_success() {
             return None;
         }
@@ -158,6 +172,92 @@ pub(crate) async fn fetch_source_map(script_url: &str, source_map_url: &str) -> 
             bytes.extend_from_slice(&chunk);
         }
         Some(bytes)
+    }
+}
+
+/// What the source-map loader needs to know about the inspected page.
+pub(crate) enum PageEvent {
+    /// The main frame committed a navigation to this URL.
+    Navigated(String),
+    ScriptParsed {
+        url: String,
+        source_map_url: String,
+        has_source_url: bool,
+    },
+}
+
+fn origin_of(value: &str) -> Option<url::Origin> {
+    url::Url::parse(value)
+        .ok()
+        .map(|url| url.origin())
+        .filter(url::Origin::is_tuple)
+}
+
+/// Loads the source map of every script the page announces. A dev server
+/// announces hundreds of modules in one burst, so network fetches queue behind
+/// four permits instead of being dropped; `data:` maps cost no request and
+/// decode inline. The page controls script URLs (`//# sourceURL=`), so a map is
+/// fetched only for a script served by the dev server or by the page's own
+/// origin: otherwise any site could make TUICommander send GETs to loopback.
+pub(crate) async fn load_maps<S>(
+    mut events: S,
+    maps: Arc<Mutex<ScriptMaps>>,
+    dev_server_url: Option<String>,
+    page_url: Option<String>,
+) where
+    S: Stream<Item = PageEvent> + Unpin,
+{
+    let dev_origin = dev_server_url.as_deref().and_then(origin_of);
+    let mut page_origin = page_url.as_deref().and_then(origin_of);
+    let permits = Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES));
+    let mut jobs = tokio::task::JoinSet::new();
+    let log_failure = |result: Result<(), tokio::task::JoinError>| {
+        if let Err(error) = result {
+            tracing::warn!(%error, "Design Mode source-map task failed");
+        }
+    };
+    while let Some(event) = events.next().await {
+        while let Some(result) = jobs.try_join_next() {
+            log_failure(result);
+        }
+        let (script_url, map_url, has_source_url) = match event {
+            PageEvent::Navigated(url) => {
+                page_origin = origin_of(&url);
+                continue;
+            }
+            PageEvent::ScriptParsed {
+                url,
+                source_map_url,
+                has_source_url,
+            } => (url, source_map_url, has_source_url),
+        };
+        if map_url.starts_with("data:") {
+            if let Some(bytes) = fetch_source_map(&script_url, &map_url).await {
+                maps.lock().await.insert(&script_url, &bytes);
+            }
+            continue;
+        }
+        let origin = origin_of(&script_url);
+        if has_source_url || origin.is_none() || (origin != dev_origin && origin != page_origin) {
+            continue;
+        }
+        if jobs.len() >= MAX_SCRIPTS {
+            tracing::debug!(script_url, "Design Mode source-map queue is full");
+            continue;
+        }
+        let permits = permits.clone();
+        let maps = maps.clone();
+        jobs.spawn(async move {
+            let Ok(_permit) = permits.acquire_owned().await else {
+                return;
+            };
+            if let Some(bytes) = fetch_source_map(&script_url, &map_url).await {
+                maps.lock().await.insert(&script_url, &bytes);
+            }
+        });
+    }
+    while let Some(result) = jobs.join_next().await {
+        log_failure(result);
     }
 }
 
@@ -306,6 +406,144 @@ mod tests {
                 &mut maps
             ),
             None
+        );
+    }
+
+    /// Serves `PLAIN` for every request after `delay`, counting requests, so
+    /// concurrent fetches really overlap.
+    async fn map_server(delay: Duration) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buffer = [0; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match socket.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&buffer[..read]),
+                        }
+                    }
+                    tokio::time::sleep(delay).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        PLAIN.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(PLAIN).await;
+                });
+            }
+        });
+        (origin, hits)
+    }
+
+    fn script(url: &str, map: &str) -> PageEvent {
+        PageEvent::ScriptParsed {
+            url: url.to_owned(),
+            source_map_url: map.to_owned(),
+            has_source_url: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_burst_of_parsed_scripts_loads_every_map_not_just_the_first_four() {
+        let (origin, hits) = map_server(Duration::from_millis(100)).await;
+        let events: Vec<_> = (0..12)
+            .map(|n| script(&format!("{origin}/src/{n}.js"), &format!("{n}.js.map")))
+            .collect();
+        let maps = Arc::new(Mutex::new(ScriptMaps::default()));
+        load_maps(
+            futures_util::stream::iter(events),
+            maps.clone(),
+            Some(origin.clone()),
+            None,
+        )
+        .await;
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 12);
+        let mut maps = maps.lock().await;
+        for n in 0..12 {
+            assert!(
+                maps.lookup(&format!("{origin}/src/{n}.js"), 1, 1).is_some(),
+                "map {n} was dropped"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn maps_are_fetched_only_for_the_dev_server_or_page_origin() {
+        let (dev, dev_hits) = map_server(Duration::ZERO).await;
+        let (other, other_hits) = map_server(Duration::ZERO).await;
+        let (navigated, navigated_hits) = map_server(Duration::ZERO).await;
+        let events = vec![
+            // A hostile page names another loopback service as its script URL.
+            script(&format!("{other}/x.js"), "/side-effect"),
+            // eval() with `//# sourceURL=` pointing at the dev server itself.
+            PageEvent::ScriptParsed {
+                url: format!("{dev}/forged.js"),
+                source_map_url: "/forged.map".into(),
+                has_source_url: true,
+            },
+            script(&format!("{dev}/src/App.js"), "App.js.map"),
+            script(&format!("{navigated}/app.js"), "app.js.map"),
+            PageEvent::Navigated(format!("{navigated}/index.html")),
+            script(&format!("{navigated}/app.js"), "app.js.map"),
+        ];
+        let maps = Arc::new(Mutex::new(ScriptMaps::default()));
+        load_maps(
+            futures_util::stream::iter(events),
+            maps.clone(),
+            Some(dev.clone()),
+            None,
+        )
+        .await;
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(
+            other_hits.load(SeqCst),
+            0,
+            "unrelated loopback origin was fetched"
+        );
+        assert_eq!(
+            dev_hits.load(SeqCst),
+            1,
+            "only the real dev-server script is fetched"
+        );
+        assert_eq!(
+            navigated_hits.load(SeqCst),
+            1,
+            "the page origin counts after navigation"
+        );
+        let mut maps = maps.lock().await;
+        assert!(maps.lookup(&format!("{dev}/src/App.js"), 1, 1).is_some());
+        assert!(maps.lookup(&format!("{dev}/forged.js"), 1, 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn inline_maps_load_for_eval_scripts_without_a_request() {
+        use base64::Engine as _;
+        let body = br#"{"version":3,"sources":["src/Inline.tsx"],"names":[],"mappings":"AAAA"}"#;
+        let map = format!(
+            "data:application/json;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(body)
+        );
+        let events = vec![PageEvent::ScriptParsed {
+            url: "webpack-internal:///./src/Inline.tsx".into(),
+            source_map_url: map,
+            has_source_url: true,
+        }];
+        let maps = Arc::new(Mutex::new(ScriptMaps::default()));
+        load_maps(futures_util::stream::iter(events), maps.clone(), None, None).await;
+        assert_eq!(
+            maps.lock()
+                .await
+                .lookup("webpack-internal:///./src/Inline.tsx", 1, 1)
+                .unwrap()
+                .file,
+            "src/Inline.tsx"
         );
     }
 
