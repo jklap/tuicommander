@@ -113,7 +113,7 @@ describe("useGitOperations", () => {
 		runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
 		getWorkspaceLifecycle: vi.fn().mockResolvedValue({
 			dirtyFiles: 0,
-			commitStatus: "unmerged",
+			commitStatus: "merged",
 			removalSafety: "safe",
 		}),
 	};
@@ -681,6 +681,23 @@ describe("useGitOperations", () => {
 	});
 
 	describe("handleRemoveWorkspace", () => {
+		it("keeps an unmerged worktree and its terminals when branch deletion was requested", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "unmerged",
+				removalSafety: "safe",
+			});
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt", terminals: ["term-1"] });
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.worktreePath).toBe("/repo/wt");
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("unmerged commits"));
+		});
 		it("removes worktree branch after confirmation, passing deleteBranchOnRemove setting", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
@@ -716,6 +733,11 @@ describe("useGitOperations", () => {
 		});
 
 		it("passes deleteBranch=false when repo setting overrides default", async () => {
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
+				dirtyFiles: 0,
+				commitStatus: "unmerged",
+				removalSafety: "safe",
+			});
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			// Set per-repo setting to override default deleteBranchOnRemove=true
@@ -1891,7 +1913,7 @@ describe("useGitOperations", () => {
 		it("passes force only after confirming destructive state", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirtyFiles: 2,
-				commitStatus: "unmerged",
+				commitStatus: "merged",
 				removalSafety: "requires_force",
 			});
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });

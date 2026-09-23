@@ -958,6 +958,25 @@ pub(crate) fn remove_worktree_by_workspace_id(
     let branch_name = workspace.branch.as_str();
     let worktree_path = PathBuf::from(&workspace.path);
 
+    // Refuse the combined operation before removing the checkout. A clean
+    // worktree can still carry commits that `git branch -d` will not delete.
+    if delete_branch && !force {
+        let lifecycle = inspect_workspace_lifecycle(&base_repo, workspace_id);
+        match lifecycle.commit_status {
+            WorkspaceCommitStatus::Unmerged => {
+                return Err(format!(
+                    "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
+                ));
+            }
+            WorkspaceCommitStatus::Unknown => {
+                return Err(lifecycle.error.unwrap_or_else(|| {
+                    format!("Cannot verify whether {branch_name} can be safely removed")
+                }));
+            }
+            WorkspaceCommitStatus::InSync | WorkspaceCommitStatus::Merged => {}
+        }
+    }
+
     tracing::info!(
         source = "worktree",
         workspace_id = %workspace_id,
@@ -3034,10 +3053,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_worktree_by_workspace_id_safe_delete_preserves_unmerged_branch() {
-        // Scenario: branch has unmerged commits, user removes worktree WITHOUT force.
-        // Expected: worktree directory removed, but `git branch -d` refuses, so the
-        // branch ref survives as a safety net for unpushed commits.
+    fn test_remove_worktree_by_workspace_id_safe_delete_preserves_unmerged_worktree() {
         let (_config_guard, _config_dir) = with_temp_config_dir();
         let repo = setup_test_repo();
         let worktrees_dir = repo.path().join("worktrees");
@@ -3059,20 +3075,16 @@ mod tests {
             .run()
             .unwrap();
 
-        // Safe remove (force=false): worktree gone, branch survives
-        let outcome = remove_worktree_by_workspace_id(
+        let error = remove_worktree_by_workspace_id(
             repo.path().to_str().unwrap(),
             "feat-unmerged",
             true,
             None,
             false,
         )
-        .expect("remove should succeed even if -d refuses");
-        assert!(
-            outcome.branch_delete_warning.is_some(),
-            "safe branch delete refusal must be surfaced to the caller"
-        );
-        assert!(!wt.path.exists(), "worktree dir should be removed");
+        .expect_err("unmerged branch must block removal before touching the worktree");
+        assert!(error.contains("unmerged"), "{error}");
+        assert!(wt.path.exists(), "worktree dir must be preserved");
 
         let branches = git_cmd(repo.path())
             .args(["branch", "--list", "feat-unmerged"])

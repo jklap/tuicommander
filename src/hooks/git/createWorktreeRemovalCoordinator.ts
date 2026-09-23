@@ -84,6 +84,13 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			clearLock();
 			return;
 		}
+		if (deleteBranch && lifecycle.commitStatus === "unmerged") {
+			deps.setStatusInfo(
+				`Cannot remove ${branchName}: the branch has unmerged commits. Merge it first, or turn off Delete branch on remove.`,
+			);
+			clearLock();
+			return;
+		}
 
 		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName, lifecycle, deleteBranch);
 		if (!confirmed) {

@@ -131,7 +131,7 @@ Repository tree with branch management.
 - CI ring indicator per branch (from githubStore)
 - PR status badge
 - Compact diff stats (additions/deletions) with exact tooltip counts
-- Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`),
+- Workspace lifecycle badge from the backend (`Dirty`, `Merged`, or `Unknown`), plus a compact unmerged-commits mark,
   keyed by workspace id; `Dirty` and `Unknown` expose their meaning and removal
   consequence in a WebView-compatible hover/focus tooltip
 - Context menu (right-click) for repo/branch operations
