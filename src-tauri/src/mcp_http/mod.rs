@@ -1804,6 +1804,16 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/test",
             post(config_routes::test_connection_http),
         )
+        // Remote connection password (keyring-proxied) — plan Phase 3 auth wiring
+        .route(
+            "/config/remote-connections/{id}/password/exists",
+            get(config_routes::remote_connection_password_exists_http),
+        )
+        .route(
+            "/config/remote-connections/{id}/password",
+            post(config_routes::save_remote_connection_password_http)
+                .delete(config_routes::delete_remote_connection_password_http),
+        )
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))

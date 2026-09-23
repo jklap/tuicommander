@@ -631,6 +631,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		hintKey: "services.hint.relayToken",
 	},
 	{ tab: "remote-access", section: "Cloud Relay", label: "Session ID", labelKey: "services.label.relaySessionId" },
+	// tabs/RemoteServersTab.tsx
+	{ tab: "remote-servers", section: "Remote Servers", sectionKey: "remoteServers.heading" },
 	// tabs/PluginsTab.tsx
 	{ tab: "plugins", section: "Plugins" },
 	{

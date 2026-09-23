@@ -19,6 +19,7 @@ export const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "github", label: "Git & GitHub" },
 	{ key: "services", label: t("settings.services", "Services & MCP") },
 	{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
+	{ key: "remote-servers", label: t("settings.remoteServers", "Remote Servers") },
 	{ key: "plugins", label: t("settings.plugins", "Plugins") },
 	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
 	{ key: "providers", label: "Providers" },

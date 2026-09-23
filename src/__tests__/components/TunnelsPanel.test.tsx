@@ -176,14 +176,38 @@ describe("TunnelsPanel", () => {
 		expect(queryByText("started")).toBeNull();
 	});
 
-	it("+ New Tunnel opens the editor modal", async () => {
+	// Settings now owns tunnel creation/editing entirely (story: SSH Tunnels +
+	// Remote Servers consolidation, decision #1) — the overlay no longer has
+	// its own "+ New Tunnel" full-editor entry point or a per-row "Edit"
+	// button, only a single "Edit in Settings" link that navigates there and
+	// closes the overlay.
+	it("has no '+ New Tunnel' button or per-row Edit button anymore", async () => {
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([makeProfile()]);
+			if (cmd === "list_active_tunnels") return Promise.resolve([]);
+			return Promise.resolve(undefined);
+		});
+		await tunnelsStore.refreshProfiles();
+		await tunnelsStore.refreshActiveTunnels();
+
 		tunnelPanelStore.open();
-		const { getByText } = render(() => <TunnelsPanel />);
+		const { queryByText } = render(() => <TunnelsPanel />);
 		await flushMicrotasks();
 
-		fireEvent.click(getByText("+ New Tunnel"));
+		expect(queryByText("+ New Tunnel")).toBeNull();
+		expect(queryByText("Edit")).toBeNull();
+	});
+
+	it("'Edit in Settings' closes the overlay and navigates to the Remote Servers settings tab", async () => {
+		const onOpenSettings = vi.fn();
+		tunnelPanelStore.open();
+		const { getByText } = render(() => <TunnelsPanel onOpenSettings={onOpenSettings} />);
 		await flushMicrotasks();
 
-		expect(getByText("New Tunnel")).toBeTruthy();
+		fireEvent.click(getByText("Edit in Settings"));
+		await flushMicrotasks();
+
+		expect(onOpenSettings).toHaveBeenCalledWith("remote-servers");
+		expect(tunnelPanelStore.state.isOpen).toBe(false);
 	});
 });

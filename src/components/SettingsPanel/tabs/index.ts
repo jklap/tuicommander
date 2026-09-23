@@ -7,6 +7,7 @@ export { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 export { NotificationsTab } from "./NotificationsTab";
 export { PluginsTab } from "./PluginsTab";
 export { RemoteAccessTab } from "./RemoteAccessTab";
+export { RemoteServersTab } from "./RemoteServersTab";
 export { RepoScriptsTab } from "./RepoScriptsTab";
 export type { RepoTabProps } from "./RepoWorktreeTab";
 export { RepoWorktreeTab } from "./RepoWorktreeTab";

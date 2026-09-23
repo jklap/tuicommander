@@ -447,13 +447,14 @@ describe("remoteConnectionsStore health-poll failure transitions", () => {
 // hydrate() guards itself with a module-level `hydrated` boolean with no test
 // reset hook, so — like tunnelsStore.hydrate() in stores/tunnels.test.ts — there
 // is exactly one "still false" window across this whole file. This describe is
-// placed LAST so it doesn't matter that its success step does
-// `setState("connections", connectionsMap)`, which — like tunnelsStore's
-// activeTunnels (see the dedicated merge-semantics test in tunnels.test.ts) —
-// MERGES onto the existing "connections" object rather than replacing it
-// wholesale, so every connection id added by earlier describes in this file
-// lingers afterward too. Assertions below check the newly-hydrated ids
-// individually rather than asserting the whole map, for exactly that reason.
+// placed LAST so it doesn't matter that its success step now writes via
+// `reconcile()` (fixed, story: SSH Tunnels + Remote Servers consolidation —
+// previously a plain-object `setState("connections", connectionsMap)` MERGED
+// onto the existing "connections" object instead of replacing it wholesale).
+// Every connection id added by earlier describes in this file is still present
+// afterward regardless, simply because hydrate() only ever runs its real body
+// once per module lifetime — assertions below check the newly-hydrated ids
+// individually rather than asserting the whole map, to stay agnostic to that.
 describe("remoteConnectionsStore.hydrate()", () => {
 	beforeEach(() => {
 		mockInvoke.mockReset();
@@ -484,5 +485,33 @@ describe("remoteConnectionsStore.hydrate()", () => {
 		expect(mockInvoke).not.toHaveBeenCalled();
 		expect(remoteConnectionsStore.getConnectionState("hy3")).toBeUndefined();
 		expect(remoteConnectionsStore.getConnectionState("hy1")).toBeDefined();
+	});
+});
+
+// Password wiring (plan Phase 3 auth wiring) — thin passthroughs to the
+// keyring-proxied Tauri commands added alongside this. The actual keyring
+// CRUD is tested in src-tauri/src/remote_connection.rs; these just confirm
+// the store calls the right command with the right args.
+describe("remoteConnectionsStore password actions", () => {
+	beforeEach(() => {
+		mockInvoke.mockReset();
+		mockInvoke.mockResolvedValue(undefined);
+	});
+
+	it("connectionPasswordExists calls remote_connection_password_exists and returns its result", async () => {
+		mockInvoke.mockResolvedValue(true);
+		const result = await remoteConnectionsStore.connectionPasswordExists("c1");
+		expect(mockInvoke).toHaveBeenCalledWith("remote_connection_password_exists", { id: "c1" });
+		expect(result).toBe(true);
+	});
+
+	it("saveConnectionPassword calls save_remote_connection_password with id and password", async () => {
+		await remoteConnectionsStore.saveConnectionPassword("c1", "hunter2");
+		expect(mockInvoke).toHaveBeenCalledWith("save_remote_connection_password", { id: "c1", password: "hunter2" });
+	});
+
+	it("deleteConnectionPassword calls delete_remote_connection_password with id", async () => {
+		await remoteConnectionsStore.deleteConnectionPassword("c1");
+		expect(mockInvoke).toHaveBeenCalledWith("delete_remote_connection_password", { id: "c1" });
 	});
 });

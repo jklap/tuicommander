@@ -130,29 +130,31 @@ The app launches in standalone mode (no browser chrome) for a native-like experi
 
 ## SSH Tunnel Management
 
-TUICommander can manage persistent SSH tunnels with automatic reconnection, port forwarding, and audit logging. A tunnel **profile** is a standalone, reusable SSH forward you set up yourself; it's a separate concept from the throwaway tunnel the [Remote Connection Manager](#remote-connection-manager) creates behind the scenes for its own SSH transport (see [Adding an SSH Connection](#adding-an-ssh-connection) below).
+TUICommander can manage persistent SSH tunnels with automatic reconnection, port forwarding, and audit logging. A tunnel **profile** is a standalone, reusable SSH forward you set up yourself; it's a separate concept from the throwaway tunnel the [Remote Servers](#remote-servers) feature creates behind the scenes for its own "Remote Server — SSH" kind (see [Adding an SSH Remote Server](#adding-an-ssh-remote-server) below).
 
-### Opening the Tunnels Panel
+Tunnel profiles are no longer behind the experimental-features flag — they're a fully graduated feature.
 
-There is currently no "SSH Tunnels" entry under Settings. Open the panel one of two ways:
+### Where to create and edit tunnels
 
-- **Command Palette** (`Cmd+P` / `Ctrl+P`) → type "tunnels" → **SSH Tunnels**
-- The **sidebar shield icon** (see [Sidebar Shield Indicator](#sidebar-shield-indicator) below) — but it only appears once at least one tunnel profile already exists, so the Command Palette is the only way in the first time
+**Settings (`Cmd+,`) → Remote Servers.** This tab owns all tunnel-profile create/edit/delete, through the same merged connection editor used for remote-server connections (see [Remote Servers](#remote-servers) below) — pick **Kind: SSH Tunnel**. There is also a lightweight **Tunnels Panel** overlay (Command Palette → "tunnels", or the sidebar shield icon) for live status/start/stop/audit-log only; its header has an **Edit in Settings** link that jumps straight to the Remote Servers tab instead of opening its own editor.
 
 ### Creating a Tunnel Profile
 
-1. Open the Tunnels Panel (see above)
-2. Click **+ New Tunnel** to open the editor
+1. Open **Settings → Remote Servers** and click **Add Connection**
+2. Set **Kind** to **SSH Tunnel**
 3. Configure:
    - **Name** — A descriptive label (e.g., "prod-db-tunnel")
    - **Host** — Remote SSH host; the field autocompletes from host aliases found in your `~/.ssh/config`
    - **Port** — SSH port (default 22)
    - **User** — SSH username
-   - **Identity / Authentication** — Optional path to an SSH private key (use the **Browse…** button, which opens a file picker rooted at `~/.ssh`); leave empty to use your SSH agent instead. The detected agent and its loaded keys are shown live underneath this field — see [SSH Agent Detection](#ssh-agent-detection)
+   - **Identity / Authentication** — Optional path to an SSH private key (use the **Browse…** button, which opens a file picker rooted at `~/.ssh`); leave empty to use your SSH agent instead. The detected agent and its loaded keys — including each key's fingerprint — are shown live underneath this field. See [SSH Agent Detection](#ssh-agent-detection)
    - **Port Forwards** — click **+ Add** per rule, then choose **Local** or **Remote** and fill in the bind port and paired host:port. Local forwards save `remote_host`/`remote_port`; Remote forwards save `local_host`/`local_port`. A new Local forward's remote host defaults to the tunnel's own Host field
-   - **Options** — only **ServerAliveInterval** (default 15s) and **StrictHostKeyChecking** (`Yes` or `AcceptNew`) are editable here. `ServerAliveCountMax` exists in the saved profile with a fixed default of 3, but the editor has no field for it
+   - **ServerAliveInterval** (default 15s), **ServerAliveCountMax** (default 3 — now has its own field, previously fixed with no UI), and **StrictHostKeyChecking** (`Yes` or `AcceptNew`) are all editable
    - **Connect automatically on startup** checkbox (persisted as `auto_connect`)
-4. Save the profile
+4. Optionally click **Test Connection** — runs a one-shot, no-forwards SSH connectivity check before you save, reporting reachable / auth failed / unreachable
+5. Save
+
+This same "SSH Tunnel" section — the SSH fields, Port Forwards editor, and auto-connect checkbox — is shared with the merged editor's "Remote Server — SSH" kind, so both present identical SSH capability; they only differ in what happens after (a tunnel profile vs. a remote-server connection).
 
 Tunnel profiles are stored as TOML files. **Global profiles** live in `<config_dir>/tunnels/` and are available across all repos. **Per-repo profiles** are stored in `<repo>/.tuic/tunnels/` and override global profiles with the same ID.
 
@@ -177,22 +179,22 @@ Open the command palette (`Cmd+P` / `Ctrl+P`) and type "tunnels" to toggle the T
 
 ### Starting and Stopping Tunnels
 
-- In the **Tunnels Panel**, click **Start** next to a profile to launch the SSH tunnel
+- In the **Tunnels Panel** (or the same list embedded in Settings → Remote Servers), click **Start** next to a profile to launch the SSH tunnel
 - The status badge next to it shows the current state: Starting, Connected, Reconnecting, Stopped, or Error
-- **Edit** reopens the same editor for that profile. **Log** expands an inline audit-event timeline (last 20 events) for it. **Del** removes the profile
+- **Edit** (Settings only — the standalone Tunnels Panel overlay no longer has its own per-row Edit button, only "Edit in Settings" in its header) reopens the merged editor for that profile. **Log** expands an inline audit-event timeline (last 20 events) for it. **Del** removes the profile
 - Click **Stop** to gracefully terminate the SSH process (SIGTERM with 5s grace period, then SIGKILL)
 - On app exit, all active tunnels are automatically stopped — no orphaned SSH processes
 
 ### SSH Agent Detection
 
-Built and working — but it's not a separate panel, it's inline text inside the tunnel editor's Identity/Authentication field. TUICommander detects your SSH agent from `SSH_AUTH_SOCK` and shows the agent type and loaded keys as you fill in the form. Supported agents:
+Built and working — it's inline text inside the shared SSH fields section of the merged connection editor (both the "SSH Tunnel" and "Remote Server — SSH" kinds). TUICommander detects your SSH agent from `SSH_AUTH_SOCK` and shows the agent type and loaded keys as you fill in the form. Supported agents:
 
 - **1Password** — Detected via the 1Password SSH agent socket
 - **Secretive** — Detected via the Secretive agent socket
 - **GPG Agent** — Detected via gpg-agent socket
 - **Generic SSH Agent** — Any other `SSH_AUTH_SOCK` value
 
-The key listing shows each loaded key's comment and key type (e.g. `ed25519`), fetched via `ssh-add -l`. The backend also returns each key's fingerprint, but the editor does not currently display it.
+The key listing shows each loaded key's comment, key type (e.g. `ed25519`), and fingerprint, all fetched via `ssh-add -l`.
 
 ### Automatic Reconnection
 
@@ -228,47 +230,69 @@ The supervisor classifies SSH process exits to determine whether retry is approp
 | Timeout | Yes | Connection timed out |
 | UserKilled | No | Process terminated by user signal |
 
-## Remote Connection Manager
+## Remote Servers
 
 Remote connections let you manage `tuic-remote` daemons (or another TUICommander instance's HTTP API) running on other machines. TUICommander routes API calls to the correct host based on which repo/session is active.
 
 ### Where to find it
 
-Open **Settings** (`Cmd+,`) → **Services & MCP** → scroll to the bottom → **Remote Machines**. There is no separate "Connections" tab or section anywhere in the app — this is the only place. Click the **+** icon in the section header (tooltip: "Add remote machine") to reveal the add form; there's no button literally labeled "Add Connection".
+Open **Settings** (`Cmd+,`) → **Remote Servers**. This is a dedicated global Settings tab (it moved out of "Services & MCP" — that tab no longer has a "Remote Machines" section at all) that owns both SSH tunnel profiles and remote-server connections through one merged editor. Click **Add Connection** to open it — a single, consistently labeled primary action, replacing the old unlabeled "+" icon.
 
-### Adding an SSH Connection
+### The merged connection editor
 
-1. Open Settings → Services & MCP → **Remote Machines** → **+**
-2. Enter a **Name**
-3. Leave the transport dropdown on **SSH** (the default)
-4. Configure **Host**, **Port** (default 22), **User**, and an optional **Identity file** path
-5. Set the **Remote daemon port** — the form defaults this to **9876**. (Note: the Rust-side `RemoteConnection::new_ssh` helper used in tests defaults the same field to **9877** — the frontend and backend disagree on the default; worth reconciling as a small bug independent of this doc.)
-6. Enter an **Auth username** (required — the form won't save without it)
+Every connection — tunnel or remote server — is created and edited through the same form: **Name**, then a **Kind** dropdown with exactly four options:
+
+- **SSH Tunnel** — a port-forwarding profile (see [SSH Tunnel Management](#ssh-tunnel-management) above)
+- **Remote Server — SSH** — connects to a `tuic-remote` daemon (or another desktop instance) over an SSH-forwarded port
+- **Remote Server — Direct** — connects directly to a URL (e.g. `http://10.0.0.5:9877`)
+- **Remote Server — Local** — connects to another named/isolated TUICommander instance running on the **same machine** (`tuic-remote --instance <id>` or `TUIC_APP_INSTANCE=<id>`), by instance ID (the port is resolved automatically by reading that instance's own config off disk) or by a manually-entered port (for an unnamed instance, e.g. a second `make dev` debug build)
+
+Kind is fixed once you're editing an existing item (switching an existing tunnel to a remote-server kind, or vice versa, doesn't map onto one Save since they're different backing stores) — only "Add Connection" lets you pick Kind freely.
+
+Editing an existing connection now always shows its **Name** field, so renaming no longer requires delete-and-recreate.
+
+### Adding an SSH Remote Server
+
+1. Open Settings → Remote Servers → **Add Connection**
+2. Set **Kind** to **Remote Server — SSH**
+3. Configure **Host**, **Port** (default 22), **User**, and an optional **Identity file** path — the same shared SSH fields as an SSH Tunnel, including agent detection and `~/.ssh/config` autocomplete
+4. Set the **Remote daemon port** — defaults to **9877**, matching what a freshly-started `tuic-remote` binary actually listens on by default
+5. Optionally enter an **Auth username** and **Auth password** — both are now optional (previously username was required but never actually used to authenticate anything). A password you enter is sent to the OS keyring, never written to `connections.json`
+6. Optionally click **Test Connection** to verify reachability (and, if you supplied credentials, that they're accepted) before saving
 7. Save
 
 Saving only writes the connection record — **no SSH tunnel is created at Save time.** The tunnel is created lazily the first time you click **Connect** on that connection: TUICommander creates a throwaway tunnel profile (named `__remote_<connection-id>`, not shown under a friendly name in the Tunnels Panel) with one Local forward from a random local port to `127.0.0.1:<remote_daemon_port>` on the far side, starts it, and waits up to 30s for it to connect. **Disconnect** stops that tunnel and deletes the throwaway profile again — nothing persists between connect/disconnect cycles.
 
-### Adding a Direct Connection
+### Adding a Direct Remote Server
 
-1. Open Settings → Services & MCP → **Remote Machines** → **+**
-2. Select **Direct** transport
-3. Enter the URL of the remote daemon (e.g., `http://10.0.0.5:9876`)
-4. Enter an **Auth username** (see the authentication caveat below)
-5. Save, then click **Connect** — health polling and the live-event bridge only start once you connect, not on save
+1. Open Settings → Remote Servers → **Add Connection**
+2. Set **Kind** to **Remote Server — Direct**
+3. Enter the URL of the remote daemon (e.g., `http://10.0.0.5:9877`)
+4. Optionally enter an **Auth username**/**Auth password** (see below)
+5. Optionally click **Test Connection**
+6. Save, then click **Connect** — health polling and the live-event bridge only start once you connect, not on save
+
+### Adding a Local Remote Server
+
+1. Open Settings → Remote Servers → **Add Connection**
+2. Set **Kind** to **Remote Server — Local**
+3. Choose **Named instance** (enter the instance ID — the real port is read off that instance's own on-disk config at connect time, so it can never go stale) or **Manual port** (for an unnamed instance, e.g. a second `make dev` debug build) — only one of the two is used, never both
+4. Optionally enter auth credentials and **Test Connection**
+5. Save
 
 ### Remote Repositories and Terminals
 
-Once a connection shows **Connected** in Remote Machines:
+Once a connection shows **Connected** in Remote Servers:
 
-- **Add remote repo** — right-click "Add repo" in the sidebar; connected remote machines appear in that context menu. The repo is added with the connection's ID attached and shows a static **"remote"** badge in the sidebar
-- **Open terminal** — terminals on a remote repo route their calls through that connection's resolved base URL (the local tunnel port for SSH, or the configured URL for Direct). I/O works the same as local terminals
-- **Health monitoring** — polled every 5 seconds against `<baseUrl>/health` while a connection is active. **Caveat:** the sidebar's "remote" badge is static — it's shown whenever a repo has a `connectionId` at all, and does not turn into a warning or change appearance when that connection drops. Only the status dot in the Remote Machines settings panel (grey/yellow/green/red) reflects live connected/connecting/error/disconnected state today
+- **Add remote repo** — right-click "Add repo" in the sidebar; connected remote servers appear in that context menu. The repo is added with the connection's ID attached and shows a static **"remote"** badge in the sidebar
+- **Open terminal** — terminals on a remote repo route their calls through that connection's resolved base URL (the local tunnel port for SSH, the configured URL for Direct, or `127.0.0.1:<resolved-port>` for Local). I/O works the same as local terminals
+- **Health monitoring** — polled every 5 seconds against `<baseUrl>/health` while a connection is active. **Caveat:** the sidebar's "remote" badge is static — it's shown whenever a repo has a `connectionId` at all, and does not turn into a warning or change appearance when that connection drops. Only the status dot in the Remote Servers list (grey/yellow/green/red) reflects live connected/connecting/error/disconnected state today
 
-Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
+Connections are stored in `<config_dir>/connections.json` with SSH, Direct, and Local transport types. Passwords are never stored there — only in the OS keyring, keyed by connection ID.
 
-### Authentication caveat
+### Authentication
 
-The **Auth username** field is required by validation on both transport types, but as of this writing it is **not used anywhere** to actually authenticate the connection — nothing in the frontend or backend builds an `Authorization` header or otherwise sends credentials to the remote daemon using it. If the remote daemon has Basic Auth enabled (the same auth described earlier in this doc's [Security](#security) section for the desktop app's own remote-access server), a Remote Connection as currently implemented has no way to supply the password. Treat this as either a real gap to close (wire the field to an actual credential and send it) or flag the field as not-yet-functional until it is.
+**Auth username** and **Auth password** are both optional on every remote-server kind, and — unlike the previous "Remote Machines" panel, where the username field was required but never actually used — a supplied password is now genuinely sent as HTTP Basic Auth to the remote daemon (for SSH and Local, over the already-encrypted forwarded/loopback connection; for Direct, directly to the URL). Use **Test Connection** to verify a password is accepted before relying on it. Leaving both fields blank is fine for a daemon with no auth configured.
 
 ## tuic-remote (Beta)
 

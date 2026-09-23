@@ -276,6 +276,10 @@ Enable the HTTP API server for external tool integration:
 
 Enable HTTP/WebSocket access from other devices on your network. See [Remote Access](remote-access.md) for full setup guide.
 
+## Remote Servers Tab
+
+SSH tunnel profiles and remote-server connections, both managed through one merged editor — click **Add Connection**, pick a **Kind** (SSH Tunnel / Remote Server — SSH / Remote Server — Direct / Remote Server — Local), fill in the fields that appear, and Save. See [SSH Tunnel Management](remote-access.md#ssh-tunnel-management) and [Remote Servers](remote-access.md#remote-servers) for the full guide, including Test Connection and optional username/password auth.
+
 ## Keyboard Shortcuts (Help panel)
 
 The keybinding UI lives in the **Help panel** (Help > Keyboard Shortcuts), not the Settings panel. Browse and rebind all app actions there:

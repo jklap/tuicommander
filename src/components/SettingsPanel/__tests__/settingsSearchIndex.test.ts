@@ -14,6 +14,7 @@ const TAB_SOURCES: Record<string, string> = {
 	github: "tabs/GitHubTab.tsx",
 	services: "tabs/ServicesTab.tsx",
 	"remote-access": "tabs/RemoteAccessTab.tsx",
+	"remote-servers": "tabs/RemoteServersTab.tsx",
 	plugins: "tabs/PluginsTab.tsx",
 	"smart-prompts": "tabs/SmartPromptsTab.tsx",
 	selection: "tabs/SelectionTab.tsx",
@@ -39,6 +40,11 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	github: { dynamic: 0, orphans: 0 },
 	services: { dynamic: 0, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
+	// dynamic: 1 — ConnectionStatusBadge's `label={remoteConnectionStatusLabel(...)}`
+	// prop on each remote-connection row: a real, per-row runtime-computed
+	// status label, not a settings-form label the extractor's blunt
+	// `label=`-anywhere-in-file heuristic can tell apart from one.
+	"remote-servers": { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 3, orphans: 11 },
 	selection: { dynamic: 2, orphans: 3 },

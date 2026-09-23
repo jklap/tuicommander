@@ -80,9 +80,7 @@ pub(crate) async fn save_tunnel_profile(
     match save_tunnel_profile_impl(&state.data_dir, profile_json) {
         Ok(id) => (StatusCode::OK, Json(serde_json::json!({"id": id}))).into_response(),
         Err(SaveTunnelProfileError::Validation(e)) => err_json(StatusCode::BAD_REQUEST, &e),
-        Err(SaveTunnelProfileError::Storage(e)) => {
-            err_json(StatusCode::INTERNAL_SERVER_ERROR, &e)
-        }
+        Err(SaveTunnelProfileError::Storage(e)) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
 
@@ -552,7 +550,11 @@ mod tests {
         ProfileStore::save(&state.data_dir, &profile).unwrap();
 
         assert!(delete_tunnel_profile_impl(&state, &profile.id).is_ok());
-        assert!(ProfileStore::load_all(&state.data_dir, None).unwrap().is_empty());
+        assert!(
+            ProfileStore::load_all(&state.data_dir, None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     // ── tunnel lifecycle ────────────────────────────────────

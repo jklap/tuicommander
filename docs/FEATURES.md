@@ -2270,32 +2270,48 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Stops all supervisors and clears the tunnel map — no orphaned SSH processes after app close
 
 ### 23.12 UI
-- **TunnelsPanel** — List of tunnel profiles with status badges and start/stop controls
-- **TunnelEditorModal** — Create and edit tunnel profiles with form validation; file browse dialog for identity file; remote host pre-populated from tunnel host when adding forwards; type-aware Local/Remote forward endpoint fields; numeric input mode for port fields
-- **TunnelStatusBadge** — Color-coded status indicator (green=connected, blue=starting, orange=reconnecting, red=error, grey=stopped)
-- **Command Palette** — `toggle-tunnels` action registered for quick access
+- Tunnel profile create/edit lives in **Settings → Remote Servers**, through the merged connection editor shared with remote-server connections (see §24) — Kind "SSH Tunnel". Tunnel-specific fields: Port Forwards list, "Connect automatically on startup"
+- **TunnelsPanel** — the standalone overlay is status/control-only: list of tunnel profiles with status badges, start/stop, audit log ("Log"), and delete. No "+ New Tunnel"/per-row Edit anymore — its header has an "Edit in Settings" link instead, which closes the overlay and navigates to Settings → Remote Servers
+- **TunnelProfileList** — the list/row rendering, extracted so both the overlay and Settings render the identical component
+- **`SshConnectionFields`** (shared) — host with `~/.ssh/config` autocomplete, port, user, identity file with Browse dialog, live SSH-agent detection (including each key's fingerprint), ServerAliveInterval, ServerAliveCountMax (now has its own field), StrictHostKeyChecking. Used by both the "SSH Tunnel" and "Remote Server — SSH" kinds
+- **`PortForwardsEditor`** (shared, extracted from the old TunnelEditorModal) — add/remove, type-aware Local/Remote forward endpoint fields, numeric input mode for port fields
+- **TunnelEditorModal** — still exists, refactored to use the two shared components above, and still fully tested, but no longer opened anywhere in the live app now that Settings owns tunnel editing
+- **TunnelStatusBadge** — now a thin wrapper around a shared **ConnectionStatusBadge** presentation component (color=green/connected, blue/starting, orange/reconnecting, red/error, grey/stopped) — the same component the Remote Servers connection list uses for its own status vocabulary
+- **Command Palette** — `toggle-tunnels` action registered for quick access. No longer behind the experimental-features flag — tunnels are a fully graduated feature
 
-## 24. Remote Connection Manager
+## 24. Remote Servers
+
+Settings → **Remote Servers** (moved out of "Services & MCP", which no longer has a remote-connections section at all) hosts one merged connection editor for both SSH tunnel profiles and remote-server connections — a "Kind" dropdown with exactly four options: SSH Tunnel / Remote Server — SSH / Remote Server — Direct / Remote Server — Local. See §23.12 for the shared SSH-fields/Port-Forwards components.
 
 ### 24.1 Connection Types
 - **SSH** — Connects via SSH tunnel to a remote `tuic-remote` daemon; auto-creates port forwarding
-  - Fields: host, SSH port (default 22), SSH user, optional identity file, remote daemon port (default 9877)
+  - Fields: the shared SSH fields (host, port default 22, user, optional identity file, keepalive tuning), remote daemon port (default 9877), optional auth username/password
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
-  - Fields: URL, auth username
+  - Fields: URL, optional auth username/password
+- **Local** — Connects to another named/isolated TUICommander instance on the **same machine** (`tuic-remote --instance <id>` / `TUIC_APP_INSTANCE=<id>`)
+  - Fields: either an instance ID (port resolved by reading that instance's own on-disk config at connect time — never cached) or a manually-entered port (for an unnamed instance), never both; optional auth username/password
+  - No host/user/identity/TLS fields — loopback only
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
-- Each connection has UUID, name, transport, auth username, and enabled flag
+- Each connection has UUID, name, transport, optional auth username, and enabled flag
+- Auth username is now optional on every transport (previously required, but never actually used to authenticate anything)
+- A password, when supplied, is written to the OS keyring (`Credential::RemoteConnection`, keyed by connection ID) via `save_remote_connection_password` — never to `connections.json`
 
-### 24.3 Remote Repositories and Terminals
+### 24.3 Authentication
+- Optional username + password on every connection kind, sent as HTTP Basic Auth
+- Password storage/retrieval: `remote_connection_password_exists` / `save_remote_connection_password` / `delete_remote_connection_password` Tauri commands + HTTP routes (`/config/remote-connections/{id}/password[...]`)
+- **Test Connection** (`test_connection` command / `POST /config/remote-connections/test`) checks reachability — and, when credentials are supplied, whether they're accepted — for the in-progress form data before Save: SSH via a one-shot no-forwards connectivity check, Direct/Local via `GET <base>/health`. Reports Reachable / Auth Failed / Not Configured / Instance Not Found / Unreachable
+
+### 24.4 Remote Repositories and Terminals
 - Repos can be assigned to a remote connection; sidebar shows remote badge
 - Terminals on remote repos route WebSocket I/O through the connection's base URL
 - `transport.ts` routes `invoke()` calls based on the active connection's `connectionId`
 - `canvasTerminalTransport.ts` supports configurable `baseUrl` for remote WebSocket connections
-- Health polling for direct connections; SSH connections rely on tunnel supervisor status
+- Health polling for Direct/Local connections; SSH connections rely on tunnel supervisor status
 
-### 24.4 SSE Event Bridge
+### 24.5 SSE Event Bridge
 - `remoteEventBridge.ts` subscribes to server-sent events from remote daemons
 - Bridges remote events (repo changes, PTY output, agent status) into local stores
 - Automatic reconnection on connection loss

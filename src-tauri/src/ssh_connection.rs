@@ -131,8 +131,14 @@ mod tests {
         assert_eq!(decoded.user, params.user);
         assert_eq!(decoded.identity_file, params.identity_file);
         assert_eq!(decoded.server_alive_interval, params.server_alive_interval);
-        assert_eq!(decoded.server_alive_count_max, params.server_alive_count_max);
-        assert_eq!(decoded.strict_host_key_checking, params.strict_host_key_checking);
+        assert_eq!(
+            decoded.server_alive_count_max,
+            params.server_alive_count_max
+        );
+        assert_eq!(
+            decoded.strict_host_key_checking,
+            params.strict_host_key_checking
+        );
     }
 
     #[test]

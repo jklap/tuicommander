@@ -1884,7 +1884,7 @@ describe("transport", () => {
 		});
 	});
 
-	describe("tunnel & remote-connection command mappings (14 COMMAND_TABLE entries)", () => {
+	describe("tunnel & remote-connection command mappings (17 COMMAND_TABLE entries)", () => {
 		it("maps list_remote_connections to GET /config/remote-connections", () => {
 			const result = mapCommandToHttp("list_remote_connections", {});
 			expect(result.method).toBe("GET");
@@ -2000,6 +2000,25 @@ describe("transport", () => {
 			const result = mapCommandToHttp("list_ssh_agent_keys", {});
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/tunnels/agent-keys");
+		});
+
+		it("maps remote_connection_password_exists to GET /config/remote-connections/{id}/password/exists, URL-encoded", () => {
+			const result = mapCommandToHttp("remote_connection_password_exists", { id: "conn/weird id" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/config/remote-connections/conn%2Fweird%20id/password/exists");
+		});
+
+		it("maps save_remote_connection_password to POST /config/remote-connections/{id}/password with the password as the body", () => {
+			const result = mapCommandToHttp("save_remote_connection_password", { id: "c1", password: "hunter2" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/config/remote-connections/c1/password");
+			expect(result.body).toEqual({ password: "hunter2" });
+		});
+
+		it("maps delete_remote_connection_password to DELETE /config/remote-connections/{id}/password", () => {
+			const result = mapCommandToHttp("delete_remote_connection_password", { id: "c1" });
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/config/remote-connections/c1/password");
 		});
 	});
 
