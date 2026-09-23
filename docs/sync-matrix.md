@@ -307,6 +307,8 @@ When modifying the remote daemon binary, `run_headless`, or standalone server be
 | `src-tauri/src/lib.rs` | `run_remote()` — the daemon; `run_headless()` |
 | `src-tauri/src/lib.rs` | `spawn_daemon_background_tasks()` — every task is started or refused with a reason; the guard test is `the_daemon_decides_on_every_desktop_background_task` |
 | `src-tauri/src/mcp_http/mod.rs` | `spawn_ipc_listener()` / `spawn_maintenance_sweep()` — shared by the desktop and the daemon |
+| `src-tauri/src/remote_lifetime.rs` | Optional idle lifetime driven by SSE and WebSocket client counts; `/health.survive_secs` must stay in sync |
+| `src-tauri/src/remote_deploy/{mod,assets,service}.rs` | SSH asset resolution/cache, ephemeral launch, and systemd/launchd install lifecycle; keep Sections 22/24 and the remote-access guide aligned |
 | `docs/user-guide/remote-access.md` | `tuic-remote (Beta)` section, incl. "What the daemon runs" |
 | `docs/FEATURES.md` | Section 22 (Remote Daemon) |
 | `.github/workflows/release.yml` | Release artifact build job — publishes **both** `tuic-remote` and `tuic-bridge` per target |
@@ -343,6 +345,8 @@ When modifying remote connection config, storage, or transport routing:
 |------|----------------|
 | `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport, RemoteConnectionStore, the password/token commands |
 | `src-tauri/src/remote_runtime.rs` | The live half: status, base URL, session token, the status poll and the SSH tunnel. Every status change is dual-emitted as `remote-connection-status`. **`teardown()` is the one way a connection goes down** — poll, mirror task, mirrored rows, tunnel and token, in that order, idempotent and safe on an id nothing knows. Disconnect and delete both call it, over IPC and over HTTP alike; a second stop path is how the tunnel came to outlive the delete that removed its profile |
+| `src-tauri/src/remote_deploy/{mod,assets,service}.rs` | On-connect deployment, cached release assets, and systemd/launchd install/uninstall |
+| `src-tauri/src/remote_lifetime.rs` | Ephemeral daemon idle expiry and `/health.survive_secs` |
 | `src-tauri/src/credentials.rs` | `Credential::RemoteConnection` — the password, keyed by the connection's UUID |
 | `src/stores/remoteConnections.ts` | Frontend remote connections store — a renderer of the backend status, plus the token it holds in memory for the transport |
 | `src/transportRuntime.ts` | `withRemoteToken` — the one place a credential is put on a URL; `resolveOwningConnection` — the one place a call's machine is decided |

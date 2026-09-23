@@ -45,7 +45,8 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Json<HealthRes
         ok: true,
         uptime_secs: uptime,
         session_count,
-        protocol_version: 1,
+        protocol_version: crate::remote_runtime::REMOTE_PROTOCOL_VERSION as u32,
+        survive_secs: state.remote_survive_secs,
         socket_path,
         instance_id: crate::app_instance::instance_identity(),
     })
@@ -1272,14 +1273,22 @@ pub(super) async fn ws_stream(
         return ws
             .write_buffer_size(64 * 1024)
             .max_write_buffer_size(256 * 1024)
-            .on_upgrade(move |socket| handle_ws_grid_session(socket, id, state, compression));
+            .on_upgrade(move |socket| async move {
+                state
+                    .remote_client_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                handle_ws_grid_session(socket, id, state, compression).await;
+            });
     }
 
     // format=text and format=log both serve clean VtLogBuffer rows (no strip_ansi).
     let log_mode = format == "log" || format == "text";
     let initial_offset = query.offset;
-    ws.on_upgrade(move |socket| {
-        handle_ws_session(socket, id, state, log_mode, initial_offset, compression)
+    ws.on_upgrade(move |socket| async move {
+        state
+            .remote_client_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        handle_ws_session(socket, id, state, log_mode, initial_offset, compression).await;
     })
 }
 

@@ -660,7 +660,7 @@ pub(super) async fn delete_remote_connection(
     // the TunnelProfile's own UUID, not by the connection's, so the call could
     // only ever miss. Teardown stops it by the id the runtime recorded, and
     // takes the poll, the mirror, its rows and the session token with it.
-    crate::remote_runtime::teardown(&state, &id);
+    crate::remote_runtime::teardown_deleted(&state, &id);
     let _guard = state.connections_lock.lock().await;
     let mut connections =
         match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
@@ -796,6 +796,34 @@ pub(super) async fn delete_remote_connection_connect(
     }
     crate::remote_runtime::teardown(&state, &id);
     super::json_result(Ok::<_, String>(serde_json::json!({ "ok": true })))
+}
+
+pub(super) async fn post_remote_connection_install(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::remote_deploy::service::install_remote_daemon_shared(&state, &id).await,
+    )
+}
+
+pub(super) async fn delete_remote_connection_install(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::remote_deploy::service::uninstall_remote_daemon_shared(&state, &id).await,
+    )
 }
 
 // --- Story 066: config / themes / notes / misc stateless parity (loopback router) ---

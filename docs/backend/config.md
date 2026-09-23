@@ -130,6 +130,21 @@ externalizes Plan Tracker and Stories Ticker by seeding `plugins/plan/` and
 `.externalized-plan-stories-v1` records completion: existing packages are never
 overwritten, and removing either seeded package after migration is permanent.
 
+One runtime cache and one transient SSH socket support SSH-managed remote daemons:
+
+- `remote-bin/<version>/tuic-remote-<target>` stores a verified release asset
+  after an atomic staging download. It contains executables, never credentials.
+- `~/.ssh/tuic-%C` is the hashed OpenSSH ControlMaster socket shared by TUIC's
+  tunnel, remote-command and SCP processes. Keeping it under the user's short,
+  access-controlled SSH directory avoids macOS `Application Support` spaces and
+  keeps the expanded Unix socket path below the platform length limit. TUIC uses
+  `ControlPersist=no`: a live tunnel remains the reusable master, while a
+  one-shot command cannot leave an unmonitored master behind.
+
+Remote pairing tokens use the credential vault key
+`remote/connection/<uuid>/pairing-token`; they never live in either directory or
+in `connections.json`.
+
 ## Core Functions
 
 ```rust

@@ -104,6 +104,52 @@ pub(crate) fn sleep_script() -> String {
 /// the same reason.
 pub(crate) use crate::fs::system32_exe;
 
+/// Write a fake SSH executable to a stable path and warm it before use.
+///
+/// Fresh executable inodes can spend minutes in endpoint-security scanning on
+/// macOS. Reusing one path per behavior keeps that scan outside test deadlines.
+pub(crate) fn fake_ssh_script(name: &str, posix: &str, windows: &str) -> std::path::PathBuf {
+    const WARMUP_VAR: &str = "TUIC_FAKE_SSH_WARMUP";
+
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-ssh");
+    std::fs::create_dir_all(&dir).expect("create fake-ssh dir");
+    let (extension, desired) = if cfg!(windows) {
+        (
+            "cmd",
+            format!("@echo off\r\nif defined {WARMUP_VAR} exit /b 0\r\n{windows}\r\n"),
+        )
+    } else {
+        (
+            "sh",
+            format!("#!/bin/sh\n[ -n \"${WARMUP_VAR}\" ] && exit 0\n{posix}\n"),
+        )
+    };
+    let path = dir.join(format!("{name}.{extension}"));
+
+    if std::fs::read_to_string(&path).is_ok_and(|found| found == desired) {
+        return path;
+    }
+
+    let staging = dir.join(format!("{name}.{extension}.{}", std::process::id()));
+    std::fs::write(&staging, &desired).expect("write fake ssh script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake ssh script");
+    }
+    std::fs::rename(&staging, &path).expect("install fake ssh script");
+
+    let _ = std::process::Command::new(&path)
+        .env(WARMUP_VAR, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    path
+}
+
 /// Write `line` to stderr and exit with `code`.
 pub(crate) fn fail_with_stderr_script(line: &str, code: i32) -> String {
     if cfg!(windows) {

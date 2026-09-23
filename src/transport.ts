@@ -1822,6 +1822,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	disconnect_remote_connection: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}/connect` }),
 	},
+	install_remote_daemon: {
+		map: (_args, p) => ({ method: "POST", path: `/config/remote-connections/${p("id")}/install` }),
+	},
+	uninstall_remote_daemon: {
+		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}/install` }),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
@@ -1833,6 +1839,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_tunnel_status: { map: (args) => ({ method: "GET", path: `/tunnels/status/${args.id}` }) },
 	get_tunnel_audit: { map: (args) => ({ method: "GET", path: `/tunnels/audit/${args.id}?limit=${args.limit || 20}` }) },
 	list_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts" }) },
+	probe_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/status" }) },
 	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
 	// --- App Logger ---

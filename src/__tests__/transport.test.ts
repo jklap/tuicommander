@@ -642,6 +642,24 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps persistent remote daemon install and uninstall", () => {
+			expect(mapCommandToHttp("install_remote_daemon", { id: "c1" })).toMatchObject({
+				method: "POST",
+				path: "/config/remote-connections/c1/install",
+			});
+			expect(mapCommandToHttp("uninstall_remote_daemon", { id: "c1" })).toMatchObject({
+				method: "DELETE",
+				path: "/config/remote-connections/c1/install",
+			});
+		});
+
+		it("maps the on-demand SSH host status probe", () => {
+			expect(mapCommandToHttp("probe_ssh_config_hosts", {})).toMatchObject({
+				method: "GET",
+				path: "/tunnels/ssh-hosts/status",
+			});
+		});
+
 		it("maps detect_agents to GET /agents", () => {
 			const result = mapCommandToHttp("detect_agents", {});
 			expect(result.method).toBe("GET");
