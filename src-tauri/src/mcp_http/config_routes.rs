@@ -909,6 +909,33 @@ pub(super) async fn test_connection_http(
     Json(crate::connection_test::test_connection_impl(&request).await).into_response()
 }
 
+#[derive(serde::Deserialize)]
+pub(super) struct ProbeDirectTlsRequest {
+    url: String,
+    #[serde(default)]
+    tls_fingerprint: Option<String>,
+}
+
+/// `POST /config/remote-connections/probe-direct-tls` — what certificate a
+/// Direct `https://` URL presents (`direct_proxy::probe_direct_tls`), so the
+/// UI can show a fingerprint before the user pins it. Read-only and
+/// credential-free, but it dials a caller-supplied host, so it is gated exactly
+/// like `test_connection_http`.
+pub(super) async fn probe_direct_tls_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(request): Json<ProbeDirectTlsRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(
+        crate::direct_proxy::probe_direct_tls(&request.url, request.tls_fingerprint.as_deref())
+            .await,
+    )
+    .into_response()
+}
+
 // --- Story 066: config / themes / notes / misc stateless parity (loopback router) ---
 //
 // Mutating / action handlers carry the same `require_local_or_auth` guard as the
@@ -1676,7 +1703,10 @@ mod tests {
             ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000))),
             None,
             Json(crate::connection_test::TestConnectionRequest {
-                transport: crate::remote_connection::RemoteTransport::Direct { url: target.url() },
+                transport: crate::remote_connection::RemoteTransport::Direct {
+                    url: target.url(),
+                    tls_fingerprint: None,
+                },
                 auth_username: Some("alice".to_string()),
                 password: Some("hunter2".to_string()),
             }),
@@ -1685,6 +1715,50 @@ mod tests {
         .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
         never.assert_async().await;
+    }
+
+    /// The certificate probe dials a caller-supplied host: from a public
+    /// address without credentials it is refused before any connection.
+    #[tokio::test]
+    async fn probe_direct_tls_http_requires_auth_from_a_public_address() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("https://{}", listener.local_addr().unwrap());
+        let resp = probe_direct_tls_http(
+            ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000))),
+            None,
+            Json(ProbeDirectTlsRequest {
+                url,
+                tls_fingerprint: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            listener.accept().is_err(),
+            "a refused probe must not have dialled the target"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_direct_tls_http_answers_the_shared_classification() {
+        let resp = probe_direct_tls_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(ProbeDirectTlsRequest {
+                url: "http://127.0.0.1:1".to_string(),
+                tls_fingerprint: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(json["type"], "NoTlsNeeded");
     }
 
     /// The response is the classification only — no echo of the request's
@@ -1702,7 +1776,10 @@ mod tests {
             ConnectInfo(loopback()),
             None,
             Json(crate::connection_test::TestConnectionRequest {
-                transport: crate::remote_connection::RemoteTransport::Direct { url: target.url() },
+                transport: crate::remote_connection::RemoteTransport::Direct {
+                    url: target.url(),
+                    tls_fingerprint: None,
+                },
                 auth_username: Some("alice".to_string()),
                 password: Some("PASSWORD_SECRET_1457".to_string()),
             }),

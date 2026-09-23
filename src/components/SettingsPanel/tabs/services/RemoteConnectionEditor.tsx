@@ -146,6 +146,13 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 	const [directUrl, setDirectUrl] = createSignal(
 		existingConnection?.transport.type === "Direct" ? existingConnection.transport.url : "",
 	);
+	// Never typed here: set only by Connect's certificate confirmation. Carried
+	// through Save so editing another field does not un-pin; cleared when the
+	// URL changes (a pin belongs to the target it was captured from) or on
+	// "Forget pinned certificate" (the next Connect asks again).
+	const [directTlsFingerprint, setDirectTlsFingerprint] = createSignal<string | null>(
+		existingConnection?.transport.type === "Direct" ? (existingConnection.transport.tls_fingerprint ?? null) : null,
+	);
 	const initialLocal = existingConnection?.transport.type === "Local" ? existingConnection.transport : null;
 	const [localMode, setLocalMode] = createSignal<"instance" | "port">(initialLocal?.instance_id ? "instance" : "port");
 	const [localInstanceId, setLocalInstanceId] = createSignal(initialLocal?.instance_id ?? "");
@@ -192,7 +199,9 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			return { type: "Ssh", ssh: trimmedSsh(), remote_daemon_port: kind() === "RemoteSsh" ? remoteDaemonPort() : 0 };
 		}
 		if (kind() === "RemoteDirect") {
-			return { type: "Direct", url: directUrl().trim() };
+			// The pin is sent only when there is one, like the backend writes it.
+			const pin = directTlsFingerprint();
+			return { type: "Direct", url: directUrl().trim(), ...(pin ? { tls_fingerprint: pin } : {}) };
 		}
 		return {
 			type: "Local",
@@ -419,8 +428,20 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						<input
 							placeholder="http://192.168.1.100:9877"
 							value={directUrl()}
-							onInput={(e) => setDirectUrl(e.currentTarget.value)}
+							onInput={(e) => {
+								setDirectUrl(e.currentTarget.value);
+								// A pin belongs to the URL it was captured from.
+								setDirectTlsFingerprint(null);
+							}}
 						/>
+						<Show when={directTlsFingerprint()}>
+							<p class={s.hint}>
+								Certificate pinned: <code>{directTlsFingerprint()}</code>{" "}
+								<button type="button" class={s.textBtn} onClick={() => setDirectTlsFingerprint(null)}>
+									Forget pinned certificate
+								</button>
+							</p>
+						</Show>
 					</div>
 					<AuthFields />
 				</Show>

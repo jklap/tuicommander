@@ -130,7 +130,7 @@ describe("RemoteMachinesPanel", () => {
 			error: "Unreachable: old error",
 			retryAfterSecs: 3,
 		};
-		const view = render(() => <RemoteMachinesPanel />);
+		const view = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(view.getByText("Connecting...")).toBeTruthy();
 		expect(view.queryByText("Unreachable: old error")).toBeNull();
 		expect(view.queryByText("Retry delay: 3s")).toBeNull();
@@ -143,7 +143,7 @@ describe("RemoteMachinesPanel", () => {
 			error: "Cannot resolve mac-mint",
 			retryAfterSecs: 3,
 		};
-		const view = render(() => <RemoteMachinesPanel />);
+		const view = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(view.getByText("Cannot resolve mac-mint")).toBeTruthy();
 		expect(view.getByText("Retry delay: 3s")).toBeTruthy();
 		expect(view.queryByText("Connecting...")).toBeNull();

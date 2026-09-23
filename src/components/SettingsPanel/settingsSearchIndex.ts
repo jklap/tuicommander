@@ -940,6 +940,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-servers", section: "Remote Servers", label: "Auth password (optional)" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Name" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Kind" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Connect automatically on startup" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Remote daemon port" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Deployment" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Keep ephemeral daemon alive (minutes)" },
@@ -953,6 +954,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-servers", section: "Remote Servers", label: "ServerAliveInterval" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "ServerAliveCountMax" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "StrictHostKeyChecking" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Compress the channel (ssh -C)" },
 	{ tab: "remote-servers", section: "Remote Servers", label: "Port Forwards" },
 	// tabs/PluginsTab.tsx
 	{ tab: "plugins", section: "Plugins" },

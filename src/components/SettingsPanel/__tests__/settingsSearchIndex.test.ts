@@ -68,10 +68,11 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	mcp: { dynamic: 1, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
 	// RemoteServersTab's merged editor: the "Named instance"/"Manual port" radio
-	// labels and the "Compress the channel" / "Connect automatically on startup"
-	// toggles wrap a nested input; the connection rows' `ConnectionStatusBadge
-	// label={…}` is a runtime status, not a setting.
-	"remote-servers": { dynamic: 5, orphans: 0 },
+	// labels wrap a nested input; the connection rows' `ConnectionStatusBadge
+	// label={…}` is a runtime status, not a setting. (The "Compress the channel" /
+	// "Connect automatically on startup" toggles are indexed: their caption is a
+	// static <span> after a self-closing input.)
+	"remote-servers": { dynamic: 3, orphans: 0 },
 	// StreamDockTab: the per-key role grid's labels come from a runtime <For>.
 	streamdock: { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },

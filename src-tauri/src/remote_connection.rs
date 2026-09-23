@@ -85,6 +85,17 @@ pub(crate) enum RemoteTransport {
     },
     Direct {
         url: String,
+        /// SHA-256 fingerprint (lowercase hex) of a pinned self-signed/
+        /// untrusted certificate, set only after the user explicitly confirms
+        /// it (`direct_proxy::probe_direct_tls` → `NeedsConfirmation`). When
+        /// set, Connect talks to the daemon only through a relay that accepts
+        /// exactly this certificate (`direct_proxy::DirectProxies`). `None` for
+        /// `http://`, a CA-trusted `https://`, or a target not yet confirmed —
+        /// and then an untrusted certificate fails Connect closed. Omitted from
+        /// the file when `None`, so an unpinned connection keeps the exact shape
+        /// older builds wrote (they ignore the key when present).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tls_fingerprint: Option<String>,
     },
     /// Another named/isolated TUICommander instance running on this same
     /// machine (`tuic-remote --instance <id>`, or `TUIC_APP_INSTANCE=<id>`
@@ -112,6 +123,8 @@ enum RemoteTransportWire {
     Ssh(SshTransportWire),
     Direct {
         url: String,
+        #[serde(default)]
+        tls_fingerprint: Option<String>,
     },
     Local {
         #[serde(default)]
@@ -160,7 +173,13 @@ impl TryFrom<RemoteTransportWire> for RemoteTransport {
 
     fn try_from(wire: RemoteTransportWire) -> Result<Self, String> {
         Ok(match wire {
-            RemoteTransportWire::Direct { url } => Self::Direct { url },
+            RemoteTransportWire::Direct {
+                url,
+                tls_fingerprint,
+            } => Self::Direct {
+                url,
+                tls_fingerprint,
+            },
             RemoteTransportWire::Local { port, instance_id } => Self::Local { port, instance_id },
             RemoteTransportWire::Ssh(ssh) => {
                 let flat = ssh.ssh_host.is_some()
@@ -229,9 +248,23 @@ impl RemoteConnection {
             RemoteTransport::Ssh { ssh, .. } => {
                 ssh.validate()?;
             }
-            RemoteTransport::Direct { url } => {
+            RemoteTransport::Direct {
+                url,
+                tls_fingerprint,
+            } => {
                 if url.trim().is_empty() {
                     return Err("url must not be empty".to_string());
+                }
+                if let Some(pin) = tls_fingerprint {
+                    if crate::direct_proxy::normalize_fingerprint(pin).is_none() {
+                        return Err(
+                            "tls_fingerprint must be a SHA-256 fingerprint (64 hex digits)"
+                                .to_string(),
+                        );
+                    }
+                    if !matches!(crate::direct_proxy::https_target(url), Ok(Some(_))) {
+                        return Err("tls_fingerprint requires an https:// url".to_string());
+                    }
                 }
             }
             RemoteTransport::Local { port, instance_id } => {
@@ -267,7 +300,10 @@ impl RemoteConnection {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
-            transport: RemoteTransport::Direct { url: url.into() },
+            transport: RemoteTransport::Direct {
+                url: url.into(),
+                tls_fingerprint: None,
+            },
             auth_username: Some(auth_username.into()),
             enabled: true,
             auto_update: false,
@@ -878,7 +914,13 @@ mod tests {
         assert_eq!(decoded.auth_username.as_deref(), Some("bob"));
         assert!(decoded.enabled);
         match decoded.transport {
-            RemoteTransport::Direct { url } => assert_eq!(url, "http://office:9877"),
+            RemoteTransport::Direct {
+                url,
+                tls_fingerprint,
+            } => {
+                assert_eq!(url, "http://office:9877");
+                assert!(tls_fingerprint.is_none());
+            }
             other => panic!("expected Direct, got {other:?}"),
         }
     }
@@ -1231,6 +1273,49 @@ mod tests {
         assert!(conn.validate().is_err());
     }
 
+    fn direct_with_pin(url: &str, pin: &str) -> RemoteConnection {
+        let mut conn = RemoteConnection::new_direct("d", url, "u");
+        conn.transport = RemoteTransport::Direct {
+            url: url.to_string(),
+            tls_fingerprint: Some(pin.to_string()),
+        };
+        conn
+    }
+
+    /// A pin is only ever a SHA-256 fingerprint on an https:// URL: anything
+    /// else is refused at save, so a garbled value can never stand in for one.
+    #[test]
+    fn validate_checks_a_pinned_certificate_fingerprint() {
+        let pin = "ab".repeat(32);
+        assert!(direct_with_pin("https://box:9877", &pin).validate().is_ok());
+        assert!(
+            direct_with_pin("https://box:9877", "nope")
+                .validate()
+                .is_err()
+        );
+        assert!(direct_with_pin("http://box:9877", &pin).validate().is_err());
+    }
+
+    /// The pin is additive: an unpinned Direct transport serializes exactly as
+    /// before (older builds read it unchanged), a pinned one round-trips, and
+    /// a file without the key reads as unpinned.
+    #[test]
+    fn tls_fingerprint_is_omitted_when_unset_and_round_trips_when_set() {
+        let plain = RemoteConnection::new_direct("d", "https://box:9877", "u");
+        let json = serde_json::to_value(&plain).unwrap();
+        assert_eq!(
+            json["transport"],
+            serde_json::json!({"type": "Direct", "url": "https://box:9877"})
+        );
+        let pinned = direct_with_pin("https://box:9877", &"cd".repeat(32));
+        let back: RemoteConnection =
+            serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert!(matches!(
+            back.transport,
+            RemoteTransport::Direct { tls_fingerprint: Some(ref p), .. } if *p == "cd".repeat(32)
+        ));
+    }
+
     #[test]
     fn validate_ssh_connection_without_auth_username_is_ok() {
         let mut conn = RemoteConnection::new_ssh("server", "host.example.com", "alice");
@@ -1393,7 +1478,7 @@ mod tests {
         assert_eq!(loaded.len(), 3);
         assert_is_the_legacy_vps(&loaded[0]);
         assert!(
-            matches!(&loaded[1].transport, RemoteTransport::Direct { url } if url == "http://office:9877")
+            matches!(&loaded[1].transport, RemoteTransport::Direct { url, .. } if url == "http://office:9877")
         );
         assert_eq!(loaded[1].deploy, DeployMode::Installed);
         // Main-era entry without the newer fields still gets their defaults.
