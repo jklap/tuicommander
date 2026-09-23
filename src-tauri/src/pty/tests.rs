@@ -8434,7 +8434,11 @@ fn a_composer_that_refused_the_first_wake_still_gets_one_at_the_next_idle() {
 fn cursor_prefix_completion_preserves_background_epoch_release() {
     let state = crate::state::tests_support::make_test_app_state();
     let child_id = "child-background-cursor-completed";
-    agent_session(&state, child_id, SHELL_IDLE);
+    // The turn is running when the suggest arrives. Seeding SHELL_IDLE and
+    // relying on the output to flip it busy stopped working with ranked
+    // evidence (#744-138c): `agent_session` confirms idle at Protocol rank,
+    // and Screen-rank output must not reopen a protocol-idle turn.
+    agent_session(&state, child_id, SHELL_BUSY);
     state
         .session_maps
         .session_states
