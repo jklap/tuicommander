@@ -26,6 +26,7 @@ pub(crate) mod cli;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
+pub(crate) mod connection_test;
 pub(crate) mod content_index;
 pub(crate) mod cow;
 pub(crate) mod cpu_watchdog;
@@ -2395,6 +2396,7 @@ pub fn run() {
             remote_connection::list_remote_connections,
             remote_connection::save_remote_connection,
             remote_connection::delete_remote_connection,
+            connection_test::test_connection,
             open_secondary_window,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,

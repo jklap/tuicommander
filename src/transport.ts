@@ -2066,6 +2066,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	delete_remote_connection: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }),
 	},
+	// Test Connection (story: SSH Tunnels + Remote Servers consolidation, Phase 2).
+	// `args.request` is the whole `{ transport, auth_username, password }` shape —
+	// mirrors the Rust `test_connection(request: TestConnectionRequest)` command's
+	// single named parameter, same convention as `save_remote_connection` passing
+	// `args.connection` straight through as the body.
+	test_connection: {
+		map: (args) => ({ method: "POST", path: "/config/remote-connections/test", body: args.request }),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
