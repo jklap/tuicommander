@@ -162,6 +162,10 @@ certificate the user pinned; `direct_proxy.rs`). It is additive: absent means
 unpinned, it is written only when set (an unpinned connection keeps the exact
 older shape), older builds ignore it, and no migration is involved. A save
 rejects a value that is not 64 hex digits or that sits on an `http://` URL.
+An SSH transport may carry `start_if_not_running`, `leave_running_on_disconnect`
+(booleans) and `instance_id` (a lowercase DNS label, validated on save) for
+confirmed daemon provisioning (`ssh_provision.rs`). Same contract: additive,
+written only when set, defaulted when absent, no migration.
 
 **Nested SSH shape and its one-time migration.** An SSH connection in
 `connections.json` and every `tunnels/*.toml` profile keep their SSH settings in

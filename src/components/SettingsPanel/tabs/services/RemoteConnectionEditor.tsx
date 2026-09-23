@@ -67,6 +67,11 @@ export function prefillFromDiscoveredHost(host: DiscoveredSshHost): ConnectionPr
  * always uses accept-new (`remote_runtime::ssh_profile`), so a saved Remote
  * Server says what runs; a tunnel profile keeps what the user picked.
  */
+/** What `tuic-remote --instance` accepts: a lowercase DNS label other than "default". */
+export function isRemoteInstanceId(id: string): boolean {
+	return id !== "default" && id.length <= 63 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(id);
+}
+
 export function hostKeyFor(kind: ConnectionKind, picked: SshConnectionParams["strict_host_key_checking"]) {
 	return kind === "SshTunnel" ? picked : "AcceptNew";
 }
@@ -143,6 +148,12 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			? existingConnection.transport.remote_daemon_port
 			: DEFAULT_REMOTE_DAEMON_PORT,
 	);
+	const existingSsh = existingConnection?.transport.type === "Ssh" ? existingConnection.transport : null;
+	const [startIfNotRunning, setStartIfNotRunning] = createSignal(existingSsh?.start_if_not_running ?? false);
+	const [leaveRunningOnDisconnect, setLeaveRunningOnDisconnect] = createSignal(
+		existingSsh?.leave_running_on_disconnect ?? false,
+	);
+	const [sshInstanceId, setSshInstanceId] = createSignal(existingSsh?.instance_id ?? "");
 	const [directUrl, setDirectUrl] = createSignal(
 		existingConnection?.transport.type === "Direct" ? existingConnection.transport.url : "",
 	);
@@ -195,8 +206,21 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 	 * either caller (`test_connection_impl`'s `Ssh` arm ignores it; Save never
 	 * reads this return value for that Kind at all) — 0 is a safe placeholder. */
 	function buildTransport(): RemoteTransport {
-		if (kind() === "SshTunnel" || kind() === "RemoteSsh") {
-			return { type: "Ssh", ssh: trimmedSsh(), remote_daemon_port: kind() === "RemoteSsh" ? remoteDaemonPort() : 0 };
+		if (kind() === "SshTunnel") {
+			return { type: "Ssh", ssh: trimmedSsh(), remote_daemon_port: 0 };
+		}
+		if (kind() === "RemoteSsh") {
+			// The provisioning fields are sent only when set, the way the backend
+			// writes them, so an unused feature leaves the saved shape unchanged.
+			const instanceId = sshInstanceId().trim();
+			return {
+				type: "Ssh",
+				ssh: trimmedSsh(),
+				remote_daemon_port: remoteDaemonPort(),
+				...(startIfNotRunning() ? { start_if_not_running: true } : {}),
+				...(startIfNotRunning() && leaveRunningOnDisconnect() ? { leave_running_on_disconnect: true } : {}),
+				...(instanceId ? { instance_id: instanceId } : {}),
+			};
 		}
 		if (kind() === "RemoteDirect") {
 			// The pin is sent only when there is one, like the backend writes it.
@@ -216,6 +240,12 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 		if (kind() === "SshTunnel" || kind() === "RemoteSsh") {
 			const ssh_ = trimmedSsh();
 			if (!ssh_.host || !ssh_.user) return "Host and user are required";
+		}
+		if (kind() === "RemoteSsh") {
+			const instanceId = sshInstanceId().trim();
+			if (instanceId && !isRemoteInstanceId(instanceId)) {
+				return 'Instance ID must be a lowercase DNS label (letters, digits, hyphens; not "default")';
+			}
 		}
 		if (kind() === "RemoteDirect" && !directUrl().trim()) return "URL is required";
 		if (kind() === "RemoteLocal" && localMode() === "instance" && !localInstanceId().trim()) {
@@ -419,6 +449,44 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 							onInput={(e) => setSurviveMinutes(Math.max(1, Number.parseInt(e.currentTarget.value, 10) || 1))}
 						/>
 					</div>
+					<div class={s.group}>
+						<label class={s.label}>Instance ID (optional)</label>
+						<input
+							placeholder="e.g. dev-box"
+							value={sshInstanceId()}
+							onInput={(e) => setSshInstanceId(e.currentTarget.value)}
+						/>
+						<p class={s.hint} style={{ margin: "4px 0 0" }}>
+							Passed as <code>--instance</code> when this app starts the remote daemon or sets its password. It is never
+							used to discover a port.
+						</p>
+					</div>
+					{/* Text before the checkbox (`order: -1` puts the box first), as the
+					    auto-update toggle does, so the search index can read the label. */}
+					<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+						Offer to start the remote daemon if it is not running
+						<input
+							type="checkbox"
+							style={{ order: -1 }}
+							checked={startIfNotRunning()}
+							onChange={(e) => setStartIfNotRunning(e.currentTarget.checked)}
+						/>
+					</label>
+					<Show when={startIfNotRunning()}>
+						<label style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+							Leave it running on disconnect
+							<input
+								type="checkbox"
+								style={{ order: -1 }}
+								checked={leaveRunningOnDisconnect()}
+								onChange={(e) => setLeaveRunningOnDisconnect(e.currentTarget.checked)}
+							/>
+						</label>
+					</Show>
+					<p class={s.hint} style={{ margin: "0" }}>
+						With "Never deploy", a Connect that finds no daemon offers to start one; you see every remote command before
+						anything runs.
+					</p>
 					<AuthFields />
 				</Show>
 
