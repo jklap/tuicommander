@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { markTccAlertShown, tccDeniedPaths, useRepository } from "../../hooks/useRepository";
+import { appLogger } from "../../stores/appLogger";
 import { mockInvoke } from "../mocks/tauri";
 
 describe("useRepository", () => {
@@ -667,6 +668,37 @@ describe("useRepository", () => {
 			mockInvoke.mockRejectedValueOnce("Operation not permitted");
 			await repo.listLocalBranches("/repos/tcc-denied-non-error");
 			expect(tccDeniedPaths()).toContain("/repos/tcc-denied-non-error");
+		});
+
+		it("logs a TCC denial once per path, then suppresses repeats on every subsequent retry", async () => {
+			// The refresh loop retries listLocalBranches on every debounced
+			// repo-changed event, so a permanently-denied repo must not spam the
+			// log forever — only the first occurrence should be logged.
+			const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+			try {
+				mockInvoke.mockRejectedValueOnce(new Error("Operation not permitted"));
+				await repo.listLocalBranches("/repos/tcc-denied-log-spam");
+				mockInvoke.mockRejectedValueOnce(new Error("Operation not permitted"));
+				await repo.listLocalBranches("/repos/tcc-denied-log-spam");
+				mockInvoke.mockRejectedValueOnce(new Error("Operation not permitted"));
+				await repo.listLocalBranches("/repos/tcc-denied-log-spam");
+				expect(errorSpy).toHaveBeenCalledTimes(1);
+			} finally {
+				errorSpy.mockRestore();
+			}
+		});
+
+		it("does not suppress repeated logging for a non-TCC failure on the same path", async () => {
+			const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+			try {
+				mockInvoke.mockRejectedValueOnce(new Error("fatal: not a git repository"));
+				await repo.listLocalBranches("/repos/tcc-denied-unrelated-repeat");
+				mockInvoke.mockRejectedValueOnce(new Error("fatal: not a git repository"));
+				await repo.listLocalBranches("/repos/tcc-denied-unrelated-repeat");
+				expect(errorSpy).toHaveBeenCalledTimes(2);
+			} finally {
+				errorSpy.mockRestore();
+			}
 		});
 
 		it("detects the same denial through getRepoStructure() and getRepoDiffStats()", async () => {

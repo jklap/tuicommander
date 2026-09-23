@@ -21,12 +21,32 @@ export function markTccAlertShown(): void {
 	tccAlertShown = true;
 }
 
-/** Check if an error is a macOS TCC permission denial and track it. */
-function checkTccError(err: unknown, repoPath: string): void {
+/** Check if an error is a macOS TCC permission denial and track it. Returns
+ *  whether it was one, so callers can dedupe their own repeated logging —
+ *  the underlying git command is retried on every debounced repo-changed
+ *  event, so a permanently-denied path would otherwise spam the log forever. */
+function checkTccError(err: unknown, repoPath: string): boolean {
 	const msg = err instanceof Error ? err.message : String(err);
-	if (msg.includes("Operation not permitted") && !tccAlertShown) {
+	const isTccError = msg.includes("Operation not permitted");
+	if (isTccError && !tccAlertShown) {
 		setTccDeniedPaths((prev) => (prev.includes(repoPath) ? prev : [...prev, repoPath]));
 	}
+	return isTccError;
+}
+
+/** `${label}:${repoPath}` keys already logged once for a TCC denial — see `checkTccError`. */
+const loggedTccFailures = new Set<string>();
+
+/** Log at most once per (label, repoPath) for a TCC denial; always logs otherwise. */
+function logUnlessRepeatTccFailure(isTccError: boolean, label: string, repoPath: string, log: () => void): void {
+	if (!isTccError) {
+		log();
+		return;
+	}
+	const key = `${label}:${repoPath}`;
+	if (loggedTccFailures.has(key)) return;
+	loggedTccFailures.add(key);
+	log();
 }
 
 /** Changed file information for diff browser */
@@ -402,8 +422,10 @@ export function useRepository() {
 		try {
 			return await invoke("get_repo_structure", { repoPath });
 		} catch (err) {
-			checkTccError(err, repoPath);
-			appLogger.warn("git", `Failed to get repo structure for ${repoPath}`, err);
+			const isTccError = checkTccError(err, repoPath);
+			logUnlessRepeatTccFailure(isTccError, "get_repo_structure", repoPath, () =>
+				appLogger.warn("git", `Failed to get repo structure for ${repoPath}`, err),
+			);
 			return { worktree_paths: {}, merged_branches: [], in_progress_ops: [] };
 		}
 	}
@@ -426,8 +448,10 @@ export function useRepository() {
 		try {
 			return await invoke("get_repo_diff_stats", { repoPath });
 		} catch (err) {
-			checkTccError(err, repoPath);
-			appLogger.warn("git", `Failed to get repo diff stats for ${repoPath}`, err);
+			const isTccError = checkTccError(err, repoPath);
+			logUnlessRepeatTccFailure(isTccError, "get_repo_diff_stats", repoPath, () =>
+				appLogger.warn("git", `Failed to get repo diff stats for ${repoPath}`, err),
+			);
 			return { diff_stats: {}, last_commit_ts: {}, workspace_statuses: {} };
 		}
 	}
@@ -498,8 +522,10 @@ export function useRepository() {
 		try {
 			return await invoke<string[]>("list_local_branches", { repoPath });
 		} catch (err) {
-			checkTccError(err, repoPath);
-			appLogger.error("git", "Failed to list local branches", err);
+			const isTccError = checkTccError(err, repoPath);
+			logUnlessRepeatTccFailure(isTccError, "list_local_branches", repoPath, () =>
+				appLogger.error("git", `Failed to list local branches for ${repoPath}`, err),
+			);
 			return [];
 		}
 	}
