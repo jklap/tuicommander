@@ -11,17 +11,17 @@ function makeProfile(overrides: Partial<TunnelProfile> = {}): TunnelProfile {
 	return {
 		id: "p1",
 		name: "dev tunnel",
-		host: "example.test",
-		port: 22,
-		user: "boss",
-		identity_file: null,
-		forwards: [],
-		options: {
+		ssh: {
+			host: "example.test",
+			port: 22,
+			user: "boss",
+			identity_file: null,
 			server_alive_interval: 15,
 			server_alive_count_max: 3,
 			strict_host_key_checking: "AcceptNew",
 			compression: true,
 		},
+		forwards: [],
 		auto_connect: false,
 		...overrides,
 	};

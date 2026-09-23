@@ -3,7 +3,7 @@ import { invoke } from "../../invoke";
 import { settingOptions } from "../../services/settingsCatalogue";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
-import type { ForwardSpec, ProfileOptions, TunnelProfile } from "../../stores/tunnels";
+import type { ForwardSpec, SshConnectionParams, TunnelProfile } from "../../stores/tunnels";
 import { tunnelsStore } from "../../stores/tunnels";
 import { openDialog as openFileDialog } from "../../utils/nativeDialog";
 import s from "../SettingsPanel/Settings.module.css";
@@ -28,7 +28,14 @@ interface TunnelEditorModalProps {
 	onClose: () => void;
 }
 
-function defaultOptions(): ProfileOptions {
+/** Keepalive/host-key-checking/compression fields of `SshConnectionParams`,
+ * edited as one unit in this editor's "Options" section below. */
+type SshKeepaliveOptions = Pick<
+	SshConnectionParams,
+	"server_alive_interval" | "server_alive_count_max" | "strict_host_key_checking" | "compression"
+>;
+
+function defaultOptions(): SshKeepaliveOptions {
 	return {
 		server_alive_interval: 15,
 		server_alive_count_max: 3,
@@ -93,13 +100,22 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 	registerModal(props.onClose);
 
 	const [name, setName] = createSignal(props.profile?.name ?? "");
-	const [host, setHost] = createSignal(props.profile?.host ?? "");
-	const [port, setPort] = createSignal(props.profile?.port ?? 22);
-	const [user, setUser] = createSignal(props.profile?.user ?? "");
-	const [identityFile, setIdentityFile] = createSignal(props.profile?.identity_file ?? "");
+	const [host, setHost] = createSignal(props.profile?.ssh.host ?? "");
+	const [port, setPort] = createSignal(props.profile?.ssh.port ?? 22);
+	const [user, setUser] = createSignal(props.profile?.ssh.user ?? "");
+	const [identityFile, setIdentityFile] = createSignal(props.profile?.ssh.identity_file ?? "");
 	const [forwards, setForwards] = createSignal<ForwardSpec[]>(props.profile?.forwards ?? []);
 	const [autoConnect, setAutoConnect] = createSignal(props.profile?.auto_connect ?? false);
-	const [options, setOptions] = createSignal<ProfileOptions>(props.profile?.options ?? defaultOptions());
+	const [options, setOptions] = createSignal<SshKeepaliveOptions>(
+		props.profile
+			? {
+					server_alive_interval: props.profile.ssh.server_alive_interval,
+					server_alive_count_max: props.profile.ssh.server_alive_count_max,
+					strict_host_key_checking: props.profile.ssh.strict_host_key_checking,
+					compression: props.profile.ssh.compression,
+				}
+			: defaultOptions(),
+	);
 	const [saving, setSaving] = createSignal(false);
 	const [error, setError] = createSignal("");
 	const [sshHosts, setSshHosts] = createSignal<string[]>([]);
@@ -153,12 +169,14 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 		try {
 			const data = {
 				name: trimmedName,
-				host: trimmedHost,
-				port: port(),
-				user: trimmedUser,
-				identity_file: identityFile().trim() || null,
+				ssh: {
+					host: trimmedHost,
+					port: port(),
+					user: trimmedUser,
+					identity_file: identityFile().trim() || null,
+					...options(),
+				},
 				forwards: forwards().map(normalizeForwardForType),
-				options: options(),
 				auto_connect: autoConnect(),
 			};
 
@@ -207,7 +225,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						<div class={`${s.group} ${layout.field}`} style={{ flex: "1" }}>
 							<label class={s.label}>Host</label>
 							<Input
-								data-setting-id="tunnels.profiles.{id}.host"
+								data-setting-id="tunnels.profiles.{id}.ssh.host"
 								value={host()}
 								onInput={(e) => setHost(e.currentTarget.value)}
 								list="ssh-hosts-list"
@@ -219,7 +237,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						<div class={`${s.group} ${layout.field}`} style={{ width: "80px" }}>
 							<label class={s.label}>Port</label>
 							<Input
-								data-setting-id="tunnels.profiles.{id}.port"
+								data-setting-id="tunnels.profiles.{id}.ssh.port"
 								type="number"
 								value={port()}
 								onInput={(e) => setPort(parsePort(e.currentTarget.value, 22))}
@@ -230,7 +248,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 					<div class={`${s.group} ${layout.field}`}>
 						<label class={s.label}>User</label>
 						<Input
-							data-setting-id="tunnels.profiles.{id}.user"
+							data-setting-id="tunnels.profiles.{id}.ssh.user"
 							value={user()}
 							onInput={(e) => setUser(e.currentTarget.value)}
 						/>
@@ -240,7 +258,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						<label class={s.label}>Identity / Authentication</label>
 						<div style={{ display: "flex", gap: "6px" }}>
 							<Input
-								data-setting-id="tunnels.profiles.{id}.identity_file"
+								data-setting-id="tunnels.profiles.{id}.ssh.identity_file"
 								style={{ flex: "1" }}
 								value={identityFile()}
 								onInput={(e) => setIdentityFile(e.currentTarget.value)}
@@ -395,7 +413,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						<div class={`${s.group} ${layout.field}`} style={{ flex: "1" }}>
 							<label class={s.label}>ServerAliveInterval</label>
 							<Input
-								data-setting-id="tunnels.profiles.{id}.options.server_alive_interval"
+								data-setting-id="tunnels.profiles.{id}.ssh.server_alive_interval"
 								type="number"
 								value={options().server_alive_interval}
 								onInput={(e) =>
@@ -409,7 +427,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						<div class={`${s.group} ${layout.field}`} style={{ width: "160px" }}>
 							<label class={s.label}>StrictHostKeyChecking</label>
 							<Select
-								data-setting-id="tunnels.profiles.{id}.options.strict_host_key_checking"
+								data-setting-id="tunnels.profiles.{id}.ssh.strict_host_key_checking"
 								value={options().strict_host_key_checking}
 								onChange={(e) =>
 									setOptions((o) => ({
@@ -419,7 +437,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 								}
 							>
 								<For
-									each={settingOptions("tunnels.profiles.{id}.options.strict_host_key_checking", {
+									each={settingOptions("tunnels.profiles.{id}.ssh.strict_host_key_checking", {
 										AcceptNew: "AcceptNew",
 										Yes: "Yes",
 									})}
@@ -432,7 +450,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 
 					<label class={s.toggle}>
 						<input
-							data-setting-id="tunnels.profiles.{id}.options.compression"
+							data-setting-id="tunnels.profiles.{id}.ssh.compression"
 							type="checkbox"
 							checked={options().compression}
 							onChange={(e) => setOptions((o) => ({ ...o, compression: e.currentTarget.checked }))}

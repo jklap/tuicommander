@@ -5718,3 +5718,7 @@ copies up to four ignored directories at once, reports progress, and gives
   rejected attempt, or `decide_now` disagrees with the displayed `shell_state` — either would
   confirm the feature is actually useful for real troubleshooting, not just self-consistent in
   tests.
+
+## Nested SSH model migration (wip afc10a2c9 replay) — Rust restart required
+
+- [ ] On Boss's next planned backend restart, check `<config_dir>/connections.json` and `<config_dir>/tunnels/*.toml`: each SSH entry now has a nested `ssh` block, and a `*.pre-nested-ssh-<timestamp>.bak` beside each rewritten file holds the original bytes. Then Connect an existing SSH remote machine and start an existing tunnel — both must behave exactly as before (same host, port, identity, compression). A second restart must create no new `.bak`. Rust does not hot-reload; this lane did not restart the live app.

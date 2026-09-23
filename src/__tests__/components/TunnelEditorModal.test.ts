@@ -66,12 +66,17 @@ describe("TunnelEditorModal forward row", () => {
 		const profile: TunnelProfile = {
 			id: "p1",
 			name: "db",
-			host: "bastion",
-			port: 22,
-			user: "me",
-			identity_file: null,
+			ssh: {
+				host: "bastion",
+				port: 22,
+				user: "me",
+				identity_file: null,
+				server_alive_interval: 15,
+				server_alive_count_max: 3,
+				strict_host_key_checking: "Yes",
+				compression: true,
+			},
 			forwards: [{ type: "Local", bind_port: 5432, remote_host: "db.internal", remote_port: 5432 }],
-			options: {} as TunnelProfile["options"],
 			auto_connect: false,
 		};
 		const { container } = render(() => createComponent(TunnelEditorModal, { profile, onClose: () => {} }));

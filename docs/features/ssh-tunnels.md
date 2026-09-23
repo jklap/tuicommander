@@ -43,11 +43,17 @@ Profiles are TOML files with this structure:
 ```toml
 id = "550e8400-e29b-41d4-a716-446655440000"
 name = "prod-db-tunnel"
+auto_connect = true
+
+[ssh]
 host = "bastion.example.com"
 port = 2222
 user = "deploy"
 identity_file = "/home/deploy/.ssh/id_ed25519"
-auto_connect = true
+server_alive_interval = 15
+server_alive_count_max = 3
+strict_host_key_checking = "Yes"
+compression = true
 
 [[forwards]]
 type = "Local"
@@ -60,12 +66,15 @@ type = "Remote"
 bind_port = 9090
 local_host = "127.0.0.1"
 local_port = 9090
-
-[options]
-server_alive_interval = 15
-server_alive_count_max = 3
-strict_host_key_checking = "Yes"
 ```
+
+`[ssh]` is `SshConnectionParams` (`src-tauri/src/ssh_connection.rs`), the same
+struct a remote connection's SSH transport carries. Profiles written by older
+builds kept `host`/`port`/`user`/`identity_file` at the top level and the rest in
+`[options]`; they still load, and global profiles are rewritten to `[ssh]` once at
+startup with the original kept as `<id>.toml.pre-nested-ssh-<UTC>.bak`
+(per-repo profiles are read in either shape but not rewritten). See
+`docs/backend/config.md`.
 
 ### Storage Scopes
 
@@ -192,7 +201,8 @@ When creating an SSH remote connection (`RemoteConnection` with `RemoteTransport
 
 | Module | Responsibility |
 |--------|---------------|
-| `tunnels/profile.rs` | Data model: TunnelProfile, ForwardSpec, ProfileOptions |
+| `tunnels/profile.rs` | Data model: TunnelProfile, ForwardSpec; legacy flat-shape reader + `migrate_legacy_toml` |
+| `ssh_connection.rs` | `SshConnectionParams` (shared with remote connections), boot-time shape migration |
 | `tunnels/command.rs` | Build SSH command-line arguments from a profile |
 | `tunnels/classifier.rs` | Classify SSH exit reasons from stderr/exit code |
 | `tunnels/agent.rs` | Discover SSH_AUTH_SOCK for agent forwarding |

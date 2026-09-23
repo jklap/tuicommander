@@ -185,8 +185,8 @@ describe("visual review layout regressions", () => {
 	it("catches tunnel sibling fields receiving unequal top margins", () => {
 		css("src/components/SettingsPanel/Settings.module.css", "src/components/TunnelsPanel/TunnelEditorModal.module.css");
 		const { container } = render(() => <TunnelEditorModal onClose={noop} />);
-		const host = container.querySelector('[data-setting-id="tunnels.profiles.{id}.host"]')!;
-		const port = container.querySelector('[data-setting-id="tunnels.profiles.{id}.port"]')!;
+		const host = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.host"]')!;
+		const port = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.port"]')!;
 		const top = (element: Element) => getComputedStyle(element.parentElement!).marginTop || "0px";
 		expect(top(port)).toBe(top(host));
 	});

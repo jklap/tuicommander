@@ -172,7 +172,7 @@ async fn remote_edit_preserves_credential_reference() {
                 value: json!("renamed"),
             },
             Edit::Set {
-                path: format!("/connections/{id}/transport/ssh_port"),
+                path: format!("/connections/{id}/transport/ssh/port"),
                 value: json!(2222),
             },
         ],
@@ -244,7 +244,7 @@ async fn adapter_preserves_other_fields() {
     let disk = connections_on_disk(&f);
     assert_eq!(disk[0]["id"], json!(a_id));
     assert_eq!(disk[0]["name"], json!("a"));
-    assert_eq!(disk[0]["transport"]["ssh_host"], json!("host.example"));
+    assert_eq!(disk[0]["transport"]["ssh"]["host"], json!("host.example"));
     assert_eq!(disk[1]["name"], json!("b2"));
     assert_eq!(disk[1]["auth_username"], json!("alice"));
     assert_eq!(
@@ -323,7 +323,7 @@ async fn adapter_secret_fields_presence_only() {
             &f,
             "connections",
             snapshot.revision.clone(),
-            &format!("/connections/{id}/transport/ssh_port"),
+            &format!("/connections/{id}/transport/ssh/port"),
             json!(CANARY),
         )
         .await,
@@ -379,11 +379,11 @@ async fn patch_persists_and_reads_back() {
     // Tunnel profile: edit lands in its own TOML file and reads back.
     let profile = TunnelProfile::new("tun", "t.example", "bob");
     ProfileStore::save(f.dir.path(), &profile).unwrap();
-    let probe = format!("/profiles/{}/port", profile.id);
+    let probe = format!("/profiles/{}/ssh/port", profile.id);
     let rev = revision(&f, "tunnels", &probe).await;
     set(&f, "tunnels", rev, &probe, json!(2200)).await.unwrap();
     let saved = ProfileStore::load_all(f.dir.path(), None).unwrap();
-    assert_eq!(saved[0].port, 2200);
+    assert_eq!(saved[0].ssh.port, 2200);
     assert_eq!(
         get(&f, "tunnels", &[&probe]).await.unwrap().values[&probe].stored,
         json!(2200)
@@ -408,7 +408,7 @@ async fn invalid_records_are_rejected_before_any_write() {
         .await
         .unwrap_err();
     assert_eq!(error.code, "out_of_range");
-    let port = format!("/profiles/{}/port", profile.id);
+    let port = format!("/profiles/{}/ssh/port", profile.id);
     let rev = revision(&f, "tunnels", &port).await;
     let error = set(&f, "tunnels", rev, &port, json!(0)).await.unwrap_err();
     assert_eq!(error.code, "out_of_range");
@@ -417,7 +417,9 @@ async fn invalid_records_are_rejected_before_any_write() {
         before_connections
     );
     assert_eq!(
-        ProfileStore::load_all(f.dir.path(), None).unwrap()[0].port,
+        ProfileStore::load_all(f.dir.path(), None).unwrap()[0]
+            .ssh
+            .port,
         22
     );
 }
@@ -694,7 +696,7 @@ async fn tunnel_forwards_patch_replaces_atomic_list_and_reads_back() {
         replacement
     );
     assert_eq!(saved[0].name, profile.name);
-    assert_eq!(saved[0].host, profile.host);
+    assert_eq!(saved[0].ssh.host, profile.ssh.host);
     let proposal = f
         .registry
         .execute(Request::Set {

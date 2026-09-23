@@ -24,7 +24,11 @@ pub(super) fn requires_confirmation(fields: &[&Field], latest: &Value, next: &Va
             .any(|prefix| path.starts_with(prefix)),
             (
                 "tunnels",
-                "/profiles/{id}/port" | "/profiles/{id}/auto_connect" | "/profiles/{id}/forwards",
+                // `ssh/port`: the tunnel's SSH port, nested under the shared
+                // `SshConnectionParams` since the SSH consolidation (was `/port`).
+                "/profiles/{id}/ssh/port"
+                | "/profiles/{id}/auto_connect"
+                | "/profiles/{id}/forwards",
             ) => true,
             (
                 "upstreams",
