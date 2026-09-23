@@ -3999,9 +3999,34 @@ mod tests {
         let worktree_path = body["worktree_path"].as_str().expect("worktree_path");
 
         let warmed = std::path::Path::new(worktree_path).join("node_modules/pkg.json");
+        // Poll the warm STATUS to a terminal state, not just the file: the file lands
+        // on disk (inside the background copy task, via a `tokio::task::spawn_blocking`
+        // subprocess) a moment BEFORE `run_worktree_warm` gets to insert `Completed` into
+        // `worktree_warm_status` — both happen off the back of the same await chain, but
+        // through separate scheduling hops (JoinSet -> on_progress -> function return ->
+        // status insert). Asserting on the status immediately after only the file appears
+        // races that gap and was observed to read back a stale `Running { copied: 0, total: 1
+        // }` even though the copy had already succeeded — see AGENTS.md's "Which timing
+        // assertions are load-bearing" for why the fix is to wait on the thing being
+        // asserted on, not a side channel that can outrun it.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while std::time::Instant::now() < deadline && !warmed.exists() {
+        let mut actual_status = crate::worktree::get_worktree_warm_status(
+            &state,
+            repo.path().to_string_lossy().as_ref(),
+            "warm-test-branch",
+        );
+        while std::time::Instant::now() < deadline
+            && !matches!(
+                actual_status,
+                Some(crate::state::WorktreeWarmStatus::Completed { .. })
+            )
+        {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            actual_status = crate::worktree::get_worktree_warm_status(
+                &state,
+                repo.path().to_string_lossy().as_ref(),
+                "warm-test-branch",
+            );
         }
         assert!(
             warmed.exists(),
@@ -4010,14 +4035,10 @@ mod tests {
         );
         assert!(
             matches!(
-                crate::worktree::get_worktree_warm_status(
-                    &state,
-                    repo.path().to_string_lossy().as_ref(),
-                    "warm-test-branch",
-                ),
+                actual_status,
                 Some(crate::state::WorktreeWarmStatus::Completed { warmed, .. }) if warmed > 0
             ),
-            "warm status should report a completed, non-zero warm for this endpoint too"
+            "warm status should report a completed, non-zero warm for this endpoint too: {actual_status:?}"
         );
     }
 
