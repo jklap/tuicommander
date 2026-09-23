@@ -547,15 +547,13 @@ async fn stream_ws(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     let (frames_tx, frames_rx) = tokio::sync::mpsc::unbounded_channel();
-    let subscribed = acp_commands::stream(
-        &state,
-        connection_id,
-        query.after.unwrap_or(0),
-        move |frame| frames_tx.send(frame).is_ok(),
-    );
-    if let Err(error) = subscribed {
-        return failed(error);
-    }
+    let events = match state.acp.subscribe(connection_id, query.after.unwrap_or(0)) {
+        Ok(events) => events,
+        Err(error) => return failed(error),
+    };
+    tokio::spawn(acp_commands::forward(events, move |frame| {
+        frames_tx.send(frame).is_ok()
+    }));
     ws.on_upgrade(move |socket| pump(socket, frames_rx))
 }
 

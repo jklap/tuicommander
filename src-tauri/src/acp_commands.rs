@@ -21,10 +21,10 @@ use tauri::State;
 use crate::AppState;
 use crate::acp::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpClientError, AcpConnectRequest, AcpConnectionId,
-    AcpConnectionSettlement, AcpConnectionSnapshot, AcpDetachKind, AcpHostRequestId,
-    AcpInteractionSettlement, AcpPendingInteraction, AcpReconnectRequest, AcpSessionAuthority,
-    AcpStreamFrame, AcpTurnId, EgoAcpConfig, EgoCompactRequest, EgoCompactResponse, EgoHoldRequest,
-    EgoHoldResponse,
+    AcpConnectionSettlement, AcpConnectionSnapshot, AcpDetachKind, AcpEventStream,
+    AcpHostRequestId, AcpInteractionSettlement, AcpPendingInteraction, AcpReconnectRequest,
+    AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoAcpConfig, EgoCompactRequest,
+    EgoCompactResponse, EgoHoldRequest, EgoHoldResponse,
 };
 
 /// The one executable this host may launch for ACP, as configured right now.
@@ -71,33 +71,41 @@ pub(crate) async fn reconnect(
         .await
 }
 
-/// Read one connection's events from `after_sequence` onwards, as frames.
+/// Forward one connection's events as frames until the stream ends.
 ///
 /// The frames are what both transports carry: the desktop Channel and the
 /// browser WebSocket send the same JSON, so a host written against one is
 /// written against the other. A gap is a frame rather than a dropped
 /// connection, because the subscriber has to learn that it missed something.
-pub(crate) fn stream(
-    state: &AppState,
-    connection_id: AcpConnectionId,
-    after_sequence: u64,
+///
+/// Returned as a future rather than spawned here, because the two transports
+/// run on different threads: the WebSocket handler is already inside the axum
+/// runtime, while a sync Tauri command runs on the main thread, where
+/// `tokio::spawn` panics and takes every PTY session down with the app.
+pub(crate) async fn forward(
+    mut events: AcpEventStream,
     mut send: impl FnMut(AcpStreamFrame) -> bool + Send + 'static,
-) -> Result<(), AcpClientError> {
-    let mut events = state.acp.subscribe(connection_id, after_sequence)?;
-    tokio::spawn(async move {
-        while let Some(event) = events.recv().await {
-            let frame = match event {
-                Ok(envelope) => AcpStreamFrame::Event(Box::new(envelope)),
-                Err(gap) => AcpStreamFrame::Gap(gap),
-            };
-            let fatal = matches!(frame, AcpStreamFrame::Gap(_));
-            if !send(frame) || fatal {
-                return;
-            }
+) {
+    while let Some(event) = events.recv().await {
+        let frame = match event {
+            Ok(envelope) => AcpStreamFrame::Event(Box::new(envelope)),
+            Err(gap) => AcpStreamFrame::Gap(gap),
+        };
+        let fatal = matches!(frame, AcpStreamFrame::Gap(_));
+        if !send(frame) || fatal {
+            return;
         }
-        send(AcpStreamFrame::End);
-    });
-    Ok(())
+    }
+    send(AcpStreamFrame::End);
+}
+
+/// Forward frames from the Tauri runtime, which any thread can reach.
+#[cfg(feature = "desktop")]
+fn forward_detached(
+    events: AcpEventStream,
+    send: impl FnMut(AcpStreamFrame) -> bool + Send + 'static,
+) {
+    tauri::async_runtime::spawn(forward(events, send));
 }
 
 // ---------------------------------------------------------------------------
@@ -163,9 +171,9 @@ pub(crate) fn acp_subscribe(
     after_sequence: u64,
     channel: tauri::ipc::Channel<AcpStreamFrame>,
 ) -> Result<(), AcpClientError> {
-    stream(&state, connection_id, after_sequence, move |frame| {
-        channel.send(frame).is_ok()
-    })
+    let events = state.acp.subscribe(connection_id, after_sequence)?;
+    forward_detached(events, move |frame| channel.send(frame).is_ok());
+    Ok(())
 }
 
 #[cfg(feature = "desktop")]
@@ -410,4 +418,48 @@ pub(crate) async fn acp_one_shot_prompt(
     prompt: String,
 ) -> Result<crate::acp::oneshot::EgoTurn, AcpClientError> {
     crate::acp::oneshot::run_prompt(&state, root, prompt).await
+}
+
+#[cfg(all(test, feature = "desktop"))]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use tokio::sync::broadcast;
+
+    use super::*;
+    use crate::acp::{AcpClientEvent, AcpEventJournal};
+
+    /// `acp_subscribe` is a sync command, so Tauri runs it on the main thread,
+    /// which has no Tokio runtime. A plain `#[test]` is that thread: spawning
+    /// there with `tokio::spawn` panicked with `TryCurrentError` and aborted
+    /// the whole app the moment the AI Chat panel opened.
+    #[test]
+    fn a_subscription_forwards_from_a_thread_without_a_tokio_runtime() {
+        assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "the test must run where the main thread runs: outside any runtime"
+        );
+        let (notices, _) = broadcast::channel(4);
+        let journal = AcpEventJournal::new(AcpConnectionId::new(), 1, notices);
+        journal.append(None, None, AcpClientEvent::TurnStarted);
+        let events = journal.subscribe(0).expect("subscribe");
+        drop(journal);
+
+        let (frames_tx, frames_rx) = mpsc::channel();
+        forward_detached(events, move |frame| frames_tx.send(frame).is_ok());
+
+        let bound = Duration::from_secs(10);
+        let first = frames_rx.recv_timeout(bound).expect("the backlog event");
+        assert!(
+            matches!(&first, AcpStreamFrame::Event(envelope)
+                if matches!(envelope.event, AcpClientEvent::TurnStarted)),
+            "expected the retained event first, got {first:?}"
+        );
+        let last = frames_rx.recv_timeout(bound).expect("the end frame");
+        assert!(
+            matches!(last, AcpStreamFrame::End),
+            "a closed journal ends the stream, got {last:?}"
+        );
+    }
 }
