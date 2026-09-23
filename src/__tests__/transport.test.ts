@@ -1884,6 +1884,113 @@ describe("transport", () => {
 		});
 	});
 
+	describe("tunnel & remote-connection command mappings (13 COMMAND_TABLE entries)", () => {
+		it("maps list_remote_connections to GET /config/remote-connections", () => {
+			const result = mapCommandToHttp("list_remote_connections", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/config/remote-connections");
+		});
+
+		it("maps save_remote_connection to PUT /config/remote-connections with the connection as the body", () => {
+			const connection = {
+				id: "c1",
+				name: "dev",
+				transport: { type: "Direct", url: "http://h:9876" },
+				auth_username: "",
+				enabled: true,
+			};
+			const result = mapCommandToHttp("save_remote_connection", { connection });
+			expect(result.method).toBe("PUT");
+			expect(result.path).toBe("/config/remote-connections");
+			expect(result.body).toEqual(connection);
+		});
+
+		it("maps delete_remote_connection to DELETE /config/remote-connections/{id}, URL-encoded", () => {
+			const result = mapCommandToHttp("delete_remote_connection", { id: "conn/weird id" });
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/config/remote-connections/conn%2Fweird%20id");
+		});
+
+		it("maps list_tunnel_profiles to GET /tunnels/profiles", () => {
+			const result = mapCommandToHttp("list_tunnel_profiles", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/tunnels/profiles");
+		});
+
+		it("maps save_tunnel_profile to POST /tunnels/profiles with the profile as the body", () => {
+			const profile = {
+				id: "p1",
+				name: "dev",
+				host: "h",
+				port: 22,
+				user: "u",
+				identity_file: null,
+				forwards: [],
+				options: { server_alive_interval: 15, server_alive_count_max: 3, strict_host_key_checking: "AcceptNew" },
+				auto_connect: false,
+			};
+			const result = mapCommandToHttp("save_tunnel_profile", { profile });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/tunnels/profiles");
+			expect(result.body).toEqual(profile);
+		});
+
+		it("maps delete_tunnel_profile to DELETE /tunnels/profiles/{id}, NOT URL-encoded (unlike delete_remote_connection)", () => {
+			const result = mapCommandToHttp("delete_tunnel_profile", { id: "p1" });
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/tunnels/profiles/p1");
+		});
+
+		it("maps start_tunnel to POST /tunnels/start/{id}", () => {
+			const result = mapCommandToHttp("start_tunnel", { id: "p1" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/tunnels/start/p1");
+		});
+
+		it("maps stop_tunnel to POST /tunnels/stop/{id}", () => {
+			const result = mapCommandToHttp("stop_tunnel", { id: "p1" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/tunnels/stop/p1");
+		});
+
+		it("maps list_active_tunnels to GET /tunnels/active", () => {
+			const result = mapCommandToHttp("list_active_tunnels", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/tunnels/active");
+		});
+
+		it("maps get_tunnel_status to GET /tunnels/status/{id}", () => {
+			const result = mapCommandToHttp("get_tunnel_status", { id: "p1" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/tunnels/status/p1");
+		});
+
+		it("maps get_tunnel_audit to GET /tunnels/audit/{id}, defaulting limit to 20 when omitted or falsy", () => {
+			const withoutLimit = mapCommandToHttp("get_tunnel_audit", { id: "p1" });
+			expect(withoutLimit.method).toBe("GET");
+			expect(withoutLimit.path).toBe("/tunnels/audit/p1?limit=20");
+
+			const withLimit = mapCommandToHttp("get_tunnel_audit", { id: "p1", limit: 5 });
+			expect(withLimit.path).toBe("/tunnels/audit/p1?limit=5");
+
+			// `args.limit || 20` treats a falsy 0 the same as "omitted" — current behavior.
+			const zeroLimit = mapCommandToHttp("get_tunnel_audit", { id: "p1", limit: 0 });
+			expect(zeroLimit.path).toBe("/tunnels/audit/p1?limit=20");
+		});
+
+		it("maps list_ssh_config_hosts to GET /tunnels/ssh-hosts", () => {
+			const result = mapCommandToHttp("list_ssh_config_hosts", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/tunnels/ssh-hosts");
+		});
+
+		it("maps list_ssh_agent_keys to GET /tunnels/agent-keys", () => {
+			const result = mapCommandToHttp("list_ssh_agent_keys", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/tunnels/agent-keys");
+		});
+	});
+
 	describe("ACP (ego) routes", () => {
 		const CONNECTION = "01932d5e-0000-7000-8000-0000000000e1";
 		const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
