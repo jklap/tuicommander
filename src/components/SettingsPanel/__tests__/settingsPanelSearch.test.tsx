@@ -115,6 +115,8 @@ describe("SettingsPanel search", () => {
 		vi.clearAllMocks();
 		mockInvoke.mockImplementation(async (command: string) => {
 			if (command === "load_mcp_upstreams") return { servers: [] };
+			// The MCP page now also mounts McpIntegrationsSection.
+			if (command === "list_installed_mcp_integrations") return [];
 			if (command === "list_remote_connections" || command === "remote_connection_statuses") return [];
 			if (command === "discover_ssh_hosts") return { hosts: [], hashed_count: 0 };
 			return undefined;

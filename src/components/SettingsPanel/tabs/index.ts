@@ -15,6 +15,7 @@ export { SelectionTab } from "./SelectionTab";
 export { SmartPromptsTab } from "./SmartPromptsTab";
 export { StreamDockTab } from "./StreamDockTab";
 export { LocalMcpPanel } from "./services/LocalMcpPanel";
+export { McpIntegrationsSection } from "./services/McpIntegrationsSection";
 export { RemoteAccessPanel } from "./services/RemoteAccessPanel";
 export { UpstreamMcpPanel } from "./services/UpstreamMcpPanel";
 export { TelegramTab } from "./TelegramTab";

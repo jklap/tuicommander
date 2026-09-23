@@ -301,6 +301,8 @@ describe("SettingsPanel", () => {
 				return Promise.resolve({ mcp_capabilities: { denied: [], migration_unknown_tools: [] } });
 			}
 			if (command === "load_mcp_upstreams") return Promise.resolve({ servers: [] });
+			// The MCP page now also mounts McpIntegrationsSection.
+			if (command === "list_installed_mcp_integrations") return Promise.resolve([]);
 			return Promise.resolve(undefined);
 		});
 		try {
