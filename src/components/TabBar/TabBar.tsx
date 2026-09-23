@@ -52,6 +52,8 @@ export interface TabBarProps {
 	onCloseOthers: (id: string) => void;
 	onCloseToRight: (id: string) => void;
 	onNewTab: () => void;
+	/** Agents a long press on the + button offers; each opens a new tab running that agent. */
+	getNewAgentMenuItems?: () => ContextMenuItem[];
 	onSplitVertical?: () => void;
 	onSplitHorizontal?: () => void;
 	onReorder?: (fromIndex: number, toIndex: number) => void;
@@ -133,6 +135,44 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		const rect = btn.getBoundingClientRect();
 		newTabMenu.openAt(rect.left, rect.bottom + 4);
 	};
+
+	// Long press on + lists the agents, so a tab can open straight into one
+	// instead of a shell. A press that opened the menu must not also open a tab.
+	const NEW_AGENT_LONG_PRESS_MS = 500;
+	const newAgentMenu = createContextMenu();
+	const [newAgentItems, setNewAgentItems] = createSignal<ContextMenuItem[]>([]);
+	let longPressTimer: ReturnType<typeof setTimeout> | undefined;
+	let longPressFired = false;
+
+	const cancelNewTabLongPress = () => {
+		clearTimeout(longPressTimer);
+		longPressTimer = undefined;
+	};
+
+	const startNewTabLongPress = (e: PointerEvent) => {
+		longPressFired = false;
+		if (e.button !== 0 || !props.getNewAgentMenuItems) return;
+		const btn = e.currentTarget as HTMLElement;
+		longPressTimer = setTimeout(() => {
+			longPressTimer = undefined;
+			const items = props.getNewAgentMenuItems?.() ?? [];
+			if (items.length === 0) return;
+			longPressFired = true;
+			setNewAgentItems(items);
+			const rect = btn.getBoundingClientRect();
+			newAgentMenu.openAt(rect.left, rect.bottom + 4);
+		}, NEW_AGENT_LONG_PRESS_MS);
+	};
+
+	const handleNewTabClick = () => {
+		if (longPressFired) {
+			longPressFired = false;
+			return;
+		}
+		props.onNewTab();
+	};
+
+	onCleanup(cancelNewTabLongPress);
 
 	const getTabContextMenuItems = (): ContextMenuItem[] => {
 		const id = contextTabId();
@@ -990,7 +1030,10 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			{/* New Tab button: outside scroll region so arrows don't overlap it */}
 			<button
 				class={s.newBtn}
-				onClick={() => props.onNewTab()}
+				onClick={handleNewTabClick}
+				onPointerDown={startNewTabLongPress}
+				onPointerUp={cancelNewTabLongPress}
+				onPointerLeave={cancelNewTabLongPress}
 				onContextMenu={openNewTabMenu}
 				title={`${t("tabBar.newTab", "New Tab")} (${keyFor("new-terminal")})`}
 			>
@@ -1010,6 +1053,13 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				y={newTabMenu.position().y}
 				visible={newTabMenu.visible()}
 				onClose={newTabMenu.close}
+			/>
+			<ContextMenu
+				items={newAgentItems()}
+				x={newAgentMenu.position().x}
+				y={newAgentMenu.position().y}
+				visible={newAgentMenu.visible()}
+				onClose={newAgentMenu.close}
 			/>
 			<ContextMenu
 				items={overflowItems()}

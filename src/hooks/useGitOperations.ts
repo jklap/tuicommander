@@ -503,10 +503,14 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		refreshAllBranchStats,
 	});
 
-	const handleNewTab = async () => {
-		// Prefer the active terminal's branch registration and CWD as source of truth —
-		// the store's activeBranch may be stale if HEAD changed externally and head-changed
-		// hasn't been fully processed yet (race between refreshAllBranchStats and setActiveBranch).
+	/**
+	 * The repo and branch a new tab opens in, or null when no repo is active.
+	 *
+	 * Prefers the active terminal's branch registration and CWD as source of truth —
+	 * the store's activeBranch may be stale if HEAD changed externally and head-changed
+	 * hasn't been fully processed yet (race between refreshAllBranchStats and setActiveBranch).
+	 */
+	const resolveNewTabTarget = (): { repoPath: string; branchName: string } | null => {
 		const activeTerminalId = terminalsStore.state.activeId;
 		const activeTerminal = activeTerminalId ? terminalsStore.get(activeTerminalId) : null;
 		const activeCwd = activeTerminal?.cwd ?? null;
@@ -523,25 +527,26 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					const ownerEntry = Object.entries(repo.workspaces).find(
 						([, b]) => b.worktreePath === activeCwd && b.terminals.includes(activeTerminalId),
 					);
-					if (ownerEntry) {
-						await handleAddTerminalToWorkspace(repoPath, ownerEntry[0]);
-						return;
-					}
+					if (ownerEntry) return { repoPath, branchName: ownerEntry[0] };
 				}
 
 				// Linked worktree: unique worktreePath per branch, unambiguous match
 				const match = Object.values(repo.workspaces).find((b) => b.worktreePath && b.worktreePath === activeCwd);
-				if (match) {
-					await handleAddTerminalToWorkspace(repoPath, match.branchName);
-					return;
-				}
+				if (match) return { repoPath, branchName: match.branchName };
 			}
 		}
 
 		// Fall back to store's active branch (no active terminal or no CWD match)
 		const activeRepo = repositoriesStore.getActive();
-		if (activeRepo?.activeWorkspaceId) {
-			await handleAddTerminalToWorkspace(activeRepo.path, activeRepo.activeWorkspaceId);
+		return activeRepo?.activeWorkspaceId
+			? { repoPath: activeRepo.path, branchName: activeRepo.activeWorkspaceId }
+			: null;
+	};
+
+	const handleNewTab = async () => {
+		const target = resolveNewTabTarget();
+		if (target) {
+			await handleAddTerminalToWorkspace(target.repoPath, target.branchName);
 		} else {
 			await deps.createNewTerminal();
 		}
@@ -802,6 +807,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		creatingWorktreeRepos,
 		removingBranches,
 		handleNewTab,
+		resolveNewTabTarget,
 		handleRunCommand,
 		executeRunCommand,
 		generateWorktreeName,

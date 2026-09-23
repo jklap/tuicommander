@@ -73,6 +73,7 @@ per cell and the configured history limit still apply.
   - Closing the floating window automatically returns the tab to the main window
   - Requires an active PTY session (disabled for tabs without a session)
 - Overflow menu on scroll arrows (right-click) shows clipped tabs; the `+` button always stays visible regardless of scroll position
+- `+` button: click opens a terminal in the active branch; right-click offers New Tab / Split; long press (500 ms) lists the enabled agents (with a submenu per run config) and opens a new tab running the chosen one
 - Tab pinning: pinned tabs are visible across all branches (not scoped to branch key)
 
 ### 1.3 Split Panes

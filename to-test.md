@@ -14,6 +14,12 @@
 - [ ] Dictate a short phrase into Claude and into a Codex tab: both still submit.
 - [ ] **After a `make dev` restart (Rust):** `session action=submit` with a 600+ char input to a Claude tab returns `acknowledged:true` and the prompt runs; a peer `agent send` of a long message also submits.
 
+## New-tab long press and settings button spacing (2026-09-23) — frontend, live via HMR
+
+- [ ] Hold the `+` in the tab bar for half a second: a menu lists the enabled agents (a submenu per agent with 2+ run configs). Picking one opens a new tab in the active branch that starts the agent. Releasing does not also open a plain tab.
+- [ ] A quick click on `+` still opens a plain terminal; right-click still shows New Tab / Split.
+- [ ] [VISUAL] Settings → Dictation → Voice tuning: "Level gate" no longer touches the "Start test recording" button. Also check the Import/Export row and the Notifications "Reset Defaults" footer.
+
 ## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
 
 - [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**.
