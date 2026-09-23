@@ -2931,9 +2931,17 @@ pub fn run() {
                     if let Some(dictation) = app_handle.try_state::<dictation::DictationState>() {
                         dictation.shutdown();
                     }
-                    // Kill all SSH tunnel processes so ports are freed for restart
+                    // Kill all SSH tunnel processes so ports are freed for restart.
+                    // Waited (bounded by GRACEFUL_SHUTDOWN_TIMEOUT), not
+                    // fire-and-forget: shutdown_all() only sends each
+                    // supervisor a signal and returns immediately, and since
+                    // this process is about to exit, nothing would otherwise
+                    // be left running long enough to confirm the SSH child
+                    // processes are actually gone before we do.
                     if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
-                        state.tunnel_manager.shutdown_all();
+                        tauri::async_runtime::block_on(
+                            state.tunnel_manager.shutdown_all_and_wait(),
+                        );
                         crate::ai_agent::knowledge::flush_dirty(state.inner());
                         // Final geometry flush — the periodic task's 2s interval
                         // may not have ticked since the last resize/move.
