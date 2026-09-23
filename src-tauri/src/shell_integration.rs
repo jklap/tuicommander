@@ -2438,8 +2438,7 @@ printf 'SESSION=%s\nATTACHMENTS=%s\nINSTRUCTIONS=%s\nISOLATED=%s\nHOSTED=%s\n' "
             ("bash", BASH_INTEGRATION),
             ("zsh", ZSH_INTEGRATION),
             // fish uses `fish --no-execute` (its own syntax-check flag, not -n);
-            // skipped below if the binary isn't installed (not on CI's Ubuntu
-            // runners) rather than silently passing or failing the whole test.
+            // handled in its own block below since it isn't a `-n`-style shell.
         ] {
             let Ok(mut child) = Command::new(shell)
                 .arg("-n")
@@ -2464,6 +2463,11 @@ printf 'SESSION=%s\nATTACHMENTS=%s\nINSTRUCTIONS=%s\nISOLATED=%s\nHOSTED=%s\n' "
             );
         }
 
+        // Installed by `scripts/install-launch-shells.sh` on the "rust" CI job
+        // (ci.yml) specifically so this actually runs there, not just on a
+        // developer machine that happens to have fish. Still gracefully skipped
+        // (not a failure) anywhere else fish isn't present — the string-content
+        // assertions above (`fish_emits_all_four_markers`) still cover that case.
         if let Ok(mut child) = Command::new("fish")
             .arg("--no-execute")
             .stdin(Stdio::piped())
