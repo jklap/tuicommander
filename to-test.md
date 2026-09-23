@@ -3392,3 +3392,40 @@ headed test browser window.
 - [ ] **[VISUAL]** Capture the two toast states together after the screenshot
       backend is available. Confirm the secondary button spacing, contrast and
       wrapping at the normal window width and at a narrow width.
+
+## SSH-managed `tuic-remote` deploy and install (stories `836-c262`–`847-ad3d`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+The Rust backend does not hot-reload. Restart the test instance before these
+checks; use `TUIC_APP_INSTANCE=remote-deploy-check` so no production connection
+or credential is touched.
+
+- [x] Against a throwaway Linux or Apple Silicon macOS SSH host with no daemon,
+      save **Deploy on connect** and click Connect. It must progress through
+      `Deploying: <step>` to Connected, bind only `127.0.0.1`, and leave the
+      host's agent configuration files unchanged.
+      _(verified 2026-09-22 through the HTTP parity surface against an isolated
+      Ubuntu systemd container on mac-mint: Connected, loopback listener only,
+      pairing token absent from argv, and no `~/.claude.json` created)_
+- [x] Disconnect, wait less than the configured survive time, and reconnect.
+      Existing remote sessions must still be present. After disconnecting for
+      longer than the survive time, the daemon and its pid file must disappear.
+      _(verified 2026-09-22: a three-second client between lifetime polls reset
+      the deadline; after the new idle window both process and pid file vanished)_
+- [x] Connect again with the same desktop version. The remote binary hash must
+      match, no second SCP should occur, and the vault pairing token must still
+      work after restarting the desktop test instance.
+      _(verified 2026-09-22: inode/mtime stayed unchanged and the isolated
+      credential-file digest survived a full `make dev` restart)_
+- [x] Click Install. On Linux verify the systemd user unit and mode-0600 env
+      file; on macOS verify the mode-0600 launchd plist. Reboot or log out/in and
+      confirm Connect no longer deploys. Then click Uninstall and confirm the
+      service files and ephemeral pid are gone.
+      _(verified 2026-09-22 on isolated Ubuntu/systemd via HTTP parity: unit and
+      protected env installed, linger enabled, service and loopback listener
+      returned after a container reboot before any SSH login, then Uninstall
+      removed the unit, env, pid and listener. launchd rendering/mode/lifecycle
+      are covered by the targeted Rust service tests.)_
+- [x] The Remote Machines form, deployment picker, survive-minutes field, SSH
+      host picker and monochrome icons were rendered in an isolated browser on
+      port 9877. _(verified 2026-09-22 from the worktree build; proof in
+      `.tmp/visual-proof/remote-machines-fields.png`)_

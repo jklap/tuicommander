@@ -1149,6 +1149,8 @@ DELETE /config/remote-connections/{id}
 PUT    /config/remote-connections/{id}/password
 GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
+POST   /config/remote-connections/{id}/install
+DELETE /config/remote-connections/{id}/install
 ```
 
 The configured remote machines and their vault password. The password is write
@@ -1156,6 +1158,12 @@ only: it goes to the OS credential vault keyed by the connection's UUID and is
 never returned, never written to `connections.json` — `GET .../password` answers
 whether one is stored, not what it is. `POST .../token` trades it for the remote
 daemon's in-memory session token.
+
+The install pair is SSH-only. `POST .../install` stages the matching release
+binary, installs and starts a systemd user unit or launchd agent, and persists
+`deploy = "installed"`. `DELETE .../install` stops and removes the service
+files and persists `deploy = "on_connect"`. Pairing tokens stay in the credential
+vault; neither response nor the connection document contains them.
 
 `DELETE /config/remote-connections/{id}` tears the live connection down before it
 rewrites the store: status poll, mirror task, mirrored session rows, SSH tunnel
@@ -1173,9 +1181,10 @@ DELETE /config/remote-connections/{id}/connect
 ```
 
 Live state, not configuration: `GET .../status` answers with one object per
-connection — `{ id, status, base_url?, token?, protocol_version?, error? }`,
-where `status` is `disconnected | connecting | connected | unauthenticated |
-error`. `base_url`, `token` and `protocol_version` are present **only** while
+connection — `{ id, status, base_url?, token?, protocol_version?, error?, step? }`,
+where `status` is `disconnected | connecting | deploying | connected |
+unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
+and `protocol_version` are present **only** while
 connected, because they are the answer to "where do I send a call", and a
 connection that is not connected has no such answer.
 
@@ -1194,6 +1203,18 @@ reconnect the user has to ask for.
 These three routes are desktop-only — they are registered on `build_router`, not
 in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote
 connection; it does not hold connections of its own.
+
+### SSH Host Status
+
+```
+GET /tunnels/ssh-hosts/status
+```
+
+Returns deduplicated SSH config hosts as
+`[{ "host": "name", "auth": "shell | no_shell | auth_failed | unreachable" }]`.
+The probe runs only on request, checks at most four hosts concurrently, uses
+batch authentication with a five-second connect timeout, and caches results for
+60 seconds.
 
 ### MCP Status
 
@@ -1345,13 +1366,18 @@ not expose a Gemini account-usage route.
 GET /health
 ```
 
-Returns `{ "ok": true, "uptime_secs": N, "session_count": N, "protocol_version": 1, "socket_path"?: "...", "instance_id": "<uuid>" }`.
+Returns `{ "ok": true, "uptime_secs": N, "session_count": N, "protocol_version": 1, "socket_path"?: "...", "instance_id": "<uuid>", "survive_secs"?: N }`.
 
 The one route served without a credential. `instance_id` identifies the running
 **process** (minted at startup, not derived from the instance id or the config
 directory): a remote connection compares it against its own before mirroring and
 refuses a base URL that resolves back to itself. A daemon that omits the field is
 older than the check and still connects.
+
+`survive_secs` is present when `tuic-remote` was launched with an idle lifetime.
+Desktop-managed SSH deployment sets the vault pairing token as this daemon's
+session token, so the same `?token=` contract protects every authenticated HTTP,
+SSE and WebSocket route without a separate pairing bypass.
 
 ### Orchestrator Stats
 

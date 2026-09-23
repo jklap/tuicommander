@@ -9,6 +9,8 @@ pub(super) struct HealthResponse {
     pub session_count: usize,
     pub protocol_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub survive_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub socket_path: Option<String>,
     /// Which running process answered. A remote connection compares it against
     /// its own before mirroring, so a base URL that resolves back to this very

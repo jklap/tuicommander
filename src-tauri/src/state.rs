@@ -1995,6 +1995,15 @@ pub struct AppState {
     /// Broadcast channel for all backend events (SSE, WebSocket, live consumers).
     /// Capacity 256 — lagged receivers get `RecvError::Lagged` and should reconnect.
     pub(crate) event_bus: tokio::sync::broadcast::Sender<AppEvent>,
+    /// Idle lifetime advertised by a deployed remote daemon.
+    pub(crate) remote_survive_secs: Option<u64>,
+    /// Open HTTP event streams. Unlike `event_bus.receiver_count()`, this does
+    /// not include permanent backend subscribers such as repo watchers.
+    pub(crate) sse_client_count: AtomicUsize,
+    /// Advances whenever an SSE or terminal WebSocket client arrives. The
+    /// lifetime timer observes this even when the client connects and leaves
+    /// between two polling ticks.
+    pub(crate) remote_client_generation: AtomicU64,
     /// Monotonic counter for SSE event IDs.
     pub(crate) event_counter: Arc<AtomicU64>,
     /// Live type filters of the open `/events` streams, so a browser that starts
@@ -3019,6 +3028,9 @@ impl AppState {
             claude_usage_cache: parking_lot::Mutex::new(crate::claude_usage::load_cache_from_disk()),
             log_buffer,
             event_bus: tokio::sync::broadcast::channel(256).0,
+            remote_survive_secs: None,
+            sse_client_count: AtomicUsize::new(0),
+            remote_client_generation: AtomicU64::new(0),
             event_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             sse_filters: Default::default(),
             content_indices: DashMap::new(),

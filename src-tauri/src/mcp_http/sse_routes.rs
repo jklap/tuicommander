@@ -11,6 +11,24 @@ use serde::Deserialize;
 use crate::AppState;
 use crate::state::AppEvent;
 
+struct SseClientGuard(Arc<AppState>);
+
+impl SseClientGuard {
+    fn new(state: Arc<AppState>) -> Self {
+        state.sse_client_count.fetch_add(1, Ordering::Relaxed);
+        state
+            .remote_client_generation
+            .fetch_add(1, Ordering::Relaxed);
+        Self(state)
+    }
+}
+
+impl Drop for SseClientGuard {
+    fn drop(&mut self) {
+        self.0.sse_client_count.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 #[derive(Deserialize)]
 pub(super) struct SseQuery {
     /// Comma-separated event type filter (e.g. "repo-changed,session-created").
@@ -167,6 +185,7 @@ pub(super) async fn sse_events(
     Query(query): Query<SseQuery>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.event_bus.subscribe();
+    let client_guard = SseClientGuard::new(state.clone());
     let initial_types: Option<Vec<String>> = query.types.map(|t| {
         t.split(',')
             .map(|s| s.trim().to_string())
@@ -186,6 +205,7 @@ pub(super) async fn sse_events(
     };
 
     let stream = async_stream::stream! {
+        let _client_guard = client_guard;
         // Moved in so it lives exactly as long as the stream does.
         let _filter_guard = filter_guard;
         // Send retry directive as first event
@@ -526,6 +546,27 @@ mod tests {
         AppEvent::DirChanged {
             dir_path: "/dir".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn event_stream_lifetime_tracks_only_the_connected_client() {
+        let state = crate::mcp_http::tests::test_state();
+        let _internal = state.event_bus.subscribe();
+        assert_eq!(state.sse_client_count.load(Ordering::Relaxed), 0);
+
+        let response = sse_events(
+            State(state.clone()),
+            Query(SseQuery {
+                types: None,
+                stream_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(state.sse_client_count.load(Ordering::Relaxed), 1);
+
+        drop(response);
+        assert_eq!(state.sse_client_count.load(Ordering::Relaxed), 0);
     }
 
     /// A panel that mounts late adds an event type the stream was not opened

@@ -11,7 +11,7 @@ use tokio::process::Command;
 use super::agent::discover_agent_socket;
 use super::backoff::BackoffCalculator;
 use super::classifier::{ExitReason, classify_exit};
-use super::command::{build_ssh_args, build_ssh_env};
+use super::command::{build_ssh_args, build_ssh_env, ensure_ssh_control_dir};
 use super::port::check_local_port;
 #[cfg(unix)]
 use super::port::kill_ssh_on_port;
@@ -147,6 +147,16 @@ async fn supervision_loop(
     let mut backoff = BackoffCalculator::new();
 
     loop {
+        if let Err(error) = ensure_ssh_control_dir() {
+            set_status(
+                &status,
+                TunnelStatus::Error {
+                    message: format!("failed to create SSH control directory: {error}"),
+                },
+                &callback,
+            );
+            return;
+        }
         let args = build_ssh_args(&profile);
         let env = build_ssh_env(agent_socket.as_deref());
 
@@ -435,85 +445,9 @@ fn is_retryable_spawn_error(e: &std::io::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::system32_exe;
+    use crate::test_support::{fake_ssh_script, system32_exe};
     use std::net::SocketAddr;
-    use std::path::Path;
     use tokio::net::TcpListener;
-
-    /// Env var that makes a fake ssh script exit before running its behavior.
-    /// Set only by the warm-up exec in [`fake_ssh_script`]; the supervisor
-    /// never sets it, so a supervised spawn always runs the real behavior.
-    const WARMUP_VAR: &str = "TUIC_FAKE_SSH_WARMUP";
-
-    /// Write a fake ssh script to a **stable, reused** path and make sure the OS
-    /// has already vetted it for execution.
-    ///
-    /// The reuse is the point, and it is not a micro-optimisation. On a machine
-    /// with exec-time code scanning (macOS `syspolicyd` plus an endpoint-security
-    /// agent) the *first* exec of a freshly written executable blocks while it is
-    /// scanned — measured here at 6s to 102s, in every directory tried, with no
-    /// relation to test-suite load. Every later exec of the *same* file is ~6ms.
-    /// A per-run temp file therefore paid that scan inside the test's own timing
-    /// window, on every run, and the four supervisor tests failed whenever the
-    /// scan outlasted their poll bound — reproducibly, with the suite otherwise
-    /// idle. Keying the file by test name makes the scan a one-off per machine.
-    ///
-    /// The warm-up exec below pays that one-off *before* the caller starts a
-    /// supervisor, so no assertion ever races the scanner. It only runs when the
-    /// file was actually created or rewritten; an unchanged file is already
-    /// vetted, so the whole helper costs a read and a compare.
-    ///
-    /// `name` must be unique per behavior — it is the cache key. The content is
-    /// compared on every call, so editing a behavior rewrites (and re-warms) the
-    /// script instead of silently reusing the old one.
-    ///
-    /// The behavior is spelled once per shell. Windows cannot exec a `#!`
-    /// script at all — it answers "%1 is not a valid Win32 application" — and a
-    /// batch file shares no syntax with `sh` beyond `echo`, so there is nothing
-    /// here to translate automatically. `Command` runs a `.cmd` through
-    /// `cmd.exe` for us.
-    fn fake_ssh_script(name: &str, posix: &str, windows: &str) -> PathBuf {
-        // Under `target/`, so it is gitignored and survives between runs.
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-ssh");
-        std::fs::create_dir_all(&dir).expect("create fake-ssh dir");
-        let (extension, desired) = if cfg!(windows) {
-            (
-                "cmd",
-                format!("@echo off\r\nif defined {WARMUP_VAR} exit /b 0\r\n{windows}\r\n"),
-            )
-        } else {
-            (
-                "sh",
-                format!("#!/bin/sh\n[ -n \"${WARMUP_VAR}\" ] && exit 0\n{posix}\n"),
-            )
-        };
-        let path = dir.join(format!("{name}.{extension}"));
-
-        if std::fs::read_to_string(&path).is_ok_and(|found| found == desired) {
-            return path;
-        }
-
-        // Write beside the target and rename over it, so a second run of this
-        // test never execs a half-written script.
-        let staging = dir.join(format!("{name}.{extension}.{}", std::process::id()));
-        std::fs::write(&staging, &desired).expect("write fake ssh script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod fake ssh script");
-        }
-        std::fs::rename(&staging, &path).expect("install fake ssh script");
-
-        let _ = std::process::Command::new(&path)
-            .env(WARMUP_VAR, "1")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-
-        path
-    }
 
     fn test_profile() -> TunnelProfile {
         TunnelProfile {

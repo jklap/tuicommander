@@ -525,6 +525,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Plugin system (see FEATURES.md section 17), with Plan Tracker and Stories Ticker shipped as one-time-seeded external packages rather than compiled built-ins; binary reads support bounded per-call budgets and panel messages can transfer buffer ownership
 - [x] Self-contained SQLite Viewer plugin under `plugins/`: sql.js/WebAssembly browsing, native filtering/pagination, indexes, visual plans, CSV copy, and explicit atomic inline-edit saves, with the engine and database scoped to the viewer iframe lifecycle
 - [x] Remote access / HTTP server
+- [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile Companion PWA (sessions, live output, question reply, activity feed)
 - [x] MCP Proxy Hub (aggregate upstream MCP servers via HTTP and stdio, tool namespace prefixing, circuit breaker, hot-reload, OS keyring credentials, tool filtering, session-local Grok compatibility through lazy meta-tools)
 - [x] Copy Path in Markdown panel

@@ -102,6 +102,9 @@ pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
+pub(crate) mod remote_deploy;
+#[cfg_attr(feature = "desktop", allow(dead_code))]
+pub(crate) mod remote_lifetime;
 pub(crate) mod remote_mirror;
 pub(crate) mod remote_runtime;
 pub(crate) mod repo_watcher;
@@ -1721,6 +1724,8 @@ pub fn run() {
             remote_runtime::connect_remote_connection,
             remote_runtime::disconnect_remote_connection,
             remote_runtime::remote_connection_statuses,
+            remote_deploy::service::install_remote_daemon,
+            remote_deploy::service::uninstall_remote_daemon,
             open_secondary_window,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,
@@ -2095,6 +2100,7 @@ pub fn run() {
             tunnels::tauri_commands::list_active_tunnels,
             tunnels::tauri_commands::get_tunnel_status,
             tunnels::tauri_commands::list_ssh_config_hosts,
+            tunnels::tauri_commands::probe_ssh_config_hosts,
             tunnels::tauri_commands::list_ssh_agent_keys,
             tunnels::tauri_commands::get_tunnel_audit,
             acp_commands::acp_connect,
@@ -2451,8 +2457,87 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
 ///   and tombstone sweeper.
 /// - Logs "Starting tuic-remote" with the `protocol_version` field.
 /// - Binds TCP directly without spawning an IPC socket.
+///
+/// Runtime options for the standalone remote daemon.
+pub struct RemoteOptions {
+    /// TCP port exposed by the daemon.
+    pub port: u16,
+    /// IP address the daemon binds.
+    pub bind: std::net::IpAddr,
+    /// Idle lifetime in seconds, or no automatic expiry.
+    pub survive_secs: Option<u64>,
+    /// Whether startup writes MCP configuration for local agents.
+    pub agent_configs: bool,
+    pairing_token: Option<String>,
+}
+
+impl Default for RemoteOptions {
+    fn default() -> Self {
+        Self {
+            port: 9877,
+            bind: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            survive_secs: None,
+            agent_configs: true,
+            pairing_token: None,
+        }
+    }
+}
+
+impl RemoteOptions {
+    /// Return the complete TCP bind address.
+    pub fn bind_addr(&self) -> std::net::SocketAddr {
+        std::net::SocketAddr::new(self.bind, self.port)
+    }
+
+    /// Set the one-shot pairing token supplied by the launcher.
+    pub fn set_pairing_token(&mut self, token: Option<String>) {
+        self.pairing_token = token;
+    }
+}
+
+#[cfg(any(not(feature = "desktop"), test))]
+struct RemotePidFile(std::path::PathBuf);
+
+#[cfg(any(not(feature = "desktop"), test))]
+impl RemotePidFile {
+    fn create(config_dir: &std::path::Path) -> std::io::Result<Self> {
+        let path = config_dir.join("tuic-remote.pid");
+        std::fs::write(&path, std::process::id().to_string())?;
+        Ok(Self(path))
+    }
+}
+
+#[cfg(any(not(feature = "desktop"), test))]
+impl Drop for RemotePidFile {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.0)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(source = "remote", path = %self.0.display(), "Failed to remove pid file: {error}");
+        }
+    }
+}
+
+#[cfg(all(unix, not(feature = "desktop")))]
+async fn remote_shutdown_signal() -> std::io::Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+        _ = hangup.recv() => Ok(()),
+    }
+}
+
+#[cfg(all(not(unix), not(feature = "desktop")))]
+async fn remote_shutdown_signal() -> std::io::Result<()> {
+    tokio::signal::ctrl_c().await
+}
+
 #[cfg(not(feature = "desktop"))]
-pub async fn run_remote(port: u16) -> anyhow::Result<()> {
+pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .map_err(|_| anyhow::anyhow!("Failed to install rustls CryptoProvider"))?;
@@ -2466,14 +2551,14 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
 
     let mut app_config = config::load_app_config();
     app_config.services.server.enabled = true;
-    if app_config.services.server.port != port {
+    if app_config.services.server.port != options.port {
         tracing::info!(
             source = "remote",
             config_port = app_config.services.server.port,
-            override_port = port,
+            override_port = options.port,
             "Port overridden by TUIC_PORT / CLI argument"
         );
-        app_config.services.server.port = port;
+        app_config.services.server.port = options.port;
     }
     if app_config.services.auth.lan_auth_bypass {
         tracing::warn!(
@@ -2482,7 +2567,10 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
         );
         app_config.services.auth.lan_auth_bypass = false;
     }
-    if app_config.services.auth.session_token.is_empty() {
+    if let Some(token) = options.pairing_token.take() {
+        app_config.services.auth.session_token = token;
+        app_config.services.auth.session_token_exists = true;
+    } else if app_config.services.auth.session_token.is_empty() {
         app_config.services.auth.session_token = uuid::Uuid::new_v4().to_string();
         app_config.services.auth.session_token_exists = true;
     }
@@ -2490,6 +2578,7 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     let data_dir = config::config_dir();
     let worktrees_dir = data_dir.join("worktrees");
     std::fs::create_dir_all(&worktrees_dir)?;
+    let _pid_file = RemotePidFile::create(&data_dir)?;
 
     // Env only, for the same reason the desktop boot does it: the rest of the
     // chain spawns `gh` or reads the credential store, and this runs before the
@@ -2498,6 +2587,7 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
+    app_state.remote_survive_secs = options.survive_secs;
     *app_state.github.token.get_mut() = github_token;
     *app_state.github.token_source.get_mut() = github_token_source;
 
@@ -2511,7 +2601,9 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
     // this machine can only find the socket if it is listening. Awaited: the
     // configs written below name a bridge that must have something to connect to.
     mcp_http::spawn_ipc_listener(&state, true).await;
-    agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
+    if options.agent_configs {
+        agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
+    }
 
     // Watch and pre-warm the repos this machine holds. Cross-repo content search
     // never starts a build of its own, so without this the daemon answers every
@@ -2581,23 +2673,28 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
         config::TlsConfig::Off => None,
     };
 
-    const PROTOCOL_VERSION: u32 = 1;
+    let protocol_version = remote_runtime::REMOTE_PROTOCOL_VERSION as u32;
     tracing::info!(
         source = "remote",
-        port,
+        port = options.port,
         tls = tls_config.is_some(),
-        protocol_version = PROTOCOL_VERSION,
+        protocol_version,
         "Starting tuic-remote"
     );
 
-    let bind_addr = format!("0.0.0.0:{port}");
-    let listener = std::net::TcpListener::bind(&bind_addr)
-        .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on port {port}: {e}"))?;
+    let bind_addr = options.bind_addr();
+    let listener = std::net::TcpListener::bind(bind_addr)
+        .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on {bind_addr}: {e}"))?;
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
 
     let router = mcp_http::build_remote_router(state.clone());
     let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let lifetime = remote_lifetime::expired(
+        state.clone(),
+        options.survive_secs.map(std::time::Duration::from_secs),
+    );
+    tokio::pin!(lifetime);
 
     tokio::select! {
         result = axum::serve(listener, svc) => {
@@ -2605,8 +2702,12 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
                 anyhow::bail!("TCP server error: {e}");
             }
         }
-        _ = tokio::signal::ctrl_c() => {
+        signal = remote_shutdown_signal() => {
+            signal?;
             tracing::info!(source = "remote", "Received shutdown signal");
+        }
+        () = &mut lifetime => {
+            tracing::info!(source = "remote", "Remote daemon survive time expired");
         }
     }
 
@@ -2722,7 +2823,10 @@ mod tests {
     #[test]
     fn the_daemon_listens_on_ipc_before_it_writes_bridge_configs() {
         let source = include_str!("lib.rs");
-        let body = fn_body(source, "pub async fn run_remote(port: u16)");
+        let body = fn_body(
+            source,
+            "pub async fn run_remote(mut options: RemoteOptions)",
+        );
         let listener = body
             .find("spawn_ipc_listener")
             .expect("run_remote must start the IPC listener the bridge connects to");
@@ -2741,7 +2845,10 @@ mod tests {
     /// repo for as long as the process lived: empty results that never resolve.
     #[test]
     fn the_daemon_warms_and_watches_the_repos_it_holds() {
-        let body = fn_body(include_str!("lib.rs"), "pub async fn run_remote(port: u16)");
+        let body = fn_body(
+            include_str!("lib.rs"),
+            "pub async fn run_remote(mut options: RemoteOptions)",
+        );
         for call in [
             "repo_watcher::start_watching",
             "repos_to_prewarm",
@@ -2752,6 +2859,42 @@ mod tests {
                 "run_remote must call {call} — without it the machine's repos have no index"
             );
         }
+    }
+
+    #[test]
+    fn remote_options_control_binding_and_agent_config_installation() {
+        let options = RemoteOptions {
+            port: 4545,
+            bind: "127.0.0.1".parse().expect("loopback"),
+            survive_secs: Some(30),
+            agent_configs: false,
+            ..RemoteOptions::default()
+        };
+        assert_eq!(options.bind_addr(), "127.0.0.1:4545".parse().unwrap());
+
+        let body = fn_body(
+            include_str!("lib.rs"),
+            "pub async fn run_remote(mut options: RemoteOptions)",
+        );
+        assert!(
+            body.contains("if options.agent_configs")
+                && body.contains("agent_mcp::ensure_mcp_configs"),
+            "run_remote must gate agent config writes behind the explicit option"
+        );
+    }
+
+    #[test]
+    fn remote_pid_file_is_removed_when_its_guard_drops() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("tuic-remote.pid");
+        {
+            let _guard = RemotePidFile::create(dir.path()).expect("pid file");
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("pid contents"),
+                std::process::id().to_string()
+            );
+        }
+        assert!(!path.exists());
     }
 
     #[test]

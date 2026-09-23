@@ -79,6 +79,7 @@
 /config/remote-connections/status
 /config/remote-connections/x
 /config/remote-connections/x/connect
+/config/remote-connections/x/install
 /config/remote-connections/x/password
 /config/remote-connections/x/token
 /config/repo-defaults
@@ -297,6 +298,7 @@
 /tunnels/profiles
 /tunnels/profiles/x
 /tunnels/ssh-hosts
+/tunnels/ssh-hosts/status
 /tunnels/start/x
 /tunnels/status/x
 /tunnels/stop/x

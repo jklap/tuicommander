@@ -28,9 +28,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::remote_connection::{RemoteConnection, RemoteConnectionStore, RemoteTransport};
+use crate::remote_connection::{
+    DeployMode, RemoteConnection, RemoteConnectionStore, RemoteTransport,
+};
 use crate::state::{AppEvent, AppState};
 
 /// How often a connected connection re-proves itself against `/api/version`.
@@ -40,6 +42,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long `connect` waits for an SSH tunnel to report Connected.
 const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TUNNEL_POLL: Duration = Duration::from_millis(250);
+const LISTEN_GRACE: Duration = Duration::from_secs(15);
+pub(crate) const REMOTE_PROTOCOL_VERSION: u64 = 1;
 
 /// First wait after a connect attempt that failed, and the ceiling it doubles
 /// towards. The floor is not zero on purpose: a machine that is off answers its
@@ -74,14 +78,30 @@ const CONNECTING_POLL: Duration = Duration::from_millis(250);
 /// and the daemon is answering, so the fix is the password, not the route. They
 /// were one state once, and the resulting "connection error" sent people to
 /// debug their tunnel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RemoteStatus {
     Disconnected,
     Connecting,
+    Deploying { step: String },
     Connected,
     Unauthenticated,
     Error,
+}
+
+impl Serialize for RemoteStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(match self {
+            Self::Disconnected => "disconnected",
+            Self::Connecting => "connecting",
+            Self::Deploying { .. } => "deploying",
+            Self::Connected => "connected",
+            Self::Unauthenticated => "unauthenticated",
+            Self::Error => "error",
+        })
+    }
 }
 
 /// What a client needs to render a connection and to route a call to it.
@@ -103,6 +123,8 @@ pub(crate) struct RemoteConnectionStatus {
     pub(crate) protocol_version: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) step: Option<String>,
 }
 
 /// Live state for one connection. Never serialized as-is: `snapshot` builds the
@@ -128,7 +150,7 @@ struct Entry {
 
 impl Entry {
     fn snapshot(&self, id: &str) -> RemoteConnectionStatus {
-        let status = self.status.unwrap_or(RemoteStatus::Disconnected);
+        let status = self.status.clone().unwrap_or(RemoteStatus::Disconnected);
         // Base URL and token are answers about where to send a call. A
         // connection that is not connected has no such answer, and handing one
         // out anyway is how a call reaches a daemon that rejected us.
@@ -138,6 +160,10 @@ impl Entry {
         // publishing it early emits a second `connecting` push that says nothing
         // a client can act on.
         let connected = status == RemoteStatus::Connected;
+        let step = match &status {
+            RemoteStatus::Deploying { step } => Some(step.clone()),
+            _ => None,
+        };
         RemoteConnectionStatus {
             id: id.to_string(),
             status,
@@ -145,6 +171,7 @@ impl Entry {
             token: connected.then(|| self.token.clone()).flatten(),
             protocol_version: connected.then_some(self.protocol_version).flatten(),
             error: self.error.clone(),
+            step,
         }
     }
 }
@@ -282,7 +309,7 @@ impl RemoteRuntime {
     fn status_of(&self, id: &str) -> RemoteStatus {
         self.entries
             .get(id)
-            .and_then(|e| e.status)
+            .and_then(|e| e.status.clone())
             .unwrap_or(RemoteStatus::Disconnected)
     }
 
@@ -462,6 +489,9 @@ async fn authenticate(
     connection: &RemoteConnection,
     base_url: &str,
 ) -> Result<Option<String>, String> {
+    if let Some(token) = crate::remote_connection::pairing_token(&connection.id)? {
+        return Ok(Some(token));
+    }
     if !crate::remote_connection::connection_password_exists(&connection.id)? {
         return Ok(None);
     }
@@ -667,8 +697,10 @@ fn claim_and_supervise(
     let claimed = {
         let mut entry = state.remote.entries.entry(id.to_string()).or_default();
         if matches!(
-            entry.status,
-            Some(RemoteStatus::Connecting | RemoteStatus::Connected)
+            entry.status.as_ref(),
+            Some(
+                RemoteStatus::Connecting | RemoteStatus::Deploying { .. } | RemoteStatus::Connected
+            )
         ) {
             None
         } else {
@@ -698,9 +730,37 @@ async fn handshake(
         .map_err(ConnectFailure::error)?;
     update(state, id, |e| e.base_url = Some(base_url.clone()));
 
-    let health = read_health(&client, &base_url)
-        .await
-        .map_err(ConnectFailure::error)?;
+    let first_health = read_health(&client, &base_url).await;
+    if connection.deploy == DeployMode::Installed
+        && let Err(error) = &first_health
+    {
+        return Err(ConnectFailure::error(format!(
+            "installed daemon not answering: {error}"
+        )));
+    }
+
+    let mut deployed = false;
+    let health =
+        if deploy_reason(connection, first_health.as_ref().map_err(String::as_str)).is_some() {
+            deployed = true;
+            deploy_and_wait(state, id, connection, &client, &base_url).await?
+        } else {
+            first_health.map_err(ConnectFailure::error)?
+        };
+
+    if connection.deploy != DeployMode::Never
+        && health.protocol_version != Some(REMOTE_PROTOCOL_VERSION)
+    {
+        let prefix = if connection.deploy == DeployMode::Installed {
+            "installed daemon protocol mismatch"
+        } else {
+            "deployed daemon protocol mismatch"
+        };
+        return Err(ConnectFailure::error(format!(
+            "{prefix}: expected {REMOTE_PROTOCOL_VERSION}, got {:?}",
+            health.protocol_version
+        )));
+    }
     // A connection that resolves back to this very process mirrors every local
     // event onto the bus that produced it, and both `/events` and the window
     // emit repeat it — the origin marker stops the second hop, but nothing
@@ -714,16 +774,105 @@ async fn handshake(
     }
     update(state, id, |e| e.protocol_version = health.protocol_version);
 
-    let token = authenticate(connection, &base_url)
+    let mut token = authenticate(connection, &base_url)
         .await
         .map_err(ConnectFailure::unauthenticated)?;
 
-    match probe_authenticated(&client, &base_url, token.as_deref()).await {
+    let mut probe = probe_authenticated(&client, &base_url, token.as_deref()).await;
+    if probe == Probe::Rejected && connection.deploy == DeployMode::OnConnect && !deployed {
+        deploy_and_wait(state, id, connection, &client, &base_url).await?;
+        token = crate::remote_connection::pairing_token(&connection.id)
+            .map_err(ConnectFailure::error)?;
+        probe = probe_authenticated(&client, &base_url, token.as_deref()).await;
+    }
+
+    match probe {
         Probe::Ok => Ok(token),
         Probe::Rejected => Err(ConnectFailure::unauthenticated(
             REJECTED_CREDENTIALS.to_string(),
         )),
         Probe::Failed(e) => Err(ConnectFailure::error(e)),
+    }
+}
+
+fn deploy_reason(
+    connection: &RemoteConnection,
+    health: Result<&Health, &str>,
+) -> Option<&'static str> {
+    if connection.deploy != DeployMode::OnConnect {
+        return None;
+    }
+    match health {
+        Err(_) => Some("unreachable"),
+        Ok(health) if health.protocol_version != Some(REMOTE_PROTOCOL_VERSION) => Some("protocol"),
+        Ok(_) => None,
+    }
+}
+
+async fn deploy_and_wait(
+    state: &Arc<AppState>,
+    id: &str,
+    connection: &RemoteConnection,
+    client: &reqwest::Client,
+    base_url: &str,
+) -> Result<Health, ConnectFailure> {
+    let profile = ssh_profile(connection).ok_or_else(|| {
+        ConnectFailure::error("deployment requires an SSH connection".to_string())
+    })?;
+    let RemoteTransport::Ssh {
+        remote_daemon_port, ..
+    } = &connection.transport
+    else {
+        unreachable!("ssh_profile only returns Some for SSH transports")
+    };
+    let token = match crate::remote_connection::pairing_token(&connection.id)
+        .map_err(ConnectFailure::error)?
+    {
+        Some(token) => token,
+        None => {
+            let token = uuid::Uuid::new_v4().to_string();
+            crate::remote_connection::set_pairing_token(&connection.id, &token)
+                .map_err(ConnectFailure::error)?;
+            token
+        }
+    };
+
+    update(state, id, |entry| {
+        entry.status = Some(RemoteStatus::Deploying {
+            step: "installing daemon".to_string(),
+        });
+        entry.error = None;
+    });
+    crate::remote_deploy::deploy_ephemeral(
+        &profile,
+        *remote_daemon_port,
+        &token,
+        connection.survive_secs,
+    )
+    .await
+    .map_err(|error| ConnectFailure::error(format!("installing daemon: {error}")))?;
+
+    wait_until_listening(client, base_url, LISTEN_GRACE).await
+}
+
+async fn wait_until_listening(
+    client: &reqwest::Client,
+    base_url: &str,
+    grace: Duration,
+) -> Result<Health, ConnectFailure> {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        let last_error = match read_health(client, base_url).await {
+            Ok(health) => return Ok(health),
+            Err(error) => error,
+        };
+        if std::time::Instant::now() >= deadline {
+            return Err(ConnectFailure::error(format!(
+                "installed daemon did not start within {}s: {last_error}",
+                grace.as_secs()
+            )));
+        }
+        tokio::time::sleep(TUNNEL_POLL).await;
     }
 }
 
@@ -758,25 +907,14 @@ async fn resolve_base_url(
     match &connection.transport {
         RemoteTransport::Direct { url } => Ok(url.trim_end_matches('/').to_string()),
         RemoteTransport::Ssh {
-            ssh_host,
-            ssh_port,
-            ssh_user,
-            identity_file,
-            remote_daemon_port,
+            remote_daemon_port, ..
         } => {
-            use crate::tunnels::profile::{
-                ForwardSpec, ProfileOptions, StrictHostKeyChecking, TunnelProfile,
-            };
+            use crate::tunnels::profile::ForwardSpec;
             let local_port = crate::tunnels::port::find_free_port()
                 .await
                 .map_err(|e| format!("No free local port for the tunnel: {e}"))?;
-            let mut profile = TunnelProfile::new(
-                format!("remote connection {}", connection.name),
-                ssh_host.clone(),
-                ssh_user.clone(),
-            );
-            profile.port = *ssh_port;
-            profile.identity_file = identity_file.as_ref().map(PathBuf::from);
+            let mut profile =
+                ssh_profile(connection).expect("SSH transport always produces an SSH profile");
             profile.forwards = vec![ForwardSpec::Local {
                 bind_port: local_port,
                 remote_host: "127.0.0.1".to_string(),
@@ -787,10 +925,6 @@ async fn resolve_base_url(
             // cannot stop to ask about a fingerprint. Everything else —
             // including `Compression=yes`, which is what keeps the terminal
             // stream small on this exact link — stays at the default.
-            profile.options = ProfileOptions {
-                strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
-                ..ProfileOptions::default()
-            };
             let tunnel_id = state.tunnel_manager.start(profile).await?;
             update(state, &connection.id, |e| {
                 e.tunnel_id = Some(tunnel_id.clone())
@@ -799,6 +933,32 @@ async fn resolve_base_url(
             Ok(format!("http://127.0.0.1:{local_port}"))
         }
     }
+}
+
+fn ssh_profile(connection: &RemoteConnection) -> Option<crate::tunnels::profile::TunnelProfile> {
+    let RemoteTransport::Ssh {
+        ssh_host,
+        ssh_port,
+        ssh_user,
+        identity_file,
+        ..
+    } = &connection.transport
+    else {
+        return None;
+    };
+    use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
+    let mut profile = TunnelProfile::new(
+        format!("remote connection {}", connection.name),
+        ssh_host.clone(),
+        ssh_user.clone(),
+    );
+    profile.port = *ssh_port;
+    profile.identity_file = identity_file.as_ref().map(PathBuf::from);
+    profile.options = ProfileOptions {
+        strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
+        ..ProfileOptions::default()
+    };
+    Some(profile)
 }
 
 async fn wait_for_tunnel(state: &Arc<AppState>, tunnel_id: &str) -> Result<(), String> {
@@ -859,6 +1019,41 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
         return;
     };
     dispose(state, id, entry);
+}
+
+/// Delete-specific teardown: clear local runtime state immediately, then make
+/// one bounded best-effort attempt to stop the ephemeral daemon this saved
+/// connection owns. Disconnect deliberately does not do this — it is allowed
+/// to leave the daemon alive for a cheap reconnect within `survive_secs`.
+pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
+    stop_deleted_ephemeral(state, id);
+    teardown(state, id);
+}
+
+fn stop_deleted_ephemeral(state: &Arc<AppState>, id: &str) {
+    let connection = match RemoteConnectionStore::load(&state.data_dir) {
+        Ok(connections) => connections
+            .into_iter()
+            .find(|connection| connection.id == id),
+        Err(error) => {
+            tracing::warn!(source = "remote", connection = id, %error, "Could not inspect deleted connection for ephemeral cleanup");
+            None
+        }
+    };
+    let Some(profile) = connection.as_ref().and_then(delete_stop_profile) else {
+        return;
+    };
+    tokio::spawn(async move {
+        let _ = crate::remote_deploy::stop_ephemeral(&profile).await;
+    });
+}
+
+fn delete_stop_profile(
+    connection: &RemoteConnection,
+) -> Option<crate::tunnels::profile::TunnelProfile> {
+    (connection.deploy == DeployMode::OnConnect)
+        .then(|| ssh_profile(connection))
+        .flatten()
 }
 
 /// Stop everything one entry owns and announce the departure.
@@ -1006,7 +1201,9 @@ fn spawn_supervisor(state: &Arc<AppState>, id: String) {
                 // Somebody else's attempt is in flight — an explicit `connect`,
                 // which claims before it spawns us. Watch, do not join in, and
                 // do not grow the backoff on an attempt that is not ours.
-                RemoteStatus::Connecting => tokio::time::sleep(CONNECTING_POLL).await,
+                RemoteStatus::Connecting | RemoteStatus::Deploying { .. } => {
+                    tokio::time::sleep(CONNECTING_POLL).await
+                }
                 // Disconnected or Error. Disconnected is also where a fresh
                 // supervisor starts, so this arm must attempt rather than bail:
                 // a teardown is recognised by the generation above, never by the
@@ -1248,6 +1445,70 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&status).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn deploying_payload_carries_the_step_name() {
+        let payload = remote_connection_status_payload(&RemoteConnectionStatus {
+            id: "machine".into(),
+            status: RemoteStatus::Deploying {
+                step: "asset".into(),
+            },
+            base_url: None,
+            token: None,
+            protocol_version: None,
+            error: None,
+            step: Some("asset".into()),
+        });
+
+        assert_eq!(payload["status"], "deploying");
+        assert_eq!(payload["step"], "asset");
+    }
+
+    #[tokio::test]
+    async fn pairing_token_skips_the_password_exchange() {
+        let mut server = mockito::Server::new_async().await;
+        let exchange = server
+            .mock("GET", "/api/auth/session-token")
+            .expect(0)
+            .create_async()
+            .await;
+        let connection = RemoteConnection::new_direct("paired", server.url(), "boss");
+        crate::remote_connection::set_pairing_token(&connection.id, "pair-token").unwrap();
+
+        let token = authenticate(&connection, &server.url()).await.unwrap();
+
+        assert_eq!(token.as_deref(), Some("pair-token"));
+        exchange.assert_async().await;
+    }
+
+    #[test]
+    fn deployment_decision_is_exact_about_protocol_and_mode() {
+        let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
+        let healthy = Health {
+            protocol_version: Some(REMOTE_PROTOCOL_VERSION),
+            instance_id: None,
+        };
+        let incompatible = Health {
+            protocol_version: Some(REMOTE_PROTOCOL_VERSION + 1),
+            instance_id: None,
+        };
+
+        assert_eq!(deploy_reason(&connection, Ok(&healthy)), None);
+        connection.deploy = crate::remote_connection::DeployMode::OnConnect;
+        assert_eq!(
+            deploy_reason(&connection, Ok(&incompatible)),
+            Some("protocol")
+        );
+        assert_eq!(
+            deploy_reason(&connection, Err("Unreachable: refused")),
+            Some("unreachable")
+        );
+        connection.deploy = crate::remote_connection::DeployMode::Installed;
+        assert_eq!(
+            deploy_reason(&connection, Err("Unreachable: refused")),
+            None
+        );
     }
 
     #[test]
@@ -1735,6 +1996,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn teardown_delete_stops_only_an_on_connect_ssh_daemon() {
+        let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
+        connection.deploy = DeployMode::OnConnect;
+        let profile = delete_stop_profile(&connection).expect("ephemeral daemon");
+        assert_eq!(profile.host, "host");
+
+        connection.deploy = DeployMode::Installed;
+        assert!(delete_stop_profile(&connection).is_none());
+
+        let mut direct = RemoteConnection::new_direct("lan", "http://host:9877", "boss");
+        direct.deploy = DeployMode::OnConnect;
+        assert!(delete_stop_profile(&direct).is_none());
+    }
+
+    #[test]
+    fn teardown_delete_stop_is_fire_and_forget_and_uses_the_bounded_stop_helper() {
+        let source = include_str!("remote_runtime.rs");
+        let start = source.find("fn stop_deleted_ephemeral").unwrap();
+        let body = &source[start..source[start..].find("\n}\n").unwrap() + start];
+        assert!(body.contains("tokio::spawn"));
+        assert!(body.contains("remote_deploy::stop_ephemeral"));
+        assert!(
+            body.contains("let _ ="),
+            "remote SSH failure must be ignored"
+        );
+    }
+
     /// A failed connect must not leave the tunnel it opened behind.
     ///
     /// `resolve_base_url` starts the SSH tunnel BEFORE the health check, the
@@ -2144,6 +2433,7 @@ mod tests {
                 token: None,
                 protocol_version: None,
                 error: None,
+                step: None,
             });
             assert_eq!(payload["id"], "abc");
             assert!(payload.get("status").is_some());

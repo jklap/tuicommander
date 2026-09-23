@@ -696,6 +696,10 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
         .route("/status/{id}", get(commands::get_tunnel_status))
         .route("/audit/{id}", get(commands::get_tunnel_audit))
         .route("/ssh-hosts", get(commands::list_ssh_config_hosts))
+        .route(
+            "/ssh-hosts/status",
+            get(commands::probe_ssh_config_hosts_http),
+        )
         .route("/agent-keys", get(commands::list_agent_keys))
 }
 
@@ -1524,6 +1528,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/{id}/connect",
             post(config_routes::post_remote_connection_connect)
                 .delete(config_routes::delete_remote_connection_connect),
+        )
+        .route(
+            "/config/remote-connections/{id}/install",
+            post(config_routes::post_remote_connection_install)
+                .delete(config_routes::delete_remote_connection_install),
         )
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
@@ -2476,6 +2485,23 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn remote_lifetime_health_reports_survive_secs() {
+        let mut state = crate::state::tests_support::make_test_app_state();
+        state.remote_survive_secs = Some(1_800);
+        let app = build_router(Arc::new(state), false, true);
+        let response = app
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["survive_secs"], 1_800);
     }
 
     /// The map page is static HTML served by `include_str!`, exactly like

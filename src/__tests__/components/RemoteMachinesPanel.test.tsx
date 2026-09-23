@@ -1,0 +1,136 @@
+import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { actions, connections } = vi.hoisted(() => ({
+	actions: {
+		hydrate: vi.fn(() => Promise.resolve()),
+		addConnection: vi.fn<(connection: unknown) => Promise<void>>(() => Promise.resolve()),
+		setPassword: vi.fn(() => Promise.resolve()),
+		hasPassword: vi.fn(() => Promise.resolve(false)),
+		connect: vi.fn(() => Promise.resolve()),
+		disconnect: vi.fn(() => Promise.resolve()),
+		install: vi.fn(() => Promise.resolve()),
+		uninstall: vi.fn(() => Promise.resolve()),
+		probeSshHosts: vi.fn<
+			() => Promise<Array<{ host: string; auth: "shell" | "no_shell" | "auth_failed" | "unreachable" }>>
+		>(() => Promise.resolve([])),
+		removeConnection: vi.fn(() => Promise.resolve()),
+	},
+	connections: {} as Record<string, unknown>,
+}));
+
+vi.mock("../../stores/remoteConnections", () => ({
+	remoteConnectionsStore: {
+		...actions,
+		getConnections: () => connections,
+	},
+}));
+
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { error: vi.fn() },
+}));
+
+import { RemoteMachinesPanel } from "../../components/SettingsPanel/tabs/services/RemoteMachinesPanel";
+
+function sshConnection(deploy: "never" | "on_connect" | "installed" = "never") {
+	return {
+		connection: {
+			id: "machine-1",
+			name: "Build host",
+			transport: {
+				type: "Ssh" as const,
+				ssh_host: "builder.local",
+				ssh_port: 22,
+				ssh_user: "dev",
+				identity_file: null,
+				remote_daemon_port: 9876,
+			},
+			auth_username: "tuic",
+			enabled: true,
+			deploy,
+			survive_secs: 1800,
+		},
+		status: "disconnected" as const,
+	};
+}
+
+describe("RemoteMachinesPanel", () => {
+	beforeEach(() => {
+		for (const key of Object.keys(connections)) delete connections[key];
+		for (const action of Object.values(actions)) action.mockClear();
+	});
+
+	afterEach(cleanup);
+
+	it("persists deployment mode and survive minutes when saving an SSH machine", async () => {
+		const { getByTitle, getByPlaceholderText, getByText, container } = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(getByTitle("Add remote machine"));
+
+		fireEvent.input(getByPlaceholderText("Name (e.g. dev-server, staging)"), {
+			target: { value: "Builder" },
+		});
+		fireEvent.input(getByPlaceholderText("Host (e.g. 192.168.1.100)"), {
+			target: { value: "builder.local" },
+		});
+		const deployment = Array.from(container.querySelectorAll("select")).find((select) =>
+			select.textContent?.includes("Deploy on connect"),
+		);
+		expect(deployment).toBeTruthy();
+		fireEvent.change(deployment!, { target: { value: "on_connect" } });
+		const survive = Array.from(container.querySelectorAll('input[type="number"]')).at(-1);
+		expect(survive).toBeTruthy();
+		fireEvent.input(survive!, { target: { value: "45" } });
+		fireEvent.click(getByText("Save"));
+
+		await waitFor(() => expect(actions.addConnection).toHaveBeenCalledTimes(1));
+		expect(actions.addConnection.mock.calls[0][0]).toMatchObject({
+			name: "Builder",
+			deploy: "on_connect",
+			survive_secs: 2700,
+		});
+	});
+
+	it("renders deployment progress from the backend status payload", () => {
+		connections["machine-1"] = {
+			...sshConnection(),
+			status: "deploying",
+			deployStep: "starting daemon",
+		};
+		const { getByText } = render(() => <RemoteMachinesPanel />);
+		expect(getByText("Deploying: starting daemon")).toBeTruthy();
+	});
+
+	it("offers install and uninstall based on the persisted deploy mode", async () => {
+		connections["machine-1"] = sshConnection();
+		let view = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(view.getByText("Install"));
+		await waitFor(() => expect(actions.install).toHaveBeenCalledWith("machine-1"));
+		view.unmount();
+
+		connections["machine-1"] = sshConnection("installed");
+		view = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(view.getByText("Uninstall"));
+		await waitFor(() => expect(actions.uninstall).toHaveBeenCalledWith("machine-1"));
+	});
+
+	it("lists probed host states while keeping the SSH host input free-form", async () => {
+		actions.probeSshHosts.mockResolvedValueOnce([
+			{ host: "shell-host", auth: "shell" },
+			{ host: "git-only", auth: "no_shell" },
+		]);
+		const { getByTitle, getByText, getByPlaceholderText, container } = render(() => <RemoteMachinesPanel />);
+		fireEvent.click(getByTitle("Add remote machine"));
+		fireEvent.click(getByText("Probe SSH hosts"));
+
+		await waitFor(() => expect(container.querySelectorAll("datalist option")).toHaveLength(2));
+		const options = Array.from(container.querySelectorAll("datalist option"));
+		expect(options.map((option) => option.getAttribute("label"))).toEqual([
+			"shell-host — shell",
+			"git-only — no shell",
+		]);
+
+		const hostInput = getByPlaceholderText("Host (e.g. 192.168.1.100)") as HTMLInputElement;
+		fireEvent.input(hostInput, { target: { value: "other.example" } });
+		expect(hostInput.value).toBe("other.example");
+	});
+});
