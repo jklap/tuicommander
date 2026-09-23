@@ -46,13 +46,14 @@ fn append(
     project_hint: Option<&str>,
     entry: NewProgressEntry,
     agent_type: Option<&str>,
+    pty_id: Option<&str>,
 ) -> Result<ProgressEntry, String> {
     if !progress_tracking_enabled(state, agent_type) {
         return Err(TRACKING_DISABLED.to_string());
     }
     entry.validate()?;
     let project = resolve_owning_project(project_hint)?;
-    ProgressStore::open()?.record(&project.to_string_lossy(), &entry)
+    ProgressStore::open()?.record_for_pty(&project.to_string_lossy(), &entry, pty_id)
 }
 
 /// Shared reporting core for MCP, HTTP and Tauri IPC. `into_entry` is what
@@ -63,12 +64,14 @@ pub fn submit_progress_report(
     input: ProgressReportInput,
     agent_name: Option<String>,
     agent_type: Option<&str>,
+    pty_id: Option<&str>,
 ) -> Result<ProgressEntry, String> {
     append(
         state,
         project_hint,
         input.into_entry(agent_name)?,
         agent_type,
+        pty_id,
     )
 }
 
@@ -83,6 +86,7 @@ pub fn record_intent(
     text: &str,
     agent_name: Option<String>,
     agent_type: Option<&str>,
+    pty_id: Option<&str>,
 ) -> Result<ProgressEntry, String> {
     append(
         state,
@@ -94,6 +98,7 @@ pub fn record_intent(
             agent_name,
         },
         agent_type,
+        pty_id,
     )
 }
 
@@ -114,8 +119,11 @@ pub fn progress_delete(
     ProgressStore::open()?.delete(&project_of(project)?, &input.ids)
 }
 
-pub fn progress_mark_viewed(project: &str) -> Result<ProgressViewedReceipt, String> {
-    ProgressStore::open()?.mark_viewed(&project_of(project)?)
+pub fn progress_mark_viewed(
+    project: &str,
+    pty_id: Option<&str>,
+) -> Result<ProgressViewedReceipt, String> {
+    ProgressStore::open()?.mark_viewed_for_pty(&project_of(project)?, pty_id)
 }
 
 #[cfg(test)]
@@ -194,11 +202,13 @@ mod tests {
             "Rewriting the Progress store",
             Some("claude".to_string()),
             Some("claude"),
+            Some("pty-a"),
         )
         .unwrap();
         assert_eq!(entry.kind, ProgressKind::Intent);
         assert_eq!(entry.text, "Rewriting the Progress store");
         assert_eq!(entry.agent_name.as_deref(), Some("claude"));
+        assert_eq!(entry.pty_id.as_deref(), Some("pty-a"));
         assert_eq!(
             entry.project,
             project.path().canonicalize().unwrap().to_string_lossy()
@@ -217,7 +227,7 @@ mod tests {
 
         let hint = project.path().to_string_lossy().to_string();
         assert_eq!(
-            record_intent(&state, Some(&hint), "Should not land", None, None).unwrap_err(),
+            record_intent(&state, Some(&hint), "Should not land", None, None, None).unwrap_err(),
             TRACKING_DISABLED
         );
         assert_eq!(
@@ -229,6 +239,7 @@ mod tests {
                     text: "Should not land either".to_string(),
                     step: None,
                 },
+                None,
                 None,
                 None,
             )

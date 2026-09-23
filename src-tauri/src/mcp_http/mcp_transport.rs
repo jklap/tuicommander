@@ -5450,6 +5450,8 @@ async fn handle_progress(
         .and_then(|id| state.peer_agents.get(&id).map(|peer| peer.name.clone()));
     let agent_type = resolve_mcp_origin_agent_type(state, mcp_session_id);
     let workspace_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
+    let pty_id = resolve_mcp_origin_session(state, mcp_session_id)
+        .and_then(|peer| state.live_pty_for_peer(&peer));
     let state = state.clone();
     run_blocking_handler(move || {
         match report_progress(
@@ -5458,6 +5460,7 @@ async fn handle_progress(
             input,
             agent_name,
             agent_type.as_deref(),
+            pty_id.as_deref(),
         ) {
             Ok(receipt) => to_json_or_error(receipt),
             Err(error) => serde_json::json!({"error": error}),
@@ -5475,6 +5478,7 @@ pub(crate) fn report_progress(
     input: crate::progress::ProgressReportInput,
     agent_name: Option<String>,
     agent_type: Option<&str>,
+    pty_id: Option<&str>,
 ) -> Result<crate::progress::ProgressReceipt, String> {
     let submitted = crate::progress::submit_progress_report(
         state.as_ref(),
@@ -5482,6 +5486,7 @@ pub(crate) fn report_progress(
         input,
         agent_name,
         agent_type,
+        pty_id,
     )?;
     Ok(emit_progress_entry(state, submitted))
 }
@@ -12599,6 +12604,7 @@ mod tests {
             input.clone(),
             Some("worker".to_string()),
             None,
+            None,
         )
         .unwrap();
 
@@ -12635,6 +12641,7 @@ mod tests {
             input,
             Some("worker".to_string()),
             None,
+            None,
         )
         .unwrap();
         assert_ne!(second.id, first.id);
@@ -12668,6 +12675,11 @@ mod tests {
                 registered_at: 0,
             },
         );
+        #[cfg(unix)]
+        {
+            insert_managed_test_session(&state, "pty-progress", &project.path().to_string_lossy());
+            state.bind_live_pty(&tuic, "pty-progress");
+        }
 
         let receipt = handle_progress(
             &state,
@@ -12686,6 +12698,8 @@ mod tests {
             Some("progress-worker")
         );
         assert_eq!(stored.entries[0].project, owner.to_string_lossy());
+        #[cfg(unix)]
+        assert_eq!(stored.entries[0].pty_id.as_deref(), Some("pty-progress"));
     }
 
     /// The only reportable kinds are `done` and `blocked`. `intent` belongs to

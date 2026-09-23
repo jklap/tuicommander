@@ -34,7 +34,8 @@ Hovering over a row highlights it (same as keyboard selection). Clicking a row e
 
 ### Project Progress
 
-Run **Open Project Progress** to open the active project's journal in a dialog.
+Run **Open Terminal Progress** to open the active terminal's journal in a dialog.
+Use the selector to inspect another terminal or the whole repository.
 This action is available in desktop and browser mode. The same dialog opens from
 the aggregate Progress entry in the notification bell.
 

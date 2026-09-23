@@ -8,18 +8,24 @@ registered project and normal route authentication.
 | Route | Body | Response |
 |---|---|---|
 | `/progress/report` | `{ type, text, step? }`, `type` is `done` or `blocked` | `{ id }` |
-| `/progress/list` | `{ blockedOnly }` | `{ project, entries, lastViewedMs? }` |
+| `/progress/list` | `{ blockedOnly?, ptyId? }` | `{ project, entries, ptyIds, lastViewedMs? }` |
 | `/progress/delete` | `{ ids }` | `{ deleted }` |
-| `/progress/viewed` | none | `{ lastViewedMs }` |
+| `/progress/viewed?ptyId=<id>` | none | `{ lastViewedMs }` |
 
 Unknown fields are rejected. `text` is capped at 500 characters and `step` at 80.
+Omit `ptyId` on `/progress/viewed` to mark the repository aggregate; supply it
+to mark one PTY. Each scope keeps a separate last-visit timestamp.
 `intent` is a valid entry *kind* but not a reportable one — TUIC writes those
 itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 
-The list is newest-first and capped at 500 entries. There is no paging, no
+`ptyId` selects one PTY; omitting it returns the repository aggregate. Each
+entry includes `ptyId` when TUIC knows its source. Older entries and direct
+IPC/HTTP reports have no PTY ID and remain visible in the aggregate. `ptyIds`
+lists the PTYs with stored history, including closed PTYs. The list is
+newest-first and capped at 500 entries per request. There is no paging, no
 cursor and no revision: the journal is append-only, so an entry is written once
 and either kept or deleted. The one exception is a host-written `intent` that
-repeats the project's newest intent (same text, same agent): it returns the
+repeats that PTY's newest intent (same text, same agent): it returns the
 existing entry, because a screen repaint is not a new intent. `delete` is scoped
 to the project in the query, so one project cannot delete another project's row
 by id.

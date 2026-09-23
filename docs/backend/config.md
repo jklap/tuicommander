@@ -870,9 +870,14 @@ A `.tuic.json` file in the repository root provides team-shareable settings. It 
 `service.rs`)
 
 One append-only journal in one database, `<config dir>/progress.sqlite3`, with
-`project` as a column. Nothing is written inside a repository — no `.tuic`
+`project` and nullable `pty_id` columns. Existing databases gain `pty_id` on
+open; old rows keep `NULL` because their PTY cannot be reconstructed. A
+project-wide query includes every PTY and the unattributed rows; a PTY query
+selects one source. Nothing is written inside a repository — no `.tuic`
 directory, no `.git/info/exclude` registration, no export lock, and so nothing
 for the repository watcher or the content index to ignore.
+Separate `pty_views` and `project_views` tables keep last-visit marks for each
+PTY and the repository aggregate.
 `repo_watcher.rs` asserts that: it snapshots the repository tree byte-for-byte
 around a record/delete/mark-viewed cycle and requires it unchanged.
 

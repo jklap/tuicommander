@@ -755,7 +755,10 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => ({ method: "POST", path: `/progress/delete?path=${p("project")}`, body: args.input }),
 	},
 	progress_mark_viewed: {
-		map: (_args, p) => ({ method: "POST", path: `/progress/viewed?path=${p("project")}` }),
+		map: (args, p) => ({
+			method: "POST",
+			path: `/progress/viewed?path=${p("project")}${args.ptyId ? `&ptyId=${p("ptyId")}` : ""}`,
+		}),
 	},
 
 	// --- Config: prompt library ---

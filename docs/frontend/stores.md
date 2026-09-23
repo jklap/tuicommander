@@ -547,9 +547,10 @@ Dynamic context menu action registration.
 
 ### progressStore (`progress.ts`)
 
-Transport-neutral presentation state for Project Progress. It holds one flat
-entry list per project and the divider timestamp frozen when the dialog opened;
-the stored mark moves on close, so the line never jumps under the reader.
+Transport-neutral presentation state for Progress. It selects the active PTY
+when available and retains a repository aggregate view. It holds the selected
+scope's entry list and its divider timestamp frozen while that scope is shown.
+Switching scopes loads the new mark; closing records every visited scope.
 
 It queries on open, for the one project the dialog shows — not once per
 registered repository, which is what made the old panel fire a request per repo

@@ -389,6 +389,7 @@ fn report_progress_event(
         report,
         None,
         None,
+        None,
     )
 }
 
@@ -410,8 +411,8 @@ fn progress_delete(
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn progress_mark_viewed(project: String) -> Result<progress::ProgressViewedReceipt, String> {
-    progress::progress_mark_viewed(&project)
+fn progress_mark_viewed(project: String, pty_id: Option<String>) -> Result<progress::ProgressViewedReceipt, String> {
+    progress::progress_mark_viewed(&project, pty_id.as_deref())
 }
 
 /// Receive a screenshot response from the frontend (captured iframe content).

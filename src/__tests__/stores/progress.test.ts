@@ -13,10 +13,27 @@ vi.mock("../../stores/repositories", () => ({
 		get: (path: string) => (path === "/repo" ? { displayName: "Repo" } : undefined),
 	},
 }));
+vi.mock("../../stores/terminals", () => ({
+	terminalsStore: {
+		state: { activeId: "tab-a", terminals: { "tab-a": { sessionId: "pty-a", repoPath: "/repo", name: "Agent A" } } },
+	},
+}));
 
 type Kind = "done" | "blocked" | "intent";
 
-function entry(id: number, createdAtMs: number, type: Kind = "done") {
+function entry(
+	id: number,
+	createdAtMs: number,
+	type: Kind = "done",
+): {
+	id: number;
+	project: string;
+	createdAtMs: number;
+	type: Kind;
+	text: string;
+	step: string;
+	ptyId?: string;
+} {
 	return { id, project: "/repo", createdAtMs, type, text: `entry ${id}`, step: "Delivery" };
 }
 
@@ -28,6 +45,71 @@ describe("progressStore", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		vi.resetModules();
+	});
+
+	it("opens the active PTY and can switch to another PTY in the same repository", async () => {
+		invokeMock.mockResolvedValue({ ...list([]), ptyIds: ["pty-a", "pty-b"] });
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open();
+		await vi.waitFor(() =>
+			expect(invokeMock).toHaveBeenCalledWith("progress_list", {
+				project: "/repo",
+				input: { blockedOnly: false, ptyId: "pty-a" },
+			}),
+		);
+		store.selectPty("pty-b");
+		await vi.waitFor(() =>
+			expect(invokeMock).toHaveBeenCalledWith("progress_list", {
+				project: "/repo",
+				input: { blockedOnly: false, ptyId: "pty-b" },
+			}),
+		);
+		expect(store.selectedPtyId()).toBe("pty-b");
+	});
+
+	it("does not show the previous PTY's entries while another PTY loads", async () => {
+		invokeMock.mockResolvedValueOnce({ ...list([{ ...entry(1, 100), ptyId: "pty-a" }]), ptyIds: ["pty-a", "pty-b"] });
+		let finishLoad!: (value: ReturnType<typeof list>) => void;
+		invokeMock.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishLoad = resolve;
+				}),
+		);
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open("/repo");
+		await vi.waitFor(() => expect(store.state.projects["/repo"].entries).toHaveLength(1));
+		store.selectPty("pty-b");
+		expect(store.state.projects["/repo"].entries).toEqual([]);
+		finishLoad(list([]));
+		await vi.waitFor(() => expect(store.state.projects["/repo"].loading).toBe(false));
+	});
+
+	it("marks every viewed scope when closing after switching PTYs", async () => {
+		invokeMock.mockResolvedValue(list([]));
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open("/repo");
+		store.selectPty("pty-b");
+		store.selectPty(null);
+		await store.close();
+		expect(invokeMock).toHaveBeenCalledWith("progress_mark_viewed", { project: "/repo", ptyId: "pty-a" });
+		expect(invokeMock).toHaveBeenCalledWith("progress_mark_viewed", { project: "/repo", ptyId: "pty-b" });
+		expect(invokeMock).toHaveBeenCalledWith("progress_mark_viewed", { project: "/repo" });
+	});
+
+	it("uses each PTY's own divider when switching scopes", async () => {
+		invokeMock.mockImplementation((_command: string, args: { input?: { ptyId?: string } }) =>
+			Promise.resolve(list([], args.input?.ptyId === "pty-b" ? 50 : 150)),
+		);
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open("/repo");
+		await vi.waitFor(() => expect(store.state.projects["/repo"].dividerMs).toBe(150));
+		store.selectPty("pty-b");
+		await vi.waitFor(() => expect(store.state.projects["/repo"].dividerMs).toBe(50));
 	});
 
 	/// The list is redrawn whenever an entry arrives. If the divider followed the
@@ -55,7 +137,7 @@ describe("progressStore", () => {
 		expect(store.state.projects["/repo"].dividerMs).toBe(150);
 
 		await store.close();
-		expect(invokeMock).toHaveBeenCalledWith("progress_mark_viewed", { project: "/repo" });
+		expect(invokeMock).toHaveBeenCalledWith("progress_mark_viewed", { project: "/repo", ptyId: "pty-a" });
 		expect(store.state.projects["/repo"].dividerMs).toBeUndefined();
 	});
 
@@ -71,7 +153,7 @@ describe("progressStore", () => {
 		expect(invokeMock).toHaveBeenCalledTimes(1);
 		expect(invokeMock).toHaveBeenCalledWith("progress_list", {
 			project: "/repo",
-			input: { blockedOnly: false },
+			input: { blockedOnly: false, ptyId: "pty-a" },
 		});
 	});
 
@@ -87,7 +169,7 @@ describe("progressStore", () => {
 		await vi.waitFor(() =>
 			expect(invokeMock).toHaveBeenCalledWith("progress_list", {
 				project: "/repo",
-				input: { blockedOnly: true },
+				input: { blockedOnly: true, ptyId: "pty-a" },
 			}),
 		);
 	});
@@ -127,7 +209,7 @@ describe("progressStore", () => {
 		expect(store.unreadCount).toBe(0);
 
 		// Open on the same project, the list refreshes instead of counting.
-		store.presentLive({ repo_path: "/repo", payload: { entry: entry(3, 300) } });
+		store.presentLive({ repo_path: "/repo", payload: { entry: { ...entry(3, 300), ptyId: "pty-a" } } });
 		expect(store.unreadCount).toBe(0);
 	});
 
