@@ -545,10 +545,13 @@ export const BranchItem: Component<{
 							<ChevronIcon />
 						</span>
 						{/* Rides the icon's corner so the count costs no width; it is the
-						    only trace of the sessions while the list is collapsed. */}
-						<span class={s.branchAgentCount} aria-hidden="true">
-							{props.branch.terminals.length}
-						</span>
+						    only trace of the sessions while the list is collapsed. Expanded,
+						    the rows themselves show them, so the count is only noise. */}
+						<Show when={props.branch.tabsCollapsed}>
+							<span class={s.branchAgentCount} aria-hidden="true">
+								{props.branch.terminals.length}
+							</span>
+						</Show>
 					</span>
 				</Show>
 				<div class={s.branchContent}>

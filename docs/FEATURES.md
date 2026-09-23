@@ -279,6 +279,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Clicking a row switches to that session.
 - Every branch shows its list by default (`tabsCollapsed` absent); collapsing is remembered per workspace. The branch icon toggles the list: it swaps to a chevron on hover or keyboard focus (Enter/Space), inside the icon's own box, so branch rows have no chevron column and badges keep one right edge. Clicking the row only opens the branch — it never expands or collapses the list.
 - Single-session branches can expand too.
+- A collapsed list shows its session count on the branch icon; an expanded list hides it, because the rows already show every session.
 
 ### 2.4 Git Quick Actions
 - Bottom of sidebar when a repo is active

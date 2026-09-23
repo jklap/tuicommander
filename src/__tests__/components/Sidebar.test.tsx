@@ -1922,6 +1922,32 @@ describe("Sidebar", () => {
 			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "main");
 			expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
 		});
+
+		it("branch icon hides the session count while the list is expanded", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						"feature/open": {
+							workspaceId: "feature/open",
+							branchName: "feature/open",
+							isMain: false,
+							worktreePath: "/wt/open",
+							terminals: ["t1", "t2", "t3"],
+							additions: 0,
+							deletions: 0,
+							tabsCollapsed: false,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const toggle = branchRow(container, "feature/open").querySelector(".branchIconToggle")!;
+
+			// The expanded rows already show every session; a badge would repeat them.
+			expect(toggle.querySelector(".branchAgentCount")).toBeNull();
+			// Screen readers keep the count: the toggle label still carries it.
+			expect(toggle.getAttribute("aria-label")).toContain("3");
+		});
 	});
 
 	describe("multiple repos", () => {
