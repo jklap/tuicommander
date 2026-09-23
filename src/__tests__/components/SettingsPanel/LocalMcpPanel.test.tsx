@@ -91,7 +91,7 @@ describe("LocalMcpPanel", () => {
 	])("does not repeat MCP card contents: %s", async (copy) => {
 		const view = render(() => <LocalMcpPanel />);
 		await vi.advanceTimersByTimeAsync(0);
-		expect(view.getByRole("heading", { name: "TUIC Tools" })).toBeDefined();
+		expect(view.getByRole("heading", { name: "TUIC MCP Server" })).toBeDefined();
 		expect(view.getByRole("checkbox", { name: "session" })).toBeDefined();
 		expect(view.queryByText(copy)).toBeNull();
 		view.unmount();
@@ -208,7 +208,7 @@ describe("LocalMcpPanel", () => {
 		await vi.advanceTimersByTimeAsync(0);
 
 		expect(view.getByText("Server connections")).toBeDefined();
-		expect(view.getByText("TUIC Tools")).toBeDefined();
+		expect(view.getByText("TUIC MCP Server")).toBeDefined();
 		expect(view.getByText("Server Status")).toBeDefined();
 
 		view.unmount();
@@ -325,16 +325,16 @@ describe("LocalMcpPanel", () => {
 			view.unmount();
 		});
 
-		// A search result for either TUIC Tools control must land on the control itself,
+		// A search result for either TUIC MCP Server control must land on the control itself,
 		// not fall back to the section heading.
-		it("scrolls to each indexed TUIC Tools control, not just its section", async () => {
+		it("scrolls to each indexed TUIC MCP Server control, not just its section", async () => {
 			uiStore.setSettingsExpertMode(true);
 			const view = await renderWith({
 				collapse_tools: false,
 				mcp_capabilities: { denied: ["settings", "debug"], migration_unknown_tools: [] },
 			});
 			const entries = SETTINGS_SEARCH_INDEX.filter(
-				(entry) => entry.tab === "mcp" && entry.section === "TUIC Tools" && entry.label,
+				(entry) => entry.tab === "mcp" && entry.section === "TUIC MCP Server" && entry.label,
 			);
 			expect(entries.map((entry) => entry.label)).toEqual([
 				"Collapse tools — Speakeasy MCP (reduces AI context ~98%)",

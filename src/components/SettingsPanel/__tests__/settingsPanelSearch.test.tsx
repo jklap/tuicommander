@@ -117,6 +117,8 @@ describe("SettingsPanel search", () => {
 			if (command === "load_mcp_upstreams") return { servers: [] };
 			if (command === "list_remote_connections" || command === "remote_connection_statuses") return [];
 			if (command === "discover_ssh_hosts") return { hosts: [], hashed_count: 0 };
+			// The MCP page lists the clients the bridge was installed in.
+			if (command === "list_installed_mcp_integrations") return [];
 			return undefined;
 		});
 		vi.spyOn(appLogger, "warn").mockImplementation(() => {});

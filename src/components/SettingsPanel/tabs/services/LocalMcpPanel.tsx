@@ -10,6 +10,7 @@ import { ContextualHelp } from "../../ContextualHelp";
 import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
 import { SectionCard, SettingPageHeader, SettingRow } from "../../SettingsPrimitives";
+import { McpIntegrationsSection } from "./McpIntegrationsSection";
 import layout from "./ServiceRestyle.module.css";
 import { type AppConfig, type McpCapability, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 import { UpstreamMcpPanel } from "./UpstreamMcpPanel";
@@ -86,15 +87,18 @@ export const LocalMcpPanel: Component = () => {
 					)}
 				</SettingRow>
 
-				<SettingRow label={t("services.label.mcpConnection", "MCP Connection")}>
-					{() => <StatusBadge label="tuic-bridge" />}
-				</SettingRow>
-
 				<UpstreamMcpPanel />
-				{/* ── TUIC Tools ── */}
 			</SectionCard>
-			<SectionCard title="TUIC Tools">
+			<McpIntegrationsSection />
+			{/* ── TUIC MCP Server ── */}
+			<SectionCard title="TUIC MCP Server">
 				<div class={s.group}>
+					<p class={s.hint} style={{ margin: "0 0 8px" }}>
+						{t(
+							"services.hint.perAgentAutoConfigure",
+							"The MCP server can also be configured automatically for a specific agent from that agent's own settings, under Settings → Agents.",
+						)}
+					</p>
 					<button
 						data-non-setting="Show the bridge integration instructions; not a preference"
 						class={s.mcpDisclosure}

@@ -753,7 +753,7 @@ after loading this backend build to obtain the updated catalogue.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
-When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
+When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC MCP Server > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
 
 | Meta-tool | Purpose |
 |-----------|---------|

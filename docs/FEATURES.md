@@ -1040,7 +1040,6 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **MCP bridge install:** One-click install/remove of `tui-mcp-bridge` into agent's native MCP config file
 - **Supported MCP agents:** Claude, Cursor, Windsurf, VS Code, Zed, Amp, Gemini, Codex, Grok, OpenCode, Droid, Goose, pi (through pi-mcp-adapter)
 - **Shared settings files are opt-in:** Zed, Amp and Gemini store MCP servers inside their general `settings.json`, so those three are never written automatically — the panel says so and the Install button does it on request
-- **Remove all MCP integrations:** Lists every client holding a bridge entry and clears them in one action, so uninstalling TUICommander does not leave a dangling `tuic-bridge` server behind
 - **Edit agent config:** Opens agent's own configuration file in the user's preferred IDE
 - **Context menu integration:** Right-click terminal > Agents submenu with per-agent run configurations; selected environment variables apply only to the launched agent, including from the sidebar menu
 - **Busy detection:** Agents submenu disabled when a process is already running in the active terminal
@@ -1753,9 +1752,10 @@ The navigation groups the global pages by task. Each group is a static label row
 ### 11.3 MCP, Remote Access and Remote Servers
 Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll. The former **Remote Machines** page is now a section of **Remote Servers** (an old `remote-machines` deep link opens it).
 - **MCP** — HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
-- **MCP** — MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
+- **MCP** — TUIC MCP Server and MCP integrations: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.); a note above the manual-configure disclosure points to the per-agent auto-configure option in Settings → Agents instead; **MCP integrations** (moved from Settings → Agents) lists and removes every client the bridge was installed in
 - **MCP** — TUIC capability switches: enable or deny capability domains and grouped actions to restrict what AI agents can access; additional restrictions preserve migrated member denials
 - **MCP** — Upstream MCP Servers: add/edit/remove upstream MCP servers (HTTP or stdio with optional `cwd`), per-upstream enable/disable, reconnect, Bearer/OAuth and multiple masked secret header rows backed by the OS credential vault, origin-bound credentials that fail closed on provider changes or unbound old entries, same-origin-only credential redirects, live status dots, tool count and metrics. Saved upstreams auto-connect on boot. The MCP popup's "Manage in Settings" opens this page at this section
+- **MCP** — **Remove all MCP integrations:** lists every client holding a bridge entry and clears them in one action, so uninstalling TUICommander does not leave a dangling `tuic-bridge` server behind (moved here from the Agents page)
 - MCP Per-Repo Scoping: each repo can define which upstream MCP servers are relevant via an allowlist in repo settings (3-layer: per-repo > `.tuic.json` > defaults). Null/empty allowlist = all servers. Quick toggle via **Cmd+Shift+M** popup
 - File Access: **Additional Readable Directories** — extra absolute directories a browser/remote/PWA client may read files from, on top of registered repository roots. Default: `~/.claude/plans` (so a Claude Code plan-file link an agent printed opens with no setup). Desktop reads are never restricted; never widens writing, copying, or moving — see **14.6**
 - **Remote Access** — port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, Tailscale HTTPS, cloud relay. A discovery failure replaces only the address choices with an inline error and Retry; other settings remain available
@@ -2529,7 +2529,7 @@ partial work, and their child processes may continue.
 
 ### 19.1.1 Lazy Tool Discovery (`collapse_tools`)
 - Native MCP switches in Settings use domain sections, with rare and conditional tools separate. Each tool retains its own saved switch and existing permission gates.
-- When `collapse_tools: true` (Settings > MCP > TUIC Tools > "Collapse tools"), the full tool list is replaced with 3 meta-tools: `search_tools`, `get_tool_schema`, `call_tool`
+- When `collapse_tools: true` (Settings > MCP > TUIC MCP Server > "Collapse tools"), the full tool list is replaced with 3 meta-tools: `search_tools`, `get_tool_schema`, `call_tool`
 - Grok sessions (`clientInfo.name` matching `grok-shell-*`) receive the same 3 meta-tools automatically because Grok rejects nested qualified names such as `tuicommander__upstream__tool`; this per-session compatibility mode leaves the global setting and other clients unchanged, and the bridge restores it after TUIC reconnects
 - Cuts MCP context from ~35k tokens to ~500 tokens per agent turn; agent fetches schemas on demand via BM25-ranked search
 - BM25 index backed by `AppState::tool_search_index` (rebuilds automatically when the tool set changes)
