@@ -452,7 +452,7 @@ serving a configuration the disk disagrees with. See
 | `DELETE` | `/worktrees` | Remove worktree |
 | `GET` | `/worktrees/paths?path=` | Get linked-worktree paths for a repo, keyed by workspace id and carrying `kind` |
 | `GET` | `/worktrees/lifecycle?repoPath=&workspaceId=` | Fresh dirty/commit/removal-safety verdict for one exact workspace; unknown fails closed |
-| `POST` | `/worktrees/run-script` | Run a setup script in a directory; returns exit code and captured output |
+| `POST` | `/worktrees/run-script` | Run a Setup/Archive/Run script (`{script, cwd}`) with the `TUIC_*` env injected and the 900 s deadline — loopback or authenticated only (`require_local_or_auth`); `cwd` must be absolute after `~` expansion |
 
 ### Dictation and Desktop Integration
 
@@ -1493,8 +1493,13 @@ Remote continuation notes also name the required `connection_id`.
 
 MCP `repo action=worktree_create` uses the same creation path as HTTP
 `POST /worktrees`, including `base_repo` validation, stale-worktree recovery,
-cache invalidation, `worktree-created` SSE/Tauri events, setup-script result
-reporting, and best-effort copy-on-write warming of Git-ignored directories.
+cache invalidation, `worktree-created` SSE/Tauri events, and the background
+post-create chain (best-effort copy-on-write warming of Git-ignored directories,
+then the file sync, then the Setup Script). The response returns before that
+chain runs, so it carries **no** `setup_script`/`setup_script_error` (removed;
+the outcome is the `worktree-setup-script-completed` event) and
+`instructions.warm_artifacts.status` stays `pending` until the Setup Script has
+finished.
 Every created workspace is a linked worktree: Git refs and objects remain
 shared with the parent, while `instructions.warm_artifacts.warmed_directories`
 reports how many ignored directories arrived warm. Parent tracked changes are
@@ -2258,6 +2263,7 @@ When MCP-only (localhost):
 - **Markdown link resolution parity:** `POST /fs/resolve-markdown-link` and the `resolve_markdown_link` Tauri command call the same Rust resolver. It returns only target metadata, rejects UNC paths before probing, and preserves local symlink targets outside the registered root.
 - **Mobile Markdown images:** `GET /fs/markdown-image?repoPath=...&file=...` serves image files up to 10 MiB through the shared authenticated router. It canonicalizes the selected repository and requested file, then refuses a file outside that repository, including escapes through symlinks.
 - **Traversal gate on absolute-path fs routes:** `/fs/read-external`, `/fs/read-editor-external`, `/fs/write-external`, `/fs/copy-abs`, `/fs/move-abs` and `/fs/transfer` (its `destDir`) share `deny_unless_in_roots`, which rejects `..`, NUL and relative paths before the lexical `Path::starts_with` containment check. Without that first layer, `/repo/../../etc/passwd` passes containment by components while the OS resolves it outside the repo. These routes are in `shared_routes()`, so they are reachable from the remote router too. Paths are intentionally not canonicalized — symlinks placed inside a registered repo are an accepted design decision
+- **External path routes: `read-external` / `read-editor-external`:** These two READ routes are gated to registered repository roots **plus** the user-configurable `additional_readable_dirs` (`AppConfig`, default `["~/.claude/plans"]` — see [`config.md`](config.md)). Each configured entry is tilde-expanded and validated (`expand_readable_root`): blank/whitespace-only, `..`-containing, or non-absolute entries are dropped before ever reaching `deny_unless_in_roots`, since an empty root string would otherwise match every path (`Path::starts_with("")` is always `true`). The four mutating routes — `write-external`, `copy-abs`, `move-abs`, `transfer` — are **unchanged**: they stay confined to `registered_repo_roots()` only, so this setting never widens anything but the ability to read a file over HTTP
 - **Anti-hijack guard on `agent register`:** A non-loopback caller cannot register as an existing live TUIC session — the `register` action (along with `list_peers`, `send`, `inbox`) is restricted to loopback connections, preventing a remote client from injecting messages into another agent's context (see `mcp_transport.rs`)
 
 ## Browser Mode Integration

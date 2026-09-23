@@ -738,6 +738,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Command" },
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Args" },
 	{ tab: "mcp", section: "Upstream MCP Servers", label: "Working directory" },
+	// tabs/services/RemoteAccessPanel.tsx
+	{ tab: "remote-access", section: "File Access", sectionKey: "services.heading.fileAccess" },
+	{
+		tab: "remote-access",
+		section: "File Access",
+		label: "Additional Readable Directories",
+		labelKey: "services.label.additionalReadableDirs",
+	},
 	{ tab: "remote-access", section: "Remote Access" },
 	{ tab: "remote-access", section: "Connection status" },
 	{ tab: "remote-access", section: "Tailscale HTTPS" },

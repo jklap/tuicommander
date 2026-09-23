@@ -1992,7 +1992,7 @@ end-exclusive UTF-16 code-unit offsets within `line_text`. They can be passed
 directly to JavaScript `String.slice`, including when text before the match
 contains multibyte characters or non-BMP emoji.
 
-Sandboxed filesystem operations for the file manager panel. `/fs/read-external` reads an arbitrary absolute path (not sandboxed to a repo).
+Sandboxed filesystem operations for the file manager panel. `/fs/read-external` (and `/fs/read-editor-external`) reads an absolute path gated to registered repository roots **plus** the user-configurable `additional_readable_dirs` list (`AppConfig`, default `["~/.claude/plans"]`) — not sandboxed to a single repo, but not arbitrary either. See `docs/backend/config.md` for the setting and `docs/backend/mcp-http.md`'s Security Model section for the gate's mechanics.
 
 ## Agent Usage Endpoints
 
@@ -2045,7 +2045,7 @@ Gemini has no corresponding endpoint: its `/stats` and `/usage` commands are
 session-local UI data, not a stable account quota contract. TUIC therefore does
 not expose a Gemini account-usage route.
 
-**Absolute-path write boundary.** `/fs/write-external`, `/fs/copy-abs`, and `/fs/move-abs` are gated to **registered repository roots** for the HTTP boundary (a 403 otherwise), mirroring `/fs/read-external`. The gate rejects traversal syntax (`..`), NUL bytes, and relative paths *before* the containment check: containment is `Path::starts_with`, which is purely lexical, so `/repo/../../etc/passwd` is "inside" `/repo` by components while the OS resolves it far outside. Paths are deliberately **not** canonicalized — a symlink inside a registered repo that points outside it is an accepted design decision in this project. `/fs/transfer` gates only its `destDir` — sources are commonly external (a file dragged in from the desktop). `/fs/stat` and `/fs/resolve-terminal-path` return only metadata (no content) so they are not repo-gated; both also refuse macOS TCC-protected directories. `/fs/resolve-terminal-path` returns JSON `null` on a miss (`Option<ResolvedFilePath>`). `/fs/resolve-terminal-paths` is its batched sibling and is a POST for one reason: a whole terminal screen's candidates do not fit a query string, and being able to send many of them is the point. It answers **positionally** — the array it returns has one entry per input candidate, in order, `null` where that candidate resolved to nothing — so a caller may index the response by the index of the request.
+**Absolute-path write boundary.** `/fs/write-external`, `/fs/copy-abs`, and `/fs/move-abs` are gated to **registered repository roots only** for the HTTP boundary (a 403 otherwise) — this is narrower than `/fs/read-external`/`/fs/read-editor-external`, which also accept the user-configurable `additional_readable_dirs` list. That list is deliberately READ-only: it widens what a browser/remote client may *read*, never what it may write, copy, or move. The gate rejects traversal syntax (`..`), NUL bytes, and relative paths *before* the containment check: containment is `Path::starts_with`, which is purely lexical, so `/repo/../../etc/passwd` is "inside" `/repo` by components while the OS resolves it far outside. Paths are deliberately **not** canonicalized — a symlink inside a registered repo that points outside it is an accepted design decision in this project. `/fs/transfer` gates only its `destDir` — sources are commonly external (a file dragged in from the desktop). `/fs/stat` and `/fs/resolve-terminal-path` return only metadata (no content) so they are not repo-gated; both also refuse macOS TCC-protected directories. `/fs/resolve-terminal-path` returns JSON `null` on a miss (`Option<ResolvedFilePath>`). `/fs/resolve-terminal-paths` is its batched sibling and is a POST for one reason: a whole terminal screen's candidates do not fit a query string, and being able to send many of them is the point. It answers **positionally** — the array it returns has one entry per input candidate, in order, `null` where that candidate resolved to nothing — so a caller may index the response by the index of the request.
 
 `/fs/resolve-markdown-link` returns a tagged `kind` (`heading`, `file`, `missing`, or `blocked`). It decodes path and fragment separately, resolves relative to the source file, permits local symlinks outside the root, and refuses UNC/network paths before filesystem access.
 
@@ -2729,8 +2729,12 @@ what MCP `repo action=worktree_create` returns — one value, two carriers — a
 it is the ONLY instruction channel: there is no enforcement layer behind it.
 Its `warm_artifacts.status` starts as `pending`; wait for `done` or `failed`
 in `GET /worktrees/paths?path=<base_repo>` before installing or building.
-The setup script completes before warming begins. Desktop IPC creation also
-returns `pending` and warms in the background.
+After this response, a background chain (`worktree::spawn_worktree_setup_chain`)
+runs strictly in order: the CoW warm, then the file sync
+(`copy_ignored_files`/`copy_untracked_files`/`copy_paths`), then the configured
+Setup Script. `status` stays `pending` until the LAST of those finishes, so
+`done` means the Setup Script has run too. Desktop IPC creation runs the same
+chain and also returns `pending`.
 
 `workspace_id` is how every later call addresses this workspace — `DELETE
 /worktrees/:workspaceId`, `POST /worktrees/finalize`,
@@ -2753,6 +2757,14 @@ only that session within its existing repository. Explicit session creation
 leaves the caller in place. Placement does not change the shell cwd or send
 input to an agent. The existing per-workspace terminal snapshots preserve the
 placement on restart; an inactive caller does not change the current selection.
+
+**API change:** the response no longer carries `setup_script` /
+`setup_script_error` (previously the Setup Script ran inline and its
+`{exit_code, stdout, stderr}` result or error string rode on this response).
+The outcome is reported later via the dual-emitted
+`worktree-setup-script-completed` event (`/events` SSE; payload in
+`docs/sync-matrix.md`), silent when no script is configured. The same applies
+to MCP `repo action=worktree_create` and `POST /sessions/worktree`.
 
 ### Worktrees Base Directory
 
@@ -2828,8 +2840,14 @@ Content-Type: application/json
 ```
 
 Runs the script through `sh -c` (Unix) or `cmd /C` (Windows) in `cwd` and returns
-exit code plus captured output. `cwd` accepts `~`. A `cwd` that does not exist is a
-500 with `{ "error": ... }`. Same body as the `run_setup_script` command.
+`{ "exit_code": number, "stdout": string, "stderr": string }` — the same function
+and shape as the `run_setup_script` command, with the `TUIC_*` environment
+injected (`script_env::ScriptContext`: main checkout path, branch, base ref,
+worktree name, …) and the fixed 900 s script deadline. This is arbitrary shell
+execution, so the handler itself requires a loopback or authenticated request
+(`require_local_or_auth`; 403 otherwise). `cwd` accepts `~`; after expansion it
+must be absolute with no `..` (400 otherwise). A `cwd` that does not exist, or a
+timeout, is a 500 with `{ "error": ... }`.
 
 ### Remove Worktree
 

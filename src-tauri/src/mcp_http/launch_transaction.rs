@@ -296,17 +296,27 @@ async fn execute_scoped(
                 }
                 record.stage = "worktree_started".into();
                 journal.save(&key, &mut record)?;
-                match super::worktree_routes::create_worktree_shared(
+                // Unattended launch (C18a): wait for warm -> file sync -> Setup Script,
+                // so the child never starts in a half-set-up worktree.
+                match super::worktree_routes::create_worktree_shared_with_setup(
                     state,
                     new.repo_path.clone(),
                     new.branch.clone(),
                     new.base_ref.clone(),
                     Some(request.parent_session_id.clone()),
                     true,
+                    super::worktree_routes::SetupChainMode::Wait,
                 )
                 .await
                 {
-                    Ok(created) => {
+                    Ok((created, Some(setup_failure))) => {
+                        record.workspace_path = Some(created.path);
+                        record.stage = "blocked".into();
+                        record.reason = Some(format!("setup_script_failed: {setup_failure}"));
+                        journal.save(&key, &mut record)?;
+                        return Ok(receipt(state, &record));
+                    }
+                    Ok((created, None)) => {
                         record.workspace_path = Some(created.path);
                         #[cfg(test)]
                         if fault == Fault::AfterWorktreeEffect {
