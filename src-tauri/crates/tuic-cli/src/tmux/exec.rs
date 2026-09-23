@@ -322,7 +322,8 @@ impl TuicBackend for IpcBackend {
         let body = serde_json::json!({ "cwd": cwd });
         let resp = crate::ipc::post(
             &format!(
-                "/tmux/panes/{pane_id}/materialize?label={}",
+                "/tmux/panes/{}/materialize?label={}",
+                crate::urlencod(pane_id),
                 crate::urlencod(label)
             ),
             &body.to_string(),
@@ -341,7 +342,11 @@ impl TuicBackend for IpcBackend {
     fn rename_pane(&self, label: &str, pane_id: &str, title: Option<&str>) -> Result<(), String> {
         let body = serde_json::json!({ "title": title });
         let resp = crate::ipc::put(
-            &format!("/tmux/panes/{pane_id}?label={}", crate::urlencod(label)),
+            &format!(
+                "/tmux/panes/{}?label={}",
+                crate::urlencod(pane_id),
+                crate::urlencod(label)
+            ),
             &body.to_string(),
         )
         .map_err(|e| e.to_string())?;
@@ -353,7 +358,8 @@ impl TuicBackend for IpcBackend {
 
     fn kill_pane(&self, label: &str, pane_id: &str) -> Result<(), String> {
         let resp = crate::ipc::delete(&format!(
-            "/tmux/panes/{pane_id}?label={}",
+            "/tmux/panes/{}?label={}",
+            crate::urlencod(pane_id),
             crate::urlencod(label)
         ))
         .map_err(|e| e.to_string())?;
@@ -367,7 +373,8 @@ impl TuicBackend for IpcBackend {
         let body = serde_json::json!({ "value": value });
         let resp = crate::ipc::put(
             &format!(
-                "/tmux/panes/{pane_id}/accent-color?label={}",
+                "/tmux/panes/{}/accent-color?label={}",
+                crate::urlencod(pane_id),
                 crate::urlencod(label)
             ),
             &body.to_string(),
@@ -1046,5 +1053,121 @@ mod resolve_cwd_tests {
         });
         assert_eq!(topology_cwd_for_window(&topology, "@0"), Some("/repo/path"));
         assert_eq!(topology_cwd_for_window(&topology, "@nonexistent"), None);
+    }
+}
+
+/// Regression coverage for the missing-`urlencod(pane_id)` bug (fixed
+/// alongside these tests): every `IpcBackend` method that puts a tmux pane
+/// id (always `"%<number>"`) into a URL *path* segment must percent-encode
+/// it first, or a two-digit id round-trips through axum's path decoder as a
+/// single mangled byte and every one of these calls 404s with "pane not
+/// found" — which is exactly what made `respawn-pane -k` (the call that
+/// actually launches a swarm teammate's real `claude` process) silently
+/// never start a single teammate past the 10th pane allocated in a label's
+/// lifetime. `tmux::mod`'s `FakeBackend`-driven integration suite cannot
+/// catch this class of bug at all: it never builds a URL, so it exercised
+/// only `TuicBackend`'s pure dispatch logic, never `IpcBackend`'s actual HTTP
+/// wire format. These tests are the only place that does.
+///
+/// Mirrors `ipc.rs`'s own `round_trip` test helper exactly — same
+/// join-the-client-thread-don't-detach-the-server reasoning (see that
+/// module's doc comment), same reason every test here needs
+/// `#[serial_test::serial]`: `$TUIC_SOCKET` is a process-global env var.
+#[cfg(all(test, unix))]
+mod ipc_backend_pane_id_url_encoding_tests {
+    use super::{IpcBackend, TuicBackend};
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+
+    /// Runs `call` against a real `IpcBackend`, capturing the raw HTTP
+    /// request it actually sends over the wire, and answers it with a fixed
+    /// 200 response whose body is valid enough for every caller in this
+    /// module (`{"ok":true,"tuic_session_id":"s1"}` covers both the
+    /// `Result<(), _>` callers, which ignore the body, and
+    /// `materialize_pane`, which needs `tuic_session_id`).
+    fn capture_request<T: Send + 'static>(
+        call: impl FnOnce() -> T + Send + 'static,
+    ) -> (String, T) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("mcp.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        unsafe {
+            std::env::set_var("TUIC_SOCKET", &sock_path);
+        }
+        let client = std::thread::spawn(call);
+
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+
+        let body = r#"{"ok":true,"tuic_session_id":"s1"}"#;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream.flush().unwrap();
+        drop(stream);
+
+        (request, client.join().unwrap())
+    }
+
+    /// The request line only — enough to assert method + exact path, without
+    /// coupling the test to header ordering/casing.
+    fn request_line(raw: &str) -> &str {
+        raw.lines().next().unwrap_or_default()
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn materialize_pane_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) =
+            capture_request(|| IpcBackend.materialize_pane("claude-swarm-1", "%13", None));
+        assert_eq!(
+            request_line(&raw),
+            "POST /tmux/panes/%2513/materialize?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok("s1".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rename_pane_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) =
+            capture_request(|| IpcBackend.rename_pane("claude-swarm-1", "%14", Some("title")));
+        assert_eq!(
+            request_line(&raw),
+            "PUT /tmux/panes/%2514?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn kill_pane_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) = capture_request(|| IpcBackend.kill_pane("claude-swarm-1", "%15"));
+        assert_eq!(
+            request_line(&raw),
+            "DELETE /tmux/panes/%2515?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn set_pane_accent_color_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) = capture_request(|| {
+            IpcBackend.set_pane_accent_color("claude-swarm-1", "%16", "fg=yellow")
+        });
+        assert_eq!(
+            request_line(&raw),
+            "PUT /tmux/panes/%2516/accent-color?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok(()));
     }
 }
