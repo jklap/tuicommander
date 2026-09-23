@@ -732,7 +732,7 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     pub(crate) tab_cycling_all_types: bool,
     /// Show a branch's open terminals as a nested list under its sidebar row
-	/// Opt-in, off by default; available whenever a branch has an open terminal.
+    /// Opt-in, off by default; available whenever a branch has an open terminal.
     #[serde(default)]
     pub(crate) tab_tree_enabled: bool,
     /// Auto-show PR detail popover when a branch has PR data
@@ -954,7 +954,7 @@ impl Default for AppConfig {
             font_family: "JetBrains Mono".to_string(),
             font_size: 14,
             font_weight: default_font_weight(),
-            theme: "vscode-dark".to_string(),
+            theme: "commander".to_string(),
             mcp_server_enabled: true,
             mcp_port: default_mcp_port(),
             mcp_config_installed: false,

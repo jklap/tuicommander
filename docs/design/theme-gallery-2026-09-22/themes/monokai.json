@@ -23,7 +23,7 @@
   "selectionBackground": "#49483e",
   "appChrome": {
     "background": "#272822",
-    "surface": "#1e1f1c",
+    "surface": "#2d2e27",
     "surfaceElevated": "#3e3d32",
     "highlight": "#49483e",
     "foreground": "#f8f8f2",

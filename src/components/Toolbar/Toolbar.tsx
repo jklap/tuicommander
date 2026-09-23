@@ -18,7 +18,7 @@ import { updaterStore } from "../../stores/updater";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
-import { getRepoColor } from "../../utils/repoColor";
+import { getRepoTextColor } from "../../utils/repoColor";
 import { IdeLauncher } from "../IdeLauncher";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { SmartPromptsDropdown } from "../SmartPromptsDropdown/SmartPromptsDropdown";
@@ -210,7 +210,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 	const activeRepoColor = () => {
 		const activeRepoPath = repositoriesStore.state.activeRepoPath;
 		if (!activeRepoPath) return undefined;
-		return getRepoColor(activeRepoPath);
+		return getRepoTextColor(activeRepoPath);
 	};
 
 	const getRepoPath = () => props.repoPath;
@@ -276,15 +276,15 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 				>
 					<defs>
 						<linearGradient id="toolbar-name-grad" x1="0" y1="0" x2="110" y2="0" gradientUnits="userSpaceOnUse">
-							<stop offset="0%" stop-color="#909090" />
-							<stop offset="32%" stop-color="#767676" />
-							<stop offset="100%" stop-color="#5a5a5a" />
+							<stop offset="0%" class={s.nameGradStart} />
+							<stop offset="32%" class={s.nameGradMid} />
+							<stop offset="100%" class={s.nameGradEnd} />
 						</linearGradient>
 					</defs>
 					<text
 						x="0"
 						y="12"
-						fill="#060606"
+						class={s.nameShadow}
 						font-size="11"
 						font-weight="700"
 						letter-spacing="0.09em"
@@ -297,7 +297,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 					<text
 						x="0"
 						y="12"
-						fill="#3e3e3e"
+						class={s.nameHighlight}
 						font-size="11"
 						font-weight="700"
 						letter-spacing="0.09em"
@@ -329,15 +329,15 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 				>
 					<defs>
 						<linearGradient id="toolbar-name-grad-short" x1="0" y1="0" x2="38" y2="0" gradientUnits="userSpaceOnUse">
-							<stop offset="0%" stop-color="#909090" />
-							<stop offset="50%" stop-color="#767676" />
-							<stop offset="100%" stop-color="#5a5a5a" />
+							<stop offset="0%" class={s.nameGradStart} />
+							<stop offset="50%" class={s.nameGradMid} />
+							<stop offset="100%" class={s.nameGradEnd} />
 						</linearGradient>
 					</defs>
 					<text
 						x="0"
 						y="12"
-						fill="#060606"
+						class={s.nameShadow}
 						font-size="11"
 						font-weight="700"
 						letter-spacing="0.09em"
@@ -350,7 +350,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 					<text
 						x="0"
 						y="12"
-						fill="#3e3e3e"
+						class={s.nameHighlight}
 						font-size="11"
 						font-weight="700"
 						letter-spacing="0.09em"
@@ -541,7 +541,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 										</svg>
 									</span>
 									<div class={s.activityItemBody}>
-										<span class={s.activityItemTitle}>Project Progress</span>
+										<span class={s.activityItemTitle}>Terminal Progress</span>
 										<span class={s.activityItemSubtitle}>
 											{progressStore.unreadCount} new update{progressStore.unreadCount === 1 ? "" : "s"}
 										</span>
@@ -719,7 +719,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 													<span
 														class={s.notifRepo}
 														style={(() => {
-															const color = getRepoColor(notif.repoPath);
+															const color = getRepoTextColor(notif.repoPath);
 															return color ? { color } : undefined;
 														})()}
 													>

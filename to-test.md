@@ -22,13 +22,33 @@
 `<config>/themes` exists, so no existing install receives it from the bundle.
 Verified live on 2026-09-22 by copying the file into
 `~/Library/Application Support/com.tuic.commander/themes/` (the watcher picked
-it up): pure black chrome, white accent, `-webkit-font-smoothing: antialiased`
-and `letter-spacing: 0.01em` on `html[data-theme="clean"]`, toast clamp at four lines.
+it up): pure black chrome, white accent, neutral tab-type tints on
+`html[data-theme="clean"]`, toast clamp at four lines. Font smoothing
+(`antialiased`, 0.01em tracking) is global on `html`, verified live on both
+Clean and VS Code Dark.
 
 - [ ] In a **restarted** instance with an empty `<config>/themes` (or
-      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Clean" without
+      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Ink" (key `clean`) without
+## Theme review applied (2026-09-23) — **Rust, needs a `make dev` restart**
+
+Bundled JSONs updated (VS Code Dark now follows VS Code Dark 2026), Deep Black / Delicate One removed, "Clean"
+shown as "Ink" and "VS Code Light" as "Paper", default and fallback moved to
+Commander (`config.rs` default, `DEFAULT_THEME` in `settings.ts`). Before/after
+reference: `docs/design/theme-gallery-2026-09-22/`. `seed_builtin_themes` is a
+no-op once `<config>/themes` exists, so an existing install sees none of the
+new colors or names until the JSONs are copied into that folder.
+
+- [ ] In a **restarted** instance with an empty `<config>/themes` (or
+      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance lists 13 themes, with Ink,
+      Paper and VS Code Dark and without Deep Black or Delicate One.
+- [ ] Same instance, `config.json` with `"theme": "does-not-exist"`: the app
+      opens in Commander and logs `falling back to commander`.
+- [ ] [VISUAL] On Paper: the toolbar wordmark is a clean grey with no dark
+      smear, a colored repo name is readable, and the active tab row in the
+      sidebar is visible.
+
       any manual copy.
-- [x] Selecting "Clean" applies the black chrome and antialiased text at once.
+- [x] Selecting "Ink" (then named "Clean") applies the black chrome and antialiased text at once.
       _(verified: live screenshot + `document.documentElement.dataset.theme ===
       "clean"`, computed `-webkit-font-smoothing: antialiased`, 2026-09-22)_
 

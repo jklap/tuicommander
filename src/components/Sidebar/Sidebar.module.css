@@ -701,19 +701,21 @@
   width: 100%;
 }
 
+/* Tinted with the theme foreground, not white: a white wash vanished on a
+   light theme. On a dark theme it matches the old rgba(255, 255, 255, 0.08). */
 .branchTabItem.active {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--fg-primary) 8%, transparent);
   color: var(--fg-primary);
 }
 
 @media (hover: hover) {
   .branchTabItem:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: color-mix(in srgb, var(--fg-primary) 8%, transparent);
     color: var(--fg-primary);
   }
 
   .branchTabItem.active:hover {
-    background: rgba(255, 255, 255, 0.11);
+    background: color-mix(in srgb, var(--fg-primary) 11%, transparent);
   }
 }
 
