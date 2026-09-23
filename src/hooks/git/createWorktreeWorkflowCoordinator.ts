@@ -11,6 +11,7 @@ import { effectiveMergeMethod, isMergeHeadChanged, isMergeMethodNotAllowed } fro
 import { reportActionError } from "../../utils/reportActionError";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
+import type { SetupNewWorktreeOptions } from "./createWorktreeCreationCoordinator";
 import { bindStartWork, createStartWork } from "./startWork";
 
 interface WorktreeWorkflowCoordinatorDeps {
@@ -82,6 +83,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
+		options?: SetupNewWorktreeOptions,
 	) => Promise<string | undefined>;
 	refreshAllBranchStats: (repoPath: string) => Promise<void>;
 }
@@ -165,6 +167,9 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				},
 				result.branch,
 				await buildAgentSeed(result.prompt, repoPath),
+				// start_conflict_assist creates the worktree itself; no backend
+				// setup chain runs for it, so the Setup Script runs from here.
+				{ runSetupScriptHere: true },
 			);
 		} catch (err) {
 			appLogger.error("git", `Failed to start conflict assist for PR #${prNumber}`, err);

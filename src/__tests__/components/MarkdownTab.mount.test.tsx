@@ -182,6 +182,20 @@ describe("MarkdownTab", () => {
 			expect(mockReadFile).not.toHaveBeenCalled();
 		});
 
+		it("a generic permission-denied error still logs at error level and renders the raw message (regression guard)", async () => {
+			mockInvoke.mockRejectedValue(new Error("permission denied (os error 13)"));
+			const { container } = render(() => <MarkdownTab tab={fileTab({ filePath: "/etc/motd", repoPath: "" })} />);
+
+			await waitFor(() =>
+				expect(container.querySelector("#markdown-content")?.textContent).toContain("permission denied"),
+			);
+			expect(appLogger.error).toHaveBeenCalledWith(
+				"app",
+				"readFileContent failed",
+				expect.objectContaining({ error: "permission denied (os error 13)" }),
+			);
+		});
+
 		it("sets empty content when the file tab has no filePath", () => {
 			const { container } = render(() => <MarkdownTab tab={fileTab({ filePath: "" })} />);
 			expect(container.querySelector("#markdown-content")?.textContent).toContain("No content");

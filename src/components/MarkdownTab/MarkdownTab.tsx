@@ -290,7 +290,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 			} catch (err) {
 				if (cancelled) return;
 				const msg = err instanceof Error ? err.message : String(err);
-				// Silently ignore expected errors (file deleted); log anything else.
+				// Silently ignore an expected error (file deleted), not a real regression.
 				if (!isMissingFileError(msg)) {
 					appLogger.warn("app", "focus-reload readFileContent failed", { repoPath, filePath, error: msg });
 				}
