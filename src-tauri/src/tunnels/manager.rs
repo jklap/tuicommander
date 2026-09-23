@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 
 use super::audit::{AuditLog, EventKind};
 use super::profile::TunnelProfile;
-use super::supervisor::{TunnelStatus, TunnelSupervisor};
+use super::supervisor::{GRACEFUL_SHUTDOWN_TIMEOUT, TunnelStatus, TunnelSupervisor};
 
 pub struct TunnelHandle {
     pub profile: TunnelProfile,
@@ -148,9 +148,20 @@ impl TunnelManager {
         // Publish into OUR reservation. If it is gone, a stop() landed while we
         // were spawning: honour it rather than resurrecting a tunnel the user
         // asked to stop, and shut down the supervisor we just created so it does
-        // not outlive this call.
+        // not outlive this call. Waited (bounded), not fire-and-forget — this
+        // supervisor and its ssh child are about to become fully unreachable
+        // (nothing else holds `handle`), so if we didn't wait here, nothing
+        // would ever confirm they actually stopped.
         if !reservation.publish(Arc::clone(&handle)) {
-            handle.lock().supervisor.stop();
+            // Extracted to its own statement, not `if let Some(task) =
+            // handle.lock()...` directly: a temporary created in an `if
+            // let` scrutinee lives until the end of that statement, which
+            // would hold this (non-`Send`) `parking_lot::MutexGuard` across
+            // the `.await` below.
+            let task = handle.lock().supervisor.stop_and_take_task();
+            if let Some(task) = task {
+                let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await;
+            }
             return Err(format!("tunnel '{id}' was stopped while starting"));
         }
         let _ = audit
@@ -238,13 +249,113 @@ impl TunnelManager {
     }
 
     /// Stop all running tunnels and clear the map. Used on app exit.
+    ///
+    /// Fire-and-forget: returns as soon as the shutdown signal is sent to
+    /// every supervisor, without waiting for their SSH processes to actually
+    /// exit. Fine for a live, long-running app process — the async shutdown
+    /// (SIGTERM, up to 5s grace, SIGKILL) keeps running on the same runtime
+    /// and completes within a few seconds regardless of whether anything is
+    /// still around to observe it. **Not fine for real app exit**, where the
+    /// process itself may terminate before that completes — use
+    /// `shutdown_all_and_wait` there instead.
     pub fn shutdown_all(&self) {
-        for entry in self.tunnels.iter() {
-            if let TunnelSlot::Running(handle) = entry.value() {
+        // Collect keys, then remove one at a time — NOT iterate-then-clear().
+        // A separate `clear()` after a snapshot iteration is a real TOCTOU: a
+        // concurrent `start()` that publishes into the map in the gap between
+        // the snapshot and the clear is wiped out by `clear()` without ever
+        // being asked to stop (found by code review, 2026-09-23). Removing
+        // each key individually means a handle published after our snapshot
+        // was taken is simply left alone (picked up by a later shutdown call)
+        // instead of being silently destroyed.
+        let ids: Vec<String> = self
+            .tunnels
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        for id in ids {
+            if let Some((_, TunnelSlot::Running(handle))) = self.tunnels.remove(&id) {
                 handle.lock().supervisor.stop();
             }
         }
-        self.tunnels.clear();
+    }
+
+    /// Like `stop`, but waits — bounded by `GRACEFUL_SHUTDOWN_TIMEOUT` — for
+    /// confirmation that the tunnel's underlying SSH process actually exited
+    /// before returning, instead of firing the shutdown signal and returning
+    /// immediately. Use this wherever "asked it to stop" isn't good enough —
+    /// test cleanup, primarily, so a `#[tokio::test]`'s per-test runtime
+    /// isn't torn down (aborting the supervision task before it finishes
+    /// killing its child) before the process is actually gone.
+    ///
+    /// Known, accepted gap: if `id` is still a `TunnelSlot::Starting`
+    /// reservation (its `start_with` hasn't published a real supervisor yet),
+    /// this only removes the reservation and returns immediately — it does
+    /// NOT wait for that in-flight `start_with` call's own eventual cleanup
+    /// (see its lost-publish-race branch), because nothing here has a handle
+    /// to that unrelated task to wait on. No caller in this codebase hits
+    /// this today (every caller awaits its own `start()`/`start_with()` to
+    /// completion before ever calling `stop_and_wait`), so the "confirmed
+    /// stopped" contract is honored in practice; a future caller that calls
+    /// this on a tunnel it knows is still starting would need a real fix
+    /// (threading a completion signal through `TunnelSlot::Starting`), not
+    /// just this doc comment.
+    pub async fn stop_and_wait(&self, id: &str) -> Result<(), String> {
+        let handle = self
+            .tunnels
+            .remove(id)
+            .map(|(_, v)| v)
+            .ok_or_else(|| format!("tunnel '{id}' not found"))?;
+
+        if let TunnelSlot::Running(handle) = handle {
+            let task = handle.lock().supervisor.stop_and_take_task();
+            if let Some(task) = task {
+                let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task).await;
+            }
+        }
+        let _ = self.audit.lock().insert(
+            id,
+            EventKind::Stopped,
+            serde_json::json!({"reason": "stop requested"}),
+        );
+        Ok(())
+    }
+
+    /// Like `shutdown_all`, but waits for confirmation that every tunnel's
+    /// SSH process actually exited before returning — used on real app exit,
+    /// where the process is about to disappear and a fire-and-forget signal
+    /// has no guarantee of being delivered (let alone acted on) before that
+    /// happens. All tunnels are asked to stop concurrently, not one after
+    /// another, and the WHOLE batch shares a single `GRACEFUL_SHUTDOWN_TIMEOUT`
+    /// bound — this does not scale with tunnel count, so app exit can never
+    /// hang indefinitely no matter how many tunnels are running.
+    pub async fn shutdown_all_and_wait(&self) {
+        // Collect keys, then remove one at a time — NOT iterate-then-clear().
+        // Same real TOCTOU as `shutdown_all` (see its comment): a separate
+        // `clear()` after the snapshot can silently drop a tunnel a
+        // concurrent `start()` publishes in the gap, with no stop signal and
+        // no wait — directly undermining the "no orphaned SSH process on
+        // exit" guarantee this method exists to provide.
+        let ids: Vec<String> = self
+            .tunnels
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        let tasks: Vec<tokio::task::JoinHandle<()>> = ids
+            .into_iter()
+            .filter_map(|id| match self.tunnels.remove(&id) {
+                Some((_, TunnelSlot::Running(handle))) => {
+                    handle.lock().supervisor.stop_and_take_task()
+                }
+                _ => None,
+            })
+            .collect();
+
+        let joined = async {
+            for task in tasks {
+                let _ = task.await;
+            }
+        };
+        let _ = tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, joined).await;
     }
 }
 
@@ -328,7 +439,12 @@ mod tests {
         let events = manager.audit.lock().query_by_tunnel(&id, 20).unwrap();
         assert!(events.iter().any(|event| event.kind == EventKind::Started));
 
-        manager.stop(&id).unwrap();
+        // Waited, not fire-and-forget: confirms the fake-ssh child is
+        // actually gone before the test ends, rather than leaking a
+        // `sleep 3600` process (see supervisor.rs's GRACEFUL_SHUTDOWN_TIMEOUT
+        // doc comment for why the fire-and-forget `stop()` can't guarantee
+        // that within a `#[tokio::test]`'s short-lived runtime).
+        manager.stop_and_wait(&id).await.unwrap();
     }
 
     #[tokio::test]
@@ -341,7 +457,7 @@ mod tests {
             .await
             .unwrap();
 
-        manager.stop(&id).unwrap();
+        manager.stop_and_wait(&id).await.unwrap();
 
         assert!(manager.list().is_empty(), "map should be empty after stop");
     }
@@ -408,7 +524,7 @@ mod tests {
             other => panic!("unexpected status: {other:?}"),
         }
 
-        manager.stop(&id).unwrap();
+        manager.stop_and_wait(&id).await.unwrap();
     }
 
     #[tokio::test]
@@ -429,7 +545,7 @@ mod tests {
 
         assert_eq!(manager.list().len(), 3);
 
-        manager.shutdown_all();
+        manager.shutdown_all_and_wait().await;
 
         assert!(
             manager.list().is_empty(),
@@ -483,7 +599,7 @@ mod tests {
             "original handle must be untouched (not overwritten/orphaned)"
         );
 
-        manager.stop(&id).unwrap();
+        manager.stop_and_wait(&id).await.unwrap();
     }
 
     /// The TOCTOU: `start` used to check `contains_key`, then `.await` the
@@ -674,6 +790,6 @@ mod tests {
             );
         }
 
-        manager.shutdown_all();
+        manager.shutdown_all_and_wait().await;
     }
 }
