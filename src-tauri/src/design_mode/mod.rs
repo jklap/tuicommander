@@ -95,12 +95,7 @@ pub(crate) async fn start(
             .trim_end_matches(std::path::MAIN_SEPARATOR)
             .to_owned()
     };
-    let url = crate::config::load_repo_settings()
-        .repos
-        .get(&repo_path)
-        .and_then(|settings| settings.dev_server_url.as_deref())
-        .filter(|url| !url.trim().is_empty())
-        .map(str::to_owned);
+    let url = dev_server_url(&crate::config::load_repo_settings(), &repo);
     if let Some(url) = &url {
         let parsed = url::Url::parse(url).map_err(|_| "Invalid Design Mode URL")?;
         if !matches!(parsed.scheme(), "http" | "https") {
@@ -114,6 +109,26 @@ pub(crate) async fn start(
         })
         .await?;
     Ok(status_json(&status))
+}
+
+/// Repo settings are keyed by the path the frontend registered, which may be a
+/// symlink (or `/var` against `/private/var`) of the canonical root Design Mode
+/// uses. Match on the canonical root of each key, not on the text.
+fn dev_server_url(
+    settings: &crate::config::RepoSettingsMap,
+    repo: &std::path::Path,
+) -> Option<String> {
+    let entry = settings.repos.iter().find_map(|(key, entry)| {
+        (crate::git::canonical_repo_root(std::path::Path::new(key)) == repo).then_some(entry)
+    });
+    if entry.is_none() {
+        tracing::debug!(repo = %repo.display(), "Design Mode found no repo settings for this repository");
+    }
+    entry?
+        .dev_server_url
+        .as_deref()
+        .filter(|url| !url.trim().is_empty())
+        .map(str::to_owned)
 }
 
 pub(crate) async fn stop(
@@ -156,5 +171,36 @@ pub(crate) fn emit_changed(
     use tauri::Emitter;
     if let Some(app) = state.app_handle.read().as_ref() {
         let _ = app.emit("design-mode-changed", payload);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_server_url_is_found_under_a_symlinked_repo_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real, &link).unwrap();
+        let mut settings = crate::config::RepoSettingsMap::default();
+        settings.repos.insert(
+            link.to_string_lossy().into_owned(),
+            crate::config::RepoSettingsEntry {
+                dev_server_url: Some("http://localhost:5173".into()),
+                ..Default::default()
+            },
+        );
+        let canonical = crate::git::canonical_repo_root(&real);
+        assert_eq!(
+            dev_server_url(&settings, &canonical).as_deref(),
+            Some("http://localhost:5173")
+        );
+        assert_eq!(dev_server_url(&settings, &dir.path().join("other")), None);
     }
 }

@@ -4,8 +4,12 @@ function tuicExtract() {
   const escape = (value) => globalThis.CSS?.escape?.(value) ?? value.replace(/[^a-zA-Z0-9_-]/g, (char) => `\\${char}`);
   const stableClass = (value) => !/^(?:css-|sc-|_)[a-zA-Z0-9_-]*[a-fA-F0-9]{6,}$/.test(value) && !/^[a-fA-F0-9]{8,}$/.test(value);
   const tag = (node) => node.tagName.toLowerCase();
-  const unique = (selector) => {
-    try { return doc.querySelectorAll(selector).length === 1; }
+  // An element in a shadow tree is only reachable from its own root, so every
+  // uniqueness check runs against that root, and paths cross to the host.
+  const scope = (node) => node.getRootNode?.() ?? doc;
+  const hostOf = (root) => (root.nodeType === 11 && root.host) || null;
+  const unique = (root, selector) => {
+    try { return root.querySelectorAll(selector).length === 1; }
     catch { return false; }
   };
   const nth = (node) => {
@@ -15,23 +19,45 @@ function tuicExtract() {
     }
     return `${tag(node)}:nth-of-type(${index})`;
   };
+  // Each fragment costs document-wide queries; the selector and both paths
+  // share ancestors, so compute each one once.
+  const fragments = new Map();
   const fragment = (node) => {
-    if (node.id && unique(`#${escape(node.id)}`)) return `#${escape(node.id)}`;
-    for (const name of node.classList) {
-      if (stableClass(name) && unique(`${tag(node)}.${escape(name)}`)) return `${tag(node)}.${escape(name)}`;
+    if (fragments.has(node)) return fragments.get(node);
+    const root = scope(node);
+    let result = nth(node);
+    if (node.id && unique(root, `#${escape(node.id)}`)) result = `#${escape(node.id)}`;
+    else {
+      for (const name of node.classList) {
+        if (stableClass(name) && unique(root, `${tag(node)}.${escape(name)}`)) {
+          result = `${tag(node)}.${escape(name)}`;
+          break;
+        }
+      }
     }
-    return nth(node);
+    fragments.set(node, result);
+    return result;
   };
+  const selectorFor = (node) => {
+    const root = scope(node);
+    let selector = fragment(node);
+    for (let parent = node.parentElement; parent && !unique(root, selector); parent = parent.parentElement) {
+      selector = `${fragment(parent)} > ${selector}`;
+    }
+    const host = hostOf(root);
+    return host ? `${selectorFor(host)} >>> ${selector}` : selector;
+  };
+  // Ancestors from the root down; `>>>` marks where the chain enters a shadow tree.
   const chain = [];
-  for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
-    chain.unshift(node);
+  for (let node = el; node && node.nodeType === 1;) {
+    const host = node.parentElement ? null : hostOf(node.parentNode);
+    chain.unshift({ node, join: host ? " >>> " : " > " });
+    node = node.parentElement ?? host;
   }
-  let selector = fragment(el);
-  for (let index = chain.length - 2; !unique(selector) && index >= 0; index -= 1) {
-    selector = `${fragment(chain[index])} > ${selector}`;
-  }
-  const path = (max) => chain.slice(-max).map(fragment).join(" > ");
-  const attributes = Object.fromEntries(Array.from(el.attributes, (attr) => [attr.name, attr.value]).slice(0, 32));
+  const selector = selectorFor(el);
+  const path = (max) => chain.slice(-max).map(({ node, join }, index) => (index ? join : "") + fragment(node)).join("");
+  const allowed = (name) => /^(?:id|class|href|src|alt|title|role|name|type|placeholder|aria-.*)$/.test(name);
+  const attributes = Object.fromEntries(Array.from(el.attributes, (attr) => [attr.name, attr.value]).filter(([name]) => allowed(name)).slice(0, 32));
   const fiberKey = Object.keys(el).find((key) => key.startsWith("__reactFiber$"));
   const fiber = fiberKey ? el[fiberKey] : undefined;
   const source = {};

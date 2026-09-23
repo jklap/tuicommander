@@ -93,8 +93,54 @@ describe("design mode extraction", () => {
 	});
 
 	it("limits attributes before sending the node over CDP", () => {
-		const attrs = Array.from({ length: 60 }, (_, index) => `data-field-${index}='x'`).join(" ");
+		const attrs = Array.from({ length: 60 }, (_, index) => `aria-field-${index}='x'`).join(" ");
 		const result = extract(`<button ${attrs}>Pick</button>`, "button");
 		expect(Object.keys(result.attributes)).toHaveLength(32);
+	});
+
+	it("keeps class and aria-label that follow many framework attributes", () => {
+		// Rust drops everything outside its allowlist; capping in page order first
+		// would spend the whole budget on attributes the agent never sees.
+		const noise = Array.from({ length: 40 }, (_, index) => `data-test-${index}='x'`).join(" ");
+		const result = extract(`<button ${noise} class="primary" aria-label="Save draft">Pick</button>`, "button");
+		expect(result.attributes).toEqual({ class: "primary", "aria-label": "Save draft" });
+	});
+
+	it("addresses an element inside an open shadow root through its host", () => {
+		const dom = new JSDOM(`<main><x-card id="card"></x-card><x-card></x-card></main>`);
+		const host = dom.window.document.querySelector("#card");
+		if (!host) throw new Error("missing host");
+		const root = host.attachShadow({ mode: "open" });
+		root.innerHTML = `<div class="body"><button class="save">Save</button></div>`;
+		const button = root.querySelector("button");
+		if (!button) throw new Error("missing shadow button");
+		const fn = dom.window.eval(`(${source.trim()})`) as (this: Element) => Extracted;
+		const result = fn.call(button);
+		expect(result.selector).toBe("#card >>> button.save");
+		const [hostSelector, inner] = result.selector.split(" >>> ");
+		expect(dom.window.document.querySelectorAll(hostSelector)).toHaveLength(1);
+		expect(root.querySelectorAll(inner)).toHaveLength(1);
+		expect(result.fullPath).toBe("html:nth-of-type(1) > body:nth-of-type(1) > main:nth-of-type(1) > #card >>> div.body > button.save");
+		expect(result.elementPath.endsWith("#card >>> div.body > button.save")).toBe(true);
+	});
+
+	it("computes each ancestor's selector fragment once per pick", () => {
+		// Two identical nests force the selector to climb all 20 ancestors.
+		const nest = `${"<section class='a b c'>".repeat(20)}<button>Pick</button>${"</section>".repeat(20)}`;
+		const dom = new JSDOM(nest + nest);
+		const node = dom.window.document.querySelectorAll("button")[1];
+		const document = dom.window.document;
+		const original = document.querySelectorAll.bind(document);
+		let calls = 0;
+		document.querySelectorAll = ((selector: string) => {
+			calls += 1;
+			return original(selector);
+		}) as typeof document.querySelectorAll;
+		const fn = dom.window.eval(`(${source.trim()})`) as (this: Element) => Extracted;
+		const result = fn.call(node);
+		expect(result.selector).toContain("section:nth-of-type(2)");
+		// The climb costs 81 queries (20 ancestors x 3 classes + 21 uniqueness
+		// checks). Both paths reuse those fragments; recomputing them costs 72 more.
+		expect(calls).toBeLessThanOrEqual(81);
 	});
 });
