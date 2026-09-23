@@ -118,6 +118,7 @@ mod shell_integration;
 #[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
+pub(crate) mod ssh_connection;
 pub(crate) mod state;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;

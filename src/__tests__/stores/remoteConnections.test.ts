@@ -118,10 +118,15 @@ function sshConn(id: string): RemoteConnection {
 		name: `ssh-${id}`,
 		transport: {
 			type: "Ssh",
-			ssh_host: "example.test",
-			ssh_port: 22,
-			ssh_user: "boss",
-			identity_file: null,
+			ssh: {
+				host: "example.test",
+				port: 22,
+				user: "boss",
+				identity_file: null,
+				server_alive_interval: 15,
+				server_alive_count_max: 3,
+				strict_host_key_checking: "Yes",
+			},
 			remote_daemon_port: 9877,
 		},
 		auth_username: "boss",
@@ -133,12 +138,16 @@ function tunnelProfileFixture(id: string, name: string): TunnelProfile {
 	return {
 		id,
 		name,
-		host: "example.test",
-		port: 22,
-		user: "boss",
-		identity_file: null,
+		ssh: {
+			host: "example.test",
+			port: 22,
+			user: "boss",
+			identity_file: null,
+			server_alive_interval: 15,
+			server_alive_count_max: 3,
+			strict_host_key_checking: "AcceptNew",
+		},
 		forwards: [{ type: "Local", bind_port: 12345, remote_host: "127.0.0.1", remote_port: 9877 }],
-		options: { server_alive_interval: 15, server_alive_count_max: 3, strict_host_key_checking: "AcceptNew" },
 		auto_connect: false,
 	};
 }
@@ -184,7 +193,10 @@ describe("remoteConnectionsStore.connect() (SSH)", () => {
 		expect(fetchMock).toHaveBeenCalledWith(`${st?.baseUrl}/health`);
 		expect(startBridge).toHaveBeenCalledWith(id, st?.baseUrl);
 		expect(mockInvoke).toHaveBeenCalledWith("save_tunnel_profile", {
-			profile: expect.objectContaining({ name: `__remote_${id}`, host: "example.test", user: "boss" }),
+			profile: expect.objectContaining({
+				name: `__remote_${id}`,
+				ssh: expect.objectContaining({ host: "example.test", user: "boss" }),
+			}),
 		});
 		expect(mockInvoke).toHaveBeenCalledWith("start_tunnel", { id: "auto-p1" });
 	});

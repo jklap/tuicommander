@@ -10,12 +10,16 @@ function makeProfile(overrides: Partial<TunnelProfile> = {}): TunnelProfile {
 	return {
 		id: "existing-1",
 		name: "prod db tunnel",
-		host: "prod.example.test",
-		port: 2222,
-		user: "deploy",
-		identity_file: "~/.ssh/id_ed25519",
+		ssh: {
+			host: "prod.example.test",
+			port: 2222,
+			user: "deploy",
+			identity_file: "~/.ssh/id_ed25519",
+			server_alive_interval: 15,
+			server_alive_count_max: 3,
+			strict_host_key_checking: "Yes",
+		},
 		forwards: [],
-		options: { server_alive_interval: 15, server_alive_count_max: 3, strict_host_key_checking: "Yes" },
 		auto_connect: true,
 		...overrides,
 	};
@@ -107,12 +111,16 @@ describe("TunnelEditorModal", () => {
 		expect(mockInvoke).toHaveBeenCalledWith("save_tunnel_profile", {
 			profile: {
 				name: "new tunnel",
-				host: "host.example.test",
-				port: 22,
-				user: "boss",
-				identity_file: null,
+				ssh: {
+					host: "host.example.test",
+					port: 22,
+					user: "boss",
+					identity_file: null,
+					server_alive_interval: 15,
+					server_alive_count_max: 3,
+					strict_host_key_checking: "Yes",
+				},
 				forwards: [],
-				options: { server_alive_interval: 15, server_alive_count_max: 3, strict_host_key_checking: "Yes" },
 				auto_connect: false,
 			},
 		});
@@ -141,12 +149,8 @@ describe("TunnelEditorModal", () => {
 			profile: {
 				id: profile.id,
 				name: "renamed tunnel",
-				host: profile.host,
-				port: profile.port,
-				user: profile.user,
-				identity_file: profile.identity_file,
+				ssh: profile.ssh,
 				forwards: [],
-				options: profile.options,
 				auto_connect: profile.auto_connect,
 			},
 		});

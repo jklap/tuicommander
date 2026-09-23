@@ -102,6 +102,12 @@ pub(crate) enum Credential<'a> {
     GithubToken(&'a str),
     McpUpstream(&'a str),
     Provider(&'a str),
+    /// A saved `RemoteConnection`'s password, keyed by the connection's own
+    /// `id` (a UUID). Never persisted in `connections.json` itself — see
+    /// `remote_connection.rs`'s doc comment on `RemoteConnection::auth_username`.
+    /// A new feature (SSH Tunnels + Remote Servers consolidation) — no legacy
+    /// keyring slot to migrate from.
+    RemoteConnection(&'a str),
 }
 
 impl Credential<'_> {
@@ -116,6 +122,7 @@ impl Credential<'_> {
             Self::GithubToken(id) => format!("github/account/{id}/token"),
             Self::McpUpstream(name) => format!("mcp/{name}"),
             Self::Provider(id) => format!("provider/{id}"),
+            Self::RemoteConnection(id) => format!("remote-connection/{id}"),
         }
     }
 
@@ -129,7 +136,8 @@ impl Credential<'_> {
             | Self::RelayToken
             | Self::PushVapidPrivateKey
             | Self::GithubToken(_)
-            | Self::Provider(_) => None,
+            | Self::Provider(_)
+            | Self::RemoteConnection(_) => None,
         }
     }
 }
@@ -614,11 +622,61 @@ mod tests {
         );
         assert_eq!(Credential::McpUpstream("foo").vault_key(), "mcp/foo");
         assert_eq!(Credential::Provider("my-id").vault_key(), "provider/my-id");
+        assert_eq!(
+            Credential::RemoteConnection("conn-id").vault_key(),
+            "remote-connection/conn-id"
+        );
     }
 
     #[test]
     fn provider_credential_has_no_legacy_entry() {
         assert!(Credential::Provider("test").legacy_entry().is_none());
+    }
+
+    #[test]
+    fn remote_connection_credential_has_no_legacy_entry() {
+        assert!(
+            Credential::RemoteConnection("conn-id")
+                .legacy_entry()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn remote_connection_vault_key_is_id_scoped() {
+        assert_eq!(
+            Credential::RemoteConnection("conn-id").vault_key(),
+            "remote-connection/conn-id"
+        );
+    }
+
+    #[test]
+    fn remote_connection_credential_crud() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_vault();
+        set(Credential::RemoteConnection("conn-1"), "hunter2").unwrap();
+        assert_eq!(
+            get(Credential::RemoteConnection("conn-1")).unwrap(),
+            Some("hunter2".to_string())
+        );
+        delete(Credential::RemoteConnection("conn-1")).unwrap();
+        assert_eq!(get(Credential::RemoteConnection("conn-1")).unwrap(), None);
+    }
+
+    #[test]
+    fn remote_connection_credentials_are_scoped_per_connection_id() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_vault();
+        set(Credential::RemoteConnection("conn-a"), "pass-a").unwrap();
+        set(Credential::RemoteConnection("conn-b"), "pass-b").unwrap();
+        assert_eq!(
+            get(Credential::RemoteConnection("conn-a")).unwrap(),
+            Some("pass-a".to_string())
+        );
+        assert_eq!(
+            get(Credential::RemoteConnection("conn-b")).unwrap(),
+            Some("pass-b".to_string())
+        );
     }
 
     #[test]

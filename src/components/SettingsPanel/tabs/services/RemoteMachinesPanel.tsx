@@ -44,12 +44,34 @@ export function remoteStatusLabel(status: string): string {
 /** Transport summary string */
 export function transportSummary(transport: RemoteTransport): string {
 	if (transport.type === "Ssh") {
-		return `${transport.ssh_user}@${transport.ssh_host}:${transport.ssh_port}`;
+		return `${transport.ssh.user}@${transport.ssh.host}:${transport.ssh.port}`;
+	}
+	if (transport.type === "Local") {
+		return transport.instance_id ? `local: ${transport.instance_id}` : `local: 127.0.0.1:${transport.port ?? "?"}`;
 	}
 	return transport.url;
 }
 
-/** Blank form state for adding/editing a remote machine */
+/** Human-readable badge text for a transport's kind */
+export function transportBadgeLabel(transport: RemoteTransport): string {
+	switch (transport.type) {
+		case "Ssh":
+			return "SSH";
+		case "Local":
+			return "LOCAL";
+		default:
+			return "DIRECT";
+	}
+}
+
+/** Blank form state for adding/editing a remote machine.
+ *
+ * `sshServerAliveInterval`/`sshServerAliveCountMax`/`sshStrictHostKeyChecking`
+ * have no UI in this form yet (the shared `SshConnectionFields` editor lands
+ * in a later phase of the SSH Tunnels + Remote Servers consolidation plan) —
+ * they're carried through here only so editing an existing connection
+ * round-trips its real values instead of silently resetting them to these
+ * defaults on every save. */
 export function emptyRemoteForm() {
 	return {
 		name: "",
@@ -58,7 +80,13 @@ export function emptyRemoteForm() {
 		sshPort: 22,
 		sshUser: "",
 		identityFile: "",
-		remoteDaemonPort: 9876,
+		sshServerAliveInterval: 15,
+		sshServerAliveCountMax: 3,
+		sshStrictHostKeyChecking: "Yes" as "Yes" | "AcceptNew",
+		// Matches `RemoteConnection::new_ssh`'s Rust default and what a freshly
+		// started `tuic-remote` binary actually listens on out of the box
+		// (`tuic_remote.rs`'s `TUIC_PORT` fallback) — 9876 was this form's bug.
+		remoteDaemonPort: 9877,
 		directUrl: "",
 		authUsername: "",
 	};
@@ -101,10 +129,15 @@ export const RemoteMachinesPanel: Component = () => {
 			f.transportType === "Ssh"
 				? {
 						type: "Ssh",
-						ssh_host: f.sshHost.trim(),
-						ssh_port: f.sshPort,
-						ssh_user: f.sshUser.trim(),
-						identity_file: f.identityFile.trim() || null,
+						ssh: {
+							host: f.sshHost.trim(),
+							port: f.sshPort,
+							user: f.sshUser.trim(),
+							identity_file: f.identityFile.trim() || null,
+							server_alive_interval: f.sshServerAliveInterval,
+							server_alive_count_max: f.sshServerAliveCountMax,
+							strict_host_key_checking: f.sshStrictHostKeyChecking,
+						},
 						remote_daemon_port: f.remoteDaemonPort,
 					}
 				: { type: "Direct", url: f.directUrl.trim() };
@@ -115,7 +148,7 @@ export const RemoteMachinesPanel: Component = () => {
 			id: randomId(""),
 			name,
 			transport,
-			auth_username: f.authUsername.trim(),
+			auth_username: f.authUsername.trim() || null,
 			enabled: true,
 		};
 
@@ -134,16 +167,26 @@ export const RemoteMachinesPanel: Component = () => {
 
 	function startEdit(conn: RemoteConnection) {
 		setEditingId(conn.id);
+		const empty = emptyRemoteForm();
 		setEditForm({
 			name: conn.name,
-			transportType: conn.transport.type,
-			sshHost: conn.transport.type === "Ssh" ? conn.transport.ssh_host : "",
-			sshPort: conn.transport.type === "Ssh" ? conn.transport.ssh_port : 22,
-			sshUser: conn.transport.type === "Ssh" ? conn.transport.ssh_user : "",
-			identityFile: conn.transport.type === "Ssh" ? (conn.transport.identity_file ?? "") : "",
-			remoteDaemonPort: conn.transport.type === "Ssh" ? conn.transport.remote_daemon_port : 9876,
+			// "Local" isn't creatable/editable through this form yet (Phase 3
+			// of the consolidation plan) — fall back to "Ssh" rather than widen
+			// `transportType`'s type for a kind this form can't actually render.
+			transportType: conn.transport.type === "Direct" ? "Direct" : "Ssh",
+			sshHost: conn.transport.type === "Ssh" ? conn.transport.ssh.host : "",
+			sshPort: conn.transport.type === "Ssh" ? conn.transport.ssh.port : 22,
+			sshUser: conn.transport.type === "Ssh" ? conn.transport.ssh.user : "",
+			identityFile: conn.transport.type === "Ssh" ? (conn.transport.ssh.identity_file ?? "") : "",
+			sshServerAliveInterval:
+				conn.transport.type === "Ssh" ? conn.transport.ssh.server_alive_interval : empty.sshServerAliveInterval,
+			sshServerAliveCountMax:
+				conn.transport.type === "Ssh" ? conn.transport.ssh.server_alive_count_max : empty.sshServerAliveCountMax,
+			sshStrictHostKeyChecking:
+				conn.transport.type === "Ssh" ? conn.transport.ssh.strict_host_key_checking : empty.sshStrictHostKeyChecking,
+			remoteDaemonPort: conn.transport.type === "Ssh" ? conn.transport.remote_daemon_port : empty.remoteDaemonPort,
 			directUrl: conn.transport.type === "Direct" ? conn.transport.url : "",
-			authUsername: conn.auth_username,
+			authUsername: conn.auth_username ?? "",
 		});
 	}
 
@@ -153,10 +196,15 @@ export const RemoteMachinesPanel: Component = () => {
 			f.transportType === "Ssh"
 				? {
 						type: "Ssh",
-						ssh_host: f.sshHost.trim(),
-						ssh_port: f.sshPort,
-						ssh_user: f.sshUser.trim(),
-						identity_file: f.identityFile.trim() || null,
+						ssh: {
+							host: f.sshHost.trim(),
+							port: f.sshPort,
+							user: f.sshUser.trim(),
+							identity_file: f.identityFile.trim() || null,
+							server_alive_interval: f.sshServerAliveInterval,
+							server_alive_count_max: f.sshServerAliveCountMax,
+							strict_host_key_checking: f.sshStrictHostKeyChecking,
+						},
 						remote_daemon_port: f.remoteDaemonPort,
 					}
 				: { type: "Direct", url: f.directUrl.trim() };
@@ -165,7 +213,7 @@ export const RemoteMachinesPanel: Component = () => {
 			...connState.connection,
 			name: f.name.trim(),
 			transport,
-			auth_username: f.authUsername.trim(),
+			auth_username: f.authUsername.trim() || null,
 		};
 
 		setSaving(true);
@@ -399,7 +447,7 @@ export const RemoteMachinesPanel: Component = () => {
 												color: conn().transport.type === "Ssh" ? "#61afef" : "#98c379",
 											}}
 										>
-											{conn().transport.type === "Ssh" ? "SSH" : "DIRECT"}
+											{transportBadgeLabel(conn().transport)}
 										</span>
 										<Show when={connState.status !== "disconnected"}>
 											<span style={{ "font-size": "11px", color: remoteStatusColor(connState.status) }}>

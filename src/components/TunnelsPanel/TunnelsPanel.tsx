@@ -127,7 +127,7 @@ export const TunnelsPanel: Component = () => {
 											<div class={s.rowInfo}>
 												<span class={s.rowName}>{profile.name}</span>
 												<span class={s.rowMeta}>
-													{profile.user}@{profile.host}:{profile.port}
+													{profile.ssh.user}@{profile.ssh.host}:{profile.ssh.port}
 												</span>
 												<TunnelStatusBadge status={tunnelsStore.getTunnelStatus(profile.id)} />
 											</div>
