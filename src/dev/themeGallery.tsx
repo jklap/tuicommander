@@ -21,6 +21,9 @@
  * same-origin iframe to about:blank (`guardSameOriginNav`).
  * It is not a rollup input, so it never ships in a build.
  */
+// Side-effect only: the desktop-only COMMAND_TABLE entries (see
+// transportExtended.ts) — this page renders desktop components in browser mode.
+import "../transportExtended";
 import { createSignal, For, type JSX, onCleanup } from "solid-js";
 import { render } from "solid-js/web";
 import "../global.css";

@@ -10,6 +10,11 @@ import {
 	mapCommandToHttp,
 	owningConnectionFor,
 } from "../transport";
+// Side-effect only: registers transportExtended.ts's COMMAND_TABLE entries so
+// mapCommandToHttp can resolve them here, the same way src/appEntry.tsx does
+// for the desktop bundle. See transportExtended.ts's module doc for why these
+// entries live in a separate file instead of transport.ts's own table.
+import "../transportExtended";
 import {
 	setRemoteBaseUrlLookup,
 	setRemoteTokenLookup,
@@ -32,20 +37,21 @@ function findNodes<T extends ts.Node>(root: ts.Node, guard: (node: ts.Node) => n
 	return found;
 }
 
-function extractCommandTableCommands(transportSource = readRepoFile("src/transport.ts")): Set<string> {
-	const sourceFile = ts.createSourceFile("transport.ts", transportSource, ts.ScriptTarget.Latest, true);
+/** Top-level command names of the object literal declared as `tableName` in `source`. */
+function extractTableKeys(source: string, tableName: string): Set<string> {
+	const sourceFile = ts.createSourceFile("transport.ts", source, ts.ScriptTarget.Latest, true);
 	const declaration = sourceFile.statements
 		.filter(ts.isVariableStatement)
 		.flatMap((statement) => [...statement.declarationList.declarations])
-		.find((entry) => ts.isIdentifier(entry.name) && entry.name.text === "COMMAND_TABLE");
+		.find((entry) => ts.isIdentifier(entry.name) && entry.name.text === tableName);
 	let value = declaration?.initializer;
 	while (value && !ts.isObjectLiteralExpression(value)) {
 		if (ts.isParenthesizedExpression(value)) value = value.expression;
 		else if (ts.isConditionalExpression(value)) value = value.whenFalse;
 		else if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.CommaToken) value = value.right;
-		else throw new Error("COMMAND_TABLE initializer is not an object");
+		else throw new Error(`${tableName} initializer is not an object`);
 	}
-	if (!value) throw new Error("COMMAND_TABLE initializer not found");
+	if (!value) throw new Error(`${tableName} initializer not found`);
 	return new Set(
 		value.properties
 			.filter(ts.isPropertyAssignment)
@@ -54,6 +60,31 @@ function extractCommandTableCommands(transportSource = readRepoFile("src/transpo
 			.map((name) => name.text),
 	);
 }
+
+/**
+ * The full command surface is split across two files: transport.ts's own
+ * COMMAND_TABLE (every command mobile.html's code can reach) and
+ * transportExtended.ts's EXTENDED_COMMAND_TABLE (desktop/Settings-only
+ * commands, merged in at runtime — see transportExtended.ts's module doc).
+ * Every consumer of this coverage set must treat both as one table. Passing a
+ * `transportSource` scans only that one source's COMMAND_TABLE.
+ */
+function extractCommandTableCommands(transportSource?: string): Set<string> {
+	if (transportSource !== undefined) return extractTableKeys(transportSource, "COMMAND_TABLE");
+	const core = extractTableKeys(readRepoFile("src/transport.ts"), "COMMAND_TABLE");
+	const extended = extractTableKeys(readRepoFile("src/transportExtended.ts"), "EXTENDED_COMMAND_TABLE");
+	return new Set([...core, ...extended]);
+}
+
+describe("COMMAND_TABLE split", () => {
+	it("keeps the two tables disjoint so no command is mapped twice", () => {
+		const core = extractTableKeys(readRepoFile("src/transport.ts"), "COMMAND_TABLE");
+		const extended = extractTableKeys(readRepoFile("src/transportExtended.ts"), "EXTENDED_COMMAND_TABLE");
+		expect(core.size).toBeGreaterThan(0);
+		expect(extended.size).toBeGreaterThan(0);
+		expect([...extended].filter((command) => core.has(command))).toEqual([]);
+	});
+});
 
 describe("COMMAND_TABLE source scan", () => {
 	it("finds space-indented commands without treating a nested object key as a command", () => {

@@ -50,6 +50,8 @@ describe("a repo registered on a remote machine runs its work there", () => {
 		globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("{}"));
 
 		({ rpc } = await import("../transport"));
+		// The desktop-only entries (transportExtended.ts) into this fresh module graph.
+		await import("../transportExtended");
 		const runtime = await import("../transportRuntime");
 		getSessionConnection = runtime.getSessionConnection;
 		({ repositoriesStore } = await import("../stores/repositories"));
