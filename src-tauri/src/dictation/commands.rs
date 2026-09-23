@@ -354,19 +354,40 @@ pub async fn download_speech_asset(app: AppHandle, asset: String) -> Result<Stri
     let id = target.id.to_string();
     let progress_app = app.clone();
     let progress_id = id.clone();
-    let path = library
+    let installed = library
         .install(target, move |downloaded, total| {
-            let payload = download_progress(Some(&progress_id), downloaded, total);
-            let _ = progress_app.emit(SPEECH_DOWNLOAD_PROGRESS, payload.clone());
-            push_to_bus(
+            emit_speech_download(
                 &progress_app,
-                crate::state::AppEvent::SpeechDownloadProgress { payload },
+                download_progress(Some(&progress_id), downloaded, total),
             );
         })
-        .await
-        .map_err(|error| error.to_string())?;
+        .await;
 
+    // Sent on success and on failure alike. Only the caller that started a
+    // download has a return value to clear its bar with; every other client —
+    // a browser, a second window, a script on the HTTP API — learns it ended
+    // from this alone, and without it shows the last percent forever.
+    emit_speech_download(&app, download_finished(&id));
+
+    let path = installed.map_err(|error| error.to_string())?;
     Ok(format!("Installed to {}", path.display()))
+}
+
+/// Emit one speech-download event on both transports.
+fn emit_speech_download(app: &AppHandle, payload: serde_json::Value) {
+    let _ = app.emit(SPEECH_DOWNLOAD_PROGRESS, payload.clone());
+    push_to_bus(
+        app,
+        crate::state::AppEvent::SpeechDownloadProgress { payload },
+    );
+}
+
+/// The last event of a speech-asset download, whatever its outcome.
+///
+/// It carries no outcome on purpose: the catalogue is the one place that says
+/// whether the asset is now ready, and a client re-reads it on `done`.
+fn download_finished(asset: &str) -> serde_json::Value {
+    serde_json::json!({ "asset": asset, "done": true })
 }
 
 /// The event a speech-asset download reports progress on.
@@ -3445,6 +3466,16 @@ mod tests {
             serde_json::json!(0),
             "a server that sent no length must not divide by it"
         );
+    }
+
+    /// The frontend keys its bar on `asset` and ends it on `done`; a progress
+    /// event must never carry `done`, or the bar would vanish mid-download.
+    #[test]
+    fn a_finished_speech_download_names_its_asset_and_says_done() {
+        let finished = download_finished("italian");
+        assert_eq!(finished["asset"], serde_json::json!("italian"));
+        assert_eq!(finished["done"], serde_json::json!(true));
+        assert!(download_progress(Some("italian"), 4, 4).get("done").is_none());
     }
 
     /// Auto has no language until somebody speaks, and a voice assistant that
