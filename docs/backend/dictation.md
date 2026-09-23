@@ -1026,7 +1026,7 @@ that emits only one of the two reaches only one kind of client.
 | Event | Fires when | Payload |
 |---|---|---|
 | `dictation-download-progress` | a Whisper model is downloading | `{ downloaded, total, percent }` |
-| `speech-download-progress` | a speech asset is downloading | the same, plus `asset` |
+| `speech-download-progress` | a speech asset is downloading, and once more when it ends | the same, plus `asset`; the last event is `{ asset, done: true }` on success and failure alike |
 | `speech-utterance` | a reply changes state | the `SpokenReply` shape `speak_reply` returns |
 
 **One serializer feeds both.** Each `AppEvent` variant carries an

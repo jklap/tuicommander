@@ -707,7 +707,7 @@ the server is back to the filter the connection was opened with.
 | `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
 | `session-state-changed` | `{session_id, state}` — `state` is the same object `GET /sessions` returns per session (`shell_state`, `agent_state`, `awaiting_input`, `question_confident`, `background_work`, `queued_commands`, …), snake_case, with the fields serde skips at their zero value omitted | A session's derived lifecycle state moved. Published by the session-state accumulator (`state.rs publish_session_state_change`) once per real transition, deduped by `SessionState`'s `PartialEq` — a repaint that changes only `last_activity_ms` publishes nothing. Dual-emitted on the Tauri window under the same name and with the same payload, so `useAgentPolling.ts` consumes both transports with one handler instead of polling `list_active_sessions`. Absence of a field means its zero value, not "unknown" |
 | `dictation-download-progress` | `{downloaded, total, percent}` | A Whisper model is downloading. Dual-emitted on the Tauri window with the identical body |
-| `speech-download-progress` | `{asset, downloaded, total, percent}` | A speech asset is downloading. `asset` is the only difference from the line above, and it is what a client joins the bar against |
+| `speech-download-progress` | `{asset, downloaded, total, percent}`, then `{asset, done: true}` | A speech asset is downloading; the `done` event ends it, success or failure. `asset` is the only difference from the line above, and it is what a client joins the bar against |
 | `speech-utterance` | `{utteranceId, state, error?, turn}` — the `SpokenReply` shape `POST /dictation/speech/speak` returns | A reply moved between `queued`, `rendering`, `speaking` and one of `finished` / `interrupted` / `failed`. Pushed by the render thread that performed the transition, so a client no longer polls `speech/status` |
 | *(any of the above, mirrored)* | the daemon's own payload plus `__tuic_origin: {connection}` | An event this machine repeated from a connected remote daemon (`remote_mirror.rs`). It arrives under the daemon's own event name, so a client needs no new subscription; `__tuic_origin` says which connection it came from. A frame that already carries the key is dropped rather than repeated, so a mirrored event never crosses a second hop |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped. Dropped events are never resent, so a client that derives state from the stream must re-read it — `subscribeEvents`' `onResync("lagged")` callback exists for that. It also fires with `"reconnect"` on any EventSource re-open after the first, because a drop loses the same way silently. Both are SSE-only: Tauri `listen()` is in-process and cannot drop |
@@ -1645,7 +1645,10 @@ The speech-asset routes take `asset`, an id from the catalogue in
 a `400`-shaped error string rather than a path or a URL built from what the
 caller sent. `download` is minutes long and streams nothing back — progress
 arrives as `speech-download-progress`, on the desktop window **and** on
-`/events`, carrying `{ asset, downloaded, total, percent }`. The Whisper-model
+`/events`, carrying `{ asset, downloaded, total, percent }`, then one final `{ asset, done: true }`
+whether the download succeeded or failed. That last event is how a client that
+did not start the download ends its bar; it carries no outcome, so re-read
+`GET /dictation/speech/assets` for the new state. The Whisper-model
 download beside it pushes `dictation-download-progress` with the same body minus
 `asset`.
 

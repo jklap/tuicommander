@@ -350,7 +350,14 @@ function createDictationStore() {
 	// Per-asset speech download progress. Keyed by asset id because the runtime
 	// library and a language are separate downloads a user can start together,
 	// and one shared percent would show each of them the other's.
-	listen<{ asset: string; percent: number }>("speech-download-progress", (event) => {
+	// `done` ends the bar for every client, including one that did not start
+	// the download and so has no `downloadSpeechAsset` to clear it.
+	listen<{ asset: string; percent: number; done?: boolean }>("speech-download-progress", (event) => {
+		if (event.payload.done) {
+			setState("speechDownloads", event.payload.asset, undefined);
+			void actions.refreshSpeechAssets();
+			return;
+		}
 		setState("speechDownloads", event.payload.asset, event.payload.percent);
 	});
 

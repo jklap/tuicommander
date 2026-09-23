@@ -1085,6 +1085,24 @@ describe("dictationStore", () => {
 			});
 		});
 
+		it("clears a finished download this client never started", async () => {
+			// A download started over HTTP by another client, or by curl, has
+			// no `downloadSpeechAsset` here whose `finally` would clear it: only
+			// the backend's done event can end the bar, or it sits at 100%.
+			const handler = await subscribed("speech-download-progress");
+
+			await testInScopeAsync(async () => {
+				handler?.({ payload: { asset: "italian", percent: 100 } });
+				expect(store.state.speechDownloads.italian).toBe(100);
+
+				mockInvoke.mockClear();
+				mockInvoke.mockResolvedValueOnce([]);
+				handler?.({ payload: { asset: "italian", percent: 100, done: true } });
+				expect(store.state.speechDownloads.italian).toBeUndefined();
+				await vi.waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("get_speech_assets"));
+			});
+		});
+
 		it("applies a pushed utterance without asking the backend anything", async () => {
 			const handler = await subscribed("speech-utterance");
 			expect(handler, "finished and interrupted have no call to return from").toBeDefined();
