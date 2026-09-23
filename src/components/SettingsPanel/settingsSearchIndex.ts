@@ -548,16 +548,10 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "github", section: "Additional GitHub Accounts", label: "Add another github.com account" },
 	{ tab: "github", section: "Additional GitHub Accounts", label: "Add Enterprise account" },
 	// tabs/ServicesTab.tsx
-	{ tab: "services", section: "File Access", sectionKey: "services.heading.fileAccess" },
-	{ tab: "services", section: "TUIC Tools" },
-	{
-		tab: "services",
-		section: "File Access",
-		label: "Additional Readable Directories",
-		labelKey: "services.label.additionalReadableDirs",
-	},
+	{ tab: "services", section: "TUIC MCP Server" },
 	// tabs/RemoteAccessTab.tsx
 	{ tab: "remote-access", section: "HTTP API Server", sectionKey: "services.heading.httpApiServer" },
+	{ tab: "remote-access", section: "File Access", sectionKey: "services.heading.fileAccess" },
 	{ tab: "remote-access", section: "Remote Access", sectionKey: "services.heading.remoteAccess" },
 	{ tab: "remote-access", section: "Tailscale HTTPS" },
 	{ tab: "remote-access", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
@@ -570,9 +564,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "remote-access",
-		section: "HTTP API Server",
-		label: "MCP Connection",
-		labelKey: "services.label.mcpConnection",
+		section: "File Access",
+		label: "Additional Readable Directories",
+		labelKey: "services.label.additionalReadableDirs",
 	},
 	{
 		tab: "remote-access",

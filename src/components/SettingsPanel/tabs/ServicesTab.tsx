@@ -1,12 +1,12 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
+import { invoke } from "../../../invoke";
 import { appLogger } from "../../../stores/appLogger";
-import { settingsStore } from "../../../stores/settings";
-import { rpc } from "../../../transport";
+import { isTauri, rpc } from "../../../transport";
 import { writeClipboard } from "../../../utils/clipboard";
-import { isAbsolutePath } from "../../../utils/pathUtils";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
 import s from "../Settings.module.css";
+import a from "./AgentsTab.module.css";
 import { UpstreamMcpPanel } from "./services/UpstreamMcpPanel";
 
 export { authFromUpstreamForm, shouldShowAuthorize, startAuthorizeFlow } from "./services/UpstreamMcpPanel";
@@ -65,34 +65,6 @@ export async function copyMcpSnippet(snippet: string): Promise<boolean> {
 }
 
 const LocalServicesPanel: Component = () => {
-	// --- Additional HTTP-readable directories ---
-	const [newReadableDir, setNewReadableDir] = createSignal("");
-	const [readableDirError, setReadableDirError] = createSignal<string | null>(null);
-	const readableDirs = (): string[] => settingsStore.state.additionalReadableDirs;
-	/** Mirrors the backend's `expand_readable_root` acceptance rule (fs_routes.rs) —
-	 *  an absolute path, or `~`/`~/...` — so a client-side entry that can never
-	 *  resolve to a real root is rejected here instead of silently sitting in the
-	 *  list looking identical to a working entry. Defense-in-depth only: the
-	 *  backend re-validates independently and is the actual enforcement point. */
-	const isValidReadableDirEntry = (entry: string): boolean =>
-		!entry.includes("..") && (entry === "~" || entry.startsWith("~/") || isAbsolutePath(entry));
-	const addReadableDir = () => {
-		const dir = newReadableDir().trim();
-		if (!dir) return;
-		if (!isValidReadableDirEntry(dir)) {
-			setReadableDirError(
-				t("services.readableDirs.invalid", "Must be an absolute path, or start with ~/ for your home directory"),
-			);
-			return;
-		}
-		setReadableDirError(null);
-		if (readableDirs().includes(dir)) return;
-		settingsStore.setAdditionalReadableDirs([...readableDirs(), dir]);
-		setNewReadableDir("");
-	};
-	const removeReadableDir = (dir: string) =>
-		settingsStore.setAdditionalReadableDirs(readableDirs().filter((d) => d !== dir));
-
 	const [disabledNativeTools, setDisabledNativeTools] = createSignal<string[]>([]);
 	const [collapseTools, setCollapseTools] = createSignal<boolean>(false);
 	const [bridgeInfo, setBridgeInfo] = createSignal<{ bridge_path: string; config_snippet: string } | null>(null);
@@ -124,60 +96,19 @@ const LocalServicesPanel: Component = () => {
 
 	return (
 		<>
-			<h3>{t("services.heading.fileAccess", "File Access")}</h3>
-
-			<div class={s.group}>
-				<label>{t("services.label.additionalReadableDirs", "Additional Readable Directories")}</label>
-				<p class={s.hint}>
-					{t(
-						"services.hint.additionalReadableDirs",
-						"Absolute directories that web and remote clients may READ files from, in addition to your registered repositories. Desktop reads are never restricted. Never widens writing, copying, or moving. Use ~ for your home directory.",
-					)}
-				</p>
-
-				<For each={readableDirs()}>
-					{(dir) => (
-						<div class={s.copyPathRow}>
-							<span class={s.copyPathText}>{dir}</span>
-							<button type="button" class={s.transferBtn} onClick={() => removeReadableDir(dir)}>
-								{t("services.readableDirs.remove", "Remove")}
-							</button>
-						</div>
-					)}
-				</For>
-
-				<div class={s.copyPathRow}>
-					<input
-						type="text"
-						class={s.copyPathInput}
-						value={newReadableDir()}
-						onInput={(e) => {
-							setNewReadableDir(e.currentTarget.value);
-							setReadableDirError(null);
-						}}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") addReadableDir();
-						}}
-						placeholder={t("services.readableDirs.placeholder", "e.g. ~/.claude/plans")}
-					/>
-					<button type="button" class={s.transferBtn} onClick={addReadableDir} disabled={!newReadableDir().trim()}>
-						{t("services.readableDirs.add", "Add")}
-					</button>
-				</div>
-				<Show when={readableDirError()}>
-					<p class={s.hint} style={{ color: "var(--error)" }}>
-						{readableDirError()}
-					</p>
-				</Show>
-			</div>
-
-			{/* ── TUIC Tools ── */}
-			<h3>TUIC Tools</h3>
+			{/* ── TUIC MCP Server ── */}
+			<h3>TUIC MCP Server</h3>
 			<div class={s.group}>
 				<p class={s.hint}>Native tools exposed via MCP. Disable tools to restrict what AI agents can access.</p>
 			</div>
 
 			<div class={s.group}>
+				<p class={s.hint} style={{ margin: "0 0 8px" }}>
+					{t(
+						"services.hint.perAgentAutoConfigure",
+						"The MCP server can also be configured automatically for a specific agent from that agent's own settings, under Settings → Agents.",
+					)}
+				</p>
 				<button
 					class={s.mcpDisclosure}
 					onClick={() => {
@@ -286,10 +217,76 @@ const LocalServicesPanel: Component = () => {
 	);
 };
 
+// ---------------------------------------------------------------------------
+// MCP integrations cleanup (moved here from the Agents tab)
+// ---------------------------------------------------------------------------
+
+/**
+ * One place to see — and undo — every MCP bridge entry TUICommander wrote.
+ *
+ * Without it, uninstalling TUIC leaves a dangling `tuic-bridge` entry in each
+ * client it ever configured, and the user has to know which ones those were to
+ * clean up (issue #115).
+ */
+const McpIntegrationsSection: Component = () => {
+	const [installed, setInstalled] = createSignal<string[]>([]);
+	const [busy, setBusy] = createSignal(false);
+	const [error, setError] = createSignal<string | null>(null);
+
+	const refresh = async () => {
+		if (!isTauri()) return;
+		try {
+			setInstalled(await invoke<string[]>("list_installed_mcp_integrations"));
+		} catch (err) {
+			appLogger.error("config", "Failed to list MCP integrations", err);
+		}
+	};
+
+	onMount(refresh);
+
+	const handleRemoveAll = async () => {
+		if (busy()) return;
+		setBusy(true);
+		setError(null);
+		try {
+			await invoke<string[]>("remove_all_mcp_integrations");
+		} catch (err) {
+			// The sweep removes what it can and reports the rest, so refresh
+			// regardless — some entries are gone even on a partial failure.
+			setError(String(err));
+			appLogger.error("config", "Failed to remove MCP integrations", err);
+		} finally {
+			await refresh();
+			setBusy(false);
+		}
+	};
+
+	return (
+		<Show when={isTauri() && installed().length > 0}>
+			<div class={a.expandedSection}>
+				<div class={a.expandedLabel}>MCP integrations</div>
+				<p class={s.hint} style={{ "margin-bottom": "8px" }}>
+					The TUICommander bridge is configured in: <strong>{installed().join(", ")}</strong>. Remove them before
+					uninstalling TUICommander, or each client will report a missing MCP server.
+				</p>
+				<div class={a.actionsRow}>
+					<button class={a.actionBtn} onClick={handleRemoveAll} disabled={busy()}>
+						{busy() ? "Removing..." : "Remove all MCP integrations"}
+					</button>
+				</div>
+				<Show when={error()}>
+					<p class={a.remoteError}>{error()}</p>
+				</Show>
+			</div>
+		</Show>
+	);
+};
+
 export const ServicesTab: Component = () => (
 	<div class={s.section}>
 		<LocalServicesPanel />
 		<UpstreamMcpPanel />
+		<McpIntegrationsSection />
 		<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
 			{t("services.hint.autoSave", "Settings are saved automatically when changed")}
 		</p>

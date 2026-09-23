@@ -17,7 +17,7 @@ export const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "dictation", label: t("settings.dictation", "Dictation") },
 	{ key: "streamdock", label: t("settings.streamdock", "StreamDock") },
 	{ key: "github", label: "Git & GitHub" },
-	{ key: "services", label: t("settings.services", "Services & MCP") },
+	{ key: "services", label: t("settings.services", "MCP Servers") },
 	{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 	{ key: "remote-servers", label: t("settings.remoteServers", "Remote Servers") },
 	{ key: "plugins", label: t("settings.plugins", "Plugins") },

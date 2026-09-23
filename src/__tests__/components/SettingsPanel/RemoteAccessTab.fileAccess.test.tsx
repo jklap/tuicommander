@@ -16,17 +16,33 @@ vi.mock("../../../stores/settings", () => ({
 	},
 }));
 
-import { ServicesTab } from "../../../components/SettingsPanel/tabs/ServicesTab";
+// `RemoteAccessTab` fetches `get_local_ips` from a `createResource` on mount
+// whose result nothing in this test's rendered tree ever reads — same leak
+// shape as `RemoteAccessTab.render.test.tsx`. Intercept only this one
+// command — everything else keeps going through the real `rpc()`.
+vi.mock("../../../transport", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../../transport")>();
+	return {
+		...actual,
+		rpc: (async (command: string, ...rest: unknown[]) => {
+			if (command === "get_local_ips") return [];
+			// biome-ignore lint/suspicious/noExplicitAny: forwarding to the real overloaded rpc()
+			return (actual.rpc as any)(command, ...rest);
+		}) as typeof actual.rpc,
+	};
+});
 
-/** ServicesTab's onMount fires a fire-and-forget `load_config` rpc call (for
- *  the TUIC Tools section's disabled-tools/collapse-tools state) that stays
- *  unresolved past the synchronous test body — flush it so vitest's leak
- *  detector doesn't flag it as dangling. */
+import { RemoteAccessTab } from "../../../components/SettingsPanel/tabs/RemoteAccessTab";
+
+/** RemoteAccessTab's onMount fires several fire-and-forget rpc calls (server
+ *  status, relay status, self-signed cert status, Tailscale status, local IPs,
+ *  connect URL) that stay unresolved past the synchronous test body — flush
+ *  them so vitest's leak detector doesn't flag them as dangling. */
 async function flushMicrotasks(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-describe("ServicesTab — File Access", () => {
+describe("RemoteAccessTab — File Access", () => {
 	beforeEach(() => {
 		additionalReadableDirsBox.dirs = ["~/.claude/plans", "/tmp/other"];
 		additionalReadableDirsBox.setAdditionalReadableDirs.mockReset();
@@ -41,7 +57,7 @@ describe("ServicesTab — File Access", () => {
 		// `load_config` resolves undefined via the global Tauri mock (no case for
 		// it), which the tools-config loader's own try/catch swallows — the File
 		// Access section renders unconditionally regardless.
-		const { getByText, unmount } = render(() => <ServicesTab />);
+		const { getByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 
 		expect(getByText("File Access")).toBeTruthy();
@@ -50,7 +66,7 @@ describe("ServicesTab — File Access", () => {
 	});
 
 	it("adding a typed directory calls settingsStore.setAdditionalReadableDirs with the appended list", async () => {
-		const { getByPlaceholderText, getByText, unmount } = render(() => <ServicesTab />);
+		const { getByPlaceholderText, getByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 
 		const input = getByPlaceholderText("e.g. ~/.claude/plans") as HTMLInputElement;
@@ -66,7 +82,7 @@ describe("ServicesTab — File Access", () => {
 	});
 
 	it("removing a directory calls it with the list minus that entry", async () => {
-		const { getAllByText, unmount } = render(() => <ServicesTab />);
+		const { getAllByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 
 		const removeButtons = getAllByText("Remove");
@@ -77,7 +93,7 @@ describe("ServicesTab — File Access", () => {
 	});
 
 	it("refuses to add a blank/whitespace-only entry", async () => {
-		const { getByPlaceholderText, getByText, unmount } = render(() => <ServicesTab />);
+		const { getByPlaceholderText, getByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 
 		const input = getByPlaceholderText("e.g. ~/.claude/plans") as HTMLInputElement;
@@ -92,7 +108,7 @@ describe("ServicesTab — File Access", () => {
 	});
 
 	it("refuses a relative path with a visible error, and clears it on next input", async () => {
-		const { getByPlaceholderText, getByText, queryByText, unmount } = render(() => <ServicesTab />);
+		const { getByPlaceholderText, getByText, queryByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 
 		const input = getByPlaceholderText("e.g. ~/.claude/plans") as HTMLInputElement;
@@ -109,7 +125,7 @@ describe("ServicesTab — File Access", () => {
 	});
 
 	it("refuses an entry containing '..' with a visible error", async () => {
-		const { getByPlaceholderText, getByText, queryByText, unmount } = render(() => <ServicesTab />);
+		const { getByPlaceholderText, getByText, queryByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 
 		const input = getByPlaceholderText("e.g. ~/.claude/plans") as HTMLInputElement;
@@ -122,7 +138,7 @@ describe("ServicesTab — File Access", () => {
 	});
 
 	it("accepts a bare ~/ entry (the documented placeholder form)", async () => {
-		const { getByPlaceholderText, getByText, unmount } = render(() => <ServicesTab />);
+		const { getByPlaceholderText, getByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 
 		const input = getByPlaceholderText("e.g. ~/.claude/plans") as HTMLInputElement;

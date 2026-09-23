@@ -394,21 +394,21 @@ export const UpstreamMcpPanel: Component = () => {
 			id={SETTINGS_SECTION_UPSTREAM_MCP}
 			style={{ "margin-top": "24px", "border-top": "1px solid var(--border)", "padding-top": "16px" }}
 		>
+			<h3 style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
+				<span>Upstream MCP Servers</span>
+				<button
+					class={s.copyBtn}
+					onClick={() => {
+						setShowAdd((v) => !v);
+						setError("");
+					}}
+					title="Add upstream server"
+					style={{ "font-size": "18px", "line-height": 1, width: "auto", padding: "0 8px" }}
+				>
+					{showAdd() ? "−" : "+"}
+				</button>
+			</h3>
 			<div class={s.group}>
-				<label style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
-					<span>Upstream MCP Servers</span>
-					<button
-						class={s.copyBtn}
-						onClick={() => {
-							setShowAdd((v) => !v);
-							setError("");
-						}}
-						title="Add upstream server"
-						style={{ "font-size": "18px", "line-height": 1 }}
-					>
-						{showAdd() ? "−" : "+"}
-					</button>
-				</label>
 				<p class={s.hint}>
 					Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
 				</p>
