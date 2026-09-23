@@ -558,6 +558,10 @@ Example:
 Handled by `.claude/hooks/daily-check.sh` (SessionStart hook). Runs automatically once per day — no model action needed. If the hook outputs something, relay it to Boss.
 
 
+## Sidebar clicks
+**Clicking a branch row opens the branch. It never expands or collapses the agents.** Expanding belongs to the branch icon alone (`branchIconToggle` in `RepoSection.tsx`), which stops propagation so the toggle never also opens the branch. **Any change to what a sidebar click does requires explicit Boss approval before implementation** — including removing or moving a control that performs a click action.
+
+
 ## Drag & Drop
 D&D is strategic and fragile (tab reorder, split-pane moves, file drops, FileBrowser intra-tree moves). **Any change to D&D code, event handlers on drag/drop/pointer events, or `dragDrop.ts`/`useFileDrop.ts` requires explicit Boss approval before implementation.**
 
