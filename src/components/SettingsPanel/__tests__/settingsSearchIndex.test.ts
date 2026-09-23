@@ -22,7 +22,11 @@ const TAB_SOURCES: Record<string, string[]> = {
 	"keyboard-shortcuts": ["tabs/KeyboardShortcutsTab.tsx"],
 	dictation: ["DictationSettings.tsx"],
 	github: ["tabs/GitHubTab.tsx"],
-	mcp: ["tabs/services/LocalMcpPanel.tsx", "tabs/services/UpstreamMcpPanel.tsx"],
+	mcp: [
+		"tabs/services/LocalMcpPanel.tsx",
+		"tabs/services/UpstreamMcpPanel.tsx",
+		"tabs/services/McpIntegrationsSection.tsx",
+	],
 	"remote-access": ["tabs/services/RemoteAccessPanel.tsx"],
 	"remote-servers": [
 		"tabs/RemoteServersTab.tsx",

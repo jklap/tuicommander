@@ -19,7 +19,7 @@ import { rpc } from "../../../transport";
 /**
  * Placement regression guard for the Services & MCP split. The Remote Access
  * page (`RemoteAccessPanel`) owns File Access, Remote Access, Tailscale HTTPS,
- * Self-Signed HTTPS and Cloud Relay; HTTP API Server and TUIC Tools stay on the
+ * Self-Signed HTTPS and Cloud Relay; HTTP API Server and TUIC MCP Server stay on the
  * MCP page (`LocalMcpPanel`). Moving a section between the two pages must be a
  * deliberate change to this test.
  */
@@ -78,17 +78,17 @@ describe("Remote Access / MCP — placement regression guard", () => {
 		}
 		expect(view.getByText("Enable remote access")).toBeDefined();
 		expect(view.queryByRole("heading", { name: "HTTP API Server" })).toBeNull();
-		expect(view.queryByRole("heading", { name: "TUIC Tools" })).toBeNull();
+		expect(view.queryByRole("heading", { name: "TUIC MCP Server" })).toBeNull();
 
 		view.unmount();
 	});
 
-	it("HTTP API Server and TUIC Tools stay on the MCP page", async () => {
+	it("HTTP API Server and TUIC MCP Server stay on the MCP page", async () => {
 		const view = render(() => <LocalMcpPanel />);
 		await vi.advanceTimersByTimeAsync(0);
 
 		expect(view.getByRole("heading", { name: "HTTP API Server" })).toBeDefined();
-		expect(view.getByRole("heading", { name: "TUIC Tools" })).toBeDefined();
+		expect(view.getByRole("heading", { name: "TUIC MCP Server" })).toBeDefined();
 		for (const heading of ["File Access", "Remote Access", "Cloud Relay"]) {
 			expect(view.queryByRole("heading", { name: heading })).toBeNull();
 		}
