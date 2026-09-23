@@ -266,12 +266,8 @@ mod tests {
         TunnelProfile {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.to_string(),
-            host: "example.com".to_string(),
-            port: 22,
-            user: "alice".to_string(),
-            identity_file: None,
+            ssh: crate::ssh_connection::SshConnectionParams::new("example.com", "alice"),
             forwards: Vec::new(),
-            options: super::super::profile::ProfileOptions::default(),
             auto_connect: false,
         }
     }
@@ -533,7 +529,7 @@ mod tests {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
         let mut profile = test_profile("invalid");
-        profile.host = " ".to_string();
+        profile.ssh.host = " ".to_string();
         let id = profile.id.clone();
 
         let error = manager.start(profile).await.expect_err("invalid profile");

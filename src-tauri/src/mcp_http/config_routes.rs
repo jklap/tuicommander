@@ -744,33 +744,21 @@ pub(super) async fn delete_remote_connection(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    state.tunnel_manager.stop_if_running(&id);
     let _guard = state.connections_lock.lock().await;
-    let mut connections =
-        match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
-            Ok(c) => c,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-                    .into_response();
-            }
-        };
-    let before = connections.len();
-    connections.retain(|c| c.id != id);
-    if connections.len() == before {
-        return (
+    // Shared with the Tauri `delete_remote_connection` command
+    // (`remote_connection::delete_remote_connection`) — see
+    // `delete_remote_connection_impl`'s doc comment (plan Phase 1) for why
+    // this used to only happen on the HTTP side.
+    match crate::remote_connection::delete_remote_connection_impl(&state, &id) {
+        Ok(true) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
         )
-            .into_response();
-    }
-    match crate::remote_connection::RemoteConnectionStore::save(&state.data_dir, &connections) {
-        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
+            Json(serde_json::json!({"error": e})),
         )
             .into_response(),
     }
@@ -1262,6 +1250,51 @@ mod tests {
             value.as_array().unwrap().len(),
             0,
             "non-desktop builds report no audio devices"
+        );
+    }
+
+    // ── delete_remote_connection ─────────────────────────────
+    //
+    // Thin wiring tests: the actual logic (stop-tunnel-then-delete, keyring
+    // cleanup, not-found handling) is shared with the Tauri command via
+    // `remote_connection::delete_remote_connection_impl` and tested directly
+    // there — these just confirm this route maps that shared result to the
+    // right HTTP status/body (plan Phase 1).
+
+    #[tokio::test]
+    async fn delete_remote_connection_http_returns_404_for_a_missing_connection() {
+        let state = super::super::tests::test_state();
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state),
+            Path("does-not-exist".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_remote_connection_http_removes_an_existing_connection() {
+        let state = super::super::tests::test_state();
+        let conn = crate::remote_connection::RemoteConnection::new_ssh("t", "h", "u");
+        let id = conn.id.clone();
+        crate::remote_connection::upsert_remote_connection(&state.data_dir, conn).unwrap();
+
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
         );
     }
 }

@@ -82,14 +82,16 @@ describe("RemoteMachinesPanel", () => {
 			name: "staging",
 			transport: {
 				type: "Ssh",
-				ssh_host: "10.0.0.5",
-				ssh_port: 22,
-				ssh_user: "deploy",
-				identity_file: null,
-				// Current (buggy, per the plan doc) default — 9877 is what a real
-				// tuic-remote daemon actually listens on; this locks in today's
-				// behavior, not the eventual fix.
-				remote_daemon_port: 9876,
+				ssh: {
+					host: "10.0.0.5",
+					port: 22,
+					user: "deploy",
+					identity_file: null,
+				},
+				// Fixed (plan Phase 1) — 9877 matches `RemoteConnection::new_ssh`'s
+				// Rust default and what a real `tuic-remote` daemon actually
+				// listens on out of the box.
+				remote_daemon_port: 9877,
 			},
 		});
 	});

@@ -16,30 +16,23 @@ pub(crate) fn list_tunnel_profiles(
 #[tauri::command]
 pub(crate) fn save_tunnel_profile(
     state: tauri::State<'_, Arc<AppState>>,
-    mut profile: serde_json::Value,
+    profile: serde_json::Value,
 ) -> Result<String, String> {
-    if profile
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .is_empty()
-    {
-        profile["id"] = serde_json::Value::String(uuid::Uuid::new_v4().to_string());
-    }
-    let mut profile: TunnelProfile = serde_json::from_value(profile).map_err(|e| e.to_string())?;
-    profile.validate()?;
-    let id = profile.id.clone();
-    ProfileStore::save(&state.data_dir, &profile).map_err(|e| e.to_string())?;
-    Ok(id)
+    super::commands::save_tunnel_profile_impl(&state.data_dir, profile).map_err(|e| match e {
+        super::commands::SaveTunnelProfileError::Validation(msg) => msg,
+        super::commands::SaveTunnelProfileError::Storage(msg) => msg,
+    })
 }
 
 #[tauri::command]
 pub(crate) fn delete_tunnel_profile(
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
-) -> Result<bool, String> {
-    state.tunnel_manager.stop_if_running(&id);
-    ProfileStore::delete(&state.data_dir, None, &id).map_err(|e| e.to_string())
+) -> Result<(), String> {
+    super::commands::delete_tunnel_profile_impl(&state, &id).map_err(|e| match e {
+        super::commands::DeleteTunnelProfileError::NotFound => "profile not found".to_string(),
+        super::commands::DeleteTunnelProfileError::Storage(msg) => msg,
+    })
 }
 
 #[tauri::command]
@@ -297,22 +290,22 @@ pub(crate) async fn list_ssh_agent_keys() -> Result<SshAgentInfo, String> {
 
 // ── Tests ───────────────────────────────────────────────────
 //
-// These `#[tauri::command]` fns take `tauri::State<'_, Arc<AppState>>`
-// directly with no plain-`&AppState` `_impl` twin to call instead (unlike
-// e.g. `pty.rs`'s `get_session_foreground_process`/`list_active_sessions`).
+// `save_tunnel_profile`/`delete_tunnel_profile` above now each delegate to a
+// plain-`&AppState` `_impl` twin in `commands.rs`
+// (`save_tunnel_profile_impl`/`delete_tunnel_profile_impl`, shared with the
+// HTTP routes — see plan Phase 1) — those are tested directly there. The
+// remaining `#[tauri::command]` fns in this file still take
+// `tauri::State<'_, Arc<AppState>>` directly with no such twin.
 // `tauri::State<'r, T>` wraps a private `&'r T` with no public constructor
 // outside a running Tauri app (confirmed by reading `tauri::state::State`'s
 // definition — a tuple struct with a private field, only ever built by
 // `StateManager::get`), and no test anywhere in this codebase constructs one
 // (see `pty.rs`'s doc comment on `list_active_sessions_impl`, which
 // documents this exact gap for a different command). Extracting a testable
-// `_impl` twin is a production-code change, out of scope for this test-only
-// pass — so these tests cover the free functions that ARE directly callable
+// `_impl` twin for the rest is a production-code change beyond this phase's
+// scope — so these tests cover the free functions that ARE directly callable
 // (`status_to_frontend`, `extract_audit_message`, `detect_agent_type`), which
-// is as close to full command coverage as this pass can safely get. The
-// three IPC-side halves of the known parity bugs (see plan Phase 1) are
-// documented in `commands.rs`'s test module instead, next to their HTTP-side
-// pinning tests, citing the exact source lines that diverge.
+// is as close to full command coverage as this pass can safely get.
 #[cfg(test)]
 mod tests {
     use super::*;

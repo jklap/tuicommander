@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use super::profile::{ForwardSpec, StrictHostKeyChecking, TunnelProfile};
+use super::profile::{ForwardSpec, TunnelProfile};
+use crate::ssh_connection::StrictHostKeyChecking;
 
 /// Build the ssh argument vector for a tunnel profile.
 pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
@@ -26,16 +27,16 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
     args.push("-o".to_string());
     args.push(format!(
         "ServerAliveInterval={}",
-        profile.options.server_alive_interval
+        profile.ssh.server_alive_interval
     ));
     args.push("-o".to_string());
     args.push(format!(
         "ServerAliveCountMax={}",
-        profile.options.server_alive_count_max
+        profile.ssh.server_alive_count_max
     ));
 
     // Host key policy
-    let shk_value = match profile.options.strict_host_key_checking {
+    let shk_value = match profile.ssh.strict_host_key_checking {
         StrictHostKeyChecking::Yes => "yes",
         StrictHostKeyChecking::AcceptNew => "accept-new",
     };
@@ -48,10 +49,10 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
 
     // SSH port
     args.push("-p".to_string());
-    args.push(profile.port.to_string());
+    args.push(profile.ssh.port.to_string());
 
     // Identity file (optional)
-    if let Some(identity) = &profile.identity_file {
+    if let Some(identity) = &profile.ssh.identity_file {
         args.push("-i".to_string());
         args.push(identity.to_string_lossy().into_owned());
     }
@@ -79,7 +80,7 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
     }
 
     // Destination — must be last
-    args.push(format!("{}@{}", profile.user, profile.host));
+    args.push(format!("{}@{}", profile.ssh.user, profile.ssh.host));
 
     args
 }
@@ -102,18 +103,15 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
+    use crate::ssh_connection::SshConnectionParams;
+    use crate::tunnels::profile::TunnelProfile;
 
     fn base_profile() -> TunnelProfile {
         TunnelProfile {
             id: uuid::Uuid::new_v4().to_string(),
             name: "test".to_string(),
-            host: "example.com".to_string(),
-            port: 22,
-            user: "alice".to_string(),
-            identity_file: None,
+            ssh: SshConnectionParams::new("example.com", "alice"),
             forwards: Vec::new(),
-            options: ProfileOptions::default(),
             auto_connect: false,
         }
     }
@@ -207,7 +205,7 @@ mod tests {
     #[test]
     fn with_identity_file() {
         let mut profile = base_profile();
-        profile.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
+        profile.ssh.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
 
         let args = build_ssh_args(&profile);
 
@@ -253,7 +251,7 @@ mod tests {
     #[test]
     fn strict_host_key_checking_accept_new() {
         let mut profile = base_profile();
-        profile.options.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
+        profile.ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
 
         let args = build_ssh_args(&profile);
 

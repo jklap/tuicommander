@@ -519,12 +519,8 @@ mod tests {
         TunnelProfile {
             id: uuid::Uuid::new_v4().to_string(),
             name: "test-tunnel".to_string(),
-            host: "example.com".to_string(),
-            port: 22,
-            user: "alice".to_string(),
-            identity_file: None,
+            ssh: crate::ssh_connection::SshConnectionParams::new("example.com", "alice"),
             forwards: Vec::new(),
-            options: super::super::profile::ProfileOptions::default(),
             auto_connect: false,
         }
     }

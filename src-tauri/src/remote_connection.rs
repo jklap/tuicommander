@@ -1,12 +1,24 @@
 //! Remote connection config model.
 //!
-//! Persists named connections (SSH or Direct) to `connections.json` in the
-//! app config directory. Each connection has a UUID, a human-readable name,
-//! a transport, auth info, and an enabled flag.
+//! Persists named connections (SSH, Direct, or Local) to `connections.json`
+//! in the app config directory. Each connection has a UUID, a human-readable
+//! name, a transport, optional auth info, and an enabled flag.
+//!
+//! No on-disk migration for the Phase 1 shape change (flat SSH fields →
+//! nested `SshConnectionParams`, `auth_username` → `Option<String>`, new
+//! `Local` transport variant): verified 2026-09-23 that no `connections.json`
+//! or `tunnels/*.toml` file exists anywhere on this machine (default config
+//! dir or any named `instances/<id>/` dir) — this feature (`61a388b83`,
+//! 2026-05-09) has never had a real persisted connection to migrate. Per the
+//! consolidation plan's Phase 1 note, additive/renamed fields are safe to
+//! ship without a migration when there's nothing on disk to break; revisit if
+//! a real install is ever found with a pre-Phase-1 `connections.json`.
 
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+use crate::ssh_connection::SshConnectionParams;
 
 const CONNECTIONS_FILE: &str = "connections.json";
 
@@ -20,7 +32,13 @@ pub(crate) struct RemoteConnection {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) transport: RemoteTransport,
-    pub(crate) auth_username: String,
+    /// Optional now (story: SSH Tunnels + Remote Servers consolidation,
+    /// Phase 1) — previously required but never actually used to
+    /// authenticate anything. The password half of auth (never stored here)
+    /// lives in the credential vault, keyed by `id` — see
+    /// `credentials::Credential::RemoteConnection`.
+    #[serde(default)]
+    pub(crate) auth_username: Option<String>,
     pub(crate) enabled: bool,
 }
 
@@ -29,14 +47,27 @@ pub(crate) struct RemoteConnection {
 #[serde(tag = "type")]
 pub(crate) enum RemoteTransport {
     Ssh {
-        ssh_host: String,
-        ssh_port: u16,
-        ssh_user: String,
-        identity_file: Option<String>,
+        /// Host/port/user/identity/keepalive config — shared with
+        /// `tunnels::profile::TunnelProfile` via `SshConnectionParams`.
+        ssh: SshConnectionParams,
         remote_daemon_port: u16,
     },
     Direct {
         url: String,
+    },
+    /// Another named/isolated TUICommander instance running on this same
+    /// machine (`tuic-remote --instance <id>`, or `TUIC_APP_INSTANCE=<id>`
+    /// for the desktop app). Exactly one of `port`/`instance_id` is set:
+    /// when `instance_id` is set, the real port is resolved by reading that
+    /// instance's own `config.json` off disk at connect time (see
+    /// `resolve_local_instance_port`), never cached, so a restarted instance
+    /// that landed on a different port via the 9876→9877→9878 retry chain
+    /// doesn't leave a stale port behind. `port` alone covers the unnamed
+    /// case (e.g. a plain `make dev` second debug instance on 9877, which
+    /// has no `instances/<id>/` directory to discover).
+    Local {
+        port: Option<u16>,
+        instance_id: Option<String>,
     },
 }
 
@@ -52,51 +83,12 @@ impl RemoteConnection {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
             transport: RemoteTransport::Ssh {
-                ssh_host: host.into(),
-                ssh_port: 22,
-                ssh_user: ssh_user.clone(),
-                identity_file: None,
+                ssh: SshConnectionParams::new(host, ssh_user.clone()),
                 remote_daemon_port: 9877,
             },
-            auth_username: ssh_user,
+            auth_username: Some(ssh_user),
             enabled: true,
         }
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        if uuid::Uuid::parse_str(&self.id).is_err() {
-            return Err("id must be a valid UUID".to_string());
-        }
-        if self.name.trim().is_empty() {
-            return Err("name must not be empty".to_string());
-        }
-        if self.auth_username.trim().is_empty() {
-            return Err("auth_username must not be empty".to_string());
-        }
-        match &self.transport {
-            RemoteTransport::Ssh {
-                ssh_host,
-                ssh_user,
-                ssh_port,
-                ..
-            } => {
-                if ssh_host.trim().is_empty() {
-                    return Err("ssh_host must not be empty".to_string());
-                }
-                if ssh_user.trim().is_empty() {
-                    return Err("ssh_user must not be empty".to_string());
-                }
-                if *ssh_port == 0 {
-                    return Err("ssh_port must be in range 1-65535".to_string());
-                }
-            }
-            RemoteTransport::Direct { url } => {
-                if url.trim().is_empty() {
-                    return Err("url must not be empty".to_string());
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Create a new Direct connection.
@@ -109,10 +101,181 @@ impl RemoteConnection {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
             transport: RemoteTransport::Direct { url: url.into() },
-            auth_username: auth_username.into(),
+            auth_username: Some(auth_username.into()),
             enabled: true,
         }
     }
+
+    /// Create a new Local connection pointing at a named instance, resolved
+    /// by instance id rather than a manually-entered port.
+    pub(crate) fn new_local_instance(name: impl Into<String>, instance_id: impl Into<String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.into(),
+            transport: RemoteTransport::Local {
+                port: None,
+                instance_id: Some(instance_id.into()),
+            },
+            auth_username: None,
+            enabled: true,
+        }
+    }
+
+    /// Create a new Local connection pointing at a manually-entered port
+    /// (the unnamed-instance case — e.g. a plain `make dev` second debug
+    /// instance, which has no `instances/<id>/` directory to discover).
+    pub(crate) fn new_local_port(name: impl Into<String>, port: u16) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.into(),
+            transport: RemoteTransport::Local {
+                port: Some(port),
+                instance_id: None,
+            },
+            auth_username: None,
+            enabled: true,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if uuid::Uuid::parse_str(&self.id).is_err() {
+            return Err("id must be a valid UUID".to_string());
+        }
+        if self.name.trim().is_empty() {
+            return Err("name must not be empty".to_string());
+        }
+        match &self.transport {
+            RemoteTransport::Ssh { ssh, .. } => {
+                ssh.validate()?;
+            }
+            RemoteTransport::Direct { url } => {
+                if url.trim().is_empty() {
+                    return Err("url must not be empty".to_string());
+                }
+            }
+            RemoteTransport::Local { port, instance_id } => {
+                let has_instance = instance_id.as_ref().is_some_and(|s| !s.trim().is_empty());
+                match (port, has_instance) {
+                    (None, false) => {
+                        return Err(
+                            "Local connection requires either a port or an instance_id"
+                                .to_string(),
+                        );
+                    }
+                    (Some(_), true) => {
+                        return Err(
+                            "Local connection must specify either a port or an instance_id, not both"
+                                .to_string(),
+                        );
+                    }
+                    (Some(0), false) => {
+                        return Err("port must be in range 1-65535".to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local instance port resolution
+// ---------------------------------------------------------------------------
+
+/// Distinguishes "this instance id has no on-disk config directory at all"
+/// (a typo, or an instance that was never started) from "the directory
+/// exists but its `config.json` couldn't be read/parsed" (a real instance,
+/// transient or corrupt state) — Test Connection (plan Phase 2) needs to
+/// tell these apart in its UI, and Connect needs the same distinction to
+/// give a useful error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LocalInstancePortError {
+    InstanceNotFound,
+    Unreadable(String),
+}
+
+impl std::fmt::Display for LocalInstancePortError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InstanceNotFound => write!(f, "instance not found"),
+            Self::Unreadable(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+/// Minimal shape of `config.json` needed to pull out
+/// `services.server.port` without dragging in the full `AppConfig` type
+/// (and its many `#[serde(default = ...)]` helpers) into this module. Missing
+/// sub-objects default to a `ServerConfig`-shaped zero value with port 0,
+/// which `resolve_local_instance_port_at` never accepts as valid (see its own
+/// port-zero handling below) — a `config.json` with no `services.server.port`
+/// key at all is at least as "unreadable" as one with a bad type.
+#[derive(Debug, Default, Deserialize)]
+struct MinimalAppConfigForPort {
+    #[serde(default)]
+    services: MinimalServicesConfigForPort,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MinimalServicesConfigForPort {
+    #[serde(default)]
+    server: MinimalServerConfigForPort,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MinimalServerConfigForPort {
+    #[serde(default)]
+    port: u16,
+}
+
+/// Resolve a named instance's `remote_access_port` (`services.server.port`
+/// in `config.json`) by reading that instance's own config directory off
+/// disk, using the real platform config dir and home dir. Re-read on every
+/// call, never cached — see `RemoteTransport::Local`'s doc comment for why.
+pub(crate) fn resolve_local_instance_port(instance_id: &str) -> Result<u16, LocalInstancePortError> {
+    let platform_config = dirs::config_dir();
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    resolve_local_instance_port_at(instance_id, platform_config.as_deref(), &home)
+}
+
+/// The testable body of [`resolve_local_instance_port`], taking explicit
+/// `platform_config`/`home` bases instead of reading them from `dirs::` —
+/// mirrors `config::resolve_real_config_dir`'s own split so a test can point
+/// it at a tempdir instead of the real platform config location.
+fn resolve_local_instance_port_at(
+    instance_id: &str,
+    platform_config: Option<&Path>,
+    home: &Path,
+) -> Result<u16, LocalInstancePortError> {
+    let instance = crate::app_instance::AppInstance::named(instance_id)
+        .map_err(|_| LocalInstancePortError::InstanceNotFound)?;
+    let dir = instance.config_dir_from(platform_config, home);
+    if !dir.is_dir() {
+        return Err(LocalInstancePortError::InstanceNotFound);
+    }
+
+    let config_path = dir.join("config.json");
+    let content = std::fs::read_to_string(&config_path).map_err(|e| {
+        LocalInstancePortError::Unreadable(format!(
+            "failed to read {}: {e}",
+            config_path.display()
+        ))
+    })?;
+    let parsed: MinimalAppConfigForPort = serde_json::from_str(&content).map_err(|e| {
+        LocalInstancePortError::Unreadable(format!(
+            "failed to parse {}: {e}",
+            config_path.display()
+        ))
+    })?;
+    let port = parsed.services.server.port;
+    if port == 0 {
+        return Err(LocalInstancePortError::Unreadable(format!(
+            "{} has no valid services.server.port",
+            config_path.display()
+        )));
+    }
+    Ok(port)
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +337,36 @@ pub(crate) fn upsert_remote_connection(
     RemoteConnectionStore::save(data_dir, &connections).map_err(|e| e.to_string())
 }
 
+/// Delete a connection by id: stops any tunnel running for it, deletes any
+/// stored keyring credential for it, then removes it from `connections.json`.
+///
+/// Shared by the Tauri `delete_remote_connection` command and the HTTP
+/// `delete_remote_connection` route (`mcp_http::config_routes`) so both do
+/// the exact same cleanup — the IPC command previously skipped the
+/// tunnel-stop step (see `known_bug_http_delete_stops_a_running_tunnel_before_deleting`
+/// on `AppState::tunnel_manager`, now `_now_fixed`). Callers hold
+/// `state.connections_lock` around this the same way `upsert_remote_connection`
+/// does.
+///
+/// Returns `Ok(true)` if a connection with this id was found and removed,
+/// `Ok(false)` if no connection with this id existed.
+pub(crate) fn delete_remote_connection_impl(
+    state: &crate::AppState,
+    id: &str,
+) -> Result<bool, String> {
+    state.tunnel_manager.stop_if_running(id);
+    let _ = crate::credentials::delete(crate::credentials::Credential::RemoteConnection(id));
+
+    let mut connections = RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
+    let before = connections.len();
+    connections.retain(|c| c.id != id);
+    if connections.len() == before {
+        return Ok(false);
+    }
+    RemoteConnectionStore::save(&state.data_dir, &connections).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
@@ -203,10 +396,8 @@ pub async fn delete_remote_connection(
     id: String,
 ) -> Result<(), String> {
     let _guard = state.connections_lock.lock().await;
-    let mut connections =
-        RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
-    connections.retain(|c| c.id != id);
-    RemoteConnectionStore::save(&state.data_dir, &connections).map_err(|e| e.to_string())
+    delete_remote_connection_impl(&state, &id)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -227,16 +418,13 @@ mod tests {
         assert!(decoded.enabled);
         match decoded.transport {
             RemoteTransport::Ssh {
-                ssh_host,
-                ssh_port,
-                ssh_user,
-                identity_file,
+                ssh,
                 remote_daemon_port,
             } => {
-                assert_eq!(ssh_host, "example.com");
-                assert_eq!(ssh_port, 22);
-                assert_eq!(ssh_user, "alice");
-                assert!(identity_file.is_none());
+                assert_eq!(ssh.host, "example.com");
+                assert_eq!(ssh.port, 22);
+                assert_eq!(ssh.user, "alice");
+                assert!(ssh.identity_file.is_none());
                 assert_eq!(remote_daemon_port, 9877);
             }
             other => panic!("expected Ssh, got {other:?}"),
@@ -249,12 +437,71 @@ mod tests {
         let json = serde_json::to_string(&conn).unwrap();
         let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.name, "office");
-        assert_eq!(decoded.auth_username, "bob");
+        assert_eq!(decoded.auth_username, Some("bob".to_string()));
         assert!(decoded.enabled);
         match decoded.transport {
             RemoteTransport::Direct { url } => assert_eq!(url, "http://office:9877"),
             other => panic!("expected Direct, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn local_instance_json_round_trip() {
+        let conn = RemoteConnection::new_local_instance("dev-instance", "dev-box");
+        let json = serde_json::to_string(&conn).unwrap();
+        let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.auth_username, None);
+        match decoded.transport {
+            RemoteTransport::Local { port, instance_id } => {
+                assert!(port.is_none());
+                assert_eq!(instance_id, Some("dev-box".to_string()));
+            }
+            other => panic!("expected Local, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_port_json_round_trip() {
+        let conn = RemoteConnection::new_local_port("debug-instance", 9877);
+        let json = serde_json::to_string(&conn).unwrap();
+        let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
+        match decoded.transport {
+            RemoteTransport::Local { port, instance_id } => {
+                assert_eq!(port, Some(9877));
+                assert!(instance_id.is_none());
+            }
+            other => panic!("expected Local, got {other:?}"),
+        }
+    }
+
+    /// A pre-Phase-1-shaped `auth_username: String` (always present, never
+    /// null/missing) must still deserialize now that the field is
+    /// `Option<String>` — this is the only backward-compat surface Phase 1
+    /// actually needs (see this file's top doc comment on why a full
+    /// migration wasn't built).
+    #[test]
+    fn legacy_string_auth_username_still_deserializes() {
+        let json = serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "name": "legacy",
+            "transport": {"type": "Direct", "url": "http://x"},
+            "auth_username": "alice",
+            "enabled": true,
+        });
+        let decoded: RemoteConnection = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.auth_username, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn missing_auth_username_defaults_to_none() {
+        let json = serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "name": "no-auth",
+            "transport": {"type": "Direct", "url": "http://x"},
+            "enabled": true,
+        });
+        let decoded: RemoteConnection = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.auth_username, None);
     }
 
     #[test]
@@ -268,6 +515,11 @@ mod tests {
         let direct_json = serde_json::to_string(&direct).unwrap();
         let direct_val: serde_json::Value = serde_json::from_str(&direct_json).unwrap();
         assert_eq!(direct_val["transport"]["type"], "Direct");
+
+        let local = RemoteConnection::new_local_port("l", 9877);
+        let local_json = serde_json::to_string(&local).unwrap();
+        let local_val: serde_json::Value = serde_json::from_str(&local_json).unwrap();
+        assert_eq!(local_val["transport"]["type"], "Local");
     }
 
     #[test]
@@ -300,18 +552,16 @@ mod tests {
         assert!(conn.enabled);
         match conn.transport {
             RemoteTransport::Ssh {
-                ssh_port,
+                ssh,
                 remote_daemon_port,
-                ssh_user,
-                ..
             } => {
-                assert_eq!(ssh_port, 22);
+                assert_eq!(ssh.port, 22);
                 assert_eq!(remote_daemon_port, 9877);
-                assert_eq!(ssh_user, "myuser");
+                assert_eq!(ssh.user, "myuser");
             }
             other => panic!("expected Ssh, got {other:?}"),
         }
-        assert_eq!(conn.auth_username, "myuser");
+        assert_eq!(conn.auth_username, Some("myuser".to_string()));
     }
 
     #[test]
@@ -323,6 +573,15 @@ mod tests {
     #[test]
     fn validate_valid_ssh_connection() {
         let conn = RemoteConnection::new_ssh("server", "host.example.com", "alice");
+        assert!(conn.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_ssh_connection_without_auth_username_is_ok() {
+        // auth_username is optional now — a connection with none set must
+        // still validate (story: SSH Tunnels + Remote Servers consolidation).
+        let mut conn = RemoteConnection::new_ssh("server", "host.example.com", "alice");
+        conn.auth_username = None;
         assert!(conn.validate().is_ok());
     }
 
@@ -355,6 +614,73 @@ mod tests {
         assert!(conn.validate().is_err());
     }
 
+    #[test]
+    fn validate_local_requires_port_or_instance_id() {
+        let conn = RemoteConnection {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "local".to_string(),
+            transport: RemoteTransport::Local {
+                port: None,
+                instance_id: None,
+            },
+            auth_username: None,
+            enabled: true,
+        };
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("port or an instance_id"), "{err}");
+    }
+
+    #[test]
+    fn validate_local_rejects_both_port_and_instance_id() {
+        let conn = RemoteConnection {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "local".to_string(),
+            transport: RemoteTransport::Local {
+                port: Some(9877),
+                instance_id: Some("dev-box".to_string()),
+            },
+            auth_username: None,
+            enabled: true,
+        };
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn validate_local_port_accepted() {
+        let conn = RemoteConnection::new_local_port("l", 9877);
+        assert!(conn.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_local_instance_id_accepted() {
+        let conn = RemoteConnection::new_local_instance("l", "dev-box");
+        assert!(conn.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_local_zero_port_rejected() {
+        let conn = RemoteConnection::new_local_port("l", 0);
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("port must be in range"), "{err}");
+    }
+
+    #[test]
+    fn validate_local_blank_instance_id_treated_as_absent() {
+        let conn = RemoteConnection {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "local".to_string(),
+            transport: RemoteTransport::Local {
+                port: None,
+                instance_id: Some("   ".to_string()),
+            },
+            auth_username: None,
+            enabled: true,
+        };
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("port or an instance_id"), "{err}");
+    }
+
     // --- IPC/HTTP parity: shared save path enforces validate() (story 127-89ec) -
     // `upsert_remote_connection` is the single persist path behind both the Tauri
     // `save_remote_connection` command (which previously skipped validation) and
@@ -377,29 +703,25 @@ mod tests {
         );
     }
 
-    // --- IPC/HTTP parity bug (see plan Phase 1): `delete_remote_connection` ---
+    // --- IPC/HTTP parity bug, NOW FIXED (see plan Phase 1): `delete_remote_connection` ---
     //
-    // The HTTP route (`mcp_http::config_routes::delete_remote_connection`)
-    // calls `state.tunnel_manager.stop_if_running(&id)` before deleting the
-    // connection from `connections.json`. The IPC command right above
-    // (`delete_remote_connection` in this file) does not — verified by
-    // reading its source: it goes straight from loading the store to
-    // `retain`/`save`, with no `tunnel_manager` reference at all. The IPC
-    // side cannot be pinned by a direct call here for the same reason as
-    // `tunnels::tauri_commands`'s parity-bug tests: it takes
-    // `tauri::State<'_, Arc<AppState>>`, which has no public constructor
-    // outside a running Tauri app. Do not "fix" the test below when Phase 1
-    // makes the two sides agree; update it to assert the new, unified
-    // behavior (both sides stop a running tunnel, or neither does) instead.
+    // Both the Tauri `delete_remote_connection` command and the HTTP
+    // `delete_remote_connection` route now call the shared
+    // `delete_remote_connection_impl`, which stops any running tunnel for
+    // this connection id before removing it — previously only the HTTP route
+    // did this (verified by reading its source pre-fix: the IPC command went
+    // straight from loading the store to `retain`/`save`, with no
+    // `tunnel_manager` reference at all). The IPC side still cannot be
+    // exercised directly by a test here for the same reason as
+    // `tunnels::tauri_commands`'s parity-bug tests (`tauri::State<'_, Arc<AppState>>`
+    // has no public constructor outside a running Tauri app) — but since both
+    // commands now call `delete_remote_connection_impl` with nothing else in
+    // between, exercising it directly (as this test does) proves both sides.
     #[tokio::test]
-    async fn known_bug_http_delete_stops_a_running_tunnel_before_deleting() {
+    async fn delete_remote_connection_impl_stops_a_running_tunnel_before_deleting() {
         use crate::tunnels::profile::TunnelProfile;
-        use axum::body::Body;
-        use axum::extract::connect_info::ConnectInfo;
-        use axum::http::{Request, StatusCode};
-        use tower::ServiceExt;
 
-        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let state = crate::state::tests_support::make_test_app_state();
         let conn = RemoteConnection::new_ssh("test", "127.0.0.1", "nobody");
         let id = conn.id.clone();
         upsert_remote_connection(&state.data_dir, conn).unwrap();
@@ -412,7 +734,7 @@ mod tests {
         // its background supervision loop ever attempts a real connection.
         let mut seed_profile = TunnelProfile::new("seed", "127.0.0.1", "nobody");
         seed_profile.id = id.clone();
-        seed_profile.port = 1;
+        seed_profile.ssh.port = 1;
         state
             .tunnel_manager
             .start(seed_profile)
@@ -423,22 +745,49 @@ mod tests {
             "seed tunnel must be visible in the manager before delete"
         );
 
-        let app = crate::mcp_http::build_router(state.clone(), false, true);
-        let mut req = Request::delete(format!("/config/remote-connections/{id}"))
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut()
-            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        let deleted = delete_remote_connection_impl(&state, &id).unwrap();
+        assert!(deleted, "connection must have been found and removed");
 
-        // KNOWN BUG, see plan Phase 1: the IPC command does not do this — a
-        // tunnel started for a connection deleted over IPC would be left
-        // running, orphaned from the connection list that used to reference
-        // it.
         assert!(
             state.tunnel_manager.get_status(&id).is_none(),
-            "HTTP delete must stop the running tunnel for this connection id"
+            "delete must stop the running tunnel for this connection id"
+        );
+        assert!(
+            RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty(),
+            "connection must be removed from the store"
+        );
+    }
+
+    #[test]
+    fn delete_remote_connection_impl_returns_false_for_missing_id() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let deleted = delete_remote_connection_impl(&state, "does-not-exist").unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn delete_remote_connection_impl_deletes_the_stored_credential() {
+        crate::credentials::reset_test_faults();
+        let state = crate::state::tests_support::make_test_app_state();
+        let conn = RemoteConnection::new_ssh("test", "127.0.0.1", "nobody");
+        let id = conn.id.clone();
+        upsert_remote_connection(&state.data_dir, conn).unwrap();
+        crate::credentials::set(crate::credentials::Credential::RemoteConnection(&id), "hunter2")
+            .unwrap();
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id))
+                .unwrap(),
+            Some("hunter2".to_string())
+        );
+
+        delete_remote_connection_impl(&state, &id).unwrap();
+
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id))
+                .unwrap(),
+            None
         );
     }
 
@@ -458,5 +807,110 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, id);
         assert_eq!(loaded[0].name, "renamed");
+    }
+
+    // --- resolve_local_instance_port_at ---
+
+    #[test]
+    fn resolve_local_instance_port_missing_directory_is_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let err = resolve_local_instance_port_at("no-such-instance", None, &home).unwrap_err();
+        assert_eq!(err, LocalInstancePortError::InstanceNotFound);
+    }
+
+    #[test]
+    fn resolve_local_instance_port_invalid_id_is_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        // "default" is reserved by `AppInstance::named` and rejected outright.
+        let err = resolve_local_instance_port_at("default", None, &home).unwrap_err();
+        assert_eq!(err, LocalInstancePortError::InstanceNotFound);
+    }
+
+    #[test]
+    fn resolve_local_instance_port_missing_config_file_is_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let instance = crate::app_instance::AppInstance::named("dev-box").unwrap();
+        let dir = instance.config_dir_from(None, &home);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Directory exists, but no config.json inside it.
+
+        let err = resolve_local_instance_port_at("dev-box", None, &home).unwrap_err();
+        assert!(matches!(err, LocalInstancePortError::Unreadable(_)));
+    }
+
+    #[test]
+    fn resolve_local_instance_port_corrupt_json_is_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let instance = crate::app_instance::AppInstance::named("dev-box").unwrap();
+        let dir = instance.config_dir_from(None, &home);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), "not valid json{{{").unwrap();
+
+        let err = resolve_local_instance_port_at("dev-box", None, &home).unwrap_err();
+        assert!(matches!(err, LocalInstancePortError::Unreadable(_)));
+    }
+
+    #[test]
+    fn resolve_local_instance_port_zero_port_is_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let instance = crate::app_instance::AppInstance::named("dev-box").unwrap();
+        let dir = instance.config_dir_from(None, &home);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::json!({"services": {"server": {"port": 0}}}).to_string(),
+        )
+        .unwrap();
+
+        let err = resolve_local_instance_port_at("dev-box", None, &home).unwrap_err();
+        assert!(matches!(err, LocalInstancePortError::Unreadable(_)));
+    }
+
+    #[test]
+    fn resolve_local_instance_port_reads_the_real_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let instance = crate::app_instance::AppInstance::named("dev-box").unwrap();
+        let dir = instance.config_dir_from(None, &home);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::json!({"services": {"server": {"port": 9878}}}).to_string(),
+        )
+        .unwrap();
+
+        let port = resolve_local_instance_port_at("dev-box", None, &home).unwrap();
+        assert_eq!(port, 9878);
+    }
+
+    #[test]
+    fn resolve_local_instance_port_ignores_unrelated_config_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let instance = crate::app_instance::AppInstance::named("dev-box").unwrap();
+        let dir = instance.config_dir_from(None, &home);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::json!({
+                "shell": "/bin/zsh",
+                "services": {
+                    "server": {"port": 9877, "enabled": true},
+                    "auth": {"username": "boss"},
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let port = resolve_local_instance_port_at("dev-box", None, &home).unwrap();
+        assert_eq!(port, 9877);
     }
 }

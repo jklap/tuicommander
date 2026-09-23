@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+
+use crate::ssh_connection::SshConnectionParams;
 
 /// Schema version for future migration support.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -8,12 +9,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub struct TunnelProfile {
     pub id: String,
     pub name: String,
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub identity_file: Option<PathBuf>,
+    /// SSH host/port/user/identity/keepalive config — shared with
+    /// `RemoteTransport::Ssh` via `ssh_connection::SshConnectionParams`, so
+    /// the two can never present different capabilities again.
+    pub ssh: SshConnectionParams,
     pub forwards: Vec<ForwardSpec>,
-    pub options: ProfileOptions,
     #[serde(default)]
     pub auto_connect: bool,
 }
@@ -33,30 +33,13 @@ pub enum ForwardSpec {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileOptions {
-    pub server_alive_interval: u16,
-    pub server_alive_count_max: u16,
-    pub strict_host_key_checking: StrictHostKeyChecking,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum StrictHostKeyChecking {
-    Yes,
-    AcceptNew,
-}
-
 impl TunnelProfile {
     pub fn new(name: impl Into<String>, host: impl Into<String>, user: impl Into<String>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
-            host: host.into(),
-            port: 22,
-            user: user.into(),
-            identity_file: None,
+            ssh: SshConnectionParams::new(host, user),
             forwards: Vec::new(),
-            options: ProfileOptions::default(),
             auto_connect: false,
         }
     }
@@ -69,17 +52,9 @@ impl TunnelProfile {
         if self.name.is_empty() {
             return Err("name must not be empty".to_string());
         }
-        self.host = self.host.trim().to_string();
-        if self.host.is_empty() {
-            return Err("host must not be empty".to_string());
-        }
-        self.user = self.user.trim().to_string();
-        if self.user.is_empty() {
-            return Err("user must not be empty".to_string());
-        }
-        if self.port == 0 {
-            return Err("SSH port must be in range 1-65535".to_string());
-        }
+        self.ssh.host = self.ssh.host.trim().to_string();
+        self.ssh.user = self.ssh.user.trim().to_string();
+        self.ssh.validate()?;
         for forward in &self.forwards {
             match forward {
                 ForwardSpec::Local {
@@ -124,19 +99,11 @@ impl TunnelProfile {
     }
 }
 
-impl Default for ProfileOptions {
-    fn default() -> Self {
-        Self {
-            server_alive_interval: 15,
-            server_alive_count_max: 3,
-            strict_host_key_checking: StrictHostKeyChecking::Yes,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ssh_connection::StrictHostKeyChecking;
+    use std::path::PathBuf;
 
     fn make_profile() -> TunnelProfile {
         TunnelProfile::new("my-tunnel", "example.com", "alice")
@@ -145,8 +112,8 @@ mod tests {
     #[test]
     fn toml_round_trip() {
         let mut profile = make_profile();
-        profile.port = 2222;
-        profile.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
+        profile.ssh.port = 2222;
+        profile.ssh.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
         profile.forwards = vec![
             ForwardSpec::Local {
                 bind_port: 8080,
@@ -165,25 +132,25 @@ mod tests {
 
         assert_eq!(deserialized.id, profile.id);
         assert_eq!(deserialized.name, profile.name);
-        assert_eq!(deserialized.host, profile.host);
-        assert_eq!(deserialized.port, profile.port);
-        assert_eq!(deserialized.user, profile.user);
-        assert_eq!(deserialized.identity_file, profile.identity_file);
+        assert_eq!(deserialized.ssh.host, profile.ssh.host);
+        assert_eq!(deserialized.ssh.port, profile.ssh.port);
+        assert_eq!(deserialized.ssh.user, profile.ssh.user);
+        assert_eq!(deserialized.ssh.identity_file, profile.ssh.identity_file);
         assert_eq!(deserialized.forwards.len(), 2);
         assert_eq!(
-            deserialized.options.server_alive_interval,
-            profile.options.server_alive_interval
+            deserialized.ssh.server_alive_interval,
+            profile.ssh.server_alive_interval
         );
         assert_eq!(
-            deserialized.options.server_alive_count_max,
-            profile.options.server_alive_count_max
+            deserialized.ssh.server_alive_count_max,
+            profile.ssh.server_alive_count_max
         );
     }
 
     #[test]
     fn validate_ssh_port_zero_rejected() {
         let mut profile = make_profile();
-        profile.port = 0;
+        profile.ssh.port = 0;
         assert!(profile.validate().is_err());
     }
 
@@ -238,14 +205,14 @@ mod tests {
     #[test]
     fn validate_empty_host_rejected() {
         let mut profile = make_profile();
-        profile.host = String::new();
+        profile.ssh.host = String::new();
         assert!(profile.validate().is_err());
     }
 
     #[test]
     fn validate_empty_user_rejected() {
         let mut profile = make_profile();
-        profile.user = String::new();
+        profile.ssh.user = String::new();
         assert!(profile.validate().is_err());
     }
 
@@ -256,12 +223,12 @@ mod tests {
     }
 
     #[test]
-    fn default_profile_options_values() {
-        let opts = ProfileOptions::default();
-        assert_eq!(opts.server_alive_interval, 15);
-        assert_eq!(opts.server_alive_count_max, 3);
+    fn default_ssh_params_values() {
+        let profile = make_profile();
+        assert_eq!(profile.ssh.server_alive_interval, 15);
+        assert_eq!(profile.ssh.server_alive_count_max, 3);
         assert!(matches!(
-            opts.strict_host_key_checking,
+            profile.ssh.strict_host_key_checking,
             StrictHostKeyChecking::Yes
         ));
     }
@@ -320,14 +287,14 @@ mod tests {
     #[test]
     fn validate_whitespace_only_host_rejected() {
         let mut profile = make_profile();
-        profile.host = "   ".to_string();
+        profile.ssh.host = "   ".to_string();
         assert!(profile.validate().is_err());
     }
 
     #[test]
     fn validate_whitespace_only_user_rejected() {
         let mut profile = make_profile();
-        profile.user = "   ".to_string();
+        profile.ssh.user = "   ".to_string();
         assert!(profile.validate().is_err());
     }
 }

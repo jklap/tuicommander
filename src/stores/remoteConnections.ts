@@ -4,6 +4,7 @@ import { invoke } from "../invoke";
 import { setRemoteBaseUrlLookup } from "../transportRuntime";
 import { startRemoteEventBridge } from "../utils/remoteEventBridge";
 import { appLogger } from "./appLogger";
+import type { SshConnectionParams } from "./tunnels";
 import { tunnelsStore } from "./tunnels";
 
 // ---------------------------------------------------------------------------
@@ -14,20 +15,25 @@ export interface RemoteConnection {
 	id: string;
 	name: string;
 	transport: RemoteTransport;
-	auth_username: string;
+	/** Optional — no longer required to authenticate anything by itself. */
+	auth_username?: string | null;
 	enabled: boolean;
 }
 
 export type RemoteTransport =
 	| {
 			type: "Ssh";
-			ssh_host: string;
-			ssh_port: number;
-			ssh_user: string;
-			identity_file: string | null;
+			/** Host/port/user/identity/keepalive config — shared shape with `TunnelProfile.ssh`. */
+			ssh: SshConnectionParams;
 			remote_daemon_port: number;
 	  }
-	| { type: "Direct"; url: string };
+	| { type: "Direct"; url: string }
+	| {
+			type: "Local";
+			/** Exactly one of `port`/`instance_id` is set. */
+			port: number | null;
+			instance_id: string | null;
+	  };
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
@@ -184,10 +190,13 @@ function createRemoteConnectionsStore() {
 					// Create (or re-use) a tunnel profile for this connection
 					await tunnelsStore.createProfile({
 						name: profileName,
-						host: transport.ssh_host,
-						port: transport.ssh_port,
-						user: transport.ssh_user,
-						identity_file: transport.identity_file,
+						ssh: {
+							...transport.ssh,
+							// A remote-connection-managed tunnel always accepts a
+							// newly-seen host key rather than prompting — there's no
+							// interactive terminal attached to answer ssh's prompt.
+							strict_host_key_checking: "AcceptNew",
+						},
 						forwards: [
 							{
 								type: "Local",
@@ -196,11 +205,6 @@ function createRemoteConnectionsStore() {
 								remote_port: transport.remote_daemon_port,
 							},
 						],
-						options: {
-							server_alive_interval: 15,
-							server_alive_count_max: 3,
-							strict_host_key_checking: "AcceptNew",
-						},
 						auto_connect: false,
 					});
 
@@ -234,13 +238,18 @@ function createRemoteConnectionsStore() {
 					startHealthPolling(id);
 					eventBridges.get(id)?.();
 					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
-				} else {
+				} else if (transport.type === "Direct") {
 					// Direct transport — baseUrl is already known
 					setState("connections", id, { baseUrl: transport.url });
 					await pollHealth(id);
 					startHealthPolling(id);
 					eventBridges.get(id)?.();
 					eventBridges.set(id, startRemoteEventBridge(id, transport.url));
+				} else {
+					// Local transport — instance-id/port resolution and the actual
+					// connect flow land in a later phase of the SSH Tunnels + Remote
+					// Servers consolidation plan (Phase 1 only introduces the shape).
+					throw new Error("Local connections are not yet supported");
 				}
 			} catch (err) {
 				appLogger.error("store", `Failed to connect remote connection ${id}`, err);

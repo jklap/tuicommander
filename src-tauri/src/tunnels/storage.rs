@@ -140,8 +140,8 @@ mod tests {
         let app = app_data(&tmp);
 
         let mut profile = make_profile("staging");
-        profile.port = 2222;
-        profile.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
+        profile.ssh.port = 2222;
+        profile.ssh.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
 
         ProfileStore::save(&app, &profile).unwrap();
         let profiles = ProfileStore::load_all(&app, None).unwrap();
@@ -150,10 +150,10 @@ mod tests {
         let loaded = &profiles[0];
         assert_eq!(loaded.id, profile.id);
         assert_eq!(loaded.name, profile.name);
-        assert_eq!(loaded.host, profile.host);
-        assert_eq!(loaded.port, profile.port);
-        assert_eq!(loaded.user, profile.user);
-        assert_eq!(loaded.identity_file, profile.identity_file);
+        assert_eq!(loaded.ssh.host, profile.ssh.host);
+        assert_eq!(loaded.ssh.port, profile.ssh.port);
+        assert_eq!(loaded.ssh.user, profile.ssh.user);
+        assert_eq!(loaded.ssh.identity_file, profile.ssh.identity_file);
     }
 
     #[test]

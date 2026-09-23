@@ -3,7 +3,7 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
-import type { ForwardSpec, ProfileOptions, TunnelProfile } from "../../stores/tunnels";
+import type { ForwardSpec, SshConnectionParams, TunnelProfile } from "../../stores/tunnels";
 import { tunnelsStore } from "../../stores/tunnels";
 import s from "../SettingsPanel/Settings.module.css";
 import d from "../shared/dialog.module.css";
@@ -24,7 +24,14 @@ interface TunnelEditorModalProps {
 	onClose: () => void;
 }
 
-function defaultOptions(): ProfileOptions {
+/** Keepalive/host-key-checking fields of `SshConnectionParams`, edited as one
+ * unit in this editor's "Options" section below. */
+type SshKeepaliveOptions = Pick<
+	SshConnectionParams,
+	"server_alive_interval" | "server_alive_count_max" | "strict_host_key_checking"
+>;
+
+function defaultOptions(): SshKeepaliveOptions {
 	return {
 		server_alive_interval: 15,
 		server_alive_count_max: 3,
@@ -88,13 +95,21 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 	registerModal(props.onClose);
 
 	const [name, setName] = createSignal(props.profile?.name ?? "");
-	const [host, setHost] = createSignal(props.profile?.host ?? "");
-	const [port, setPort] = createSignal(props.profile?.port ?? 22);
-	const [user, setUser] = createSignal(props.profile?.user ?? "");
-	const [identityFile, setIdentityFile] = createSignal(props.profile?.identity_file ?? "");
+	const [host, setHost] = createSignal(props.profile?.ssh.host ?? "");
+	const [port, setPort] = createSignal(props.profile?.ssh.port ?? 22);
+	const [user, setUser] = createSignal(props.profile?.ssh.user ?? "");
+	const [identityFile, setIdentityFile] = createSignal(props.profile?.ssh.identity_file ?? "");
 	const [forwards, setForwards] = createSignal<ForwardSpec[]>(props.profile?.forwards ?? []);
 	const [autoConnect, setAutoConnect] = createSignal(props.profile?.auto_connect ?? false);
-	const [options, setOptions] = createSignal<ProfileOptions>(props.profile?.options ?? defaultOptions());
+	const [options, setOptions] = createSignal<SshKeepaliveOptions>(
+		props.profile
+			? {
+					server_alive_interval: props.profile.ssh.server_alive_interval,
+					server_alive_count_max: props.profile.ssh.server_alive_count_max,
+					strict_host_key_checking: props.profile.ssh.strict_host_key_checking,
+				}
+			: defaultOptions(),
+	);
 	const [saving, setSaving] = createSignal(false);
 	const [error, setError] = createSignal("");
 	const [sshHosts, setSshHosts] = createSignal<string[]>([]);
@@ -148,12 +163,14 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 		try {
 			const data = {
 				name: trimmedName,
-				host: trimmedHost,
-				port: port(),
-				user: trimmedUser,
-				identity_file: identityFile().trim() || null,
+				ssh: {
+					host: trimmedHost,
+					port: port(),
+					user: trimmedUser,
+					identity_file: identityFile().trim() || null,
+					...options(),
+				},
 				forwards: forwards().map(normalizeForwardForType),
-				options: options(),
 				auto_connect: autoConnect(),
 			};
 

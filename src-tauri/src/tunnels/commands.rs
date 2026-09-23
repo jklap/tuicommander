@@ -26,17 +26,95 @@ pub(crate) async fn list_tunnel_profiles(State(state): State<Arc<AppState>>) -> 
     }
 }
 
+/// Error from [`save_tunnel_profile_impl`] — kept as two variants (rather
+/// than a single `String`) so each transport can map it to its own idiomatic
+/// shape: the HTTP route needs a 400 for a validation failure vs. a 500 for
+/// a storage failure, while the Tauri command flattens both into one
+/// `Result<String, String>`.
+#[derive(Debug)]
+pub(crate) enum SaveTunnelProfileError {
+    /// Bad JSON shape, or `TunnelProfile::validate()` rejected it.
+    Validation(String),
+    /// `ProfileStore::save` failed (disk I/O).
+    Storage(String),
+}
+
+/// Shared body of the HTTP `save_tunnel_profile` route and the Tauri
+/// `save_tunnel_profile` command (`tauri_commands::save_tunnel_profile`) —
+/// mints a fresh UUID for an empty/missing `id` before validating, so both
+/// transports agree on "empty id means generate one" instead of one
+/// generating a UUID and the other rejecting it as "not a valid UUID" (see
+/// this file's test module history: `known_bug_http_save_does_not_generate_an_id_for_an_empty_id`,
+/// now fixed). Takes a plain `&Path` rather than `&AppState` since it's the
+/// only field either caller needs, and a raw `serde_json::Value` rather than
+/// `TunnelProfile` directly so the empty-id check can run before
+/// deserialization, exactly like the Tauri command always did.
+pub(crate) fn save_tunnel_profile_impl(
+    data_dir: &std::path::Path,
+    mut profile_json: serde_json::Value,
+) -> Result<String, SaveTunnelProfileError> {
+    if profile_json
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .is_empty()
+    {
+        profile_json["id"] = serde_json::Value::String(uuid::Uuid::new_v4().to_string());
+    }
+    let mut profile: TunnelProfile = serde_json::from_value(profile_json)
+        .map_err(|e| SaveTunnelProfileError::Validation(e.to_string()))?;
+    profile
+        .validate()
+        .map_err(SaveTunnelProfileError::Validation)?;
+    let id = profile.id.clone();
+    ProfileStore::save(data_dir, &profile)
+        .map_err(|e| SaveTunnelProfileError::Storage(e.to_string()))?;
+    Ok(id)
+}
+
 /// POST /tunnels/profiles — create or update a profile.
 pub(crate) async fn save_tunnel_profile(
     State(state): State<Arc<AppState>>,
-    Json(mut profile): Json<TunnelProfile>,
+    Json(profile_json): Json<serde_json::Value>,
 ) -> Response {
-    if let Err(e) = profile.validate() {
-        return err_json(StatusCode::BAD_REQUEST, &e);
+    match save_tunnel_profile_impl(&state.data_dir, profile_json) {
+        Ok(id) => (StatusCode::OK, Json(serde_json::json!({"id": id}))).into_response(),
+        Err(SaveTunnelProfileError::Validation(e)) => err_json(StatusCode::BAD_REQUEST, &e),
+        Err(SaveTunnelProfileError::Storage(e)) => {
+            err_json(StatusCode::INTERNAL_SERVER_ERROR, &e)
+        }
     }
-    match ProfileStore::save(&state.data_dir, &profile) {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"id": profile.id}))).into_response(),
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+}
+
+/// Error from [`delete_tunnel_profile_impl`] — see
+/// [`SaveTunnelProfileError`]'s doc comment for why this isn't a single
+/// `String`: the HTTP route needs a 404 for "not found" vs. a 500 for a real
+/// storage failure.
+#[derive(Debug)]
+pub(crate) enum DeleteTunnelProfileError {
+    /// No profile with this id exists (repo or global scope).
+    NotFound,
+    /// `ProfileStore::delete` failed (disk I/O).
+    Storage(String),
+}
+
+/// Shared body of the HTTP `delete_tunnel_profile` route and the Tauri
+/// `delete_tunnel_profile` command — stops any running tunnel for this
+/// profile id, then deletes it, treating "no such profile" as an error on
+/// both transports (previously the Tauri command returned `Ok(false)`
+/// silently for this case while HTTP returned 404 — see this file's test
+/// module history: `known_bug_http_delete_returns_404_for_a_missing_profile`,
+/// now fixed by making the Tauri side error too, matching HTTP's existing,
+/// more REST-idiomatic behavior).
+pub(crate) fn delete_tunnel_profile_impl(
+    state: &AppState,
+    id: &str,
+) -> Result<(), DeleteTunnelProfileError> {
+    state.tunnel_manager.stop_if_running(id);
+    match ProfileStore::delete(&state.data_dir, None, id) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(DeleteTunnelProfileError::NotFound),
+        Err(e) => Err(DeleteTunnelProfileError::Storage(e.to_string())),
     }
 }
 
@@ -45,12 +123,14 @@ pub(crate) async fn delete_tunnel_profile(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    state.tunnel_manager.stop_if_running(&id);
-
-    match ProfileStore::delete(&state.data_dir, None, &id) {
-        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"deleted": true}))).into_response(),
-        Ok(false) => err_json(StatusCode::NOT_FOUND, "profile not found"),
-        Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    match delete_tunnel_profile_impl(&state, &id) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"deleted": true}))).into_response(),
+        Err(DeleteTunnelProfileError::NotFound) => {
+            err_json(StatusCode::NOT_FOUND, "profile not found")
+        }
+        Err(DeleteTunnelProfileError::Storage(e)) => {
+            err_json(StatusCode::INTERNAL_SERVER_ERROR, &e)
+        }
     }
 }
 
@@ -342,7 +422,7 @@ mod tests {
     #[tokio::test]
     async fn save_tunnel_profile_rejects_invalid_profile_with_400() {
         let mut profile = valid_profile_json();
-        profile["host"] = serde_json::Value::String(String::new());
+        profile["ssh"]["host"] = serde_json::Value::String(String::new());
 
         let resp = app(test_state())
             .oneshot(post_json("/tunnels/profiles", &profile))
@@ -356,18 +436,16 @@ mod tests {
         );
     }
 
-    // --- IPC/HTTP parity bug (see plan Phase 1): `save_tunnel_profile` ---
+    // --- IPC/HTTP parity bug, NOW FIXED (see plan Phase 1): `save_tunnel_profile` ---
     //
-    // The Tauri command (`tauri_commands::save_tunnel_profile`) generates a
-    // fresh UUID whenever the incoming `id` is empty, before deserializing
-    // into `TunnelProfile`. The HTTP route deserializes `Json<TunnelProfile>`
-    // directly with no such step, so an empty `id` reaches `validate()`
-    // unchanged and is rejected as "not a valid UUID" instead of being
-    // silently assigned one. These two tests pin the CURRENT (divergent)
-    // behavior on each side — do not "fix" this test when Phase 1 makes the
-    // two sides agree; update it to assert the new, unified behavior instead.
+    // Both the HTTP route and the Tauri command (`tauri_commands::save_tunnel_profile`)
+    // now call the shared `save_tunnel_profile_impl`, which mints a fresh UUID
+    // for an empty/missing `id` before validating — previously only the Tauri
+    // command did this (verified pre-fix: the HTTP route deserialized
+    // `Json<TunnelProfile>` directly with no such step, so an empty `id`
+    // reached `validate()` unchanged and was rejected as "not a valid UUID").
     #[tokio::test]
-    async fn known_bug_http_save_does_not_generate_an_id_for_an_empty_id() {
+    async fn http_save_generates_an_id_for_an_empty_id_matching_ipc() {
         let mut profile = valid_profile_json();
         profile["id"] = serde_json::Value::String(String::new());
 
@@ -376,29 +454,47 @@ mod tests {
             .await
             .unwrap();
 
-        // KNOWN BUG, see plan Phase 1: the IPC command would generate a UUID
-        // here and succeed; the HTTP route rejects it instead.
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
+        let generated_id = json["id"].as_str().expect("id must be a string");
         assert!(
-            json["error"].as_str().unwrap().contains("valid UUID"),
-            "expected a UUID validation error, got: {json}"
+            uuid::Uuid::parse_str(generated_id).is_ok(),
+            "expected a generated UUID, got: {generated_id}"
         );
     }
 
-    // The IPC-side counterpart (`tauri_commands::save_tunnel_profile` mints a
-    // fresh UUID for an empty `id` instead of rejecting it, verified by
-    // reading its source directly — the `if profile.get("id")...is_empty()`
-    // block right before it deserializes into `TunnelProfile`) cannot be
-    // pinned by an actual call here: that function takes
-    // `tauri::State<'_, Arc<AppState>>`, and `tauri::State`'s only field is
-    // private with no public constructor outside a running Tauri app (see
-    // `pty.rs`'s `get_session_foreground_process_impl` doc comment, which
-    // documents this exact gap for a different command, and this crate's
-    // existing `#[tauri::command]` fns that split into a plain-`&AppState`
-    // `_impl` twin specifically to work around it). Extracting a testable
-    // `_impl` twin here is itself a production-code change, out of scope for
-    // this test-only pass — left for whoever does the Phase 1 fix.
+    // The IPC-side counterpart (`tauri_commands::save_tunnel_profile`) now
+    // calls the exact same `save_tunnel_profile_impl` this HTTP test exercises
+    // above — previously that logic could only be verified by reading source,
+    // since `tauri::State<'_, Arc<AppState>>` has no public constructor
+    // outside a running Tauri app (see `pty.rs`'s
+    // `get_session_foreground_process_impl` doc comment, the established
+    // pattern this fix follows). Exercising `save_tunnel_profile_impl`
+    // directly proves both transports now share one code path, not just one
+    // behavior.
+    #[test]
+    fn save_tunnel_profile_impl_generates_an_id_for_an_empty_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut profile = valid_profile_json();
+        profile["id"] = serde_json::Value::String(String::new());
+
+        let id = save_tunnel_profile_impl(dir.path(), profile).unwrap();
+        assert!(uuid::Uuid::parse_str(&id).is_ok(), "expected a UUID: {id}");
+
+        let saved = ProfileStore::load_all(dir.path(), None).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, id);
+    }
+
+    #[test]
+    fn save_tunnel_profile_impl_rejects_invalid_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut profile = valid_profile_json();
+        profile["ssh"]["host"] = serde_json::Value::String(String::new());
+
+        let err = save_tunnel_profile_impl(dir.path(), profile).unwrap_err();
+        assert!(matches!(err, SaveTunnelProfileError::Validation(_)));
+    }
 
     #[tokio::test]
     async fn delete_tunnel_profile_returns_ok_true_when_deleted() {
@@ -418,29 +514,46 @@ mod tests {
         assert!(remaining.is_empty());
     }
 
-    // --- IPC/HTTP parity bug (see plan Phase 1): `delete_tunnel_profile` ---
+    // --- IPC/HTTP parity bug, NOW FIXED (see plan Phase 1): `delete_tunnel_profile` ---
     //
-    // The HTTP route answers 404 for a missing profile; the Tauri command
-    // (verified by reading its source: `ProfileStore::delete(...).map_err(...)`
-    // returns `Ok(false)` straight through) returns `Ok(false)` for the exact
-    // same case instead. Do not "fix" the test below when Phase 1 makes the
-    // two sides agree; update it to assert the new, unified behavior instead.
+    // Both transports now share `delete_tunnel_profile_impl`, which treats a
+    // missing profile as an error (`DeleteTunnelProfileError::NotFound`,
+    // mapped to HTTP 404 / IPC `Err("profile not found")`) — previously the
+    // Tauri command returned `Ok(false)` silently for this case (verified
+    // pre-fix by reading its source: `ProfileStore::delete(...).map_err(...)`
+    // passed the bool straight through with no not-found handling) while HTTP
+    // already answered 404. HTTP's existing, more REST-idiomatic behavior is
+    // the one both sides now agree on.
     #[tokio::test]
-    async fn known_bug_http_delete_returns_404_for_a_missing_profile() {
+    async fn http_delete_returns_404_for_a_missing_profile() {
         let resp = app(test_state())
             .oneshot(delete("/tunnels/profiles/does-not-exist"))
             .await
             .unwrap();
-        // KNOWN BUG, see plan Phase 1: the IPC command returns `Ok(false)`
-        // for this exact case instead of an error/404.
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    // Same infrastructure gap as `save_tunnel_profile` above: the IPC-side
-    // counterpart (`tauri_commands::delete_tunnel_profile` returning
-    // `Ok(false)` for a missing profile instead of an error) cannot be pinned
-    // by a direct call here — see the comment above
-    // `known_bug_http_save_does_not_generate_an_id_for_an_empty_id`.
+    // The IPC-side counterpart (`tauri_commands::delete_tunnel_profile`) now
+    // calls the exact same `delete_tunnel_profile_impl` this HTTP test
+    // exercises above — see the comment above
+    // `save_tunnel_profile_impl_generates_an_id_for_an_empty_id` for why this
+    // is now directly testable instead of only readable-by-source.
+    #[test]
+    fn delete_tunnel_profile_impl_errors_for_a_missing_profile() {
+        let state = test_state();
+        let err = delete_tunnel_profile_impl(&state, "does-not-exist").unwrap_err();
+        assert!(matches!(err, DeleteTunnelProfileError::NotFound));
+    }
+
+    #[test]
+    fn delete_tunnel_profile_impl_succeeds_for_an_existing_profile() {
+        let state = test_state();
+        let profile = TunnelProfile::new("to-delete", "host.example.com", "alice");
+        ProfileStore::save(&state.data_dir, &profile).unwrap();
+
+        assert!(delete_tunnel_profile_impl(&state, &profile.id).is_ok());
+        assert!(ProfileStore::load_all(&state.data_dir, None).unwrap().is_empty());
+    }
 
     // ── tunnel lifecycle ────────────────────────────────────
 

@@ -21,14 +21,21 @@ describe("ServicesTab remote machine presentation", () => {
 		expect(
 			transportSummary({
 				type: "Ssh",
-				ssh_host: "dev.example.test",
-				ssh_port: 2222,
-				ssh_user: "boss",
-				identity_file: null,
-				remote_daemon_port: 9876,
+				ssh: {
+					host: "dev.example.test",
+					port: 2222,
+					user: "boss",
+					identity_file: null,
+					server_alive_interval: 15,
+					server_alive_count_max: 3,
+					strict_host_key_checking: "Yes",
+				},
+				remote_daemon_port: 9877,
 			}),
 		).toBe("boss@dev.example.test:2222");
 		expect(transportSummary({ type: "Direct", url: "https://dev.example.test" })).toBe("https://dev.example.test");
+		expect(transportSummary({ type: "Local", port: 9877, instance_id: null })).toBe("local: 127.0.0.1:9877");
+		expect(transportSummary({ type: "Local", port: null, instance_id: "dev-box" })).toBe("local: dev-box");
 	});
 
 	it("keeps the new-machine defaults stable", () => {
@@ -39,7 +46,12 @@ describe("ServicesTab remote machine presentation", () => {
 			sshPort: 22,
 			sshUser: "",
 			identityFile: "",
-			remoteDaemonPort: 9876,
+			sshServerAliveInterval: 15,
+			sshServerAliveCountMax: 3,
+			sshStrictHostKeyChecking: "Yes",
+			// Fixed (plan Phase 1): matches `RemoteConnection::new_ssh`'s Rust
+			// default and what a real `tuic-remote` daemon actually listens on.
+			remoteDaemonPort: 9877,
 			directUrl: "",
 			authUsername: "",
 		});
