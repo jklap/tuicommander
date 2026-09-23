@@ -2110,6 +2110,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	stop_direct_proxy: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("connectionId")}/direct-proxy` }),
 	},
+	// Local transport's Connect flow — resolve a named instance's port off disk.
+	get_local_instance_port: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/config/remote-connections/local-instance-port/${p("instanceId")}`,
+		}),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },

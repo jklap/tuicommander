@@ -429,6 +429,15 @@ pub async fn delete_remote_connection(
 // `credentials::Credential::RemoteConnection`.
 // ---------------------------------------------------------------------------
 
+/// Command wrapper for [`resolve_local_instance_port`], for the `Local`
+/// transport's Connect flow (story: SSH Tunnels + Remote Servers
+/// consolidation) — named distinctly from the pure function it wraps since a
+/// `#[tauri::command]`'s JS-facing name is its Rust identifier.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn get_local_instance_port(instance_id: String) -> Result<u16, String> {
+    resolve_local_instance_port(&instance_id).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_connection_password_exists(id: String) -> Result<bool, String> {
     crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id))
@@ -819,6 +828,19 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         let deleted = delete_remote_connection_impl(&state, "does-not-exist").unwrap();
         assert!(!deleted);
+    }
+
+    // --- get_local_instance_port command (Local transport Connect flow) ---
+    //
+    // Uses the reserved "default" id rather than a real filesystem fixture —
+    // `AppInstance::named` rejects it outright regardless of what's actually
+    // on disk, so this stays deterministic without needing dependency
+    // injection the way `resolve_local_instance_port_at`'s own tests do.
+
+    #[test]
+    fn get_local_instance_port_surfaces_a_clear_error_for_an_invalid_id() {
+        let err = get_local_instance_port("default".to_string()).unwrap_err();
+        assert_eq!(err, LocalInstancePortError::InstanceNotFound.to_string());
     }
 
     // --- Remote connection password commands (plan Phase 3 auth wiring) ---

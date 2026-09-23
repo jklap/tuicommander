@@ -1813,6 +1813,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/{id}/direct-proxy",
             post(config_routes::start_direct_proxy_http).delete(config_routes::stop_direct_proxy_http),
         )
+        .route(
+            "/config/remote-connections/local-instance-port/{instanceId}",
+            get(config_routes::get_local_instance_port_http),
+        )
         // Remote connection password (keyring-proxied) — plan Phase 3 auth wiring
         .route(
             "/config/remote-connections/{id}/password/exists",

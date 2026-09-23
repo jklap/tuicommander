@@ -137,6 +137,97 @@ describe("remoteConnectionsStore connect/disconnect (Direct)", () => {
 	});
 });
 
+function localInstanceConn(id: string, instanceId: string): RemoteConnection {
+	return {
+		id,
+		name: `local-${id}`,
+		transport: { type: "Local", port: null, instance_id: instanceId },
+		auth_username: null,
+		enabled: true,
+	};
+}
+
+function localPortConn(id: string, port: number): RemoteConnection {
+	return {
+		id,
+		name: `local-${id}`,
+		transport: { type: "Local", port, instance_id: null },
+		auth_username: null,
+		enabled: true,
+	};
+}
+
+describe("remoteConnectionsStore.connect() (Local)", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		resetMockInvokeToDefault();
+		fetchMock.mockReset();
+		fetchMock.mockResolvedValue({ ok: true, json: async () => ({ protocol_version: 1 }) });
+		vi.stubGlobal("fetch", fetchMock);
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it("named instance: resolves the port via get_local_instance_port, then connects with no proxy when unauthenticated", async () => {
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "get_local_instance_port") return Promise.resolve(9878);
+			if (cmd === "start_direct_proxy") return Promise.resolve(null); // no auth configured -> no proxy
+			return defaultMockInvokeImpl(cmd);
+		});
+		await remoteConnectionsStore.addConnection(localInstanceConn("loc1", "dev-box"));
+		await remoteConnectionsStore.connect("loc1");
+
+		expect(mockInvoke).toHaveBeenCalledWith("get_local_instance_port", { instanceId: "dev-box" });
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"start_direct_proxy",
+			expect.objectContaining({ connectionId: "loc1", url: "http://127.0.0.1:9878" }),
+		);
+		expect(remoteConnectionsStore.getConnectionState("loc1")?.status).toBe("connected");
+		expect(remoteConnectionsStore.getBaseUrl("loc1")).toBe("http://127.0.0.1:9878");
+	});
+
+	it("manual port: skips get_local_instance_port entirely", async () => {
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "start_direct_proxy") return Promise.resolve(null);
+			return defaultMockInvokeImpl(cmd);
+		});
+		await remoteConnectionsStore.addConnection(localPortConn("loc2", 9877));
+		await remoteConnectionsStore.connect("loc2");
+
+		expect(mockInvoke).not.toHaveBeenCalledWith("get_local_instance_port", expect.anything());
+		expect(remoteConnectionsStore.getBaseUrl("loc2")).toBe("http://127.0.0.1:9877");
+	});
+
+	it("routes through the proxy port when auth is configured (start_direct_proxy returns a port)", async () => {
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "start_direct_proxy") return Promise.resolve(15000);
+			return defaultMockInvokeImpl(cmd);
+		});
+		await remoteConnectionsStore.addConnection(localPortConn("loc3", 9877));
+		await remoteConnectionsStore.connect("loc3");
+
+		expect(remoteConnectionsStore.getBaseUrl("loc3")).toBe("http://127.0.0.1:15000");
+		expect(remoteConnectionsStore.getConnectionState("loc3")?.directProxyStarted).toBe(true);
+	});
+
+	it("neither instance_id nor port configured is a clear connect error, not a thrown-and-uncaught exception", async () => {
+		const conn: RemoteConnection = {
+			id: "loc4",
+			name: "broken",
+			transport: { type: "Local", port: null, instance_id: null },
+			auth_username: null,
+			enabled: true,
+		};
+		await remoteConnectionsStore.addConnection(conn);
+		await remoteConnectionsStore.connect("loc4");
+		const st = remoteConnectionsStore.getConnectionState("loc4");
+		expect(st?.status).toBe("error");
+		expect(st?.error).toContain("neither an instance_id nor a port");
+	});
+});
+
 function sshConn(id: string): RemoteConnection {
 	return {
 		id,
