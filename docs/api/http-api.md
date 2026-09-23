@@ -199,10 +199,15 @@ GET /sessions
 ```
 
 Returns array of active session info (ID, cwd, worktree path, branch,
-`display_name`, `display_name_is_custom`, `is_remote`, optional
-`pty_description`, optional terminal `alias`, and nested state). The
+`display_name`, `display_name_is_custom`, `display_name_from_spawn`,
+`is_remote`, optional `pty_description`, optional terminal `alias`, optional
+`parent_session`, and nested state). The
 `alias` field is the only record of a tab's alias after a WebView reload, because
-`term-alias-assigned` fires once, at spawn. The
+`term-alias-assigned` fires once, at spawn; `parent_session` is the same for the
+sub-agent tag, which `session-created` publishes once. It holds only a resolved
+parent, never a `pending-mcp:` placeholder. `display_name_from_spawn` is true when
+`agent action=spawn` named the session and no user rename has replaced it; a
+non-custom name synced back from an OSC or intent title does not set it. The
 origin fields let browser and desktop clients preserve manual-title protection
 and remote-completion muting across reconnects. For detected agents,
 `state.agent_state` distinguishes PTY

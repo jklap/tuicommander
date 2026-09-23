@@ -81,6 +81,7 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                 worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
                 display_name: session.display_name.clone(),
                 display_name_is_custom: session.display_name_is_custom,
+                display_name_from_spawn: session.display_name_from_spawn,
                 is_remote: session.is_remote,
                 pty_description: state
                     .session_maps
@@ -92,6 +93,12 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .term_aliases
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                parent_session: state
+                    .session_maps
+                    .session_parent
+                    .get(&session_id)
+                    .map(|value| value.value().clone())
+                    .filter(|parent| !super::mcp_transport::is_pending_parent(parent)),
                 state: state.session_state_with_shell(&session_id),
                 connection_id: None,
                 session_id,
@@ -346,9 +353,9 @@ pub(super) async fn set_session_name(
         Some(e) => e,
         None => return session_not_found(),
     };
-    let mut session = entry.lock();
-    session.display_name = body.name;
-    session.display_name_is_custom = body.is_custom.unwrap_or(true);
+    entry
+        .lock()
+        .set_display_name(body.name, body.is_custom.unwrap_or(true));
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -605,8 +612,11 @@ pub(super) fn register_pty_session(
         display_name,
         parent_session,
     });
-    // After `SessionCreated`: the alias is also published on the bus, and a
-    // consumer must learn that a session exists before an event about it.
+    // After `SessionCreated`: on the bus a consumer learns that a session exists
+    // before an event about it. That ordering holds on the bus only — the desktop
+    // `term-alias-assigned` window emit fires here, before either caller's desktop
+    // `session-created`, and the UI relies on `terminalsStore.applyAlias`
+    // retaining an alias for a session it has not bound yet.
     state.assign_term_alias(session_id, requested_alias);
 }
 
@@ -695,6 +705,7 @@ pub(super) fn spawn_pty_session(
             cwd: cwd.clone(),
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: true,
             shell: shell.clone(),
         },
@@ -3394,5 +3405,112 @@ mod tests {
             .find(|row| row.session_id == session_id)
             .expect("the spawned session is listed");
         assert_eq!(row.alias.as_deref(), Some("tu-7"));
+    }
+
+    /// Every OSC 0/2 and intent title is synced back through `PUT name` as a
+    /// non-custom name. When the reload inferred "spawn-named" from that shape,
+    /// the agent's next OSC titles were all rejected and the tab title froze. The
+    /// origin is recorded where the name is born and survives only a non-custom
+    /// sync, which is exactly how the live tab treats it.
+    #[tokio::test]
+    async fn only_an_agent_spawn_marks_a_row_as_spawn_named() {
+        use axum::extract::{Path as AxPath, State as AxState};
+        let state = super::super::tests::test_state();
+        let session_id = match super::spawn_pty_session(
+            state.clone(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            None,
+            24,
+            80,
+            None,
+            super::RequestedIdentity::default(),
+        ) {
+            Ok(id) => id,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+        let rename = |name: &str, is_custom: bool| {
+            super::set_session_name(
+                AxState(state.clone()),
+                AxPath(session_id.clone()),
+                axum::Json(super::SetNameRequest {
+                    name: Some(name.to_string()),
+                    is_custom: Some(is_custom),
+                }),
+            )
+        };
+        let row = || {
+            super::local_session_rows(&state)
+                .into_iter()
+                .find(|row| row.session_id == session_id)
+                .expect("the spawned session is listed")
+        };
+
+        rename("main-wise-beacon", false).await;
+        let synced = row();
+        assert_eq!(synced.display_name.as_deref(), Some("main-wise-beacon"));
+        assert!(
+            !synced.display_name_from_spawn,
+            "an OSC title is not a spawn name"
+        );
+
+        // What `agent spawn` with a `name` records.
+        state
+            .session_maps
+            .sessions
+            .get(&session_id)
+            .unwrap()
+            .lock()
+            .display_name_from_spawn = true;
+        rename("Call mapping", false).await;
+        assert!(
+            row().display_name_from_spawn,
+            "an intent title refines a spawn name; the live tab still refuses OSC titles"
+        );
+        rename("mine", true).await;
+        let renamed = row();
+        assert!(renamed.display_name_is_custom);
+        assert!(
+            !renamed.display_name_from_spawn,
+            "a user rename replaces the spawn name"
+        );
+    }
+
+    /// The parent is published once, on `session-created`; a reload or a
+    /// late-joining browser has only the row. A `pending-mcp:` placeholder is
+    /// never a session a tab can match, so it is withheld until `register`
+    /// resolves it.
+    #[tokio::test]
+    async fn session_rows_carry_only_a_resolved_parent() {
+        let state = super::super::tests::test_state();
+        let session_id = match super::spawn_pty_session(
+            state.clone(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            None,
+            24,
+            80,
+            None,
+            super::RequestedIdentity::default(),
+        ) {
+            Ok(id) => id,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+        let parent = || {
+            super::local_session_rows(&state)
+                .into_iter()
+                .find(|row| row.session_id == session_id)
+                .expect("the spawned session is listed")
+                .parent_session
+        };
+        assert_eq!(parent(), None);
+        state
+            .session_maps
+            .session_parent
+            .insert(session_id.clone(), "pending-mcp:mcp-late".to_string());
+        assert_eq!(parent(), None);
+        state
+            .session_maps
+            .session_parent
+            .insert(session_id.clone(), "lead-session".to_string());
+        assert_eq!(parent().as_deref(), Some("lead-session"));
     }
 }

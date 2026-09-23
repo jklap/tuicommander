@@ -1383,12 +1383,29 @@ pub struct PtySession {
     pub display_name: Option<String>,
     /// Only explicit user renames are protected from OSC/intent title updates.
     pub display_name_is_custom: bool,
+    /// The name was given by the agent spawn that created the session. The UI
+    /// reads it on reload to keep the agent's own OSC title from replacing that
+    /// name; the row's other fields cannot tell it apart from a synced OSC title.
+    pub display_name_from_spawn: bool,
     /// Created through HTTP/MCP rather than the local desktop UI.
     pub is_remote: bool,
     /// Resolved shell command used to spawn the PTY (e.g. "/bin/zsh",
     /// "C:\\Program Files\\Git\\bin\\bash.exe", "wsl.exe -d Ubuntu").
     /// Kept so `get_session_shell_family` can classify without re-resolving.
     pub shell: String,
+}
+
+impl PtySession {
+    /// Record the tab name the UI synced, from either transport. A non-custom
+    /// name is an OSC or intent title, which refines a spawn name without
+    /// replacing it; only a user rename (`is_custom`) ends the spawn origin.
+    pub(crate) fn set_display_name(&mut self, name: Option<String>, is_custom: bool) {
+        self.display_name = name;
+        self.display_name_is_custom = is_custom;
+        if is_custom {
+            self.display_name_from_spawn = false;
+        }
+    }
 }
 
 /// Configuration for agent orchestration
@@ -5124,6 +5141,7 @@ pub(crate) mod tests_support {
                 cwd: None,
                 display_name: None,
                 display_name_is_custom: false,
+                display_name_from_spawn: false,
                 is_remote: false,
                 shell: "/bin/sh".to_string(),
             }),

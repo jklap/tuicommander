@@ -93,6 +93,7 @@ pub(crate) async fn create_pty(
             cwd: config.cwd,
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: false,
             shell: shell.clone(),
         }),
@@ -257,6 +258,7 @@ pub(crate) async fn create_pty_with_worktree(
             cwd: worktree_cwd,
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: false,
             shell,
         }),
@@ -782,9 +784,9 @@ pub(crate) fn set_session_name(
         .sessions
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    let mut session = entry.lock();
-    session.display_name = name;
-    session.display_name_is_custom = is_custom.unwrap_or(true);
+    entry
+        .lock()
+        .set_display_name(name, is_custom.unwrap_or(true));
     Ok(())
 }
 

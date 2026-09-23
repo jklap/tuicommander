@@ -332,6 +332,11 @@ fn pending_parent_id(mcp_session_id: &str) -> String {
     format!("{PENDING_PARENT_PREFIX}{mcp_session_id}")
 }
 
+/// A placeholder is a routing key, not a session: never publish it as a parent.
+pub(super) fn is_pending_parent(parent: &str) -> bool {
+    parent.starts_with(PENDING_PARENT_PREFIX)
+}
+
 /// Interval a client should poll a task handle at. Floored well above zero so a
 /// stuck orchestrator cannot hot-loop the server.
 const TASK_POLL_INTERVAL_MS: u64 = 1000;
@@ -4017,6 +4022,14 @@ fn handle_agent_with_parent_cwd(
             let spawn_parent = caller_tuic
                 .clone()
                 .or_else(|| mcp_session_id.map(pending_parent_id));
+            // What the UI is told. A placeholder matches no tab, and nothing
+            // corrects the tab once `register` resolves it; the session row does,
+            // on the next reload.
+            // DEFERRED (2026-09-23) — push the resolved parent live when
+            // `link_pending_children_to_parent` swaps the placeholder. Needs a new
+            // bus event, SSE arm and desktop emit; until then the tag shows only
+            // after a reload for a caller that spawns before it registers.
+            let published_parent = spawn_parent.clone().filter(|p| !is_pending_parent(p));
             // Buffers, alias, metrics, grid watch and the session-created
             // broadcast, sharing one helper with session::spawn_pty_session so the
             // VT screen can only ever be built at the geometry the PTY was opened
@@ -4033,6 +4046,7 @@ fn handle_agent_with_parent_cwd(
                     cwd: effective_cwd.clone(),
                     display_name: requested_name.clone(),
                     display_name_is_custom: false,
+                    display_name_from_spawn: requested_name.is_some(),
                     is_remote: true,
                     shell: binary_path.clone(),
                 },
@@ -4040,7 +4054,7 @@ fn handle_agent_with_parent_cwd(
                 cols,
                 effective_agent_type.clone(),
                 None,
-                spawn_parent.clone(),
+                published_parent.clone(),
             );
             let cwd_str = effective_cwd.clone();
 
@@ -4057,7 +4071,7 @@ fn handle_agent_with_parent_cwd(
                             "cwd": cwd_str,
                             "agent_type": agent_type_val,
                             "display_name": requested_name,
-                            "parent_session": spawn_parent,
+                            "parent_session": published_parent,
                         }),
                     );
                 }
@@ -8216,6 +8230,7 @@ mod tests {
                 cwd: Some(cwd.to_string()),
                 display_name: None,
                 display_name_is_custom: false,
+                display_name_from_spawn: false,
                 is_remote: false,
                 shell: "true".to_string(),
             }),
@@ -11501,6 +11516,7 @@ mod tests {
                 cwd: None,
                 display_name: Some("submission-probe".to_string()),
                 display_name_is_custom: false,
+                display_name_from_spawn: false,
                 is_remote: true,
                 shell: "/bin/sh".to_string(),
             }),
@@ -15009,6 +15025,7 @@ mod tests {
                 cwd: Some("/Gits/personal/beta".to_string()),
                 display_name: None,
                 display_name_is_custom: false,
+                display_name_from_spawn: false,
                 is_remote: false,
                 shell: "true".to_string(),
             }),
@@ -16320,6 +16337,19 @@ mod tests {
             Some("linux-primary")
         );
 
+        // A WebView reload rebuilds the tab from the session row alone: the row
+        // must say the name came from the spawn (so the agent's OSC title cannot
+        // replace it) and which agent spawned it (so the sub-agent tag survives).
+        let row = super::super::session::local_session_rows(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .expect("the spawned session is listed");
+        assert!(row.display_name_from_spawn, "{row:?}");
+        assert_eq!(
+            row.parent_session.as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440b01")
+        );
+
         let listed = handle_session(&state, &serde_json::json!({"action": "list"}), None);
         let listed_session = listed
             .as_array()
@@ -16763,6 +16793,7 @@ mod tests {
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
         let parent_mcp = "mcp-late-parent";
+        let mut events = state.event_bus.subscribe();
 
         let spawned = handle_agent(
             &state,
@@ -16790,6 +16821,27 @@ mod tests {
             spawned.get("parent_session_id").is_none(),
             "an unregistered parent has no identity for the child to answer: {spawned}"
         );
+        // The placeholder is a routing key, not a session any tab can match: sent
+        // to the UI it pinned the tab's tag to "sub" and nothing ever corrected it.
+        let parent_row = |state: &AppState| {
+            super::super::session::local_session_rows(state)
+                .into_iter()
+                .find(|row| row.session_id == child)
+                .expect("the spawned child is listed")
+                .parent_session
+        };
+        let created = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| match event {
+                crate::state::AppEvent::SessionCreated {
+                    session_id,
+                    parent_session,
+                    ..
+                } if session_id == child => Some(parent_session),
+                _ => None,
+            })
+            .expect("the spawn publishes session-created");
+        assert_eq!(created, None, "a pending placeholder must not be published");
+        assert_eq!(parent_row(&state), None);
         let pending_parent = pending_parent_id(parent_mcp);
         state.push_agent_inbox(
             &pending_parent,
@@ -16828,6 +16880,11 @@ mod tests {
         let parent_tuic = registered["tuic_session"].as_str().unwrap();
         assert!(is_valid_uuid(parent_tuic));
         assert_eq!(registered["linked_children"], 1);
+        assert_eq!(
+            parent_row(&state).as_deref(),
+            Some(parent_tuic),
+            "once the parent registers, the row names it for the next reload"
+        );
         assert_eq!(
             state
                 .session_maps
