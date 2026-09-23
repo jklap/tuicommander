@@ -858,7 +858,7 @@ pub(super) async fn delete_remote_connection_connect(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    crate::remote_runtime::teardown(&state, &id);
+    crate::remote_runtime::disconnect(&state, &id);
     super::json_result(Ok::<_, String>(serde_json::json!({ "ok": true })))
 }
 
@@ -887,6 +887,90 @@ pub(super) async fn delete_remote_connection_install(
     }
     super::upstream_json_result(
         crate::remote_deploy::service::uninstall_remote_daemon_shared(&state, &id).await,
+    )
+}
+
+// --- SSH remote daemon provisioning (`ssh_provision`) ---
+//
+// Every handler takes a STORED connection id and nothing else that reaches the
+// remote host: host, user, port, instance and credentials come from
+// `connections.json` and the vault. All four can run commands over SSH (or, for
+// the plan, read which ones would run), so all four are gated like the other
+// privileged remote-connection routes; the gate runs before the store is even
+// read.
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProvisionPlanQuery {
+    action: crate::ssh_provision::ProvisionAction,
+}
+
+/// `GET /config/ssh-daemon/{id}/plan?action=start|set_password` — what an
+/// accepted offer would run, with the digest the execute call must echo.
+pub(super) async fn get_ssh_daemon_plan(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<ProvisionPlanQuery>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::ssh_provision::plan_for(&state, &id, query.action))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProvisionExecuteRequest {
+    plan_digest: String,
+}
+
+/// `POST /config/ssh-daemon/{id}/start` — run an accepted Start plan, then
+/// connect. Refused when the stored connection no longer matches the digest.
+pub(super) async fn post_ssh_daemon_start(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<ProvisionExecuteRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::ssh_provision::start_daemon(&state, &id, &request.plan_digest).await,
+    )
+}
+
+/// `POST /config/ssh-daemon/{id}/stop` — stop the connection's daemon,
+/// PID-file verified. Answers whether a `tuic-remote` was signalled.
+pub(super) async fn post_ssh_daemon_stop(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(crate::ssh_provision::stop_daemon(&state, &id).await)
+}
+
+/// `POST /config/remote-connections/{id}/configure-ssh-password` — run an
+/// accepted SetPassword plan: the saved username and password go to
+/// `tuic-remote --set-password-if-unset` on stdin over SSH. The request body
+/// carries the digest only — never a credential.
+pub(super) async fn post_configure_ssh_daemon_password(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<ProvisionExecuteRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::ssh_provision::configure_password(&state, &id, &request.plan_digest).await,
     )
 }
 
@@ -1792,5 +1876,137 @@ mod tests {
             .expect("body");
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert_eq!(text, r#"{"type":"AuthFailed"}"#);
+    }
+
+    /// A stored SSH connection whose host is a listener nobody else uses, so a
+    /// test can prove no SSH connection was ever opened to it.
+    fn ssh_provisioning_fixture() -> (Arc<AppState>, String, std::net::TcpListener) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut connection =
+            crate::remote_connection::RemoteConnection::new_ssh("box", "127.0.0.1", "boss");
+        if let crate::remote_connection::RemoteTransport::Ssh {
+            ssh,
+            start_if_not_running,
+            ..
+        } = &mut connection.transport
+        {
+            ssh.port = listener.local_addr().unwrap().port();
+            *start_if_not_running = true;
+        }
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::remote_connection::RemoteConnectionStore::save(
+            &state.data_dir,
+            std::slice::from_ref(&connection),
+        )
+        .unwrap();
+        (state, connection.id, listener)
+    }
+
+    /// Every provisioning route runs (or describes) commands over SSH: from a
+    /// public address without credentials each one is refused, and the stored
+    /// host is never dialled.
+    #[tokio::test]
+    async fn ssh_daemon_provisioning_routes_refuse_a_public_caller_without_dialling() {
+        let (state, id, listener) = ssh_provisioning_fixture();
+        let public = || ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 5], 12345)));
+        let digest = || {
+            Json(ProvisionExecuteRequest {
+                plan_digest: "0".repeat(64),
+            })
+        };
+        let responses = [
+            get_ssh_daemon_plan(
+                public(),
+                None,
+                State(state.clone()),
+                Path(id.clone()),
+                axum::extract::Query(ProvisionPlanQuery {
+                    action: crate::ssh_provision::ProvisionAction::Start,
+                }),
+            )
+            .await,
+            post_ssh_daemon_start(
+                public(),
+                None,
+                State(state.clone()),
+                Path(id.clone()),
+                digest(),
+            )
+            .await,
+            post_ssh_daemon_stop(public(), None, State(state.clone()), Path(id.clone())).await,
+            post_configure_ssh_daemon_password(
+                public(),
+                None,
+                State(state.clone()),
+                Path(id.clone()),
+                digest(),
+            )
+            .await,
+        ];
+        for resp in responses {
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(
+            listener.accept().is_err(),
+            "a refused provisioning call must not have opened an SSH connection"
+        );
+    }
+
+    /// From an allowed caller, a plan is a read; an execute with a digest that
+    /// does not match the stored connection's plan runs nothing.
+    #[tokio::test]
+    async fn ssh_daemon_start_with_a_stale_digest_runs_nothing() {
+        let (state, id, listener) = ssh_provisioning_fixture();
+        let plan = get_ssh_daemon_plan(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id.clone()),
+            axum::extract::Query(ProvisionPlanQuery {
+                action: crate::ssh_provision::ProvisionAction::Start,
+            }),
+        )
+        .await;
+        assert_eq!(plan.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(plan.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(plan["action"], "start");
+        assert_eq!(plan["digest"].as_str().unwrap().len(), 64);
+
+        let resp = post_ssh_daemon_start(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id),
+            Json(ProvisionExecuteRequest {
+                plan_digest: "0".repeat(64),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("nothing was run"));
+        assert!(listener.accept().is_err(), "nothing may be dialled");
+    }
+
+    /// The routes take a stored id only: an id that names no connection is an
+    /// error, never something to dial.
+    #[tokio::test]
+    async fn ssh_daemon_routes_refuse_an_unknown_connection() {
+        let (state, _id, listener) = ssh_provisioning_fixture();
+        let resp = post_ssh_daemon_stop(
+            ConnectInfo(loopback()),
+            None,
+            State(state),
+            Path("not-a-connection".to_string()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        assert!(listener.accept().is_err());
     }
 }

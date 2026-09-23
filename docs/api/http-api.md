@@ -1637,6 +1637,10 @@ POST   /config/remote-connections/{id}/install
 DELETE /config/remote-connections/{id}/install
 GET    /config/remote-connections/{id}/update
 POST   /config/remote-connections/{id}/update
+POST   /config/remote-connections/{id}/configure-ssh-password
+GET    /config/ssh-daemon/{id}/plan?action=start|set_password
+POST   /config/ssh-daemon/{id}/start
+POST   /config/ssh-daemon/{id}/stop
 ```
 
 The configured remote machines and their vault password. The password is write
@@ -1654,7 +1658,7 @@ A connection is
 
 | `type` | Fields |
 |--------|--------|
-| `Ssh` | `ssh: { host, port, user, identity_file, server_alive_interval, server_alive_count_max, strict_host_key_checking: "Yes" \| "AcceptNew", compression }`, `remote_daemon_port` |
+| `Ssh` | `ssh: { host, port, user, identity_file, server_alive_interval, server_alive_count_max, strict_host_key_checking: "Yes" \| "AcceptNew", compression }`, `remote_daemon_port`, and optionally `start_if_not_running` (bool), `leave_running_on_disconnect` (bool), `instance_id` (lowercase DNS label, not `default`) — omitted while unset, so a connection that never uses provisioning keeps the older shape |
 | `Direct` | `url`, `tls_fingerprint` (optional: SHA-256 hex of a pinned self-signed certificate; omitted when unset) |
 | `Local` | `port`, `instance_id` — exactly one set (a whitespace-only `instance_id` counts as unset). Connect resolves `instance_id` from that instance's `config.json` on every attempt and connects to `http://127.0.0.1:<port>` with the normal token handshake; an unresolvable instance fails before anything is contacted. Update refuses it (`Update & restart is not available for a Local connection…`); deploy is SSH-only |
 
@@ -1737,6 +1741,30 @@ password and the pairing token (it used to leave the pairing token behind), via
 the same `remote_connection::delete_remote_connection_impl` the desktop command
 calls. A missing id answers 404 (the vault entries are cleared either way).
 
+#### SSH daemon provisioning
+
+`GET /config/ssh-daemon/{id}/plan?action=start|set_password` answers what
+accepting a connection's `provision_offer` would run:
+`{ connection_id, connection_name, action, destination: "user@host:port", summary, steps: [{ description, command? }], digest }`
+— `command` is the exact remote shell command, `digest` a SHA-256 over the
+whole plan. It contacts nothing. `POST /config/ssh-daemon/{id}/start` and
+`POST /config/remote-connections/{id}/configure-ssh-password` take
+`{ "plan_digest": "<digest>" }` and nothing else: the plan is rebuilt from the
+STORED connection and a different digest is refused (502, "nothing was run")
+before any SSH. Start runs the same pinned, checksummed deployment as
+`deploy = "on_connect"` (Windows hosts refused), honours `instance_id`
+(`--instance <id>`, own PID/log file), requires `start_if_not_running`, then
+connects; it answers `null`. Set-password pipes the saved username and password
+on stdin to `tuic-remote [--instance <id>] --set-password-if-unset`, which
+refuses when the daemon already has credentials (a password is never
+overwritten, never sent over HTTP, never in a command line or response), and
+answers the follow-up message as a JSON string. `POST /config/ssh-daemon/{id}/stop`
+stops the ephemeral daemon only when its PID file names a running `tuic-remote`,
+answering `true` when one was signalled. All four are guarded by
+`require_local_or_auth` (403 from a public address before the store is read) and
+answer 502 for any failure. There is no route that takes a caller-supplied host,
+user or credential.
+
 ### Remote Connection Runtime
 
 ```
@@ -1746,16 +1774,24 @@ DELETE /config/remote-connections/{id}/connect
 ```
 
 Live state, not configuration: `GET .../status` answers with one object per
-connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, live_sessions?, update_notice?, update_in_progress?, error?, step? }`,
+connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, live_sessions?, update_notice?, update_in_progress?, error?, step?, provision_offer? }`,
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
 connected; `update_in_progress` is present as `true` while a manual or unattended update
-owns the connection. The route and token fields answer "where do I send a call", and a
+owns the connection. `provision_offer` (`"start"` or `"set_password"`) is present
+only while NOT connected, when the backend can offer one of the SSH daemon
+provisioning plans above for this failure: an SSH connection with
+`start_if_not_running` and `deploy = "never"` found nothing answering, or the
+daemon has no password configured at all (never for a wrong password). For a
+Local connection, `update_notice` names both versions when the other instance
+runs a different one. The route and token fields answer "where do I send a call", and a
 connection that is not connected has no such answer.
 
 `POST .../connect` brings a connection up and `DELETE .../connect` takes it
-down. Neither returns the new status: every transition is pushed as a
+down; taking it down also stops a daemon this app started through a confirmed
+Start plan in this run, PID-file verified, unless `leave_running_on_disconnect`
+is set. Neither returns the new status: every transition is pushed as a
 `remote-connection-status` event on `/events` SSE (and to the desktop window),
 so one client connecting is visible to all of them.
 

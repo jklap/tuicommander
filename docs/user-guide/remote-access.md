@@ -306,8 +306,15 @@ They live on **Settings → Remote Servers** (the separate Remote Machines page 
 4. Set the remote daemon port (default 9877)
 5. Choose **Never deploy**, **Deploy on connect**, or **Installed service**, and
    set how many minutes an ephemeral daemon should survive with no client
-6. Set the auth username and password the daemon was configured with
-7. Optionally click **Test Connection**, then Save, then click **Connect**
+6. Optionally set an **Instance ID** — passed as `--instance <id>` whenever
+   TUICommander starts the remote daemon or sets its password (see
+   [Start a daemon or set its password, with confirmation](#start-a-daemon-or-set-its-password-with-confirmation)).
+   It is never used to discover a port; it must be a lowercase DNS label
+7. With **Never deploy**, optionally check **Offer to start the remote daemon if
+   it is not running**, and then **Leave it running on disconnect** if a daemon
+   TUICommander starts should outlive the connection
+8. Set the auth username and password the daemon was configured with
+9. Optionally click **Test Connection**, then Save, then click **Connect**
 
 For an installed service, Connect waits for the SSH forwarding port and retries the daemon health check during startup before reporting it unavailable.
 
@@ -352,7 +359,9 @@ missing password leaves it **unauthenticated**. A named instance that cannot be
 found (never started, typo) fails Connect without contacting anything. Pointing
 it at the instance you are configuring is refused like a Direct self-connection.
 **Update & restart** is not offered for a Local connection's binary: update
-that install directly.
+that install directly. When the other instance runs a different version than this
+app, the row shows **Remote out of date** with a "Version mismatch" notice naming
+both versions.
 
 ### Connect or Install
 
@@ -376,6 +385,48 @@ path also uses `tuic-remote.pid`; deleting an on-connect machine sends a
 best-effort stop, while deleting an installed connection deliberately leaves its
 service alone. The daemon is launched with `--no-agent-configs`, so deploying it
 does not rewrite the host's Claude, Codex, or other agent configuration.
+
+### Start a daemon or set its password, with confirmation
+
+Two situations get an **offer** on the connection's row instead of a bare error.
+Nothing on the remote host changes until you accept the exact plan.
+
+- **Start remote daemon…** — a **Never deploy** connection with **Offer to start
+  the remote daemon if it is not running** found nothing answering on its daemon
+  port.
+- **Set remote password…** — the daemon answered, but it has **no password
+  configured at all** (never a wrong one: a wrong password stays a plain
+  "rejected credentials" error), and this connection has an auth username and a
+  saved password.
+
+Either button opens a confirmation listing the destination (`user@host:port`)
+and every command that will run there, in order, exactly as it will be sent.
+**Accept and run** runs it; Cancel, Escape or a click outside runs nothing. If
+the connection is edited between the dialog and the accept, the plan is refused
+and must be reviewed again.
+
+Starting uses the same path as **Deploy on connect**: the release asset pinned to
+this app's version, checked against its published SHA-256 (512 MiB limit, 300 s
+timeout; Windows hosts are refused), copied only when the installed binary's
+hash differs, and launched on `127.0.0.1` with a pairing token read from stdin.
+With an **Instance ID** the daemon is launched as `--instance <id>` and keeps its
+own `~/.cache/tuic/tuic-remote-<id>.pid` and `.log`. After starting, the
+connection connects.
+
+Setting the password runs `tuic-remote [--instance <id>] --set-password-if-unset`
+over the same SSH connection, with the saved username and password on stdin —
+never in a command line, a log or a response. The daemon itself refuses when it
+already has credentials, so an existing password is never overwritten; a saved
+password with a line break or leading/trailing whitespace is refused rather than
+altered. A running daemon reads its password at startup: restart it afterwards.
+A daemon too old to know `--set-password-if-unset` refuses too, and nothing
+changes.
+
+**Disconnect** stops a daemon TUICommander started this way in this run, unless
+**Leave it running on disconnect** is checked. The stop is PID-file verified: the
+file must name a process that `ps` reports as `tuic-remote`, otherwise nothing is
+signalled — a stale PID is never killed and nothing is stopped by name. A daemon
+somebody else started is never touched.
 
 ### Update and restart a remote machine
 
@@ -652,6 +703,10 @@ subsequent launch:
 ./tuic-remote --instance build-host --set-password
 ./tuic-remote --instance build-host
 ```
+
+`--set-password-if-unset` reads the same two lines but refuses — before reading
+anything, and again before writing — when the instance already has a username or
+password. It is the mode TUICommander's **Set remote password…** uses.
 
 An instance ID is one lowercase ASCII DNS label: 1–63 characters, letters or
 digits at both ends, with hyphens allowed internally. `default` is reserved;

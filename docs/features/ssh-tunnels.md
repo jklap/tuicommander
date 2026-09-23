@@ -220,6 +220,7 @@ When a "Remote Server — SSH" connection (`RemoteConnection` with `RemoteTransp
 | `tunnels/manager.rs` | Orchestrate multiple supervisors |
 | `tunnels/tauri_commands.rs` | Tauri IPC command handlers (desktop) |
 | `tunnels/commands.rs` | HTTP command handlers (browser mode) |
+| `ssh_provision.rs` | Confirmed remote-daemon provisioning for Remote Server — SSH: start plan / set-password plan, digest-bound execution, PID-verified stop on disconnect (runs over `tunnels::exec`) |
 
 ## Auto-Connect
 

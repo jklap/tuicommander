@@ -4,6 +4,7 @@ import {
 	type ConnectionState,
 	type DiscoveredSshHost,
 	type DiscoveredSshHosts,
+	type ProvisionAction,
 	type RemoteConnection,
 	type RemoteTransport,
 	remoteConnectionsStore,
@@ -76,6 +77,7 @@ export const RemoteMachinesPanel: Component<RemoteMachinesPanelProps> = (props) 
 	const [agentInfo, setAgentInfo] = createSignal<SshAgentInfo | null>(null);
 	const [serviceBusyId, setServiceBusyId] = createSignal<string | null>(null);
 	const [updateErrors, setUpdateErrors] = createSignal<Record<string, string>>({});
+	const [provisionNotes, setProvisionNotes] = createSignal<Record<string, string>>({});
 
 	onMount(() => {
 		remoteConnectionsStore.hydrate();
@@ -144,6 +146,21 @@ export const RemoteMachinesPanel: Component<RemoteMachinesPanelProps> = (props) 
 				`${session_count} live sessions will be lost. Update and restart remote?`;
 			if (!window.confirm(details)) return;
 			await remoteConnectionsStore.updateAndRestart(id, session_count, desktop_build.sha256);
+		} catch (reason) {
+			setUpdateErrors((current) => ({ ...current, [id]: String(reason) }));
+		} finally {
+			setServiceBusyId(null);
+		}
+	}
+
+	/** Act on the backend's SSH offer: the store shows the plan and runs it only on Accept. */
+	async function provision(connState: ConnectionState, action: ProvisionAction) {
+		const id = connState.connection.id;
+		setServiceBusyId(id);
+		setProvisionNotes((current) => ({ ...current, [id]: "" }));
+		try {
+			const note = await remoteConnectionsStore.provision(id, action);
+			if (note) setProvisionNotes((current) => ({ ...current, [id]: note }));
 		} catch (reason) {
 			setUpdateErrors((current) => ({ ...current, [id]: String(reason) }));
 		} finally {
@@ -321,14 +338,39 @@ export const RemoteMachinesPanel: Component<RemoteMachinesPanelProps> = (props) 
 											{connState.updateNotice}
 										</div>
 									</Show>
+									<Show when={provisionNotes()[conn().id]}>
+										<div class={s.hint} style={{ margin: 0, "font-size": "11px" }} role="status">
+											{provisionNotes()[conn().id]}
+										</div>
+									</Show>
 									<Show when={updateErrors()[conn().id]}>
 										<div class={s.hint} style={{ margin: 0, "font-size": "11px", color: "var(--error)" }} role="alert">
 											{updateErrors()[conn().id]}
 										</div>
 									</Show>
 								</div>
-								{/* Connect / Disconnect */}
-								<Show when={connState.status === "connected"}>
+								{/* SSH offers: the backend found the daemon down or unconfigured. */}
+								<Show when={connState.provisionOffer === "start" && connState.status !== "connected"}>
+									<button
+										class={s.textBtn}
+										disabled={serviceBusyId() === conn().id}
+										onClick={() => provision(connState, "start")}
+									>
+										Start remote daemon…
+									</button>
+								</Show>
+								<Show when={connState.provisionOffer === "set_password" && connState.status !== "connected"}>
+									<button
+										class={s.textBtn}
+										disabled={serviceBusyId() === conn().id}
+										onClick={() => provision(connState, "set_password")}
+									>
+										Set remote password…
+									</button>
+								</Show>
+								{/* Connect / Disconnect. A Local connection is another install on this
+								    machine: its version notice says to update it directly. */}
+								<Show when={connState.status === "connected" && conn().transport.type !== "Local"}>
 									<button
 										class={s.textBtn}
 										disabled={serviceBusyId() === conn().id || connState.updateInProgress}

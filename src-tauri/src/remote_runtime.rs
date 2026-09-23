@@ -135,6 +135,11 @@ pub(crate) struct RemoteConnectionStatus {
     pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) step: Option<String>,
+    /// What this app can offer to do about the failure over SSH — start the
+    /// daemon, or give an unconfigured one its password. Only an offer: it runs
+    /// after the user accepts the exact plan (`ssh_provision`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) provision_offer: Option<crate::ssh_provision::ProvisionAction>,
 }
 
 /// Live state for one connection. Never serialized as-is: `snapshot` builds the
@@ -152,6 +157,7 @@ struct Entry {
     update_notice: Option<String>,
     update_in_progress: Option<u64>,
     error: Option<String>,
+    provision_offer: Option<crate::ssh_provision::ProvisionAction>,
     tunnel_id: Option<String>,
     /// The task that owns this connection's whole lifecycle: bring it up, keep
     /// it up, retry while it is down. Its presence IS the desired state — there
@@ -194,6 +200,7 @@ impl Entry {
             update_in_progress: (connected && self.update_in_progress.is_some()).then_some(true),
             error: self.error.clone(),
             step,
+            provision_offer: (!connected).then_some(self.provision_offer).flatten(),
         }
     }
 }
@@ -237,6 +244,11 @@ pub(crate) struct RemoteRuntime {
     /// keyed by connection id — the Direct transport's analogue of the SSH
     /// tunnel an entry records in `tunnel_id`. Stopped wherever that tunnel is.
     direct_proxies: crate::direct_proxy::DirectProxies,
+    /// Connections whose daemon this app started through a confirmed
+    /// `ssh_provision` Start plan in this run — the only daemons Disconnect may
+    /// stop (`ssh_provision::stop_after_disconnect`). Never persisted: after a
+    /// restart nothing here is "ours" any more.
+    provisioned: DashMap<String, ()>,
 }
 
 impl Default for RemoteRuntime {
@@ -253,11 +265,26 @@ impl Default for RemoteRuntime {
                 "the default HTTP client must build — Client::new panics on the same failure",
             ),
             direct_proxies: Default::default(),
+            provisioned: DashMap::new(),
         }
     }
 }
 
 impl RemoteRuntime {
+    /// Record that this app started `id`'s daemon (confirmed Start plan).
+    pub(crate) fn mark_provisioned(&self, id: &str) {
+        self.provisioned.insert(id.to_string(), ());
+    }
+
+    /// Forget the mark, returning whether it was there.
+    pub(crate) fn take_provisioned(&self, id: &str) -> bool {
+        self.provisioned.remove(id).is_some()
+    }
+
+    pub(crate) fn forget_provisioned(&self, id: &str) {
+        self.provisioned.remove(id);
+    }
+
     /// The shared HTTP client. Cloning is an `Arc` bump, not a new pool.
     pub(crate) fn http_client(&self) -> reqwest::Client {
         self.client.clone()
@@ -498,6 +525,24 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
     let state = state.clone();
     let id = id.to_string();
     let task = tokio::spawn(async move {
+        // A Local connection is another instance on this machine: there is no
+        // release asset to select and nothing this app may install over it, so
+        // the comparison is the version alone and the notice says what to do.
+        if let Ok(connection) = load_connection(&state, &id)
+            && matches!(connection.transport, RemoteTransport::Local { .. })
+        {
+            let remote_version = state
+                .remote
+                .entries
+                .get(&id)
+                .and_then(|entry| entry.build.as_ref().map(|b| b.version.clone()));
+            let notice = local_version_notice(remote_version.as_deref(), env!("CARGO_PKG_VERSION"));
+            update_connected(&state, &id, |entry| {
+                entry.out_of_date = Some(notice.is_some());
+                entry.update_notice = notice;
+            });
+            return;
+        }
         let Some(build) = state
             .remote
             .entries
@@ -599,6 +644,22 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
     });
     if let Some(previous) = entry.comparison.replace(task) {
         previous.abort();
+    }
+}
+
+/// The warning a Local connection shows when the other instance runs a
+/// different version than this app — informational only: Update & restart
+/// refuses Local (`LOCAL_TRANSPORT_UPDATE_UNSUPPORTED`). `None` when the
+/// versions match; an instance too old to report its build gets a notice too.
+fn local_version_notice(remote_version: Option<&str>, local_version: &str) -> Option<String> {
+    match remote_version {
+        Some(remote) if remote == local_version => None,
+        Some(remote) => Some(format!(
+            "Version mismatch: this app is v{local_version}, the local instance runs v{remote}. Update that install directly."
+        )),
+        None => Some(format!(
+            "The local instance does not report its version (this app is v{local_version}). Update that install directly."
+        )),
     }
 }
 
@@ -774,6 +835,7 @@ pub(crate) fn load_connection(state: &Arc<AppState>, id: &str) -> Result<RemoteC
 struct ConnectFailure {
     status: RemoteStatus,
     message: String,
+    offer: Option<crate::ssh_provision::ProvisionAction>,
 }
 
 impl ConnectFailure {
@@ -782,6 +844,7 @@ impl ConnectFailure {
         Self {
             status: RemoteStatus::Error,
             message,
+            offer: None,
         }
     }
 
@@ -790,8 +853,46 @@ impl ConnectFailure {
         Self {
             status: RemoteStatus::Unauthenticated,
             message,
+            offer: None,
         }
     }
+
+    fn with_offer(mut self, offer: Option<crate::ssh_provision::ProvisionAction>) -> Self {
+        self.offer = offer;
+        self
+    }
+}
+
+/// A Connect that found nothing answering may offer to start the daemon — only
+/// for an SSH connection that opted in and does not deploy by itself (the
+/// other deploy modes already do, unattended, by the user's earlier choice).
+fn start_offer(connection: &RemoteConnection) -> Option<crate::ssh_provision::ProvisionAction> {
+    let opted_in = matches!(
+        &connection.transport,
+        RemoteTransport::Ssh {
+            start_if_not_running: true,
+            ..
+        }
+    );
+    (opted_in && connection.deploy == DeployMode::Never)
+        .then_some(crate::ssh_provision::ProvisionAction::Start)
+}
+
+/// A token exchange refused because the daemon has NO password configured —
+/// never a wrong one — may offer to set the saved one over SSH, for an SSH
+/// connection that has a username to set.
+fn password_offer(
+    connection: &RemoteConnection,
+    error: &str,
+) -> Option<crate::ssh_provision::ProvisionAction> {
+    let unconfigured = error == crate::remote_connection::REMOTE_PASSWORD_NOT_CONFIGURED;
+    let ssh = matches!(connection.transport, RemoteTransport::Ssh { .. });
+    let has_username = connection
+        .auth_username
+        .as_deref()
+        .is_some_and(|u| !u.is_empty());
+    (unconfigured && ssh && has_username)
+        .then_some(crate::ssh_provision::ProvisionAction::SetPassword)
 }
 
 /// Bring a connection up: resolve where it answers, prove it is reachable,
@@ -909,6 +1010,9 @@ async fn attempt(
             // trace of the connection.
             stop_tunnel(state, id);
             set_error(state, id, failure.status, failure.message.clone());
+            if failure.offer.is_some() {
+                update(state, id, |e| e.provision_offer = failure.offer);
+            }
             Err(failure.message)
         }
     }
@@ -957,6 +1061,7 @@ fn claim_and_supervise(
         } else {
             entry.status = Some(RemoteStatus::Connecting);
             entry.error = None;
+            entry.provision_offer = None;
             Some(entry.snapshot(id))
         }
     };
@@ -997,13 +1102,14 @@ async fn handshake(
     };
 
     let mut deployed = false;
-    let health =
-        if deploy_reason(connection, first_health.as_ref().map_err(String::as_str)).is_some() {
-            deployed = true;
-            deploy_and_wait(state, id, connection, &client, &base_url).await?
-        } else {
-            first_health.map_err(ConnectFailure::error)?
-        };
+    let health = if deploy_reason(connection, first_health.as_ref().map_err(String::as_str))
+        .is_some()
+    {
+        deployed = true;
+        deploy_and_wait(state, id, connection, &client, &base_url).await?
+    } else {
+        first_health.map_err(|e| ConnectFailure::error(e).with_offer(start_offer(connection)))?
+    };
 
     if connection.deploy != DeployMode::Never
         && health.protocol_version != Some(REMOTE_PROTOCOL_VERSION)
@@ -1035,9 +1141,10 @@ async fn handshake(
         e.out_of_date = health.build.is_none().then_some(true);
     });
 
-    let mut token = authenticate(connection, &base_url)
-        .await
-        .map_err(ConnectFailure::unauthenticated)?;
+    let mut token = authenticate(connection, &base_url).await.map_err(|e| {
+        let offer = password_offer(connection, &e);
+        ConnectFailure::unauthenticated(e).with_offer(offer)
+    })?;
 
     let mut probe = probe_authenticated(&client, &base_url, token.as_deref()).await;
     if probe == Probe::Rejected && connection.deploy == DeployMode::OnConnect && !deployed {
@@ -1081,22 +1188,14 @@ async fn deploy_and_wait(
         ConnectFailure::error("deployment requires an SSH connection".to_string())
     })?;
     let RemoteTransport::Ssh {
-        remote_daemon_port, ..
+        remote_daemon_port,
+        instance_id,
+        ..
     } = &connection.transport
     else {
         unreachable!("ssh_profile only returns Some for SSH transports")
     };
-    let token = match crate::remote_connection::pairing_token(&connection.id)
-        .map_err(ConnectFailure::error)?
-    {
-        Some(token) => token,
-        None => {
-            let token = uuid::Uuid::new_v4().to_string();
-            crate::remote_connection::set_pairing_token(&connection.id, &token)
-                .map_err(ConnectFailure::error)?;
-            token
-        }
-    };
+    let token = ensure_pairing_token(&connection.id).map_err(ConnectFailure::error)?;
 
     update(state, id, |entry| {
         entry.status = Some(RemoteStatus::Deploying {
@@ -1104,16 +1203,30 @@ async fn deploy_and_wait(
         });
         entry.error = None;
     });
-    crate::remote_deploy::deploy_ephemeral(
+    crate::remote_deploy::deploy_ephemeral_for(
         &profile,
         *remote_daemon_port,
         &token,
         connection.survive_secs,
+        instance_id.as_deref(),
     )
     .await
     .map_err(|error| ConnectFailure::error(format!("installing daemon: {error}")))?;
 
     wait_until_listening(client, base_url, LISTEN_GRACE).await
+}
+
+/// The pairing token a deployed daemon is launched with, minted and stored in
+/// the vault on first use. Shared by the unattended deploy and the confirmed
+/// `ssh_provision` Start, so both launch the daemon the connection can then
+/// authenticate to.
+pub(crate) fn ensure_pairing_token(id: &str) -> Result<String, String> {
+    if let Some(token) = crate::remote_connection::pairing_token(id)? {
+        return Ok(token);
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    crate::remote_connection::set_pairing_token(id, &token)?;
+    Ok(token)
 }
 
 async fn wait_until_listening(
@@ -1362,11 +1475,20 @@ pub(crate) fn teardown(state: &Arc<AppState>, id: &str) {
     dispose(state, id, entry);
 }
 
+/// An explicit Disconnect: stop a daemon this app started for the connection
+/// when it is not to be left running (`ssh_provision::stop_after_disconnect`),
+/// then [`teardown`]. Both transports' disconnect calls come here.
+pub(crate) fn disconnect(state: &Arc<AppState>, id: &str) {
+    crate::ssh_provision::stop_after_disconnect(state, id);
+    teardown(state, id);
+}
+
 /// Delete-specific teardown: clear local runtime state immediately, then make
 /// one bounded best-effort attempt to stop the ephemeral daemon this saved
 /// connection owns. Disconnect deliberately does not do this — it is allowed
 /// to leave the daemon alive for a cheap reconnect within `survive_secs`.
 pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
+    crate::ssh_provision::stop_after_disconnect(state, id);
     stop_deleted_ephemeral(state, id);
     teardown(state, id);
     state.remote.attempted_updates.remove(id);
@@ -1729,7 +1851,7 @@ pub async fn disconnect_remote_connection(
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    teardown(&state.inner().clone(), &id);
+    disconnect(&state.inner().clone(), &id);
     Ok(())
 }
 
@@ -2654,6 +2776,7 @@ mod tests {
             update_in_progress: None,
             error: None,
             step: Some("asset".into()),
+            provision_offer: None,
         });
 
         assert_eq!(payload["status"], "deploying");
@@ -2706,6 +2829,96 @@ mod tests {
             deploy_reason(&connection, Err("Unreachable: refused")),
             None
         );
+    }
+
+    #[test]
+    fn start_is_offered_only_to_an_opted_in_ssh_connection_that_does_not_deploy() {
+        use crate::ssh_provision::ProvisionAction;
+        let mut connection = RemoteConnection::new_ssh("vps", "h", "u");
+        assert_eq!(start_offer(&connection), None, "opt-in is off by default");
+        if let RemoteTransport::Ssh {
+            start_if_not_running,
+            ..
+        } = &mut connection.transport
+        {
+            *start_if_not_running = true;
+        }
+        assert_eq!(start_offer(&connection), Some(ProvisionAction::Start));
+        connection.deploy = DeployMode::OnConnect;
+        assert_eq!(
+            start_offer(&connection),
+            None,
+            "OnConnect deploys by itself"
+        );
+        connection.deploy = DeployMode::Installed;
+        assert_eq!(start_offer(&connection), None);
+        let direct = RemoteConnection::new_direct("d", "http://h", "u");
+        assert_eq!(start_offer(&direct), None);
+    }
+
+    /// Only a daemon with NO password is offered one; a wrong password (or any
+    /// other refusal) never is.
+    #[test]
+    fn a_password_is_offered_only_to_an_unconfigured_daemon() {
+        use crate::remote_connection::REMOTE_PASSWORD_NOT_CONFIGURED;
+        use crate::ssh_provision::ProvisionAction;
+        let mut connection = RemoteConnection::new_ssh("vps", "h", "boss");
+        assert_eq!(
+            password_offer(&connection, REMOTE_PASSWORD_NOT_CONFIGURED),
+            Some(ProvisionAction::SetPassword)
+        );
+        assert_eq!(
+            password_offer(&connection, "Authentication rejected by the remote daemon"),
+            None
+        );
+        assert_eq!(password_offer(&connection, REJECTED_CREDENTIALS), None);
+        connection.auth_username = None;
+        assert_eq!(
+            password_offer(&connection, REMOTE_PASSWORD_NOT_CONFIGURED),
+            None
+        );
+        let direct = RemoteConnection::new_direct("d", "http://h", "boss");
+        assert_eq!(
+            password_offer(&direct, REMOTE_PASSWORD_NOT_CONFIGURED),
+            None
+        );
+    }
+
+    #[test]
+    fn an_offer_is_published_only_while_not_connected() {
+        use crate::ssh_provision::ProvisionAction;
+        let mut entry = Entry {
+            status: Some(RemoteStatus::Error),
+            provision_offer: Some(ProvisionAction::Start),
+            ..Entry::default()
+        };
+        let payload = remote_connection_status_payload(&entry.snapshot("vps"));
+        assert_eq!(payload["provision_offer"], "start");
+        entry.status = Some(RemoteStatus::Connected);
+        let payload = remote_connection_status_payload(&entry.snapshot("vps"));
+        assert!(payload.get("provision_offer").is_none());
+        let none = remote_connection_status_payload(&Entry::default().snapshot("vps"));
+        assert!(none.get("provision_offer").is_none());
+    }
+
+    #[test]
+    fn a_local_instance_on_another_version_is_warned_about() {
+        assert_eq!(local_version_notice(Some("1.7.7"), "1.7.7"), None);
+        let notice = local_version_notice(Some("1.7.6"), "1.7.7").unwrap();
+        assert!(
+            notice.contains("v1.7.7") && notice.contains("v1.7.6"),
+            "{notice}"
+        );
+        assert!(notice.contains("Update that install directly"));
+        assert!(local_version_notice(None, "1.7.7").is_some());
+    }
+
+    #[test]
+    fn disconnect_forgets_that_this_app_started_the_daemon() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.remote.mark_provisioned("vps");
+        disconnect(&state, "vps");
+        assert!(!state.remote.take_provisioned("vps"));
     }
 
     #[test]
@@ -4137,6 +4350,7 @@ mod tests {
                 update_in_progress: None,
                 error: None,
                 step: None,
+                provision_offer: None,
             });
             assert_eq!(payload["id"], "abc");
             assert!(payload.get("status").is_some());

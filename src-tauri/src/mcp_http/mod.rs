@@ -1987,6 +1987,24 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/probe-direct-tls",
             post(config_routes::probe_direct_tls_http),
         )
+        // SSH remote daemon provisioning: stored connection ids only, every
+        // step confirmed by plan digest (`ssh_provision`).
+        .route(
+            "/config/remote-connections/{id}/configure-ssh-password",
+            post(config_routes::post_configure_ssh_daemon_password),
+        )
+        .route(
+            "/config/ssh-daemon/{id}/plan",
+            get(config_routes::get_ssh_daemon_plan),
+        )
+        .route(
+            "/config/ssh-daemon/{id}/start",
+            post(config_routes::post_ssh_daemon_start),
+        )
+        .route(
+            "/config/ssh-daemon/{id}/stop",
+            post(config_routes::post_ssh_daemon_stop),
+        )
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))

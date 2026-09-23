@@ -303,6 +303,68 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			});
 		});
 
+		describe("SSH daemon provisioning runs only the plan the user accepted", () => {
+			const plan = (action: "start" | "set_password") => ({
+				connection_id: "c1",
+				connection_name: "conn-c1",
+				action,
+				destination: "boss@box:22",
+				summary: "Start tuic-remote",
+				steps: [{ description: "Detect the remote platform", command: "uname -sm" }],
+				digest: "d".repeat(64),
+			});
+			const answer = (action: "start" | "set_password") =>
+				invokeMock.mockImplementation((command: string) => {
+					calls.push(command);
+					if (command === "plan_ssh_daemon_provision") return Promise.resolve(plan(action));
+					if (command === "configure_ssh_daemon_password") return Promise.resolve("Password set.");
+					return Promise.resolve(undefined);
+				});
+			const commandsAfterHydrate = () => calls.slice(calls.indexOf("remote_connection_statuses") + 1);
+
+			it("publishes the backend's offer on the connection", () => {
+				push({ id: "c1", status: "error", error: "Unreachable", provision_offer: "start" } as StatusPayload);
+				expect(store.getConnectionState("c1")?.provisionOffer).toBe("start");
+				push({ id: "c1", status: "connecting" });
+				expect(store.getConnectionState("c1")?.provisionOffer).toBeUndefined();
+			});
+
+			it("shows the plan and starts the daemon with its digest on accept", async () => {
+				answer("start");
+				const running = store.provision("c1", "start");
+				await vi.waitFor(() => expect(store.getPendingProvisionConfirmation()).not.toBeNull());
+				expect(store.getPendingProvisionConfirmation()?.steps[0].command).toBe("uname -sm");
+				expect(commandsAfterHydrate()).toEqual(["plan_ssh_daemon_provision"]);
+
+				store.resolveProvisionConfirmation(true);
+				await expect(running).resolves.toBe("Remote daemon started.");
+				expect(store.getPendingProvisionConfirmation()).toBeNull();
+				expect(invokeMock).toHaveBeenCalledWith("plan_ssh_daemon_provision", { id: "c1", action: "start" });
+				expect(invokeMock).toHaveBeenCalledWith("start_ssh_daemon", { id: "c1", planDigest: "d".repeat(64) });
+			});
+
+			it("declining runs nothing", async () => {
+				answer("start");
+				const running = store.provision("c1", "start");
+				await vi.waitFor(() => expect(store.getPendingProvisionConfirmation()).not.toBeNull());
+				store.resolveProvisionConfirmation(false);
+				await expect(running).resolves.toBeNull();
+				expect(commandsAfterHydrate()).toEqual(["plan_ssh_daemon_provision"]);
+			});
+
+			it("sets a password with the digest only — no credential leaves the frontend", async () => {
+				answer("set_password");
+				const running = store.provision("c1", "set_password");
+				await vi.waitFor(() => expect(store.getPendingProvisionConfirmation()).not.toBeNull());
+				store.resolveProvisionConfirmation(true);
+				await expect(running).resolves.toBe("Password set.");
+				expect(invokeMock).toHaveBeenCalledWith("configure_ssh_daemon_password", {
+					id: "c1",
+					planDigest: "d".repeat(64),
+				});
+			});
+		});
+
 		it("keeps the deployment step from the backend status", () => {
 			push({ id: "c1", status: "deploying", step: "starting daemon" });
 
