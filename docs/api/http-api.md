@@ -317,7 +317,8 @@ Hands the text to the same idle gate peer messages use instead of typing it now:
 submitted immediately when the agent is idle (`typed: true`, `queued: 0`),
 otherwise parked until the agent's next busy→idle transition, so a running turn
 is never steered. User commands and peer messages share one typed FIFO and are
-submitted one per idle window in backend acceptance order. `queued`,
+submitted one per idle window in backend acceptance order (a run of hands-free
+voice entries at the head is joined into one submission). `queued`,
 `state.queued_commands`, and `DELETE` count or remove only user commands;
 clearing Compose commands never deletes pending peer/orchestrator delivery.
 
@@ -1632,6 +1633,7 @@ POST /dictation/inject           { "text": "..." }  -> "<corrected text>"
 GET  /dictation/config                              -> DictationConfig
 PUT  /dictation/config           DictationConfig    -> null
 GET  /dictation/hands-free                          -> HandsFreeStatus
+GET  /dictation/hands-free/default-notice           -> string
 POST /dictation/hands-free/arm   { "sessionId": "...", "owner": "..." }
                                                     -> HandsFreeStatus
 POST /dictation/hands-free/disarm                   -> HandsFreeDisarmed
@@ -1733,11 +1735,19 @@ come back under `alreadyDelivered` — nothing can take those back.
 Both bodies are the structs `dictation::commands` serializes, camelCase on the
 wire and identical on both transports:
 
-- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error }`
+- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error, deliveredTurns, droppedTurns }`
 - `HandsFreeDisarmed { wasArmed, generation, cancelled, alreadyDelivered, discardedPending, discardedCapture, status }`
 
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
+
+`deliveredTurns` counts spoken turns handed to the Compose queue and
+`droppedTurns` counts turns the activation phrase dropped. Both are monotonic
+for the life of the backend process and are never reset on arm, so a client
+detects a turn by comparing two polls — the earcons key on them, because a
+`delivered` phase can be overwritten before the next poll and a drop has no
+phase at all. `hands_free_earcons` in the dictation config (default `true`)
+turns them off; only the frontend reads it.
 
 Arming and disarming also tell the bound model so, unless
 `hands_free_notify_model` is `false` in the dictation config (it defaults to
@@ -1745,6 +1755,9 @@ Arming and disarming also tell the bound model so, unless
 above). The notice is an ordinary Compose entry, so it appears in `queuedIds`
 until the composer types it, and a disarm that arrives first cancels it — in
 which case no end notice is sent, because the model never read the start one.
+`hands_free_start_notice` replaces the start notice's text (empty means the
+built-in one, which `GET /dictation/hands-free/default-notice` returns as a JSON
+string); Rust folds it to one line before it is queued.
 `error` carries the reason when the queue refuses a notice; arming still
 succeeds. Turning the setting off never leaves speech running: a disarm revokes
 it either way.

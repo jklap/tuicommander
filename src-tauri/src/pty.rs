@@ -1485,6 +1485,26 @@ impl SilenceState {
         token
     }
 
+    /// A claim that leaves the agent busy: refused while another claim is live
+    /// or an earlier write is uncertain, since no atom CAS orders it.
+    fn begin_mid_turn_injection_claim(&mut self) -> Option<u64> {
+        if self.active_injection_claim.is_some() || self.injection_delivery_uncertain {
+            return None;
+        }
+        Some(self.begin_injection_claim(false))
+    }
+
+    /// Drop a mid-turn claim whose write never started. Nothing else moves: the
+    /// agent was busy before the claim and still is.
+    fn release_injection_claim(&mut self, token: u64) {
+        if self
+            .active_injection_claim
+            .is_some_and(|(owner, _)| owner == token)
+        {
+            self.active_injection_claim = None;
+        }
+    }
+
     fn commit_injection_claim(&mut self, token: u64) -> bool {
         if self
             .active_injection_claim
@@ -7346,6 +7366,10 @@ fn has_partial_user_input(state: &AppState, session_id: &str) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InjectionClaim {
     token: u64,
+    /// The claim moved the atom IDLE→BUSY. A mid-turn voice claim
+    /// (`claim_composer_for_voice`) did not, so its rollback must not hand a
+    /// working agent an idle edge it never had.
+    took_idle: bool,
 }
 
 fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<InjectionClaim> {
@@ -7361,6 +7385,15 @@ fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<Inject
     if !try_shell_transition(state, session_id, SHELL_IDLE, SHELL_BUSY, true) {
         return None;
     }
+    finish_idle_claim(state, session_id, prior_idle_confirmed)
+}
+
+/// The half of an idle claim after IDLE→BUSY is ours.
+fn finish_idle_claim(
+    state: &AppState,
+    session_id: &str,
+    prior_idle_confirmed: bool,
+) -> Option<InjectionClaim> {
     // The composer is re-read after the atom is ours: `should_inject_now` was a
     // snapshot, and the user can start typing in between. Revert before the
     // claim exists so no spurious busy/idle pair reaches the UI.
@@ -7375,10 +7408,66 @@ fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<Inject
         .map(|silence| silence.lock().begin_injection_claim(prior_idle_confirmed))
         .unwrap_or(0);
     emit_shell_state(state, session_id, "busy");
-    Some(InjectionClaim { token })
+    Some(InjectionClaim {
+        token,
+        took_idle: true,
+    })
+}
+
+/// Reserve an agent's composer for one hands-free turn, busy or not.
+///
+/// An idle agent is claimed exactly as the queue claims it, minus the
+/// confirmed-idle requirement. A working agent keeps its BUSY atom — it is
+/// working — so the claim token alone orders writers: it is refused while
+/// another claim is live or an earlier write is uncertain.
+///
+/// DEFERRED (2026-09-23) — the idle path above does not check for a live
+/// mid-turn claim, so if the agent goes idle during a mid-turn voice write, a
+/// queue flush can claim IDLE→BUSY and type its entry in the same few ms. The
+/// writer mutex keeps the bytes unspliced; only the order of the two
+/// submissions can swap. Not worth changing the state machine for now.
+fn claim_composer_for_voice(state: &AppState, session_id: &str) -> Option<InjectionClaim> {
+    let prior_idle_confirmed = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .map(|silence| silence.lock().idle_confirmed())
+        .unwrap_or(false);
+    if try_shell_transition(state, session_id, SHELL_IDLE, SHELL_BUSY, true) {
+        return finish_idle_claim(state, session_id, prior_idle_confirmed);
+    }
+    let busy = state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .is_some_and(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY);
+    if !busy {
+        return None;
+    }
+    let token = state
+        .session_maps
+        .silence_states
+        .get(session_id)?
+        .lock()
+        .begin_mid_turn_injection_claim()?;
+    let claim = InjectionClaim {
+        token,
+        took_idle: false,
+    };
+    if has_partial_user_input(state, session_id) {
+        rollback_injection_claim(state, session_id, claim);
+        return None;
+    }
+    Some(claim)
 }
 
 fn rollback_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) -> bool {
+    if !claim.took_idle {
+        if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+            silence.lock().release_injection_claim(claim.token);
+        }
+        return false;
+    }
     let owns_claim = state
         .session_maps
         .silence_states
@@ -8503,6 +8592,89 @@ pub(crate) fn enqueue_voice_command(
         crate::state::PendingInjection::voice_command(text, generation),
     );
     Ok(crate::state::VoiceEnqueued { id, typed, queued })
+}
+
+/// What became of a hands-free turn written to an agent's composer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VoiceWrite {
+    /// Typed and submitted. Also returned when the write was cut short after
+    /// its first byte: typing it again could submit it twice.
+    Written,
+    /// Nothing typed. The hands-free side keeps the turn and retries.
+    Held(VoiceHold),
+}
+
+/// Why a hands-free turn was not typed yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VoiceHold {
+    /// A confident question or permission dialog owns the composer.
+    Question,
+    /// The user has a draft in the composer.
+    Draft,
+    /// Another write holds the composer, or an earlier one is uncertain.
+    InFlight,
+    /// The PTY refused the first byte.
+    WriteNotStarted,
+}
+
+impl VoiceHold {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Question => "confident question on screen",
+            Self::Draft => "partial user input in the composer",
+            Self::InFlight => "another write holds the composer",
+            Self::WriteNotStarted => "the write did not start",
+        }
+    }
+}
+
+/// Type one hands-free turn into an agent's composer now — busy or idle.
+///
+/// This is the *only* way hands-free speech reaches a model, and it is not the
+/// Compose queue: that queue is for "one message, let the agent work, then the
+/// next". Speech behaves like a line the user types by hand into a working
+/// agent, which the agent queues or takes mid-turn itself (Boss's rule;
+/// parking it until idle measured a median 103 s, max 594 s).
+///
+/// Two holds remain, and they are the reason this is not a raw write: a
+/// confident question (speech must never answer a permission dialog) and a
+/// draft in the composer. A held turn stays with the caller. The write itself
+/// is the framed path every injection uses (Ctrl-U, text, a separate Enter).
+pub(crate) fn write_voice_turn(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> Result<VoiceWrite, String> {
+    if text.trim().is_empty() {
+        return Err("Command text is empty".to_string());
+    }
+    if !session_accepts_voice(state, session_id) {
+        return Err(if state.session_maps.sessions.contains_key(session_id) {
+            "Session is not running an agent".to_string()
+        } else {
+            "Session not found".to_string()
+        });
+    }
+    if blocked_on_confident_question(state, session_id) {
+        return Ok(VoiceWrite::Held(VoiceHold::Question));
+    }
+    if has_partial_user_input(state, session_id) {
+        return Ok(VoiceWrite::Held(VoiceHold::Draft));
+    }
+    let Some(claim) = claim_composer_for_voice(state, session_id) else {
+        return Ok(VoiceWrite::Held(if has_partial_user_input(state, session_id) {
+            VoiceHold::Draft
+        } else {
+            VoiceHold::InFlight
+        }));
+    };
+    Ok(
+        match run_claimed_injection(state, session_id, text, claim, ClaimedInjectionKind::Message)
+        {
+            InjectionOutcome::Submitted | InjectionOutcome::Uncertain(_) => VoiceWrite::Written,
+            InjectionOutcome::NotStarted(_) => VoiceWrite::Held(VoiceHold::WriteNotStarted),
+        },
+    )
 }
 
 /// Whether a session can take hands-free speech at all.

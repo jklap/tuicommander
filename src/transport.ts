@@ -153,6 +153,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 	get_dictation_config: { map: () => ({ method: "GET", path: "/dictation/config" }) },
 	get_hands_free_status: { map: () => ({ method: "GET", path: "/dictation/hands-free" }) },
+	get_hands_free_default_notice: {
+		map: () => ({ method: "GET", path: "/dictation/hands-free/default-notice" }),
+	},
 	// camelCase on the wire in both directions: the axum request type renames to
 	// match the IPC argument names, so the same store code works on either.
 	arm_hands_free_dictation: {

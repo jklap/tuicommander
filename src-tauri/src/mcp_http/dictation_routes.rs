@@ -281,6 +281,10 @@ pub(super) async fn get_hands_free_status_http(State(state): State<Arc<AppState>
     Json(dictation::commands::hands_free_status(&dictation)).into_response()
 }
 
+pub(super) async fn get_hands_free_default_notice_http() -> impl IntoResponse {
+    Json(dictation::commands::get_hands_free_default_notice())
+}
+
 pub(super) async fn get_dictation_config_http() -> impl IntoResponse {
     Json(dictation::commands::get_dictation_config())
 }

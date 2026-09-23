@@ -178,65 +178,55 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Toolbar Bell",
 		labelKey: "notifications.label.toolbarBell",
 	},
-	// DictationSettings.tsx
-	{ tab: "dictation", section: "Dictation Settings", sectionKey: "dictation.title" },
-	{ tab: "dictation", section: "Dictation Settings", label: "Enable Dictation", labelKey: "dictation.enableLabel" },
-	{ tab: "dictation", section: "Dictation Settings", label: "Whisper Model", labelKey: "dictation.modelLabel" },
-	{ tab: "dictation", section: "Dictation Settings", label: "Hotkey", labelKey: "dictation.hotkeyLabel" },
+	// DictationSettings.tsx — `SpeechRecognition`, `HandsFreeControls` and
+	// `SpeechSetup` each open with their own heading, so `extractSettings`, which
+	// reads source order rather than the render tree, lists them in the order
+	// they are defined.
+	{ tab: "dictation", section: "Dictation", sectionKey: "dictation.heading.dictation" },
+	{ tab: "dictation", section: "Auto-Corrections", sectionKey: "dictation.heading.corrections" },
+	{ tab: "dictation", section: "Speech recognition", sectionKey: "dictation.heading.recognition" },
+	{ tab: "dictation", section: "Spoken replies", sectionKey: "dictation.heading.spokenReplies" },
+	{ tab: "dictation", section: "Hands-free conversation", sectionKey: "dictation.heading.handsFree" },
+	{ tab: "dictation", section: "Dictation", label: "Enable Dictation", labelKey: "dictation.enableLabel" },
+	{ tab: "dictation", section: "Dictation", label: "Hotkey", labelKey: "dictation.hotkeyLabel" },
+	{ tab: "dictation", section: "Dictation", label: "Long-press threshold", labelKey: "dictation.longPressLabel" },
+	{ tab: "dictation", section: "Dictation", label: "Auto-send", labelKey: "dictation.autoSendLabel" },
+	{ tab: "dictation", section: "Speech recognition", label: "Input device", labelKey: "dictation.inputDeviceLabel" },
+	{ tab: "dictation", section: "Speech recognition", label: "Whisper Model", labelKey: "dictation.modelLabel" },
+	{ tab: "dictation", section: "Speech recognition", label: "Language", labelKey: "dictation.languageLabel" },
+	{ tab: "dictation", section: "Speech recognition", label: "Voice tuning", labelKey: "dictation.tuningLabel" },
+	{ tab: "dictation", section: "Speech recognition", label: "Level gate", labelKey: "dictation.rmsLabel" },
 	{
 		tab: "dictation",
-		section: "Dictation Settings",
-		label: "Long-press threshold",
-		labelKey: "dictation.longPressLabel",
-	},
-	{ tab: "dictation", section: "Dictation Settings", label: "Auto-send", labelKey: "dictation.autoSendLabel" },
-	{
-		tab: "dictation",
-		section: "Dictation Settings",
-		label: "Notify model when hands-free changes",
-		labelKey: "dictation.notifyModelLabel",
-	},
-	{ tab: "dictation", section: "Dictation Settings", label: "Language", labelKey: "dictation.languageLabel" },
-	{ tab: "dictation", section: "Dictation Settings", label: "Microphone", labelKey: "dictation.microphoneLabel" },
-	{
-		tab: "dictation",
-		section: "Dictation Settings",
-		label: "Auto-Corrections",
-		labelKey: "dictation.correctionsLabel",
-	},
-	// `VoiceTuning` renders between Microphone and Auto-Corrections, but it is a
-	// sub-component, so `extractSettings` — which reads source order, not the
-	// render tree — sees it wherever it is DEFINED. It is defined at the end of
-	// the file for exactly that reason, and these entries follow it.
-	{ tab: "dictation", section: "Dictation Settings", label: "Voice tuning", labelKey: "dictation.tuningLabel" },
-	{ tab: "dictation", section: "Dictation Settings", label: "Level gate", labelKey: "dictation.rmsLabel" },
-	{
-		tab: "dictation",
-		section: "Dictation Settings",
+		section: "Speech recognition",
 		label: "Speech confidence gate",
 		labelKey: "dictation.noSpeechLabel",
 	},
-	// `SpeechSetup` and `HandsFreeControls` (818-2a29) are defined after
-	// `VoiceTuning` for the same reason, so their entries follow its.
-	{ tab: "dictation", section: "Dictation Settings", label: "Spoken replies", labelKey: "dictation.speechLabel" },
-	{ tab: "dictation", section: "Dictation Settings", label: "Voice", labelKey: "dictation.voiceLabel" },
+	{ tab: "dictation", section: "Spoken replies", label: "Voice", labelKey: "dictation.voiceLabel" },
 	{
 		tab: "dictation",
-		section: "Dictation Settings",
-		label: "Hands-free conversation",
-		labelKey: "dictation.handsFreeLabel",
-	},
-	{
-		tab: "dictation",
-		section: "Dictation Settings",
+		section: "Hands-free conversation",
 		label: "Activation phrase",
 		labelKey: "dictation.activationPhraseLabel",
 	},
 	{
 		tab: "dictation",
-		section: "Dictation Settings",
+		section: "Hands-free conversation",
 		label: "Hold-back before sending",
 		labelKey: "dictation.holdBackLabel",
+	},
+	{ tab: "dictation", section: "Hands-free conversation", label: "Earcons", labelKey: "dictation.earconsLabel" },
+	{
+		tab: "dictation",
+		section: "Hands-free conversation",
+		label: "Notify model when hands-free changes",
+		labelKey: "dictation.notifyModelLabel",
+	},
+	{
+		tab: "dictation",
+		section: "Hands-free conversation",
+		label: "Start notice",
+		labelKey: "dictation.startNoticeLabel",
 	},
 	// tabs/GitHubTab.tsx
 	{ tab: "github", section: "GitHub Authentication" },

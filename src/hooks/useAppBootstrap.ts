@@ -141,7 +141,12 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 			loadFontFromConfig: settingsStore.loadFontFromConfig,
 			refreshDictationConfig: () =>
 				dictationStore.refreshConfig().then(() => {
-					if (dictationStore.state.enabled) dictationStore.refreshStatus();
+					if (!dictationStore.state.enabled) return;
+					dictationStore.refreshStatus();
+					// A conversation outlives a WebView reload: reading its status
+					// finds one still armed and brings its toast back. Reading
+					// never opens the microphone.
+					dictationStore.refreshHandsFree();
 				}),
 			startUserActivityListening: userActivityStore.startListening,
 		},

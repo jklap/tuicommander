@@ -101,6 +101,8 @@ describe("CommandPalette browser mode", () => {
 		expect(isBrowserCommandPaletteAction(designMode)).toBe(true);
 		// Stop must reach a browser client too: otherwise the tab menu is its only way out.
 		expect(isBrowserCommandPaletteAction(stopDesignMode)).toBe(true);
+		// The arm path opens this tab's own microphone over the voice socket.
+		expect(isBrowserCommandPaletteAction(action("toggle-hands-free", "Start hands-free conversation"))).toBe(true);
 		expect(isBrowserCommandPaletteAction(nativeDialog)).toBe(false);
 		expect(isBrowserCommandPaletteAction(hostAdministration)).toBe(false);
 		expect(container.textContent).toContain("Search Files");

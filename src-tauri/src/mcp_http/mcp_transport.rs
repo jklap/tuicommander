@@ -5311,6 +5311,16 @@ fn resolve_mcp_origin_session(
     mcp_session_id.and_then(|mcp_sid| state.mcp.to_session.get(mcp_sid).map(|s| s.value().clone()))
 }
 
+/// The live PTY behind this MCP connection, keyed as `sessions` keys it.
+///
+/// Not the peer id: a hand-opened tab registers under its `$TUIC_SESSION`
+/// while its PTY carries the UUID `create_pty` minted, and anything bound to a
+/// terminal (hands-free, a progress entry) holds the PTY key.
+fn resolve_mcp_origin_pty(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> Option<String> {
+    resolve_mcp_origin_session(state, mcp_session_id)
+        .and_then(|peer| state.live_pty_for_peer(&peer))
+}
+
 fn resolve_mcp_origin_repo_path(
     state: &Arc<AppState>,
     mcp_session_id: Option<&str>,
@@ -5420,7 +5430,7 @@ fn handle_voice(
     // off the owner's own control surface: that path exists for the user's UI,
     // and handing it to a model would let any MCP client speak into somebody
     // else's conversation.
-    let Some(caller) = resolve_mcp_origin_session(state, mcp_session_id) else {
+    let Some(caller) = resolve_mcp_origin_pty(state, mcp_session_id) else {
         return serde_json::json!({"error":
             "This connection is not bound to a terminal, so there is no conversation to speak into"
         });
@@ -5493,8 +5503,7 @@ async fn handle_progress(
         .and_then(|id| state.peer_agents.get(&id).map(|peer| peer.name.clone()));
     let agent_type = resolve_mcp_origin_agent_type(state, mcp_session_id);
     let workspace_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
-    let pty_id = resolve_mcp_origin_session(state, mcp_session_id)
-        .and_then(|peer| state.live_pty_for_peer(&peer));
+    let pty_id = resolve_mcp_origin_pty(state, mcp_session_id);
     let state = state.clone();
     run_blocking_handler(move || {
         match report_progress(
@@ -7775,37 +7784,44 @@ mod tests {
         );
 
         // Bind the same MCP connection to a terminal. Both paths must now get
-        // past the identity gate and fail on something else entirely.
-        state
-            .mcp
-            .to_session
-            .insert("mcp-voice-bound".to_string(), "tuic-session".to_string());
-        let bound_direct = tool_call_text(
-            &post_test_tool_call(
-                Arc::clone(&state),
-                "mcp-voice-bound",
-                "voice",
-                serde_json::json!({"action": "status"}),
-            )
-            .await,
-        );
-        let bound_collapsed = tool_call_text(
-            &post_test_tool_call(
-                state,
-                "mcp-voice-bound",
-                "call_tool",
-                serde_json::json!({
-                    "tool_name": "voice",
-                    "arguments": {"action": "status"}
-                }),
-            )
-            .await,
-        );
-        assert!(
-            !bound_direct.contains("not bound to a terminal"),
-            "a bound caller must pass the identity gate: {bound_direct}"
-        );
-        assert_eq!(bound_direct, bound_collapsed);
+        // past the identity gate and fail on something else entirely. The
+        // terminal needs a live PTY: the gate names the caller by it, and a
+        // peer id with no PTY behind it is no terminal at all. Unix-only
+        // because a live PTY is.
+        #[cfg(unix)]
+        {
+            crate::state::tests_support::insert_dummy_session(&state, "tuic-session");
+            state
+                .mcp
+                .to_session
+                .insert("mcp-voice-bound".to_string(), "tuic-session".to_string());
+            let bound_direct = tool_call_text(
+                &post_test_tool_call(
+                    Arc::clone(&state),
+                    "mcp-voice-bound",
+                    "voice",
+                    serde_json::json!({"action": "status"}),
+                )
+                .await,
+            );
+            let bound_collapsed = tool_call_text(
+                &post_test_tool_call(
+                    state,
+                    "mcp-voice-bound",
+                    "call_tool",
+                    serde_json::json!({
+                        "tool_name": "voice",
+                        "arguments": {"action": "status"}
+                    }),
+                )
+                .await,
+            );
+            assert!(
+                !bound_direct.contains("not bound to a terminal"),
+                "a bound caller must pass the identity gate: {bound_direct}"
+            );
+            assert_eq!(bound_direct, bound_collapsed);
+        }
     }
 
     /// The description is the only instruction a model gets, and the one thing
@@ -15084,6 +15100,49 @@ mod tests {
             Some("/Gits/personal/delta"),
             "the peer's live PTY holds the cwd under its own key — resolve it, do not assume the keys match"
         );
+    }
+
+    /// Hands-free binds the PTY the user picked, keyed by the UUID
+    /// `create_pty` minted; the MCP connection names the caller by its
+    /// `$TUIC_SESSION`. Compared as they arrive, a hand-opened tab never
+    /// matched its own binding and `voice` answered "Speech is bound to
+    /// another session" to the very terminal it was armed for — tab
+    /// `a171e425…`, PTY `2015957f…`, observed 2026-09-23.
+    #[cfg(unix)]
+    #[test]
+    fn origin_pty_resolves_a_hand_opened_tab_to_its_own_pty() {
+        let state = test_state();
+        let mcp_sid = "mcp-hand-opened-voice-tab";
+        let tuic = "a171e425-ddbd-47bf-804a-a7f3f7ffd474";
+        let pty_key = "2015957f-705a-49ee-a344-329f6ee68641";
+
+        crate::state::tests_support::insert_dummy_session(&state, pty_key);
+        state
+            .session_maps
+            .live_pty_by_tuic_session
+            .insert(tuic.to_string(), pty_key.to_string());
+        state
+            .mcp
+            .to_session
+            .insert(mcp_sid.to_string(), tuic.to_string());
+
+        assert_eq!(
+            resolve_mcp_origin_pty(&state, Some(mcp_sid)).as_deref(),
+            Some(pty_key),
+            "the binding holds the PTY key, so the caller must be named by it too"
+        );
+    }
+
+    #[test]
+    fn origin_pty_is_none_for_a_connection_with_no_live_terminal() {
+        let state = test_state();
+        state
+            .mcp
+            .to_session
+            .insert("mcp-orphan".to_string(), "no-such-tab".to_string());
+
+        assert_eq!(resolve_mcp_origin_pty(&state, Some("mcp-orphan")), None);
+        assert_eq!(resolve_mcp_origin_pty(&state, None), None);
     }
 
     #[test]

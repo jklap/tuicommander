@@ -52,13 +52,19 @@ pub const SAMPLE_RATE: u32 = 16_000;
 /// 10 ms. The APM takes this and nothing else.
 pub const FRAME_SAMPLES: usize = SAMPLE_RATE as usize / 100;
 
-/// How much un-consumed reply audio the far end will hold: two seconds.
+/// How much un-consumed reply audio the far end will hold: two minutes.
 ///
-/// Reached only when playback and capture are out of step — the mode was
-/// disarmed mid-reply, or the device stopped delivering. Holding more would
-/// not improve cancellation, because audio this old no longer corresponds to
-/// anything the microphone is about to hear.
-const FAR_END_CAPACITY: usize = SAMPLE_RATE as usize * 2;
+/// A reply arrives whole, before any of it has played, and replies queue
+/// behind the one playing — so the buffer must hold every reply the speaker
+/// has accepted, not a window of recent audio. Two seconds used to be the
+/// cap, and it cut every longer reply down to its last two seconds: the
+/// start of playback was matched against the end of the reply, then against
+/// silence, and hands-free heard itself.
+///
+/// Reached only when capture stops consuming — the mode was disarmed
+/// mid-reply, or the device stopped delivering. 120 s at 16 kHz is ~7.7 MB,
+/// and only while that much is actually queued.
+const FAR_END_CAPACITY: usize = SAMPLE_RATE as usize * 120;
 
 /// Subtracts our own voice from what the microphone heard.
 ///
@@ -113,11 +119,23 @@ impl FarEnd {
         }
         if self.samples.len() > FAR_END_CAPACITY {
             let excess = self.samples.len() - FAR_END_CAPACITY;
-            // Drop the oldest. What is kept is what the microphone is about to
-            // hear; the head is audio the speaker has already finished with.
-            self.samples.drain(..excess);
+            // Drop the newest. Nothing queued here has played yet, so the head
+            // is what the microphone hears next; dropping it would align the
+            // start of playback with the wrong seconds of the reply.
+            self.samples.truncate(FAR_END_CAPACITY);
             self.dropped += excess as u64;
+            tracing::warn!(
+                source = "dictation",
+                "echo: far-end reference full, dropped the newest {excess} samples \
+                 ({} dropped in total); that part of the reply will not be cancelled",
+                self.dropped
+            );
         }
+    }
+
+    /// Queue `count` samples of silence: capture that precedes the next reply.
+    pub fn pad(&mut self, count: usize) {
+        self.samples.extend(std::iter::repeat_n(0.0, count));
     }
 
     /// Take the next `count` samples, padding with silence.
@@ -174,6 +192,14 @@ fn resample(samples: &[f32], from_rate: u32) -> Vec<f32> {
     out
 }
 
+/// How much capture has been recorded but not yet handed to
+/// [`EchoGuard::clean`]: the samples still waiting in the endpoint's buffer.
+///
+/// A probe rather than a number because it is read by the render thread, at
+/// the moment a reply is handed to the device, while the buffer belongs to
+/// whatever feeds the capture loop.
+pub type Backlog = Box<dyn Fn() -> usize + Send>;
+
 /// The far-end buffer and the canceller behind it, kept in step.
 ///
 /// One of these is shared by [`speaker`](super::speaker), which fills it, and
@@ -184,6 +210,9 @@ pub struct EchoGuard {
     /// Capture samples left over from the last call: the canceller works in
     /// whole 10 ms frames and a device chunk is not a multiple of one.
     remainder: Vec<f32>,
+    /// Capture not yet drained, for aligning the start of a reply. `None`
+    /// until a capture stream is attached.
+    backlog: Option<Backlog>,
 }
 
 impl EchoGuard {
@@ -192,12 +221,37 @@ impl EchoGuard {
             far_end: FarEnd::new(),
             canceller,
             remainder: Vec::new(),
+            backlog: None,
         }
+    }
+
+    /// A new capture stream feeds this guard from now on.
+    ///
+    /// Whatever the previous stream left — queued reply, a partial frame — was
+    /// counted against capture that will never be cleaned, so it goes.
+    pub fn attach_capture(&mut self, backlog: Backlog) {
+        self.far_end.clear();
+        self.remainder.clear();
+        self.backlog = Some(backlog);
     }
 
     /// A reply about to be played. Called by the render thread, before the
     /// audio reaches the device, so the far end is never behind the near end.
+    ///
+    /// With nothing queued, the device starts this reply now, and every
+    /// capture sample recorded but not yet cleaned — the endpoint's backlog
+    /// plus the carried partial frame — was heard *before* it. Those samples
+    /// are matched against silence first. Without that the reply's head is
+    /// paired with audio captured before it played, and the reference runs
+    /// ahead of its echo by however long the capture loop was busy.
+    ///
+    /// A reply queued behind one still playing follows it with no gap,
+    /// because that is how the device plays it.
     pub fn note_rendered(&mut self, audio: &SpeechAudio) {
+        if self.far_end.is_empty() {
+            let pending = self.backlog.as_ref().map_or(0, |backlog| backlog());
+            self.far_end.pad(self.remainder.len() + pending);
+        }
         self.far_end.push(audio);
     }
 
@@ -486,7 +540,7 @@ mod tests {
         // Disarming mid-reply, or a device that stops delivering. The buffer
         // must not grow with the conversation.
         let mut far_end = FarEnd::new();
-        for _ in 0..10 {
+        for _ in 0..=FAR_END_CAPACITY / SAMPLE_RATE as usize {
             far_end.push(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE));
         }
 
@@ -495,18 +549,120 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_audio_is_the_audio_that_is_kept() {
-        // What the microphone is about to hear is the end of the queue, not
-        // the start. Dropping from the tail would keep the wrong seconds.
+    fn a_reply_longer_than_two_seconds_reaches_the_canceller_from_its_first_sample() {
+        // The reply is handed over whole, before a sample of it has played, so
+        // its first second is what the microphone hears first. A buffer that
+        // kept only the newest two seconds matched the start of playback
+        // against the end of the reply, then against silence: nothing a
+        // six-second reply said was cancelled, and hands-free heard itself.
+        let mut probe = Probe::new();
+        let reply: Vec<f32> = (0..SAMPLE_RATE as usize * 6)
+            .map(|n| (n % 1_000) as f32 + 1.0)
+            .collect();
+        probe.guard.note_rendered(&audio(reply.clone(), SAMPLE_RATE));
+
+        probe.guard.clean(&vec![0.0; reply.len()]);
+
+        let seen = probe.far_end_seen();
+        let diverged = seen.iter().zip(&reply).position(|(a, b)| a != b);
+        assert_eq!(
+            (seen.len(), diverged),
+            (reply.len(), None),
+            "the reference is not the reply as played (length, first differing sample)"
+        );
+        assert_eq!(probe.guard.dropped_far_end(), 0);
+    }
+
+    /// A guard whose capture endpoint still holds `pending` undrained samples.
+    fn probe_with_backlog(pending: usize) -> Probe {
+        let mut probe = Probe::new();
+        probe.guard.attach_capture(Box::new(move || pending));
+        probe
+    }
+
+    fn ramp(len: usize) -> Vec<f32> {
+        (0..len).map(|n| n as f32 + 1.0).collect()
+    }
+
+    #[test]
+    fn capture_waiting_to_be_drained_when_a_reply_starts_is_matched_against_silence() {
+        // The capture loop drains every 50 ms and transcribes inline, so a
+        // reply can start with seconds of capture still undrained. That audio
+        // was recorded before the reply played; pairing it with the reply's
+        // first samples puts the reference ahead of its echo, and AEC3 cannot
+        // cancel an echo that arrives before its reference is due.
+        let pending = 3 * FRAME_SAMPLES;
+        let mut probe = probe_with_backlog(pending);
+        let reply = ramp(2 * FRAME_SAMPLES);
+        probe.guard.note_rendered(&audio(reply.clone(), SAMPLE_RATE));
+
+        probe.guard.clean(&vec![0.0; pending + reply.len()]);
+
+        let mut expected = vec![0.0; pending];
+        expected.extend(&reply);
+        assert_eq!(probe.far_end_seen(), expected);
+    }
+
+    #[test]
+    fn a_partial_frame_already_drained_also_precedes_the_reply() {
+        // The carried remainder was drained before the reply existed, so it is
+        // backlog too, even with nothing left in the endpoint.
+        let mut probe = probe_with_backlog(0);
+        probe.guard.clean(&[0.0; 40]);
+        let reply = ramp(FRAME_SAMPLES);
+        probe.guard.note_rendered(&audio(reply.clone(), SAMPLE_RATE));
+
+        probe.guard.clean(&vec![0.0; 2 * FRAME_SAMPLES - 40]);
+
+        let seen = probe.far_end_seen();
+        assert_eq!(seen[..40], vec![0.0; 40][..]);
+        assert_eq!(seen[40..40 + FRAME_SAMPLES], reply[..]);
+    }
+
+    #[test]
+    fn a_reply_queued_behind_one_still_playing_follows_it_without_a_gap() {
+        // The device plays the second reply straight after the first, so its
+        // reference must follow the first's directly. Padding it with the
+        // backlog would open a gap that the device never plays.
+        let pending = 3 * FRAME_SAMPLES;
+        let mut probe = probe_with_backlog(pending);
+        let first = ramp(FRAME_SAMPLES);
+        let second: Vec<f32> = first.iter().map(|s| -s).collect();
+        probe.guard.note_rendered(&audio(first.clone(), SAMPLE_RATE));
+        probe.guard.note_rendered(&audio(second.clone(), SAMPLE_RATE));
+
+        probe.guard.clean(&vec![0.0; pending + 2 * FRAME_SAMPLES]);
+
+        let seen = probe.far_end_seen();
+        assert_eq!(seen[pending..pending + FRAME_SAMPLES], first[..]);
+        assert_eq!(seen[pending + FRAME_SAMPLES..], second[..]);
+    }
+
+    #[test]
+    fn attaching_a_new_capture_stream_forgets_what_the_old_one_left() {
+        let mut probe = Probe::new();
+        probe
+            .guard
+            .note_rendered(&audio(vec![1.0; FRAME_SAMPLES], SAMPLE_RATE));
+        probe.guard.clean(&[0.0; 40]);
+
+        probe.guard.attach_capture(Box::new(|| 0));
+        probe.guard.clean(&vec![0.0; FRAME_SAMPLES]);
+
+        assert_eq!(probe.far_end_seen(), vec![0.0; FRAME_SAMPLES]);
+        assert!(!probe.guard.is_playing());
+    }
+
+    #[test]
+    fn a_full_buffer_drops_the_newest_audio_never_the_reply_about_to_play() {
+        // Only reached when capture has stopped consuming. The head is still
+        // what the microphone hears next; the tail is what has to go.
         let mut far_end = FarEnd::new();
         far_end.push(&audio(vec![1.0; FAR_END_CAPACITY], SAMPLE_RATE));
         far_end.push(&audio(vec![2.0; FRAME_SAMPLES], SAMPLE_RATE));
 
-        let all = far_end.take(FAR_END_CAPACITY);
-        assert_eq!(
-            &all[all.len() - FRAME_SAMPLES..],
-            &vec![2.0; FRAME_SAMPLES][..]
-        );
+        assert_eq!(far_end.take(FAR_END_CAPACITY), vec![1.0; FAR_END_CAPACITY]);
+        assert_eq!(far_end.dropped(), FRAME_SAMPLES as u64);
     }
 
     #[test]

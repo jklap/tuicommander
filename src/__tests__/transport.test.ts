@@ -518,6 +518,7 @@ describe("transport", () => {
 				["list_audio_devices", {}, "GET", "/dictation/devices"],
 				["get_dictation_config", {}, "GET", "/dictation/config"],
 				["get_hands_free_status", {}, "GET", "/dictation/hands-free"],
+				["get_hands_free_default_notice", {}, "GET", "/dictation/hands-free/default-notice"],
 				["disarm_hands_free_dictation", {}, "POST", "/dictation/hands-free/disarm"],
 				["get_relay_status", {}, "GET", "/system/relay-status"],
 				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
