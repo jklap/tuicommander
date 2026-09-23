@@ -1906,6 +1906,23 @@ mod tests {
     }
 
     #[test]
+    fn urlencod_escapes_percent_so_a_tmux_pane_id_never_gets_reinterpreted() {
+        // Every tmux pane id is "%<number>" (TmuxTopology::alloc_pane,
+        // src-tauri/src/mcp_http/tmux_routes.rs). Any two-digit id is a
+        // syntactically valid percent-escape (0-9 are all valid hex digits),
+        // so a raw "%13" embedded in a URL path decodes server-side to the
+        // single byte 0x13, not the 3-character string "%13" — this is the
+        // root cause behind tmux/exec.rs's `IpcBackend::materialize_pane`/
+        // `rename_pane`/`kill_pane`/`set_pane_accent_color` all 404ing with
+        // "pane not found" for every swarm teammate pane past the 10th one
+        // allocated (fixed alongside this test). `urlencod`'s very first
+        // `.replace('%', "%25")` is what prevents that reinterpretation —
+        // it had no direct test of its own before this one.
+        assert_eq!(urlencod("%13"), "%2513");
+        assert_eq!(urlencod("%1"), "%251");
+    }
+
+    #[test]
     fn build_open_terminal_url_escapes_a_plus_in_the_path() {
         let url = build_open_terminal_url(&["/Users/x/C++Projects".to_string()]);
         assert_eq!(url, "tuic://open-terminal?path=/Users/x/C%2B%2BProjects");
