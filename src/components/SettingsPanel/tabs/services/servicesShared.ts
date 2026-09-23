@@ -106,9 +106,11 @@ interface RelayStatus {
  * (`running` for MCP, `reachable` for Remote Access) but are never mounted at
  * the same time — they are separate, mutually exclusive Settings tabs. This
  * is the one poll implementation both call into, so neither page hand-rolls
- * its own interval.
+ * its own interval. A page that needs one more status read on the same cadence
+ * (Remote Access: the self-signed cert status) passes it as `extra` instead of
+ * starting a second interval.
  */
-export function useMcpStatusPoll() {
+export function useMcpStatusPoll(extra?: () => Promise<void>) {
 	// Each poll returns a fresh object; only a changed snapshot may notify readers.
 	const [status, setStatus] = createSignal<McpStatus | null>(null, { equals: sameData });
 	const [relayConnected, setRelayConnected] = createSignal(false);
@@ -127,6 +129,7 @@ export function useMcpStatusPoll() {
 		} catch {
 			// Relay status not available
 		}
+		if (extra) await extra();
 	};
 
 	onMount(() => {
