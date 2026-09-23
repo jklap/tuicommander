@@ -318,6 +318,14 @@ export const BranchItem: Component<{
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
 	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.branchName));
 	const hasDiff = () => props.branch.additions > 0 || props.branch.deletions > 0;
+	// Select this branch/worktree first so the Git panel targets it (it follows
+	// activeWorktreePath), then open the changes tab — otherwise a chip would
+	// show the active branch's diff instead of this row's.
+	const showChanges = (e: MouseEvent | KeyboardEvent) => {
+		e.stopPropagation();
+		props.onSelect();
+		props.onShowChanges?.();
+	};
 
 	const hasError = () => props.branch.terminals.some((id) => terminalsStore.get(id)?.awaitingInput === "error");
 
@@ -579,6 +587,9 @@ export const BranchItem: Component<{
 							if (status().commitStatus === "merged") return "Merged";
 							return null;
 						};
+						// Only the dirty count points at a diff; Unknown and Merged have none to show.
+						const opensChanges = () =>
+							!!props.onShowChanges && status().commitStatus !== "unknown" && lostFiles() > 0;
 						const tooltip = () => {
 							if (status().commitStatus === "unknown") {
 								const explanation =
@@ -608,6 +619,10 @@ export const BranchItem: Component<{
 									data-tooltip-pos="bottom"
 									data-tooltip-align="right"
 									tabIndex={0}
+									role={opensChanges() ? "button" : undefined}
+									onClick={opensChanges() ? showChanges : undefined}
+									onKeyDown={opensChanges() ? onClickKeyDown(showChanges) : undefined}
+									style={opensChanges() ? { cursor: "pointer" } : undefined}
 								>
 									{label()}
 								</span>
@@ -647,18 +662,7 @@ export const BranchItem: Component<{
 							additions={props.branch.additions}
 							deletions={props.branch.deletions}
 							dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
-							onClick={
-								props.onShowChanges
-									? (e) => {
-											e.stopPropagation();
-											// Select this branch/worktree first so the Git panel targets it
-											// (it follows activeWorktreePath), then open the changes tab —
-											// otherwise the badge always shows the active branch's diff.
-											props.onSelect();
-											props.onShowChanges?.();
-										}
-									: undefined
-							}
+							onClick={props.onShowChanges ? showChanges : undefined}
 						/>
 					</div>
 				</Show>

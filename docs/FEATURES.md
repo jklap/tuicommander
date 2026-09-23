@@ -262,7 +262,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Right-click context menu: Copy Path, Add Terminal, Create Worktree, Merge & Archive, Delete Worktree, Open in IDE, Rename Branch
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
 - PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
-- Diff stats: `+N / -N` additions/deletions
+- Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there)
 - Merged badge: branches merged into main show a "Merged" badge
 - Question indicator: `?` icon (orange, pulsing) when agent asks a question
 - Idle indicator: branch icons turn grey when the repo has no active terminals

@@ -295,7 +295,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 					setPrDetailIsManual(true);
 					setPrDetailTarget({ repoPath: repo.path, branch });
 				}}
-				onShowChanges={() => (uiStore.isDetached("git") ? togglePanel("git") : uiStore.toggleGitPanelOnTab("changes"))}
+				onShowChanges={() => (uiStore.isDetached("git") ? togglePanel("git") : uiStore.openGitPanelOnTab("changes"))}
 				buildAgentMenuItems={
 					props.buildAgentMenuItems ? (branch) => props.buildAgentMenuItems!(repo.path, branch) : undefined
 				}
