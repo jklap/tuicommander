@@ -142,9 +142,21 @@ impl ProgressStore {
     /// the AUTOINCREMENT high-water mark is carried over: a dialog may still
     /// hold the id of a deleted newest entry, and reissuing it would let that
     /// dialog delete an entry it never showed.
+    ///
+    /// The earliest journals used a bare `INTEGER PRIMARY KEY`, and such a file
+    /// has no `sqlite_sequence` table at all. The mark is therefore the larger
+    /// of the recorded sequence, when there is one, and the highest id present.
     fn rebuild_for_hand_offs(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
-        let high_water: Option<i64> = tx
+        let has_sequence: bool = tx
             .query_row(
+                "SELECT EXISTS (SELECT 1 FROM sqlite_master
+                                 WHERE type = 'table' AND name = 'sqlite_sequence')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_error("read the progress id high-water mark"))?;
+        let sequence: Option<i64> = if has_sequence {
+            tx.query_row(
                 "SELECT seq FROM sqlite_sequence WHERE name = 'entries'",
                 [],
                 |row| row.get(0),
@@ -1018,5 +1030,64 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(error.contains(STORE_FILE), "unexpected error: {error}");
+    }
+
+    /// The first journals were created with a bare `INTEGER PRIMARY KEY` (the
+    /// schema parked in b3f470df), so the file has no `sqlite_sequence` table
+    /// at all. The hand-off rebuild read that table unconditionally and failed
+    /// with `no such table: sqlite_sequence`, which made every progress read
+    /// and write fail. The rebuild must open such a journal, keep every row
+    /// and id, and continue numbering after the highest id.
+    #[test]
+    fn opening_a_journal_without_autoincrement_rebuilds_it_and_keeps_every_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let conn = Connection::open(dir.path().join("progress.sqlite3")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE entries (
+               id            INTEGER PRIMARY KEY,
+               project       TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               kind          TEXT NOT NULL CHECK (kind IN ('done','blocked','intent')),
+               text          TEXT NOT NULL,
+               step          TEXT,
+               agent_name    TEXT
+             );
+             CREATE INDEX entries_by_project ON entries (project, id DESC);
+             CREATE TABLE project_views (
+               project        TEXT PRIMARY KEY,
+               last_viewed_ms INTEGER NOT NULL DEFAULT 0
+             );
+             ALTER TABLE entries ADD COLUMN pty_id TEXT;
+             INSERT INTO entries (id, project, created_at_ms, kind, text, pty_id)
+             VALUES (1, '/repo', 1, 'done', 'first', 'pty-a'),
+                    (7, '/repo', 2, 'intent', 'seventh', 'pty-a');",
+        )
+        .unwrap();
+        let has_sequence: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_sequence'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_sequence, 0, "the legacy journal has no sqlite_sequence");
+        drop(conn);
+
+        let store = ProgressStore::open().unwrap();
+        let kept = store.list("/repo", &ProgressListInput::default()).unwrap();
+        let ids: Vec<i64> = kept.entries.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![7, 1]);
+
+        let next = store
+            .record_hand_off(
+                "/repo",
+                &entry(ProgressKind::Delegated, "Review the parser"),
+                Some("pty-a"),
+                Some("pty-b"),
+                None,
+            )
+            .unwrap();
+        assert_eq!(next.id, 8, "numbering continues after the highest id");
     }
 }
