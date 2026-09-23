@@ -134,9 +134,24 @@ export const RemoteServersTab: Component = () => {
 				</Show>
 			</div>
 
-			<Show when={editorTarget()}>
-				{(target) => <RemoteConnectionEditor target={target()} onClose={closeEditor} />}
-			</Show>
+			{/* `<For>`, not `<Show>` — deliberately. Code review 2026-09-23 found a
+			    real HIGH bug: Solid's `<Show>` only re-invokes its render callback
+			    on a falsy→truthy transition, so switching `editorTarget()` from one
+			    truthy value to ANOTHER (clicking Edit on connection B while
+			    connection A's editor is already open — reachable, since only "Add
+			    Connection" is gated behind `!editorTarget()`, not the per-row Edit
+			    buttons) never remounted `RemoteConnectionEditor`. It destructures
+			    `props.target` once at setup and seeds every signal from that frozen
+			    snapshot, so the form kept showing A's stale data and Save would
+			    have written B's edits to A's id. `<For>` keys by array-item
+			    REFERENCE, and every `openAdd`/`openEditTunnel`/`openEditConnection`
+			    call constructs a brand-new object via `setEditorTarget({...})`, so
+			    wrapping in a length-0-or-1 array forces a real unmount+remount
+			    whenever the target changes — including target → different target,
+			    not just null → target. */}
+			<For each={editorTarget() ? [editorTarget() as EditorTarget] : []}>
+				{(target) => <RemoteConnectionEditor target={target} onClose={closeEditor} />}
+			</For>
 
 			<div style={{ "margin-top": "16px" }}>
 				{/* A plain div, deliberately not a form-label element — this isn't a

@@ -616,7 +616,7 @@ async fn relay_one_connection(
     };
 
     if let Some(creds) = basic_auth.filter(|_| !cookie_seen.load(Ordering::Relaxed)) {
-        relay_with_auth_injection(inbound, &mut outbound, &creds, &cookie_seen).await
+        relay_with_auth_injection(inbound, outbound, &creds, &cookie_seen).await
     } else {
         let mut inbound = inbound;
         tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await?;
@@ -636,32 +636,76 @@ async fn relay_one_connection(
 /// reading line-by-line are preserved by `BufReader`'s own internal buffer,
 /// so a request/response body sent alongside its headers in the same read is
 /// never dropped.
+///
+/// Code review 2026-09-23 found two real bugs, both fixed here:
+///
+/// 1. **Deadlock on a bodied first request (HIGH).** The old code wrote the
+///    (possibly auth-injected) request headers, then unconditionally blocked
+///    reading the *response* headers before ever forwarding the *request
+///    body*. A server that requires the full body before it will respond at
+///    all (most of them, for a POST/PUT) then waits forever for bytes the
+///    proxy never sends — masked in practice only because this app's own
+///    first request through a fresh proxy is always a bodyless GET /health.
+///    Fixed by taking `outbound` BY VALUE (not `&mut Box<dyn AsyncStream>`,
+///    which is only a borrow and therefore not `'static`) so the
+///    client-to-server direction can be `tokio::spawn`ed as its own task,
+///    genuinely running concurrently with — not strictly before — reading
+///    the response. A plain `tokio::join!` of a full client-to-server copy
+///    alongside the response-read-then-copy would NOT fix this: an ordinary
+///    keep-alive client that finished sending its body simply goes idle
+///    waiting for the response rather than closing (no read EOF), so a
+///    `copy()` future for that direction never completes on its own even
+///    after every body byte has been relayed — `join!` would still block on
+///    it forever. Spawning is what lets the two directions make independent
+///    progress without either waiting on the other's completion.
+/// 2. **Malformed/truncated first request corrupts header order (MEDIUM).**
+///    The old code unconditionally popped the last line and re-pushed it
+///    after the injected header, assuming that line was always the trailing
+///    blank line. `read_header_block` can return on EOF with no blank line
+///    ever seen (a truncated first request) — in that case the *request
+///    line itself* was the last line, so popping it silently reordered the
+///    request into `Authorization: ...\r\nGET / HTTP/1.1\r\n`, invalid HTTP.
+///    Fixed by only popping when a real blank-line terminator was seen;
+///    otherwise the header is simply appended.
 async fn relay_with_auth_injection(
     inbound: TcpStream,
-    outbound: &mut Box<dyn AsyncStream>,
+    outbound: Box<dyn AsyncStream>,
     (username, password): &(String, String),
     cookie_seen: &Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     let (in_read, mut in_write) = tokio::io::split(inbound);
     let mut in_read = BufReader::new(in_read);
+    let mut outbound = outbound;
 
     let mut request_lines = read_header_block(&mut in_read).await?;
     if !request_lines.is_empty() {
         let credential = format!("{username}:{password}");
         let encoded =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, credential);
-        let blank_line = request_lines.pop();
-        request_lines.push(format!("Authorization: Basic {encoded}\r\n"));
-        if let Some(blank) = blank_line {
-            request_lines.push(blank);
+        let has_blank_terminator = request_lines
+            .last()
+            .is_some_and(|l| l == "\r\n" || l == "\n");
+        if has_blank_terminator {
+            let blank_line = request_lines.pop().expect("checked above");
+            request_lines.push(format!("Authorization: Basic {encoded}\r\n"));
+            request_lines.push(blank_line);
+        } else {
+            request_lines.push(format!("Authorization: Basic {encoded}\r\n"));
         }
         for line in &request_lines {
             outbound.write_all(line.as_bytes()).await?;
         }
     }
 
+    // Split AFTER writing the (possibly auth-injected) request headers, and
+    // take ownership of both halves — `in_read`/`out_write` need to be
+    // `'static` to move into the spawned task below.
     let (out_read, mut out_write) = tokio::io::split(outbound);
     let mut out_read = BufReader::new(out_read);
+
+    let client_to_server =
+        tokio::spawn(async move { tokio::io::copy(&mut in_read, &mut out_write).await });
+
     let response_lines = read_header_block(&mut out_read).await?;
     let saw_session_cookie = response_lines.iter().any(|line| {
         line.to_ascii_lowercase().starts_with("set-cookie:") && line.contains("tui-session")
@@ -673,11 +717,10 @@ async fn relay_with_auth_injection(
         cookie_seen.store(true, Ordering::Relaxed);
     }
 
-    let client_to_server = tokio::io::copy(&mut in_read, &mut out_write);
-    let server_to_client = tokio::io::copy(&mut out_read, &mut in_write);
-    let (a, b) = tokio::join!(client_to_server, server_to_client);
-    a?;
-    b?;
+    let server_to_client = tokio::io::copy(&mut out_read, &mut in_write).await;
+    let client_to_server = client_to_server.await.map_err(std::io::Error::other)?;
+    client_to_server?;
+    server_to_client?;
     Ok(())
 }
 
@@ -735,21 +778,51 @@ pub async fn probe_direct_tls_connection(
 /// Returns `None` when no proxy is needed at all (plain `http://` with no
 /// credentials configured) — the frontend should then talk to the raw URL
 /// directly, exactly as it does today.
+///
+/// Security review 2026-09-23 (CRITICAL, fixed): this used to take a
+/// caller-supplied `url` parameter and relay to THAT host, while fetching
+/// Basic Auth credentials from the keyring keyed on the separate
+/// caller-supplied `connection_id` — with no check that the two agreed. Any
+/// caller (a plugin over Tauri IPC, or any `require_local_or_auth`-satisfying
+/// HTTP caller) could pair a legitimate `connection_id` whose saved password
+/// it wanted with an attacker-controlled `url`, and the proxy would relay to
+/// that host with the real password injected — a full credential
+/// exfiltration primitive, defeating this feature's entire stated purpose
+/// ("the frontend never sees the password"). Fixed by deriving the proxy
+/// target from the connection's OWN stored `transport` exclusively — there is
+/// no longer a `url` parameter for a caller to substitute.
 pub(crate) async fn start_direct_proxy_impl(
     state: &crate::AppState,
     connection_id: &str,
-    url: &str,
     tls_fingerprint: Option<&str>,
     use_native_roots: bool,
 ) -> Result<Option<u16>, String> {
-    let (host, port, is_https) = parse_direct_target(url)?;
-
     let connections = crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
         .map_err(|e| e.to_string())?;
     let connection = connections
         .into_iter()
         .find(|c| c.id == connection_id)
         .ok_or_else(|| format!("connection '{connection_id}' not found"))?;
+
+    let (host, port, is_https) = match &connection.transport {
+        crate::remote_connection::RemoteTransport::Direct { url, .. } => parse_direct_target(url)?,
+        crate::remote_connection::RemoteTransport::Local { port, instance_id } => {
+            let resolved_port = match instance_id {
+                Some(id) if !id.trim().is_empty() => {
+                    crate::remote_connection::resolve_local_instance_port(id)
+                        .map_err(|e| e.to_string())?
+                }
+                _ => port.ok_or_else(|| {
+                    "Local connection has neither a port nor an instance_id configured".to_string()
+                })?,
+            };
+            ("127.0.0.1".to_string(), resolved_port, false)
+        }
+        crate::remote_connection::RemoteTransport::Ssh { .. } => {
+            return Err("start_direct_proxy does not apply to an SSH connection".to_string());
+        }
+    };
+
     let password = crate::credentials::get(crate::credentials::Credential::RemoteConnection(
         connection_id,
     ))?;
@@ -786,14 +859,12 @@ pub(crate) async fn start_direct_proxy_impl(
 pub async fn start_direct_proxy(
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     connection_id: String,
-    url: String,
     tls_fingerprint: Option<String>,
     use_native_roots: bool,
 ) -> Result<Option<u16>, String> {
     start_direct_proxy_impl(
         &state,
         &connection_id,
-        &url,
         tls_fingerprint.as_deref(),
         use_native_roots,
     )
@@ -1299,6 +1370,169 @@ mod tests {
         server_shutdown.notify_waiters();
     }
 
+    /// A fake HTTP/1.1 server that reads and discards exactly
+    /// `Content-Length` request-body bytes BEFORE writing any response —
+    /// reproducing how most real servers actually behave (never answer
+    /// until the full request body has arrived), unlike
+    /// `start_capturing_http_server`'s bodyless-request assumption.
+    async fn start_body_requiring_http_server() -> (
+        SocketAddr,
+        Arc<Notify>,
+        tokio::sync::oneshot::Receiver<String>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_for_task = shutdown.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            tokio::select! {
+                () = shutdown_for_task.notified() => {}
+                accepted = listener.accept() => {
+                    let Ok((stream, _)) = accepted else { return };
+                    let (read_half, mut write_half) = stream.into_split();
+                    let mut reader = BufReader::new(read_half);
+                    let lines = read_header_block(&mut reader).await.unwrap_or_default();
+                    let content_length: usize = lines
+                        .iter()
+                        .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                        .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    let mut body = vec![0u8; content_length];
+                    if content_length > 0 {
+                        let _ = tokio::io::AsyncReadExt::read_exact(&mut reader, &mut body).await;
+                    }
+                    let body_str = String::from_utf8_lossy(&body).to_string();
+                    let response_body = "ok";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    let _ = write_half.write_all(response.as_bytes()).await;
+                    let _ = write_half.shutdown().await;
+                    let _ = tx.send(body_str);
+                }
+            }
+        });
+        (addr, shutdown, rx)
+    }
+
+    #[tokio::test]
+    async fn relay_with_auth_injection_forwards_a_request_body_without_deadlocking() {
+        // Regression test for a real HIGH finding (code review 2026-09-23):
+        // the old code blocked reading the response headers before ever
+        // forwarding the request body, so any server that requires the full
+        // body before responding — most real ones, for a POST/PUT —
+        // deadlocked forever. The bounded `timeout` below is the actual
+        // assertion: the old code would hang past it.
+        let (server_addr, server_shutdown, body_rx) = start_body_requiring_http_server().await;
+        let manager = DirectProxyManager::new();
+        let port = manager
+            .start(
+                "conn-body".to_string(),
+                server_addr.ip().to_string(),
+                server_addr.port(),
+                OutboundTls::None,
+                Some(("alice".to_string(), "hunter2".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let body = "hello=world";
+        let request = format!(
+            "POST /submit HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        client.write_all(request.as_bytes()).await.unwrap();
+        client.shutdown().await.unwrap();
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let mut buf = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut client, &mut buf)
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        })
+        .await
+        .expect("must not deadlock on a bodied first request");
+        assert!(response.contains("200 OK"), "response: {response}");
+
+        let received_body = tokio::time::timeout(std::time::Duration::from_secs(1), body_rx)
+            .await
+            .expect("server must have been reached")
+            .unwrap();
+        assert_eq!(
+            received_body, body,
+            "the full request body must have been relayed, not dropped"
+        );
+
+        manager.stop("conn-body");
+        server_shutdown.notify_waiters();
+    }
+
+    #[tokio::test]
+    async fn relay_with_auth_injection_appends_header_instead_of_reordering_on_truncated_request() {
+        // Regression test for a real MEDIUM finding (code review 2026-09-23):
+        // the old code unconditionally treated the LAST captured line as the
+        // trailing blank-line terminator and popped it to reinsert after the
+        // injected Authorization header. `read_header_block` can return on
+        // EOF with no blank line ever seen (a connection that drops
+        // mid-headers) — in that case the last line was the REQUEST LINE
+        // itself, and popping it silently reordered the request into
+        // invalid HTTP (`Authorization: ...\r\nGET ...\r\n`). Proves the
+        // request line stays first even when no blank-line terminator was
+        // ever seen.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (inbound, _) = listener.accept().await.unwrap();
+
+        client
+            .write_all(b"GET /partial HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        // No blank line, then close — simulates a connection dropping
+        // mid-headers, so `read_header_block` returns on EOF.
+        client.shutdown().await.unwrap();
+
+        let (outbound_near, mut outbound_far) = tokio::io::duplex(4096);
+        let cookie_seen = Arc::new(AtomicBool::new(false));
+        let creds = ("bob".to_string(), "sekret".to_string());
+        let handle = tokio::spawn(async move {
+            let _ = relay_with_auth_injection(
+                inbound,
+                Box::new(outbound_near) as Box<dyn AsyncStream>,
+                &creds,
+                &cookie_seen,
+            )
+            .await;
+        });
+
+        let mut buf = vec![0u8; 256];
+        let n = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            tokio::io::AsyncReadExt::read(&mut outbound_far, &mut buf),
+        )
+        .await
+        .expect("must forward the truncated request promptly")
+        .unwrap();
+        let forwarded = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        assert!(
+            forwarded.starts_with("GET /partial HTTP/1.1\r\n"),
+            "request line must stay first, never reordered after the injected header: {forwarded:?}"
+        );
+        assert!(
+            forwarded.contains("Authorization: Basic"),
+            "auth header must still be injected: {forwarded:?}"
+        );
+
+        handle.abort();
+    }
+
     /// A fake HTTP/1.1 server that echoes back whether it saw an
     /// `Authorization` header (as a `captured-authorization:` response
     /// header) and always sets the real `tui-session` cookie name, so tests
@@ -1341,5 +1575,173 @@ mod tests {
             }
         });
         (addr, shutdown)
+    }
+
+    // --- start_direct_proxy_impl: target/credential derivation ---
+    //
+    // Regression tests for a real CRITICAL security-review finding
+    // (2026-09-23): this function used to take a caller-supplied `url`
+    // independent of `connection_id`, so any caller could request a proxy
+    // for a legitimate `connection_id` (fetching ITS saved keyring password)
+    // while relaying to an attacker-chosen host instead of that connection's
+    // own stored target — a full credential-exfiltration primitive. There is
+    // no `url` parameter any more; these tests prove the target AND the
+    // injected credentials are both derived from `connection_id`'s own
+    // stored `RemoteConnection`, and that two different connections never
+    // cross.
+
+    #[tokio::test]
+    async fn start_direct_proxy_impl_relays_each_connection_to_its_own_target_with_its_own_credentials()
+     {
+        let state = crate::state::tests_support::make_test_app_state();
+        let (server1_addr, server1_shutdown) = start_capturing_http_server().await;
+        let (server2_addr, server2_shutdown) = start_capturing_http_server().await;
+
+        let conn1 = crate::remote_connection::RemoteConnection::new_direct(
+            "victim",
+            format!("http://{server1_addr}"),
+            "user1",
+        );
+        let conn2 = crate::remote_connection::RemoteConnection::new_direct(
+            "other",
+            format!("http://{server2_addr}"),
+            "user2",
+        );
+        crate::remote_connection::RemoteConnectionStore::save(
+            &state.data_dir,
+            &[conn1.clone(), conn2.clone()],
+        )
+        .unwrap();
+        crate::credentials::set(
+            crate::credentials::Credential::RemoteConnection(&conn1.id),
+            "pw1",
+        )
+        .unwrap();
+        crate::credentials::set(
+            crate::credentials::Credential::RemoteConnection(&conn2.id),
+            "pw2",
+        )
+        .unwrap();
+
+        async fn fetch_captured_auth(port: u16) -> String {
+            let mut client = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            client
+                .write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+                .await
+                .unwrap();
+            client.shutdown().await.unwrap();
+            let mut buf = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut client, &mut buf)
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        }
+
+        let proxy_port1 = start_direct_proxy_impl(&state, &conn1.id, None, false)
+            .await
+            .unwrap()
+            .expect("proxy should start: credentials are configured");
+        let response1 = fetch_captured_auth(proxy_port1).await;
+        let expected1 = format!(
+            "Basic {}",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "user1:pw1")
+        );
+        assert!(
+            response1.contains(&expected1),
+            "conn1's proxy must inject conn1's own credentials: {response1}"
+        );
+        state.direct_proxy_manager.stop(&conn1.id);
+
+        let proxy_port2 = start_direct_proxy_impl(&state, &conn2.id, None, false)
+            .await
+            .unwrap()
+            .expect("proxy should start: credentials are configured");
+        let response2 = fetch_captured_auth(proxy_port2).await;
+        let expected2 = format!(
+            "Basic {}",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "user2:pw2")
+        );
+        assert!(
+            response2.contains(&expected2),
+            "conn2's proxy must inject conn2's own credentials, never conn1's: {response2}"
+        );
+        assert!(
+            !response2.contains(&expected1),
+            "conn2's proxy must never leak conn1's credentials: {response2}"
+        );
+        state.direct_proxy_manager.stop(&conn2.id);
+
+        server1_shutdown.notify_waiters();
+        server2_shutdown.notify_waiters();
+    }
+
+    #[tokio::test]
+    async fn start_direct_proxy_impl_local_transport_resolves_the_manual_port() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let (server_addr, server_shutdown) = start_capturing_http_server().await;
+
+        let mut conn = crate::remote_connection::RemoteConnection::new_local_port(
+            "loopback",
+            server_addr.port(),
+        );
+        // No credentials configured and Local is never https, so ordinarily
+        // this would report `Ok(None)` (no proxy needed, already covered
+        // elsewhere) — force a proxy to start anyway by setting a username
+        // + keyring password, purely to prove the resolved target is the
+        // connection's own configured port.
+        conn.auth_username = Some("local-user".to_string());
+        crate::remote_connection::RemoteConnectionStore::save(&state.data_dir, &[conn.clone()])
+            .unwrap();
+        crate::credentials::set(
+            crate::credentials::Credential::RemoteConnection(&conn.id),
+            "pw",
+        )
+        .unwrap();
+
+        let proxy_port = start_direct_proxy_impl(&state, &conn.id, None, false)
+            .await
+            .unwrap()
+            .expect("proxy should start: credentials are configured");
+        let mut client = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+        client
+            .write_all(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+        let mut buf = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut client, &mut buf)
+            .await
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&buf).contains("200 OK"),
+            "proxy must relay to the Local connection's own configured port"
+        );
+        state.direct_proxy_manager.stop(&conn.id);
+        server_shutdown.notify_waiters();
+    }
+
+    #[tokio::test]
+    async fn start_direct_proxy_impl_rejects_an_ssh_connection() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let conn =
+            crate::remote_connection::RemoteConnection::new_ssh("ssh-conn", "example.com", "alice");
+        crate::remote_connection::RemoteConnectionStore::save(
+            &state.data_dir,
+            std::slice::from_ref(&conn),
+        )
+        .unwrap();
+
+        let result = start_direct_proxy_impl(&state, &conn.id, None, false).await;
+        assert!(
+            result.is_err(),
+            "SSH transport must not reach the proxy machinery"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_direct_proxy_impl_unknown_connection_id_errors() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let result = start_direct_proxy_impl(&state, "does-not-exist", None, false).await;
+        assert!(result.is_err());
     }
 }

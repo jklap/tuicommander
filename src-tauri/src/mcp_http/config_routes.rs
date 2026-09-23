@@ -815,7 +815,6 @@ pub(super) async fn probe_direct_tls_http(
 
 #[derive(serde::Deserialize)]
 pub(super) struct StartDirectProxyRequest {
-    pub url: String,
     #[serde(default)]
     pub tls_fingerprint: Option<String>,
     #[serde(default)]
@@ -836,7 +835,6 @@ pub(super) async fn start_direct_proxy_http(
         crate::direct_proxy::start_direct_proxy_impl(
             &state,
             &connection_id,
-            &request.url,
             request.tls_fingerprint.as_deref(),
             request.use_native_roots,
         )
@@ -1856,6 +1854,17 @@ mod tests {
         // "default" is reserved by AppInstance::named — deterministic
         // InstanceNotFound with no real filesystem dependency, matching the
         // Tauri-command-side test of the same underlying function.
+        //
+        // Code review 2026-09-23: no success-path test exists for this route
+        // either, same constraint as `get_local_instance_port` — it calls
+        // the same real-filesystem, non-injectable function, so a genuine
+        // success case through this handler would mean writing to the
+        // actual OS home directory from a test. `json_result`'s Ok/Err
+        // mapping is already covered generically elsewhere in this file's
+        // test suite, and the wrapper's own forwarding logic (the only part
+        // specific to it) is proven in
+        // `remote_connection.rs`'s `get_local_instance_port_wrapper_logic_forwards_a_successful_resolution_unchanged`
+        // against the injectable base function.
         let resp = get_local_instance_port_http(
             ConnectInfo(loopback()),
             None,

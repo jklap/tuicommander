@@ -89,7 +89,16 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
         }
     }
 
-    // Destination — must be last
+    // `--` end-of-options marker, then the destination — must be last.
+    // Security review 2026-09-23 (MEDIUM, confirmed exploitable): `user`/
+    // `host` are only checked for emptiness (`SshConnectionParams::validate`),
+    // never for a leading `-`. Without `--`, a destination token like
+    // `-oProxyCommand=<cmd>@host` is real OpenSSH option-injection — verified
+    // locally: `ssh -o BatchMode=yes "-oProxyCommand=touch /tmp/x" true`
+    // actually executes `touch` as a local subprocess via ProxyCommand.
+    // `--` makes ssh treat everything after it as a positional destination,
+    // never as a flag, regardless of what `user`/`host` contain.
+    args.push("--".to_string());
     args.push(format!("{}@{}", profile.ssh.user, profile.ssh.host));
 
     args
@@ -114,6 +123,9 @@ pub fn build_ssh_test_args(ssh: &SshConnectionParams) -> Vec<String> {
         "ConnectTimeout=5".to_string(),
     ];
     args.extend(build_ssh_option_args(ssh));
+    // `--`: see `build_ssh_args`'s doc comment on the option-injection fix
+    // this closes — same destination-token shape, same fix.
+    args.push("--".to_string());
     args.push(format!("{}@{}", ssh.user, ssh.host));
     args.push("true".to_string());
     args
@@ -143,6 +155,12 @@ pub fn build_ssh_remote_command_args(
         "ConnectTimeout=5".to_string(),
     ];
     args.extend(build_ssh_option_args(ssh));
+    // `--`: see `build_ssh_args`'s doc comment on the option-injection fix
+    // this closes — same destination-token shape, same fix. Especially
+    // important here: this builder backs remote-daemon provisioning
+    // (install/start/`--set-password`), a higher-risk caller than a plain
+    // tunnel or Test Connection.
+    args.push("--".to_string());
     args.push(format!("{}@{}", ssh.user, ssh.host));
     args.push(remote_command.to_string());
     args
@@ -433,5 +451,53 @@ mod tests {
         }];
         let args = build_ssh_args(&profile);
         assert_flag_absent(&args, "-A");
+    }
+
+    // --- `--` end-of-options marker before the destination ---
+    //
+    // Regression tests for a real, CONFIRMED-EXPLOITABLE MEDIUM finding
+    // (security review 2026-09-23): `user`/`host` are only checked for
+    // emptiness, never for a leading `-`. Without a `--` marker, a
+    // destination token like `-oProxyCommand=<cmd>@host` is real OpenSSH
+    // option injection — verified locally against a real `ssh` binary:
+    // `ssh -o BatchMode=yes "-oProxyCommand=touch /tmp/x" true` actually
+    // executed `touch` as a local subprocess via ProxyCommand. `--` makes
+    // ssh treat everything after it as a positional destination, never as a
+    // flag, regardless of what `user`/`host` contain — these tests assert
+    // it is present immediately before the destination in all three argv
+    // builders that construct one.
+
+    #[test]
+    fn build_ssh_args_has_end_of_options_marker_before_the_destination() {
+        let mut profile = base_profile();
+        profile.ssh.user = "-oProxyCommand=touch /tmp/pwned".to_string();
+        let args = build_ssh_args(&profile);
+        let dest_pos = args.len() - 1;
+        assert_eq!(args[dest_pos - 1], "--", "args: {args:?}");
+        assert_eq!(
+            args[dest_pos],
+            "-oProxyCommand=touch /tmp/pwned@example.com"
+        );
+    }
+
+    #[test]
+    fn build_ssh_test_args_has_end_of_options_marker_before_the_destination() {
+        let mut ssh = SshConnectionParams::new("example.com", "alice");
+        ssh.host = "-oProxyCommand=touch /tmp/pwned".to_string();
+        let args = build_ssh_test_args(&ssh);
+        // Layout: [..., "--", "<dest>", "true"]
+        let dest_pos = args.len() - 2;
+        assert_eq!(args[dest_pos - 1], "--", "args: {args:?}");
+        assert_eq!(args[dest_pos], "alice@-oProxyCommand=touch /tmp/pwned");
+    }
+
+    #[test]
+    fn build_ssh_remote_command_args_has_end_of_options_marker_before_the_destination() {
+        let ssh = SshConnectionParams::new("example.com", "alice");
+        let args = build_ssh_remote_command_args(&ssh, "true");
+        // Layout: [..., "--", "<dest>", "<remote_command>"]
+        let dest_pos = args.len() - 2;
+        assert_eq!(args[dest_pos - 1], "--", "args: {args:?}");
+        assert_eq!(args[dest_pos], "alice@example.com");
     }
 }

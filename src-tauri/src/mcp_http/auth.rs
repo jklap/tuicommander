@@ -11,6 +11,20 @@ use std::sync::Arc;
 /// which is why we need this: JS API calls would otherwise fail with 401 every time.
 const SESSION_COOKIE: &str = "tui-session";
 
+/// Body text for a genuine credential mismatch (`AuthResult::Invalid`).
+/// `pub(crate)` (not `pub(super)` like the rest of this module) specifically
+/// so `connection_test`'s Test Connection health probe can classify a 401 by
+/// matching against this exact value instead of hand-duplicating the
+/// literal — a future wording change here now can't silently desync from
+/// that classification.
+pub(crate) const INVALID_CREDENTIALS_BODY: &str = "Invalid credentials";
+
+/// Body text for `AuthResult::MissingHeader`/`::NotConfigured` — identical
+/// for both variants by design (see `validate_basic_auth`'s doc comment on
+/// why an unauthenticated caller can't be shown which one it hit). Shared
+/// with `connection_test` for the same reason as `INVALID_CREDENTIALS_BODY`.
+pub(crate) const AUTH_CHALLENGE_BODY: &str = "Scan the QR code or authenticate with Basic Auth";
+
 /// Result of checking Basic Auth credentials against a config.
 pub(super) enum AuthResult {
     /// Credentials are valid
@@ -338,13 +352,13 @@ pub async fn basic_auth_middleware(
         AuthResult::MissingHeader | AuthResult::NotConfigured => (
             StatusCode::UNAUTHORIZED,
             [(header::WWW_AUTHENTICATE, "Basic realm=\"TUICommander\"")],
-            "Scan the QR code or authenticate with Basic Auth",
+            AUTH_CHALLENGE_BODY,
         )
             .into_response(),
         AuthResult::Invalid => {
             tracing::warn!(source = "auth", ip = %client_ip, "Failed auth attempt");
             record_auth_failure(&state.auth_rate_limits, client_ip, rate_window_secs);
-            (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
+            (StatusCode::UNAUTHORIZED, INVALID_CREDENTIALS_BODY).into_response()
         }
     }
 }

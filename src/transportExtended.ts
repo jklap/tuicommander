@@ -1534,7 +1534,6 @@ const EXTENDED_COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: `/config/remote-connections/${p("connectionId")}/direct-proxy`,
 			body: {
-				url: args.url,
 				tls_fingerprint: args.tlsFingerprint ?? null,
 				use_native_roots: args.useNativeRoots ?? false,
 			},

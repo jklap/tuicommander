@@ -1009,6 +1009,40 @@ mod tests {
         assert_eq!(err, LocalInstancePortError::InstanceNotFound.to_string());
     }
 
+    /// Code review 2026-09-23 found the success path was untested here (and
+    /// in `get_local_instance_port_http`, same constraint) — only
+    /// `InstanceNotFound` was covered. A genuine end-to-end success test
+    /// through `get_local_instance_port` itself isn't safely possible: it
+    /// calls `resolve_local_instance_port`, which reads the REAL
+    /// `dirs::config_dir()`/`dirs::home_dir()` (not injectable — this is a
+    /// thin `#[tauri::command]` wrapper whose signature is a fixed IPC
+    /// contract, unlike `resolve_local_instance_port_at`'s own
+    /// dependency-injected test variant), so a real success case would mean
+    /// writing to the actual OS home directory from a test. This function's
+    /// ENTIRE body is `resolve_local_instance_port(&id).map_err(|e|
+    /// e.to_string())` — the only logic actually specific to the wrapper —
+    /// so this proves that exact transformation forwards an `Ok` value
+    /// completely unchanged, using the same injectable base function whose
+    /// own success case is already thoroughly tested
+    /// (`resolve_local_instance_port_reads_the_real_port`).
+    #[test]
+    fn get_local_instance_port_wrapper_logic_forwards_a_successful_resolution_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let instance = crate::app_instance::AppInstance::named("dev-box").unwrap();
+        let dir = instance.config_dir_from(None, &home);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::json!({"services": {"server": {"port": 9878}}}).to_string(),
+        )
+        .unwrap();
+
+        let wrapped: Result<u16, String> =
+            resolve_local_instance_port_at("dev-box", None, &home).map_err(|e| e.to_string());
+        assert_eq!(wrapped, Ok(9878));
+    }
+
     // --- Remote connection password commands (plan Phase 3 auth wiring) ---
 
     #[test]

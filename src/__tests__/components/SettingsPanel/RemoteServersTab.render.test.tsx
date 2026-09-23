@@ -117,6 +117,46 @@ describe("RemoteServersTab", () => {
 		expect(getByDisplayValue("old-name")).toBeTruthy();
 	});
 
+	it("clicking Edit on a second connection while the editor is already open shows the SECOND connection's data, not stale data from the first (code review 2026-09-23)", async () => {
+		// Regression test for a real HIGH bug: RemoteConnectionEditor used to be
+		// mounted via `<Show when={editorTarget()}>`, which only re-invokes its
+		// render callback on a falsy->truthy transition — switching editorTarget()
+		// from one truthy value to ANOTHER never remounted the editor, so it kept
+		// showing the first connection's frozen snapshot. Fixed by mounting via a
+		// reference-keyed `<For>` instead, which remounts on any target change.
+		await remoteConnectionsStore.addConnection({
+			id: "editA",
+			name: "connection-a",
+			transport: { type: "Direct", url: "http://host-a:9876", tls_fingerprint: null },
+			auth_username: "",
+			enabled: true,
+		});
+		await remoteConnectionsStore.addConnection({
+			id: "editB",
+			name: "connection-b",
+			transport: { type: "Direct", url: "http://host-b:9876", tls_fingerprint: null },
+			auth_username: "",
+			enabled: true,
+		});
+		mockInvoke.mockClear();
+		const { getAllByText, getByDisplayValue, queryByDisplayValue } = render(() => <RemoteServersTab />);
+		await flushMicrotasks();
+
+		const editButtons = getAllByText("Edit");
+		fireEvent.click(editButtons[0]);
+		await flushMicrotasks();
+		expect(getByDisplayValue("connection-a")).toBeTruthy();
+
+		// Click Edit on the OTHER row without closing the first — the editor
+		// must switch to showing connection-b, not keep showing connection-a.
+		const editButtonsAfterFirstOpen = getAllByText("Edit");
+		fireEvent.click(editButtonsAfterFirstOpen[editButtonsAfterFirstOpen.length - 1]);
+		await flushMicrotasks();
+
+		expect(getByDisplayValue("connection-b")).toBeTruthy();
+		expect(queryByDisplayValue("connection-a")).toBeNull();
+	});
+
 	it("renders an existing tunnel profile and remote connection in their respective lists", async () => {
 		mockInvoke.mockImplementation((cmd: string) => {
 			if (cmd === "list_tunnel_profiles")

@@ -60,6 +60,22 @@ impl SshConnectionParams {
         if self.user.trim().is_empty() {
             return Err("user must not be empty".to_string());
         }
+        // Defense in depth alongside `tunnels::command`'s `--` end-of-options
+        // marker (the actual fix — see its doc comment): a host/user
+        // starting with `-` is real OpenSSH option-injection when placed as
+        // the destination argv token (confirmed exploitable via
+        // `ProxyCommand`, security review 2026-09-23). `--` alone already
+        // closes this regardless of what's validated, but rejecting it here
+        // too gives a clear error at Save time instead of a confusing ssh
+        // failure, for the callers that reach this validator (Test
+        // Connection's ad hoc unsaved form data does not, by design — it's
+        // covered by `--` alone).
+        if self.host.trim_start().starts_with('-') {
+            return Err("host must not start with '-'".to_string());
+        }
+        if self.user.trim_start().starts_with('-') {
+            return Err("user must not start with '-'".to_string());
+        }
         if self.port == 0 {
             return Err("SSH port must be in range 1-65535".to_string());
         }
@@ -106,6 +122,23 @@ mod tests {
         let params = SshConnectionParams::new("host", "");
         let err = params.validate().unwrap_err();
         assert!(err.contains("user must not be empty"), "{err}");
+    }
+
+    // Regression tests for a real, confirmed-exploitable option-injection
+    // finding (security review 2026-09-23) — see `tunnels::command`'s `--`
+    // marker doc comment for the full exploit chain this defends in depth.
+    #[test]
+    fn validate_host_starting_with_dash_rejected() {
+        let params = SshConnectionParams::new("-oProxyCommand=touch /tmp/pwned", "user");
+        let err = params.validate().unwrap_err();
+        assert!(err.contains("host must not start with '-'"), "{err}");
+    }
+
+    #[test]
+    fn validate_user_starting_with_dash_rejected() {
+        let params = SshConnectionParams::new("host", "-oProxyCommand=touch /tmp/pwned");
+        let err = params.validate().unwrap_err();
+        assert!(err.contains("user must not start with '-'"), "{err}");
     }
 
     #[test]
