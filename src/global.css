@@ -296,14 +296,21 @@
   --ansi-bright-white: #ffffff;
 }
 
-/* Clean theme: the Orca dark look. Same system font, but the lighter
-   "antialiased" rasterization every Electron app on macOS uses instead of
-   WebKit's dilated default, plus a touch of tracking. Colors live in
-   src-tauri/src/themes/clean.json; applyAppTheme() sets data-theme. */
-html[data-theme="clean"] {
+/* Same system font as every native app, but WebKit defaults to subpixel
+   smoothing, which dilates light-on-dark strokes and is what made the UI read
+   as "web" next to Orca or VS Code. Those apps force the grayscale
+   rasterization Cocoa uses; so do we, plus a touch of tracking. */
+html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: 0.01em;
+}
+
+/* Clean theme: the Orca dark look. Colors live in
+   src-tauri/src/themes/clean.json; applyAppTheme() sets data-theme on <html>.
+   Not anchored to html on purpose: the theme gallery (theme-gallery.html)
+   sets the same attribute on one card per theme. */
+[data-theme="clean"] {
   /* Tab-type tints are fixed hues in :root (red diff, blue editor, green
      markdown, purple panel, cyan remote). On a neutral palette they read as
      six unrelated tab styles, so here they all tint with the muted gray and
@@ -316,9 +323,12 @@ html[data-theme="clean"] {
   --tab-remote-rgb: 115, 115, 115;
 }
 
-/* On a light surface lightening the red lowers its contrast instead. */
+/* On a light surface lightening the red lowers its contrast instead. Repo
+   colors are picked against a dark UI; shade them for repo names on white
+   (getRepoTextColor). */
 [data-theme="vscode-light"] {
   --diff-del: var(--error);
+  --repo-text-shade: 40%;
 }
 
 html, body {

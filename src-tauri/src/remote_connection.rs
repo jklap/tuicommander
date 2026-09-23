@@ -22,6 +22,23 @@ pub(crate) struct RemoteConnection {
     pub(crate) transport: RemoteTransport,
     pub(crate) auth_username: String,
     pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) deploy: DeployMode,
+    #[serde(default = "default_survive_secs")]
+    pub(crate) survive_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DeployMode {
+    #[default]
+    Never,
+    OnConnect,
+    Installed,
+}
+
+const fn default_survive_secs() -> u64 {
+    1_800
 }
 
 /// Transport layer for a remote connection.
@@ -60,6 +77,8 @@ impl RemoteConnection {
             },
             auth_username: ssh_user,
             enabled: true,
+            deploy: DeployMode::Never,
+            survive_secs: default_survive_secs(),
         }
     }
 
@@ -111,6 +130,8 @@ impl RemoteConnection {
             transport: RemoteTransport::Direct { url: url.into() },
             auth_username: auth_username.into(),
             enabled: true,
+            deploy: DeployMode::Never,
+            survive_secs: default_survive_secs(),
         }
     }
 }
@@ -196,6 +217,34 @@ pub(crate) fn set_connection_password(id: &str, password: &str) -> Result<(), St
 pub(crate) fn connection_password_exists(id: &str) -> Result<bool, String> {
     crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
         .map(|v| v.is_some())
+}
+
+pub(crate) fn set_pairing_token(id: &str, token: &str) -> Result<(), String> {
+    if token.is_empty() {
+        return crate::credentials::delete(crate::credentials::Credential::RemotePairingToken(id));
+    }
+    crate::credentials::set(
+        crate::credentials::Credential::RemotePairingToken(id),
+        token,
+    )
+}
+
+pub(crate) fn pairing_token(id: &str) -> Result<Option<String>, String> {
+    crate::credentials::get(crate::credentials::Credential::RemotePairingToken(id))
+}
+
+fn delete_connection_credentials(id: &str) -> Result<(), String> {
+    let password = crate::credentials::delete(crate::credentials::Credential::RemoteConnection(id));
+    let pairing =
+        crate::credentials::delete(crate::credentials::Credential::RemotePairingToken(id));
+    match (password, pairing) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(password), Ok(())) => Err(password),
+        (Ok(()), Err(pairing)) => Err(pairing),
+        (Err(password), Err(pairing)) => Err(format!(
+            "failed to delete remote password ({password}) and pairing token ({pairing})"
+        )),
+    }
 }
 
 /// Trade the stored Basic Auth credentials for the daemon's session token.
@@ -289,7 +338,7 @@ pub async fn delete_remote_connection(
     // connection — the poll, the mirror, its rows, the tunnel, the session token
     // — is keyed by an id that is about to name nothing. Deleting the record
     // first leaves all of it running with no way left to address it.
-    crate::remote_runtime::teardown(&state.inner().clone(), &id);
+    crate::remote_runtime::teardown_deleted(state.inner(), &id);
     let _guard = state.connections_lock.lock().await;
     let mut connections =
         RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
@@ -297,7 +346,7 @@ pub async fn delete_remote_connection(
     RemoteConnectionStore::save(&state.data_dir, &connections).map_err(|e| e.to_string())?;
     // The vault entry outlives connections.json unless this runs: the id is a
     // fresh UUID every time, so a forgotten secret is unreachable and permanent.
-    set_connection_password(&id, "")
+    delete_connection_credentials(&id)
 }
 
 #[cfg(feature = "desktop")]
@@ -451,10 +500,37 @@ mod tests {
             .collect();
         assert_eq!(
             keys,
-            ["id", "name", "transport", "auth_username", "enabled"],
+            [
+                "id",
+                "name",
+                "transport",
+                "auth_username",
+                "enabled",
+                "deploy",
+                "survive_secs"
+            ],
             "connections.json gained a field — if it holds a secret, it must go to the vault instead"
         );
-        assert!(!serde_json::to_string(&conn).unwrap().contains("password"));
+        let serialized = serde_json::to_string(&conn).unwrap();
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("token"));
+    }
+
+    #[test]
+    fn legacy_connection_defaults_to_no_deploy_and_thirty_minutes() {
+        let mut value = serde_json::to_value(RemoteConnection::new_direct(
+            "office",
+            "http://office:9877",
+            "bob",
+        ))
+        .unwrap();
+        value.as_object_mut().unwrap().remove("deploy");
+        value.as_object_mut().unwrap().remove("survive_secs");
+
+        let decoded: RemoteConnection = serde_json::from_value(value).unwrap();
+
+        assert_eq!(decoded.deploy, DeployMode::Never);
+        assert_eq!(decoded.survive_secs, 1_800);
     }
 
     #[tokio::test]

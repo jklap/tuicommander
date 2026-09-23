@@ -130,6 +130,21 @@ externalizes Plan Tracker and Stories Ticker by seeding `plugins/plan/` and
 `.externalized-plan-stories-v1` records completion: existing packages are never
 overwritten, and removing either seeded package after migration is permanent.
 
+One runtime cache and one transient SSH socket support SSH-managed remote daemons:
+
+- `remote-bin/<version>/tuic-remote-<target>` stores a verified release asset
+  after an atomic staging download. It contains executables, never credentials.
+- `~/.ssh/tuic-%C` is the hashed OpenSSH ControlMaster socket shared by TUIC's
+  tunnel, remote-command and SCP processes. Keeping it under the user's short,
+  access-controlled SSH directory avoids macOS `Application Support` spaces and
+  keeps the expanded Unix socket path below the platform length limit. TUIC uses
+  `ControlPersist=no`: a live tunnel remains the reusable master, while a
+  one-shot command cannot leave an unmonitored master behind.
+
+Remote pairing tokens use the credential vault key
+`remote/connection/<uuid>/pairing-token`; they never live in either directory or
+in `connections.json`.
+
 ## Core Functions
 
 ```rust
@@ -230,7 +245,7 @@ needs an app restart is what that costs.
 | `shell` | `Option<String>` | `None` | Shell override (platform default if None) |
 | `font_family` | `String` | `"JetBrains Mono"` | Terminal font family |
 | `font_size` | `u16` | `14` | Terminal font size |
-| `theme` | `String` | `"vscode-dark"` | Terminal theme |
+| `theme` | `String` | `"commander"` | Terminal theme. An empty or unknown key falls back to `commander` (`DEFAULT_THEME`, `src/stores/settings.ts`) |
 | `ide` | `String` | `""` | IDE for "Open in..." |
 | `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General > AI Chat` and written through `save_config` like any other field |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
@@ -263,7 +278,7 @@ cleartext copy does not survive on disk.
 | `language` | `String` | `"en"` | UI language code |
 | `max_tab_name_length` | `u32` | `25` | Max tab name display length |
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
-| `tab_tree_enabled` | `bool` | `false` | When true, every branch with an open session can show a collapsible activity card with session state and agent activity under its sidebar row |
+| `tab_tree_enabled` | `bool` | `false` | Opt-in sidebar activity cards. `false` renders no activity caret, card, or nested agent/session rows. `true` lets every branch with an open terminal session expand its assigned sessions. Applies immediately; no restart is required. |
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
@@ -858,9 +873,14 @@ The Design Mode `dev_server_url` is deliberately absent from this format: a comm
 `service.rs`)
 
 One append-only journal in one database, `<config dir>/progress.sqlite3`, with
-`project` as a column. Nothing is written inside a repository — no `.tuic`
+`project` and nullable `pty_id` columns. Existing databases gain `pty_id` on
+open; old rows keep `NULL` because their PTY cannot be reconstructed. A
+project-wide query includes every PTY and the unattributed rows; a PTY query
+selects one source. Nothing is written inside a repository — no `.tuic`
 directory, no `.git/info/exclude` registration, no export lock, and so nothing
 for the repository watcher or the content index to ignore.
+Separate `pty_views` and `project_views` tables keep last-visit marks for each
+PTY and the repository aggregate.
 `repo_watcher.rs` asserts that: it snapshots the repository tree byte-for-byte
 around a record/delete/mark-viewed cycle and requires it unchanged.
 

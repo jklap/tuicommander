@@ -16,6 +16,15 @@ export interface RemoteConnection {
 	transport: RemoteTransport;
 	auth_username: string;
 	enabled: boolean;
+	deploy: DeployMode;
+	survive_secs: number;
+}
+
+export type DeployMode = "never" | "on_connect" | "installed";
+
+export interface SshHostStatus {
+	host: string;
+	auth: "shell" | "no_shell" | "auth_failed" | "unreachable";
 }
 
 export type RemoteTransport =
@@ -34,7 +43,7 @@ export type RemoteTransport =
  * `/health` answers, but every other route needs a credential this client does
  * not have. The fix is a password, not a network one, and the panel says so.
  */
-export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "unauthenticated" | "error";
+export type ConnectionStatus = "disconnected" | "connecting" | "deploying" | "connected" | "unauthenticated" | "error";
 
 export interface ConnectionState {
 	connection: RemoteConnection;
@@ -42,6 +51,7 @@ export interface ConnectionState {
 	baseUrl?: string;
 	protocolVersion?: number;
 	error?: string;
+	deployStep?: string;
 }
 
 /** One connection as the backend reports it. Snake case: it is a Rust struct. */
@@ -52,6 +62,7 @@ interface RemoteConnectionStatusPayload {
 	token?: string;
 	protocol_version?: number;
 	error?: string;
+	step?: string;
 }
 
 interface RemoteConnectionsState {
@@ -134,6 +145,7 @@ function createRemoteConnectionsStore() {
 			baseUrl: payload.base_url,
 			protocolVersion: payload.protocol_version,
 			error: payload.error,
+			deployStep: payload.step,
 		});
 
 		// A machine's run configs belong to the machine, and a daemon that went
@@ -209,6 +221,24 @@ function createRemoteConnectionsStore() {
 			if (!state.connections[id]) return;
 			remoteTokens.delete(id);
 			await invoke("disconnect_remote_connection", { id });
+		},
+
+		async install(id: string): Promise<void> {
+			const current = state.connections[id];
+			if (!current) return;
+			await invoke("install_remote_daemon", { id });
+			setState("connections", id, "connection", "deploy", "installed");
+		},
+
+		async uninstall(id: string): Promise<void> {
+			const current = state.connections[id];
+			if (!current) return;
+			await invoke("uninstall_remote_daemon", { id });
+			setState("connections", id, "connection", "deploy", "on_connect");
+		},
+
+		async probeSshHosts(): Promise<SshHostStatus[]> {
+			return (await invoke<SshHostStatus[]>("probe_ssh_config_hosts")) ?? [];
 		},
 
 		/** Save a new connection to the backend and add it to state */

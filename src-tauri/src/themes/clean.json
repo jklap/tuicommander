@@ -1,5 +1,5 @@
 {
-  "name": "Clean",
+  "name": "Ink",
   "black": "#1d1f21",
   "red": "#cc6666",
   "green": "#b5bd68",
@@ -31,7 +31,7 @@
     "mutedForeground": "#737373",
     "accent": "#e5e5e5",
     "accentHover": "#ffffff",
-    "border": "#232323",
+    "border": "#2e2e2e",
     "success": "#86efac",
     "warning": "#d4a300",
     "error": "#ff6568",

@@ -1308,7 +1308,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
 
 ### 11.2 Appearance
-- Terminal theme: multiple themes, color swatches. Bundled themes include **Deep Black** (near-true-black background with GitHub-style ANSI accents), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Clean** (Orca-style neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette; the only theme that also switches the UI to `antialiased` font smoothing with 0.01em tracking, keyed on `html[data-theme]`)
+- Terminal theme: multiple themes, color swatches. Bundled themes include **Commander** (default and fallback for an unknown key), **Paper** (key `vscode-light`, the light theme), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Ink** (key `clean`; Orca-style neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette, neutral tab-type tints keyed on `html[data-theme]`). The UI uses `antialiased` font smoothing with 0.01em tracking on every theme
 - Terminal font: 11 bundled monospace fonts (JetBrains Mono default)
 - Default font size: 8-32px slider
 - Split tab mode: separate / unified
@@ -2092,6 +2092,14 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - `--set-password` performs interactive password setup (bcrypt hashed) inside
   the instance selected earlier on the same command line
 - LAN auth bypass always disabled in headless mode (security hardening)
+- `--bind <ip>` selects the listening address; desktop-managed deployments pin
+  it to `127.0.0.1`
+- `--survive-secs <n>` exits after that many seconds without SSE or WebSocket
+  clients; client activity resets the timer
+- `--no-agent-configs` skips host agent configuration for ephemeral and installed
+  desktop-managed daemons
+- `TUIC_PAIRING_TOKEN` is consumed once as the daemon session token and removed
+  from the environment before child processes can inherit it
 
 ### 22.3 TLS
 - Manual TLS via `services.tls` in the instance's `config.json` (`mode: "manual"`,
@@ -2099,9 +2107,11 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - No TLS by default — use a reverse proxy or Tailscale for production
 
 ### 22.4 Lifecycle
-- Graceful shutdown on SIGINT/SIGTERM
+- Graceful shutdown on SIGINT/SIGTERM/SIGHUP, with a pid file removed on exit
 - Binds TCP, starts background tasks (MCP session reaper, upstream health checks)
 - Fails fast if port is already in use
+- Optional survive timer preserves sessions across short disconnects, then exits
+  when its configurable idle window expires
 
 ## 23. SSH Tunnel Manager
 
@@ -2178,15 +2188,21 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 24.1 Connection Types
 - **SSH** — Connects via SSH tunnel to a remote `tuic-remote` daemon; auto-creates port forwarding
-  - Fields: host, SSH port (default 22), SSH user, optional identity file, remote daemon port (default 9877)
+  - Fields: host, SSH port (default 22), SSH user, optional identity file, remote daemon port (default 9877), deploy policy, survive time
+  - The host picker probes deduplicated SSH config hosts on demand and labels
+    shell, no-shell, auth-failed and unreachable results; free text remains valid
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
   - Fields: URL, auth username
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
-- Each connection has UUID, name, transport, auth username, and enabled flag
+- Each connection has UUID, name, transport, auth username, enabled flag,
+  `deploy` (`never | on_connect | installed`) and `survive_secs`
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
+- Desktop-managed SSH deployments use a separate vault pairing token. It is the
+  daemon session token, never appears in `connections.json`, and survives a
+  desktop restart so Connect can rejoin the same daemon
 
 ### 24.3 Authentication
 - `tuic-remote` authenticates every TCP request: the headless build has no loopback bypass and `run_remote` forces `lan_auth_bypass` off, so an SSH tunnel does not make it local. `GET /health` is the only unauthenticated route
@@ -2195,7 +2211,21 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Held in memory only, never persisted: the daemon mints a new one on every restart, and a 401 from the status poll triggers one re-authentication
 - Status separates **Not authenticated** (reachable, credentials rejected) from **Error** (unreachable). An unauthenticated connection starts no poll, no event bridge and routes no calls
 
-### 24.4 Remote Repositories and Terminals
+### 24.4 Connect and Install
+- **Deploy on connect** resolves the host target with `uname`, downloads and
+  caches the matching release asset, compares its SHA-256, copies only when
+  needed, then launches it on loopback with the configured survive time
+- SSH tunnel, remote exec and SCP share the TUIC-owned
+  `~/.ssh/tuic-%C` ControlMaster socket, so one authenticated connection serves
+  the whole flow without exceeding Unix socket path limits. The master persists
+  only for the life of the process that owns it, preventing a completed one-shot
+  command from making a later supervised tunnel exit immediately
+- **Install** writes a systemd user unit and protected environment file on Linux,
+  or a protected launchd plist on macOS. **Uninstall** stops and removes them
+- Deployment publishes `deploying` status with the current step. Failures retain
+  the step and remote log tail in `error`; they are never misreported as an auth failure
+
+### 24.5 Remote Repositories and Terminals
 - Repos can be assigned to a remote connection; sidebar shows remote badge
 - Terminals on remote repos route WebSocket I/O through the connection's base URL
 - **One choke point decides the machine.** `resolveOwningConnection` (`transportRuntime.ts`) reads the call's own arguments — a session id first, then a repository path — and answers which connection owns it. Both entry points ask it: `rpc()` for the HTTP transport and `invoke()` for the desktop IPC path, which would otherwise short-circuit straight to the local backend. A call site cannot forget to route, because it never routes
@@ -2205,7 +2235,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - `canvasTerminalTransport.ts` takes the `connectionId` and derives both the base URL and the token from it
 - Status polling runs against `/api/version`, not `/health`: only a route behind the auth middleware can tell a working connection from a rejected one
 
-### 24.5 Event Mirror
+### 24.6 Event Mirror
 - `remote_mirror.rs` runs one task per connected connection: it reads the daemon's `GET /sessions` and then its `/events` stream, in Rust
 - The stream carries **no** `types=` filter, and every frame is repeated on the local bus under the daemon's own event name — a client cannot tell a mirrored event from a local one, so the existing handlers raise the same badge, the same notification and the same queue gate, and a new event type crosses for free
 - Mirrored sessions appear in `list_active_sessions` and `GET /sessions` beside local ones, each carrying `connection_id` — the only field that says which machine runs it
@@ -2268,15 +2298,15 @@ connect. It is not an argument of any command or route, so no request — local
 or remote — can choose what the host runs. An empty setting refuses every
 connect rather than failing later inside a spawn.
 
-## 27. Project Progress
+## 27. Terminal Progress
 
-- One append-only journal per project: entries are written once, then kept or deleted. No pause, clear, correction, revision, deduplication or Markdown export
+- One append-only journal per project with each new entry attributed to its source PTY when known: entries are written once, then kept or deleted. No pause, clear, correction, revision, deduplication or Markdown export
 - Three kinds. Agents report `done` and `blocked`; TUICommander writes `intent` from the agent's own `intent:` marker, so an agent that never calls the tool still leaves a trail
 - Compact MCP `progress` tool (`type`, `text`, optional `step`) that appends and toasts in one call, stays directly callable in collapsed tool mode, and refuses `intent` — that kind is observed, not claimed
 - An imperative reporting obligation in `initialize` rather than only a tool description: the descriptive version recorded zero entries across 39 repositories
 - One SQLite database in the configuration directory with the project as a column. Nothing is written inside a repository, so Progress produces no repository-change event, no Git-exclude entry and no indexing pass
 - Managed workspaces resolve to their parent project, so a worktree and its repository share one history; a directory belonging to no registered project is not recorded at all
-- A dialog, not a panel: one newest-first list for the active project, queried once on open rather than once per registered repository
+- A dialog, not a panel: one newest-first list for the active PTY by default, a selector for other PTYs and the repository aggregate, queried once per selected view
 - A last-visit divider frozen while the dialog is open, so it never moves under the line being read
 - Blocked entries in red, `intent` entries muted, one blocked-only filter, per-entry deletion scoped to the project
 - Aggregate notification-bell count plus exactly one live toast, silent by default; Progress entries are not duplicated into MESSAGES

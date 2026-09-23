@@ -47,6 +47,7 @@ type StatusPayload = {
 	token?: string;
 	protocol_version?: number;
 	error?: string;
+	step?: string;
 };
 
 function directConn(id: string): RemoteConnection {
@@ -56,6 +57,8 @@ function directConn(id: string): RemoteConnection {
 		transport: { type: "Direct", url: "http://remote.test:9876" },
 		auth_username: "user",
 		enabled: true,
+		deploy: "never",
+		survive_secs: 1800,
 	};
 }
 
@@ -141,6 +144,32 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			push(connected);
 			expect(store.getConnectionState("c1")?.status).toBe("connected");
 			expect(store.getConnectionState("c1")?.protocolVersion).toBe(2);
+		});
+
+		it("keeps the deployment step from the backend status", () => {
+			push({ id: "c1", status: "deploying", step: "starting daemon" });
+
+			expect(store.getConnectionState("c1")).toMatchObject({
+				status: "deploying",
+				deployStep: "starting daemon",
+			});
+		});
+
+		it("install and uninstall update the persisted deploy mode after the backend succeeds", async () => {
+			await store.install("c1");
+			expect(invokeMock).toHaveBeenCalledWith("install_remote_daemon", { id: "c1" });
+			expect(store.getConnectionState("c1")?.connection.deploy).toBe("installed");
+
+			await store.uninstall("c1");
+			expect(invokeMock).toHaveBeenCalledWith("uninstall_remote_daemon", { id: "c1" });
+			expect(store.getConnectionState("c1")?.connection.deploy).toBe("on_connect");
+		});
+
+		it("returns the probed SSH host states from the backend", async () => {
+			invokeMock.mockResolvedValueOnce([{ host: "builder", auth: "shell" }]);
+
+			await expect(store.probeSshHosts()).resolves.toEqual([{ host: "builder", auth: "shell" }]);
+			expect(invokeMock).toHaveBeenCalledWith("probe_ssh_config_hosts");
 		});
 
 		it("does no networking and runs no poll of its own", async () => {

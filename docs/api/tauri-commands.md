@@ -5,9 +5,9 @@
 | Command | Parameters | Result | Description |
 |---|---|---|---|
 | `report_progress_event` | `project, report` | `{id}` | Appends one `done` or `blocked` entry through the same core as MCP and HTTP. |
-| `progress_list` | `project, input.blockedOnly` | `ProgressList` | The project's newest 500 entries, newest first, with the stored last-visit mark. |
+| `progress_list` | `project, input.blockedOnly?, input.ptyId?` | `ProgressList` | The selected PTY's or project's newest 500 entries, available PTY IDs, and the stored last-visit mark. |
 | `progress_delete` | `project, input.ids` | `{deleted}` | Deletes entries by id, scoped to the project — one project cannot delete another's. |
-| `progress_mark_viewed` | `project` | `{lastViewedMs}` | Moves the last-visit mark to now. Deliberately not an MCP action: it is the reader's, not the agent's. |
+| `progress_mark_viewed` | `project, ptyId?` | `{lastViewedMs}` | Moves the selected PTY's or repository aggregate's last-visit mark to now. Deliberately not an MCP action: it is the reader's, not the agent's. |
 
 The journal is append-only. There is no pause, clear, correction or export
 command: an entry is written once and either kept or deleted. `intent` entries
@@ -260,6 +260,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_active_tunnels` | -- | `Vec<JSON>` | List all active tunnels with ID, status, and started_at |
 | `get_tunnel_status` | `id` | `JSON` | Get the current status of a specific tunnel (starting, connected, reconnecting, stopped, error) |
 | `list_ssh_config_hosts` | -- | `Vec<String>` | Parse `~/.ssh/config` and return all non-negated, non-wildcard Host entries |
+| `probe_ssh_config_hosts` | -- | `Vec<SshHostStatus>` | Probe deduplicated SSH config hosts with bounded concurrency and classify shell, no-shell, authentication-failed and unreachable results |
 | `get_tunnel_audit` | `id, limit?` | `Vec<JSON>` | Query audit log events for a tunnel (default limit 20). Returns timestamp, kind, and extracted message |
 | `list_ssh_agent_keys` | -- | `SshAgentInfo` | Detect SSH agent type (1Password, Secretive, GPG, generic) and list loaded keys via `ssh-add -l` |
 
@@ -269,10 +270,12 @@ reached is an error carrying ego's own sentence, never an empty result.
 |---------|------|---------|-------------|
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
 | `save_remote_connection` | `connection` | `()` | Create or update a remote machine. Validates before saving |
-| `delete_remote_connection` | `id` | `()` | Delete a remote machine and its vault password. The vault key is the connection's UUID, so a secret left behind is unreachable forever |
+| `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials, and its ephemeral daemon best-effort; an installed service is left for explicit uninstall |
 | `set_remote_connection_password` | `id, password` | `()` | Store the Basic Auth password in the OS credential vault, or forget it when `password` is empty. Never written to `connections.json` |
 | `remote_connection_password_exists` | `id` | `bool` | Whether a password is stored. The password itself is never readable — this and the token exchange are the only answers given about it |
 | `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |
+| `install_remote_daemon` | `id` | `()` | Stage the matching daemon and install/start a systemd user unit or launchd agent, then persist `deploy = installed` |
+| `uninstall_remote_daemon` | `id` | `()` | Stop and remove the systemd/launchd service files and persist `deploy = on_connect` |
 
 ## Remote Connection Runtime (`remote_runtime.rs`)
 
@@ -283,7 +286,7 @@ remote daemon.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `connect_remote_connection` | `id` | `()` | Bring a connection up: resolve the base URL (starting an SSH tunnel when the transport needs one), read `/health`, trade the stored password for a session token, then prove it on `/api/version`. Idempotent while connecting or connected, so a double click opens one tunnel. Every transition is announced as a `remote-connection-status` event |
+| `connect_remote_connection` | `id` | `()` | Bring a connection up. SSH connections may deploy a matching loopback-only daemon first, then authenticate with the vault pairing token; direct and unmanaged connections use the stored password exchange. Idempotent while connecting or connected, so a double click opens one tunnel. Every transition is announced as a `remote-connection-status` event |
 | `disconnect_remote_connection` | `id` | `()` | Stop the status poll, forget the token, stop the tunnel |
 | `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected — a connection that is not connected has no route to hand out |
 

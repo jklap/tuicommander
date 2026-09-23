@@ -287,21 +287,22 @@ Ideas panel with per-repo filtering and terminal integration.
 
 ### ProgressDialog (`ProgressDialog/`)
 
-The whole Progress UI: one newest-first list of the active project's journal
-entries, a divider marking where the last visit ended, and a blocked-only
+The whole Progress UI: one newest-first list for the active PTY by default,
+with a selector for other PTYs and the repository aggregate. It has a divider
+marking where the last visit ended, and a blocked-only
 checkbox. Blocked entries are red, host-written `intent` entries are muted, and
 each row can be deleted. There are no pages, no tabs, no workstream projections
 and no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
 
-Opening asks the shared journal once, for the project it shows. The old panel
+Opening asks the shared journal once, for the selected PTY or project. The old panel
 fanned out across every registered repository and answered with one red
 unavailable block per repository that no longer existed; the dialog shows one
 project and one failure line.
 
-The divider is frozen while the dialog is open. The stored mark moves on close —
-redrawing the line under the reader's cursor while they are still reading is the
-one thing it must not do.
+Each PTY and the aggregate has a separate divider, frozen while that view is
+open. Switching views loads the new scope's mark; closing records every visited
+scope without moving a line under the reader's cursor.
 
 `embedded` drops the overlay and the floating box so the mobile PWA's Progress
 tab can host the same component full-bleed; a whole bottom tab is already the

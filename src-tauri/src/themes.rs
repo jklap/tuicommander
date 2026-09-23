@@ -325,11 +325,6 @@ const BUILTIN_THEMES: &[(&str, &str)] = &[
     ("nord.json", include_str!("themes/nord.json")),
     ("darksun.json", include_str!("themes/darksun.json")),
     (
-        "delicate-one.json",
-        include_str!("themes/delicate-one.json"),
-    ),
-    ("deep-black.json", include_str!("themes/deep-black.json")),
-    (
         "minimal-kiwi.json",
         include_str!("themes/minimal-kiwi.json"),
     ),

@@ -2,6 +2,7 @@ import { type Component, createMemo, For, onMount, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
 import { type ProgressEntry, type ProgressKind, progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
 import { formatRelativeTime } from "../../utils/time";
 import d from "../shared/dialog.module.css";
 import s from "./ProgressDialog.module.css";
@@ -57,6 +58,25 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 		return path ? progressStore.state.projects[path] : undefined;
 	};
 	const entries = createMemo<ProgressEntry[]>(() => projectState()?.entries ?? []);
+	const terminalNames = createMemo(
+		() =>
+			new Map(
+				Object.values(terminalsStore.state.terminals)
+					.filter((terminal) => terminal.sessionId)
+					.map((terminal) => [terminal.sessionId as string, terminal.name]),
+			),
+	);
+	const terminalName = (ptyId: string) => terminalNames().get(ptyId) || `Terminal ${ptyId.slice(0, 8)}`;
+	const ptyOptions = createMemo(() => {
+		const path = project();
+		const ids = new Set(projectState()?.ptyIds ?? []);
+		for (const terminal of Object.values(terminalsStore.state.terminals)) {
+			if (terminal.repoPath === path && terminal.sessionId) ids.add(terminal.sessionId);
+		}
+		const selected = progressStore.selectedPtyId();
+		if (selected) ids.add(selected);
+		return Array.from(ids).map((id) => ({ id, label: terminalName(id) }));
+	});
 
 	const displayName = () => {
 		const path = project();
@@ -78,7 +98,7 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 		<div
 			class={`${s.dialog}${props.embedded ? ` ${s.embedded}` : ""}`}
 			role={props.embedded ? "region" : "dialog"}
-			aria-label="Project Progress"
+			aria-label="Progress"
 			onClick={(e) => e.stopPropagation()}
 		>
 			<div class={s.header}>
@@ -86,6 +106,22 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 					<h4>Progress</h4>
 					<span class={s.project}>{displayName()}</span>
 				</div>
+				<select
+					class={s.terminalSelect}
+					aria-label="Progress terminal"
+					onChange={(event) => progressStore.selectPty(event.currentTarget.value || null)}
+				>
+					<option value="" selected={!progressStore.selectedPtyId()}>
+						All repo
+					</option>
+					<For each={ptyOptions()}>
+						{(terminal) => (
+							<option value={terminal.id} selected={progressStore.selectedPtyId() === terminal.id}>
+								{terminal.label}
+							</option>
+						)}
+					</For>
+				</select>
 				<label class={s.filter}>
 					<input
 						type="checkbox"
@@ -132,7 +168,9 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 									? "Loading…"
 									: progressStore.blockedOnly()
 										? "Nothing is blocked."
-										: "No progress recorded for this project yet."}
+										: progressStore.selectedPtyId()
+											? "No progress recorded for this terminal yet."
+											: "No progress recorded for this project yet."}
 						</p>
 					}
 				>
@@ -157,6 +195,9 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 											</Show>
 											<Show when={entry.agentName}>
 												<span>· {entry.agentName}</span>
+											</Show>
+											<Show when={!progressStore.selectedPtyId()}>
+												<span>· {entry.ptyId ? terminalName(entry.ptyId) : "Terminal unknown"}</span>
 											</Show>
 										</div>
 									</div>

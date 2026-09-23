@@ -60,6 +60,7 @@ import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml } from "./scrollbarMarks";
+import { scrollbarThumb } from "./scrollbarThumb";
 import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
 import {
 	altSequenceFromCode,
@@ -896,9 +897,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function updateScrollbar(frame: DecodedFrame) {
 		if (!scrollbarRef || !scrollThumbRef) return;
 		const total = frame.historySize + (frame.screenRows || lastResizeRows || 24);
-		// visible rows = the authoritative resize row count — no per-frame
-		// canvasRef.clientHeight read (layout-forcing).
-		const visible = lastResizeRows || 24;
 
 		if (frame.historySize === 0) {
 			scrollbarRef.style.display = "none";
@@ -906,17 +904,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		scrollbarRef.style.display = "block";
 
-		// Track height comes from the resize-time cache, not scrollbarRef.clientHeight.
-		const trackH = scrollbarTrackHeight;
-		const thumbRatio = Math.min(1, visible / total);
-		const thumbHeight = Math.max(20, trackH * thumbRatio);
-		const scrollRange = trackH - thumbHeight;
-		const scrollPos = frame.historySize > 0 ? (1 - frame.displayOffset / frame.historySize) * scrollRange : scrollRange;
-
-		scrollThumbRef.style.height = `${thumbHeight}px`;
-		scrollThumbRef.style.transform = `translateY(${scrollPos}px)`;
+		const thumb = thumbFor(frame);
+		scrollThumbRef.style.height = `${thumb.height}px`;
+		scrollThumbRef.style.transform = `translateY(${thumb.top}px)`;
 
 		paintScrollbarMarks(total);
+	}
+
+	function thumbFor(frame: DecodedFrame) {
+		return scrollbarThumb({
+			// Track height comes from the resize-time cache, not scrollbarRef.clientHeight;
+			// visible rows = the authoritative resize row count — no per-frame
+			// canvasRef.clientHeight read (layout-forcing).
+			trackH: scrollbarTrackHeight,
+			visibleRows: lastResizeRows || 24,
+			historySize: frame.historySize,
+			displayOffset: frame.displayOffset,
+		});
 	}
 
 	let scrollbarMarksContainer: HTMLDivElement | null = null;
@@ -3091,11 +3095,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!scrollDragging || !currentFrame) return;
 			const historySize = currentFrame.historySize;
 			if (historySize === 0) return;
-			// Use the cached track height (set in remeasure) instead of reading
-			// scrollbarRef.clientHeight — a layout-forcing read on every mousemove.
-			const trackHeight = scrollbarTrackHeight;
-			const thumbHeight = parseFloat(scrollThumbRef.style.height) || 20;
-			const scrollRange = trackHeight - thumbHeight;
+			const scrollRange = thumbFor(currentFrame).range;
 			if (scrollRange <= 0) return;
 
 			const dy = e.clientY - scrollDragStartY;
@@ -3573,7 +3573,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						// Harmonized with the editor scrollbar: same --bg-highlight resting
 						// color, --fg-muted on hover, and a hand pointer cursor.
 						background: "var(--bg-highlight)",
-						"min-height": "20px",
 						position: "absolute",
 						top: "0",
 						cursor: "pointer",

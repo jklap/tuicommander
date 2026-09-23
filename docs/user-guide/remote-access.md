@@ -210,12 +210,16 @@ Remote connections let you manage `tuic-remote` daemons running on other machine
 
 ### Adding an SSH Connection
 
-1. Open **Settings** → **Connections** → **Add Connection**
+1. Open **Settings** → **Services & MCP** → **Remote Machines** and click **+**
 2. Select **SSH** transport
-3. Configure host, port (default 22), user, and optional identity file
-4. Set the remote daemon port (default 9877)
-5. Set the auth username and password the daemon was configured with
-6. Save — an SSH tunnel is automatically created to forward the daemon port
+3. Type a host or choose **Probe SSH hosts** to see the hosts from your SSH
+   config and whether each accepts a shell login
+4. Configure the port (default 22), user, and optional identity file
+5. Choose **Never deploy**, **Deploy on connect**, or **Installed service**, and
+   set how many minutes an ephemeral daemon should survive with no client
+6. Set the remote daemon port (default 9877)
+7. Set the auth username and password the daemon was configured with
+8. Save, then click **Connect**
 
 ### Adding a Direct Connection
 
@@ -230,6 +234,29 @@ A URL that points back at the TUICommander you are configuring is refused with
 compares the `instance_id` in `GET /health` against this process's own, so a
 second daemon on the same machine (a different port) is still a valid peer.
 
+### Connect or Install
+
+**Connect** with **Deploy on connect** is the zero-setup path. If no compatible
+daemon answers, TUICommander downloads the release asset matching the host,
+caches it locally, copies it over the same SSH identity as the tunnel and starts
+it on `127.0.0.1`. The daemon keeps existing sessions alive for the configured
+survive time after the last client leaves, then exits. A later Connect reuses a
+matching binary already on the host and the pairing token in the local vault.
+
+**Install** uses the same binary but registers a persistent user service. Linux
+gets `~/.config/systemd/user/tuic-remote.service` plus the mode-0600
+`~/.config/tuic/remote.env`; macOS gets the mode-0600
+`~/Library/LaunchAgents/dev.tuicommander.remote.plist`. The service starts at
+login and restarts on failure, so later Connect operations only open the SSH
+tunnel. **Uninstall** stops and removes the service files but leaves the cached
+binary available for a future Connect.
+
+Both paths place the executable and log under `~/.cache/tuic/`. The ephemeral
+path also uses `tuic-remote.pid`; deleting an on-connect machine sends a
+best-effort stop, while deleting an installed connection deliberately leaves its
+service alone. The daemon is launched with `--no-agent-configs`, so deploying it
+does not rewrite the host's Claude, Codex, or other agent configuration.
+
 ### Authentication
 
 `tuic-remote` authenticates **every** TCP request. The headless build has no
@@ -242,8 +269,11 @@ The password is kept in the OS credential vault, keyed by the connection's UUID.
 daemon's token ever appears in `GET /config`. Deleting a connection deletes its
 vault entry with it.
 
-On connect, TUICommander trades the password for the daemon's session token over
-`GET /api/auth/session-token` (Basic Auth), then puts that token in the query
+For a manually managed daemon, TUICommander trades the password for the daemon's
+session token over `GET /api/auth/session-token` (Basic Auth). For Connect and
+Install, the vault pairing token is the daemon session token itself and is sent
+to the launch process over SSH stdin, never in its command line. TUICommander
+then puts the session token in the query
 string of every call — HTTP, the terminal WebSocket and the `/events` SSE
 stream alike. It has to be the query string: a WebSocket upgrade cannot carry an
 `Authorization` header, and the daemon answers `Access-Control-Allow-Origin: *`,
@@ -458,9 +488,19 @@ TUIC_PORT=8080 ./tuic-remote
 
 # Named instance, with the same port override
 TUIC_PORT=8080 ./tuic-remote --instance build-host
+
+# Loopback-only ephemeral daemon with a 30-minute idle lifetime
+TUIC_PAIRING_TOKEN=... ./tuic-remote --bind 127.0.0.1 \
+  --survive-secs 1800 --no-agent-configs
 ```
 
-The daemon binds to `0.0.0.0:<port>` and serves:
+By default the daemon binds to `0.0.0.0:<port>` and runs until signalled. The
+desktop-managed form binds to loopback, skips agent config installation, writes
+`tuic-remote.pid` in its config directory, and exits after the survive time with
+no SSE or WebSocket clients. SIGINT, SIGTERM and SIGHUP all shut it down cleanly
+and remove that pid file.
+
+The daemon serves:
 - The HTTP API (sessions, terminals, git, filesystem, agents)
 - WebSocket terminal streaming
 - MCP tool integration (for AI agents)
@@ -543,7 +583,7 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Tauri dependency | Yes | No |
 | Default port | 9876 | 9877 |
 | LAN auth bypass | Configurable | Always disabled |
-| Signal handling | N/A | Graceful SIGINT/SIGTERM |
+| Signal handling | N/A | Graceful SIGINT/SIGTERM/SIGHUP |
 | MCP bridge for local agents | Bundled sidecar | Downloaded next to the daemon |
 | Embedded assistant (watchers, scheduler) | Yes | No |
 

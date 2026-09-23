@@ -37,6 +37,17 @@ that checkout merely to run this check.
       only the Chrome windows it owns. A browser/PWA start must explain that
       Chrome opens on the host machine.
 
+## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
+
+- [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**.
+- [ ] In **All repo**, existing entries recorded before this change should remain visible as **Terminal unknown**. Closing a PTY should leave its saved history selectable.
+- [ ] Open PTY A, switch to PTY B, then **All repo** and close Progress. Reopen each view and confirm each has its own last-visit divider; viewing A alone must not mark B or **All repo** as seen.
+
+## Terminal scrollbar thumb minimum 48px (2026-09-23) — frontend, live via HMR
+
+- [ ] [VISUAL] A terminal with a very long scrollback (e.g. `seq 100000`): the thumb stays 48px tall and is easy to grab; dragging it scrolls the whole history, top to bottom.
+- [ ] [VISUAL] A short scrollback still gets a proportional (larger) thumb; a very short split pane never shows a thumb taller than its track.
+
 ## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
 
 - [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift.
@@ -45,19 +56,39 @@ that checkout merely to run this check.
 - [ ] Every branch with terminals starts expanded after the reload; a branch collapsed via its icon stays collapsed after a restart.
 - [ ] [VISUAL] Repo header: GitHub badge sits right next to the repo chevron; on hover ⋯ and + appear to its left, nothing shifts.
 
+## Theme review applied (2026-09-23) — **Rust, needs a `make dev` restart**
+
+Bundled JSONs updated (VS Code Dark now follows VS Code Dark 2026), Deep Black / Delicate One removed, "Clean"
+shown as "Ink" and "VS Code Light" as "Paper", default and fallback moved to
+Commander (`config.rs` default, `DEFAULT_THEME` in `settings.ts`). Before/after
+reference: `docs/design/theme-gallery-2026-09-22/`. `seed_builtin_themes` is a
+no-op once `<config>/themes` exists, so an existing install sees none of the
+new colors or names until the JSONs are copied into that folder.
+
+- [ ] In a **restarted** instance with an empty `<config>/themes` (or
+      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance lists 13 themes, with Ink,
+      Paper and VS Code Dark and without Deep Black or Delicate One.
+- [ ] Same instance, `config.json` with `"theme": "does-not-exist"`: the app
+      opens in Commander and logs `falling back to commander`.
+- [ ] [VISUAL] On Paper: the toolbar wordmark is a clean grey with no dark
+      smear, a colored repo name is readable, and the active tab row in the
+      sidebar is visible.
+
 ## Clean theme bundled (2026-09-22) — **Rust, needs a `make dev` restart**
 
 `clean.json` is in `BUILTIN_THEMES`, but `seed_builtin_themes` is a no-op once
 `<config>/themes` exists, so no existing install receives it from the bundle.
 Verified live on 2026-09-22 by copying the file into
 `~/Library/Application Support/com.tuic.commander/themes/` (the watcher picked
-it up): pure black chrome, white accent, `-webkit-font-smoothing: antialiased`
-and `letter-spacing: 0.01em` on `html[data-theme="clean"]`, toast clamp at four lines.
+it up): pure black chrome, white accent, neutral tab-type tints on
+`html[data-theme="clean"]`, toast clamp at four lines. Font smoothing
+(`antialiased`, 0.01em tracking) is global on `html`, verified live on both
+Clean and VS Code Dark.
 
 - [ ] In a **restarted** instance with an empty `<config>/themes` (or
-      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Clean" without
+      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Ink" (key `clean`) without
       any manual copy.
-- [x] Selecting "Clean" applies the black chrome and antialiased text at once.
+- [x] Selecting "Ink" (then named "Clean") applies the black chrome and antialiased text at once.
       _(verified: live screenshot + `document.documentElement.dataset.theme ===
       "clean"`, computed `-webkit-font-smoothing: antialiased`, 2026-09-22)_
 
@@ -3401,3 +3432,40 @@ headed test browser window.
 - [ ] **[VISUAL]** Capture the two toast states together after the screenshot
       backend is available. Confirm the secondary button spacing, contrast and
       wrapping at the normal window width and at a narrow width.
+
+## SSH-managed `tuic-remote` deploy and install (stories `836-c262`–`847-ad3d`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+The Rust backend does not hot-reload. Restart the test instance before these
+checks; use `TUIC_APP_INSTANCE=remote-deploy-check` so no production connection
+or credential is touched.
+
+- [x] Against a throwaway Linux or Apple Silicon macOS SSH host with no daemon,
+      save **Deploy on connect** and click Connect. It must progress through
+      `Deploying: <step>` to Connected, bind only `127.0.0.1`, and leave the
+      host's agent configuration files unchanged.
+      _(verified 2026-09-22 through the HTTP parity surface against an isolated
+      Ubuntu systemd container on mac-mint: Connected, loopback listener only,
+      pairing token absent from argv, and no `~/.claude.json` created)_
+- [x] Disconnect, wait less than the configured survive time, and reconnect.
+      Existing remote sessions must still be present. After disconnecting for
+      longer than the survive time, the daemon and its pid file must disappear.
+      _(verified 2026-09-22: a three-second client between lifetime polls reset
+      the deadline; after the new idle window both process and pid file vanished)_
+- [x] Connect again with the same desktop version. The remote binary hash must
+      match, no second SCP should occur, and the vault pairing token must still
+      work after restarting the desktop test instance.
+      _(verified 2026-09-22: inode/mtime stayed unchanged and the isolated
+      credential-file digest survived a full `make dev` restart)_
+- [x] Click Install. On Linux verify the systemd user unit and mode-0600 env
+      file; on macOS verify the mode-0600 launchd plist. Reboot or log out/in and
+      confirm Connect no longer deploys. Then click Uninstall and confirm the
+      service files and ephemeral pid are gone.
+      _(verified 2026-09-22 on isolated Ubuntu/systemd via HTTP parity: unit and
+      protected env installed, linger enabled, service and loopback listener
+      returned after a container reboot before any SSH login, then Uninstall
+      removed the unit, env, pid and listener. launchd rendering/mode/lifecycle
+      are covered by the targeted Rust service tests.)_
+- [x] The Remote Machines form, deployment picker, survive-minutes field, SSH
+      host picker and monochrome icons were rendered in an isolated browser on
+      port 9877. _(verified 2026-09-22 from the worktree build; proof in
+      `.tmp/visual-proof/remote-machines-fields.png`)_

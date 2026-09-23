@@ -96,6 +96,16 @@ const VSCODE_DARK_ENTRY = makeRustEntry({
 	app_chrome: { bg_primary: "#1e1e1e" },
 });
 
+// The fallback theme. Its background differs from VS Code Dark and from the
+// hardcoded FALLBACK_* values, so a fallback test can only pass on Commander.
+const COMMANDER_ENTRY = makeRustEntry({
+	key: "commander",
+	name: "Commander",
+	background: "#202020",
+	foreground: "#d4d4d4",
+	app_chrome: { bg_primary: "#202020" },
+});
+
 const NORD_ENTRY = makeRustEntry({
 	key: "nord",
 	name: "Nord",
@@ -104,7 +114,7 @@ const NORD_ENTRY = makeRustEntry({
 	app_chrome: { bg_primary: "#2e3440" },
 });
 
-const FIXTURES = [DRACULA_ENTRY, VSCODE_DARK_ENTRY, NORD_ENTRY];
+const FIXTURES = [DRACULA_ENTRY, VSCODE_DARK_ENTRY, COMMANDER_ENTRY, NORD_ENTRY];
 
 describe("themes", () => {
 	let invoke: ReturnType<typeof vi.fn>;
@@ -127,7 +137,7 @@ describe("themes", () => {
 			expect(invoke).toHaveBeenCalledWith("list_themes");
 
 			const names = getThemeNames();
-			expect(Object.keys(names)).toHaveLength(3);
+			expect(Object.keys(names)).toHaveLength(4);
 			expect(names["dracula"]).toBe("Dracula");
 			expect(names["nord"]).toBe("Nord");
 		});
@@ -152,13 +162,13 @@ describe("themes", () => {
 			expect(theme.foreground).toBe("#f8f8f2");
 		});
 
-		it("falls back to vscode-dark for unknown key", async () => {
+		it("falls back to commander for unknown key", async () => {
 			invoke.mockResolvedValueOnce(FIXTURES);
 			const { loadThemes, getTerminalTheme } = await import("../themes");
 			await loadThemes();
 
 			const theme = getTerminalTheme("nonexistent");
-			expect(theme.background).toBe("#1e1e1e");
+			expect(theme.background).toBe("#202020");
 		});
 
 		it("returns hardcoded fallback when themes not loaded", async () => {
@@ -179,13 +189,13 @@ describe("themes", () => {
 			expect(theme.bgPrimary).toBe("#282a36");
 		});
 
-		it("falls back to vscode-dark for unknown key", async () => {
+		it("falls back to commander for unknown key", async () => {
 			invoke.mockResolvedValueOnce(FIXTURES);
 			const { loadThemes, getAppTheme } = await import("../themes");
 			await loadThemes();
 
 			const theme = getAppTheme("nonexistent");
-			expect(theme.bgPrimary).toBe("#1e1e1e");
+			expect(theme.bgPrimary).toBe("#202020");
 		});
 
 		it("returns hardcoded fallback when themes not loaded", async () => {
@@ -206,6 +216,7 @@ describe("themes", () => {
 			expect(names).toEqual({
 				dracula: "Dracula",
 				"vscode-dark": "VS Code Dark",
+				commander: "Commander",
 				nord: "Nord",
 			});
 		});
@@ -252,14 +263,14 @@ describe("themes", () => {
 			expect(document.documentElement.dataset.theme).toBe("nord");
 		});
 
-		it("falls back to vscode-dark for unknown theme", async () => {
+		it("falls back to commander for unknown theme", async () => {
 			invoke.mockResolvedValueOnce(FIXTURES);
 			const { loadThemes, applyAppTheme } = await import("../themes");
 			await loadThemes();
 
 			applyAppTheme("nonexistent");
 			const style = document.documentElement.style;
-			expect(style.getPropertyValue("--bg-primary")).toBe("#1e1e1e");
+			expect(style.getPropertyValue("--bg-primary")).toBe("#202020");
 		});
 
 		it("warns when applying unknown theme", async () => {

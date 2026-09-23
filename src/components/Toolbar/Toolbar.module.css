@@ -54,6 +54,30 @@
   display: none;
 }
 
+/* Embossed wordmark, derived from the theme so it holds on light backgrounds
+   too. On a dark toolbar these resolve close to the original fixed greys
+   (#060606 shadow, #3e3e3e rim, #909090 -> #5a5a5a face); on a light one the
+   shadow is a darkened background, a faint engraving instead of a black smear. */
+.nameShadow {
+  fill: color-mix(in oklab, var(--bg-primary) 70%, #000);
+}
+
+.nameHighlight {
+  fill: color-mix(in srgb, var(--bg-primary) 82%, #fff);
+}
+
+.nameGradStart {
+  stop-color: color-mix(in srgb, var(--fg-secondary) 85%, var(--bg-primary));
+}
+
+.nameGradMid {
+  stop-color: color-mix(in srgb, var(--fg-muted) 90%, var(--bg-primary));
+}
+
+.nameGradEnd {
+  stop-color: color-mix(in srgb, var(--fg-muted) 70%, var(--bg-primary));
+}
+
 .narrowSidebar .appNameFull {
   display: none;
 }

@@ -1,11 +1,15 @@
+use std::collections::BTreeSet;
 use std::io::BufReader;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use serde::Serialize;
 
 use super::profile::TunnelProfile;
 use super::storage::ProfileStore;
@@ -141,47 +145,171 @@ pub(crate) async fn get_tunnel_audit(
 
 // ── SSH config hosts ────────────────────────────────────────
 
-/// GET /tunnels/ssh-hosts — parse ~/.ssh/config and return host aliases.
-pub(crate) async fn list_ssh_config_hosts() -> Response {
-    let config_path = match dirs::home_dir() {
-        Some(h) => h.join(".ssh").join("config"),
-        None => return (StatusCode::OK, Json(serde_json::json!([]))).into_response(),
-    };
+const SSH_PROBE_CACHE_TTL: Duration = Duration::from_secs(60);
+const SSH_PROBE_TIMEOUT: Duration = Duration::from_secs(7);
+const SSH_PROBE_CONCURRENCY: usize = 4;
 
-    let file = match std::fs::File::open(&config_path) {
-        Ok(f) => f,
-        Err(_) => return (StatusCode::OK, Json(serde_json::json!([]))).into_response(),
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HostAuth {
+    Shell,
+    NoShell,
+    AuthFailed,
+    Unreachable,
+}
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct SshHostStatus {
+    pub(crate) host: String,
+    pub(crate) auth: HostAuth,
+}
+
+struct ProbeCacheEntry {
+    stored_at: Instant,
+    hosts: Vec<String>,
+    statuses: Vec<SshHostStatus>,
+}
+
+static SSH_PROBE_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<ProbeCacheEntry>>> =
+    std::sync::OnceLock::new();
+
+fn ssh_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".ssh").join("config"))
+}
+
+pub(crate) fn load_ssh_config_hosts() -> Result<Vec<String>, String> {
+    let Some(path) = ssh_config_path() else {
+        return Ok(Vec::new());
+    };
+    parse_ssh_config_hosts(&path)
+}
+
+fn parse_ssh_config_hosts(path: &FsPath) -> Result<Vec<String>, String> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("failed to read SSH config: {error}")),
+    };
     let mut reader = BufReader::new(file);
-    let config = match ssh2_config::SshConfig::default()
+    let config = ssh2_config::SshConfig::default()
         .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS)
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return err_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("failed to parse SSH config: {e}"),
-            );
-        }
-    };
-
-    let hosts: Vec<String> = config
+        .map_err(|error| format!("failed to parse SSH config: {error}"))?;
+    Ok(config
         .get_hosts()
         .iter()
-        .flat_map(|host| {
-            host.pattern.iter().filter_map(|clause| {
-                // Skip negated patterns and the wildcard-only pattern.
-                if clause.negated || clause.pattern == "*" {
-                    None
-                } else {
-                    Some(clause.pattern.clone())
-                }
-            })
-        })
-        .collect();
+        .flat_map(|host| &host.pattern)
+        .filter(|clause| !clause.negated && clause.pattern != "*")
+        .map(|clause| clause.pattern.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect())
+}
 
-    (StatusCode::OK, Json(serde_json::json!(hosts))).into_response()
+/// GET /tunnels/ssh-hosts — parse ~/.ssh/config and return host aliases.
+pub(crate) async fn list_ssh_config_hosts() -> Response {
+    match load_ssh_config_hosts() {
+        Ok(hosts) => (StatusCode::OK, Json(serde_json::json!(hosts))).into_response(),
+        Err(error) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    }
+}
+
+pub(crate) async fn probe_ssh_config_hosts_http() -> Response {
+    match probe_ssh_config_hosts().await {
+        Ok(statuses) => (StatusCode::OK, Json(serde_json::json!(statuses))).into_response(),
+        Err(error) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    }
+}
+
+pub(crate) async fn probe_ssh_config_hosts() -> Result<Vec<SshHostStatus>, String> {
+    let hosts = load_ssh_config_hosts()?;
+    let cache = SSH_PROBE_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    probe_cached(cache, hosts, FsPath::new("ssh"), SSH_PROBE_TIMEOUT).await
+}
+
+async fn probe_cached(
+    cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
+    hosts: Vec<String>,
+    binary: &FsPath,
+    timeout: Duration,
+) -> Result<Vec<SshHostStatus>, String> {
+    let mut cached = cache.lock().await;
+    if let Some(entry) = cached.as_ref()
+        && entry.hosts == hosts
+        && entry.stored_at.elapsed() < SSH_PROBE_CACHE_TTL
+    {
+        return Ok(entry.statuses.clone());
+    }
+    let statuses = probe_hosts_with_binary(hosts.clone(), binary, timeout).await;
+    *cached = Some(ProbeCacheEntry {
+        stored_at: Instant::now(),
+        hosts,
+        statuses: statuses.clone(),
+    });
+    Ok(statuses)
+}
+
+async fn probe_hosts_with_binary(
+    hosts: Vec<String>,
+    binary: &FsPath,
+    timeout: Duration,
+) -> Vec<SshHostStatus> {
+    use futures_util::StreamExt;
+    futures_util::stream::iter(hosts.into_iter().map(|host| async move {
+        let auth = probe_host_with_binary(&host, binary, timeout).await;
+        SshHostStatus { host, auth }
+    }))
+    .buffer_unordered(SSH_PROBE_CONCURRENCY)
+    .collect()
+    .await
+}
+
+fn probe_args(host: &str) -> Vec<String> {
+    vec![
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "ConnectTimeout=5".into(),
+        "-o".into(),
+        "StrictHostKeyChecking=accept-new".into(),
+        host.to_string(),
+        "true".into(),
+    ]
+}
+
+async fn probe_host_with_binary(host: &str, binary: &FsPath, timeout: Duration) -> HostAuth {
+    let mut command = tokio::process::Command::new(binary);
+    command
+        .args(probe_args(host))
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = match tokio::time::timeout(timeout, command.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) | Err(_) => return HostAuth::Unreachable,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    classify_probe(output.status.success(), &stdout, &stderr)
+}
+
+fn classify_probe(success: bool, stdout: &str, stderr: &str) -> HostAuth {
+    if success {
+        return HostAuth::Shell;
+    }
+    let message = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    if message.contains("does not provide shell access")
+        || message.contains("shell access is disabled")
+    {
+        HostAuth::NoShell
+    } else if matches!(
+        super::classifier::classify_exit(stderr, Some(255)),
+        super::classifier::ExitReason::AuthFailed
+    ) {
+        HostAuth::AuthFailed
+    } else {
+        HostAuth::Unreachable
+    }
 }
 
 // ── SSH agent keys ──────────────────────────────────────────
@@ -235,4 +363,103 @@ pub(crate) async fn list_agent_keys() -> Response {
         .collect();
 
     (StatusCode::OK, Json(serde_json::json!(keys))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_hosts_are_deduplicated_and_wildcards_are_omitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config");
+        std::fs::write(
+            &config,
+            "Host alpha beta\n  HostName example.test\nHost alpha\n  User boss\nHost * !internal\n  ServerAliveInterval 10\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            parse_ssh_config_hosts(&config).unwrap(),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+    }
+
+    #[test]
+    fn ssh_hosts_probe_uses_the_noninteractive_bounded_command() {
+        assert_eq!(
+            probe_args("vps"),
+            vec![
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "vps",
+                "true",
+            ]
+        );
+        assert_eq!(SSH_PROBE_CONCURRENCY, 4);
+    }
+
+    #[tokio::test]
+    async fn ssh_hosts_probe_classifies_shell_no_shell_auth_and_timeout() {
+        let shell = crate::test_support::fake_ssh_script("ssh-hosts-shell", "exit 0", "exit /b 0");
+        let no_shell = crate::test_support::fake_ssh_script(
+            "ssh-hosts-no-shell",
+            "echo 'This service does not provide shell access.' >&2; exit 1",
+            "echo This service does not provide shell access. 1>&2& exit /b 1",
+        );
+        let auth = crate::test_support::fake_ssh_script(
+            "ssh-hosts-auth",
+            "echo 'Permission denied (publickey).' >&2; exit 255",
+            "echo Permission denied (publickey). 1>&2& exit /b 255",
+        );
+        let timeout = crate::test_support::fake_ssh_script(
+            "ssh-hosts-timeout",
+            "sleep 2",
+            "ping -n 3 127.0.0.1 >nul",
+        );
+
+        assert_eq!(
+            probe_host_with_binary("host", &shell, Duration::from_secs(1)).await,
+            HostAuth::Shell
+        );
+        assert_eq!(
+            probe_host_with_binary("host", &no_shell, Duration::from_secs(1)).await,
+            HostAuth::NoShell
+        );
+        assert_eq!(
+            probe_host_with_binary("host", &auth, Duration::from_secs(1)).await,
+            HostAuth::AuthFailed
+        );
+        assert_eq!(
+            probe_host_with_binary("host", &timeout, Duration::from_millis(50)).await,
+            HostAuth::Unreachable
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_hosts_probe_cache_reuses_results_for_sixty_seconds() {
+        let cache = tokio::sync::Mutex::new(None);
+        let shell =
+            crate::test_support::fake_ssh_script("ssh-hosts-cache-shell", "exit 0", "exit /b 0");
+        let auth = crate::test_support::fake_ssh_script(
+            "ssh-hosts-cache-auth",
+            "echo 'Permission denied' >&2; exit 255",
+            "echo Permission denied 1>&2& exit /b 255",
+        );
+        let hosts = vec!["cached".to_string()];
+
+        let first = probe_cached(&cache, hosts.clone(), &shell, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let second = probe_cached(&cache, hosts, &auth, Duration::from_secs(1))
+            .await
+            .unwrap();
+
+        assert_eq!(first[0].auth, HostAuth::Shell);
+        assert_eq!(second, first, "fresh cache must skip the second process");
+    }
 }
