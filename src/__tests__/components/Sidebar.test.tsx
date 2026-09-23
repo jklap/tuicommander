@@ -1079,6 +1079,18 @@ describe("Sidebar", () => {
 			});
 		}
 
+		it("shows unmerged commits as a compact marker beside the PR and diff area", () => {
+			const container = renderLifecycle({
+				additions: 42,
+				lifecycleStatus: { dirtyFiles: 0, commitStatus: "unmerged", removalSafety: "safe" },
+			});
+			const marker = container.querySelector('[aria-label="Unmerged commits"]');
+			expect(marker).not.toBeNull();
+			expect(marker?.getAttribute("data-tooltip")).toContain("not merged into the default branch");
+			expect(container.querySelector(".lifecycleBadge")).toBeNull();
+			expect(container.querySelector(".branchStats")).not.toBeNull();
+		});
+
 		it("counts the files a removal would discard instead of calling the tree dirty", () => {
 			const container = renderLifecycle({
 				lifecycleStatus: { dirtyFiles: 24, commitStatus: "in_sync", removalSafety: "requires_force" },

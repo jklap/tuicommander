@@ -597,9 +597,8 @@ export const BranchItem: Component<{
 							if (status().commitStatus === "merged") return "Merged";
 							return null;
 						};
-						// Only the dirty count points at a diff; Unknown and Merged have none to show.
-						const opensChanges = () =>
-							!!props.onShowChanges && status().commitStatus !== "unknown" && lostFiles() > 0;
+						// Only the dirty count points at a diff; commit verdicts have none to show.
+						const opensChanges = () => !!props.onShowChanges && status().commitStatus !== "unknown" && lostFiles() > 0;
 						const tooltip = () => {
 							if (status().commitStatus === "unknown") {
 								const explanation =
@@ -614,9 +613,13 @@ export const BranchItem: Component<{
 									? "HEAD is merged"
 									: status().commitStatus === "in_sync"
 										? "HEAD is the default branch tip — no commits of its own"
-										: "HEAD remains in the parent";
+										: "Branch has commits not merged into the default branch";
 							const removal =
-								status().removalSafety === "safe" ? "safe to remove" : "destructive confirmation required";
+								status().commitStatus === "unmerged"
+									? "merge before deleting the branch"
+									: status().removalSafety === "safe"
+										? "safe to remove"
+										: "destructive confirmation required";
 							return `Clean working tree; ${commitState}; ${removal}`;
 						};
 						return (
@@ -640,8 +643,20 @@ export const BranchItem: Component<{
 						);
 					}}
 				</Show>
-				<Show when={pr() || hasDiff()}>
+				<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged" || pr() || hasDiff()}>
 					<div class={s.branchBadgeStack}>
+						<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged"}>
+							<span
+								class={s.branchUnmergedMarker}
+								aria-label="Unmerged commits"
+								data-tooltip="Branch has commits not merged into the default branch. Merge before deleting the branch."
+								data-tooltip-pos="bottom"
+								data-tooltip-align="right"
+								tabIndex={0}
+							>
+								<span class={s.branchUnmergedGlyph} aria-hidden="true" />
+							</span>
+						</Show>
 						<Show when={pr()}>
 							<span
 								class={(() => {

@@ -143,12 +143,13 @@ Removing a worktree:
 1. Closes all terminals associated with that branch
 2. Runs `git worktree remove` to clean up
 3. Removes the branch entry from the sidebar
-4. If branch deletion was requested but `git branch -d` keeps the branch because it is not safely merged, shows a status message that the worktree was removed and the branch was kept
+4. If branch deletion was requested, checks for unmerged commits before removing the worktree. An unmerged branch blocks the operation and stays in the sidebar. Merge it first, or turn off **Delete branch on remove** to keep the branch.
+5. If Git rejects branch deletion after removal despite the preflight check, shows a status message that the worktree was removed and the branch was kept.
 
 Immediately before removal, TUICommander refreshes the backend lifecycle verdict
 for the exact workspace id. Dirty files require an explicit destructive
 confirmation; `Unknown` blocks removal. Commits live in the parent object store,
-and safe branch deletion keeps an unmerged branch instead of discarding it.
+and a clean worktree with unmerged commits is marked `Unmerged` in the sidebar.
 
 ## Worktree Manager Panel
 

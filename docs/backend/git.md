@@ -194,6 +194,9 @@ valid, cold linked worktree.
 Lifecycle is backend-authored from the exact checkout `HEAD`. Linked worktrees
 report dirty state, default-branch ancestry, and removal safety. Any failed check
 serializes as `unknown`, never as clean or safe.
+When branch deletion is requested without force, worktree removal checks this
+verdict before touching the checkout. An unmerged branch or unknown verdict
+stops the combined operation and leaves the worktree in place.
 
 The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository: concurrent requests join the active run and coalesce into one trailing rerun. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
 
