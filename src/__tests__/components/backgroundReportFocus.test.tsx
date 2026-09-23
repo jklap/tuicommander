@@ -114,6 +114,7 @@ it("background_report_open_and_update_preserve_terminal_input_focus — catches:
 		setStatusInfo: noop,
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: noop,
+		handleWorktreeSetupScriptCompleted: noop,
 		getDefaultFontSize: () => 14,
 		stores: {
 			hydrate: vi.fn().mockResolvedValue(undefined),

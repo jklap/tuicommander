@@ -2,6 +2,7 @@ import { type Accessor, createEffect, createRoot, type Setter } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../../agents";
 import { ensureAgentConfigsForRepo } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
+import { repoSettingsStore } from "../../stores/repoSettings";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { workItemLinksStore } from "../../stores/workItemLinks";
@@ -18,6 +19,11 @@ import { prepareAgentLaunchCommand } from "../../utils/agentSession";
 import { usePty } from "../usePty";
 import type { AgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
+import {
+	armSetupScriptWaiter,
+	type SetupNewWorktreeOptions,
+	type SetupScriptWaiter,
+} from "./createWorktreeCreationCoordinator";
 
 /** Maximum characters of a brief typed into an agent; item bodies can be arbitrarily long. */
 export const START_WORK_PROMPT_CAP = 12_000;
@@ -64,6 +70,7 @@ export interface StartWorkDeps {
 		result: PendingCreation["result"],
 		displayName: string,
 		agentSeed?: AgentSeed,
+		options?: SetupNewWorktreeOptions,
 	) => Promise<string | undefined>;
 	setStatusInfo: (message: string) => void;
 	creatingWorktreeRepos: Accessor<Set<string>>;
@@ -191,6 +198,7 @@ export function createStartWork(deps: StartWorkDeps) {
 		let seed: Awaited<ReturnType<typeof resolveStartWorkAgent>>;
 		let result: PendingCreation["result"] & { status: "ok" };
 		let termId: string | undefined;
+		let setupWaiter: SetupScriptWaiter | undefined;
 		try {
 			const submit = request.delivery === "submit";
 			seed = await resolveStartWorkAgent(repoPath, request.agentType, submit ? brief : undefined);
@@ -200,8 +208,14 @@ export function createStartWork(deps: StartWorkDeps) {
 				base = baseRefs.find((r) => r.is_default)?.name ?? baseRefs[0]?.name ?? "main";
 			}
 			deps.setStatusInfo(`Creating worktree ${branch}...`);
+			// Armed before the request: the backend chain may finish its Setup
+			// Script before createWorktree's response is processed.
+			setupWaiter = repoSettingsStore.getEffective(repoPath)?.setupScript ? armSetupScriptWaiter(repoPath) : undefined;
 			result = await deps.createWorktree(repoPath, branch, true, base);
-			termId = await deps.setupNewWorktree(repoPath, result, branch, seed);
+			termId = await deps.setupNewWorktree(repoPath, result, branch, seed, { setupWaiter });
+		} catch (err) {
+			setupWaiter?.cancel();
+			throw err;
 		} finally {
 			deps.setCreatingWorktreeRepos((prev) => {
 				const next = new Set(prev);

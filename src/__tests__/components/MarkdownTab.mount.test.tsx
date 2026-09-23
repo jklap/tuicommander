@@ -182,6 +182,52 @@ describe("MarkdownTab", () => {
 			expect(mockReadFile).not.toHaveBeenCalled();
 		});
 
+		// HTTP-transport-only: this 403 can only come back from the `invoke` branch
+		// (an absolute path routed through `read_external_file`), which is unreachable
+		// on native Tauri — the IPC command has no repo-root gate at all.
+		describe("HTTP read-gate 403 (access denied)", () => {
+			const deniedError = new Error(
+				'RPC read_external_file failed: 403 {"error":"Access denied: path must be within a registered repository or an allowed directory"}',
+			);
+
+			it("shows a friendly message and does NOT log at error level", async () => {
+				mockInvoke.mockRejectedValue(deniedError);
+				const { container } = render(() => <MarkdownTab tab={fileTab({ filePath: "/etc/motd", repoPath: "" })} />);
+
+				await waitFor(() =>
+					expect(container.querySelector("#markdown-content")?.textContent).toContain("registered repositories"),
+				);
+				expect(appLogger.error).not.toHaveBeenCalled();
+			});
+
+			it("logs at debug level with a distinct message", async () => {
+				mockInvoke.mockRejectedValue(deniedError);
+				render(() => <MarkdownTab tab={fileTab({ filePath: "/etc/motd", repoPath: "" })} />);
+
+				await waitFor(() =>
+					expect(appLogger.debug).toHaveBeenCalledWith(
+						"app",
+						"readFileContent denied by the HTTP read gate",
+						expect.anything(),
+					),
+				);
+			});
+		});
+
+		it("a generic permission-denied error still logs at error level and renders the raw message (regression guard)", async () => {
+			mockInvoke.mockRejectedValue(new Error("permission denied (os error 13)"));
+			const { container } = render(() => <MarkdownTab tab={fileTab({ filePath: "/etc/motd", repoPath: "" })} />);
+
+			await waitFor(() =>
+				expect(container.querySelector("#markdown-content")?.textContent).toContain("permission denied"),
+			);
+			expect(appLogger.error).toHaveBeenCalledWith(
+				"app",
+				"readFileContent failed",
+				expect.objectContaining({ error: "permission denied (os error 13)" }),
+			);
+		});
+
 		it("sets empty content when the file tab has no filePath", () => {
 			const { container } = render(() => <MarkdownTab tab={fileTab({ filePath: "" })} />);
 			expect(container.querySelector("#markdown-content")?.textContent).toContain("No content");
