@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { invoke, listen } from "./invoke";
 import { appLogger } from "./stores/appLogger";
-import { FONT_FAMILIES, type FontType, settingsStore } from "./stores/settings";
+import { DEFAULT_THEME, FONT_FAMILIES, type FontType, settingsStore } from "./stores/settings";
 
 /** Terminal color theme (mirrors xterm.js ITheme keys used by CanvasTerminal) */
 export interface TerminalTheme {
@@ -211,14 +211,14 @@ export async function listenForThemeChanges(): Promise<void> {
 	});
 }
 
-/** Get a terminal theme by key, falling back to vscode-dark */
+/** Get a terminal theme by key, falling back to DEFAULT_THEME */
 export function getTerminalTheme(key: string): TerminalTheme {
-	return themes.get(key)?.terminal ?? themes.get("vscode-dark")?.terminal ?? FALLBACK_TERMINAL;
+	return themes.get(key)?.terminal ?? themes.get(DEFAULT_THEME)?.terminal ?? FALLBACK_TERMINAL;
 }
 
-/** Get an app theme by key, falling back to vscode-dark */
+/** Get an app theme by key, falling back to DEFAULT_THEME */
 export function getAppTheme(key: string): IAppTheme {
-	return themes.get(key)?.appChrome ?? themes.get("vscode-dark")?.appChrome ?? FALLBACK_APP;
+	return themes.get(key)?.appChrome ?? themes.get(DEFAULT_THEME)?.appChrome ?? FALLBACK_APP;
 }
 
 /** Get display names for all loaded themes. */
@@ -310,7 +310,7 @@ export { themeGeneration };
 export function applyAppTheme(key: string): void {
 	const appTheme = themes.get(key);
 	if (!appTheme) {
-		appLogger.warn("app", `Unknown theme "${key}", falling back to vscode-dark`);
+		appLogger.warn("app", `Unknown theme "${key}", falling back to ${DEFAULT_THEME}`);
 	}
 	const theme = getAppTheme(key);
 	const root = document.documentElement.style;

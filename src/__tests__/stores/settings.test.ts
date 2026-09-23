@@ -297,6 +297,23 @@ describe("settingsStore", () => {
 			});
 		});
 
+		it("falls back to the commander theme when the config names none", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				shell: null,
+				font_family: "Hack",
+				font_size: 14,
+				theme: "",
+				mcp_server_enabled: false,
+				ide: "zed",
+				default_font_size: 16,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.theme).toBe("commander");
+			});
+		});
+
 		it("migrates legacy IDE from localStorage", async () => {
 			localStorage.setItem("tui-commander-default-ide", "cursor");
 			mockInvoke.mockResolvedValueOnce({

@@ -9,7 +9,7 @@ import { settingsStore } from "../../stores/settings";
 import { tunnelPanelStore } from "../../stores/tunnelPanel";
 import { tunnelsStore } from "../../stores/tunnels";
 import { uiStore } from "../../stores/ui";
-import { getRepoColor } from "../../utils/repoColor";
+import { getRepoTextColor } from "../../utils/repoColor";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { PromptDialog } from "../PromptDialog";
@@ -270,7 +270,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	/** Render a single RepoSection with all its props */
 	const renderRepoSection = (repo: RepositoryState) => {
 		// Color inheritance: repo color > group color > undefined
-		const nameColor = () => getRepoColor(repo.path);
+		const nameColor = () => getRepoTextColor(repo.path);
 
 		return (
 			<RepoSection

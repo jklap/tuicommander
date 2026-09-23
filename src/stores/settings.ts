@@ -80,6 +80,10 @@ interface RustAppConfig {
 }
 
 // Default values
+/** Theme used when the configured key is empty or names no loaded theme.
+ *  Lives here, not in themes.ts: themes.ts imports this store. */
+export const DEFAULT_THEME = "commander";
+
 const DEFAULTS = {
 	ide: "vscode" as const,
 	font: "JetBrains Mono" as const,
@@ -330,7 +334,7 @@ function createSettingsStore() {
 		fontWeight: DEFAULTS.fontWeight,
 		defaultFontSize: DEFAULTS.fontSize,
 		shell: null,
-		theme: "commander",
+		theme: DEFAULT_THEME,
 		confirmBeforeQuit: true,
 		confirmBeforeClosingTab: true,
 		maxTabNameLength: 25,
@@ -497,7 +501,7 @@ function createSettingsStore() {
 				setState("ide", validateIde(config.ide));
 				setState("defaultFontSize", config.default_font_size || DEFAULTS.fontSize);
 				setState("shell", config.shell || null);
-				setState("theme", config.theme || "vscode-dark");
+				setState("theme", config.theme || DEFAULT_THEME);
 				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
 				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
 				setState("maxTabNameLength", config.max_tab_name_length || 25);

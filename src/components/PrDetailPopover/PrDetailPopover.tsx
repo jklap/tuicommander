@@ -17,7 +17,7 @@ import { cx } from "../../utils";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { isAlreadyMerged, mergeWithFallback } from "../../utils/prMerge";
 import { prContextVariables } from "../../utils/promptContext";
-import { getRepoColor } from "../../utils/repoColor";
+import { getRepoTextColor } from "../../utils/repoColor";
 import { interpolateTemplate } from "../../utils/templateInterpolation";
 import {
 	type CleanupStep,
@@ -313,7 +313,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 
 	const shouldAnchorTop = () => props.anchor === "top" || (!props.anchor && flippedTop());
 
-	const repoColor = createMemo(() => getRepoColor(props.repoPath));
+	const repoColor = createMemo(() => getRepoTextColor(props.repoPath));
 
 	const stateClass = () => {
 		if (prData()?.is_draft) return "draft";

@@ -16,8 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Voice progress reaches browser and remote clients** — Model and speech-asset download progress, and every state a spoken reply passes through, are pushed on the `/events` stream as well as to the desktop window. A browser tab no longer watches a download start and finish with nothing in between, and no longer polls to learn that a reply ended.
 - **Hands-free conversation from a browser tab** — A browser or PWA client uses its own microphone and speaker: Settings > Dictation now opens outside the desktop app, and starting a conversation there is heard and answered where you are. The two sides never mix — arming from a laptop cannot open the microphone on the machine running TUICommander, and the desktop cannot take audio from a browser — and a client that has no audio connection is refused rather than quietly served the server's hardware. Closing the tab ends the conversation it held, leaving nothing queued and nothing speaking. The global dictation hotkey and the microphone-device list stay desktop-only.
 
+### Changed
+
+- **Bundled themes reviewed** — Commander, Darksun, Minimal Kiwi, Monokai, Tokyo Night, Solarized Dark, Ink and Paper separate the main area, sidebar, hover and selection more clearly and draw visible borders. Commander's chrome matches its terminal background and its accent is brighter; Minimal Kiwi's success green no longer equals its accent; Paper has readable terminal yellow and cyan. "Clean" is renamed **Ink** and "VS Code Light" **Paper** (theme keys unchanged, so saved settings keep working). VS Code Dark now follows VS Code's current default, Dark 2026 (darker, cooler greys), instead of the old Dark+ palette. Commander is now the default and the fallback for an unknown theme. The toolbar wordmark, sidebar tab selection and repository name colors follow the theme, so they stay readable on Paper.
+
 ### Removed
 
+- Removed the Deep Black and Delicate One bundled themes: near-duplicates of Ink and of the neutral greys. An existing install keeps the files it already has in its themes folder.
 - Retired the external Voice plugin that read terminal text through Web Speech synthesis. Native Kokoro voice conversation is planned separately in Dictation.
 
 ### Fixed

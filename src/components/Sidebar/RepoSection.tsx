@@ -207,13 +207,18 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 				{(id) => {
 					const term = () => terminalsStore.get(id);
 					const isActive = () => terminalsStore.state.activeId === id;
-					const activity = () => {
+					// The row shows the tab title, as the tab bar does; what the agent is
+					// doing goes in the tooltip.
+					const activity = () => term()?.name ?? null;
+					const detail = () => {
 						const t = term();
-						return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt ?? t.name) : null;
+						return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt) : null;
 					};
 					const accessibleLabel = () => {
 						const t = term();
-						return t ? `${t.name}: ${activity()}` : undefined;
+						if (!t) return undefined;
+						const d = detail();
+						return d ? `${t.name}: ${d}` : t.name;
 					};
 					const dotClass = () => {
 						const t = term();
