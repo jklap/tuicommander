@@ -51,6 +51,31 @@ pub(crate) enum RemoteTransport {
         /// `tunnels::profile::TunnelProfile` via `SshConnectionParams`.
         ssh: SshConnectionParams,
         remote_daemon_port: u16,
+        /// Remote daemon provisioning (plan Phase 5): if the SSH tunnel
+        /// fails to connect (nothing listening on `remote_daemon_port`) and
+        /// this is set, Connect offers to probe/install/start `tuic-remote`
+        /// on the remote host — always with an explicit confirmation dialog
+        /// first, never silently. `SSH Tunnel` kind connections never have
+        /// this concept; only a Remote Server — SSH connection targets a
+        /// `tuic-remote` daemon specifically.
+        #[serde(default)]
+        start_if_not_running: bool,
+        /// Only meaningful when this session's Connect actually started the
+        /// daemon itself (tracked in-memory on the frontend, never here) —
+        /// if false, Disconnect stops it again; if true, it's left running
+        /// for next time.
+        #[serde(default)]
+        leave_running_on_disconnect: bool,
+        /// The `--instance <id>` argument passed when *we* launch or
+        /// configure the daemon ourselves (start, `--set-password`) — an
+        /// argument we choose, never state read back from the remote host.
+        /// Distinct from `Local`'s `instance_id`, which instead *resolves* a
+        /// port by reading a local instance's own config off disk; SSH
+        /// deliberately does not do the remote equivalent of that (considered
+        /// and rejected — see the plan's "Remote daemon provisioning" section
+        /// for why remote auto-discovery isn't worth the fragility).
+        #[serde(default)]
+        instance_id: Option<String>,
     },
     Direct {
         url: String,
@@ -92,6 +117,9 @@ impl RemoteConnection {
             transport: RemoteTransport::Ssh {
                 ssh: SshConnectionParams::new(host, ssh_user.clone()),
                 remote_daemon_port: 9877,
+                start_if_not_running: false,
+                leave_running_on_disconnect: false,
+                instance_id: None,
             },
             auth_username: Some(ssh_user),
             enabled: true,
@@ -438,6 +466,60 @@ pub fn get_local_instance_port(instance_id: String) -> Result<u16, String> {
     resolve_local_instance_port(&instance_id).map_err(|e| e.to_string())
 }
 
+/// Set an SSH remote daemon's password from its OWN already-saved
+/// credentials (`auth_username` + the keyring entry for this connection id)
+/// — never from a value passed in over IPC/HTTP. This is what `connect()`'s
+/// "offer to configure" step (plan Phase 5) calls for an already-saved
+/// connection being connected from the list, where the frontend never has
+/// the plaintext password in hand at all (only the Settings editor's
+/// in-progress form does, and that flow already goes through Test
+/// Connection/Save, not this path). Keeps the plaintext password
+/// server-side for this call site too, consistent with the rest of this
+/// story's security posture.
+pub(crate) async fn configure_ssh_daemon_password_impl(
+    state: &crate::AppState,
+    connection_id: &str,
+) -> Result<(), String> {
+    let connections = RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
+    let connection = connections
+        .into_iter()
+        .find(|c| c.id == connection_id)
+        .ok_or_else(|| format!("connection '{connection_id}' not found"))?;
+    let RemoteTransport::Ssh {
+        ssh, instance_id, ..
+    } = &connection.transport
+    else {
+        return Err(
+            "configure_ssh_daemon_password is only valid for an SSH remote connection".to_string(),
+        );
+    };
+    let username = connection
+        .auth_username
+        .clone()
+        .ok_or_else(|| "no auth username configured for this connection".to_string())?;
+    let password = crate::credentials::get(crate::credentials::Credential::RemoteConnection(
+        connection_id,
+    ))?
+    .ok_or_else(|| "no password configured for this connection".to_string())?;
+    let agent_socket = crate::tunnels::agent::discover_agent_socket();
+    crate::ssh_provision::set_ssh_daemon_password(
+        ssh,
+        agent_socket.as_deref(),
+        instance_id.as_deref(),
+        &username,
+        &password,
+    )
+    .await
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn configure_ssh_daemon_password(
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    connection_id: String,
+) -> Result<(), String> {
+    configure_ssh_daemon_password_impl(&state, &connection_id).await
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn remote_connection_password_exists(id: String) -> Result<bool, String> {
     crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id))
@@ -480,12 +562,18 @@ mod tests {
             RemoteTransport::Ssh {
                 ssh,
                 remote_daemon_port,
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
             } => {
                 assert_eq!(ssh.host, "example.com");
                 assert_eq!(ssh.port, 22);
                 assert_eq!(ssh.user, "alice");
                 assert!(ssh.identity_file.is_none());
                 assert_eq!(remote_daemon_port, 9877);
+                assert!(!start_if_not_running);
+                assert!(!leave_running_on_disconnect);
+                assert!(instance_id.is_none());
             }
             other => panic!("expected Ssh, got {other:?}"),
         }
@@ -500,7 +588,10 @@ mod tests {
         assert_eq!(decoded.auth_username, Some("bob".to_string()));
         assert!(decoded.enabled);
         match decoded.transport {
-            RemoteTransport::Direct { url, tls_fingerprint } => {
+            RemoteTransport::Direct {
+                url,
+                tls_fingerprint,
+            } => {
                 assert_eq!(url, "http://office:9877");
                 assert!(tls_fingerprint.is_none());
             }
@@ -567,6 +658,75 @@ mod tests {
         assert_eq!(decoded.auth_username, None);
     }
 
+    /// Phase-1-shaped `RemoteTransport::Ssh` JSON (before Phase 5 added
+    /// `start_if_not_running`/`leave_running_on_disconnect`/`instance_id`)
+    /// must still deserialize — same backward-compat contract as
+    /// `legacy_string_auth_username_still_deserializes` above.
+    #[test]
+    fn pre_phase5_ssh_transport_json_still_deserializes() {
+        let json = serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "name": "legacy-ssh",
+            "transport": {
+                "type": "Ssh",
+                "ssh": {
+                    "host": "h", "port": 22, "user": "u", "identity_file": null,
+                    "server_alive_interval": 15, "server_alive_count_max": 3,
+                    "strict_host_key_checking": "Yes",
+                },
+                "remote_daemon_port": 9877,
+            },
+            "enabled": true,
+        });
+        let decoded: RemoteConnection = serde_json::from_value(json).unwrap();
+        match decoded.transport {
+            RemoteTransport::Ssh {
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
+                ..
+            } => {
+                assert!(!start_if_not_running);
+                assert!(!leave_running_on_disconnect);
+                assert!(instance_id.is_none());
+            }
+            other => panic!("expected Ssh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ssh_provisioning_fields_round_trip_when_set() {
+        let mut conn = RemoteConnection::new_ssh("prov", "h", "u");
+        let RemoteTransport::Ssh {
+            start_if_not_running,
+            leave_running_on_disconnect,
+            instance_id,
+            ..
+        } = &mut conn.transport
+        else {
+            panic!("expected Ssh");
+        };
+        *start_if_not_running = true;
+        *leave_running_on_disconnect = true;
+        *instance_id = Some("dev-box".to_string());
+
+        let json = serde_json::to_string(&conn).unwrap();
+        let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
+        match decoded.transport {
+            RemoteTransport::Ssh {
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
+                ..
+            } => {
+                assert!(start_if_not_running);
+                assert!(leave_running_on_disconnect);
+                assert_eq!(instance_id, Some("dev-box".to_string()));
+            }
+            other => panic!("expected Ssh, got {other:?}"),
+        }
+    }
+
     #[test]
     fn serde_tag_produces_correct_type_field() {
         let ssh = RemoteConnection::new_ssh("s", "h", "u");
@@ -617,10 +777,16 @@ mod tests {
             RemoteTransport::Ssh {
                 ssh,
                 remote_daemon_port,
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
             } => {
                 assert_eq!(ssh.port, 22);
                 assert_eq!(remote_daemon_port, 9877);
                 assert_eq!(ssh.user, "myuser");
+                assert!(!start_if_not_running, "provisioning must default off");
+                assert!(!leave_running_on_disconnect);
+                assert!(instance_id.is_none());
             }
             other => panic!("expected Ssh, got {other:?}"),
         }

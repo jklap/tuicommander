@@ -106,6 +106,7 @@
 /config/remote-connections/probe-direct-tls
 /config/remote-connections/test
 /config/remote-connections/x
+/config/remote-connections/x/configure-ssh-password
 /config/remote-connections/x/direct-proxy
 /config/remote-connections/x/password
 /config/remote-connections/x/password/exists
@@ -116,6 +117,12 @@
 /config/repositories
 /config/repositories/stale-temp
 /config/slot-test
+/config/ssh-daemon/check-version
+/config/ssh-daemon/install
+/config/ssh-daemon/probe
+/config/ssh-daemon/set-password
+/config/ssh-daemon/start
+/config/ssh-daemon/stop
 /config/themes
 /config/ui-prefs
 /diagnostics/capture

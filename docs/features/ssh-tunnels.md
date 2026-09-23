@@ -194,6 +194,21 @@ One form — Name + a Kind dropdown (SSH Tunnel / Remote Server — SSH / Remote
 
 When creating a "Remote Server — SSH" connection (`RemoteConnection` with `RemoteTransport::Ssh`), a tunnel profile is automatically created to forward the daemon port. The tunnel supervisor manages the SSH connection, and the remote connection routes API calls through the forwarded port.
 
+### Remote Daemon Provisioning
+
+`RemoteTransport::Ssh` carries three additional fields beyond the shared `SshConnectionParams`/`remote_daemon_port`, all specific to the "Remote Server — SSH" kind (not shared with plain tunnel profiles): `start_if_not_running`, `leave_running_on_disconnect`, and `instance_id` (an optional `--instance <id>` argument used only when *this connection* launches or configures the remote daemon itself — never used for discovery, unlike Local's `instance_id`).
+
+`ssh_provision.rs` owns the actual remote-side mechanics, all built as pure `build_*_command`/`parse_*_output` functions plus a thin async wrapper that runs the real SSH command — this split means the substantive logic (exact commands, output classification) is unit-testable without spawning any process:
+
+- `probe_ssh_daemon_state` — `command -v tuic-remote` plus a port probe, classified as `Running` / `NotRunningBinaryPresent` / `NotRunningBinaryMissing`
+- `probe_remote_artifact` + `install_tuic_remote_binary` — `uname -s`/`uname -m` to pick the right release artifact, downloaded and streamed to the remote over the same SSH connection's stdin (no `scp` dependency)
+- `start_ssh_daemon` — fire-and-forget `nohup ... &disown`, passing `TUIC_PORT` and (if set) `--instance <id>`
+- `stop_ssh_daemon` — PID-verified stop, mirroring `tunnels/port.rs`'s `kill_ssh_on_port` discipline (confirm the PID is actually the expected process before signaling), reimplemented as a single remote shell command since the process lives on the far end
+- `set_ssh_daemon_password` — pipes credentials to `tuic-remote [--instance <id>] --set-password` over stdin, the same pipeable interface documented in [tuic-remote Setup](../user-guide/remote-access.md#setup-1)
+- `compare_versions` — pure string comparison backing the version-mismatch warning shown after Connect (SSH and Direct both use this; Direct only ever compares, since none of the SSH-specific remote actions apply to it)
+
+The frontend orchestration (`remoteConnections.ts`'s `ensureSshDaemonRunning`/`offerToConfigureIfUnconfigured`/`checkRemoteVersionAfterConnect`) gates every remote-state-changing step behind an explicit confirmation dialog (`PendingProvisionConfirmation`, rendered by `ProvisionConfirmDialog.tsx`) — never a silent default. A genuinely unconfigured daemon (empty username/password on the far end) is distinguished from a wrong password purely by the 401 response body text (`mcp_http/auth.rs`'s `AuthResult::NotConfigured` vs `Invalid`); only the former ever offers to auto-configure credentials.
+
 ## Module Map
 
 | Module | Responsibility |
@@ -210,6 +225,7 @@ When creating a "Remote Server — SSH" connection (`RemoteConnection` with `Rem
 | `tunnels/manager.rs` | Orchestrate multiple supervisors |
 | `tunnels/tauri_commands.rs` | Tauri IPC command handlers (desktop) |
 | `tunnels/commands.rs` | HTTP command handlers (browser mode) |
+| `ssh_provision.rs` | Remote daemon provisioning: probe/install/start/stop `tuic-remote` and set its password over SSH, plus version comparison |
 
 ## Auto-Connect
 

@@ -26,6 +26,16 @@ export type RemoteTransport =
 			/** Host/port/user/identity/keepalive config — shared shape with `TunnelProfile.ssh`. */
 			ssh: SshConnectionParams;
 			remote_daemon_port: number;
+			/** Remote daemon provisioning (Phase 5): offer to probe/install/start
+			 * `tuic-remote` on the remote host if the tunnel fails to connect. */
+			start_if_not_running: boolean;
+			/** Only meaningful when this session's Connect actually started the
+			 * daemon — if false, Disconnect stops it again. */
+			leave_running_on_disconnect: boolean;
+			/** `--instance <id>` passed when WE launch/configure the daemon
+			 * ourselves — an argument we choose, never state read back from the
+			 * remote. Distinct from `Local`'s `instance_id`. */
+			instance_id: string | null;
 	  }
 	| {
 			type: "Direct";
@@ -91,6 +101,34 @@ export interface PendingFingerprintConfirmation {
 	fingerprint: string;
 }
 
+/**
+ * Result of `probeSshDaemon`. Mirrors the Rust `SshDaemonState` enum
+ * (`src-tauri/src/ssh_provision.rs`). Story: SSH Tunnels + Remote Servers
+ * consolidation, Phase 5.
+ */
+export type SshDaemonState =
+	| { type: "Running" }
+	| { type: "NotRunningBinaryPresent" }
+	| { type: "NotRunningBinaryMissing" };
+
+/** Mirrors the Rust `VersionCheckResult` enum. */
+export type VersionCheckResult =
+	| { type: "Match" }
+	| { type: "Outdated"; remote_version: string; local_version: string };
+
+/**
+ * A remote-daemon-provisioning step (Phase 5) needs the user's explicit
+ * confirmation before it acts — never a silent default. One at a time, like
+ * `PendingFingerprintConfirmation`, rendered by a dialog in `RemoteServersTab`.
+ */
+export interface PendingProvisionConfirmation {
+	connectionId: string;
+	connectionName: string;
+	/** e.g. "tuic-remote isn't installed on host — download and install it now?" */
+	message: string;
+	confirmLabel: string;
+}
+
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
 export interface ConnectionState {
@@ -103,6 +141,13 @@ export interface ConnectionState {
 	/** Whether a Direct-transport TLS/auth proxy (Phase 4) is running for
 	 * this connection — so `disconnect()` knows whether to stop one. */
 	directProxyStarted?: boolean;
+	/** Whether THIS session's Connect started the remote daemon itself (Phase
+	 * 5) — never persisted; only meaningful for as long as the app runs.
+	 * `disconnect()` only ever stops a daemon this session actually started. */
+	sshDaemonStartedBySession?: boolean;
+	/** Set after a successful connect if the remote's `/api/version` differs
+	 * from this app's own version — informational, never blocks the connection. */
+	versionWarning?: string;
 }
 
 interface RemoteConnectionsState {
@@ -153,6 +198,27 @@ function createRemoteConnectionsStore() {
 		return new Promise((resolve) => {
 			confirmationResolver = resolve;
 			setPendingConfirmation({ connectionId, connectionName, url, fingerprint });
+		});
+	}
+
+	// Remote daemon provisioning confirmations (Phase 5) — same one-at-a-time
+	// pattern as the fingerprint confirmation above, generalized to an
+	// arbitrary message/label since provisioning has several distinct
+	// confirmable steps (install missing binary, set an unconfigured
+	// password, update an outdated binary) rather than one fixed question.
+	const [pendingProvisionConfirmation, setPendingProvisionConfirmation] =
+		createSignal<PendingProvisionConfirmation | null>(null);
+	let provisionConfirmationResolver: ((accepted: boolean) => void) | null = null;
+
+	function requestProvisionConfirmation(
+		connectionId: string,
+		connectionName: string,
+		message: string,
+		confirmLabel: string,
+	): Promise<boolean> {
+		return new Promise((resolve) => {
+			provisionConfirmationResolver = resolve;
+			setPendingProvisionConfirmation({ connectionId, connectionName, message, confirmLabel });
 		});
 	}
 
@@ -216,6 +282,144 @@ function createRemoteConnectionsStore() {
 		return false;
 	}
 
+	/** This app's own version — `getVersion()` (Tauri OS API) on desktop; the
+	 * same `/api/version` a remote daemon serves, but against the CURRENT
+	 * origin, in browser mode (there is no Tauri command for it — desktop
+	 * doesn't need one, browser mode already has same-origin `fetch`). */
+	async function getLocalAppVersion(): Promise<string | null> {
+		try {
+			const { isTauri } = await import("../transport");
+			if (isTauri()) {
+				const { getVersion } = await import("@tauri-apps/api/app");
+				return await getVersion();
+			}
+			const resp = await fetch("/api/version");
+			if (!resp.ok) return null;
+			const data = (await resp.json()) as { version?: string };
+			return data.version ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	/** After a successful connect, best-effort check whether the remote's
+	 * version differs from this app's own — informational only, never blocks
+	 * or retries the connection. Sets `versionWarning` when they differ. */
+	async function checkRemoteVersionAfterConnect(id: string, baseUrl: string): Promise<void> {
+		try {
+			const [localVersion, remoteResp] = await Promise.all([getLocalAppVersion(), fetch(`${baseUrl}/api/version`)]);
+			if (!localVersion || !remoteResp.ok) return;
+			const remoteData = (await remoteResp.json()) as { version?: string };
+			if (!remoteData.version) return;
+			const result = await invoke<VersionCheckResult>("check_remote_version", {
+				localVersion,
+				remoteVersion: remoteData.version,
+			});
+			if (result.type === "Outdated") {
+				setState("connections", id, {
+					versionWarning: `Remote is running version ${result.remote_version}, this app is on ${result.local_version}.`,
+				});
+			}
+		} catch (err) {
+			// Best-effort — a version-check failure must never affect the
+			// connection's actual status.
+			appLogger.warn("store", `Version check failed for connection ${id}`, err);
+		}
+	}
+
+	/**
+	 * Remote daemon provisioning (Phase 5): called only after the normal
+	 * tunnel-connect attempt has already failed and `start_if_not_running` is
+	 * set. Probes whether `tuic-remote` is running/installed on the remote
+	 * host, and — ALWAYS with an explicit confirmation dialog first, never
+	 * silently — installs it if missing and starts it. Returns `true` if the
+	 * caller should retry the tunnel connect, `false` if provisioning didn't
+	 * get the daemon running (the caller should report the original error).
+	 */
+	async function ensureSshDaemonRunning(
+		id: string,
+		connectionName: string,
+		ssh: SshConnectionParams,
+		remoteDaemonPort: number,
+		instanceId: string | null,
+	): Promise<boolean> {
+		const state_ = await invoke<SshDaemonState>("probe_ssh_daemon", { ssh, port: remoteDaemonPort });
+
+		if (state_.type === "NotRunningBinaryMissing") {
+			const accepted = await requestProvisionConfirmation(
+				id,
+				connectionName,
+				`tuic-remote isn't installed on ${ssh.host}. Download and install it now?`,
+				"Install",
+			);
+			if (!accepted) return false;
+			await invoke("install_ssh_daemon", { ssh });
+		} else if (state_.type === "Running") {
+			// Already running but the tunnel still failed to connect — some
+			// other problem (host key, auth, a stale forward). Don't mask it
+			// with a provisioning flow that has nothing to offer here.
+			return false;
+		}
+
+		const startAccepted = await requestProvisionConfirmation(
+			id,
+			connectionName,
+			`${connectionName}'s remote daemon isn't running on ${ssh.host}. Start it now?`,
+			"Start",
+		);
+		if (!startAccepted) return false;
+
+		await invoke("start_ssh_remote_daemon", { ssh, instanceId, port: remoteDaemonPort });
+		setState("connections", id, { sshDaemonStartedBySession: true });
+		return true;
+	}
+
+	/**
+	 * After a (re)connected SSH tunnel's first health check, offer to set the
+	 * remote daemon's password if it turns out to have never been configured
+	 * (distinct from a wrong password — see `mcp_http/auth.rs`'s
+	 * `AuthResult::NotConfigured` vs `Invalid`). The credentials come from the
+	 * connection's OWN already-saved `auth_username` + keyring entry, sourced
+	 * entirely server-side (`configure_ssh_daemon_password`) — `connect()`'s
+	 * caller here never has the plaintext password in hand at all (only the
+	 * Settings editor's in-progress form does, a separate flow). Best-effort:
+	 * any failure here just leaves the connection in its current
+	 * (already-reported) state.
+	 */
+	async function offerToConfigureIfUnconfigured(
+		id: string,
+		connectionName: string,
+		hasAuthUsername: boolean,
+		baseUrl: string,
+	): Promise<void> {
+		if (!hasAuthUsername) return;
+		try {
+			const resp = await fetch(`${baseUrl}/health`);
+			if (resp.status !== 401) return;
+			const bodyText = await resp.text().catch(() => "");
+			// "Scan the QR code or authenticate with Basic Auth" (NotConfigured
+			// /MissingHeader) is textually distinct from "Invalid credentials"
+			// (Invalid) — see mcp_http/auth.rs. A wrong password must NEVER
+			// trigger this offer, only a daemon that has no credentials at all.
+			if (!bodyText.includes("Scan the QR code")) return;
+		} catch {
+			return;
+		}
+
+		const accepted = await requestProvisionConfirmation(
+			id,
+			connectionName,
+			`${connectionName}'s remote daemon has no password configured yet. Set it to this connection's saved credentials?`,
+			"Set password",
+		);
+		if (!accepted) return;
+		try {
+			await invoke("configure_ssh_daemon_password", { connectionId: id });
+		} catch (err) {
+			appLogger.error("store", `Failed to set remote daemon password for connection ${id}`, err);
+		}
+	}
+
 	// ---------------------------------------------------------------------------
 	// Actions
 	// ---------------------------------------------------------------------------
@@ -266,42 +470,71 @@ function createRemoteConnectionsStore() {
 
 			try {
 				if (transport.type === "Ssh") {
-					const localPort = randomLocalPort();
+					// Captured as its own const: TS narrowing on `transport` doesn't
+					// survive into the nested function expression below (a function
+					// boundary resets narrowing on a captured outer variable) — this
+					// alias keeps `.ssh`/`.remote_daemon_port`/etc. typed correctly
+					// wherever it's used in this block.
+					const sshTransport = transport;
 					const profileName = `__remote_${id}`;
 
-					// Create (or re-use) a tunnel profile for this connection
-					await tunnelsStore.createProfile({
-						name: profileName,
-						ssh: {
-							...transport.ssh,
-							// A remote-connection-managed tunnel always accepts a
-							// newly-seen host key rather than prompting — there's no
-							// interactive terminal attached to answer ssh's prompt.
-							strict_host_key_checking: "AcceptNew",
-						},
-						forwards: [
-							{
-								type: "Local",
-								bind_port: localPort,
-								remote_host: "127.0.0.1",
-								remote_port: transport.remote_daemon_port,
+					/** Create/reuse the tunnel profile, start it, and wait for it to
+					 * connect. Called twice when provisioning kicks in: once for the
+					 * initial attempt, once more after the daemon has (hopefully)
+					 * been started on the remote host. */
+					async function attemptTunnelConnect(): Promise<{ localPort: number; profileId: string } | null> {
+						const localPort = randomLocalPort();
+						await tunnelsStore.createProfile({
+							name: profileName,
+							ssh: {
+								...sshTransport.ssh,
+								// A remote-connection-managed tunnel always accepts a
+								// newly-seen host key rather than prompting — there's no
+								// interactive terminal attached to answer ssh's prompt.
+								strict_host_key_checking: "AcceptNew",
 							},
-						],
-						auto_connect: false,
-					});
+							forwards: [
+								{
+									type: "Local",
+									bind_port: localPort,
+									remote_host: "127.0.0.1",
+									remote_port: sshTransport.remote_daemon_port,
+								},
+							],
+							auto_connect: false,
+						});
 
-					// Find the profile ID we just created (by name)
-					await tunnelsStore.refreshProfiles();
-					const profiles = tunnelsStore.getProfiles();
-					const profile = profiles.find((p) => p.name === profileName);
-					if (!profile) {
-						throw new Error(`Could not find tunnel profile "${profileName}" after creation`);
+						await tunnelsStore.refreshProfiles();
+						const profile = tunnelsStore.getProfiles().find((p) => p.name === profileName);
+						if (!profile) {
+							throw new Error(`Could not find tunnel profile "${profileName}" after creation`);
+						}
+
+						await tunnelsStore.startTunnel(profile.id);
+						const connected = await waitForTunnel(profile.id);
+						return connected ? { localPort, profileId: profile.id } : null;
 					}
 
-					// Start the tunnel and wait for it to connect
-					await tunnelsStore.startTunnel(profile.id);
-					const connected = await waitForTunnel(profile.id);
-					if (!connected) {
+					let result = await attemptTunnelConnect();
+
+					if (!result && sshTransport.start_if_not_running) {
+						// Remote daemon provisioning (Phase 5): the tunnel failing to
+						// connect at all (not an auth/host-key failure once actually
+						// connected) is the "not running" signal — always confirmed
+						// with the user before acting, never silently.
+						const provisioned = await ensureSshDaemonRunning(
+							id,
+							connState.connection.name,
+							sshTransport.ssh,
+							sshTransport.remote_daemon_port,
+							sshTransport.instance_id,
+						);
+						if (provisioned) {
+							result = await attemptTunnelConnect();
+						}
+					}
+
+					if (!result) {
 						setState("connections", id, {
 							status: "error",
 							error: "SSH tunnel failed to connect",
@@ -309,10 +542,10 @@ function createRemoteConnectionsStore() {
 						return;
 					}
 
-					const baseUrl = `http://127.0.0.1:${localPort}`;
+					const baseUrl = `http://127.0.0.1:${result.localPort}`;
 					setState("connections", id, {
 						baseUrl,
-						tunnelProfileId: profile.id,
+						tunnelProfileId: result.profileId,
 					});
 
 					// Initial health check sets status to "connected" or "error"
@@ -320,6 +553,14 @@ function createRemoteConnectionsStore() {
 					startHealthPolling(id);
 					eventBridges.get(id)?.();
 					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
+
+					await offerToConfigureIfUnconfigured(
+						id,
+						connState.connection.name,
+						!!connState.connection.auth_username,
+						baseUrl,
+					);
+					await checkRemoteVersionAfterConnect(id, baseUrl);
 				} else if (transport.type === "Direct") {
 					// Direct transport (story: SSH Tunnels + Remote Servers
 					// consolidation, Phase 4). Probe first: a plain `http://` or an
@@ -379,6 +620,7 @@ function createRemoteConnectionsStore() {
 					startHealthPolling(id);
 					eventBridges.get(id)?.();
 					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
+					await checkRemoteVersionAfterConnect(id, baseUrl);
 				} else {
 					// Local transport: another named/isolated instance on this same
 					// machine. Always plain HTTP on loopback — never TLS (loopback is
@@ -407,6 +649,7 @@ function createRemoteConnectionsStore() {
 					startHealthPolling(id);
 					eventBridges.get(id)?.();
 					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
+					await checkRemoteVersionAfterConnect(id, baseUrl);
 				}
 			} catch (err) {
 				appLogger.error("store", `Failed to connect remote connection ${id}`, err);
@@ -429,7 +672,7 @@ function createRemoteConnectionsStore() {
 				eventBridges.delete(id);
 			}
 
-			const { tunnelProfileId, directProxyStarted } = connState;
+			const { tunnelProfileId, directProxyStarted, sshDaemonStartedBySession } = connState;
 			if (tunnelProfileId) {
 				try {
 					await tunnelsStore.stopTunnel(tunnelProfileId);
@@ -446,6 +689,23 @@ function createRemoteConnectionsStore() {
 					appLogger.warn("store", `Failed to stop direct proxy for connection ${id}`, err);
 				}
 			}
+			// Remote daemon provisioning (Phase 5): only ever stop a daemon THIS
+			// session actually started, and only when the connection's own
+			// "leave running" setting doesn't say to keep it up.
+			if (
+				sshDaemonStartedBySession &&
+				connState.connection.transport.type === "Ssh" &&
+				!connState.connection.transport.leave_running_on_disconnect
+			) {
+				try {
+					await invoke("stop_ssh_remote_daemon", {
+						ssh: connState.connection.transport.ssh,
+						port: connState.connection.transport.remote_daemon_port,
+					});
+				} catch (err) {
+					appLogger.warn("store", `Failed to stop remote daemon for connection ${id}`, err);
+				}
+			}
 
 			setState("connections", id, {
 				status: "disconnected",
@@ -454,6 +714,8 @@ function createRemoteConnectionsStore() {
 				error: undefined,
 				tunnelProfileId: undefined,
 				directProxyStarted: undefined,
+				sshDaemonStartedBySession: undefined,
+				versionWarning: undefined,
 			});
 			appLogger.info("store", `Disconnected remote connection ${id}`);
 		},
@@ -514,6 +776,31 @@ function createRemoteConnectionsStore() {
 		},
 
 		/**
+		 * SSH-only "Update" action for an outdated remote daemon (Phase 5):
+		 * repeats the same download/replace step `ensureSshDaemonRunning` uses
+		 * for a missing binary, then restarts the process via the same
+		 * PID-verified stop/start pair Disconnect uses. Never called
+		 * automatically — always an explicit user action from the version
+		 * warning shown after Connect.
+		 */
+		async updateSshRemoteBinary(id: string): Promise<void> {
+			const connState = state.connections[id];
+			if (connState?.connection.transport.type !== "Ssh") return;
+			const { ssh, remote_daemon_port, instance_id } = connState.connection.transport;
+			await invoke("install_ssh_daemon", { ssh });
+			try {
+				await invoke("stop_ssh_remote_daemon", { ssh, port: remote_daemon_port });
+			} catch (err) {
+				// The daemon may not have been running under a PID we can verify
+				// (e.g. started outside this app) — installing the new binary
+				// still succeeded, so proceed to (re)start it regardless.
+				appLogger.warn("store", `Failed to stop remote daemon before update for connection ${id}`, err);
+			}
+			await invoke("start_ssh_remote_daemon", { ssh, instanceId: instance_id, port: remote_daemon_port });
+			setState("connections", id, { versionWarning: undefined });
+		},
+
+		/**
 		 * Test connectivity for a transport that may not be saved yet (Phase 2 —
 		 * no UI wired to this yet, Phase 3 owns that). Never mutates store state:
 		 * a pure passthrough to the backend, which itself has no side effects
@@ -558,6 +845,19 @@ function createRemoteConnectionsStore() {
 			setPendingConfirmation(null);
 			confirmationResolver?.(accepted);
 			confirmationResolver = null;
+		},
+
+		/** Reactive getter for a pending remote-daemon-provisioning confirmation
+		 * (Phase 5), if any SSH connection is mid-Connect and awaiting one. */
+		getPendingProvisionConfirmation(): PendingProvisionConfirmation | null {
+			return pendingProvisionConfirmation();
+		},
+
+		/** Resolve the current pending provisioning confirmation. */
+		resolveProvisionConfirmation(accepted: boolean): void {
+			setPendingProvisionConfirmation(null);
+			provisionConfirmationResolver?.(accepted);
+			provisionConfirmationResolver = null;
 		},
 	};
 

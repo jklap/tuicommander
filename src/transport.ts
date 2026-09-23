@@ -2117,6 +2117,48 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/config/remote-connections/local-instance-port/${p("instanceId")}`,
 		}),
 	},
+	// SSH remote daemon provisioning (Phase 5).
+	configure_ssh_daemon_password: {
+		map: (_args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("connectionId")}/configure-ssh-password`,
+		}),
+	},
+	probe_ssh_daemon: {
+		map: (args) => ({ method: "POST", path: "/config/ssh-daemon/probe", body: { ssh: args.ssh, port: args.port } }),
+	},
+	install_ssh_daemon: {
+		map: (args) => ({ method: "POST", path: "/config/ssh-daemon/install", body: { ssh: args.ssh } }),
+	},
+	start_ssh_remote_daemon: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/ssh-daemon/start",
+			body: { ssh: args.ssh, instance_id: args.instanceId ?? null, port: args.port },
+		}),
+	},
+	stop_ssh_remote_daemon: {
+		map: (args) => ({ method: "POST", path: "/config/ssh-daemon/stop", body: { ssh: args.ssh, port: args.port } }),
+	},
+	set_ssh_remote_password: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/ssh-daemon/set-password",
+			body: {
+				ssh: args.ssh,
+				instance_id: args.instanceId ?? null,
+				username: args.username,
+				password: args.password,
+			},
+		}),
+	},
+	check_remote_version: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/ssh-daemon/check-version",
+			body: { local_version: args.localVersion, remote_version: args.remoteVersion },
+		}),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },

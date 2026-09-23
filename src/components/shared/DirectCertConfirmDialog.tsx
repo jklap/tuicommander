@@ -1,6 +1,6 @@
 import { type Component, Show } from "solid-js";
-import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { registerModal } from "../../stores/modalStack";
+import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import d from "./dialog.module.css";
 
 /**
@@ -25,7 +25,9 @@ export const DirectCertConfirmDialog: Component = () => {
 				return (
 					<div
 						class={d.overlay}
-						onClick={(e) => e.target === e.currentTarget && remoteConnectionsStore.resolveFingerprintConfirmation(false)}
+						onClick={(e) =>
+							e.target === e.currentTarget && remoteConnectionsStore.resolveFingerprintConfirmation(false)
+						}
 					>
 						<div class={d.popover} style={{ width: "480px" }}>
 							<div class={d.header}>
@@ -34,9 +36,8 @@ export const DirectCertConfirmDialog: Component = () => {
 							<div class={d.body} style={{ display: "flex", "flex-direction": "column", gap: "10px" }}>
 								<p>
 									<strong>{p().connectionName}</strong> (<code>{p().url}</code>) presented a certificate that isn't
-									signed by a certificate authority your system trusts. This is expected for a self-signed
-									certificate — the same situation TUICommander's own remote-access HTTPS handles with a one-time
-									browser warning.
+									signed by a certificate authority your system trusts. This is expected for a self-signed certificate —
+									the same situation TUICommander's own remote-access HTTPS handles with a one-time browser warning.
 								</p>
 								<p>Compare this fingerprint against the one shown on the remote machine before accepting:</p>
 								<p
@@ -58,7 +59,10 @@ export const DirectCertConfirmDialog: Component = () => {
 								</p>
 							</div>
 							<div class={d.actions}>
-								<button class={d.cancelBtn} onClick={() => remoteConnectionsStore.resolveFingerprintConfirmation(false)}>
+								<button
+									class={d.cancelBtn}
+									onClick={() => remoteConnectionsStore.resolveFingerprintConfirmation(false)}
+								>
 									Cancel
 								</button>
 								<button

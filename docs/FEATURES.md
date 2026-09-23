@@ -2285,8 +2285,8 @@ Settings → **Remote Servers** (moved out of "Services & MCP", which no longer 
 
 ### 24.1 Connection Types
 - **SSH** — Connects via SSH tunnel to a remote `tuic-remote` daemon; auto-creates port forwarding
-  - Fields: the shared SSH fields (host, port default 22, user, optional identity file, keepalive tuning), remote daemon port (default 9877), optional auth username/password
-- **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
+  - Fields: the shared SSH fields (host, port default 22, user, optional identity file, keepalive tuning), remote daemon port (default 9877), optional Instance ID (`--instance <id>`, used only when this connection itself launches/configures the daemon — never for discovery), "Start remote daemon if not running", "Leave daemon running on disconnect" (shown only when the former is checked), optional auth username/password
+- **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios); `https://` with a self-signed cert is supported via TOFU fingerprint pinning (§24.6)
   - Fields: URL, optional auth username/password
 - **Local** — Connects to another named/isolated TUICommander instance on the **same machine** (`tuic-remote --instance <id>` / `TUIC_APP_INSTANCE=<id>`)
   - Fields: either an instance ID (port resolved by reading that instance's own on-disk config at connect time — never cached) or a manually-entered port (for an unnamed instance), never both; optional auth username/password
@@ -2315,6 +2315,18 @@ Settings → **Remote Servers** (moved out of "Services & MCP", which no longer 
 - `remoteEventBridge.ts` subscribes to server-sent events from remote daemons
 - Bridges remote events (repo changes, PTY output, agent status) into local stores
 - Automatic reconnection on connection loss
+
+### 24.6 Self-Signed HTTPS for Direct
+- A Direct connection whose URL is `https://` and whose certificate isn't CA-trusted is probed (`probe_direct_tls_connection`) before Connect: a fresh self-signed cert prompts a one-time fingerprint-confirmation dialog (`DirectCertConfirmDialog.tsx`) mirroring the app's own self-signed-HTTPS UX; accepting pins the SHA-256 fingerprint on the connection (`tls_fingerprint`)
+- Once pinned, `direct_proxy.rs`'s `DirectProxyManager` runs a local loopback reverse proxy for that connection's lifetime: it holds the real outbound TLS connection (a custom rustls `ServerCertVerifier` that accepts only the pinned fingerprint), attaches Basic Auth itself if credentials are configured, and re-exposes plain HTTP/WS on `127.0.0.1:<ephemeral-port>` — the same shape as an SSH tunnel's forwarded port, so no frontend code needs to know the difference
+- A fingerprint mismatch on a later connect (certificate changed since pinning) is refused outright, never silently re-pinned
+- Plain `http://` and already-CA-trusted `https://` Direct connections are unaffected — no proxy, talks to the URL directly, exactly as before this feature existed
+
+### 24.7 Remote Daemon Provisioning (SSH) and Version Checking
+- When "Start remote daemon if not running" is set and a Connect's tunnel attempt fails, `ensureSshDaemonRunning` probes `tuic-remote`'s state on the remote host (`probe_ssh_daemon` → `ssh_provision::probe_ssh_daemon_state`) and, gated behind an explicit confirmation dialog for every remote-state-changing step (`ProvisionConfirmDialog.tsx` / `PendingProvisionConfirmation`), installs a missing binary (detects OS/arch, downloads the matching release artifact, streams it over the same SSH connection's stdin) and starts the daemon, then retries the tunnel connect once
+- If the daemon comes up but has no password configured yet (distinguished from a wrong password via the 401 response body — `mcp_http/auth.rs`'s `AuthResult::NotConfigured` vs `Invalid`), and this connection has an Auth username/password saved, `offerToConfigureIfUnconfigured` confirms and sets it on the remote (`configure_ssh_daemon_password`, sourced entirely server-side from the saved connection so the plaintext password never crosses into frontend code for this flow)
+- Disconnect stops a daemon this session started (`stop_ssh_remote_daemon`, PID-verified like `tunnels/port.rs`'s `kill_ssh_on_port`) unless "Leave daemon running on disconnect" is set
+- After every successful Connect (SSH, Direct, Local), `checkRemoteVersionAfterConnect` compares the remote's `/api/version` against this app's own (`check_remote_version`) and shows an inline warning on mismatch; SSH connections additionally get an "Update" button (`updateSshRemoteBinary`) that repeats the install step and restarts the daemon
 
 ---
 

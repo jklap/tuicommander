@@ -103,6 +103,21 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			? target.connection.transport.remote_daemon_port
 			: DEFAULT_REMOTE_DAEMON_PORT,
 	);
+	const [startIfNotRunning, setStartIfNotRunning] = createSignal(
+		target.kind === "edit-connection" && target.connection.transport.type === "Ssh"
+			? target.connection.transport.start_if_not_running
+			: false,
+	);
+	const [leaveRunningOnDisconnect, setLeaveRunningOnDisconnect] = createSignal(
+		target.kind === "edit-connection" && target.connection.transport.type === "Ssh"
+			? target.connection.transport.leave_running_on_disconnect
+			: false,
+	);
+	const [sshInstanceId, setSshInstanceId] = createSignal(
+		target.kind === "edit-connection" && target.connection.transport.type === "Ssh"
+			? (target.connection.transport.instance_id ?? "")
+			: "",
+	);
 	const [directUrl, setDirectUrl] = createSignal(
 		target.kind === "edit-connection" && target.connection.transport.type === "Direct"
 			? target.connection.transport.url
@@ -164,7 +179,14 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 	 * reads this return value for that Kind at all) — 0 is a safe placeholder. */
 	function buildTransport(): RemoteTransport {
 		if (kind() === "SshTunnel" || kind() === "RemoteSsh") {
-			return { type: "Ssh", ssh: trimmedSsh(), remote_daemon_port: kind() === "RemoteSsh" ? remoteDaemonPort() : 0 };
+			return {
+				type: "Ssh",
+				ssh: trimmedSsh(),
+				remote_daemon_port: kind() === "RemoteSsh" ? remoteDaemonPort() : 0,
+				start_if_not_running: kind() === "RemoteSsh" && startIfNotRunning(),
+				leave_running_on_disconnect: kind() === "RemoteSsh" && leaveRunningOnDisconnect(),
+				instance_id: kind() === "RemoteSsh" ? sshInstanceId().trim() || null : null,
+			};
 		}
 		if (kind() === "RemoteDirect") {
 			return { type: "Direct", url: directUrl().trim(), tls_fingerprint: directTlsFingerprint() };
@@ -242,7 +264,14 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						setSaving(false);
 						return;
 					}
-					transport = { type: "Ssh", ssh: ssh_, remote_daemon_port: remoteDaemonPort() };
+					transport = {
+						type: "Ssh",
+						ssh: ssh_,
+						remote_daemon_port: remoteDaemonPort(),
+						start_if_not_running: startIfNotRunning(),
+						leave_running_on_disconnect: leaveRunningOnDisconnect(),
+						instance_id: sshInstanceId().trim() || null,
+					};
 				} else if (kind() === "RemoteDirect") {
 					const url = directUrl().trim();
 					if (!url) {
@@ -365,7 +394,37 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 							}
 						/>
 					</div>
+					<div class={s.group}>
+						<label class={s.label}>Instance ID (optional)</label>
+						<input
+							placeholder="e.g. dev-box"
+							value={sshInstanceId()}
+							onInput={(e) => setSshInstanceId(e.currentTarget.value)}
+						/>
+						<p class={s.hint}>
+							Passed as <code>--instance</code> when starting or configuring the remote daemon ourselves — not used to
+							discover an existing port, only when this app launches or configures it.
+						</p>
+					</div>
 					<AuthFields />
+					<label class={s.toggle}>
+						<input
+							type="checkbox"
+							checked={startIfNotRunning()}
+							onChange={(e) => setStartIfNotRunning(e.currentTarget.checked)}
+						/>
+						<span>Start remote daemon if not running</span>
+					</label>
+					<Show when={startIfNotRunning()}>
+						<label class={s.toggle}>
+							<input
+								type="checkbox"
+								checked={leaveRunningOnDisconnect()}
+								onChange={(e) => setLeaveRunningOnDisconnect(e.currentTarget.checked)}
+							/>
+							<span>Leave daemon running on disconnect</span>
+						</label>
+					</Show>
 				</Show>
 
 				<Show when={kind() === "RemoteDirect"}>

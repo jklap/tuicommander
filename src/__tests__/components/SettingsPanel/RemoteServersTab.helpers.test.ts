@@ -16,9 +16,14 @@ describe("RemoteServersTab transport presentation", () => {
 					strict_host_key_checking: "Yes",
 				},
 				remote_daemon_port: 9877,
+				start_if_not_running: false,
+				leave_running_on_disconnect: false,
+				instance_id: null,
 			}),
 		).toBe("boss@dev.example.test:2222");
-		expect(transportSummary({ type: "Direct", url: "https://dev.example.test", tls_fingerprint: null })).toBe("https://dev.example.test");
+		expect(transportSummary({ type: "Direct", url: "https://dev.example.test", tls_fingerprint: null })).toBe(
+			"https://dev.example.test",
+		);
 		expect(transportSummary({ type: "Local", port: 9877, instance_id: null })).toBe("local: 127.0.0.1:9877");
 		expect(transportSummary({ type: "Local", port: null, instance_id: "dev-box" })).toBe("local: dev-box");
 	});
@@ -37,6 +42,9 @@ describe("RemoteServersTab transport presentation", () => {
 					strict_host_key_checking: "Yes",
 				},
 				remote_daemon_port: 9877,
+				start_if_not_running: false,
+				leave_running_on_disconnect: false,
+				instance_id: null,
 			}),
 		).toBe("SSH");
 		expect(transportBadgeLabel({ type: "Direct", url: "http://h", tls_fingerprint: null })).toBe("DIRECT");

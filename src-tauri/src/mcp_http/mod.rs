@@ -1811,11 +1811,41 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route(
             "/config/remote-connections/{id}/direct-proxy",
-            post(config_routes::start_direct_proxy_http).delete(config_routes::stop_direct_proxy_http),
+            post(config_routes::start_direct_proxy_http)
+                .delete(config_routes::stop_direct_proxy_http),
         )
         .route(
             "/config/remote-connections/local-instance-port/{instanceId}",
             get(config_routes::get_local_instance_port_http),
+        )
+        .route(
+            "/config/remote-connections/{id}/configure-ssh-password",
+            post(config_routes::configure_ssh_daemon_password_http),
+        )
+        // SSH remote daemon provisioning — plan Phase 5
+        .route(
+            "/config/ssh-daemon/probe",
+            post(config_routes::probe_ssh_daemon_http),
+        )
+        .route(
+            "/config/ssh-daemon/install",
+            post(config_routes::install_ssh_daemon_http),
+        )
+        .route(
+            "/config/ssh-daemon/start",
+            post(config_routes::start_ssh_daemon_http),
+        )
+        .route(
+            "/config/ssh-daemon/stop",
+            post(config_routes::stop_ssh_daemon_http),
+        )
+        .route(
+            "/config/ssh-daemon/set-password",
+            post(config_routes::set_ssh_daemon_password_http),
+        )
+        .route(
+            "/config/ssh-daemon/check-version",
+            post(config_routes::check_remote_version_http),
         )
         // Remote connection password (keyring-proxied) — plan Phase 3 auth wiring
         .route(
