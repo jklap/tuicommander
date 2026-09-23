@@ -1758,7 +1758,7 @@ Vite reloads this without a restart.
 
 ## Worktree removal safety gate (2026-08-26, **Rust change — needs `make dev` restart**)
 
-Fix for the incident in `plans/worktree-removal-incident-2026-08-26.md` (worktree
+Fix for the incident in `plans/docs/worktree-removal-incident-2026-08-26.md` (worktree
 deleted twice while an agent worked in it). Rust unit tests cover the logic
 directly (`cargo nextest run worktree::`, `mcp_http::worktree_routes::`,
 `mcp_http::mcp_transport::tests::handle_worktree_remove*`), but the end-to-end

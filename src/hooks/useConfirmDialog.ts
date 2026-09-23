@@ -172,7 +172,7 @@ export function useConfirmDialog() {
 	 *  it — it fires BEFORE any terminal is closed, using the branch's
 	 *  attached-terminal list as of the moment the user clicked delete. See
 	 *  `createWorktreeRemovalCoordinator` and
-	 *  `plans/worktree-removal-incident-2026-08-26.md`.
+	 *  `plans/docs/worktree-removal-incident-2026-08-26.md`.
 	 *
 	 *  `defaultButton: "cancel"` deliberately, so pressing Enter through a
 	 *  queue of near-identical confirm prompts (e.g. a batch delete) cannot

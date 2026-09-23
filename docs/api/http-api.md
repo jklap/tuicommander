@@ -2311,7 +2311,7 @@ Query parameters:
 
 Without `force`, removal refuses with a `4xx`/`5xx` error body `{ "error": "worktree_dirty:<git stderr>" }` for uncommitted work, or `{ "error": "worktree_locked:<git stderr>" }` for a `git worktree lock`ed worktree (taken automatically while a session is attached — see `docs/backend/git.md`). Independently of `force`, a live session attached to the worktree refuses with `{ "error": "worktree_busy:<n> session(s) attached: ..." }` unless `overrideBusy=true`.
 
-Branch deletion **always** uses the safe `git branch -d`, regardless of `force`/`overrideBusy` -- a worktree removal never force-deletes the branch (the branch surviving as `branch_delete_warning` is what made the 2026-08-26 incident's orphaned commits recoverable; see `plans/worktree-removal-incident-2026-08-26.md`).
+Branch deletion **always** uses the safe `git branch -d`, regardless of `force`/`overrideBusy` -- a worktree removal never force-deletes the branch (the branch surviving as `branch_delete_warning` is what made the 2026-08-26 incident's orphaned commits recoverable; see `plans/docs/worktree-removal-incident-2026-08-26.md`).
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 

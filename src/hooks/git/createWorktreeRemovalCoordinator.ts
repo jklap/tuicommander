@@ -98,7 +98,7 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 		// anything is closed. This is what stops the class of incident where a
 		// worktree with a live (even idle) terminal attached got deleted: a busy
 		// workspace gets a dialog that says so, BEFORE the close-terminal loop
-		// below ever runs. See plans/worktree-removal-incident-2026-08-26.md.
+		// below ever runs. See plans/docs/worktree-removal-incident-2026-08-26.md.
 		const activity = branchActivitySummary(branch.terminals);
 		const confirmed = activity.isBusy
 			? await (deps.dialogs.confirmRemoveBusyWorktree?.(branchName, activity) ??

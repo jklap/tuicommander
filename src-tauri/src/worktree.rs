@@ -870,7 +870,7 @@ pub(crate) const BUSY_WORKTREE_PREFIX: &str = "worktree_busy:";
 /// A plain bool can't express this: git's `remove` has two *independent* refusals
 /// (uncommitted work, and a `git worktree lock`) and a single `--force` only lifts
 /// the first — lifting the second needs `--force` twice. See the incident writeup
-/// at `plans/worktree-removal-incident-2026-08-26.md` for why collapsing these two
+/// at `plans/docs/worktree-removal-incident-2026-08-26.md` for why collapsing these two
 /// into one flag is exactly what let a live worktree be destroyed unconditionally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemovalMode {
