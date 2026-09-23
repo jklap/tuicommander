@@ -194,9 +194,44 @@ impl ScriptContext {
         cmd.env("PATH", crate::cli::enriched_path());
     }
 
-    /// Apply to a PTY spawn (Run Script, via the interactive terminal).
+    /// Every key `pairs()` can ever emit — used by `apply_pty` to clear a key
+    /// this context doesn't set, so a stale value can't survive from the
+    /// *spawning* process's own environment.
+    const ALL_KEYS: &[&str] = &[
+        "TUIC_SCRIPT_KIND",
+        "TUIC_APP_VERSION",
+        "TUIC_CONFIG_DIR",
+        "TUIC_WORKTREE_PATH",
+        "TUIC_WORKTREE_NAME",
+        "TUIC_WORKTREES_DIR",
+        "TUIC_MAIN_REPO_PATH",
+        "TUIC_REPO_NAME",
+        "TUIC_IS_WORKTREE",
+        "TUIC_BRANCH",
+        "TUIC_BASE_REF",
+        "TUIC_BASE_BRANCH",
+    ];
+
+    /// Apply to a PTY spawn (every interactive terminal, via
+    /// `pty::inject_worktree_env`). Unlike `apply_std`, this clears every key
+    /// this context does NOT set (e.g. `TUIC_MAIN_REPO_PATH` for a non-repo
+    /// cwd) rather than only ever adding — `ScriptContext::derive` is a pure
+    /// function of the cwd path, so its result must not be able to inherit a
+    /// stale value from the *spawning* process's own environment. That gap is
+    /// reachable in practice: TUICommander spawning a PTY while it is itself
+    /// running nested inside another TUIC-hosted session (the same "avoid a
+    /// nested-session leak" concern `inject_unix_terminal_env`'s
+    /// `env_remove("CLAUDECODE")` exists for) would otherwise leak the outer
+    /// session's own `TUIC_*` vars into an inner terminal whose cwd isn't
+    /// even a repo.
     pub(crate) fn apply_pty(&self, cmd: &mut portable_pty::CommandBuilder) {
-        for (k, v) in self.pairs() {
+        let pairs = self.pairs();
+        for key in Self::ALL_KEYS {
+            if !pairs.iter().any(|(k, _)| k == key) {
+                cmd.env_remove(key);
+            }
+        }
+        for (k, v) in pairs {
             cmd.env(k, v);
         }
     }
