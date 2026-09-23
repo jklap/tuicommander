@@ -750,6 +750,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/api/auth/session-token",
             get(config_routes::get_session_token),
         )
+        // Agent configs. Shared: a remote repo's agents run with the remote
+        // machine's `agents.json`, which the frontend reads by connection
+        // (`remoteIO` in agentConfigs.ts). Only in `build_router`, the daemon
+        // answered 404 and those repos ran with no agent configs.
+        .route(
+            "/config/agents",
+            get(config_routes::get_agents_config).put(config_routes::put_agents_config),
+        )
         // Progress. Shared, not desktop-only: the store is a SQLite file in the
         // app config directory and every handler calls `crate::progress::*`,
         // which needs no WebView and no Tauri. These lived in `build_router`
@@ -1517,10 +1525,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/keybindings",
             get(config_routes::get_keybindings).put(config_routes::put_keybindings),
-        )
-        .route(
-            "/config/agents",
-            get(config_routes::get_agents_config).put(config_routes::put_agents_config),
         )
         .route(
             "/config/agents/{agent}/hook-instrumentation",
@@ -2800,6 +2804,10 @@ mod tests {
             "/progress/viewed",
             "/progress/flow",
             "/progress/flow/detail",
+            // The frontend reads a remote machine's agents.json (827c4bab);
+            // absent here, tuic-remote answered 404 and remote repos ran with
+            // no agent configs.
+            "/config/agents",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific
