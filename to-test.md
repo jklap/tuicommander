@@ -14,6 +14,11 @@
 - [ ] In **All repo**, existing entries recorded before this change should remain visible as **Terminal unknown**. Closing a PTY should leave its saved history selectable.
 - [ ] Open PTY A, switch to PTY B, then **All repo** and close Progress. Reopen each view and confirm each has its own last-visit divider; viewing A alone must not mark B or **All repo** as seen.
 
+## Terminal scrollbar thumb minimum 48px (2026-09-23) — frontend, live via HMR
+
+- [ ] [VISUAL] A terminal with a very long scrollback (e.g. `seq 100000`): the thumb stays 48px tall and is easy to grab; dragging it scrolls the whole history, top to bottom.
+- [ ] [VISUAL] A short scrollback still gets a proportional (larger) thumb; a very short split pane never shows a thumb taller than its track.
+
 ## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
 
 - [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift.
