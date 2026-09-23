@@ -597,9 +597,15 @@ const SpeechSetup: Component = () => {
 const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
 	const percent = () => dictationStore.state.speechDownloads[props.asset.id];
 	const downloading = () => props.asset.state === "downloading" || percent() !== undefined;
+	// The bundle replies are spoken with — the counterpart of the selected
+	// Whisper model, and highlighted the same way.
+	const speaking = () =>
+		props.asset.state === "ready" &&
+		props.asset.language !== null &&
+		props.asset.language === dictationStore.state.language;
 
 	return (
-		<div class={cx(d.modelRow, props.asset.state === "ready" && d.active)}>
+		<div class={cx(d.modelRow, speaking() && d.active)}>
 			<div class={d.modelInfo}>
 				<span class={d.modelName}>{props.asset.display_name}</span>
 				<span class={d.modelSize}>{megabytes(props.asset.download_bytes)}</span>
@@ -621,9 +627,16 @@ const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
 						</div>
 						<span class={d.progressText}>{percent() ?? 0}%</span>
 					</div>
-					<button class={d.modelDelete} onClick={() => dictationStore.cancelSpeechDownload(props.asset.id)}>
-						{t("dictation.cancel", "Cancel")}
+					<button
+						class={d.modelDelete}
+						onClick={() => dictationStore.cancelSpeechDownload(props.asset.id)}
+						title={t("dictation.cancel", "Cancel")}
+					>
+						&times;
 					</button>
+				</Show>
+				<Show when={!downloading() && speaking()}>
+					<span class={d.modelActiveLabel}>{t("dictation.active", "Active")}</span>
 				</Show>
 				<Show when={!downloading() && props.asset.state !== "ready"}>
 					<button class={d.modelDownload} onClick={() => dictationStore.downloadSpeechAsset(props.asset.id)}>

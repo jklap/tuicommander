@@ -8,6 +8,12 @@
 
 # To Test
 
+## Settings consistency: Language, ego, Spoken replies (2026-09-23) — Rust part needs `make dev` restart
+
+- [ ] [VISUAL] Settings → General: no Language picker (only English ships). The AI Chat section (Experimental Features on) looks like TUIC CLI: `?` tooltip, green "Configured at …", **Select…** opens a file picker and saves the pick, **Clear** empties it.
+- [ ] [VISUAL] Settings → Dictation → Spoken replies: rows look like the Whisper list. Only the language replies are spoken in is highlighted with "Active"; a running download shows its bar and a × to cancel.
+- [ ] After the restart, start a speech download with `curl -X POST localhost:9876/dictation/speech/assets/download -H 'content-type: application/json' -d '{"asset":"german"}'` while Settings → Dictation is open. The bar climbs, then the row turns to Downloaded by itself instead of staying at 100% with a cancel control.
+
 ## Sub-agent tags and branch count (2026-09-23) — Rust, needs `make dev` restart
 
 - [ ] [VISUAL] Sidebar: a branch whose agent list is expanded shows no number on its icon; collapse it and the number comes back.
