@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 
 import { fireEvent, render } from "@solidjs/testing-library";
+import { marked } from "marked";
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { ContentRenderer, stripEventHandlers } from "../../components/ui/ContentRenderer";
+import { applyCommentBlockMetadata, ContentRenderer, stripEventHandlers } from "../../components/ui/ContentRenderer";
 import { stripAnsi } from "../../utils/stripAnsi";
 import { findTweakCommentBlocks, insertTweakBlockComment } from "../../utils/tweakComments";
 
@@ -76,6 +77,32 @@ describe("ContentRenderer", () => {
 		expect(renderedHeading?.textContent).toBe("Heading");
 		expect(renderedHeading?.classList.contains("tweak-block-highlight")).toBe(true);
 		expect(renderedHeading?.getAttribute("data-tweak-id")).toBe("c_heading");
+	});
+
+	it("annotates a CRLF document with ranges that slice exactly the rendered block", async () => {
+		const source = "# Heading\r\n\r\nFirst line\r\nsecond line\r\n\r\nLast.\r\n";
+		const { container } = render(() => <ContentRenderer content={source} commentableBlocks />);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+		const ranges = Array.from(container.querySelectorAll<HTMLElement>("[data-comment-source-start]")).map((el) =>
+			source.slice(Number(el.dataset.commentSourceStart), Number(el.dataset.commentSourceEnd)),
+		);
+		expect(ranges).toEqual(["# Heading", "First line\r\nsecond line", "Last."]);
+	});
+
+	// Metadata runs after every render of a file tab; it must lex the document once.
+	it("lexes the source once when attaching block metadata", () => {
+		const source = "<!--tweak:block:c_h @2026-09-23T08:00:00.000Z\nnote-->\n# Heading\n\nParagraph.";
+		const container = document.createElement("div");
+		container.innerHTML = "<div><h1>Heading</h1><p>Paragraph.</p></div>";
+		const lexer = vi.spyOn(marked, "lexer");
+		try {
+			applyCommentBlockMetadata(container, source);
+			expect(lexer).toHaveBeenCalledTimes(1);
+		} finally {
+			lexer.mockRestore();
+		}
+		expect(container.querySelector("h1")?.dataset.tweakId).toBe("c_h");
 	});
 
 	it("renders markdown content as HTML", () => {
@@ -422,6 +449,20 @@ describe("ContentRenderer incremental mode", () => {
 		expect(codes.length).toBe(1);
 		expect(codes[0].textContent).toContain("const a = 1;");
 		expect(codes[0].textContent).toContain("const b = 2;");
+	});
+
+	// A streaming tick must cost the tail alone; block comments are a file-tab
+	// feature, so the answer is never lexed for block ranges.
+	it("does not lex the whole answer for block comments on a streaming tick", async () => {
+		const lexer = vi.spyOn(marked, "lexer");
+		try {
+			const { setContent } = streamed("<!--tweak:block:c_q @0\nquoted-->\nFirst.\n\n");
+			setContent("<!--tweak:block:c_q @0\nquoted-->\nFirst.\n\nSecond.\n");
+			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+			expect(lexer).not.toHaveBeenCalled();
+		} finally {
+			lexer.mockRestore();
+		}
 	});
 
 	it("re-renders from scratch when the content is replaced rather than appended", () => {

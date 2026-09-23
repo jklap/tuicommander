@@ -65,9 +65,24 @@ export function serializeTweakComment(c: TweakComment): string {
 	return `<!--tweak:begin:${c.id}-->${c.highlighted}<!--tweak:end:${c.id} @${c.createdAt}\n${escapeBody(c.comment)}-->`;
 }
 
-/** Parse all tweak comments from a markdown source, in document order. */
-export function parseTweakComments(source: string): TweakComment[] {
-	const indexed: Array<{ index: number; comment: TweakComment }> = [];
+/** Parse all tweak comments from a markdown source, in document order.
+ *  `blocks` may carry a `findTweakCommentBlocks(source)` result the caller
+ *  already holds, so the document is not lexed twice. */
+export function parseTweakComments(source: string, blocks?: TweakCommentBlock[]): TweakComment[] {
+	const indexed = [...indexInlineComments(source), ...indexBlockComments(source, blocks)];
+	return indexed.sort((a, b) => a.index - b.index).map(({ comment }) => comment);
+}
+
+/** Inline (begin/end) comments only. Never lexes the document, so it is cheap
+ *  enough for a render path that re-runs on every streaming tick. */
+export function parseInlineTweakComments(source: string): TweakComment[] {
+	return indexInlineComments(source).map(({ comment }) => comment);
+}
+
+type IndexedComment = { index: number; comment: TweakComment };
+
+function indexInlineComments(source: string): IndexedComment[] {
+	const indexed: IndexedComment[] = [];
 	FULL_RE.lastIndex = 0;
 	let match: RegExpExecArray | null;
 	while ((match = FULL_RE.exec(source)) !== null) {
@@ -77,8 +92,16 @@ export function parseTweakComments(source: string): TweakComment[] {
 			comment: { id, highlighted, comment: unescapeBody(body), createdAt },
 		});
 	}
-	const blocks = findTweakCommentBlocks(source);
+	return indexed;
+}
+
+function indexBlockComments(source: string, knownBlocks?: TweakCommentBlock[]): IndexedComment[] {
+	// Without a marker there is nothing to anchor, and lexing is the costly part.
+	if (!source.includes("<!--tweak:block:")) return [];
+	const blocks = knownBlocks ?? findTweakCommentBlocks(source);
+	const indexed: IndexedComment[] = [];
 	BLOCK_RE.lastIndex = 0;
+	let match: RegExpExecArray | null;
 	while ((match = BLOCK_RE.exec(source)) !== null) {
 		const [, id, createdAt, body] = match;
 		const block = blocks.find((candidate) => candidate.start >= BLOCK_RE.lastIndex);
@@ -95,7 +118,7 @@ export function parseTweakComments(source: string): TweakComment[] {
 			},
 		});
 	}
-	return indexed.sort((a, b) => a.index - b.index).map(({ comment }) => comment);
+	return indexed;
 }
 
 function tokenTag(token: ReturnType<typeof marked.lexer>[number]): TweakCommentBlock["tag"] | null {
@@ -117,13 +140,23 @@ function tokenTag(token: ReturnType<typeof marked.lexer>[number]): TweakCommentB
 	}
 }
 
-/** Build the visible markdown plus an index back to the raw source. */
+/**
+ * Build the visible markdown plus an index back to the raw source. Line endings
+ * are normalized the way `marked.lexer` does it (`\r\n` and a lone `\r` become
+ * `\n`), so the lexer's `raw` lengths add up to offsets into `visible`.
+ */
 function visibleSourceIndex(source: string): { visible: string; map: number[] } {
-	const hidden = buildVisibilityMask(source);
+	const shown = buildVisibilityMask(source);
 	const chars: string[] = [];
 	const map: number[] = [];
 	for (let i = 0; i < source.length; i++) {
-		if (!hidden[i]) continue;
+		if (!shown[i]) continue;
+		if (source[i] === "\r") {
+			if (source[i + 1] === "\n" && shown[i + 1]) continue; // the `\n` stands for the pair
+			chars.push("\n");
+			map.push(i);
+			continue;
+		}
 		chars.push(source[i]);
 		map.push(i);
 	}
@@ -165,7 +198,9 @@ export function insertTweakBlockComment(
 	if (source.slice(block.start, block.end) !== comment.highlighted) {
 		throw new Error("insertTweakBlockComment: source range no longer matches the rendered block");
 	}
-	const marker = `${serializeTweakBlockComment(comment)}\n`;
+	// Match the file's line endings so a CRLF file does not gain a lone LF line.
+	const eol = source.includes("\r\n") ? "\r\n" : "\n";
+	const marker = `${serializeTweakBlockComment(comment)}${eol}`;
 	return ensureConventionHeader(source.slice(0, block.start) + marker + source.slice(block.start));
 }
 

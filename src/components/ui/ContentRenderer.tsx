@@ -14,6 +14,7 @@ import {
 	findTweakCommentBlocks,
 	injectTweakSentinels,
 	maskTweakCommentSyntax,
+	parseInlineTweakComments,
 	parseTweakComments,
 } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
@@ -68,10 +69,15 @@ export function stripEventHandlers(html: string): string {
 /** Attach raw-source ranges to the top-level elements produced by marked. */
 export function applyCommentBlockMetadata(container: HTMLElement, source: string): void {
 	const blocks = findTweakCommentBlocks(source);
-	const comments = parseTweakComments(source).filter((comment) => comment.anchor === "block");
+	const comments = parseTweakComments(source, blocks).filter((comment) => comment.anchor === "block");
 	const renderRoot = container.firstElementChild ?? container;
 	const elements = Array.from(renderRoot.children) as HTMLElement[];
 	let elementIndex = 0;
+	// DEFERRED (2026-09-23) — pairing is by tag only. A raw HTML token (e.g.
+	// `<p align="center">`) renders an element with no entry in `blocks`, so the
+	// next same-tag block binds to it and every later one shifts by one. The fix
+	// needs per-token element counts for `html` tokens (after DOMPurify), which
+	// is more than a local change; the save path already refuses a stale range.
 	for (const block of blocks) {
 		while (elementIndex < elements.length && elements[elementIndex].tagName !== block.tag) elementIndex++;
 		const element = elements[elementIndex++];
@@ -406,8 +412,10 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 
 	const isEmpty = createMemo(() => (props.content ?? "").trim() === "");
 
-	// Tweak comments parsed from the raw source — applied to the rendered DOM below.
-	const tweakComments = createMemo(() => parseTweakComments(props.content ?? ""));
+	// Inline tweak comments parsed from the raw source — applied to the rendered DOM
+	// below. Block comments are attached by `applyCommentBlockMetadata`; parsing them
+	// here would lex the whole document again, on every streaming tick too.
+	const inlineTweakComments = createMemo(() => parseInlineTweakComments(props.content ?? ""));
 
 	const handleClick = (e: MouseEvent) => {
 		const target = e.target as HTMLElement;
@@ -469,8 +477,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 				cb.indeterminate = true;
 			});
 			// Turn highlight sentinels into <span class="tweak-highlight"> wrappers.
-			const comments = tweakComments();
-			const inlineComments = comments.filter((comment) => comment.anchor !== "block");
+			const inlineComments = inlineTweakComments();
 			if (inlineComments.length > 0) applyTweakDomHighlights(containerRef, inlineComments);
 			if (props.commentableBlocks && !props.incremental) applyCommentBlockMetadata(containerRef, props.content ?? "");
 			renderMermaidBlocks(containerRef);

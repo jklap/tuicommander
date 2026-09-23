@@ -18,6 +18,7 @@ vi.mock("../../transport", async (importOriginal) => ({
 
 import { MarkdownTab } from "../../components/MarkdownTab/MarkdownTab";
 import { type FileTab, mdTabsStore } from "../../stores/mdTabs";
+import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 
@@ -83,6 +84,58 @@ describe("MarkdownTab agent review actions", () => {
 		await waitFor(() => expect((send as HTMLButtonElement).disabled).toBe(false));
 		expect(addToast).toHaveBeenCalledWith("Sent to agent", expect.stringContaining("queued"), "info");
 		expect(container.querySelector(".header")?.lastElementChild?.contains(send)).toBe(true);
+	});
+
+	/** Render `docs/<name>`, open the block-comment popover on its first paragraph and type a comment. */
+	async function startBlockComment(name: string) {
+		const tabId = mdTabsStore.add("/repo", `docs/${name}`);
+		const tab = mdTabsStore.get(tabId) as FileTab;
+		const { container } = render(() => <MarkdownTab tab={tab} />);
+		const paragraph = await waitFor(() => {
+			const el = container.querySelector<HTMLElement>("p[data-comment-source-start]");
+			if (!el) throw new Error("block metadata not applied yet");
+			return el;
+		});
+		paragraph.getBoundingClientRect = () =>
+			({ left: 100, right: 500, top: 80, bottom: 120, width: 400, height: 40, x: 100, y: 80, toJSON() {} }) as DOMRect;
+		fireEvent.mouseMove(paragraph.closest("#markdown-content")!.parentElement!, { clientX: 76, clientY: 96 });
+		fireEvent.mouseDown(await screen.findByRole("button", { name: "Comment on this block" }));
+		fireEvent.input(document.body.querySelector("textarea")!, { target: { value: "Clarify" } });
+	}
+
+	it("saves a block comment before the block the popover was opened on", async () => {
+		fileContent = "# Heading\n\nOriginal paragraph.\n";
+		await startBlockComment("fresh.md");
+
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith("write_file", {
+				repoPath: "/repo",
+				file: "docs/fresh.md",
+				content: expect.stringMatching(/# Heading\n\n<!--tweak:block:\S+ @\S+\nClarify-->\nOriginal paragraph\.\n$/),
+			}),
+		);
+	});
+
+	// The block range comes from the render that was on screen when the popover
+	// opened. If the file changes while the user types, saving at those offsets
+	// would write the marker into unrelated text.
+	it("refuses to save a block comment when the file changed after the popover opened", async () => {
+		const addToast = vi.spyOn(toastsStore, "add").mockReturnValue(1);
+		fileContent = "# Heading\n\nOriginal paragraph.\n";
+		await startBlockComment("stale.md");
+
+		fileContent = "# Heading\n\nAn agent inserted this.\n\nOriginal paragraph.\n";
+		repositoriesStore.bumpRevision("/repo");
+		await screen.findByText("An agent inserted this.");
+
+		fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+		await waitFor(() =>
+			expect(addToast).toHaveBeenCalledWith("Couldn't add comment", expect.stringContaining("changed"), "error"),
+		);
+		expect(mockInvoke).not.toHaveBeenCalledWith("write_file", expect.anything());
 	});
 
 	it("hides the agent review controls when the file has no tweak comments", async () => {

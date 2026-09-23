@@ -19,8 +19,12 @@ export interface CommentOverlayProps {
 	 *  is the 0-based ordinal of the selected text among identical rendered
 	 *  occurrences, used to anchor the correct instance in the source. */
 	onSave: (comment: TweakComment, occurrenceIndex: number) => void;
-	/** Save a whole rendered Markdown block using its exact raw-source range. */
+	/** Save a whole rendered Markdown block using its exact raw-source range.
+	 *  `comment.highlighted` is the raw source `blockSource` returned when the
+	 *  popover opened, so the caller can refuse a range the file moved under. */
 	onSaveBlock?: (comment: TweakComment, range: { start: number; end: number }) => void;
+	/** Raw source of a block range in the document currently rendered. */
+	blockSource?: (range: { start: number; end: number }) => string;
 	/** Called with the comment id when the user deletes a comment. */
 	onDelete: (id: string) => void;
 }
@@ -36,12 +40,32 @@ interface PopoverState {
 	selectionText?: string;
 	sourceStart?: number;
 	sourceEnd?: number;
+	/** Raw block source captured when the popover opened. */
+	sourceSnapshot?: string;
 }
 
 interface TooltipState {
 	x: number;
 	y: number;
 	text: string;
+}
+
+/**
+ * The top-level block whose comment gutter (36px left of it to 8px inside it)
+ * contains the point. Top-level blocks stack in document order, so a binary
+ * search on their vertical extent reads O(log n) layouts instead of all of them.
+ */
+function blockInGutter(blocks: ArrayLike<HTMLElement>, clientX: number, clientY: number): HTMLElement | null {
+	let low = 0;
+	let high = blocks.length - 1;
+	while (low <= high) {
+		const mid = (low + high) >> 1;
+		const rect = blocks[mid].getBoundingClientRect();
+		if (clientY < rect.top) high = mid - 1;
+		else if (clientY > rect.bottom) low = mid + 1;
+		else return clientX >= rect.left - 36 && clientX <= rect.left + 8 ? blocks[mid] : null;
+	}
+	return null;
 }
 
 export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
@@ -140,6 +164,8 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		if (target.closest("a, button, input, select, textarea, label")) return;
 		const span = target.closest(".tweak-highlight, .tweak-block-highlight") as HTMLElement | null;
 		if (!span) return;
+		// The click that ends a drag-select must leave the selection to the inline comment button.
+		if (window.getSelection()?.isCollapsed === false) return;
 
 		const id = span.dataset["tweakId"];
 		const comment = span.dataset["tweakComment"];
@@ -188,15 +214,11 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 
 	const handleBlockGutterMove = (e: MouseEvent) => {
 		if (popover() || btnPos()) return;
-		const blocks = Array.from(
+		const block = blockInGutter(
 			props.contentRef.querySelectorAll<HTMLElement>("[data-comment-source-start][data-comment-source-end]"),
+			e.clientX,
+			e.clientY,
 		);
-		const block = blocks.find((candidate) => {
-			const rect = candidate.getBoundingClientRect();
-			return (
-				e.clientY >= rect.top && e.clientY <= rect.bottom && e.clientX >= rect.left - 36 && e.clientX <= rect.left + 8
-			);
-		});
 		if (!block || block.classList.contains("tweak-block-highlight") || block.querySelector(".tweak-highlight")) {
 			clearBlockTarget();
 			return;
@@ -213,13 +235,11 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 			block.classList.add("tweak-block-target");
 		}
 		const rect = block.getBoundingClientRect();
-		setBlockBtn({
-			x: Math.max(4, rect.left - 30),
-			y: rect.top + 2,
-			start,
-			end,
-			text: (block.textContent ?? "").trim(),
-		});
+		const x = Math.max(4, rect.left - 30);
+		const y = rect.top + 2;
+		const current = blockBtn();
+		if (current && current.x === x && current.y === y && current.start === start && current.end === end) return;
+		setBlockBtn({ x, y, start, end, text: (block.textContent ?? "").trim() });
 	};
 
 	onMount(() => {
@@ -285,6 +305,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 			selectionText: block.text,
 			sourceStart: block.start,
 			sourceEnd: block.end,
+			sourceSnapshot: props.blockSource?.({ start: block.start, end: block.end }),
 		});
 	};
 
@@ -298,7 +319,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 				props.onSaveBlock?.(
 					{
 						id: generateTweakCommentId(),
-						highlighted: state.selectionText ?? "",
+						highlighted: state.sourceSnapshot ?? "",
 						comment: draft().trim(),
 						createdAt: new Date().toISOString(),
 						anchor: "block",
