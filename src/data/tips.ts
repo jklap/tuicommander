@@ -514,7 +514,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Remote Machine Deploy",
 		description:
-			"Choose Deploy on connect in Settings > Remote Machines to stage and launch the matching daemon over SSH automatically.",
+			"Choose Deploy on connect in Settings > Remote Servers to stage and launch the matching daemon over SSH automatically.",
 		shortcut: null,
 	},
 	{

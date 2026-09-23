@@ -185,21 +185,27 @@ notification opens that session.
 
 ## SSH Tunnel Management
 
-TUICommander can manage persistent SSH tunnels with automatic reconnection, port forwarding, and audit logging.
+TUICommander can manage persistent SSH tunnels with automatic reconnection, port forwarding, and audit logging. A tunnel **profile** is a standalone, reusable SSH forward you set up yourself; it is a separate thing from the tunnel a [remote connection](#remote-connection-manager) opens for itself on Connect. Tunnels are no longer behind the Experimental Features flag.
+
+### Where to create and edit tunnels
+
+**Settings (`Cmd+,`) → Remote Servers.** That page owns tunnel create, edit and delete through the same merged editor remote connections use — pick **Kind: SSH Tunnel**. Its **SSH Tunnels** section lists every profile with Start/Stop, Edit, Log and Del. The **Tunnels Panel** overlay (Command Palette → "tunnels", or the sidebar shield icon) is for live status, start/stop and the audit log only; its **Edit in Settings** link closes it and opens the Remote Servers page.
 
 ### Creating a Tunnel Profile
 
-1. Turn on **Experimental Features** in **Settings** → **General**, then open the **SSH Tunnels** panel (command palette → "SSH Tunnels")
-2. Click **+ New Tunnel** to open the editor
+1. Open **Settings → Remote Servers** and click **Add Connection**
+2. Leave **Kind** on **SSH Tunnel** (the default)
 3. Configure:
    - **Name** — A descriptive label (e.g., "prod-db-tunnel")
-   - **Host** — Remote SSH host
+   - **Host** — Remote SSH host; autocompletes from the host aliases in your `~/.ssh/config`
    - **Port** — SSH port (default 22)
    - **User** — SSH username
-   - **Identity File** — Optional path to SSH private key (use the Browse button to select)
-   - **Port Forwards** — Local or remote port forwarding rules (e.g., local 8080 → remote 80). Local forwards target `remote_host`/`remote_port`; Remote forwards target `local_host`/`local_port`. The remote host is pre-populated from the tunnel host when adding a Local forward
-   - **Options** — ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes or AcceptNew), Compression (default on)
-4. Save the profile
+   - **Identity / Authentication** — Optional path to an SSH private key; leave empty to use your SSH agent. On the desktop app **Browse…** opens a file picker at `~/.ssh`. The detected agent and its loaded keys, with each key's fingerprint, show underneath (see [SSH Agent Detection](#ssh-agent-detection))
+   - **Port Forwards** — click **+ Add** per rule, choose **Local** or **Remote**, and fill in the bind port and the paired host:port. Local forwards target `remote_host`/`remote_port`; Remote forwards target `local_host`/`local_port`. A new Local forward's remote host defaults to the tunnel's Host
+   - **ServerAliveInterval** (default 15s), **ServerAliveCountMax** (default 3), **StrictHostKeyChecking** (`Yes` or `AcceptNew`) and **Compress the channel (ssh -C)** (default on)
+   - **Connect automatically on startup** (persisted as `auto_connect`)
+4. Optionally click **Test Connection** — a one-shot, no-forwards SSH check that reports reachable, authentication failed or unreachable before you save
+5. Save
 
 **Compression** is `ssh -C` on the tunnel channel, and it is on by default because
 a tunnel usually carries a terminal stream, which deflates to a few percent of
@@ -213,18 +219,16 @@ A tunnel shows **Connected** only after SSH survives its initial 500 ms. With lo
 
 ### Auto-Connect
 
-Enable **Auto-Connect** on a tunnel profile to have it start automatically when TUICommander launches. Useful for tunnels you always need (database access, internal services).
+Enable **Connect automatically on startup** on a tunnel profile to have it start automatically when TUICommander launches. Useful for tunnels you always need (database access, internal services). Profiles marked with auto-connect are started during app hydration before you interact with the UI.
 
-Toggle auto-connect in the tunnel editor — profiles marked with auto-connect are started during app hydration before you interact with the UI.
+### Sidebar Shield Indicator
 
-### Statusbar Indicator
+The sidebar footer (next to the Help button) shows a shield icon once at least one tunnel profile exists:
 
-The status bar shows a shield icon for SSH tunnels:
+- **Muted icon, no badge** — you have tunnel profiles configured but none are currently connected
+- **Accent-colored icon with a count badge** — the number of connected tunnels
 
-- **Grey shield** — You have tunnel profiles configured but none are currently connected
-- **Green shield with badge** — Shows the number of active tunnel connections
-
-Click the shield to open the Tunnels Panel.
+Click it to open the Tunnels Panel.
 
 ### Command Palette
 
@@ -232,21 +236,22 @@ Open the command palette (`Cmd+P` / `Ctrl+P`) and type "tunnels" to toggle the T
 
 ### Starting and Stopping Tunnels
 
-- In the **Tunnels Panel**, click the **Start** button next to a profile to launch the SSH tunnel
-- The **TunnelStatusBadge** shows the current state: Starting, Connected, Reconnecting, Stopped, or Error
+- In the **Tunnels Panel** (or the SSH Tunnels list on Settings → Remote Servers), click **Start** next to a profile to launch the SSH tunnel
+- The status badge next to it shows the current state: Starting, Connected, Reconnecting, Stopped, or Error
+- **Edit** (Settings only) reopens the merged editor on that profile; **Log** expands the last 20 audit events; **Del** removes the profile
 - Click **Stop** to gracefully terminate the SSH process (SIGTERM with 5s grace period, then SIGKILL)
 - On app exit, all active tunnels are automatically stopped — no orphaned SSH processes
 
 ### SSH Agent Detection
 
-TUICommander automatically detects your SSH agent and shows the agent type and loaded keys in the tunnel editor. Supported agents:
+TUICommander detects your SSH agent from `SSH_AUTH_SOCK` and shows the agent type and loaded keys inside the shared SSH fields of the connection editor (both the SSH Tunnel and Remote Server — SSH kinds). Supported agents:
 
 - **1Password** — Detected via the 1Password SSH agent socket
 - **Secretive** — Detected via the Secretive agent socket
 - **GPG Agent** — Detected via gpg-agent socket
 - **Generic SSH Agent** — Any other `SSH_AUTH_SOCK` value
 
-The key listing shows fingerprint, comment, and key type for each loaded key, helping you verify that the correct identity is available before connecting.
+The key listing shows each loaded key's comment, key type and fingerprint (from `ssh-add -l`), so you can check the right identity is available before connecting.
 
 ### Automatic Reconnection
 
@@ -286,33 +291,47 @@ The supervisor classifies SSH process exits to determine whether retry is approp
 
 Remote connections let you manage `tuic-remote` daemons running on other machines. TUICommander routes API calls to the correct host based on which repo/session is active.
 
+They live on **Settings → Remote Servers** (the separate Remote Machines page merged into it; an old `remote-machines` deep link opens it). **Add Connection** opens the merged editor: a **Name** and a **Kind** — **SSH Tunnel** (a tunnel profile, see above), **Remote Server — SSH**, **Remote Server — Direct** or **Remote Server — Local**. Editing an existing item fixes its Kind; its Name stays editable. The page's **Remote Machines** section lists the connections, the SSH hosts discovered from your SSH config and `known_hosts` (click one to open the editor prefilled with it, or **Probe** it), and each row's Connect, Update, Install, Edit and Remove actions.
+
 ### Adding an SSH Connection
 
-1. Open **Settings** → **Remote Machines** and click **+**
-2. Select **SSH** transport
-3. Type a host or choose **Probe SSH hosts** to see the hosts from your SSH
-   config and whether each accepts a shell login
-4. Configure the port (default 22), user, and optional identity file
+1. Open **Settings** → **Remote Servers** and click **Add Connection** (or click a
+   discovered host under **Remote Machines** — **Probe config hosts** shows which
+   accept a shell login)
+2. Set **Kind** to **Remote Server — SSH**
+3. Configure the host, port (default 22), user and optional identity file — the
+   same SSH fields as a tunnel. **StrictHostKeyChecking** is fixed to
+   `AcceptNew` here: the tunnel TUICommander opens on your behalf always accepts a
+   new host's key on first contact and refuses a changed one
+4. Set the remote daemon port (default 9877)
 5. Choose **Never deploy**, **Deploy on connect**, or **Installed service**, and
    set how many minutes an ephemeral daemon should survive with no client
-6. Set the remote daemon port (default 9877)
-7. Set the auth username and password the daemon was configured with
-8. Save, then click **Connect**
+6. Set the auth username and password the daemon was configured with
+7. Optionally click **Test Connection**, then Save, then click **Connect**
 
 For an installed service, Connect waits for the SSH forwarding port and retries the daemon health check during startup before reporting it unavailable.
 
 ### Adding a Direct Connection
 
-1. Open **Settings** → **Remote Machines** and click **+**
-2. Select **Direct** transport
+1. Open **Settings** → **Remote Servers** and click **Add Connection**
+2. Set **Kind** to **Remote Server — Direct**
 3. Enter the URL of the remote daemon (e.g., `http://10.0.0.5:9877`)
 4. Set the auth username and password
-5. Save — health polling begins immediately
+5. Optionally click **Test Connection**, then Save, then click **Connect**
 
 A URL that points back at the TUICommander you are configuring is refused with
 "this very TUICommander instance — a machine cannot mirror itself". The check
 compares the `instance_id` in `GET /health` against this process's own, so a
 second daemon on the same machine (a different port) is still a valid peer.
+
+### Adding a Local Connection
+
+**Remote Server — Local** points at another TUICommander instance on the same
+machine (`tuic-remote --instance <id>` or `TUIC_APP_INSTANCE=<id>`): either a
+**Named instance** (its port is read from that instance's own config when used,
+never cached) or a **Manual port** for an unnamed one. It can be saved and
+checked with **Test Connection**; **Connect** does not support it yet and fails
+with "Local connections are not yet supported".
 
 ### Connect or Install
 

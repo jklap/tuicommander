@@ -261,7 +261,7 @@ describe("SettingsPanel", () => {
 			Application: ["General", "Appearance", "Notifications"],
 			Workspace: ["Terminal", "Smart Selection", "Keyboard Shortcuts", "Git & GitHub"],
 			AI: ["Agents", "Voice", "Smart Prompts"],
-			Integrations: ["MCP", "Remote Access", "Remote Machines", "StreamDock", "Telegram", "Plugins"],
+			Integrations: ["MCP", "Remote Access", "Remote Servers", "StreamDock", "Telegram", "Plugins"],
 			REPOSITORIES: ["Alpha", "Beta"],
 		});
 	});
@@ -281,13 +281,15 @@ describe("SettingsPanel", () => {
 	});
 
 	it("opens the successor page for the tab keys this reorganization retired", () => {
-		// services split into MCP / Remote Access / Remote Machines, and providers
-		// became AI Chat; an old tuic://settings?tab=… link must land on a page.
+		// services split into MCP / Remote Access / Remote Machines, providers
+		// became AI Chat, and Remote Machines merged into Remote Servers; an old
+		// tuic://settings?tab=… link must land on a page.
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
 		try {
 			for (const [retired, label] of [
 				["services", "MCP"],
 				["providers", "AI Chat"],
+				["remote-machines", "Remote Servers"],
 			]) {
 				const { container, unmount } = render(() => (
 					<SettingsPanel visible={true} onClose={() => {}} initialTab={retired} />
