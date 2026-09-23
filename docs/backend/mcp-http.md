@@ -904,8 +904,10 @@ registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 
 `session action=submit session_id=<id> input=<command>` is the managed-agent
 command surface. It accepts only a confirmed-idle agent with an empty composer,
-never queues, and keeps the PTY writer locked across Ctrl-U, bracketed paste for
-multiline input, the 50 ms raw-mode scheduling gap, and Enter. The existing
+never queues, and keeps the PTY writer locked across Ctrl-U, a 50 ms gap, the
+text (bracketed paste for multiline input), a second 50 ms raw-mode scheduling
+gap, and Enter. Ctrl-U travels alone because Claude Code strips it from a long
+text it treats as a paste and then refuses the Enter. The existing
 `InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
 `turn_epoch` advance exactly once after the full write.
 

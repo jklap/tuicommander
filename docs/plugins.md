@@ -440,7 +440,7 @@ await host.writePty(sessionId, "\x03"); // Send Ctrl-C
 
 Sends user input to an agent session with correct Enter handling. **Requires `"pty:write"` capability.**
 
-Ink-based agents (Claude Code, Codex, etc.) run in raw mode and need Ctrl-U + text in one write, then `\r` in a separate write. Shell sessions receive everything in a single write. This method handles both cases automatically based on the detected agent type.
+Ink-based agents (Claude Code, Codex, etc.) run in raw mode and need Ctrl-U, the text, and `\r` as three writes with a real time gap between them, so each arrives in its own read (Claude Code strips a Ctrl-U that arrives inside a long text and then refuses the Enter). Shell sessions receive Ctrl-U + text in one write, then `\r`. This method handles both cases automatically based on the detected agent type.
 
 ```typescript
 await host.sendAgentInput(sessionId, "y");       // confirm a prompt

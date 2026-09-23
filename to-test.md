@@ -8,6 +8,12 @@
 
 # To Test
 
+## Dictation auto-send on long text (2026-09-23) — frontend, live via HMR
+
+- [ ] With Auto-send on, dictate 30+ seconds into a Claude tab: the text is submitted without pressing Enter, and no "Removed 1 invisible character" notice appears.
+- [ ] Dictate a short phrase into Claude and into a Codex tab: both still submit.
+- [ ] **After a `make dev` restart (Rust):** `session action=submit` with a 600+ char input to a Claude tab returns `acknowledged:true` and the prompt runs; a peer `agent send` of a long message also submits.
+
 ## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
 
 - [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**.

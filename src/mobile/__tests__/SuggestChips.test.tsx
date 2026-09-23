@@ -31,13 +31,14 @@ describe("SuggestChips", () => {
 		const { container } = render(() => <SuggestChips sessionId="s1" items={["Run tests"]} agentType="claude" />);
 		const button = container.querySelector("button")!;
 		await fireEvent.click(button);
-		// Wait past AGENT_ENTER_GAP_MS: with an agent attached sendCommand holds
-		// the Enter back by a real elapsed gap so the PTY cannot coalesce it into
-		// the payload's read(). A microtask flush no longer reaches the 2nd write.
-		await new Promise((r) => setTimeout(r, AGENT_ENTER_GAP_MS + 20));
-		expect(rpc).toHaveBeenCalledTimes(2);
-		expect(rpc).toHaveBeenNthCalledWith(1, "write_pty", { sessionId: "s1", data: "\x15Run tests" });
-		expect(rpc).toHaveBeenNthCalledWith(2, "write_pty", { sessionId: "s1", data: "\r" });
+		// Wait past two AGENT_ENTER_GAP_MS: with an agent attached sendCommand
+		// separates Ctrl-U from the text, and the text from the Enter, by a real
+		// elapsed gap each so the PTY cannot coalesce them into one read().
+		await new Promise((r) => setTimeout(r, 2 * AGENT_ENTER_GAP_MS + 20));
+		expect(rpc).toHaveBeenCalledTimes(3);
+		expect(rpc).toHaveBeenNthCalledWith(1, "write_pty", { sessionId: "s1", data: "\x15" });
+		expect(rpc).toHaveBeenNthCalledWith(2, "write_pty", { sessionId: "s1", data: "Run tests" });
+		expect(rpc).toHaveBeenNthCalledWith(3, "write_pty", { sessionId: "s1", data: "\r" });
 	});
 
 	it("renders nothing when items is empty", () => {

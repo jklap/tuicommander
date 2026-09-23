@@ -50,8 +50,9 @@ export function clearShellFamilyCache(sessionId: string): void {
 
 /** Send a command to a PTY session with split writes.
  *
- *  Splits into two writes:
- *  1. Ctrl-U + text (clears any existing input, then types the command)
+ *  Splits into separate writes:
+ *  1. Ctrl-U + text (clears any existing input, then types the command) — with
+ *     an agent attached, Ctrl-U and text are two writes a real gap apart
  *  2. \r (Enter — sent separately)
  *
  *  The Ctrl-U prefix is required for Ink-based agents (Claude Code, Codex, etc.)
@@ -87,7 +88,17 @@ export async function sendCommand(
 	const skipPrefix = !agentType && isWindowsNative(shellFamily);
 	const prefix = skipPrefix ? "" : "\x15";
 	const payload = text.includes("\n") ? `\x1b[200~${text}\x1b[201~` : text;
-	await writeFn(prefix + payload);
+	if (agentType) {
+		// Ctrl-U must reach an agent in its own read. Claude Code treats a long
+		// input chunk as a paste: a Ctrl-U inside it is stripped as an invisible
+		// character, and Claude then refuses the Enter that follows ("review and
+		// press Enter to send") — dictated text sat unsent even with a 500ms gap.
+		await writeFn(prefix);
+		await delay(AGENT_ENTER_GAP_MS);
+		await writeFn(payload);
+	} else {
+		await writeFn(prefix + payload);
+	}
 	if (!submit) return;
 	// Two writes are not two reads. An Ink/raw-mode agent only treats the CR as
 	// submit when it arrives in a SEPARATE read() from the text; back-to-back
