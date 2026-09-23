@@ -439,7 +439,10 @@ async fn post_progress_viewed(
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
-    json_result(crate::progress::progress_mark_viewed(&q.path, q.pty_id.as_deref()))
+    json_result(crate::progress::progress_mark_viewed(
+        &q.path,
+        q.pty_id.as_deref(),
+    ))
 }
 
 async fn post_progress_flow(
@@ -894,9 +897,6 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/metrics", get(session::get_metrics))
         .route("/process/stats", get(session::get_process_stats))
         .route("/process/monitor", get(session::process_monitor_panel))
-        .route("/agents/map", get(session::subagent_map_panel))
-        .route("/agents/map/data", get(session::subagent_map_data))
-        .route("/agents/map/prompt", get(session::subagent_map_prompt))
         // Git operations
         .route("/repo/info", get(git_routes::repo_info))
         .route("/repo/remote-url", get(git_routes::remote_url))
@@ -2547,72 +2547,22 @@ mod tests {
         assert_eq!(json["survive_secs"], 1_800);
     }
 
-    /// The map page is static HTML served by `include_str!`, exactly like
-    /// `/process/monitor`.
+    /// The node-tree call map was removed on 2026-09-23; the Progress Flow
+    /// view replaced it. Its three routes must not come back as a stray page,
+    /// and nothing under them may read a transcript.
     #[tokio::test]
-    async fn subagent_map_panel_serves_the_page() {
-        let app = build_router(test_state(), false, true);
-        let resp = app
-            .oneshot(Request::get("/agents/map").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        assert!(
-            content_type.starts_with("text/html"),
-            "served as {content_type}"
-        );
-    }
-
-    /// The call map takes no parameter that could steer a read: with no
-    /// terminals it is an empty tree, whatever the query string says.
-    #[tokio::test]
-    async fn subagent_map_data_is_an_empty_tree_without_terminals() {
-        let app = build_router(test_state(), false, true);
-        let resp = app
-            .oneshot(
-                Request::get("/agents/map/data?session=..%2F..%2F..%2Fetc%2Fpasswd")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["roots"].as_array().map(Vec::len), Some(0));
-        assert_eq!(json["terminals"], 0);
-        assert_eq!(json["subagents"], 0);
-    }
-
-    /// `session` and `agent` are keys, never path components. Traversal-shaped
-    /// values resolve to nothing — the same 404 as any unknown id, and never a
-    /// filesystem read.
-    #[tokio::test]
-    async fn subagent_map_prompt_treats_a_traversal_as_an_unknown_id() {
-        for query in [
-            "?session=..%2F..%2Fetc&agent=..%2Fpasswd",
-            "?session=nope&agent=x",
-            "?agent=x",
-            "",
+    async fn the_removed_agent_map_routes_are_not_served() {
+        for path in [
+            "/agents/map",
+            "/agents/map/data",
+            "/agents/map/prompt?session=x&agent=y",
         ] {
             let app = build_router(test_state(), false, true);
             let resp = app
-                .oneshot(
-                    Request::get(format!("/agents/map/prompt{query}"))
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
-            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "query {query:?}");
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
         }
     }
 
@@ -2816,9 +2766,6 @@ mod tests {
             "/worktrees/x",
             "/agents",
             "/agents/detect",
-            "/agents/map",
-            "/agents/map/data",
-            "/agents/map/prompt",
             "/fs/list",
             "/fs/read",
             "/fs/write",

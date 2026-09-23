@@ -144,46 +144,34 @@ the workflow.
 | `GET` | `/metrics` | Session metrics (spawned, failed, bytes) |
 | `GET` | `/process/stats` | CPU% and RSS memory for TUIC and all child process trees |
 | `GET` | `/process/monitor` | Self-contained HTML dashboard for process metrics (for remote/PWA/mobile) |
-| `GET` | `/agents/map` | Self-contained HTML call map: agent terminals, the peers they spawned, and their Claude subagents |
-| `GET` | `/agents/map/data` | The call tree behind that page |
-| `GET` | `/agents/map/prompt?session=&agent=` | One subagent's full spawn prompt, redacted — fetched when a node is expanded |
 
-**Superseded by the Progress Flow view (`progress_flow`, 2026-09-23); kept until Boss approves removal.**
+The `/agents/map` routes and their HTML page were removed on 2026-09-23. The
+Progress Flow view (`POST /progress/flow`, `POST /progress/flow/detail`)
+replaced them and reuses how they read subagents:
 
-**The call map reads the subagent's own transcript for everything but the spawn.**
-Claude records an `Agent` spawn in the parent transcript but writes the
-subagent's turns to `<config>/projects/<cwd-slug>/<uuid>/subagents/agent-<id>.jsonl`
-— measured over 582 real transcripts: 833 spawns and zero `isSidechain:true`
-rows in any parent file. That is why a subagent is invisible in the terminal
-that spawned it. The parent transcript is read for the `Agent` tool call only:
-its timestamp starts the node and its `prompt` says why the subagent exists. A
+**Subagents are read from their own transcripts.** Claude records an `Agent`
+spawn in the parent transcript but writes the subagent's turns to
+`<config>/projects/<cwd-slug>/<uuid>/subagents/agent-<id>.jsonl` — measured over
+582 real transcripts: 833 spawns and zero `isSidechain:true` rows in any parent
+file. The parent transcript supplies the `Agent` call's timestamp and prompt; a
 subagent whose join fails still renders from its own file, with its own first
 message standing in for the prompt. The teammate join compares the prompt with
-the *decoded* first message; the raw JSON line escapes every newline, so a
-multi-line prompt never matched before 2026-09-23.
+the *decoded* first message, because the raw JSON line escapes every newline.
+The report is the subagent's last reply; tool results are never kept.
 
-Terminals come from `AppState`: title from `display_name`, intent from
-`SessionState.agent_intent`, state from `awaiting_input`/`shell_state`. The
-parent terminal comes from `session_parent` (child PTY → spawner's TUIC session,
-written by `agent action=spawn`), resolved to a PTY with `live_pty_for_peer`; a
-link to a closed terminal leaves the child a root.
-
-`?session=` (prompt endpoint only) is a TUIC session id looked up in `AppState`, **never a path**, and `?agent=` is compared against the subagents listed on disk.
-Every path component comes from the session's own cwd, the agent process's
-`CLAUDE_CONFIG_DIR`, and the session uuid Claude published — so an unknown id
-answers 404, and no request parameter can steer a filesystem read. Only sessions TUIC has already
-identified as `claude` are read for subagents: Claude discovery falls back to "newest
+`/progress/flow/detail` takes a PTY id looked up in `AppState` and an agent id
+compared against the subagents listed on disk — **never a path**. Every path
+component comes from the session's cwd, the agent process's
+`CLAUDE_CONFIG_DIR` and the session uuid Claude published. Only sessions TUIC
+has identified as `claude` are read: Claude discovery falls back to "newest
 unclaimed session file under the project dir", so asking it about a shell tab
 would hand that session another tab's transcript (issue #119).
 
 Both files are read through per-path byte cursors held in
-`AppState.subagent_map_cache`, so a poll parses only what was appended since
-the last one — the biggest parent transcript on the development machine is
-31 MB, which a full re-read every 2s would turn into 15 MB/s of disk and JSON.
-Tool activity is a count per tool name (at most 32 distinct names per subagent,
-the rest counted as `other`). A prompt reaches `/agents/map/data` only redacted
-and cut to 200 characters, redacted before the cut; the full redacted prompt
-only through `/agents/map/prompt`. No tool-result body or reply reaches the wire.
+`AppState.subagent_map_cache`, so a refresh parses only what was appended — the
+biggest parent transcript on the development machine is 31 MB. Tool activity
+is a count (at most 32 distinct names per subagent, the rest counted as
+`other`).
 
 ### Git Operations
 

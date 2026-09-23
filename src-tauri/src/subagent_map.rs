@@ -1,17 +1,13 @@
-//! Call map — who called whom, and why.
-//!
-//! One tree holds two kinds of node: TUIC terminals, nested by the peer spawn
-//! link TUIC records for `agent action=spawn`, and the Claude in-process
-//! subagents of each terminal, nested by `parentAgentId`. Time is not an axis:
-//! a node carries its state, its duration and a compact count of its tool calls.
+//! Claude in-process subagents, read for the Progress Flow view.
 //!
 //! Claude records an `Agent` spawn in the *parent* transcript
 //! (`<config>/projects/<cwd-slug>/<uuid>.jsonl`) but writes the subagent's own
 //! turns to a separate file under `<uuid>/subagents/`. Measured over 582 real
 //! transcripts: 833 spawns, and **zero** `isSidechain:true` rows in any parent
 //! file. That is why a subagent is invisible in the terminal that spawned it,
-//! and why the subagent file — not the parent — is the source of truth for a
-//! node.
+//! and why the subagent file — not the parent — is the source of truth for its
+//! column. Both are read through per-file byte cursors, so a refresh parses
+//! only what was appended.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -62,8 +58,6 @@ pub(crate) const MAX_LANES: usize = 64;
 /// `other_tools`, so an agent calling hundreds of MCP tools cannot grow the
 /// cache without bound.
 pub(crate) const MAX_TOOL_KINDS: usize = 32;
-/// Tool badges on one node; the rest fold into `other_tools`.
-pub(crate) const MAX_TOOL_BADGES: usize = 6;
 /// A tool name is a short identifier; anything longer is not a name.
 pub(crate) const MAX_LABEL_CHARS: usize = 64;
 /// Node titles wrap on the page, but a title is still a title, not a body.
@@ -500,64 +494,6 @@ pub(crate) fn subagents_dir(
     dir.is_dir().then_some(dir)
 }
 
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum NodeKind {
-    Terminal,
-    Subagent,
-}
-
-/// `running`/`done` for a subagent; `busy`/`idle`/`awaiting` for a terminal.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum NodeState {
-    Running,
-    Done,
-    Busy,
-    Idle,
-    Awaiting,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct ToolCount {
-    pub name: String,
-    pub count: u32,
-}
-
-/// One node of the call map.
-///
-/// Every field is final text or a number: the page renders, it never derives.
-/// `agent_type` and `description` are `None` when they would only repeat
-/// `title`.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct MapNode {
-    pub kind: NodeKind,
-    /// PTY session id for a terminal, agent id for a subagent.
-    pub id: String,
-    /// The terminal the node belongs to — the key of the prompt endpoint.
-    pub session_id: String,
-    pub title: String,
-    pub agent_type: Option<String>,
-    pub model: Option<String>,
-    pub description: Option<String>,
-    /// The terminal's current TUIC `intent:` text.
-    pub intent: Option<String>,
-    pub state: NodeState,
-    pub started_at_ms: Option<i64>,
-    /// End minus start, or now minus start while running.
-    pub duration_ms: Option<i64>,
-    /// Redacted, whitespace-collapsed, at most `PROMPT_SUMMARY_CHARS`.
-    pub prompt_summary: Option<String>,
-    /// The summary is shorter than the prompt, so expanding shows more.
-    pub prompt_more: bool,
-    /// Most-called first, at most `MAX_TOOL_BADGES`.
-    pub tools: Vec<ToolCount>,
-    /// Calls not shown in `tools`.
-    pub other_tools: u32,
-    pub tool_calls: u32,
-    pub children: Vec<MapNode>,
-}
-
 /// Redact first, then shorten. Cutting first could split a secret so its
 /// pattern no longer matches, and its prefix would reach the page.
 ///
@@ -570,26 +506,6 @@ pub(crate) fn prompt_summary(prompt: &str) -> (Option<String>, bool) {
     }
     let more = flat.chars().count() > PROMPT_SUMMARY_CHARS;
     (Some(truncate_chars(&flat, PROMPT_SUMMARY_CHARS)), more)
-}
-
-/// Most-called first, ties by name so the order is stable between polls.
-fn tool_badges(summary: &LaneSummary) -> (Vec<ToolCount>, u32) {
-    let mut all: Vec<ToolCount> = summary
-        .tools
-        .iter()
-        .map(|(name, &count)| ToolCount {
-            name: name.clone(),
-            count,
-        })
-        .collect();
-    all.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
-    let hidden: u32 = all.iter().skip(MAX_TOOL_BADGES).map(|t| t.count).sum();
-    all.truncate(MAX_TOOL_BADGES);
-    (all, hidden + summary.other_tools)
-}
-
-fn duration(start: Option<i64>, end: Option<i64>) -> Option<i64> {
-    Some((end? - start?).max(0))
 }
 
 /// A lane with everything read about it, before it becomes a node.
@@ -669,64 +585,6 @@ fn collect_lanes(
             .unwrap_or_else(|| d.summary.first_text.clone());
     }
     lanes
-}
-
-fn subagent_node(data: LaneData, session_id: &str, now_ms: i64) -> MapNode {
-    let LaneData {
-        lane,
-        summary,
-        prompt,
-    } = data;
-    let (prompt_summary, prompt_more) = prompt_summary(&prompt);
-    let (tools, other_tools) = tool_badges(&summary);
-    let end = lane.ended_at_ms.or(lane.running.then_some(now_ms));
-    let agent_type = Some(lane.agent_type).filter(|t| !t.is_empty() && *t != lane.name);
-    let description = Some(lane.description).filter(|d| !d.is_empty() && *d != lane.name);
-    MapNode {
-        kind: NodeKind::Subagent,
-        id: lane.agent_id,
-        session_id: session_id.to_owned(),
-        title: truncate_chars(&lane.name, MAX_TITLE_CHARS),
-        agent_type,
-        model: lane.model,
-        description,
-        intent: None,
-        state: if lane.running {
-            NodeState::Running
-        } else {
-            NodeState::Done
-        },
-        started_at_ms: lane.started_at_ms,
-        duration_ms: duration(lane.started_at_ms, end),
-        prompt_summary,
-        prompt_more,
-        tools,
-        other_tools,
-        tool_calls: summary.tool_calls(),
-        children: Vec::new(),
-    }
-}
-
-/// The subagents of one terminal, nested by `parentAgentId`.
-///
-/// A subagent whose parent is not among the lanes read hangs off the terminal
-/// itself: it renders from its own transcript whatever its parent does.
-pub(crate) fn subagent_nodes(
-    cache: &mut MapCache,
-    subagents_dir: &Path,
-    parent_transcript: &Path,
-    session_id: &str,
-    now_ms: i64,
-) -> Vec<MapNode> {
-    let entries = collect_lanes(cache, subagents_dir, parent_transcript)
-        .into_iter()
-        .map(|d| {
-            let id = d.lane.agent_id.clone();
-            let parent = d.lane.parent_agent_id.clone();
-            (id, parent, subagent_node(d, session_id, now_ms))
-        })
-        .collect();
-    nest(entries)
 }
 
 /// Which of a subagent's two texts to return in full.
@@ -860,145 +718,6 @@ pub(crate) fn transcript_source(
         )?
         .join(format!("{uuid}.jsonl")),
     })
-}
-
-/// One terminal as the handler found it in `AppState`.
-pub(crate) struct TerminalInfo {
-    pub session_id: String,
-    pub title: String,
-    pub agent_type: Option<String>,
-    pub intent: Option<String>,
-    pub state: NodeState,
-    /// PTY session id of the terminal that spawned this one with
-    /// `agent action=spawn`, if TUIC recorded it and that terminal still lives.
-    pub parent_session: Option<String>,
-    pub subagents: Vec<MapNode>,
-}
-
-/// The whole call map.
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
-pub(crate) struct CallMap {
-    pub roots: Vec<MapNode>,
-    pub terminals: usize,
-    pub subagents: usize,
-    /// Subagents still running.
-    pub running: usize,
-}
-
-/// Nest terminals by their spawn link. A terminal's own subagents come first
-/// among its children, then the peers it spawned.
-pub(crate) fn assemble(mut terminals: Vec<TerminalInfo>) -> CallMap {
-    terminals.sort_by(|a, b| {
-        a.title
-            .cmp(&b.title)
-            .then_with(|| a.session_id.cmp(&b.session_id))
-    });
-    let entries = terminals
-        .into_iter()
-        .map(|t| {
-            let title = truncate_chars(&t.title, MAX_TITLE_CHARS);
-            let node = MapNode {
-                kind: NodeKind::Terminal,
-                id: t.session_id.clone(),
-                session_id: t.session_id.clone(),
-                agent_type: t.agent_type.filter(|a| *a != title),
-                title,
-                model: None,
-                description: None,
-                intent: t.intent.filter(|i| !i.trim().is_empty()),
-                state: t.state,
-                started_at_ms: None,
-                duration_ms: None,
-                prompt_summary: None,
-                prompt_more: false,
-                tools: Vec::new(),
-                other_tools: 0,
-                tool_calls: 0,
-                children: t.subagents,
-            };
-            (t.session_id, t.parent_session, node)
-        })
-        .collect();
-
-    let mut map = CallMap {
-        roots: nest(entries),
-        ..CallMap::default()
-    };
-    let mut stack: Vec<&MapNode> = map.roots.iter().collect();
-    let (mut terminals, mut subagents, mut running) = (0, 0, 0);
-    while let Some(node) = stack.pop() {
-        match node.kind {
-            NodeKind::Terminal => terminals += 1,
-            NodeKind::Subagent => subagents += 1,
-        }
-        if node.state == NodeState::Running {
-            running += 1;
-        }
-        stack.extend(node.children.iter());
-    }
-    map.terminals = terminals;
-    map.subagents = subagents;
-    map.running = running;
-    map
-}
-
-/// Hang each node under its parent, keeping input order among siblings and
-/// after any children the node already carries.
-///
-/// A node whose parent is unknown is a root. So is every node on a parent
-/// cycle: the links come from files and process state, not from a structure
-/// that guarantees a tree, and a cycle must cost the edge, never the node.
-fn nest(entries: Vec<(String, Option<String>, MapNode)>) -> Vec<MapNode> {
-    let n = entries.len();
-    let index: HashMap<&str, usize> = entries
-        .iter()
-        .enumerate()
-        .map(|(i, (id, _, _))| (id.as_str(), i))
-        .collect();
-    let parent_of: Vec<Option<usize>> = entries
-        .iter()
-        .enumerate()
-        .map(|(i, (_, parent, _))| {
-            parent
-                .as_deref()
-                .and_then(|p| index.get(p).copied())
-                .filter(|&p| p != i)
-        })
-        .collect();
-    let on_cycle = |i: usize| {
-        let mut cur = parent_of[i];
-        for _ in 0..n {
-            match cur {
-                Some(p) if p == i => return true,
-                Some(p) => cur = parent_of[p],
-                None => return false,
-            }
-        }
-        false
-    };
-    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut roots: Vec<usize> = Vec::new();
-    for i in 0..n {
-        match parent_of[i].filter(|_| !on_cycle(i)) {
-            Some(p) => kids[p].push(i),
-            None => roots.push(i),
-        }
-    }
-
-    fn build(i: usize, slots: &mut [Option<MapNode>], kids: &[Vec<usize>]) -> MapNode {
-        let mut node = slots[i].take().expect("each node is placed exactly once");
-        for &k in &kids[i] {
-            let child = build(k, slots, kids);
-            node.children.push(child);
-        }
-        node
-    }
-    let mut slots: Vec<Option<MapNode>> =
-        entries.into_iter().map(|(_, _, node)| Some(node)).collect();
-    roots
-        .into_iter()
-        .map(|r| build(r, &mut slots, &kids))
-        .collect()
 }
 
 /// Every `agent-<id>.meta.json` in a subagents dir, with the transcript beside
@@ -1553,7 +1272,6 @@ mod tests {
     }
 
     const PARENT_JSONL: &str = include_str!("fixtures/subagent_map/parent.jsonl");
-    const NOW_MS: i64 = LANE_ORIGIN_MS + 60_000;
 
     /// A subagents dir holding one lane, beside the parent transcript that
     /// spawned it. Returns (subagents dir, parent transcript).
@@ -1572,8 +1290,8 @@ mod tests {
         (dir, transcript)
     }
 
-    fn nodes(dir: &Path, parent: &Path) -> Vec<MapNode> {
-        subagent_nodes(&mut MapCache::default(), dir, parent, "sess-1", NOW_MS)
+    fn flows(dir: &Path, parent: &Path) -> Vec<SubagentFlow> {
+        subagent_flows(&mut MapCache::default(), dir, parent)
     }
 
     /// Only the `Agent` tool calls are spawns. A parent transcript is mostly
@@ -1591,65 +1309,36 @@ mod tests {
         assert_eq!(spawns[0].at_ms, LANE_ORIGIN_MS - 2_000);
     }
 
-    /// The node answers "who, and why" on its own: a title that is not the
-    /// agent type repeated, the description, the prompt, a done badge with a
-    /// duration, and tool counts instead of one row per call.
+    /// A Flow column needs who the subagent is, what it was asked, what it
+    /// reported and when: the joined spawn starts it, its own last reply ends
+    /// it, and tool calls are a count rather than one row each.
     #[test]
-    fn subagent_map_node_says_what_the_subagent_was_for() {
+    fn subagent_map_flow_lane_says_what_the_subagent_was_asked_and_reported() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, parent) = session_tree(tmp.path(), PARENT_JSONL);
-        let tree = nodes(&dir, &parent);
+        let lanes = flows(&dir, &parent);
 
-        assert_eq!(tree.len(), 1);
-        let n = &tree[0];
-        assert_eq!(n.kind, NodeKind::Subagent);
-        assert_eq!(n.id, "alane-fixture");
-        assert_eq!(n.session_id, "sess-1", "the key the prompt endpoint needs");
-        assert_eq!(n.title, "reviewer-x");
-        assert_eq!(n.agent_type.as_deref(), Some("reviewer"));
-        assert_eq!(n.description.as_deref(), Some("Review the diff"));
+        assert_eq!(lanes.len(), 1);
+        let l = &lanes[0];
+        assert_eq!(l.agent_id, "alane-fixture");
+        assert_eq!(l.title, "reviewer-x");
+        assert_eq!(l.agent_type.as_deref(), Some("reviewer"));
+        assert_eq!(l.prompt, "Review the diff and report");
+        assert_eq!(l.report, "Done. Two findings, both minor.");
+        assert!(!l.running);
         assert_eq!(
-            n.model.as_deref(),
-            Some("haiku"),
-            "the model is not truncated"
-        );
-        assert_eq!(
-            n.prompt_summary.as_deref(),
-            Some("Review the diff and report")
-        );
-        assert!(!n.prompt_more, "the whole prompt already fits");
-        assert_eq!(n.state, NodeState::Done);
-        assert_eq!(
-            n.started_at_ms,
+            l.started_at_ms,
             Some(LANE_ORIGIN_MS - 2_000),
-            "the parent's Agent call starts the node"
+            "the parent's Agent call starts the subagent"
         );
-        assert_eq!(
-            n.duration_ms,
-            Some(11_250),
-            "from the spawn to the last reply"
-        );
-        assert_eq!(
-            n.tools,
-            vec![
-                ToolCount {
-                    name: "Bash".into(),
-                    count: 3
-                },
-                ToolCount {
-                    name: "Read".into(),
-                    count: 2
-                },
-            ],
-            "most-called first"
-        );
-        assert_eq!(n.tool_calls, 5);
+        assert_eq!(l.ended_at_ms, Some(LANE_ORIGIN_MS + 9_250));
+        assert_eq!(l.tool_calls, 5);
     }
 
-    /// "general-purpose / general-purpose" was the defect: the card printed
-    /// the fallback title and then the type it fell back to.
+    /// "general-purpose / general-purpose" was the swimlane's defect: a card
+    /// printed the fallback title and then the type it fell back to.
     #[test]
-    fn subagent_map_node_never_repeats_the_title() {
+    fn subagent_map_flow_lane_never_repeats_the_title_as_its_type() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, parent) = session_tree(tmp.path(), "");
         std::fs::write(dir.join("agent-ascan.meta.json"), fixture("minimal")).expect("meta");
@@ -1658,25 +1347,23 @@ mod tests {
             r#"{"agentType":"general-purpose","spawnDepth":0}"#,
         )
         .expect("meta");
-        let tree = nodes(&dir, &parent);
+        let lanes = flows(&dir, &parent);
 
-        let scan = tree.iter().find(|n| n.id == "ascan").expect("scan node");
+        let scan = lanes.iter().find(|l| l.agent_id == "ascan").expect("scan");
         assert_eq!(scan.title, "Scan the tree");
-        assert_eq!(
-            scan.description, None,
-            "the description is already the title"
-        );
         assert_eq!(scan.agent_type.as_deref(), Some("general-purpose"));
 
-        let typed = tree.iter().find(|n| n.id == "atyped").expect("typed node");
+        let typed = lanes
+            .iter()
+            .find(|l| l.agent_id == "atyped")
+            .expect("typed");
         assert_eq!(typed.title, "general-purpose");
         assert_eq!(typed.agent_type, None, "the type is already the title");
     }
 
-    /// A running node's duration grows with the clock, so the badge is live
-    /// without the page doing arithmetic.
+    /// A subagent still calling tools has not returned: no end, no report.
     #[test]
-    fn subagent_map_node_times_a_running_subagent_against_now() {
+    fn subagent_map_flow_lane_of_a_running_subagent_has_no_return() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, parent) = session_tree(tmp.path(), "");
         std::fs::write(
@@ -1684,46 +1371,31 @@ mod tests {
             format!("{}\n", row("2026-09-21T10:00:00Z", "Bash")),
         )
         .expect("lane");
-        let n = &nodes(&dir, &parent)[0];
-        assert_eq!(n.state, NodeState::Running);
-        assert_eq!(n.duration_ms, Some(NOW_MS - LANE_ORIGIN_MS));
+        let l = &flows(&dir, &parent)[0];
+        assert!(l.running);
+        assert_eq!(l.ended_at_ms, None);
+        assert_eq!(l.report, "");
     }
 
-    /// Nesting follows `parentAgentId`. A parent that is not on disk costs the
-    /// edge, not the node: the child hangs off the terminal instead.
+    /// The Flow nests subagents by `parentAgentId`, so the lane must carry it
+    /// verbatim — including one naming a parent that is not on disk, which the
+    /// Flow then hangs off the terminal instead.
     #[test]
-    fn subagent_map_nodes_nest_by_parent_agent_id() {
+    fn subagent_map_flow_lane_carries_its_parent_agent_id() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, parent) = session_tree(tmp.path(), "");
-        std::fs::write(
-            dir.join("agent-aroot-0000000000000001.meta.json"),
-            fixture("minimal"),
-        )
-        .expect("meta");
         std::fs::write(dir.join("agent-afork.meta.json"), fixture("fork")).expect("meta");
-        std::fs::write(
-            dir.join("agent-aorphan.meta.json"),
-            r#"{"agentType":"x","description":"orphan","parentAgentId":"agone","spawnDepth":1}"#,
-        )
-        .expect("meta");
-        let tree = nodes(&dir, &parent);
-
-        let root_ids: Vec<&str> = tree.iter().map(|n| n.id.as_str()).collect();
-        assert!(root_ids.contains(&"aroot-0000000000000001"));
-        assert!(
-            root_ids.contains(&"aorphan"),
-            "an unknown parent makes a root"
+        let lanes = flows(&dir, &parent);
+        let fork = lanes.iter().find(|l| l.agent_id == "afork").expect("fork");
+        assert_eq!(
+            fork.parent_agent_id.as_deref(),
+            Some("aroot-0000000000000001")
         );
-        assert!(
-            !root_ids.contains(&"afork"),
-            "the fork is nested, not a root"
-        );
-        let root = tree
+        let teammate = lanes
             .iter()
-            .find(|n| n.id == "aroot-0000000000000001")
-            .expect("root");
-        assert_eq!(root.children.len(), 1);
-        assert_eq!(root.children[0].id, "afork");
+            .find(|l| l.agent_id == "alane-fixture")
+            .expect("teammate");
+        assert_eq!(teammate.parent_agent_id, None);
     }
 
     /// Real prompts span lines. The teammate join must compare decoded text,
@@ -1737,64 +1409,61 @@ mod tests {
         let first = serde_json::json!({"timestamp":"2026-09-21T10:00:00.000Z","message":{"role":"user","content":format!("<teammate-message>\n{prompt}\n</teammate-message>")}}).to_string();
         let (dir, transcript) = session_tree(tmp.path(), &format!("{parent}\n"));
         std::fs::write(dir.join("agent-alane-fixture.jsonl"), format!("{first}\n")).expect("lane");
-        let n = &nodes(&dir, &transcript)[0];
+        let l = &flows(&dir, &transcript)[0];
         assert_eq!(
-            n.started_at_ms,
+            l.started_at_ms,
             Some(LANE_ORIGIN_MS - 2_000),
             "timed by the joined parent call"
         );
         assert_eq!(
-            n.prompt_summary.as_deref(),
-            Some("Review the diff and report \"findings\""),
+            l.prompt, prompt,
             "the joined prompt, not the teammate wrapper"
         );
     }
 
-    /// A node renders from its own transcript whatever the join does. With no
-    /// spawn to join to, the node keeps its counts and times itself.
+    /// A subagent renders from its own transcript whatever the join does. With
+    /// no spawn to join to, it keeps its counts and times itself.
     #[test]
     fn subagent_map_build_keeps_a_lane_that_joins_to_no_spawn() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, parent) = session_tree(tmp.path(), "");
-        let n = &nodes(&dir, &parent)[0];
-        assert_eq!(n.id, "alane-fixture");
+        let l = &flows(&dir, &parent)[0];
+        assert_eq!(l.agent_id, "alane-fixture");
         assert_eq!(
-            n.started_at_ms,
+            l.started_at_ms,
             Some(LANE_ORIGIN_MS),
             "timed by the lane itself"
         );
         assert_eq!(
-            n.tool_calls, 5,
+            l.tool_calls, 5,
             "its own counts are untouched by the failed join"
         );
         assert!(
-            n.prompt_summary
-                .as_deref()
-                .is_some_and(|p| p.contains("Review the diff and report")),
+            l.prompt.contains("Review the diff and report"),
             "the lane's own first message stands in for the prompt"
         );
     }
 
     /// A missing parent transcript is the ordinary case for a session whose
     /// agent writes under a config dir TUIC cannot read. It must cost the spawn
-    /// timing, never the map.
+    /// timing, never the subagent.
     #[test]
     fn subagent_map_build_tolerates_a_missing_parent_transcript() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, _) = session_tree(tmp.path(), "");
-        assert_eq!(nodes(&dir, &tmp.path().join("gone.jsonl")).len(), 1);
+        assert_eq!(flows(&dir, &tmp.path().join("gone.jsonl")).len(), 1);
     }
 
-    /// The live half of the feature: a subagent spawned while the page is open
-    /// must arrive as a new node on the next poll, and its counts must keep
-    /// growing as it appends. A cached directory listing, or an offset that
-    /// never revisits a file it has already read, both pass every other test.
+    /// The live half: a subagent spawned while Progress is open must arrive on
+    /// the next read, and its counts must keep growing as it appends. A cached
+    /// directory listing, or an offset that never revisits a file it has
+    /// already read, both pass every other test.
     #[test]
     fn subagent_map_build_picks_up_a_lane_that_appears_between_polls() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, parent) = session_tree(tmp.path(), PARENT_JSONL);
         let mut cache = MapCache::default();
-        let poll = |cache: &mut MapCache| subagent_nodes(cache, &dir, &parent, "s", NOW_MS);
+        let poll = |cache: &mut MapCache| subagent_flows(cache, &dir, &parent);
         assert_eq!(poll(&mut cache).len(), 1);
 
         // A second subagent starts: its meta lands first, its transcript grows
@@ -1803,53 +1472,47 @@ mod tests {
         let late = dir.join("agent-alate.jsonl");
         std::fs::write(&late, "").expect("empty transcript");
 
-        let tree = poll(&mut cache);
-        let node = tree
+        let lanes = poll(&mut cache);
+        let l = lanes
             .iter()
-            .find(|n| n.id == "alate")
-            .expect("the new node arrives");
-        assert_eq!(node.started_at_ms, None, "it has written nothing yet");
-        assert_eq!(node.state, NodeState::Running);
+            .find(|l| l.agent_id == "alate")
+            .expect("the new subagent arrives");
+        assert_eq!(l.started_at_ms, None, "it has written nothing yet");
+        assert!(l.running);
 
         append(&late, &format!("{}\n", row("2026-09-21T10:00:20Z", "Grep")));
-        let tree = poll(&mut cache);
-        let node = tree.iter().find(|n| n.id == "alate").expect("still there");
-        assert_eq!(
-            node.tools,
-            vec![ToolCount {
-                name: "Grep".into(),
-                count: 1
-            }]
-        );
-        assert_eq!(node.started_at_ms, Some(LANE_ORIGIN_MS + 20_000));
+        let lanes = poll(&mut cache);
+        let l = lanes
+            .iter()
+            .find(|l| l.agent_id == "alate")
+            .expect("still there");
+        assert_eq!(l.tool_calls, 1);
+        assert_eq!(l.started_at_ms, Some(LANE_ORIGIN_MS + 20_000));
     }
 
-    /// The whole point of the cache: a second poll over an unchanged tree
-    /// re-reads nothing and still answers with the same map.
+    /// The whole point of the cache: a second read over an unchanged tree
+    /// re-reads nothing and still answers the same.
     #[test]
     fn subagent_map_build_is_stable_across_polls() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (dir, parent) = session_tree(tmp.path(), PARENT_JSONL);
         let mut cache = MapCache::default();
-        let first = subagent_nodes(&mut cache, &dir, &parent, "s", NOW_MS);
-        let second = subagent_nodes(&mut cache, &dir, &parent, "s", NOW_MS);
+        let first = subagent_flows(&mut cache, &dir, &parent);
+        let second = subagent_flows(&mut cache, &dir, &parent);
         assert_eq!(first, second);
     }
 
-    /// Revised 2026-09-23 from `subagent_map_events_never_carry_a_prompt_or_a_result_body`.
+    /// Revised 2026-09-23, twice. The swimlane kept every prompt and result off
+    /// the wire; the call map allowed a redacted prompt summary; the Progress
+    /// Flow view also carries the subagent's final report, because that report
+    /// is its return arrow.
     ///
-    /// Scoped to the `/agents/map` tree. The Progress Flow view does carry the
-    /// subagent's final report, redacted and cut; that contract is
-    /// `flow_carries_a_redacted_report_but_never_a_tool_result` in
-    /// `progress/flow.rs`.
-    ///
-    /// The old contract kept every prompt off the wire; the call map needs the
-    /// prompt to say *why* a subagent exists. The new contract: a prompt reaches
-    /// the payload only redacted and at most `PROMPT_SUMMARY_CHARS` long, and
-    /// the full text only through the expand endpoint. Tool-result bodies and
-    /// the subagent's own replies still never reach it.
+    /// The contract, end to end from the files: the prompt and the report reach
+    /// the Flow payload only redacted and at most `PROMPT_SUMMARY_CHARS` long,
+    /// with a fetch reference for the rest. What a tool returned to the
+    /// subagent never reaches it.
     #[test]
-    fn subagent_map_payload_carries_only_a_redacted_prompt_summary_and_never_a_result_body() {
+    fn subagent_map_flow_payload_carries_redacted_texts_and_never_a_tool_result() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let secret = "sk-ant-api03-SECRETSECRETSECRETSECRET";
         let prompt = format!(
@@ -1858,47 +1521,39 @@ mod tests {
         );
         let parent = serde_json::json!({"timestamp":"2026-09-21T09:59:58.000Z","message":{"content":[{"type":"tool_use","id":"toolu_FIXTURE_TEAMMATE","name":"Agent","input":{"prompt":prompt}}]}}).to_string();
         let (dir, transcript) = session_tree(tmp.path(), &format!("{parent}\n"));
+        let report = format!("Rolled out with {secret}. {}", "All green. ".repeat(30));
         append(
             &dir.join("agent-alane-fixture.jsonl"),
             &format!(
                 "{}\n{}\n",
                 r#"{"timestamp":"2026-09-21T10:00:10Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t5","content":"RESULT-BODY-SENTINEL"}]}}"#,
-                r#"{"timestamp":"2026-09-21T10:00:11Z","message":{"role":"assistant","content":[{"type":"text","text":"REPLY-BODY-SENTINEL"}]}}"#,
+                serde_json::json!({"timestamp":"2026-09-21T10:00:11Z","message":{"role":"assistant","content":[{"type":"text","text":report}]}}),
             ),
         );
         let first = std::fs::read_to_string(dir.join("agent-alane-fixture.jsonl")).unwrap();
-        let first = first.replacen(
-            "Review the diff and report",
-            &prompt.replace('"', "\\\""),
-            1,
-        );
+        let first = first.replacen("Review the diff and report", &prompt, 1);
         std::fs::write(dir.join("agent-alane-fixture.jsonl"), first).unwrap();
 
-        let tree = nodes(&dir, &transcript);
-        let wire = serde_json::to_string(&tree).expect("serialises");
-        assert!(
-            !wire.contains(secret),
-            "a secret reached the payload: {wire}"
-        );
+        let lanes = HashMap::from([("pty".to_string(), flows(&dir, &transcript))]);
+        let flow = crate::progress::build_flow("/repo", &[], &HashMap::new(), &lanes, None, false);
+        let wire = serde_json::to_string(&flow).expect("serialises");
         assert!(
             !wire.contains("SECRETSECRET"),
-            "part of a secret reached the payload"
+            "a secret reached the payload: {wire}"
         );
         assert!(
             !wire.contains("RESULT-BODY-SENTINEL"),
             "a tool result reached the payload"
         );
-        assert!(
-            !wire.contains("REPLY-BODY-SENTINEL"),
-            "a reply body reached the payload"
-        );
-        let summary = tree[0].prompt_summary.as_deref().expect("a summary");
-        assert!(summary.contains("[REDACTED]"), "{summary}");
-        assert!(summary.chars().count() <= PROMPT_SUMMARY_CHARS);
-        assert!(tree[0].prompt_more, "the prompt is longer than its summary");
+        for event in &flow.events {
+            assert!(event.summary.contains("[REDACTED]"), "{}", event.summary);
+            assert!(event.summary.chars().count() <= PROMPT_SUMMARY_CHARS);
+            assert!(event.detail.is_some(), "the rest is fetched on demand");
+        }
+        assert_eq!(flow.events.len(), 2, "one spawn arrow and one return arrow");
     }
 
-    /// Redaction runs on the whole prompt before the cut. A secret straddling
+    /// Redaction runs on the whole text before the cut. A secret straddling
     /// the 200th character would otherwise lose its tail, stop matching its
     /// pattern, and ship its prefix.
     #[test]
@@ -1916,11 +1571,11 @@ mod tests {
         assert_eq!(prompt_summary(" \n\t"), (None, false), "blank is no prompt");
     }
 
-    /// The expand endpoint returns the whole prompt, redacted, and only for an
-    /// agent id found on disk. An id shaped like a path finds nothing, because
-    /// it is compared against the listing and never joined into a path.
+    /// The detail lookup returns the whole prompt or report, redacted, and only
+    /// for an agent id found on disk. An id shaped like a path finds nothing,
+    /// because it is compared against the listing and never joined into a path.
     #[test]
-    fn subagent_map_prompt_is_full_redacted_and_looked_up_by_listing() {
+    fn subagent_map_text_is_full_redacted_and_looked_up_by_listing() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let long = format!(
             "Use ghp_{} and {}",
@@ -1936,8 +1591,11 @@ mod tests {
         )
         .unwrap();
         let mut cache = MapCache::default();
+        let text = |cache: &mut MapCache, id: &str, part| {
+            subagent_text(cache, &dir, &transcript, id, part)
+        };
 
-        let full = prompt_text(&mut cache, &dir, &transcript, "alane-fixture").expect("found");
+        let full = text(&mut cache, "alane-fixture", TextPart::Prompt).expect("found");
         assert!(
             full.chars().count() > PROMPT_SUMMARY_CHARS,
             "not the summary"
@@ -1946,121 +1604,19 @@ mod tests {
             full.contains("[REDACTED]") && !full.contains("ghp_"),
             "{full}"
         );
-        assert!(
-            full.contains('\n') || full.contains("then keep going."),
-            "the body is intact"
+        assert_eq!(
+            text(&mut cache, "alane-fixture", TextPart::Report).as_deref(),
+            Some("Done. Two findings, both minor.")
         );
 
-        assert_eq!(prompt_text(&mut cache, &dir, &transcript, "nope"), None);
+        assert_eq!(text(&mut cache, "nope", TextPart::Prompt), None);
         assert_eq!(
-            prompt_text(
+            text(
                 &mut cache,
-                &dir,
-                &transcript,
-                "../subagents/agent-alane-fixture"
+                "../subagents/agent-alane-fixture",
+                TextPart::Prompt
             ),
             None
         );
-    }
-
-    fn prompt_text(
-        cache: &mut MapCache,
-        dir: &Path,
-        transcript: &Path,
-        agent_id: &str,
-    ) -> Option<String> {
-        subagent_text(cache, dir, transcript, agent_id, TextPart::Prompt)
-    }
-
-    fn terminal(id: &str, title: &str, parent: Option<&str>) -> TerminalInfo {
-        TerminalInfo {
-            session_id: id.into(),
-            title: title.into(),
-            agent_type: Some("claude".into()),
-            intent: Some("Refactor the map".into()),
-            state: NodeState::Busy,
-            parent_session: parent.map(Into::into),
-            subagents: Vec::new(),
-        }
-    }
-
-    fn sub(id: &str, state: NodeState) -> MapNode {
-        MapNode {
-            kind: NodeKind::Subagent,
-            id: id.into(),
-            session_id: "t".into(),
-            title: id.into(),
-            agent_type: None,
-            model: None,
-            description: None,
-            intent: None,
-            state,
-            started_at_ms: None,
-            duration_ms: None,
-            prompt_summary: None,
-            prompt_more: false,
-            tools: Vec::new(),
-            other_tools: 0,
-            tool_calls: 0,
-            children: Vec::new(),
-        }
-    }
-
-    /// A peer spawned with `agent action=spawn` hangs under the terminal that
-    /// spawned it, after that terminal's own subagents. A parent that is not a
-    /// live terminal leaves the child a root.
-    #[test]
-    fn subagent_map_assemble_nests_peers_under_their_spawner() {
-        let mut lead = terminal("lead", "orchestrator", None);
-        lead.subagents = vec![sub("a1", NodeState::Running)];
-        let map = assemble(vec![
-            terminal("w1", "worker one", Some("lead")),
-            lead,
-            terminal("w2", "worker two", Some("gone")),
-        ]);
-
-        let roots: Vec<&str> = map.roots.iter().map(|n| n.id.as_str()).collect();
-        assert_eq!(roots, vec!["lead", "w2"], "sorted by title; w1 is nested");
-        let lead = &map.roots[0];
-        assert_eq!(lead.intent.as_deref(), Some("Refactor the map"));
-        assert_eq!(lead.agent_type.as_deref(), Some("claude"));
-        let kids: Vec<&str> = lead.children.iter().map(|n| n.id.as_str()).collect();
-        assert_eq!(
-            kids,
-            vec!["a1", "w1"],
-            "own subagents first, then spawned peers"
-        );
-        assert_eq!(map.terminals, 3);
-        assert_eq!(map.subagents, 1);
-        assert_eq!(map.running, 1);
-    }
-
-    /// Spawn links come from runtime state, not from a structure that
-    /// guarantees a tree. A cycle must cost the edge, never the nodes — and a
-    /// node hanging off a cycle keeps its own edge.
-    #[test]
-    fn subagent_map_assemble_survives_a_parent_cycle() {
-        let map = assemble(vec![
-            terminal("a", "a", Some("b")),
-            terminal("b", "b", Some("a")),
-            terminal("c", "c", Some("a")),
-            terminal("self", "self", Some("self")),
-        ]);
-        let roots: Vec<&str> = map.roots.iter().map(|n| n.id.as_str()).collect();
-        assert_eq!(roots, vec!["a", "b", "self"]);
-        assert_eq!(map.roots[0].children.len(), 1);
-        assert_eq!(map.roots[0].children[0].id, "c");
-        assert_eq!(map.terminals, 4, "no node is lost");
-    }
-
-    /// An empty intent is no intent, and a terminal titled by its agent type
-    /// does not print the type twice.
-    #[test]
-    fn subagent_map_assemble_drops_repeated_and_empty_text() {
-        let mut t = terminal("x", "claude", None);
-        t.intent = Some("  ".into());
-        let map = assemble(vec![t]);
-        assert_eq!(map.roots[0].intent, None);
-        assert_eq!(map.roots[0].agent_type, None);
     }
 }
