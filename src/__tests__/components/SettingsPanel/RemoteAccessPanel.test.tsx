@@ -81,12 +81,12 @@ describe("RemoteAccessPanel", () => {
 		view.unmount();
 	});
 
-	it("never renders HTTP API Server or TUIC Tools content — that belongs to LocalMcpPanel", async () => {
+	it("never renders HTTP API Server or TUIC MCP Server content — that belongs to LocalMcpPanel", async () => {
 		const view = render(() => <RemoteAccessPanel />);
 		await vi.advanceTimersByTimeAsync(0);
 
 		expect(view.queryByText("HTTP API Server")).toBeNull();
-		expect(view.queryByText("TUIC Tools")).toBeNull();
+		expect(view.queryByText("TUIC MCP Server")).toBeNull();
 		expect(view.queryByText("Server Status")).toBeNull();
 
 		view.unmount();
