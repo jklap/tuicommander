@@ -2,6 +2,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHttpUrl, DEDICATED_WS_COMMANDS, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
+// Side-effect only: registers transportExtended.ts's COMMAND_TABLE entries so
+// mapCommandToHttp can resolve them here, the same way src/index.tsx does for
+// the desktop bundle. See transportExtended.ts's module doc for why these
+// entries live in a separate file instead of transport.ts's own table.
+import "../transportExtended";
 import { setTransportLogger } from "../transportRuntime";
 
 function readRepoFile(relativePath: string): string {
@@ -31,16 +36,28 @@ function extractBalancedObject(source: string, marker: string): string {
 	throw new Error(`Object end not found after marker: ${marker}`);
 }
 
-function extractCommandTableCommands(): Set<string> {
-	const transportSource = readRepoFile("src/transport.ts");
-	const tableBody = extractBalancedObject(transportSource, "const COMMAND_TABLE");
+/** Top-level `key: {` names inside a single balanced object literal's body. */
+function extractTableKeys(tableBody: string): string[] {
 	// Anchor on the single tab of a top-level key. `\s*` also matched nested
 	// `body: {` lines, which put a phantom "body" command in the set.
-	return new Set(
-		Array.from(tableBody.matchAll(/^\t([a-zA-Z_][\w]*):\s*\{/gm), (match) => match[1]).filter(
-			(command) => command !== undefined,
-		),
+	return Array.from(tableBody.matchAll(/^\t([a-zA-Z_][\w]*):\s*\{/gm), (match) => match[1]).filter(
+		(command) => command !== undefined,
 	);
+}
+
+/**
+ * The full command surface is split across two files: transport.ts's own
+ * COMMAND_TABLE (commands mobile.html's bundle may need) and
+ * transportExtended.ts's EXTENDED_COMMAND_TABLE (desktop/Settings-only
+ * commands, merged in at runtime — see transportExtended.ts's module doc).
+ * Every consumer of this coverage set must treat both as one table.
+ */
+function extractCommandTableCommands(): Set<string> {
+	const transportSource = readRepoFile("src/transport.ts");
+	const extendedSource = readRepoFile("src/transportExtended.ts");
+	const coreKeys = extractTableKeys(extractBalancedObject(transportSource, "const COMMAND_TABLE"));
+	const extendedKeys = extractTableKeys(extractBalancedObject(extendedSource, "const EXTENDED_COMMAND_TABLE"));
+	return new Set([...coreKeys, ...extendedKeys]);
 }
 
 function extractRegisteredTauriCommands(): Set<string> {

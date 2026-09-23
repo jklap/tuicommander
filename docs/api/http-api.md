@@ -103,8 +103,10 @@ there return a bare `404`.
 
 ## Route Parity Gate
 
-Every `COMMAND_TABLE` entry in `src/transport.ts` must resolve to a registered
-route. Two tests enforce it, one per language:
+Every `COMMAND_TABLE` entry — in `src/transport.ts` **or** `src/transportExtended.ts`
+(desktop/Settings-only commands split out to keep mobile's bundle under its size
+budget; see `docs/frontend/transport.md`) — must resolve to a registered route.
+Two tests enforce it, one per language:
 
 1. `src/__tests__/transport.test.ts` executes every mapper and snapshots the
    resulting paths to `src-tauri/src/mcp_http/command_table_paths.txt`.
