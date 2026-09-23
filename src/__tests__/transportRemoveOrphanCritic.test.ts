@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mapCommandToHttp } from "../transport";
+// Side-effect only: remove_orphan_worktree is a desktop-only entry (transportExtended.ts).
+import "../transportExtended";
 
 describe("remove_orphan_worktree transport binding (critic-1188 r2)", () => {
 	// Catches: confirmedSessions dropped (or renamed) between the Tauri args and the HTTP body,

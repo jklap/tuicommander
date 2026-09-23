@@ -1,5 +1,8 @@
 /** Dev-only browser verification against an isolated, real tuic-remote daemon. */
 
+// Side-effect only: the desktop-only COMMAND_TABLE entries (see
+// transportExtended.ts) — this page renders desktop components in browser mode.
+import "../transportExtended";
 import { createSignal, Show } from "solid-js";
 import { render } from "solid-js/web";
 import CanvasTerminal from "../components/Terminal/CanvasTerminal";
