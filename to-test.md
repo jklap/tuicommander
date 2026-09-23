@@ -12,6 +12,13 @@
 
 - [ ] Settings → Dictation → Spoken replies: remove Italian if installed, then Download it. It reaches Ready with no hash error, and a spoken reply uses the giovanni voice.
 
+## Compose panel pin (2026-09-23) — frontend, live via HMR
+
+- [ ] [VISUAL] `Cmd+I` in an agent tab: the panel is one row shorter than before. Click the pin: the terminal shrinks above the panel, the agent redraws at the new height, and no row hides behind the panel. Unpin: the panel overlays the terminal again and the terminal regains its full height.
+- [ ] Pinned: `Ctrl+Enter` sends, the editor empties and keeps the caret; the panel stays open. `Shift+Ctrl+Enter` does the same through the queue.
+- [ ] Pinned: click in the terminal and type — the caret stays in the terminal (not pulled back into the panel). `Cmd+I` and `Esc` move the caret between the panel and the terminal.
+- [ ] Pinned in one tab only: another tab's compose panel still closes after send.
+
 ## Dictation auto-send on long text (2026-09-23) — frontend, live via HMR
 
 - [ ] With Auto-send on, dictate 30+ seconds into a Claude tab: the text is submitted without pressing Enter, and no "Removed 1 invisible character" notice appears.

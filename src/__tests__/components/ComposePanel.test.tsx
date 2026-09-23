@@ -11,6 +11,9 @@ afterEach(async () => {
 	// leave one measurement frame queued while its view is being destroyed; keep
 	// that frame inside the test lifecycle so Vitest does not report an async leak.
 	await new Promise<void>((resolve) => setImmediate(resolve));
+	// destroy() also blurs a focused editor, and CodeMirror answers every focus
+	// change with a 10ms timer — a pinned panel keeps focus after a send.
+	await new Promise<void>((resolve) => setTimeout(resolve, 20));
 });
 
 /** Type text into the panel's CodeMirror instance. Dispatching a change through
@@ -21,6 +24,11 @@ function typeIntoEditor(container: HTMLElement, text: string): void {
 	const view = EditorView.findFromDOM(editor);
 	if (!view) throw new Error("CodeMirror view not attached");
 	view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+}
+
+function editorText(container: HTMLElement): string {
+	const editor = container.querySelector(".cm-editor") as HTMLElement;
+	return EditorView.findFromDOM(editor)?.state.doc.toString() ?? "";
 }
 
 function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}) {
@@ -42,6 +50,9 @@ function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}
 			],
 		),
 		onRemoveQueued: vi.fn(),
+		pinned: () => false,
+		onTogglePin: vi.fn(),
+		focusRequest: () => 0,
 		...overrides,
 	};
 	const rendered = render(() => <ComposePanel {...props} />);
@@ -157,5 +168,77 @@ describe("ComposePanel", () => {
 
 		setQueued(0);
 		await waitFor(() => expect(queryByText("run the tests")).toBeNull());
+	});
+
+	describe("pinned", () => {
+		it("empties the editor after a send and stays open — it replaces the agent's input box", async () => {
+			const { container, props } = renderPanel({ pinned: () => true });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "run the tests");
+
+			fireEvent.keyDown(container.querySelector(".cm-content") as HTMLElement, { key: "Enter", ctrlKey: true });
+			expect(props.onSend).toHaveBeenCalledWith("run the tests");
+			await waitFor(() => expect(editorText(container)).toBe(""));
+			expect(props.onClose).not.toHaveBeenCalled();
+		});
+
+		it("empties the editor after a queue as well", async () => {
+			const { container, props } = renderPanel({ pinned: () => true });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "then push");
+
+			fireEvent.click(container.querySelector('[title^="Queue for the next idle moment"]') as HTMLElement);
+			expect(props.onEnqueue).toHaveBeenCalledWith("then push");
+			await waitFor(() => expect(editorText(container)).toBe(""));
+		});
+
+		it("keeps the text when the send fails, so nothing typed is lost", async () => {
+			const onSend = vi.fn(() => Promise.reject(new Error("pty gone")));
+			const { container } = renderPanel({ pinned: () => true, onSend });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "run the tests");
+
+			fireEvent.click(container.querySelector('[title^="Send"]') as HTMLElement);
+			await waitFor(() => expect(onSend).toHaveBeenCalled());
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(editorText(container)).toBe("run the tests");
+		});
+
+		it("leaves the text alone when unpinned — the parent closes the panel instead", async () => {
+			const { container, props } = renderPanel();
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "run the tests");
+
+			fireEvent.click(container.querySelector('[title^="Send"]') as HTMLElement);
+			expect(props.onSend).toHaveBeenCalledWith("run the tests");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			expect(editorText(container)).toBe("run the tests");
+		});
+
+		it("toggles through the pin button, which reports its state", async () => {
+			const [pinned, setPinned] = createSignal(false);
+			const onTogglePin = vi.fn(() => setPinned(!pinned()));
+			const { container } = renderPanel({ pinned, onTogglePin });
+			const button = () => container.querySelector("[aria-pressed]") as HTMLElement;
+			await waitFor(() => expect(button()).not.toBeNull());
+			expect(button().getAttribute("aria-pressed")).toBe("false");
+
+			fireEvent.click(button());
+			expect(onTogglePin).toHaveBeenCalledTimes(1);
+			expect(button().getAttribute("aria-pressed")).toBe("true");
+			expect(container.textContent).toContain("Esc to terminal");
+		});
+
+		it("moves the caret into the editor on a focus request", async () => {
+			const [request, setRequest] = createSignal(0);
+			const { container } = renderPanel({ pinned: () => true, focusRequest: request });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			(document.activeElement as HTMLElement | null)?.blur();
+			const content = container.querySelector(".cm-content") as HTMLElement;
+			await waitFor(() => expect(document.activeElement).not.toBe(content));
+
+			setRequest(1);
+			await waitFor(() => expect(document.activeElement).toBe(content));
+		});
 	});
 });

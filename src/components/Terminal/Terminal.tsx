@@ -191,6 +191,17 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	} = createSearchVisibility();
 	const [composeOpen, setComposeOpen] = createSignal(false);
 	const [pendingComposeText, setPendingComposeText] = createSignal("");
+	// Per tab, session-only: a pinned composer replaces the agent's own input box
+	// for this terminal, so send and Esc leave it open.
+	const [composePinned, setComposePinned] = createSignal(false);
+	const [composeFocusRequest, setComposeFocusRequest] = createSignal(0);
+	/** After a send, an unpinned composer is done; a pinned one keeps the caret. */
+	const finishCompose = () => {
+		setPendingComposeText("");
+		if (composePinned()) return;
+		setComposeOpen(false);
+		canvasTerminalRef()?.focus();
+	};
 	const [reconnecting, setReconnecting] = createSignal<{ attempt: number; max: number } | null>(null);
 	let sessionInitialized = false;
 	let disposed = false;
@@ -1023,6 +1034,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		openSearch: () => openSearchBar(),
 		closeSearch: () => closeSearchBar(),
 		toggleCompose: () => {
+			if (composePinned()) {
+				// Pinned stays open: the shortcut moves the caret between the two inputs.
+				if (focusIsInsideOwnInput(document.activeElement, props.id)) canvasTerminalRef()?.focus();
+				else setComposeFocusRequest((n) => n + 1);
+				return;
+			}
 			if (composeOpen()) {
 				setComposeOpen(false);
 				canvasTerminalRef()?.focus();
@@ -1338,6 +1355,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						isOpen={composeOpen}
 						initialText={pendingComposeText}
 						onTextChange={setPendingComposeText}
+						pinned={composePinned}
+						onTogglePin={() => setComposePinned(!composePinned())}
+						focusRequest={composeFocusRequest}
 						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
 						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
 						onClearQueue={async () => {
@@ -1377,16 +1397,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 								// Trust the call's own count instead of waiting for the next 1s
 								// lifecycle poll — the badge must react to the click.
 								terminalsStore.update(props.id, { queuedCommands: outcome.queued });
-								setPendingComposeText("");
-								setComposeOpen(false);
-								canvasTerminalRef()?.focus();
+								finishCompose();
 							} catch (err) {
 								appLogger.error("terminal", "ComposePanel enqueue failed", { sessionId, error: err });
 								toastsStore.add("Could not queue the command", String(err), "error");
+								// Rethrown so a pinned panel keeps the text it failed to queue.
+								throw err;
 							}
 						}}
 						onClose={() => {
-							setComposeOpen(false);
+							if (!composePinned()) setComposeOpen(false);
 							canvasTerminalRef()?.focus();
 						}}
 						onSend={async (text) => {
@@ -1394,17 +1414,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 								try {
 									const term = terminalsStore.get(props.id);
 									await pty.sendCommand(sessionId, text, term?.agentType);
-									setPendingComposeText("");
-									setComposeOpen(false);
-									canvasTerminalRef()?.focus();
 								} catch (err) {
 									appLogger.error("terminal", "ComposePanel send failed", { sessionId, error: err });
+									// Rethrown so a pinned panel keeps the text it failed to send.
+									throw err;
 								}
-							} else {
-								setPendingComposeText("");
-								setComposeOpen(false);
-								canvasTerminalRef()?.focus();
 							}
+							finishCompose();
 						}}
 					/>
 				</Suspense>

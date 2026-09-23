@@ -3,7 +3,7 @@
   bottom: 0;
   left: 0;
   right: 0;
-  height: 160px;
+  height: 142px;
   background: var(--bg-primary);
   border-top: 1px solid var(--border);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
@@ -18,6 +18,16 @@
 .panelOpen {
   transform: translateY(0);
   pointer-events: auto;
+}
+
+/* Pinned: leave the overlay and take a slot in the terminal wrapper's flex
+   column, so the terminal content above shrinks and the PTY resizes to fit
+   instead of being drawn under the panel. */
+.panelPinned {
+  position: relative;
+  flex-shrink: 0;
+  box-shadow: none;
+  transition: none;
 }
 
 .editor {
@@ -78,9 +88,9 @@
 }
 
 .queueList {
-  /* Shares the panel's 160px with the editor and the status bar, and does not
-     shrink. Above ~96px the editor is left with too few rows to compose in. */
-  max-height: 96px;
+  /* Shares the panel's 142px with the editor and the status bar, and does not
+     shrink. Above ~78px the editor is left with too few rows to compose in. */
+  max-height: 78px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
@@ -170,6 +180,31 @@
 .queueButton:hover {
   color: var(--fg-primary);
   border-color: var(--fg-muted);
+}
+
+.pinButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.pinButton:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-muted);
+}
+
+.pinButtonActive {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .sendButton {
