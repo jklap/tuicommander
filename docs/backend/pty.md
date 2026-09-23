@@ -644,7 +644,7 @@ real cell pixel size before they'll attempt to display anything:
   1337/Kitty APC payload is replaced with a short `<image N bytes elided>`
   placeholder before it reaches the PTY flight-recorder ring (`pty_raw_rings`)
   or a `.tcap` capture (`pty_capture::record`) — both are pure debugging aids
-  (AGENTS.md's "capture before you theorise"), and a single large
+  (src-tauri/AGENTS.md's "capture before you theorise"), and a single large
   transmission would otherwise evict most of the ring's 2 MB cap or overflow
   a capture's 512 KB one outright. The real parser downstream is never
   touched by this — it always sees the original, unelided bytes.
@@ -863,7 +863,7 @@ the same encoding without Ctrl-U or Enter, so it appends without clearing a
 draft. Codex keeps its existing 500-character threshold; short dialog replies
 and unverified agents keep their existing input semantics.
 
-Never write `text + "\r"` directly to a PTY — see `AGENTS.md`.
+Never write `text + "\r"` directly to a PTY — see `src/AGENTS.md`.
 
 ## OSC 133 Semantic Prompts
 

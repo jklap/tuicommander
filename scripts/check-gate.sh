@@ -23,8 +23,8 @@
 #
 # Three known, pre-existing conditions this script warns about instead of
 # letting fail silently confuse an otherwise-clean change (none of these are
-# something to "fix" as part of an unrelated change — see AGENTS.md > Fresh
-# Worktree Setup):
+# something to "fix" as part of an unrelated change — see src-tauri/AGENTS.md >
+# Fresh Worktree Setup):
 #   - The `plugins/` git submodule is frequently uninitialized in worktrees,
 #     which fails the `Plugin tests` step.
 #   - `src/__tests__/components/ChangelogModal.test.tsx` has a flaky async
