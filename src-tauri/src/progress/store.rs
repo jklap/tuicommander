@@ -384,12 +384,7 @@ impl ProgressStore {
             .map_err(db_error("prepare the progress list"))?;
         let entries = statement
             .query_map(
-                params![
-                    project,
-                    i64::from(blocked_only),
-                    input.pty_id,
-                    limit as i64
-                ],
+                params![project, i64::from(blocked_only), input.pty_id, limit as i64],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -1083,10 +1078,19 @@ mod tests {
         let first = store.record_for_pty("/p", &intent, Some("lead")).unwrap();
         for kind in [ProgressKind::Delegated, ProgressKind::Message] {
             store
-                .record_hand_off("/p", &entry(kind, "do the lexer"), Some("lead"), Some("w1"), None)
+                .record_hand_off(
+                    "/p",
+                    &entry(kind, "do the lexer"),
+                    Some("lead"),
+                    Some("w1"),
+                    None,
+                )
                 .unwrap();
             let again = store.record_for_pty("/p", &intent, Some("lead")).unwrap();
-            assert_eq!(again.id, first.id, "after a {kind:?} the intent is a repeat");
+            assert_eq!(
+                again.id, first.id,
+                "after a {kind:?} the intent is a repeat"
+            );
         }
         let list = store.list("/p", &ProgressListInput::default()).unwrap();
         let intents = list
