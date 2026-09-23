@@ -82,6 +82,7 @@
 /config/prompt-library
 /config/remote-connections
 /config/remote-connections/status
+/config/remote-connections/test
 /config/remote-connections/x
 /config/remote-connections/x/connect
 /config/remote-connections/x/install
