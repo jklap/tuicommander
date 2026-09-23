@@ -5474,7 +5474,7 @@ path and passes a real `null` through for an unknown image id — in `transport.
   A real `npm ci`/`npm install` setup script should also be checked in the *packaged* app (`make
   build`), where the desktop-launch `PATH` is genuinely impoverished — the new
   `PATH=enriched_path()` on setup/archive scripts is meant to fix exactly that.
-- [ ] Worktree setup-script ordering fix + new event (`plans/our-repo-worktree-automation-refactored-aho.md`,
+- [ ] Worktree setup-script ordering fix + new event (`plans/worktree-automation-tuic-env-injection.md`,
   Phase 7): create a worktree in a repo with `copy_ignored_files`/`copy_untracked_files`/`copy_paths`
   AND a Setup Script configured (e.g. `ls -la > setup-saw-these-files.txt`) — confirm the synced
   files are visible to the script (previously could race and not be there yet). Since the setup
@@ -5497,7 +5497,7 @@ path and passes a real `null` through for an unknown image id — in `transport.
   subfolder *inside* a worktree (not the worktree root itself) and confirm the new tab's
   `env | grep '^TUIC_'` still shows `TUIC_WORKTREE_PATH`/`TUIC_MAIN_REPO_PATH`/`TUIC_BRANCH` etc.,
   describing the worktree root — not empty, and not describing the subfolder.
-- [ ] Smart Prompts active-repo-vs-worktree-cwd fix (`plans/our-repo-worktree-automation-refactored-aho.md`,
+- [ ] Smart Prompts active-repo-vs-worktree-cwd fix (`plans/worktree-automation-tuic-env-injection.md`,
   Phase 8b): with a worktree terminal tab focused (not the main checkout), run a Smart Prompt that
   uses `{branch}`/`{diff}` (e.g. Smart Commit) and confirm the generated message reflects the
   *worktree's* branch/diff, not the main checkout's. Then focus a plain shell tab in an
