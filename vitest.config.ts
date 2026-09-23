@@ -11,7 +11,7 @@ export default defineConfig({
     conditions: ["development", "browser"],
     alias: {
       // Mock SVG imports in tests
-      "^.+\\.svg$": path.resolve(__dirname, "src/__tests__/mocks/svg.ts"),
+      "^.+\\.svg$": path.resolve(import.meta.dirname, "src/__tests__/mocks/svg.ts"),
     },
   },
   test: {
@@ -37,7 +37,7 @@ export default defineConfig({
     maxWorkers: 4,
     setupFiles: ["src/__tests__/setup.ts", "src/__tests__/mocks/tauri.ts"],
     alias: {
-      "\\.svg$": path.resolve(__dirname, "src/__tests__/mocks/svg.ts"),
+      "\\.svg$": path.resolve(import.meta.dirname, "src/__tests__/mocks/svg.ts"),
     },
     coverage: {
       provider: "v8",
