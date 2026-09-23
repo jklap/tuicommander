@@ -1,3 +1,7 @@
+## SSH daemon provisioning, confirmed (wip 2ba33a3f5 replay) — Rust restart required
+
+- [ ] After Boss's next planned backend restart and a matching `tuic-remote` release for this version, against a disposable SSH host in an isolated `TUIC_APP_INSTANCE`: a Never-deploy "Remote Server — SSH" with "Offer to start the remote daemon if it is not running" and no daemon running shows **Start remote daemon…**; the dialog lists the exact commands; Cancel runs nothing; Accept starts it (with Instance ID: `tuic-remote --instance <id>`, `tuic-remote-<id>.pid`) and connects; Disconnect stops it (unless "Leave it running" is checked). Against a daemon with no password, **Set remote password…** sets the saved one, a second attempt reports "already has credentials; nothing was changed", and the daemon needs a restart to use it. No desktop instance or SSH host was used by this lane; Rust does not hot-reload.
+
 ## Nested SSH model migration (wip afc10a2c9 replay) — Rust restart required
 
 - [ ] On Boss's next planned backend restart, check `<config_dir>/connections.json` and `<config_dir>/tunnels/*.toml`: each SSH entry now has a nested `ssh` block, and a `*.pre-nested-ssh-<timestamp>.bak` beside each rewritten file holds the original bytes. Then Connect an existing SSH remote machine and start an existing tunnel — both must behave exactly as before (same host, port, identity, compression). A second restart must create no new `.bak`. Rust does not hot-reload; this lane did not restart the live app.

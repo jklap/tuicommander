@@ -2603,7 +2603,7 @@ Settings → **Remote Servers** (it replaced the separate **Remote Machines** pa
 
 ### 24.1 Connection Types
 - **SSH** — Connects via SSH tunnel to a remote `tuic-remote` daemon; auto-creates port forwarding
-  - Fields: the shared SSH fields (host, port default 22, user, optional identity file, keepalive tuning, compression; host-key checking is fixed to accept-new — the runtime always opens a remote server's tunnel that way), remote daemon port (default 9877), deploy policy, survive time, auto-update, optional auth username/password
+  - Fields: the shared SSH fields (host, port default 22, user, optional identity file, keepalive tuning, compression; host-key checking is fixed to accept-new — the runtime always opens a remote server's tunnel that way), remote daemon port (default 9877), deploy policy, survive time, auto-update, optional Instance ID (`--instance <id>` used only when this app starts or configures the daemon), "Offer to start the remote daemon if it is not running" and "Leave it running on disconnect" (§24.4), optional auth username/password
   - The Remote Machines list probes deduplicated SSH config hosts on demand and labels
     shell, no-shell, auth-failed and unreachable results; clicking a discovered host opens the editor prefilled with it
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
@@ -2622,7 +2622,7 @@ Settings → **Remote Servers** (it replaced the separate **Remote Machines** pa
   and overlapping requests over IPC, HTTP, or MCP receive an error.
 - **Local** — Connects to another named/isolated TUICommander instance on the **same machine** (`tuic-remote --instance <id>` / `TUIC_APP_INSTANCE=<id>`)
   - Fields: either an instance ID (port resolved by reading that instance's own on-disk config at connect time — never cached) or a manually-entered port (for an unnamed instance), never both; optional auth username/password
-  - No host/user/identity/TLS fields — loopback only. Connect resolves the port (instance id read from its `config.json` on every attempt) and connects to `http://127.0.0.1:<port>` with the normal token handshake — loopback is not a credential; an unresolvable instance fails closed; Update & restart is refused for Local
+  - No host/user/identity/TLS fields — loopback only. Connect resolves the port (instance id read from its `config.json` on every attempt) and connects to `http://127.0.0.1:<port>` with the normal token handshake — loopback is not a credential; an unresolvable instance fails closed; Update & restart is refused for Local (not offered in the list); a version different from this app's shows "Remote out of date" with a version-mismatch notice
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
@@ -2630,7 +2630,7 @@ Settings → **Remote Servers** (it replaced the separate **Remote Machines** pa
 - Each connection has UUID, name, transport, optional auth username (`null` when unset), enabled flag,
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
-- Transports: `Ssh` (nested `ssh: SshConnectionParams` + `remote_daemon_port`), `Direct` (`url`, optional pinned `tls_fingerprint`), `Local` (`port` or `instance_id`; connects over loopback HTTP, update refused)
+- Transports: `Ssh` (nested `ssh: SshConnectionParams` + `remote_daemon_port`; optional `start_if_not_running`, `leave_running_on_disconnect`, `instance_id`, written only when set), `Direct` (`url`, optional pinned `tls_fingerprint`), `Local` (`port` or `instance_id`; connects over loopback HTTP, update refused)
 - A `connections.json` written with the older flat SSH fields still loads and is rewritten once at startup, keeping `connections.json.pre-nested-ssh-<UTC>.bak`
 - The Basic Auth **password** (`set_remote_connection_password` — an empty string forgets it — and `remote_connection_password_exists`; HTTP `PUT`/`GET /config/remote-connections/{id}/password`) goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection (IPC and HTTP share one delete path that also deletes the pairing token)
 - No username + a stored password fails closed: the empty username is refused by the daemon
@@ -2661,6 +2661,19 @@ Settings → **Remote Servers** (it replaced the separate **Remote Machines** pa
   or a protected launchd plist on macOS. **Uninstall** stops and removes them
 - Deployment publishes `deploying` status with the current step. Failures retain
   the step and remote log tail in `error`; they are never misreported as an auth failure
+- **Confirmed provisioning** (`ssh_provision.rs`, `ProvisionConfirmDialog.tsx`):
+  a failed connect can publish `provision_offer` — `start` (a Never-deploy SSH
+  connection with "Offer to start…" found nothing answering) or `set_password`
+  (the daemon has no password at all; never for a wrong one). The row's
+  **Start remote daemon…** / **Set remote password…** button shows the plan —
+  destination and every remote command verbatim — and runs it only on
+  **Accept and run**, sending back the plan's digest, which the backend checks
+  against the stored connection before any SSH. Start reuses the pinned,
+  checksummed deployment with `--instance <id>` and per-instance PID/log files,
+  then connects; set-password pipes the saved credentials on stdin to
+  `tuic-remote --set-password-if-unset`, which refuses to overwrite. Disconnect
+  stops a daemon started this way unless "Leave it running" is set, only after
+  the PID file is proven to name a running `tuic-remote`
 
 ### 24.5 Remote Repositories and Terminals
 - Repos can be assigned to a remote connection; sidebar shows remote badge

@@ -2216,6 +2216,32 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { url: args.url, tls_fingerprint: args.tlsFingerprint ?? null },
 		}),
 	},
+	// SSH remote daemon provisioning (`ssh_provision.rs`). Every command names a
+	// STORED connection by id and nothing else that reaches the remote host; an
+	// execute call carries only the digest of the plan the user accepted.
+	plan_ssh_daemon_provision: {
+		map: (args, p) => ({
+			method: "GET",
+			path: `/config/ssh-daemon/${p("id")}/plan?action=${encodeURIComponent(String(args.action))}`,
+		}),
+	},
+	start_ssh_daemon: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/ssh-daemon/${p("id")}/start`,
+			body: { plan_digest: args.planDigest },
+		}),
+	},
+	stop_ssh_daemon: {
+		map: (_args, p) => ({ method: "POST", path: `/config/ssh-daemon/${p("id")}/stop` }),
+	},
+	configure_ssh_daemon_password: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("id")}/configure-ssh-password`,
+			body: { plan_digest: args.planDigest },
+		}),
+	},
 
 	// --- Tunnels ---
 	start_design_mode: {

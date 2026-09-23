@@ -85,6 +85,7 @@
 /config/remote-connections/status
 /config/remote-connections/test
 /config/remote-connections/x
+/config/remote-connections/x/configure-ssh-password
 /config/remote-connections/x/connect
 /config/remote-connections/x/install
 /config/remote-connections/x/password
@@ -96,6 +97,9 @@
 /config/repo-settings/has-custom
 /config/repositories
 /config/repositories/stale-temp
+/config/ssh-daemon/x/plan
+/config/ssh-daemon/x/start
+/config/ssh-daemon/x/stop
 /config/telegram
 /config/themes
 /config/ui-prefs

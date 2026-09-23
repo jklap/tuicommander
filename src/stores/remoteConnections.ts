@@ -62,6 +62,15 @@ export type RemoteTransport =
 			/** Host/port/user/identity/keepalive config — shared shape with `TunnelProfile.ssh`. */
 			ssh: SshConnectionParams;
 			remote_daemon_port: number;
+			/** Offer to start `tuic-remote` when Connect finds nothing answering
+			 * (deploy "never" only). Absent = off: the backend omits the three
+			 * provisioning fields while unset. */
+			start_if_not_running?: boolean;
+			/** Keep a daemon this app started running on Disconnect. */
+			leave_running_on_disconnect?: boolean;
+			/** `--instance <id>` used when this app launches or configures the
+			 * remote daemon — a lowercase DNS label, never discovered remotely. */
+			instance_id?: string | null;
 	  }
 	| {
 			type: "Direct";
@@ -127,6 +136,29 @@ export interface PendingFingerprintConfirmation {
 	fingerprint: string;
 }
 
+/** What the backend can offer to do over SSH about a failed connect. */
+export type ProvisionAction = "start" | "set_password";
+
+/** One remote step of a provisioning plan; `command` is the exact remote shell command. */
+export interface ProvisionStep {
+	description: string;
+	command?: string;
+}
+
+/**
+ * Everything a provisioning confirmation shows. Mirrors Rust
+ * `ssh_provision::ProvisionPlan`; `digest` binds the accept to exactly this plan.
+ */
+export interface ProvisionPlan {
+	connection_id: string;
+	connection_name: string;
+	action: ProvisionAction;
+	destination: string;
+	summary: string;
+	steps: ProvisionStep[];
+	digest: string;
+}
+
 export type ConnectionStatus = "disconnected" | "connecting" | "deploying" | "connected" | "unauthenticated" | "error";
 
 export interface ConnectionState {
@@ -140,6 +172,8 @@ export interface ConnectionState {
 	updateInProgress?: boolean;
 	error?: string;
 	deployStep?: string;
+	/** An SSH action the backend offers about this failure; runs only after confirmation. */
+	provisionOffer?: ProvisionAction;
 }
 
 /** One connection as the backend reports it. Snake case: it is a Rust struct. */
@@ -155,6 +189,7 @@ interface RemoteConnectionStatusPayload {
 	update_in_progress?: boolean;
 	error?: string;
 	step?: string;
+	provision_offer?: ProvisionAction;
 }
 
 interface RemoteConnectionsState {
@@ -230,6 +265,19 @@ function createRemoteConnectionsStore() {
 	const [pendingConfirmation, setPendingConfirmation] = createSignal<PendingFingerprintConfirmation | null>(null);
 	let confirmationResolver: ((accepted: boolean) => void) | null = null;
 
+	// Provisioning confirmation: same one-at-a-time shape. The dialog shows the
+	// plan the backend built; only an explicit accept sends its digest back.
+	const [pendingProvision, setPendingProvision] = createSignal<ProvisionPlan | null>(null);
+	let provisionResolver: ((accepted: boolean) => void) | null = null;
+
+	function requestProvisionConfirmation(plan: ProvisionPlan): Promise<boolean> {
+		provisionResolver?.(false);
+		return new Promise((resolve) => {
+			provisionResolver = resolve;
+			setPendingProvision(plan);
+		});
+	}
+
 	function requestFingerprintConfirmation(request: PendingFingerprintConfirmation): Promise<boolean> {
 		confirmationResolver?.(false);
 		return new Promise((resolve) => {
@@ -271,6 +319,7 @@ function createRemoteConnectionsStore() {
 			updateInProgress: payload.update_in_progress,
 			error: payload.error,
 			deployStep: payload.step,
+			provisionOffer: payload.provision_offer,
 		});
 
 		// A machine's run configs belong to the machine, and a daemon that went
@@ -386,6 +435,34 @@ function createRemoteConnectionsStore() {
 			const resolve = confirmationResolver;
 			confirmationResolver = null;
 			setPendingConfirmation(null);
+			resolve?.(accepted);
+		},
+
+		/**
+		 * Act on a provisioning offer: fetch the plan, show it, and run it only
+		 * when the user accepts. Returns the backend's follow-up message (set
+		 * password) or `null` when declined. Start also connects on success.
+		 */
+		async provision(id: string, action: ProvisionAction): Promise<string | null> {
+			const plan = await invoke<ProvisionPlan>("plan_ssh_daemon_provision", { id, action });
+			if (!(await requestProvisionConfirmation(plan))) return null;
+			if (action === "start") {
+				await invoke("start_ssh_daemon", { id, planDigest: plan.digest });
+				return "Remote daemon started.";
+			}
+			return (await invoke<string>("configure_ssh_daemon_password", { id, planDigest: plan.digest })) ?? null;
+		},
+
+		/** The provisioning plan the dialog should show, if any (reactive). */
+		getPendingProvisionConfirmation(): ProvisionPlan | null {
+			return pendingProvision();
+		},
+
+		/** Answer the pending plan: `true` runs it, `false` runs nothing. */
+		resolveProvisionConfirmation(accepted: boolean): void {
+			const resolve = provisionResolver;
+			provisionResolver = null;
+			setPendingProvision(null);
 			resolve?.(accepted);
 		},
 

@@ -154,6 +154,7 @@ mod shell_integration;
 pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
 pub(crate) mod ssh_connection;
+pub(crate) mod ssh_provision;
 pub(crate) mod state;
 pub(crate) mod stories;
 pub(crate) mod subagent_map;
@@ -2614,6 +2615,10 @@ pub fn run() {
             remote_connection::fetch_remote_connection_token,
             remote_runtime::connect_remote_connection,
             remote_runtime::disconnect_remote_connection,
+            ssh_provision::plan_ssh_daemon_provision,
+            ssh_provision::start_ssh_daemon,
+            ssh_provision::stop_ssh_daemon,
+            ssh_provision::configure_ssh_daemon_password,
             remote_runtime::remote_connection_statuses,
             remote_update::prepare_remote_update,
             remote_update::update_and_restart_remote,
@@ -3266,11 +3271,44 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     ai_agent::knowledge::spawn_persist_task(state.clone());
 }
 
+/// Whether a daemon already has Basic Auth credentials. Either half counts:
+/// `--set-password-if-unset` must never overwrite (or complete) an existing
+/// configuration, only fill an empty one.
+#[cfg(any(not(feature = "desktop"), test))]
+pub(crate) fn auth_credentials_configured(auth: &config::AuthConfig) -> bool {
+    !auth.username.is_empty() || !auth.password_hash.is_empty()
+}
+
+/// What `--set-password-if-unset` prints (on stderr, exit 1) when the daemon
+/// already has credentials. `ssh_provision` matches it to say "nothing was
+/// changed" rather than report a failure it cannot explain.
+pub const PASSWORD_ALREADY_CONFIGURED: &str =
+    "credentials are already configured; refusing to overwrite them";
+
 /// Interactive CLI to set username + password for headless auth.
 /// Reads from stdin, hashes with bcrypt, writes to config.json.
 #[cfg(not(feature = "desktop"))]
 pub fn set_password_interactive() -> anyhow::Result<()> {
+    set_password_from_stdin(false)
+}
+
+/// `tuic-remote --set-password-if-unset`: the same stdin interface, but it
+/// refuses — before reading anything — when credentials already exist. This is
+/// the only mode the desktop's SSH provisioning uses (`ssh_provision`), so an
+/// existing password is never overwritten from the other end of a connection;
+/// the check runs on the daemon's own config, not on what the client believes.
+#[cfg(not(feature = "desktop"))]
+pub fn set_password_if_unset_interactive() -> anyhow::Result<()> {
+    set_password_from_stdin(true)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn set_password_from_stdin(only_if_unset: bool) -> anyhow::Result<()> {
     use std::io::{self, BufRead, Write};
+
+    if only_if_unset && auth_credentials_configured(&config::load_app_config().services.auth) {
+        anyhow::bail!(PASSWORD_ALREADY_CONFIGURED);
+    }
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -3297,6 +3335,10 @@ pub fn set_password_interactive() -> anyhow::Result<()> {
         bcrypt::hash(&password, 12).map_err(|e| anyhow::anyhow!("Failed to hash password: {e}"))?;
 
     let mut cfg = config::load_app_config();
+    // Re-checked on the copy about to be written: stdin may have taken a while.
+    if only_if_unset && auth_credentials_configured(&cfg.services.auth) {
+        anyhow::bail!(PASSWORD_ALREADY_CONFIGURED);
+    }
     cfg.services.auth.username = username.clone();
     cfg.services.auth.password_hash = hash;
     config::save_app_config(cfg).map_err(|e| anyhow::anyhow!(e))?;

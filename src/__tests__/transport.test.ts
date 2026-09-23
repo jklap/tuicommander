@@ -2272,6 +2272,35 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps the SSH daemon provisioning commands to stored-id routes carrying only a digest", () => {
+			const plan = mapCommandToHttp("plan_ssh_daemon_provision", { id: "c1", action: "set_password" });
+			expect(plan.method).toBe("GET");
+			expect(plan.path).toBe("/config/ssh-daemon/c1/plan?action=set_password");
+			const start = mapCommandToHttp("start_ssh_daemon", { id: "c1", planDigest: "d".repeat(64) });
+			expect(start).toMatchObject({ method: "POST", path: "/config/ssh-daemon/c1/start" });
+			expect(start.body).toEqual({ plan_digest: "d".repeat(64) });
+			expect(mapCommandToHttp("stop_ssh_daemon", { id: "c1" })).toMatchObject({
+				method: "POST",
+				path: "/config/ssh-daemon/c1/stop",
+			});
+			const password = mapCommandToHttp("configure_ssh_daemon_password", { id: "c1", planDigest: "e".repeat(64) });
+			expect(password).toMatchObject({ method: "POST", path: "/config/remote-connections/c1/configure-ssh-password" });
+			// Never a credential, host or user on the wire — the backend reads them.
+			expect(password.body).toEqual({ plan_digest: "e".repeat(64) });
+		});
+
+		it("has no command that runs SSH provisioning against a caller-supplied host", () => {
+			for (const removed of [
+				"probe_ssh_daemon",
+				"install_ssh_daemon",
+				"start_ssh_remote_daemon",
+				"stop_ssh_remote_daemon",
+				"set_ssh_remote_password",
+			]) {
+				expect(() => mapCommandToHttp(removed, { ssh: { host: "evil", user: "x" }, port: 1 })).toThrow();
+			}
+		});
+
 		it("has no command that starts or stops a Direct relay from the client", () => {
 			expect(() => mapCommandToHttp("start_direct_proxy", { connectionId: "c", url: "https://evil" })).toThrow();
 			expect(() => mapCommandToHttp("stop_direct_proxy", { connectionId: "c" })).toThrow();

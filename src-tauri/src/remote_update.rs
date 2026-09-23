@@ -184,7 +184,9 @@ pub(crate) async fn perform_update_and_restart(
             }
         }
         RemoteTransport::Ssh {
-            remote_daemon_port, ..
+            remote_daemon_port,
+            instance_id,
+            ..
         } => {
             let profile = crate::remote_runtime::ssh_profile(&connection)
                 .ok_or("Could not resolve SSH profile")?;
@@ -216,11 +218,12 @@ pub(crate) async fn perform_update_and_restart(
                 .await
                 .map_err(|e| format!("Installed SSH update failed: {e}"))?;
             } else {
-                crate::remote_deploy::deploy_ephemeral(
+                crate::remote_deploy::deploy_ephemeral_for(
                     &profile,
                     *remote_daemon_port,
                     &token,
                     connection.survive_secs,
+                    instance_id.as_deref(),
                 )
                 .await
                 .map_err(|e| format!("SSH update failed: {e}"))?;

@@ -329,7 +329,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `list_remote_connections` | -- | `Vec<RemoteConnection>` | Load every configured remote machine from `connections.json` |
-| `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock. `connection.transport` is `Ssh { ssh: SshConnectionParams, remote_daemon_port }`, `Direct { url }` or `Local { port, instance_id }`; `auth_username` is optional (`null`) |
+| `save_remote_connection` | `base, connection` | `()` | Create with null base or update a remote machine from its loaded snapshot; merges changed fields into the latest record under the config file lock. `connection.transport` is `Ssh { ssh: SshConnectionParams, remote_daemon_port, start_if_not_running?, leave_running_on_disconnect?, instance_id? }` (the three provisioning fields omitted while unset), `Direct { url }` or `Local { port, instance_id }`; `auth_username` is optional (`null`) |
 | `delete_remote_connection` | `id` | `()` | Tear down and delete a remote machine, both vault credentials (password and pairing token), and its ephemeral daemon best-effort; an installed service is left for explicit uninstall. Same body as `DELETE /config/remote-connections/{id}` (`remote_connection::delete_remote_connection_impl`); a missing id is not an error here (HTTP answers 404) |
 | `test_connection` | `request: { transport, auth_username?, password? }` | `ConnectionTestResult` (`{ type: Reachable \| AuthFailed \| NotConfigured \| InstanceNotFound }` or `{ type: Unreachable, reason }`) | Test Connection for a possibly unsaved connection; persists nothing, the password is request-only. Same body as `POST /config/remote-connections/test` (`connection_test::test_connection_impl`) |
 | `probe_direct_tls_connection` | `url: string, tlsFingerprint?: string \| null` | `ProbeResult` (`{ type: NoTlsNeeded \| Trusted \| PinnedMatch }`, `{ type: NeedsConfirmation, fingerprint }`, `{ type: PinnedMismatch, presented_fingerprint }`) | What certificate a Direct URL presents, before the user pins it; persists nothing. Same as `POST /config/remote-connections/probe-direct-tls` (`direct_proxy::probe_direct_tls`) |
@@ -338,6 +338,20 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `fetch_remote_connection_token` | `id, baseUrl, username` | `String` | Trade the stored password for the daemon's in-memory session token over `GET /api/auth/session-token`. Runs in the backend so the password never reaches the WebView. Re-run on every connect: the daemon mints a new token on restart |
 | `install_remote_daemon` | `id` | `()` | Stage the matching daemon and install/start a systemd user unit or launchd agent, then persist `deploy = installed` |
 | `uninstall_remote_daemon` | `id` | `()` | Stop and remove the systemd/launchd service files and persist `deploy = on_connect` |
+
+## SSH Daemon Provisioning (`ssh_provision.rs`)
+
+Every command names a STORED connection by `id`; host, user, port, instance and
+credentials are read from `connections.json` and the vault, never from the caller.
+An execute command carries only the digest of the plan the user accepted, and is
+refused when the stored connection no longer produces that plan.
+
+| Command | Args | Returns | Description |
+|---------|------|---------|-------------|
+| `plan_ssh_daemon_provision` | `id, action: "start" \| "set_password"` | `ProvisionPlan` (`{ connection_id, connection_name, action, destination, summary, steps: [{ description, command? }], digest }`) | What accepting the connection's `provision_offer` would run on the remote host, with the exact remote commands. Contacts nothing. Same as `GET /config/ssh-daemon/{id}/plan?action=` |
+| `start_ssh_daemon` | `id, planDigest` | `()` | Run an accepted Start plan (`remote_deploy::deploy_ephemeral_for`: pinned, SHA-256-checked release asset; pairing token on stdin), mark the daemon as started by this app, then connect. Needs `start_if_not_running`. Same as `POST /config/ssh-daemon/{id}/start` |
+| `stop_ssh_daemon` | `id` | `bool` | Stop the connection's ephemeral daemon, PID-file verified (the PID must be a running `tuic-remote`); `true` when one was signalled. Same as `POST /config/ssh-daemon/{id}/stop` |
+| `configure_ssh_daemon_password` | `id, planDigest` | `String` | Run an accepted SetPassword plan: the saved username and password go on stdin to `tuic-remote --set-password-if-unset`, which refuses when the daemon already has credentials. Returns the follow-up message (restart the daemon). Same as `POST /config/remote-connections/{id}/configure-ssh-password` |
 
 ## Remote Connection Runtime (`remote_runtime.rs`)
 
@@ -349,8 +363,8 @@ remote daemon.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `connect_remote_connection` | `id` | `()` | Bring a connection up. SSH connections may deploy a matching loopback-only daemon first, then authenticate with the vault pairing token; direct and unmanaged connections use the stored password exchange. Idempotent while connecting or connected, so a double click opens one tunnel. Every transition is announced as a `remote-connection-status` event |
-| `disconnect_remote_connection` | `id` | `()` | Stop the status poll, forget the token, stop the tunnel |
-| `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected; `update_in_progress` is true during a manual or unattended update. A disconnected machine has no route to hand out |
+| `disconnect_remote_connection` | `id` | `()` | Stop the status poll, forget the token, stop the tunnel. A daemon this app started through a confirmed provisioning plan in this run is stopped too (PID-file verified) unless `leave_running_on_disconnect` is set |
+| `remote_connection_statuses` | -- | `Vec<RemoteConnectionStatus>` | Live status of every connection. `base_url`, `token` and `protocol_version` are present only while connected; `provision_offer` (`"start"` \| `"set_password"`) only while not connected; `update_in_progress` is true during a manual or unattended update. A disconnected machine has no route to hand out |
 | `prepare_remote_update` | `id` | `UpdatePreview` | Select the release or matching local daemon binary and report both build identities and the live session count |
 | `update_and_restart_remote` | `id, confirmedSessions, expectedSha256` | `UpdatePreview` | Check the confirmation, update by Direct upload or SSH deployment, and verify the new build after reconnect |
 
