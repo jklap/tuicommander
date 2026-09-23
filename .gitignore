@@ -143,3 +143,5 @@ ORCHESTRATOR.md
 # Mutation test artifacts
 /reports/mutation/
 /.stryker-tmp/
+
+.obsidian/
