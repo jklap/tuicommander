@@ -125,6 +125,18 @@ jobs:
           node scripts/third-party-notices.mjs --self-test
           node scripts/third-party-notices.mjs --check --only js
 
+      - name: Plugin tests
+        # Self-test first (it exercises its own fixtures), so a self-test
+        # regression is reported on its own rather than behind a red
+        # `test:plugins` run over the plugins submodule's real tests.
+        run: bash scripts/with-test-tmp.sh pnpm test:plugins:test && bash scripts/with-test-tmp.sh pnpm test:plugins
+
+      - name: Architecture cycles
+        run: pnpm architecture:cycles && pnpm architecture:cycles:test
+
+      - name: No literal NUL bytes in source
+        run: pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
+
   # The isolated suite took 1134-1141s on hosted Linux, versus 327s locally,
   # and later exceeded 20 minutes while still progressing. Partition the full
   # suite across runners, not extra workers competing on the same four vCPUs.
