@@ -55,6 +55,7 @@
 - [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**.
 - [ ] In **All repo**, existing entries recorded before this change should remain visible as **Terminal unknown**. Closing a PTY should leave its saved history selectable.
 - [ ] Open PTY A, switch to PTY B, then **All repo** and close Progress. Reopen each view and confirm each has its own last-visit divider; viewing A alone must not mark B or **All repo** as seen.
+- [ ] Start a **new** Claude Code session after the restart (a running one keeps its old tool list). Its tool list must show `mcp__tuicommander__progress` with a full schema, not as a deferred name behind ToolSearch; at the end of a task it must report `done` without being asked. Before this change only Codex terminals wrote done/blocked entries (`anthropic/alwaysLoad` on the `progress` tool, `mcp_transport.rs`).
 
 ## Terminal scrollbar thumb minimum 48px (2026-09-23) — frontend, live via HMR
 

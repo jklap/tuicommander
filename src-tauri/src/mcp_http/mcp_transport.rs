@@ -1178,6 +1178,9 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "progress",
+            // Claude Code defers MCP tools behind ToolSearch unless told not to;
+            // a deferred `progress` is a tool Claude agents never call.
+            "_meta": { "anthropic/alwaysLoad": true },
             "description": "Record what happened, for the user who walked away. Mandatory: type=done when the work an `intent:` announced is finished, type=blocked when you cannot proceed without the user.",
             "inputSchema": { "type": "object", "properties": {
                 "type": { "type": "string", "enum": ["done", "blocked"] },
@@ -12438,6 +12441,25 @@ mod tests {
             ],
             "native_tool_definitions must return exactly the one family, in order"
         );
+    }
+
+    /// Claude Code defers MCP tools behind ToolSearch: the model sees only the
+    /// name and must load the schema first, which in practice it never does
+    /// for `progress` — so no Claude terminal ever reported done/blocked while
+    /// Codex, which loads every tool, did. `anthropic/alwaysLoad` exempts the
+    /// tool from deferral. Only `progress` carries it: it is the one tool the
+    /// protocol makes mandatory, and every always-loaded schema costs tokens.
+    #[test]
+    fn progress_is_the_only_tool_claude_code_must_not_defer() {
+        let defs = native_tool_definitions();
+        let always_loaded: Vec<&str> = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["_meta"]["anthropic/alwaysLoad"] == serde_json::json!(true))
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert_eq!(always_loaded, vec!["progress"]);
     }
 
     /// Which name gets the collapsed surface, and — the load-bearing half —
