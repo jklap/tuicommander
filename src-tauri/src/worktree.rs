@@ -6479,8 +6479,43 @@ branch refs/heads/feat
         assert_eq!(parts[3], "true");
     }
 
+    /// RAII guard restoring an env var's prior value (or absence) on drop —
+    /// runs even if the body panics. Same idiom as `github_auth.rs`'s
+    /// `EnvVar` guard; kept local here since that one is private to its own
+    /// test module.
+    struct EnvVarGuard(&'static str, Option<String>);
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let guard = EnvVarGuard(key, std::env::var(key).ok());
+            unsafe { std::env::remove_var(key) };
+            guard
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(previous) => unsafe { std::env::set_var(self.0, previous) },
+                None => unsafe { std::env::remove_var(self.0) },
+            }
+        }
+    }
+
     #[test]
+    #[serial_test::serial]
     fn run_setup_script_does_not_set_unknown_vars() {
+        // TUIC_BRANCH is process-global env state, and this test may itself
+        // be running inside a live TUIC-hosted terminal (which sets it
+        // ambiently for its own child processes) — `apply_std` deliberately
+        // gives Setup/Archive Scripts full parent-env inheritance (see its
+        // doc comment), so an ambient TUIC_BRANCH would otherwise leak
+        // straight through and falsely read as "SET" regardless of what the
+        // detached-HEAD repo below actually derives. Clear it for the
+        // duration of this test only; the guard restores it on drop even if
+        // an assertion below panics.
+        let _env_guard = EnvVarGuard::unset("TUIC_BRANCH");
+
         // Detached HEAD: TUIC_BRANCH should be entirely absent, not empty.
         let repo = setup_test_repo();
         let sha = git_cmd(repo.path())
