@@ -377,6 +377,71 @@ mod tests {
         );
     }
 
+    // --- IPC/HTTP parity bug (see plan Phase 1): `delete_remote_connection` ---
+    //
+    // The HTTP route (`mcp_http::config_routes::delete_remote_connection`)
+    // calls `state.tunnel_manager.stop_if_running(&id)` before deleting the
+    // connection from `connections.json`. The IPC command right above
+    // (`delete_remote_connection` in this file) does not — verified by
+    // reading its source: it goes straight from loading the store to
+    // `retain`/`save`, with no `tunnel_manager` reference at all. The IPC
+    // side cannot be pinned by a direct call here for the same reason as
+    // `tunnels::tauri_commands`'s parity-bug tests: it takes
+    // `tauri::State<'_, Arc<AppState>>`, which has no public constructor
+    // outside a running Tauri app. Do not "fix" the test below when Phase 1
+    // makes the two sides agree; update it to assert the new, unified
+    // behavior (both sides stop a running tunnel, or neither does) instead.
+    #[tokio::test]
+    async fn known_bug_http_delete_stops_a_running_tunnel_before_deleting() {
+        use crate::tunnels::profile::TunnelProfile;
+        use axum::body::Body;
+        use axum::extract::connect_info::ConnectInfo;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        let conn = RemoteConnection::new_ssh("test", "127.0.0.1", "nobody");
+        let id = conn.id.clone();
+        upsert_remote_connection(&state.data_dir, conn).unwrap();
+
+        // Seed a "running" entry in the real `TunnelManager` under the same
+        // id, via its only public entry point (there is no test-only way to
+        // reach its private map from outside `tunnels::manager`). The
+        // profile's host/port don't need to actually be reachable — `start`
+        // publishes the entry into the manager's map synchronously, before
+        // its background supervision loop ever attempts a real connection.
+        let mut seed_profile = TunnelProfile::new("seed", "127.0.0.1", "nobody");
+        seed_profile.id = id.clone();
+        seed_profile.port = 1;
+        state
+            .tunnel_manager
+            .start(seed_profile)
+            .await
+            .expect("seeding a tunnel manager entry must succeed");
+        assert!(
+            state.tunnel_manager.get_status(&id).is_some(),
+            "seed tunnel must be visible in the manager before delete"
+        );
+
+        let app = crate::mcp_http::build_router(state.clone(), false, true);
+        let mut req = Request::delete(format!("/config/remote-connections/{id}"))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // KNOWN BUG, see plan Phase 1: the IPC command does not do this — a
+        // tunnel started for a connection deleted over IPC would be left
+        // running, orphaned from the connection list that used to reference
+        // it.
+        assert!(
+            state.tunnel_manager.get_status(&id).is_none(),
+            "HTTP delete must stop the running tunnel for this connection id"
+        );
+    }
+
     #[test]
     fn upsert_persists_valid_and_updates_existing() {
         let dir = tempfile::tempdir().unwrap();

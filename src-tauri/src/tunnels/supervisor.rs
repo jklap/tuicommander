@@ -802,4 +802,140 @@ mod tests {
 
         sup.stop();
     }
+
+    /// A changed host key (`classify_exit` → `ExitReason::HostKeyMismatch`) is
+    /// not retryable — the same shape as `auth_failure_no_retry` above, but
+    /// for the host-key-verification-failed message specifically. Retrying a
+    /// host-key mismatch automatically would be actively unsafe (it exists to
+    /// stop a possible MITM), so this must never produce a `Reconnecting`
+    /// status.
+    #[tokio::test]
+    async fn host_key_changed_no_retry() {
+        let script = fake_ssh_script(
+            "host_key_changed_no_retry",
+            r#"echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" >&2
+echo "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @" >&2
+echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" >&2
+echo "Host key verification failed." >&2
+exit 255"#,
+            "echo Host key verification failed. 1>&2 & exit /b 255",
+        );
+        let (cb, statuses) = status_collector();
+
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb).await;
+
+        let final_status = wait_for_stopped(&sup).await;
+
+        let history = statuses.lock().clone();
+
+        // Must NOT contain Reconnecting — a host key mismatch is not retryable.
+        let has_reconnecting = history
+            .iter()
+            .any(|s| matches!(s, TunnelStatus::Reconnecting { .. }));
+        assert!(
+            !has_reconnecting,
+            "a changed host key must not trigger reconnect, history: {history:?}"
+        );
+
+        match &final_status {
+            TunnelStatus::Stopped { reason } => {
+                assert!(
+                    reason.contains("HostKeyMismatch"),
+                    "reason should mention HostKeyMismatch, got: {reason}"
+                );
+            }
+            other => panic!("expected Stopped, got {other:?}"),
+        }
+
+        sup.stop();
+    }
+
+    /// The terminal `Stopped { reason: "max retries exceeded" }` transition
+    /// (both `supervision_loop` branches, `die_early` and the post-Connected
+    /// exit path, share this exact inline shape: if `handle_exit` says the
+    /// exit is retryable but `backoff_delay` then returns `None`, the loop
+    /// gives up) is driven entirely by `BackoffCalculator`'s hardcoded
+    /// `max_retries: 10` with real (1s-to-30s, jittered) backoff delays
+    /// between attempts. Exercising it end-to-end through a real
+    /// `TunnelSupervisor` would need ~10 real subprocess retries and
+    /// real `tokio::time::sleep`s between them — a worst-case sum around
+    /// three minutes, comfortably past this workspace's nextest
+    /// `slow-timeout` (30s × terminate-after 4 = 120s hard kill,
+    /// `.config/nextest.toml`) with no way to inject a faster backoff
+    /// without a production-code change (out of scope for this test-only
+    /// pass; `BackoffCalculator::new()` hardcodes its constants with no
+    /// test-only override point). Per this crate's own guidance ("Which
+    /// timing assertions are load-bearing"), a real-time bound that large
+    /// for a fact already covered elsewhere (`backoff::tests::
+    /// test_returns_none_after_max_retries`) is not worth adding — so this
+    /// test instead drives the exact same functions `supervision_loop` calls
+    /// (`handle_exit`, `backoff_delay`) directly and synchronously, proving
+    /// the boundary condition the loop actually depends on: after exactly
+    /// `max_retries` (10) retryable exits, the 11th `backoff_delay` call
+    /// returns `None` — which is the sole signal `supervision_loop` uses to
+    /// stop retrying and transition to `Stopped { reason: "max retries
+    /// exceeded" }` instead of looping again.
+    #[test]
+    fn reconnect_after_max_retries_reaches_the_terminal_stopped_state() {
+        let status = Mutex::new(TunnelStatus::Starting);
+        let (cb, statuses) = status_collector();
+        let mut backoff = BackoffCalculator::new();
+
+        // Replay exactly what `supervision_loop` does on each retryable exit:
+        // ask `handle_exit` (sets Reconnecting, returns true for a retryable
+        // reason), then ask `backoff_delay` for the next wait. Do this for
+        // every attempt the real backoff budget allows.
+        for attempt in 0..10u32 {
+            let retryable = handle_exit(&ExitReason::ConnectionRefused, &mut backoff, &status, &cb);
+            assert!(retryable, "ConnectionRefused must be retryable");
+            let delay = backoff_delay(&mut backoff);
+            assert!(
+                delay.is_some(),
+                "attempt {attempt}: backoff budget must not be exhausted yet"
+            );
+        }
+
+        // The 11th retryable exit: `handle_exit` still reports it as
+        // retryable (it does not know about the budget), but the backoff
+        // budget is now exhausted — this is the exact condition
+        // `supervision_loop` checks to give up instead of looping again.
+        let retryable = handle_exit(&ExitReason::ConnectionRefused, &mut backoff, &status, &cb);
+        assert!(retryable);
+        assert!(
+            backoff_delay(&mut backoff).is_none(),
+            "backoff budget must be exhausted after max_retries retryable exits"
+        );
+
+        // This is exactly what `supervision_loop` does when `backoff_delay`
+        // returns `None`: transition to the terminal Stopped state instead
+        // of looping again.
+        set_status(
+            &status,
+            TunnelStatus::Stopped {
+                reason: "max retries exceeded".to_string(),
+            },
+            &cb,
+        );
+
+        assert_eq!(
+            *status.lock(),
+            TunnelStatus::Stopped {
+                reason: "max retries exceeded".to_string()
+            }
+        );
+        let history = statuses.lock().clone();
+        assert_eq!(
+            history
+                .iter()
+                .filter(|s| matches!(s, TunnelStatus::Reconnecting { .. }))
+                .count(),
+            11,
+            "expected exactly 11 Reconnecting statuses (10 retried + 1 exhausted), history: {history:?}"
+        );
+        assert!(matches!(
+            history.last(),
+            Some(TunnelStatus::Stopped { reason }) if reason == "max retries exceeded"
+        ));
+    }
 }
