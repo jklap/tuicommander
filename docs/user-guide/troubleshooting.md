@@ -64,8 +64,8 @@ For a connection problem, verify that the backend is listening on the expected p
 
 Opening an absolute file path (a Markdown/plan-file link, or a file opened
 directly in the code editor) from a browser/remote/PWA client is gated to your
-registered repositories, plus any directory listed under **Settings → Services
-& MCP → File Access → Additional Readable Directories** (`~/.claude/plans` is
+registered repositories, plus any directory listed under **Settings → Remote
+Access → File Access → Additional Readable Directories** (`~/.claude/plans` is
 included by default). This never happens in the desktop app, where reads are
 unrestricted. If you see a message like "outside your registered repositories
 and allowed directories," add the file's folder to that list. See
