@@ -52,6 +52,8 @@ export type FlowEventKind =
 	| "subagent_return";
 
 export interface FlowEvent {
+	/** Stable across refreshes; the view keys expanded rows by it, never by position. */
+	id: string;
 	kind: FlowEventKind;
 	from: string;
 	to?: string;
@@ -240,14 +242,22 @@ export function createProgressStore() {
 		}
 	}
 
+	/// A scoped Flow also draws the terminal's parent and children, so an
+	/// entry from or to any of its columns is on screen.
+	function drawnInFlow(project: string, entry: ProgressEntry): boolean {
+		if (view() !== "flow") return false;
+		const participants = state.flows[project]?.data?.participants ?? [];
+		return participants.some((p) => p.id === entry.ptyId || p.id === entry.targetPtyId);
+	}
+
 	function presentLive(payload: ProgressRecordedPayload): void {
 		const entry = payload.payload.entry;
-		if (
-			dialogVisible() &&
-			requestedProject() === payload.repo_path &&
-			(selectedPtyId() === null || selectedPtyId() === entry.ptyId)
-		) {
-			refreshVisible(payload.repo_path);
+		const project = payload.repo_path;
+		const showing = dialogVisible() && requestedProject() === project;
+		if (showing && (selectedPtyId() === null || selectedPtyId() === entry.ptyId)) {
+			refreshVisible(project);
+		} else if (showing && drawnInFlow(project, entry)) {
+			void refreshFlow(project);
 		} else {
 			setArrivedSinceOpen((count) => count + 1);
 		}

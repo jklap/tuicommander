@@ -162,7 +162,14 @@ impl ProgressStore {
                 |row| row.get(0),
             )
             .optional()
+            .map_err(db_error("read the progress id high-water mark"))?
+        } else {
+            None
+        };
+        let max_id: Option<i64> = tx
+            .query_row("SELECT MAX(id) FROM entries", [], |row| row.get(0))
             .map_err(db_error("read the progress id high-water mark"))?;
+        let high_water = sequence.max(max_id);
         tx.execute_batch(
             "CREATE TABLE entries_hand_offs (
                id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -301,6 +308,10 @@ impl ProgressStore {
 
     /// The project's newest entry, read inside the caller's transaction so the
     /// repeat check in `record` sees every row a concurrent writer has landed.
+    ///
+    /// Hand-offs are skipped: an orchestrator writes `intent:` and then spawns
+    /// or sends, and the next repaint of that same intent must still read as a
+    /// repeat rather than land a duplicate after every hand-off.
     fn newest(
         tx: &rusqlite::Transaction<'_>,
         project: &str,
@@ -311,6 +322,7 @@ impl ProgressStore {
                 "SELECT id, created_at_ms, kind, text, step, agent_name
                    FROM entries
                   WHERE project = ?1 AND pty_id IS ?2
+                    AND kind NOT IN ('delegated', 'message')
                   ORDER BY id DESC
                   LIMIT 1",
                 params![project, pty_id],
@@ -345,6 +357,18 @@ impl ProgressStore {
     }
 
     pub fn list(&self, project: &str, input: &ProgressListInput) -> Result<ProgressList, String> {
+        self.list_limited(project, input, LIST_LIMIT)
+    }
+
+    /// `list` with an explicit row cap. The Flow reads one row past
+    /// `LIST_LIMIT` so it can tell a journal of exactly that many entries from
+    /// one that was cut.
+    pub(crate) fn list_limited(
+        &self,
+        project: &str,
+        input: &ProgressListInput,
+        limit: usize,
+    ) -> Result<ProgressList, String> {
         let conn = self.connect()?;
         let blocked_only = input.blocked_only.unwrap_or(false);
         let mut statement = conn
@@ -364,7 +388,7 @@ impl ProgressStore {
                     project,
                     i64::from(blocked_only),
                     input.pty_id,
-                    LIST_LIMIT as i64
+                    limit as i64
                 ],
                 |row| {
                     Ok((
@@ -382,9 +406,14 @@ impl ProgressStore {
             )
             .map_err(db_error("read the progress list"))?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(db_error("read a progress entry"))?
+            .map_err(db_error("read a progress entry"))?;
+        // A kind this build does not know was written by a newer one sharing
+        // the journal (debug and release share the config dir). Skipping it
+        // costs that row; failing would cost the whole project's list.
+        let mut unknown = 0usize;
+        let entries = entries
             .into_iter()
-            .map(
+            .filter_map(
                 |(
                     id,
                     created_at_ms,
@@ -396,13 +425,17 @@ impl ProgressStore {
                     target_pty_id,
                     target_name,
                 )|
-                 -> Result<_, String> {
-                    Ok(ProgressEntry {
+                 -> Option<ProgressEntry> {
+                    let Ok(kind) = ProgressKind::parse(&kind) else {
+                        unknown += 1;
+                        return None;
+                    };
+                    Some(ProgressEntry {
                         id,
                         project: project.to_string(),
                         pty_id,
                         created_at_ms: u64_from_i64(created_at_ms),
-                        kind: ProgressKind::parse(&kind)?,
+                        kind,
                         text,
                         step,
                         agent_name,
@@ -411,7 +444,15 @@ impl ProgressStore {
                     })
                 },
             )
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Vec<_>>();
+        if unknown > 0 {
+            tracing::warn!(
+                source = "progress",
+                project,
+                skipped = unknown,
+                "Progress list skipped entries of a kind this build does not know"
+            );
+        }
         let pty_ids = conn
             .prepare("SELECT DISTINCT pty_id FROM entries WHERE project = ?1 AND pty_id IS NOT NULL ORDER BY pty_id")
             .map_err(db_error("prepare the terminal list"))?
@@ -1030,6 +1071,52 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(error.contains(STORE_FILE), "unexpected error: {error}");
+    }
+
+    /// An orchestrator writes `intent:` and then spawns or sends. The next
+    /// repaint of that same intent is still a repeat: a hand-off row between
+    /// them must not turn every repaint after a hand-off into a new intent.
+    #[test]
+    fn a_hand_off_does_not_break_a_run_of_the_same_intent() {
+        let (_guard, store, _dir) = isolated_store();
+        let intent = entry(ProgressKind::Intent, "splitting the parser");
+        let first = store.record_for_pty("/p", &intent, Some("lead")).unwrap();
+        for kind in [ProgressKind::Delegated, ProgressKind::Message] {
+            store
+                .record_hand_off("/p", &entry(kind, "do the lexer"), Some("lead"), Some("w1"), None)
+                .unwrap();
+            let again = store.record_for_pty("/p", &intent, Some("lead")).unwrap();
+            assert_eq!(again.id, first.id, "after a {kind:?} the intent is a repeat");
+        }
+        let list = store.list("/p", &ProgressListInput::default()).unwrap();
+        let intents = list
+            .entries
+            .iter()
+            .filter(|e| e.kind == ProgressKind::Intent)
+            .count();
+        assert_eq!(intents, 1);
+    }
+
+    /// Debug and release builds share this journal. A kind written by a newer
+    /// build must cost that one row in an older reader, never the whole list.
+    #[test]
+    fn a_kind_this_build_does_not_know_is_skipped_not_fatal() {
+        let (_guard, store, _dir) = isolated_store();
+        store
+            .record("/p", &entry(ProgressKind::Done, "known"))
+            .unwrap();
+        let conn = Connection::open(store.database_path()).unwrap();
+        conn.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             INSERT INTO entries (project, created_at_ms, kind, text)
+             VALUES ('/p', 2, 'from_the_future', 'unknown');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let list = store.list("/p", &ProgressListInput::default()).unwrap();
+        let texts: Vec<&str> = list.entries.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["known"]);
     }
 
     /// The first journals were created with a bare `INTEGER PRIMARY KEY` (the

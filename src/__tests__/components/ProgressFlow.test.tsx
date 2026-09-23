@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { ProgressFlow } from "../../components/ProgressDialog/ProgressFlow";
 import type { ProgressFlow as Flow } from "../../stores/progress";
@@ -33,8 +34,9 @@ function flow(): Flow {
 			},
 		],
 		events: [
-			{ kind: "intent", from: "lead", summary: "Split the work", atMs: 1 },
+			{ id: "entry:1", kind: "intent", from: "lead", summary: "Split the work", atMs: 1 },
 			{
+				id: "entry:2",
 				kind: "delegated",
 				from: "lead",
 				to: "w1",
@@ -42,8 +44,9 @@ function flow(): Flow {
 				text: "Write the lexer in full",
 				atMs: 2,
 			},
-			{ kind: "done", from: "w1", to: "lead", summary: "Lexer shipped", atMs: 3 },
+			{ id: "entry:3", kind: "done", from: "w1", to: "lead", summary: "Lexer shipped", atMs: 3 },
 			{
+				id: "lead/a1:return",
 				kind: "subagent_return",
 				from: "lead/a1",
 				to: "lead",
@@ -107,5 +110,33 @@ describe("ProgressFlow", () => {
 	it("does not offer to expand an arrow that has nothing more to show", () => {
 		render(() => <ProgressFlow flow={flow()} fetchDetail={vi.fn()} />);
 		expect(screen.getByText("Lexer shipped").closest("button")).toBeNull();
+	});
+
+	// A live refresh re-sorts the events and can add one before an expanded
+	// row. The expansion belongs to the event, not to its position: keyed by
+	// index, the new row opened and the expanded one closed.
+	it("keeps an expanded row with its event when an earlier event arrives", async () => {
+		const fetchDetail = vi.fn().mockResolvedValue("Two issues found: A and B.");
+		const [data, setData] = createSignal(flow());
+		render(() => <ProgressFlow flow={data()} fetchDetail={fetchDetail} />);
+		fireEvent.click(screen.getByText("Two issues…"));
+		expect(await screen.findByText("Two issues found: A and B.")).toBeTruthy();
+
+		const next = flow();
+		next.events.unshift({
+			id: "entry:0",
+			kind: "delegated",
+			from: "lead",
+			to: "w1",
+			summary: "Earlier hand-off",
+			text: "Earlier hand-off in full",
+			atMs: 0,
+		});
+		setData(next);
+
+		expect(screen.getByText("Two issues found: A and B.")).toBeTruthy();
+		expect(screen.getByText("Earlier hand-off")).toBeTruthy();
+		expect(screen.queryByText("Earlier hand-off in full")).toBeNull();
+		expect(fetchDetail).toHaveBeenCalledTimes(1);
 	});
 });

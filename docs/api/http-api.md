@@ -52,7 +52,7 @@ ProgressFlow = {
   participants: [{ id, kind: "terminal"|"subagent", title, agentType?,
                    state: "busy"|"idle"|"awaiting"|"closed"|"running"|"done",
                    parent?, intent?, toolCalls, ptyId, agentId? }],
-  events: [{ kind: "intent"|"done"|"blocked"|"delegated"|"message"
+  events: [{ id, kind: "intent"|"done"|"blocked"|"delegated"|"message"
                   |"subagent_spawn"|"subagent_return",
              from, to?, summary, text?, detail?: { ptyId, agentId, part },
              step?, atMs }]              // oldest first
@@ -69,6 +69,10 @@ journal text, present only when the summary is shorter. `detail` marks a
 subagent arrow whose full prompt or report must be fetched from
 `/progress/flow/detail`; that route looks `ptyId` up in `AppState` and compares
 `agentId` with the subagents listed on disk, so neither value can reach a path.
+An event `id` is stable across reads (`entry:<journal id>`, or
+`<ptyId>/<agentId>:spawn` / `:return`); key client state by it, never by
+position. Past 64 subagents per terminal, the newest are kept plus every one
+still running. Both routes run on the blocking pool.
 With `ptyId`, the flow keeps that terminal, its direct parent and its direct
 children.
 

@@ -23,7 +23,7 @@
 ## Alias survives a WebView reload (2026-09-23) — Rust, needs `make dev` restart
 
 - [ ] After the restart, spawn an agent with `agent action=spawn`, then reload the WebView (`curl -X POST localhost:9876/debug/reload_webview`). The tab context menu still shows "Alias: …" and the tooltip shows the alias that `session list` returns for that session.
-- [ ] Browser mode (`http://localhost:9876/`): with the page open, spawn an agent. Its new tab shows the alias without a page reload (`term-alias-assigned` now arrives over `/events`).
+- [x] Browser mode (`http://localhost:9876/`): with the page open, spawn an agent. Its new tab shows the alias without a page reload (`term-alias-assigned` now arrives over `/events`). _(verified 2026-09-23: live `/events` SSE on :9876 delivered `event: term-alias-assigned` `{"session_id":…,"alias":"tt-1"}` for a throwaway `POST /sessions`; listener in `useAppInit.ts:596`; tests `assign_term_alias_publishes_the_alias_on_the_event_bus` + `term_alias_assigned_has_matching_sse_name_and_payload` pass. Browser tab rendering itself not observed.)_
 - [ ] Spawn a Claude agent with `name=call-map`. When Claude prints its session title, the tab still reads `call-map` (an `intent:` title may still replace it, a manual rename too). Reload the WebView: the name is still protected from the OSC title. _(frontend half is live via HMR; the reload check needs the restart)_
 
 ## Compose panel pin (2026-09-23) — frontend, live via HMR
@@ -49,14 +49,16 @@
 
 The List | Flow toggle is frontend and appears through HMR at once, but the running backend has no `progress_flow` until it restarts, so Flow shows an error line until then. The first open after the restart migrates `progress.sqlite3` (table rebuild for the new kinds).
 
-- [ ] After the restart, open Progress: the List still shows every older entry, and deleting one still works.
-- [ ] From a Claude terminal in a registered repo, `agent action=spawn` a peer with a prompt. List shows `delegated to <child>`; Flow shows a blue arrow from the parent's column to the child's, labelled with the prompt.
-- [ ] Have the child `agent action=send` to the parent and report `done`. Flow shows a grey message arrow child → parent, then a green return arrow child → parent. No toast for the delegation or the message; one silent toast for `done`.
-- [ ] Spawn the child into a managed worktree (`repo action=worktree_create spawn_session`). Its `intent:` now appears on its column (it was dropped before).
-- [ ] In a Claude terminal, run 2 subagents (one nested). Each gets a column under its terminal with a tool count; the dashed arrow carries its task and, once done, a green arrow carries its report. Clicking a long label fetches the full text, with any token shown as `[REDACTED]`.
-- [ ] Select one terminal in the selector: Flow keeps that terminal, its parent and its children only.
+- [ ] After the restart, open Progress: the List still shows every older entry, and deleting one still works. _(NOTE 2026-09-23: FAILS on :9876. `POST /progress/list` and `POST /progress/flow` both answer `progress_store_unavailable: cannot read the progress id high-water mark: no such table: sqlite_sequence`. The live `progress.sqlite3` (1614 entries) was created with a bare `id INTEGER PRIMARY KEY` (no AUTOINCREMENT), so `sqlite_sequence` does not exist and `rebuild_for_hand_offs` (`progress/store.rs:146-153`) errors in every `ProgressStore::open()`. No entry has been written since the restart (newest `created_at_ms` 12:04). The migration test only covers an AUTOINCREMENT journal.)_
+- [ ] From a Claude terminal in a registered repo, `agent action=spawn` a peer with a prompt. List shows `delegated to <child>`; Flow shows a blue arrow from the parent's column to the child's, labelled with the prompt. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
+- [ ] Have the child `agent action=send` to the parent and report `done`. Flow shows a grey message arrow child → parent, then a green return arrow child → parent. No toast for the delegation or the message; one silent toast for `done`. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
+- [ ] Spawn the child into a managed worktree (`repo action=worktree_create spawn_session`). Its `intent:` now appears on its column (it was dropped before). _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
+- [ ] In a Claude terminal, run 2 subagents (one nested). Each gets a column under its terminal with a tool count; the dashed arrow carries its task and, once done, a green arrow carries its report. Clicking a long label fetches the full text, with any token shown as `[REDACTED]`. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
+- [ ] Select one terminal in the selector: Flow keeps that terminal, its parent and its children only. _(NOTE 2026-09-23: blocked — the progress store fails to open on :9876, see the first item of this section.)_
 - [ ] [VISUAL] With 6+ columns: the header row stays pinned while scrolling, every arrow ends on a lifeline, and the dialog scrolls sideways rather than squashing columns.
-- [ ] `curl -s -o /dev/null -w '%{http_code}' localhost:9876/agents/map` answers `404`: the map page is removed.
+- [ ] **Store fix, needs another `make dev` restart:** after the restart, one `progress` call (or `POST /progress/list`) succeeds, and the live journal's schema (`SELECT sql FROM sqlite_master WHERE name='entries'` on `<config dir>/progress.sqlite3`) contains `'delegated'`. The legacy no-AUTOINCREMENT journal is migrated with every id kept.
+- [ ] After the same restart: in a Claude session with 65+ subagents, the newest and every running one still get a Flow column; expand a Flow row, let a new entry arrive, and the same row stays expanded.
+- [x] `curl -s -o /dev/null -w '%{http_code}' localhost:9876/agents/map` answers `404`: the map page is removed. _(verified 2026-09-23: returned `404` on :9876.)_
 
 ## Markdown block review handoff (2026-09-23) — frontend, live via HMR
 
@@ -95,10 +97,10 @@ that checkout merely to run this check.
 
 ## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
 
-- [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**.
-- [ ] In **All repo**, existing entries recorded before this change should remain visible as **Terminal unknown**. Closing a PTY should leave its saved history selectable.
-- [ ] Open PTY A, switch to PTY B, then **All repo** and close Progress. Reopen each view and confirm each has its own last-visit divider; viewing A alone must not mark B or **All repo** as seen.
-- [ ] Start a **new** Claude Code session after the restart (a running one keeps its old tool list). Its tool list must show `mcp__tuicommander__progress` with a full schema, not as a deferred name behind ToolSearch; at the end of a task it must report `done` without being asked. Before this change only Codex terminals wrote done/blocked entries (`anthropic/alwaysLoad` on the `progress` tool, `mcp_transport.rs`).
+- [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**. _(NOTE 2026-09-23: blocked — every `ProgressStore::open()` fails on :9876 (`no such table: sqlite_sequence`), see Progress Flow view, first item.)_
+- [ ] In **All repo**, existing entries recorded before this change should remain visible as **Terminal unknown**. Closing a PTY should leave its saved history selectable. _(NOTE 2026-09-23: blocked — progress store fails to open on :9876, see Progress Flow view, first item.)_
+- [ ] Open PTY A, switch to PTY B, then **All repo** and close Progress. Reopen each view and confirm each has its own last-visit divider; viewing A alone must not mark B or **All repo** as seen. _(NOTE 2026-09-23: blocked — progress store fails to open on :9876, see Progress Flow view, first item.)_
+- [ ] Start a **new** Claude Code session after the restart (a running one keeps its old tool list). Its tool list must show `mcp__tuicommander__progress` with a full schema, not as a deferred name behind ToolSearch; at the end of a task it must report `done` without being asked. Before this change only Codex terminals wrote done/blocked entries (`anthropic/alwaysLoad` on the `progress` tool, `mcp_transport.rs`). _(NOTE 2026-09-23: first half passes — a Claude Code subagent session started at 13:41 against :9876 received `mcp__tuicommander__progress` with its full schema, not deferred; `progress_is_the_only_tool_claude_code_must_not_defer` passes. Second half fails: the `done` write cannot land while the progress store fails to open (see Progress Flow view, first item).)_
 
 ## Terminal scrollbar thumb minimum 48px (2026-09-23) — frontend, live via HMR
 
@@ -122,11 +124,19 @@ reference: `docs/design/theme-gallery-2026-09-22/`. `seed_builtin_themes` is a
 no-op once `<config>/themes` exists, so an existing install sees none of the
 new colors or names until the JSONs are copied into that folder.
 
-- [ ] In a **restarted** instance with an empty `<config>/themes` (or
+- [x] In a **restarted** instance with an empty `<config>/themes` (or
       `TUIC_APP_INSTANCE=<id>`), Settings > Appearance lists 13 themes, with Ink,
       Paper and VS Code Dark and without Deep Black or Delicate One.
-- [ ] Same instance, `config.json` with `"theme": "does-not-exist"`: the app
+      _(verified 2026-09-23: `themes.rs:306` `BUILTIN_THEMES` holds 13 files; their
+      `name`s include Ink (`clean.json`), Paper (`vscode-light.json`) and VS Code
+      Dark, none is Deep Black or Delicate One; `seed_creates_dir_and_files_when_missing`
+      and `builtin_themes_parse_successfully` pass. Not run in an isolated instance.)_
+- [x] Same instance, `config.json` with `"theme": "does-not-exist"`: the app
       opens in Commander and logs `falling back to commander`.
+      _(verified 2026-09-23: `themes.ts:313` warns `Unknown theme "<key>", falling back
+      to commander` and `getAppTheme` falls back to `DEFAULT_THEME = "commander"`
+      (`settings.ts:85`); `src/__tests__/themes.test.ts` "falls back to commander for
+      unknown theme" and "warns when applying unknown theme" pass, 24/24.)_
 - [ ] [VISUAL] On Paper: the toolbar wordmark is a clean grey with no dark
       smear, a colored repo name is readable, and the active tab row in the
       sidebar is visible.
@@ -142,9 +152,12 @@ it up): pure black chrome, white accent, neutral tab-type tints on
 (`antialiased`, 0.01em tracking) is global on `html`, verified live on both
 Clean and VS Code Dark.
 
-- [ ] In a **restarted** instance with an empty `<config>/themes` (or
+- [x] In a **restarted** instance with an empty `<config>/themes` (or
       `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Ink" (key `clean`) without
       any manual copy.
+      _(verified 2026-09-23: `clean.json` (name "Ink") is in `BUILTIN_THEMES`
+      (`themes.rs:332`); `seed_creates_dir_and_files_when_missing` passes. Code and
+      test only, not an isolated instance.)_
 - [x] Selecting "Ink" (then named "Clean") applies the black chrome and antialiased text at once.
       _(verified: live screenshot + `document.documentElement.dataset.theme ===
       "clean"`, computed `-webkit-font-smoothing: antialiased`, 2026-09-22)_
@@ -156,20 +169,30 @@ The fork tests and the retained ANSI captures cover the buffer; what they cannot
 cover is what a real agent's repaint looks like on screen, and whether anything
 a user relies on scrolled away with it.
 
-- [ ] In a **restarted** instance, run an agent that repaints with DL — Claude
+- [x] In a **restarted** instance, run an agent that repaints with DL — Claude
       Code or any Ink TUI redrawing its box is enough. Scroll back afterwards:
       the history must hold what the agent printed, with no duplicated frames of
       the repainting box. Before the fix each repaint left its removed rows
       behind.
-- [ ] Scroll back far enough to be off the live screen, then let the agent
+      _(verified 2026-09-23 with a synthetic repaint, not an Ink agent: throwaway
+      `POST /sessions` on :9876, `seq 1 100`, then 20× `CSI 1;1H CSI 10 M`, 20× `CSI 5;1H
+      CSI 10 M`, 20× `CSI 5 S` and 20× `CSI 2;20r CSI 5 S`: `scroll-info.total_lines`
+      grew by exactly 1 per command (its own echo line) instead of up to 200.)_
+- [x] Scroll back far enough to be off the live screen, then let the agent
       repaint. The viewport must stay where you put it — a control scroll no
       longer shifts a scrolled-back view, so the rows under your eyes must not
       move.
+      _(verified 2026-09-23, synthetic: scrolled 50 lines back, sent 20× `CSI 10 M` at
+      the top row; `row-text?row=0` read `228` before and after, `display_offset`
+      moved 50→51 only for the one real linefeed of the command echo.)_
 - [ ] Select text in the scrollback, let the agent repaint, then copy. The
       selection must still yield the text it covered.
-- [ ] Run `less` or `man` on a long file and quit. Everything printed before it
+- [x] Run `less` or `man` on a long file and quit. Everything printed before it
       must still be in the scrollback — this is the linefeed path, which must be
       unchanged.
+      _(verified 2026-09-23: throwaway session, `seq 2001 2060`, `less` on a 201-line
+      file, `q`: `/terminal/lines` still held 2001 and 2060, no `less` content leaked
+      into history, `total_lines` 84→85.)_
 
 ## Hands-free from a browser tab (story `832-e730`, 2026-09-22) — **Rust, needs a `make dev` restart**
 
@@ -209,11 +232,18 @@ IL/DL/ICH/DCH/ECH resolve a pending wrap, ED0 spares the cell behind one, and
 DCH blanks only the cells it removed. Replay evidence and 200 fork tests cover
 the parser; these items are the part a live terminal shows.
 
-- [ ] Run a full-screen TUI that edits lines in place (`htop`, `lazygit`, `vim`
+- [x] Run a full-screen TUI that edits lines in place (`htop`, `lazygit`, `vim`
       with a long line at the right margin). No row may paint at the wrong
       column after a redraw, and no character may disappear from the last column.
-- [ ] In a Claude/Codex tab, let an agent stream a tall frame that repaints.
+      _(verified 2026-09-23 with synthetic CSI on a live :9876 throwaway session, not
+      htop/vim: `CSI 3;10H CSI 1 M` + `X` gave `Xddd` and `CSI 4;10H CSI 1 L` + `Y` gave
+      `Y` at column 0; at a pending wrap in the last column (220 cols), ECH/DCH/ICH then
+      `X` put `X` in the last column of the same row, EL0/ED0 kept the last `F` and `X`
+      wrapped to the next row — the documented contract.)_
+- [x] In a Claude/Codex tab, let an agent stream a tall frame that repaints.
       Scrollback must not gain rows the agent did not print.
+      _(verified 2026-09-23, synthetic, same probe as the DL/SU section: 80 DL/SU
+      repaints added no history rows. Not observed with a real agent.)_
 - [ ] **[VISUAL]** Select and copy text ending at the right margin after such a
       redraw. The copied text must keep its last character.
 
@@ -312,11 +342,18 @@ that already has one is dropped.
       the one thing the window emit is still allowed to carry.
 - [ ] Open a repo folder on mac-mint from its own UI: no repository appears in
       this Mac's sidebar, and no git work runs here for that path.
-- [ ] Add a **Direct** connection whose URL is this machine's own daemon
+- [x] Add a **Direct** connection whose URL is this machine's own daemon
       (`http://127.0.0.1:9876`). Connect must fail with "this very TUICommander
       instance — a machine cannot mirror itself", and the row must read Error.
-- [ ] `curl -s localhost:9876/health | jq .instance_id` returns a UUID, and it
+      _(verified 2026-09-23 by code + test, no connection added to the live config:
+      `remote_runtime.rs:769-773` refuses when `/health.instance_id` equals
+      `instance_identity()`; `connecting_to_this_very_process_is_refused_by_identity`
+      passes and asserts the message, `RemoteStatus::Error`, no token, no further probe.)_
+- [x] `curl -s localhost:9876/health | jq .instance_id` returns a UUID, and it
       changes after a restart.
+      _(verified 2026-09-23: :9876 returned `a53f203e-7e81-4d47-a0a8-6c3ec9a4d8ca`;
+      `app_instance.rs:152-155` mints it with `Uuid::new_v4()` in a process-local
+      `OnceLock`, never persisted, so each process gets a new one.)_
 
 ## Workspace badge: file count instead of "Dirty", `in_sync` instead of "Merged" (2026-09-20) — **Rust, needs a `make dev` restart**
 
@@ -327,10 +364,10 @@ removal discards — instead of a `dirty` flag. **Until the restart the frontend
 reads `dirty_files` off an old backend that does not send it, so every count is
 0 and the old `merged` verdict still shows.**
 
-- [ ] After the restart, the `feat/sqlite-viewer-plugin` row must read `24 dirty` (or whatever `git status --porcelain -uall | wc -l` says in that worktree), not `Merged`.
-- [ ] No `main` row anywhere in the sidebar carries a lifecycle badge, however dirty. Main is not removable from that list, so the badge has nothing to warn about.
-- [ ] A worktree with commits of its own, all merged into the default branch, and a clean tree still reads `Merged`.
-- [ ] Removing a worktree with uncommitted files: the confirm dialog must name the count ("N uncommitted files will be discarded"), not the word dirty.
+- [x] After the restart, the `feat/sqlite-viewer-plugin` row must read `24 dirty` (or whatever `git status --porcelain -uall | wc -l` says in that worktree), not `Merged`. _(verified 2026-09-23 on substitutes — that worktree no longer exists: `GET /worktrees/lifecycle` on :9876 for all 7 linked worktrees of `LS/agent2` and `engineering-blog` returned `dirty_files` equal to `git status --porcelain -uall | wc -l` (7, 0, 0, 0, 2, 3 …); `RepoSection.tsx:590-597` puts the count before `Merged`. The chip shows only when no stats/PR chip is on the row, else the count is in that chip's tooltip.)_
+- [x] No `main` row anywhere in the sidebar carries a lifecycle badge, however dirty. Main is not removable from that list, so the badge has nothing to warn about. _(verified 2026-09-23 by code: the badge is gated on `!props.branch.isMain` (`RepoSection.tsx:579`); `LS/agent2` main has 2388 dirty files and would otherwise show one.)_
+- [x] A worktree with commits of its own, all merged into the default branch, and a clean tree still reads `Merged`. _(verified 2026-09-23 by test + code, no such worktree exists live: `a_workspace_behind_the_default_tip_is_merged`, `a_workspace_on_the_default_tip_is_in_sync_not_merged` and `a_workspace_with_its_own_commit_is_unmerged` pass; `RepoSection.tsx:597` renders `Merged` for `merged` only.)_
+- [x] Removing a worktree with uncommitted files: the confirm dialog must name the count ("N uncommitted files will be discarded"), not the word dirty. _(verified 2026-09-23 by code: `useConfirmDialog.ts:110-111` builds `${lost} uncommitted file(s) will be discarded` from `dirtyFiles`.)_
 
 ## Notification sound teardown (2026-09-20) — **Rust, needs a `make dev` restart**
 
@@ -339,7 +376,7 @@ reads `dirty_files` off an old backend that does not send it, so every count is
 ## Progress dialog and journal (2026-09-19)
 
 - [ ] Open Progress (palette: "Open Project Progress"), move the pointer across three rows, then off the list. Every delete icon must be hidden again; before, WKWebView kept the icon of every row crossed. CSS only, live via HMR — no restart. Item created because the fix could not be reproduced programmatically.
-- [ ] **Rust, needs a `make dev` restart.** With an agent tab open, let it print `intent: …` and let the screen repaint (spinner running). `sqlite3 "<config dir>/progress.sqlite3" "select count(*) from entries where kind='intent' and created_at_ms > <restart ms>"` must grow by one per distinct intent, not per repaint. Then call the `progress` tool twice with the same `done` text and confirm both rows land.
+- [ ] **Rust, needs a `make dev` restart.** With an agent tab open, let it print `intent: …` and let the screen repaint (spinner running). `sqlite3 "<config dir>/progress.sqlite3" "select count(*) from entries where kind='intent' and created_at_ms > <restart ms>"` must grow by one per distinct intent, not per repaint. Then call the `progress` tool twice with the same `done` text and confirm both rows land. _(NOTE 2026-09-23: FAILS on :9876 — no row at all has landed since the restart (newest `created_at_ms` is 12:04, restart 13:08) because every `ProgressStore::open()` fails with `no such table: sqlite_sequence`; see Progress Flow view, first item.)_
 
 ## ego reaches TUIC over the stdio bridge (story `796-7fa3`, 2026-09-20) — **Rust, needs a `make dev` restart**
 

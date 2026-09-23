@@ -455,7 +455,7 @@ async fn post_progress_flow(
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
-    json_result(crate::progress::progress_flow(&state, &q.path, input))
+    json_result(crate::progress::progress_flow_blocking(state, q.path, input).await)
 }
 async fn post_progress_flow_detail(
     State(state): State<Arc<AppState>>,
@@ -466,7 +466,7 @@ async fn post_progress_flow_detail(
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
-    json_result(crate::progress::progress_flow_detail(&state, input))
+    json_result(crate::progress::progress_flow_detail_blocking(state, input).await)
 }
 
 /// Serve plugin data files over HTTP.

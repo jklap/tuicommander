@@ -63,37 +63,40 @@ const Head = (props: { dir: "left" | "right" }) => (
  */
 export const ProgressFlow: Component<ProgressFlowProps> = (props) => {
 	const column = createMemo(() => new Map(props.flow.participants.map((p, i) => [p.id, i])));
-	const [expanded, setExpanded] = createSignal<ReadonlySet<number>>(new Set());
-	const [fetched, setFetched] = createSignal<ReadonlyMap<number, string>>(new Map());
+	// Keyed by the event's stable id, never its position: a refresh re-sorts
+	// the events and the oldest fall out of the window, so an index names a
+	// different event after every live entry.
+	const [expanded, setExpanded] = createSignal<ReadonlySet<string>>(new Set());
+	const [fetched, setFetched] = createSignal<ReadonlyMap<string, string>>(new Map());
 
 	const canExpand = (event: FlowEvent) => Boolean(event.text || event.detail);
 
-	async function toggle(index: number, event: FlowEvent): Promise<void> {
+	async function toggle(event: FlowEvent): Promise<void> {
 		const open = new Set(expanded());
-		if (open.has(index)) {
-			open.delete(index);
+		if (open.has(event.id)) {
+			open.delete(event.id);
 			setExpanded(open);
 			return;
 		}
-		open.add(index);
+		open.add(event.id);
 		setExpanded(open);
-		if (!event.detail || fetched().has(index)) return;
+		if (!event.detail || fetched().has(event.id)) return;
 		try {
 			const text = await props.fetchDetail(event.detail);
-			setFetched(new Map(fetched()).set(index, text));
+			setFetched(new Map(fetched()).set(event.id, text));
 		} catch (error) {
 			appLogger.warn("store", "Progress Flow: full text unavailable", { error: String(error) });
-			setFetched(new Map(fetched()).set(index, "Full text unavailable."));
+			setFetched(new Map(fetched()).set(event.id, "Full text unavailable."));
 		}
 	}
 
-	const labelText = (index: number, event: FlowEvent) => {
-		if (!expanded().has(index)) return event.summary;
+	const labelText = (event: FlowEvent) => {
+		if (!expanded().has(event.id)) return event.summary;
 		if (event.text) return event.text;
-		return fetched().get(index) ?? "Loading…";
+		return fetched().get(event.id) ?? "Loading…";
 	};
 
-	const Label = (p: { index: number; event: FlowEvent }) => (
+	const Label = (p: { event: FlowEvent }) => (
 		<Show
 			when={canExpand(p.event)}
 			fallback={
@@ -106,11 +109,11 @@ export const ProgressFlow: Component<ProgressFlowProps> = (props) => {
 			<button
 				type="button"
 				class={`${s.label} ${s.expandable}`}
-				aria-expanded={expanded().has(p.index)}
-				onClick={() => void toggle(p.index, p.event)}
+				aria-expanded={expanded().has(p.event.id)}
+				onClick={() => void toggle(p.event)}
 			>
 				<span class={s.kind}>{KIND_LABEL[p.event.kind]}</span>
-				<span class={expanded().has(p.index) ? s.full : undefined}>{labelText(p.index, p.event)}</span>
+				<span class={expanded().has(p.event.id) ? s.full : undefined}>{labelText(p.event)}</span>
 			</button>
 		</Show>
 	);
@@ -148,7 +151,7 @@ export const ProgressFlow: Component<ProgressFlowProps> = (props) => {
 					<For each={props.flow.participants}>{(participant) => <Header participant={participant} />}</For>
 				</div>
 				<For each={props.flow.events}>
-					{(event, index) => {
+					{(event) => {
 						const from = () => column().get(event.from) ?? 0;
 						const to = () => (event.to === undefined ? undefined : column().get(event.to));
 						const isArrow = () => to() !== undefined && to() !== from();
@@ -163,7 +166,7 @@ export const ProgressFlow: Component<ProgressFlowProps> = (props) => {
 									when={isArrow()}
 									fallback={
 										<div class={s.note} style={{ "grid-column": `${from() + 1}` }}>
-											<Label index={index()} event={event} />
+											<Label event={event} />
 										</div>
 									}
 								>
@@ -174,7 +177,7 @@ export const ProgressFlow: Component<ProgressFlowProps> = (props) => {
 											"grid-column": `${Math.min(from(), to() as number) + 1} / ${Math.max(from(), to() as number) + 2}`,
 										}}
 									>
-										<Label index={index()} event={event} />
+										<Label event={event} />
 										<div class={s.line}>
 											<Head dir={(to() as number) > from() ? "right" : "left"} />
 										</div>

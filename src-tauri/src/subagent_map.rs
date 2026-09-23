@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -72,6 +73,8 @@ pub(crate) const PROMPT_SUMMARY_CHARS: usize = 200;
 /// is still contained in the message that contained the whole one. No real
 /// prompt comes close.
 const MAX_JOIN_TEXT_CHARS: usize = 16_384;
+/// A transcript cursor no Flow read has used for this long is dropped.
+pub(crate) const CACHE_IDLE: Duration = Duration::from_secs(10 * 60);
 
 /// What one transcript row contributes to a node.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,8 +82,9 @@ pub(crate) struct Row {
     pub at_ms: i64,
     /// The first `tool_use` block's name, if the row calls a tool.
     pub tool: Option<String>,
-    /// An assistant row that calls no tool: the subagent answered. When it is
-    /// the last row, the subagent has finished.
+    /// An assistant row that calls no tool, carries text and ends its turn:
+    /// the subagent answered. When it is the last row, the subagent has
+    /// finished.
     pub reply: bool,
 }
 
@@ -107,9 +111,19 @@ pub(crate) fn parse_row(line: &str) -> Option<Row> {
         _ => return None,
     };
     let assistant = message.get("role").and_then(|r| r.as_str()) == Some("assistant");
+    // Claude Code writes one row per content block, and every row but the last
+    // of a turn carries a null `stop_reason` (measured over 40 transcripts:
+    // 1298 `thinking` and 463 `text` rows, all null). A poll landing between
+    // them must not read a running subagent as finished. Older transcripts have
+    // no `stop_reason` key at all, so its absence keeps the text-only rule.
+    let ends_turn = match message.get("stop_reason") {
+        None => true,
+        Some(reason) => reason.as_str().is_some_and(|r| r != "tool_use"),
+    };
+    let has_text = row_text_of(message).is_some_and(|t| !t.trim().is_empty());
     Some(Row {
         at_ms,
-        reply: assistant && tool.is_none(),
+        reply: assistant && tool.is_none() && ends_turn && has_text,
         tool,
     })
 }
@@ -119,9 +133,17 @@ pub(crate) fn parse_row(line: &str) -> Option<Row> {
 /// Decoded, not raw: the teammate join looks for the spawn prompt inside this
 /// text, and in the raw JSON line every newline in the prompt is the two
 /// characters `\n`, so a multi-line prompt would never be found.
+///
+/// Redacted before it is capped: a secret split by the cut would no longer
+/// match its pattern, and the full-text endpoint would return its prefix.
 fn row_text(line: &str) -> Option<String> {
     let row: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-    let text = match row.get("message")?.get("content")? {
+    let text = row_text_of(row.get("message")?)?;
+    (!text.is_empty()).then(|| redact_and_cap(&text))
+}
+
+fn row_text_of(message: &serde_json::Value) -> Option<String> {
+    Some(match message.get("content")? {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Array(blocks) => blocks
             .iter()
@@ -130,8 +152,16 @@ fn row_text(line: &str) -> Option<String> {
             .collect::<Vec<_>>()
             .join("\n"),
         _ => return None,
-    };
-    (!text.is_empty()).then(|| truncate_chars(&text, MAX_JOIN_TEXT_CHARS))
+    })
+}
+
+/// A join text as it is kept: redacted first, then cut. Both sides of the join
+/// go through here, so containment still matches.
+fn redact_and_cap(text: &str) -> String {
+    truncate_chars(
+        &crate::redaction::redact_secrets(text),
+        MAX_JOIN_TEXT_CHARS,
+    )
 }
 
 fn row_timestamp(row: &serde_json::Value) -> Option<i64> {
@@ -216,12 +246,16 @@ pub(crate) struct MapCache {
 struct LaneCursor {
     offset: u64,
     summary: LaneSummary,
+    /// The last read that asked for this file; `evict_idle_before` drops the
+    /// cursor once no read has for a while.
+    last_used: Option<Instant>,
 }
 
 #[derive(Default)]
 struct SpawnCursor {
     offset: u64,
     spawns: Vec<ParentSpawn>,
+    last_used: Option<Instant>,
 }
 
 /// What a cursor advance found.
@@ -282,6 +316,7 @@ impl MapCache {
     /// moved.
     pub(crate) fn ingest(&mut self, path: &Path) -> std::io::Result<usize> {
         let cursor = self.lanes.entry(path.to_path_buf()).or_default();
+        cursor.last_used = Some(Instant::now());
         let appended = read_appended(path, &mut cursor.offset)?;
         if appended.restarted {
             cursor.summary = LaneSummary::default();
@@ -297,6 +332,7 @@ impl MapCache {
     /// Read the `Agent` calls appended to a parent transcript since the last call.
     pub(crate) fn ingest_spawns(&mut self, path: &Path) -> std::io::Result<usize> {
         let cursor = self.parents.entry(path.to_path_buf()).or_default();
+        cursor.last_used = Some(Instant::now());
         let appended = read_appended(path, &mut cursor.offset)?;
         if appended.restarted {
             cursor.spawns.clear();
@@ -306,6 +342,20 @@ impl MapCache {
             .spawns
             .extend(appended.text.lines().filter_map(parse_parent_spawn));
         Ok(cursor.spawns.len() - before)
+    }
+
+    /// Drop every cursor no read has asked for since `cutoff`: a terminal that
+    /// closed, or a Claude session that was replaced. Without this the cache
+    /// held every transcript it ever saw — each spawn prompt and report up to
+    /// `MAX_JOIN_TEXT_CHARS` — for the life of the process.
+    ///
+    /// Age rather than "not read in this pass": two Flow reads for different
+    /// projects share the cache, and a per-pass rule would make each evict the
+    /// other's cursors and re-read a parent transcript of tens of MB from zero.
+    pub(crate) fn evict_idle_before(&mut self, cutoff: Instant) {
+        let fresh = |used: Option<Instant>| used.is_some_and(|t| t >= cutoff);
+        self.lanes.retain(|_, c| fresh(c.last_used));
+        self.parents.retain(|_, c| fresh(c.last_used));
     }
 
     /// Every `Agent` call read from a parent transcript so far.
@@ -363,7 +413,7 @@ pub(crate) fn parse_parent_spawn(line: &str) -> Option<ParentSpawn> {
             .get("input")
             .and_then(|i| i.get("prompt"))
             .and_then(|p| p.as_str())
-            .map(|p| truncate_chars(p, MAX_JOIN_TEXT_CHARS))
+            .map(redact_and_cap)
             .unwrap_or_default(),
     })
 }
@@ -512,8 +562,8 @@ pub(crate) fn prompt_summary(prompt: &str) -> (Option<String>, bool) {
 struct LaneData {
     lane: Lane,
     summary: LaneSummary,
-    /// The joined spawn prompt, else the lane's own first message. Unredacted:
-    /// it never leaves the process in this form.
+    /// The joined spawn prompt, else the lane's own first message. Redacted at
+    /// ingest (`redact_and_cap`); callers still redact what they ship.
     prompt: String,
 }
 
@@ -549,9 +599,17 @@ fn collect_lanes(
         });
     }
 
-    // Oldest first (a stable sort keeps the id order for ties), and capped.
+    // Oldest first (a stable sort keeps the id order for ties), and capped to
+    // the newest: the oldest are finished history, and keeping them hid every
+    // subagent from the 65th on. A running one is live work and is kept
+    // however old, so the cap can be exceeded by the running count.
     lanes.sort_by_key(|d| d.summary.started_at_ms.unwrap_or(i64::MAX));
-    lanes.truncate(MAX_LANES);
+    let mut oldest = lanes.len().saturating_sub(MAX_LANES);
+    lanes.retain(|d| {
+        let keep = oldest == 0 || !d.summary.finished;
+        oldest = oldest.saturating_sub(1);
+        keep
+    });
 
     let _ = cache.ingest_spawns(parent_transcript);
     let spawns = cache.spawns(parent_transcript);
@@ -1618,5 +1676,149 @@ mod tests {
             ),
             None
         );
+    }
+
+    fn assistant(ts: &str, stop_reason: Option<&str>, blocks: serde_json::Value) -> String {
+        let mut message = serde_json::json!({"role": "assistant", "content": blocks});
+        if let Some(reason) = stop_reason {
+            message["stop_reason"] = serde_json::Value::String(reason.to_owned());
+        } else {
+            message["stop_reason"] = serde_json::Value::Null;
+        }
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp": ts, "message": message})
+        )
+    }
+
+    /// Claude Code writes one row per content block, all but the last with a
+    /// null `stop_reason`. A poll that lands between `thinking`/`text` and the
+    /// `tool_use` that follows must not see a finished subagent — that is what
+    /// made a running node flash "done" and back.
+    #[test]
+    fn subagent_map_split_block_rows_do_not_finish_a_running_subagent() {
+        let mut s = LaneSummary::default();
+        s.absorb(&assistant(
+            "2026-09-21T10:00:00Z",
+            None,
+            serde_json::json!([{"type": "thinking", "thinking": "hmm"}]),
+        ));
+        assert!(!s.finished, "a thinking block is not a reply");
+        s.absorb(&assistant(
+            "2026-09-21T10:00:01Z",
+            None,
+            serde_json::json!([{"type": "text", "text": "Let me look."}]),
+        ));
+        assert!(!s.finished, "text mid-turn is not the report");
+        assert_eq!(s.last_reply, "");
+        s.absorb(&assistant(
+            "2026-09-21T10:00:02Z",
+            Some("tool_use"),
+            serde_json::json!([{"type": "tool_use", "id": "t", "name": "Read"}]),
+        ));
+        assert!(!s.finished);
+        s.absorb(&assistant(
+            "2026-09-21T10:00:03Z",
+            Some("end_turn"),
+            serde_json::json!([{"type": "text", "text": "All done."}]),
+        ));
+        assert!(s.finished, "an end_turn text row is the report");
+        assert_eq!(s.last_reply, "All done.");
+    }
+
+    fn finished_lane(dir: &Path, id: &str, at_s: u32, running: bool) {
+        std::fs::write(
+            dir.join(format!("agent-{id}.meta.json")),
+            r#"{"agentType":"general-purpose","spawnDepth":0}"#,
+        )
+        .expect("meta");
+        let ts = format!("2026-09-21T10:{:02}:{:02}Z", at_s / 60, at_s % 60);
+        let text = if running {
+            format!("{}\n", row(&ts, "Bash"))
+        } else {
+            assistant(
+                &ts,
+                Some("end_turn"),
+                serde_json::json!([{"type": "text", "text": "ok"}]),
+            )
+        };
+        std::fs::write(dir.join(format!("agent-{id}.jsonl")), text).expect("lane");
+    }
+
+    /// Past `MAX_LANES` the newest subagents are the ones worth drawing: the
+    /// cap used to keep the 64 oldest, so from the 65th on nothing new ever
+    /// appeared. A running subagent is live work and is kept however old.
+    #[test]
+    fn subagent_map_lane_cap_keeps_the_newest_and_every_running_lane() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("subagents");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let total = MAX_LANES + 2;
+        for i in 0..total {
+            // The oldest is still running; the newest just started.
+            let running = i == 0 || i == total - 1;
+            finished_lane(&dir, &format!("a{i:03}"), i as u32, running);
+        }
+        let lanes = flows(&dir, &tmp.path().join("parent.jsonl"));
+        let ids: Vec<&str> = lanes.iter().map(|l| l.agent_id.as_str()).collect();
+        let newest = format!("a{:03}", total - 1);
+        assert!(ids.contains(&newest.as_str()), "the newest lane is drawn");
+        assert!(ids.contains(&"a000"), "an old running lane is kept");
+        assert!(
+            !ids.contains(&"a001"),
+            "the oldest finished lane is the one dropped"
+        );
+        assert_eq!(lanes.len(), MAX_LANES + 1);
+        assert!(lanes.iter().find(|l| l.agent_id == newest).unwrap().running);
+    }
+
+    /// Both join texts are capped at ingest. Cutting first could split a
+    /// secret past its pattern, and the full-text endpoint would then return
+    /// its prefix unredacted.
+    #[test]
+    fn subagent_map_join_texts_are_redacted_before_they_are_capped() {
+        let secret = format!("ghp_{}", "A".repeat(40));
+        let long = format!("{}{secret}", "x".repeat(MAX_JOIN_TEXT_CHARS - 10));
+
+        let spawn = serde_json::json!({"timestamp":"2026-09-21T10:00:00Z","message":{"content":[{"type":"tool_use","id":"t","name":"Agent","input":{"prompt":long}}]}}).to_string();
+        let prompt = parse_parent_spawn(&spawn).expect("spawn").prompt;
+        assert!(!prompt.contains("ghp_"), "prompt leaked a token prefix");
+        assert!(prompt.chars().count() <= MAX_JOIN_TEXT_CHARS);
+
+        let reply = assistant(
+            "2026-09-21T10:00:01Z",
+            Some("end_turn"),
+            serde_json::json!([{"type": "text", "text": long}]),
+        );
+        let text = row_text(&reply).expect("text");
+        assert!(!text.contains("ghp_"), "report leaked a token prefix");
+        assert!(text.chars().count() <= MAX_JOIN_TEXT_CHARS);
+    }
+
+    /// A cache entry for a transcript no read has asked about for a while is
+    /// dropped: the cache used to keep every file it ever saw for the life of
+    /// the process. An entry still in use survives.
+    #[test]
+    fn subagent_map_cache_evicts_entries_idle_since_the_cutoff() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let old = tmp.path().join("agent-old.jsonl");
+        let fresh = tmp.path().join("agent-fresh.jsonl");
+        let parent = tmp.path().join("parent.jsonl");
+        for p in [&old, &fresh] {
+            append(p, &format!("{}\n", row("2026-09-21T10:00:00Z", "Read")));
+        }
+        append(&parent, &format!("{}\n", serde_json::json!({"timestamp":"2026-09-21T10:00:00Z","message":{"content":[{"type":"tool_use","id":"t","name":"Agent","input":{"prompt":"p"}}]}})));
+        let mut cache = MapCache::default();
+        cache.ingest(&old).expect("read");
+        cache.ingest_spawns(&parent).expect("read");
+        assert_eq!(cache.spawns(&parent).len(), 1);
+        let cutoff = std::time::Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        cache.ingest(&fresh).expect("read");
+
+        cache.evict_idle_before(cutoff);
+        assert!(cache.summary(&old).is_none(), "the idle lane is dropped");
+        assert!(cache.summary(&fresh).is_some(), "the lane in use is kept");
+        assert!(cache.spawns(&parent).is_empty(), "the idle parent is dropped too");
     }
 }
