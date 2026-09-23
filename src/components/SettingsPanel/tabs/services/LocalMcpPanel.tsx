@@ -129,10 +129,16 @@ export const LocalMcpPanel: Component = () => {
 				</SettingRow>
 
 				<UpstreamMcpPanel />
-				{/* ── TUIC Tools ── */}
+				{/* ── TUIC MCP Server ── */}
 			</SectionCard>
-			<SectionCard title="TUIC Tools">
+			<SectionCard title="TUIC MCP Server">
 				<div class={s.group}>
+					<p class={s.hint} style={{ margin: "0 0 8px" }}>
+						{t(
+							"services.hint.perAgentAutoConfigure",
+							"The MCP server can also be configured automatically for a specific agent from that agent's own settings, under Settings → Agents.",
+						)}
+					</p>
 					<Button
 						variant="ghost"
 						data-non-setting="Show the bridge integration instructions; not a preference"
