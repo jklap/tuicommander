@@ -2206,8 +2206,14 @@ mod tests {
         write("a.txt", "feat\n");
         git(&["commit", "-am", "feat"]);
         git(&["checkout", "main"]);
+        // `--no-ff` forces a real three-way merge attempt regardless of the
+        // machine's ambient `merge.ff` config — with `merge.ff = only` set
+        // globally, a plain `git merge feat` refuses outright ("not possible
+        // to fast-forward") with no conflict at all, which is also a non-zero
+        // exit and would satisfy the assertion below for the wrong reason
+        // while leaving the fingerprint completely unchanged.
         assert!(
-            !run(&["merge", "feat"]).status.success(),
+            !run(&["merge", "--no-ff", "feat"]).status.success(),
             "the merge must conflict for this leg to test anything"
         );
         let conflict = fp();
