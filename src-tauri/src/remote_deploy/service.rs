@@ -4,7 +4,7 @@ use crate::remote_connection::{
     DeployMode, RemoteConnection, RemoteConnectionStore, RemoteTransport,
 };
 use crate::tunnels::exec::ssh_exec;
-use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
+use crate::tunnels::profile::TunnelProfile;
 
 const SERVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const UNIT_PATH: &str = "~/.config/systemd/user/tuic-remote.service";
@@ -234,26 +234,15 @@ pub(crate) async fn update_installed(
 
 fn connection_profile(connection: &RemoteConnection) -> Result<(TunnelProfile, u16), String> {
     let RemoteTransport::Ssh {
-        ssh_host,
-        ssh_port,
-        ssh_user,
-        identity_file,
-        remote_daemon_port,
+        remote_daemon_port, ..
     } = &connection.transport
     else {
         return Err("persistent remote daemon installation requires an SSH connection".to_string());
     };
-    let mut profile = TunnelProfile::new(
-        format!("remote connection {}", connection.name),
-        ssh_host.clone(),
-        ssh_user.clone(),
-    );
-    profile.port = *ssh_port;
-    profile.identity_file = identity_file.as_ref().map(std::path::PathBuf::from);
-    profile.options = ProfileOptions {
-        strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
-        ..ProfileOptions::default()
-    };
+    // The same profile the connect path's tunnel uses, so the install runs over
+    // exactly the SSH settings (keepalive, compression, accept-new) Connect does.
+    let profile = crate::remote_runtime::ssh_profile(connection)
+        .ok_or("persistent remote daemon installation requires an SSH connection")?;
     Ok((profile, *remote_daemon_port))
 }
 

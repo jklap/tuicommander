@@ -709,39 +709,22 @@ pub(super) async fn delete_remote_connection(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    // `stop_if_running(&id)` stood here and did nothing: the tunnel is keyed by
-    // the TunnelProfile's own UUID, not by the connection's, so the call could
-    // only ever miss. Teardown stops it by the id the runtime recorded, and
-    // takes the poll, the mirror, its rows and the session token with it.
-    crate::remote_runtime::teardown_deleted(&state, &id);
-    let _guard = state.connections_lock.lock().await;
-    match crate::remote_connection::remove_remote_connection(&state.data_dir, &id) {
-        Ok(true) => {}
-        Ok(false) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e})),
-            )
-                .into_response();
-        }
-    }
-    // Same reason as the IPC command: the vault key is the connection's UUID, so
-    // a secret left behind belongs to an id nothing can name again.
-    if let Err(e) = crate::remote_connection::set_connection_password(&id, "") {
-        return (
+    // The one delete path the IPC command takes too: runtime teardown, the
+    // record, then BOTH vault entries (this route used to forget only the
+    // password and leave the pairing token behind).
+    match crate::remote_connection::delete_remote_connection_impl(&state, &id).await {
+        Ok(true) => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
+        )
+            .into_response(),
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
         )
-            .into_response();
+            .into_response(),
     }
-    Json(serde_json::json!({"ok": true})).into_response()
 }
 
 /// Store the Basic Auth password for a connection, or forget it when the body
@@ -1438,6 +1421,110 @@ mod tests {
             value.as_array().unwrap().len(),
             0,
             "non-desktop builds report no audio devices"
+        );
+    }
+
+    // ── delete_remote_connection ─────────────────────────────
+    //
+    // Thin wiring tests: the actual logic (runtime teardown, removal, vault
+    // cleanup, not-found handling) is shared with the Tauri command via
+    // `remote_connection::delete_remote_connection_impl` and tested directly
+    // there — these confirm this route maps that shared result to the right
+    // HTTP status/body, and that it now forgets the pairing token too.
+
+    #[tokio::test]
+    async fn delete_remote_connection_http_returns_404_for_a_missing_connection() {
+        let state = super::super::tests::test_state();
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state),
+            Path("does-not-exist".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_remote_connection_http_removes_an_existing_connection() {
+        let state = super::super::tests::test_state();
+        let conn = crate::remote_connection::RemoteConnection::new_ssh("t", "h", "u");
+        let id = conn.id.clone();
+        crate::remote_connection::upsert_remote_connection(&state.data_dir, None, conn).unwrap();
+
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Replaces wip's `known_bug_http_delete_stops_a_running_tunnel_before_deleting`
+    /// (its premise never held here — see `deleting_a_connection_over_http_tears_the_live_one_down`):
+    /// the HTTP route used to forget only the password, so a deployed
+    /// daemon's pairing token outlived the connection under a UUID nothing
+    /// could ever name again.
+    #[tokio::test]
+    async fn deleting_a_connection_over_http_also_forgets_its_pairing_token() {
+        let state = super::super::tests::test_state();
+        let conn = crate::remote_connection::RemoteConnection::new_ssh("t", "h", "u");
+        let id = conn.id.clone();
+        crate::remote_connection::upsert_remote_connection(&state.data_dir, None, conn).unwrap();
+        crate::remote_connection::set_connection_password(&id, "s3cret").unwrap();
+        crate::remote_connection::set_pairing_token(&id, "pair-secret").unwrap();
+
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id.clone()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(!crate::remote_connection::connection_password_exists(&id).unwrap());
+        assert_eq!(
+            crate::remote_connection::pairing_token(&id).unwrap(),
+            None,
+            "HTTP delete left the pairing token in the vault"
+        );
+    }
+
+    /// The route keeps its own auth gate: deleting from a public address without
+    /// credentials is refused before anything is torn down or removed.
+    #[tokio::test]
+    async fn deleting_a_connection_over_http_still_requires_auth_from_a_public_address() {
+        let state = super::super::tests::test_state();
+        let conn = crate::remote_connection::RemoteConnection::new_direct("d", "http://x", "u");
+        let id = conn.id.clone();
+        crate::remote_connection::upsert_remote_connection(&state.data_dir, None, conn).unwrap();
+
+        let resp = delete_remote_connection(
+            ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000))),
+            None,
+            State(state.clone()),
+            Path(id),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .len(),
+            1
         );
     }
 }
