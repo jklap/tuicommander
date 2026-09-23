@@ -2847,11 +2847,23 @@ pub(crate) async fn spawn_ipc_listener(state: &Arc<AppState>, mcp_enabled: bool)
 /// Start IPC + TCP listeners. Returns `true` if TCP bound successfully (or
 /// wasn't requested). Returns `false` only when `remote_enabled` is true and
 /// TCP bind failed on all port attempts.
+///
+/// `upgrade_http`: whether plain `http://` requests on this port should
+/// 301-redirect to `https://` (`axum_server_dual_protocol`'s `.set_upgrade`,
+/// below). This is a plain redirect toggle, independent of *which* TLS source
+/// is active — it is NOT synonymous with "self-signed cert is active" even
+/// though every desktop caller currently passes `self_signed_active` here.
+/// That's a caller-side policy choice (today, only the self-signed fallback —
+/// not Tailscale, not a future manually-configured cert — wants the
+/// redirect), not a constraint this parameter enforces. A future TLS source
+/// that also wants the redirect should just pass `true`; it does not need to
+/// (and should not) route through `self_signed_active` to do so.
 pub async fn start_server(
     state: Arc<AppState>,
     mcp_enabled: bool,
     remote_enabled: bool,
     tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
+    upgrade_http: bool,
 ) -> bool {
     let config = state.config.read().clone();
     *state.tls_listener.write() = std::sync::Weak::new();
@@ -2991,7 +3003,12 @@ pub async fn start_server(
             let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
             if let Some(tls) = tls_config.clone() {
-                tracing::info!(source = "mcp_http", %addr, "TCP listening with dual-protocol HTTP+HTTPS");
+                tracing::info!(
+                    source = "mcp_http",
+                    %addr,
+                    upgrade_http,
+                    "TCP listening with dual-protocol HTTP+HTTPS"
+                );
                 let tls_state = state.clone();
                 Some(tokio::spawn(async move {
                     use axum_server_dual_protocol::ServerExt;
@@ -3014,7 +3031,7 @@ pub async fn start_server(
                     // older task dropping its token cannot clear a replacement.
                     let tls_lifetime = Arc::new(());
                     *tls_state.tls_listener.write() = Arc::downgrade(&tls_lifetime);
-                    if let Err(e) = server.set_upgrade(false).serve(svc).await {
+                    if let Err(e) = server.set_upgrade(upgrade_http).serve(svc).await {
                         tracing::error!(source = "mcp_http", "TCP/TLS server error: {e}");
                     }
                     drop(tls_lifetime);
@@ -3063,6 +3080,32 @@ pub async fn start_server(
         None
     };
 
+    // Spawn self-signed cert re-check task: catches LAN-IP changes (e.g. the
+    // laptop roaming to a new network) between restarts, which
+    // `ensure_self_signed_cert` otherwise only re-evaluates when
+    // `provision_tls_config` runs again (boot/restart). Desktop-only — the
+    // headless build never sets `self_signed_active` (it only supports
+    // manually-configured `TlsConfig::Manual` certs).
+    #[cfg(feature = "desktop")]
+    let self_signed_renewal_handle = if let Some(ref tls) = tls_config {
+        if state
+            .self_signed_active
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            let tls_clone = tls.clone();
+            let state_clone = state.clone();
+            Some(tokio::spawn(async move {
+                crate::self_signed_recheck_loop(state_clone, tls_clone).await;
+            }))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    #[cfg(not(feature = "desktop"))]
+    let self_signed_renewal_handle: Option<tokio::task::JoinHandle<()>> = None;
+
     // Wait for shutdown signal
     let _ = shutdown_rx.await;
 
@@ -3080,6 +3123,9 @@ pub async fn start_server(
         h.abort();
     }
     if let Some(h) = renewal_handle {
+        h.abort();
+    }
+    if let Some(h) = self_signed_renewal_handle {
         h.abort();
     }
 

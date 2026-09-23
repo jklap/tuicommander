@@ -1983,6 +1983,8 @@ Returns local network interfaces and addresses, ranked for pairing and phone sec
 entry: active Tailscale HTTPS, Wi-Fi/LAN, HTTP-only Tailscale, then other
 networks. Equal-ranked entries retain interface order. All candidates remain
 available for manual selection; an empty list means no detected address.
+On macOS, an extra `{ ip: "<name>.local", label: "mDNS" }` entry for the machine's existing Bonjour hostname
+is appended after the ranked entries.
 
 ### Local IP (Primary)
 
