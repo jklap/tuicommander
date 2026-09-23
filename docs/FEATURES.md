@@ -228,6 +228,7 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 - **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting
 - **Agents only** — queueing is hidden for a plain shell: its idle state says nothing about which program currently owns stdin
 - **Pin** — the pin button docks the panel under the terminal instead of over it: the terminal shrinks and the PTY resizes, so no output hides behind the panel. A pinned panel stays open after a send or a queue and removes the sent text, so it can replace the agent's own input box. Text typed while the send runs is kept, and a second send before the first finishes is ignored. When the terminal has no session or the send fails, a toast shows the error and the text stays. `Esc` and `Cmd+I` move the caret between the panel and the terminal instead of closing it. Per tab, not persisted
+- **Close button** — the ✕ in the status bar closes the panel and releases the pin; `Esc` closes an unpinned panel
 
 ### 1.21 Auto-Standby (Unix)
 

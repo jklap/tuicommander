@@ -1367,6 +1367,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						onTextChange={setPendingComposeText}
 						pinned={composePinned}
 						onTogglePin={() => setComposePinned(!composePinned())}
+						onDismiss={() => {
+							setComposePinned(false);
+							setComposeOpen(false);
+							canvasTerminalRef()?.focus();
+						}}
 						focusRequest={composeFocusRequest}
 						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
 						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
