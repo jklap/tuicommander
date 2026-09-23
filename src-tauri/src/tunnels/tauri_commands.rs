@@ -101,37 +101,13 @@ pub(crate) fn get_tunnel_status(
 
 #[tauri::command]
 pub(crate) fn list_ssh_config_hosts() -> Vec<String> {
-    let config_path = match dirs::home_dir() {
-        Some(h) => h.join(".ssh").join("config"),
-        None => return Vec::new(),
-    };
+    super::commands::load_ssh_config_hosts().unwrap_or_default()
+}
 
-    let file = match std::fs::File::open(&config_path) {
-        Ok(f) => f,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut reader = std::io::BufReader::new(file);
-    let config = match ssh2_config::SshConfig::default()
-        .parse(&mut reader, ssh2_config::ParseRule::ALLOW_UNKNOWN_FIELDS)
-    {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    config
-        .get_hosts()
-        .iter()
-        .flat_map(|host| {
-            host.pattern.iter().filter_map(|clause| {
-                if clause.negated || clause.pattern == "*" {
-                    None
-                } else {
-                    Some(clause.pattern.clone())
-                }
-            })
-        })
-        .collect()
+#[tauri::command]
+pub(crate) async fn probe_ssh_config_hosts() -> Result<Vec<super::commands::SshHostStatus>, String>
+{
+    super::commands::probe_ssh_config_hosts().await
 }
 
 #[tauri::command]

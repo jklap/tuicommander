@@ -417,6 +417,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Remote Machine Deploy",
+		description:
+			"Choose Deploy on connect in Settings > Remote Machines to stage and launch the matching daemon over SSH automatically.",
+		shortcut: null,
+	},
+	{
 		feature: "Toggle Tunnels Panel",
 		description:
 			"Open the command palette and type 'tunnels' to toggle the SSH Tunnels panel without navigating to Settings.",

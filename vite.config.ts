@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { defineConfig, type Plugin, type ViteDevServer } from "vite";
 import solid from "vite-plugin-solid";
@@ -33,6 +34,27 @@ const devServerIdentity = (): Plugin => ({
   },
 });
 
+// Theme gallery (`theme-gallery.html`): the bundled theme JSONs, read fresh on
+// every request. An `import.meta.glob` would be cached by the module graph and
+// never invalidated, because `server.watch.ignored` excludes `src-tauri`; a
+// theme edit would then stay invisible until a dev-server restart.
+const themeSources = (): Plugin => ({
+  name: "tuic-theme-sources",
+  apply: "serve",
+  configureServer(server: ViteDevServer) {
+    server.middlewares.use("/__tuic_themes", (_req, res) => {
+      const dir = join(server.config.root, "src-tauri/src/themes");
+      const themes = readdirSync(dir)
+        .filter((f) => f.endsWith(".json"))
+        .sort()
+        .map((f) => ({ key: f.slice(0, -".json".length), ...JSON.parse(readFileSync(join(dir, f), "utf-8")) }));
+      res.setHeader("content-type", "application/json");
+      res.setHeader("cache-control", "no-store");
+      res.end(JSON.stringify(themes));
+    });
+  },
+});
+
 // https://vite.dev/config/
 export default defineConfig(async ({ command }) => ({
   define: {
@@ -48,6 +70,7 @@ export default defineConfig(async ({ command }) => ({
     ...(command === "serve"
       ? [
           devServerIdentity(),
+          themeSources(),
           checker({
             // vite-plugin-checker 0.14.5+ detects TypeScript 7 and runs its
             // native CLI because TS7 no longer exposes the JavaScript compiler API.

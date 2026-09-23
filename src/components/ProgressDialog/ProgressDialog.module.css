@@ -8,6 +8,8 @@
 .title { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .title h4 { margin: 0; font-size: var(--font-lg); font-weight: 600; color: var(--fg-primary); }
 .project { font-size: 11px; color: var(--fg-muted); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.terminalSelect { min-width: 110px; max-width: 210px; color: var(--fg-primary); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 6px; font: inherit; font-size: var(--font-xs); }
+.terminalSelect:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .filter { display: flex; align-items: center; gap: 6px; color: var(--fg-secondary); font-size: var(--font-xs); cursor: pointer; white-space: nowrap; }
 .iconButton { display: flex; align-items: center; border: 0; background: transparent; color: var(--fg-secondary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); }

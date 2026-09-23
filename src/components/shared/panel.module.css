@@ -121,9 +121,9 @@
   min-width: 16px;
   height: 15px;
   padding: 0 4px;
-  background: var(--accent);
-  color: var(--text-on-accent);
-  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-tertiary));
+  color: var(--accent);
+  border-radius: var(--radius-sm);
   font-size: var(--font-2xs);
   font-weight: 600;
   line-height: 1;

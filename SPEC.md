@@ -388,8 +388,9 @@ confirmation cannot authorize changed state.
 
 ## Project Progress
 
-Progress is one append-only journal per project, read from a dialog. It answers
-"what happened while I was not watching?" and nothing else.
+Progress is one append-only journal per project, read from a dialog. The dialog
+opens on the active PTY and can switch to another PTY or the repository aggregate.
+It answers "what happened while I was not watching?" and nothing else.
 
 Three entry kinds. Agents report `done` and `blocked` through the compact MCP
 `progress` tool, whose `initialize` obligation is imperative rather than
@@ -405,8 +406,9 @@ deleted. Agents keep exactly one read action on `repo`, `progress_list`;
 everything else a reader might want costs instruction budget in every
 `initialize` and belongs to the reader instead.
 
-Storage is one SQLite database in the configuration directory with the project as
-a column. Nothing is written inside a repository, so Progress cannot produce a
+Storage is one SQLite database in the configuration directory with the project
+and a nullable PTY ID as columns. Existing entries remain unattributed; direct
+local reports with no terminal binding do too. Nothing is written inside a repository, so Progress cannot produce a
 repository change event, a Git-exclude entry or an indexing pass. Managed
 workspaces resolve to their parent project, so a worktree and its repository
 share one history. A directory belonging to no registered project is not
@@ -416,8 +418,9 @@ Collection is gated by `progress_tracking`: a global setting ANDed with an
 optional per-agent override. Global off also removes the tool from every agent's
 tool list.
 
-The UI is a dialog, not a panel: one newest-first list for the active project, a
-last-visit divider frozen while the dialog is open, blocked entries in red,
+The UI is a dialog, not a panel: one newest-first list for the active PTY, with a
+selector for other PTYs and the repository aggregate, a
+per-scope last-visit divider frozen while that view is open, blocked entries in red,
 `intent` entries muted, one blocked-only filter and per-entry deletion. No pages,
 no tabs, no per-repository fan-out. The toolbar bell carries one aggregate entry
 that opens it.
@@ -526,6 +529,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Plugin system (see FEATURES.md section 17), with Plan Tracker and Stories Ticker shipped as one-time-seeded external packages rather than compiled built-ins; binary reads support bounded per-call budgets and panel messages can transfer buffer ownership
 - [x] Self-contained SQLite Viewer plugin under `plugins/`: sql.js/WebAssembly browsing, native filtering/pagination, indexes, visual plans, CSV copy, and explicit atomic inline-edit saves, with the engine and database scoped to the viewer iframe lifecycle
 - [x] Remote access / HTTP server
+- [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile Companion PWA (sessions, live output, question reply, activity feed)
 - [x] MCP Proxy Hub (aggregate upstream MCP servers via HTTP and stdio, tool namespace prefixing, circuit breaker, hot-reload, OS keyring credentials, tool filtering, session-local Grok compatibility through lazy meta-tools)
 - [x] Copy Path in Markdown panel

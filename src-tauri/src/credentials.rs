@@ -104,6 +104,9 @@ pub(crate) enum Credential<'a> {
     /// Basic Auth password for a remote `tuic-remote` daemon, keyed by the
     /// connection's UUID. `connections.json` holds the username and never this.
     RemoteConnection(&'a str),
+    /// Pairing token used by a TUIC-deployed daemon. It shares the connection
+    /// UUID namespace but never enters the plain-text connection store.
+    RemotePairingToken(&'a str),
 }
 
 impl Credential<'_> {
@@ -118,6 +121,9 @@ impl Credential<'_> {
             Self::GithubToken(id) => format!("github/account/{id}/token"),
             Self::McpUpstream(name) => format!("mcp/{name}"),
             Self::RemoteConnection(id) => format!("remote/connection/{id}/password"),
+            Self::RemotePairingToken(id) => {
+                format!("remote/connection/{id}/pairing-token")
+            }
         }
     }
 
@@ -131,7 +137,8 @@ impl Credential<'_> {
             | Self::RelayToken
             | Self::PushVapidPrivateKey
             | Self::GithubToken(_)
-            | Self::RemoteConnection(_) => None,
+            | Self::RemoteConnection(_)
+            | Self::RemotePairingToken(_) => None,
         }
     }
 }
@@ -628,6 +635,26 @@ mod tests {
         );
         // A new feature: there is no legacy keyring slot to migrate from.
         assert!(Credential::RemoteConnection("any").legacy_entry().is_none());
+    }
+
+    #[test]
+    fn remote_connection_pairing_token_crud() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        reset_vault();
+        let credential = Credential::RemotePairingToken("connection-id");
+        assert_eq!(
+            credential.vault_key(),
+            "remote/connection/connection-id/pairing-token"
+        );
+        assert!(credential.legacy_entry().is_none());
+
+        set(credential.clone(), "pair-secret").unwrap();
+        assert_eq!(
+            get(credential.clone()).unwrap().as_deref(),
+            Some("pair-secret")
+        );
+        delete(credential.clone()).unwrap();
+        assert_eq!(get(credential).unwrap(), None);
     }
 
     #[test]

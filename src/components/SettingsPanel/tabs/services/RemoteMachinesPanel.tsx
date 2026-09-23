@@ -2,9 +2,11 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { appLogger } from "../../../../stores/appLogger";
 import {
 	type ConnectionState,
+	type DeployMode,
 	type RemoteConnection,
 	type RemoteTransport,
 	remoteConnectionsStore,
+	type SshHostStatus,
 } from "../../../../stores/remoteConnections";
 import s from "../../Settings.module.css";
 
@@ -16,27 +18,30 @@ import s from "../../Settings.module.css";
 export function remoteStatusColor(status: string): string {
 	switch (status) {
 		case "connected":
-			return "var(--accent-green, #22c55e)";
+			return "var(--success)";
 		case "connecting":
-			return "var(--fg-warning, #e5a100)";
+		case "deploying":
+			return "var(--activity)";
 		// Reachable, but every route but /health answers 401 — the same amber as
 		// "connecting" would read as progress, and green would be a lie.
 		case "unauthenticated":
-			return "var(--fg-warning, #e5a100)";
+			return "var(--warning)";
 		case "error":
-			return "var(--accent-red, #ef4444)";
+			return "var(--error)";
 		default:
 			return "var(--fg-muted)";
 	}
 }
 
 /** Human-readable label for remote connection status */
-export function remoteStatusLabel(status: string): string {
+export function remoteStatusLabel(status: string, step?: string): string {
 	switch (status) {
 		case "connected":
 			return "Connected";
 		case "connecting":
 			return "Connecting...";
+		case "deploying":
+			return `Deploying: ${step ?? "preparing"}`;
 		case "unauthenticated":
 			return "Not authenticated";
 		case "error":
@@ -67,6 +72,8 @@ export function emptyRemoteForm() {
 		directUrl: "",
 		authUsername: "",
 		authPassword: "",
+		deploy: "never" as DeployMode,
+		surviveMinutes: 30,
 	};
 }
 
@@ -78,6 +85,9 @@ export const RemoteMachinesPanel: Component = () => {
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [editForm, setEditForm] = createSignal(emptyRemoteForm());
 	const [passwordStored, setPasswordStored] = createSignal(false);
+	const [sshHosts, setSshHosts] = createSignal<SshHostStatus[]>([]);
+	const [probingHosts, setProbingHosts] = createSignal(false);
+	const [serviceBusyId, setServiceBusyId] = createSignal<string | null>(null);
 
 	onMount(() => {
 		remoteConnectionsStore.hydrate();
@@ -122,6 +132,8 @@ export const RemoteMachinesPanel: Component = () => {
 			transport,
 			auth_username: f.authUsername.trim(),
 			enabled: true,
+			deploy: f.transportType === "Ssh" ? f.deploy : "never",
+			survive_secs: Math.max(60, Math.round(f.surviveMinutes * 60)),
 		};
 
 		setSaving(true);
@@ -156,6 +168,8 @@ export const RemoteMachinesPanel: Component = () => {
 			directUrl: conn.transport.type === "Direct" ? conn.transport.url : "",
 			authUsername: conn.auth_username,
 			authPassword: "",
+			deploy: conn.deploy,
+			surviveMinutes: Math.max(1, Math.round(conn.survive_secs / 60)),
 		});
 	}
 
@@ -178,6 +192,8 @@ export const RemoteMachinesPanel: Component = () => {
 			name: f.name.trim(),
 			transport,
 			auth_username: f.authUsername.trim(),
+			deploy: f.transportType === "Ssh" ? f.deploy : "never",
+			survive_secs: Math.max(60, Math.round(f.surviveMinutes * 60)),
 		};
 
 		setSaving(true);
@@ -195,6 +211,31 @@ export const RemoteMachinesPanel: Component = () => {
 			setError(String(e));
 		} finally {
 			setSaving(false);
+		}
+	}
+
+	async function probeHosts() {
+		setProbingHosts(true);
+		setError("");
+		try {
+			setSshHosts(await remoteConnectionsStore.probeSshHosts());
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setProbingHosts(false);
+		}
+	}
+
+	async function toggleInstalled(conn: RemoteConnection) {
+		setServiceBusyId(conn.id);
+		setError("");
+		try {
+			if (conn.deploy === "installed") await remoteConnectionsStore.uninstall(conn.id);
+			else await remoteConnectionsStore.install(conn.id);
+		} catch (e) {
+			setError(String(e));
+		} finally {
+			setServiceBusyId(null);
 		}
 	}
 
@@ -223,6 +264,10 @@ export const RemoteMachinesPanel: Component = () => {
 		setFormData: (updater: (f: ReturnType<typeof emptyRemoteForm>) => ReturnType<typeof emptyRemoteForm>) => void;
 		/** A password is already in the vault — the field then means "replace it". */
 		passwordStored?: boolean;
+		sshHosts: SshHostStatus[];
+		hostListId: string;
+		probingHosts: boolean;
+		onProbeHosts: () => void;
 	}) {
 		return (
 			<>
@@ -240,10 +285,22 @@ export const RemoteMachinesPanel: Component = () => {
 					<input
 						type="text"
 						class={s.input}
+						list={props.hostListId}
 						placeholder="Host (e.g. 192.168.1.100)"
 						value={props.formData.sshHost}
 						onInput={(e) => props.setFormData((f) => ({ ...f, sshHost: e.currentTarget.value }))}
 					/>
+					<datalist id={props.hostListId}>
+						<For each={props.sshHosts}>
+							{(host) => <option value={host.host} label={`${host.host} — ${host.auth.replaceAll("_", " ")}`} />}
+						</For>
+					</datalist>
+					<button class={s.textBtn} type="button" onClick={props.onProbeHosts} disabled={props.probingHosts}>
+						<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+							<path d="M7.5 1a6.5 6.5 0 1 0 4.05 11.58l2.44 2.43 1.02-1.02-2.43-2.44A6.5 6.5 0 0 0 7.5 1m0 1.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10" />
+						</svg>
+						{props.probingHosts ? " Probing..." : " Probe SSH hosts"}
+					</button>
 					<div style={{ display: "flex", gap: "8px" }}>
 						<div style={{ flex: 1 }}>
 							<label style={{ "font-size": "12px", color: "var(--text-dimmed)" }}>Port</label>
@@ -301,6 +358,35 @@ export const RemoteMachinesPanel: Component = () => {
 						value={props.formData.directUrl}
 						onInput={(e) => props.setFormData((f) => ({ ...f, directUrl: e.currentTarget.value }))}
 					/>
+				</Show>
+				<Show when={props.formData.transportType === "Ssh"}>
+					<label style={{ display: "grid", gap: "4px" }}>
+						<span>Deployment</span>
+						<select
+							class={s.input}
+							value={props.formData.deploy}
+							onChange={(e) => props.setFormData((f) => ({ ...f, deploy: e.currentTarget.value as DeployMode }))}
+						>
+							<option value="never">Never deploy</option>
+							<option value="on_connect">Deploy on connect</option>
+							<option value="installed">Installed service</option>
+						</select>
+					</label>
+					<label style={{ display: "grid", gap: "4px" }}>
+						<span>Keep ephemeral daemon alive (minutes)</span>
+						<input
+							type="number"
+							class={s.input}
+							min={1}
+							value={props.formData.surviveMinutes}
+							onInput={(e) =>
+								props.setFormData((f) => ({
+									...f,
+									surviveMinutes: Math.max(1, parseInt(e.currentTarget.value, 10) || 1),
+								}))
+							}
+						/>
+					</label>
 				</Show>
 				<input
 					type="text"
@@ -362,7 +448,14 @@ export const RemoteMachinesPanel: Component = () => {
 							value={form().name}
 							onInput={(e) => setForm((f) => ({ ...f, name: e.currentTarget.value }))}
 						/>
-						<TransportFields formData={form()} setFormData={setForm} />
+						<TransportFields
+							formData={form()}
+							setFormData={setForm}
+							sshHosts={sshHosts()}
+							hostListId="remote-ssh-hosts-add"
+							probingHosts={probingHosts()}
+							onProbeHosts={probeHosts}
+						/>
 						<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
 							<button class={s.textBtn} onClick={addConnection} disabled={saving()}>
 								{saving() ? "Saving..." : "Save"}
@@ -412,7 +505,7 @@ export const RemoteMachinesPanel: Component = () => {
 										background: remoteStatusColor(connState.status),
 										"flex-shrink": "0",
 									}}
-									title={remoteStatusLabel(connState.status)}
+									title={remoteStatusLabel(connState.status, connState.deployStep)}
 								/>
 								{/* Info */}
 								<div style={{ flex: 1, "min-width": 0 }}>
@@ -424,15 +517,17 @@ export const RemoteMachinesPanel: Component = () => {
 												padding: "1px 5px",
 												"border-radius": "3px",
 												background:
-													conn().transport.type === "Ssh" ? "rgba(97,175,239,0.15)" : "rgba(152,195,121,0.15)",
-												color: conn().transport.type === "Ssh" ? "#61afef" : "#98c379",
+													conn().transport.type === "Ssh"
+														? "color-mix(in srgb, var(--activity) 15%, transparent)"
+														: "color-mix(in srgb, var(--success) 15%, transparent)",
+												color: conn().transport.type === "Ssh" ? "var(--activity)" : "var(--success)",
 											}}
 										>
 											{conn().transport.type === "Ssh" ? "SSH" : "DIRECT"}
 										</span>
 										<Show when={connState.status !== "disconnected"}>
 											<span style={{ "font-size": "11px", color: remoteStatusColor(connState.status) }}>
-												{remoteStatusLabel(connState.status)}
+												{remoteStatusLabel(connState.status, connState.deployStep)}
 											</span>
 										</Show>
 									</div>
@@ -450,7 +545,7 @@ export const RemoteMachinesPanel: Component = () => {
 										{transportSummary(conn().transport)}
 									</div>
 									<Show when={connState.error}>
-										<div class={s.hint} style={{ margin: 0, "font-size": "11px", color: "var(--accent-red, #ef4444)" }}>
+										<div class={s.hint} style={{ margin: 0, "font-size": "11px", color: "var(--error)" }}>
 											{connState.error}
 										</div>
 									</Show>
@@ -470,6 +565,23 @@ export const RemoteMachinesPanel: Component = () => {
 								>
 									{connState.status === "disconnected" || connState.status === "error" ? "Connect" : "Disconnect"}
 								</button>
+								<Show when={conn().transport.type === "Ssh"}>
+									<button
+										class={s.textBtn}
+										disabled={serviceBusyId() === conn().id}
+										onClick={() => toggleInstalled(conn())}
+										title={conn().deploy === "installed" ? "Remove persistent service" : "Install persistent service"}
+									>
+										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+											<path d="M7.25 1h1.5v8.1l2.65-2.65 1.06 1.06L8 11.97 3.54 7.51 4.6 6.45 7.25 9.1zM2 13h12v2H2z" />
+										</svg>
+										{serviceBusyId() === conn().id
+											? " Working..."
+											: conn().deploy === "installed"
+												? " Uninstall"
+												: " Install"}
+									</button>
+								</Show>
 								{/* Edit */}
 								<button
 									class={s.copyBtn}
@@ -509,6 +621,10 @@ export const RemoteMachinesPanel: Component = () => {
 											formData={editForm()}
 											setFormData={setEditForm}
 											passwordStored={passwordStored()}
+											sshHosts={sshHosts()}
+											hostListId={`remote-ssh-hosts-${conn().id}`}
+											probingHosts={probingHosts()}
+											onProbeHosts={probeHosts}
 										/>
 										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
 											<button class={s.textBtn} onClick={() => saveEdit(connState)} disabled={saving()}>

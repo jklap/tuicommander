@@ -1571,10 +1571,12 @@ describe("Sidebar", () => {
 
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 
+			// The row reads like its tab: the tab title. What the agent is doing
+			// stays in the tooltip and the accessible label below.
 			expect(Array.from(container.querySelectorAll(".branchAgentActivity"), (el) => el.textContent)).toEqual([
-				"coordinating checkout validation",
-				"running EU tax validation",
-				"preparing the checkout handoff",
+				"Claude checkout",
+				"Codex taxes",
+				"Gemini handoff",
 			]);
 			expect(container.querySelectorAll(".branchAgentName")).toHaveLength(0);
 			expect(Array.from(container.querySelectorAll(".branchTabItem"), (el) => el.getAttribute("aria-label"))).toEqual([

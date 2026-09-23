@@ -5094,6 +5094,7 @@ fn record_intent_in_journal(state: &AppState, session_id: &str, text: &str) {
         text,
         agent_name,
         agent_type.as_deref(),
+        Some(session_id),
     ) {
         Ok(entry) => {
             crate::mcp_http::mcp_transport::emit_progress_entry(state, entry);

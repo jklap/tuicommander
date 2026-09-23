@@ -49,7 +49,7 @@ impl ProgressStore {
     }
 
     fn connect(&self) -> Result<Connection, String> {
-        let conn = Connection::open(&self.db_path).map_err(|error| {
+        let mut conn = Connection::open(&self.db_path).map_err(|error| {
             format!(
                 "progress_store_unavailable: cannot open '{}': {error}",
                 self.db_path.display()
@@ -73,16 +73,53 @@ impl ProgressStore {
                kind          TEXT NOT NULL CHECK (kind IN ('done','blocked','intent')),
                text          TEXT NOT NULL,
                step          TEXT,
-               agent_name    TEXT
+               agent_name    TEXT,
+               pty_id        TEXT
              );
              CREATE INDEX IF NOT EXISTS entries_by_project ON entries (project, id DESC);
              CREATE TABLE IF NOT EXISTS project_views (
                project        TEXT PRIMARY KEY,
                last_viewed_ms INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS pty_views (
+               project        TEXT NOT NULL,
+               pty_id         TEXT NOT NULL,
+               last_viewed_ms INTEGER NOT NULL,
+               PRIMARY KEY (project, pty_id)
              );",
         )
         .map_err(db_error("prepare the progress schema"))?;
+        if !Self::has_pty_column(&conn)? {
+            // Serialize upgrades across processes, then inspect again: another
+            // instance may have added the column while we waited for the lock.
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error("begin the progress schema migration"))?;
+            if !Self::has_pty_column(&tx)? {
+                tx.execute("ALTER TABLE entries ADD COLUMN pty_id TEXT", [])
+                    .map_err(db_error("add terminal identity to the progress schema"))?;
+            }
+            tx.commit()
+                .map_err(db_error("commit the progress schema migration"))?;
+        }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS entries_by_pty ON entries (project, pty_id, id DESC)",
+            [],
+        )
+        .map_err(db_error("index terminal progress"))?;
         Ok(conn)
+    }
+
+    fn has_pty_column(conn: &Connection) -> Result<bool, String> {
+        Ok(conn
+            .prepare("PRAGMA table_info(entries)")
+            .map_err(db_error("inspect the progress schema"))?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(db_error("inspect the progress schema"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error("inspect the progress schema"))?
+            .iter()
+            .any(|column| column == "pty_id"))
     }
 
     /// Append one entry. There is nothing to reconcile: the table is
@@ -91,6 +128,15 @@ impl ProgressStore {
         &self,
         project: &str,
         entry: &NewProgressEntry,
+    ) -> Result<ProgressEntry, String> {
+        self.record_for_pty(project, entry, None)
+    }
+
+    pub(crate) fn record_for_pty(
+        &self,
+        project: &str,
+        entry: &NewProgressEntry,
+        pty_id: Option<&str>,
     ) -> Result<ProgressEntry, String> {
         entry.validate()?;
         let mut conn = self.connect()?;
@@ -108,7 +154,7 @@ impl ProgressStore {
         // the same step twice did the work twice, and only the reader can say
         // what that means (docs/user-guide/project-progress.md).
         if entry.kind == ProgressKind::Intent
-            && let Some(newest) = Self::newest(&tx, project)?
+            && let Some(newest) = Self::newest(&tx, project, pty_id)?
             && newest.kind == ProgressKind::Intent
             && newest.text == text
             && newest.agent_name == agent_name
@@ -116,15 +162,16 @@ impl ProgressStore {
             return Ok(newest);
         }
         tx.execute(
-            "INSERT INTO entries (project, created_at_ms, kind, text, step, agent_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO entries (project, created_at_ms, kind, text, step, agent_name, pty_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 project,
                 i64_from_u64(created_at_ms),
                 entry.kind.as_str(),
                 &text,
                 &step,
-                &agent_name
+                &agent_name,
+                pty_id,
             ],
         )
         .map_err(db_error("insert progress entry"))?;
@@ -133,6 +180,7 @@ impl ProgressStore {
         Ok(ProgressEntry {
             id,
             project: project.to_string(),
+            pty_id: pty_id.map(str::to_string),
             created_at_ms,
             kind: entry.kind,
             text,
@@ -146,15 +194,16 @@ impl ProgressStore {
     fn newest(
         tx: &rusqlite::Transaction<'_>,
         project: &str,
+        pty_id: Option<&str>,
     ) -> Result<Option<ProgressEntry>, String> {
         let row = tx
             .query_row(
                 "SELECT id, created_at_ms, kind, text, step, agent_name
                    FROM entries
-                  WHERE project = ?1
+                  WHERE project = ?1 AND pty_id IS ?2
                   ORDER BY id DESC
                   LIMIT 1",
-                params![project],
+                params![project, pty_id],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -172,6 +221,7 @@ impl ProgressStore {
             Ok(ProgressEntry {
                 id,
                 project: project.to_string(),
+                pty_id: pty_id.map(str::to_string),
                 created_at_ms: u64_from_i64(created_at_ms),
                 kind: ProgressKind::parse(&kind)?,
                 text,
@@ -187,16 +237,22 @@ impl ProgressStore {
         let blocked_only = input.blocked_only.unwrap_or(false);
         let mut statement = conn
             .prepare(
-                "SELECT id, created_at_ms, kind, text, step, agent_name
+                "SELECT id, created_at_ms, kind, text, step, agent_name, pty_id
                    FROM entries
                   WHERE project = ?1 AND (?2 = 0 OR kind = 'blocked')
+                    AND (?3 IS NULL OR pty_id = ?3)
                   ORDER BY id DESC
-                  LIMIT ?3",
+                  LIMIT ?4",
             )
             .map_err(db_error("prepare the progress list"))?;
         let entries = statement
             .query_map(
-                params![project, i64::from(blocked_only), LIST_LIMIT as i64],
+                params![
+                    project,
+                    i64::from(blocked_only),
+                    input.pty_id,
+                    LIST_LIMIT as i64
+                ],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -205,6 +261,7 @@ impl ProgressStore {
                         row.get::<_, String>(3)?,
                         row.get::<_, Option<String>>(4)?,
                         row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
@@ -213,10 +270,11 @@ impl ProgressStore {
             .map_err(db_error("read a progress entry"))?
             .into_iter()
             .map(
-                |(id, created_at_ms, kind, text, step, agent_name)| -> Result<_, String> {
+                |(id, created_at_ms, kind, text, step, agent_name, pty_id)| -> Result<_, String> {
                     Ok(ProgressEntry {
                         id,
                         project: project.to_string(),
+                        pty_id,
                         created_at_ms: u64_from_i64(created_at_ms),
                         kind: ProgressKind::parse(&kind)?,
                         text,
@@ -226,11 +284,19 @@ impl ProgressStore {
                 },
             )
             .collect::<Result<Vec<_>, String>>()?;
+        let pty_ids = conn
+            .prepare("SELECT DISTINCT pty_id FROM entries WHERE project = ?1 AND pty_id IS NOT NULL ORDER BY pty_id")
+            .map_err(db_error("prepare the terminal list"))?
+            .query_map(params![project], |row| row.get::<_, String>(0))
+            .map_err(db_error("read the terminal list"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error("read a terminal identity"))?;
 
         Ok(ProgressList {
             project: project.to_string(),
             entries,
-            last_viewed_ms: self.last_viewed_ms(&conn, project)?,
+            pty_ids,
+            last_viewed_ms: self.last_viewed_ms(&conn, project, input.pty_id.as_deref())?,
         })
     }
 
@@ -260,30 +326,59 @@ impl ProgressStore {
         Ok(ProgressDeleteReceipt { deleted })
     }
 
-    /// Record that the user has seen this project's journal up to now. The
-    /// dialog calls it on close; the divider it draws on the next open is this
-    /// timestamp.
+    /// Record that the user has seen the repository aggregate up to now.
     pub fn mark_viewed(&self, project: &str) -> Result<ProgressViewedReceipt, String> {
+        self.mark_viewed_for_pty(project, None)
+    }
+
+    pub fn mark_viewed_for_pty(
+        &self,
+        project: &str,
+        pty_id: Option<&str>,
+    ) -> Result<ProgressViewedReceipt, String> {
         let last_viewed_ms = now_ms();
         let conn = self.connect()?;
-        conn.execute(
-            "INSERT INTO project_views (project, last_viewed_ms) VALUES (?1, ?2)
-             ON CONFLICT(project) DO UPDATE SET last_viewed_ms = excluded.last_viewed_ms",
-            params![project, i64_from_u64(last_viewed_ms)],
-        )
-        .map_err(db_error("record the progress last-viewed time"))?;
+        if let Some(pty_id) = pty_id {
+            conn.execute(
+                "INSERT INTO pty_views (project, pty_id, last_viewed_ms) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(project, pty_id) DO UPDATE SET last_viewed_ms = excluded.last_viewed_ms",
+                params![project, pty_id, i64_from_u64(last_viewed_ms)],
+            )
+            .map_err(db_error("record the terminal last-viewed time"))?;
+        } else {
+            conn.execute(
+                "INSERT INTO project_views (project, last_viewed_ms) VALUES (?1, ?2)
+                 ON CONFLICT(project) DO UPDATE SET last_viewed_ms = excluded.last_viewed_ms",
+                params![project, i64_from_u64(last_viewed_ms)],
+            )
+            .map_err(db_error("record the progress last-viewed time"))?;
+        }
         Ok(ProgressViewedReceipt { last_viewed_ms })
     }
 
-    fn last_viewed_ms(&self, conn: &Connection, project: &str) -> Result<Option<u64>, String> {
-        conn.query_row(
-            "SELECT last_viewed_ms FROM project_views WHERE project = ?1",
-            params![project],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(db_error("read the progress last-viewed time"))
-        .map(|value| value.map(u64_from_i64))
+    fn last_viewed_ms(
+        &self,
+        conn: &Connection,
+        project: &str,
+        pty_id: Option<&str>,
+    ) -> Result<Option<u64>, String> {
+        let value = if let Some(pty_id) = pty_id {
+            conn.query_row(
+                "SELECT last_viewed_ms FROM pty_views WHERE project = ?1 AND pty_id = ?2",
+                params![project, pty_id],
+                |row| row.get::<_, i64>(0),
+            )
+        } else {
+            conn.query_row(
+                "SELECT last_viewed_ms FROM project_views WHERE project = ?1",
+                params![project],
+                |row| row.get::<_, i64>(0),
+            )
+        };
+        value
+            .optional()
+            .map_err(db_error("read the progress last-viewed time"))
+            .map(|value| value.map(u64_from_i64))
     }
 }
 
@@ -337,6 +432,35 @@ mod tests {
     fn the_database_lives_in_the_config_directory_and_nowhere_else() {
         let (_guard, store, dir) = isolated_store();
         assert_eq!(store.database_path(), dir.path().join("progress.sqlite3"));
+    }
+
+    #[test]
+    fn opening_an_existing_journal_adds_nullable_pty_identity_without_losing_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let conn = Connection::open(dir.path().join("progress.sqlite3")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE entries (
+               id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL, kind TEXT NOT NULL,
+               text TEXT NOT NULL, step TEXT, agent_name TEXT
+             );
+             INSERT INTO entries (project, created_at_ms, kind, text)
+             VALUES ('/repo', 1, 'done', 'Older work');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = ProgressStore::open().unwrap();
+        let legacy = store.list("/repo", &ProgressListInput::default()).unwrap();
+        assert_eq!(legacy.entries[0].text, "Older work");
+        let conn = Connection::open(store.database_path()).unwrap();
+        let pty_id: Option<String> = conn
+            .query_row("SELECT pty_id FROM entries WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(pty_id, None);
     }
 
     #[test]
@@ -427,6 +551,7 @@ mod tests {
                 "/p",
                 &ProgressListInput {
                     blocked_only: Some(true),
+                    pty_id: None,
                 },
             )
             .unwrap();
@@ -442,6 +567,98 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    #[test]
+    fn terminal_filter_separates_parallel_ptys_and_keeps_legacy_entries_in_the_project() {
+        let (_guard, store, _dir) = isolated_store();
+        let old = store
+            .record("/p", &entry(ProgressKind::Done, "older work"))
+            .unwrap();
+        let first = store
+            .record_for_pty(
+                "/p",
+                &entry(ProgressKind::Intent, "same task"),
+                Some("pty-a"),
+            )
+            .unwrap();
+        let second = store
+            .record_for_pty(
+                "/p",
+                &entry(ProgressKind::Intent, "same task"),
+                Some("pty-b"),
+            )
+            .unwrap();
+        assert_ne!(
+            first.id, second.id,
+            "one PTY must not deduplicate another's intent"
+        );
+        assert_eq!(first.pty_id.as_deref(), Some("pty-a"));
+
+        let only_a = store
+            .list(
+                "/p",
+                &ProgressListInput {
+                    pty_id: Some("pty-a".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            only_a.entries.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![first.id]
+        );
+        assert_eq!(only_a.pty_ids, vec!["pty-a", "pty-b"]);
+
+        let aggregate = store.list("/p", &Default::default()).unwrap();
+        assert_eq!(
+            aggregate
+                .entries
+                .iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>(),
+            vec![second.id, first.id, old.id]
+        );
+        assert_eq!(aggregate.entries[2].pty_id, None);
+        assert!(
+            store
+                .list("/other", &Default::default())
+                .unwrap()
+                .pty_ids
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn viewing_one_pty_does_not_mark_another_pty_or_the_repo_aggregate_as_seen() {
+        let (_guard, store, _dir) = isolated_store();
+        store
+            .record_for_pty("/p", &entry(ProgressKind::Done, "A"), Some("pty-a"))
+            .unwrap();
+        store
+            .record_for_pty("/p", &entry(ProgressKind::Done, "B"), Some("pty-b"))
+            .unwrap();
+
+        store.mark_viewed_for_pty("/p", Some("pty-a")).unwrap();
+        let select = |pty: Option<&str>| {
+            store
+                .list(
+                    "/p",
+                    &ProgressListInput {
+                        pty_id: pty.map(str::to_string),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+                .last_viewed_ms
+        };
+        assert!(select(Some("pty-a")).is_some());
+        assert_eq!(select(Some("pty-b")), None);
+        assert_eq!(select(None), None);
+
+        store.mark_viewed("/p").unwrap();
+        assert!(select(None).is_some());
+        assert_eq!(select(Some("pty-b")), None);
     }
 
     /// Two projects share one database. Nothing may leak across the column,
