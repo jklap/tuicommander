@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { marked } from "marked";
+import { describe, expect, it, vi } from "vitest";
 import {
 	CONVENTION_HEADER,
 	ensureConventionHeader,
@@ -64,6 +65,90 @@ describe("tweakComments parser/serializer", () => {
 				]),
 			);
 			expect(removeTweakComment(out, "c_block")).toBe(source);
+		});
+
+		// marked normalizes line endings before it lexes, so its token lengths are
+		// LF lengths. A CRLF file must still map to exact raw ranges, or the marker
+		// is written into the middle of a word on disk.
+		const crlfSource = "# Title\r\n\r\nFirst para\r\nline two\r\n\r\nSecond para\r\n";
+
+		it("maps blocks to exact raw ranges in a CRLF source", () => {
+			const blocks = findTweakCommentBlocks(crlfSource);
+			expect(blocks.map(({ start, end, tag }) => ({ source: crlfSource.slice(start, end), tag }))).toEqual([
+				{ source: "# Title", tag: "H1" },
+				{ source: "First para\r\nline two", tag: "P" },
+				{ source: "Second para", tag: "P" },
+			]);
+		});
+
+		it("maps blocks to exact raw ranges when lines end with a lone CR", () => {
+			const source = "# Title\r\rBody\r";
+			const blocks = findTweakCommentBlocks(source);
+			expect(blocks.map(({ start, end }) => source.slice(start, end))).toEqual(["# Title", "Body"]);
+		});
+
+		it("inserts, parses and removes a block comment in a CRLF source without breaking its line endings", () => {
+			const block = findTweakCommentBlocks(crlfSource)[2];
+			const out = insertTweakBlockComment(
+				crlfSource,
+				{
+					id: "c_crlf",
+					highlighted: crlfSource.slice(block.start, block.end),
+					comment: "Tighten this",
+					createdAt: "2026-09-23T08:00:00.000Z",
+				},
+				block,
+			);
+
+			expect(out).toContain(
+				"line two\r\n\r\n<!--tweak:block:c_crlf @2026-09-23T08:00:00.000Z\nTighten this-->\r\nSecond para\r\n",
+			);
+			expect(parseTweakComments(out)).toEqual([
+				expect.objectContaining({ id: "c_crlf", anchor: "block", highlighted: "Second para" }),
+			]);
+			expect(removeTweakComment(out, "c_crlf")).toBe(crlfSource);
+		});
+
+		it("refuses to insert when the block source changed since the comment was started", () => {
+			const source = "# Heading\n\nOriginal paragraph.";
+			const block = findTweakCommentBlocks(source)[1];
+			const snapshot = source.slice(block.start, block.end);
+			const changed = "# Heading\n\nX\n\nOriginal paragraph.";
+			expect(() =>
+				insertTweakBlockComment(
+					changed,
+					{ id: "c_stale", highlighted: snapshot, comment: "c", createdAt: "2026-09-23T08:00:00.000Z" },
+					block,
+				),
+			).toThrow(/no longer matches/);
+		});
+
+		// Streaming AI Chat re-parses the whole answer on every tick; a document
+		// without block markers must not pay for a full markdown lex.
+		it("does not lex the document when the source has no block marker", () => {
+			const lexer = vi.spyOn(marked, "lexer");
+			try {
+				parseTweakComments(
+					"# Title\n\nHello <!--tweak:begin:c_1-->world<!--tweak:end:c_1 @2026-09-23T08:00:00.000Z\nn-->",
+				);
+				expect(lexer).not.toHaveBeenCalled();
+			} finally {
+				lexer.mockRestore();
+			}
+		});
+
+		it("reuses precomputed blocks instead of lexing again", () => {
+			const source = "<!--tweak:block:c_b @2026-09-23T08:00:00.000Z\nnote-->\n# Heading";
+			const blocks = findTweakCommentBlocks(source);
+			const lexer = vi.spyOn(marked, "lexer");
+			try {
+				expect(parseTweakComments(source, blocks)).toEqual([
+					expect.objectContaining({ id: "c_b", highlighted: "# Heading" }),
+				]);
+				expect(lexer).not.toHaveBeenCalled();
+			} finally {
+				lexer.mockRestore();
+			}
 		});
 	});
 

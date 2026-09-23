@@ -349,13 +349,10 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	const handleTweakBlockSave = async (comment: TweakComment, range: { start: number; end: number }) => {
-		const current = content();
 		try {
-			const updated = insertTweakBlockComment(
-				current,
-				{ ...comment, highlighted: current.slice(range.start, range.end) },
-				range,
-			);
+			// `comment.highlighted` is the block source when the popover opened; the
+			// insert refuses the range if the file changed under it since then.
+			const updated = insertTweakBlockComment(content(), comment, range);
 			await writeTweakedSource(updated);
 		} catch (err) {
 			appLogger.error("app", `handleTweakBlockSave failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -597,6 +594,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 						onSaveBlock={(comment, range) => {
 							void handleTweakBlockSave(comment, range);
 						}}
+						blockSource={(range) => content().slice(range.start, range.end)}
 						onDelete={(id) => {
 							void handleTweakDelete(id);
 						}}
