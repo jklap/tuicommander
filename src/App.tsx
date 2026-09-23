@@ -908,6 +908,13 @@ const App: Component = () => {
 							onCloseOthers={terminalLifecycle.closeOtherTabs}
 							onCloseToRight={terminalLifecycle.closeTabsToRight}
 							onNewTab={gitOps.handleNewTab}
+							getNewAgentMenuItems={() => {
+								const target = gitOps.resolveNewTabTarget();
+								if (!target) return [];
+								// The sidebar nests every agent under one "Add Agent" entry; under + the list is the menu.
+								const items = terminalContextMenus.buildSidebarAgentMenuItems(target.repoPath, target.branchName);
+								return items.length === 1 && items[0].children ? items[0].children : items;
+							}}
 							onSplitVertical={() => splitPanes.handleSplit("vertical")}
 							onSplitHorizontal={() => splitPanes.handleSplit("horizontal")}
 							onReorder={(from, to) => {

@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Hold `+` to open an agent** — A long press on the tab bar's `+` lists the enabled agents and their run configs; picking one opens a new tab in the active branch with that agent already started. A click still opens a plain terminal.
 - **SSH remote machines deploy and install themselves** — “Deploy on connect” resolves and caches the matching `tuic-remote` release, copies it only when its hash changes, launches it on loopback with a vault-backed pairing token, and reconnects through the SSH tunnel. A configurable idle lifetime preserves sessions across short disconnects. Linux systemd user units and macOS launchd agents can be installed or removed from Remote Machines, while the SSH host picker reports shell, no-shell, authentication-failed and unreachable hosts without duplicates.
 - **Agent activity in the sidebar** — The optional nested-terminal view now expands every occupied branch into one compact card. Agent rows reuse Activity Dashboard state and show the agent icon, current intent/task, last-update age, and attention state; plain terminals remain selectable in the same card, including single-session branches.
 - **Agent toasts can jump to their repository** — A toast from another registered repository shows a keyboard-reachable “Go to repo” action. It selects that repository and focuses the originating session when the session is still open; local and stale-repository toasts do not show the action. (#835-314c)

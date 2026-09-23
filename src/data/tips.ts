@@ -21,6 +21,12 @@ export const TIPS: Tip[] = [
 		shortcut: `${mod}+P then ! or ?`,
 	},
 	{
+		feature: "Open an Agent Tab",
+		description:
+			"Hold the + in the tab bar to pick an agent. The new tab starts it directly instead of opening a shell.",
+		shortcut: null,
+	},
+	{
 		feature: "Activity Dashboard",
 		description: "See all agent sessions, CPU usage, and errors in one panel.",
 		shortcut: `${mod}+K`,

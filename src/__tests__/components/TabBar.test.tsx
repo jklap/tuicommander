@@ -41,6 +41,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 	openUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
+import type { ContextMenuItem } from "../../components/ContextMenu/ContextMenu";
 import { TabBar } from "../../components/TabBar/TabBar";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -123,6 +124,82 @@ describe("TabBar", () => {
 		));
 		fireEvent.click(container.querySelector(".newBtn")!);
 		expect(onNewTab).toHaveBeenCalledTimes(1);
+	});
+
+	describe("long press on new tab button", () => {
+		const renderWithAgents = (onNewTab: () => void, getNewAgentMenuItems: () => ContextMenuItem[]) =>
+			render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={onNewTab}
+					getNewAgentMenuItems={getNewAgentMenuItems}
+				/>
+			));
+		const menuLabels = (container: HTMLElement) =>
+			Array.from(container.querySelectorAll(".menu .label")).map((l) => l.textContent);
+
+		it("opens the agent list instead of a plain tab, and launching an agent is one click away", () => {
+			const onNewTab = vi.fn();
+			const launchClaude = vi.fn();
+			const { container } = renderWithAgents(onNewTab, () => [
+				{ label: "Claude Code", action: launchClaude },
+				{ label: "Codex", action: () => {} },
+			]);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 0 });
+			vi.advanceTimersByTime(500);
+			fireEvent.pointerUp(btn);
+			fireEvent.click(btn);
+
+			expect(onNewTab).not.toHaveBeenCalled();
+			expect(menuLabels(container)).toEqual(expect.arrayContaining(["Claude Code", "Codex"]));
+			const claude = Array.from(container.querySelectorAll(".menu .label")).find(
+				(l) => l.textContent === "Claude Code",
+			)!;
+			fireEvent.click(claude.closest(".item") ?? claude);
+			expect(launchClaude).toHaveBeenCalledTimes(1);
+		});
+
+		it("a short press still opens a plain tab", () => {
+			const onNewTab = vi.fn();
+			const getItems = vi.fn(() => [{ label: "Claude Code", action: () => {} }]);
+			const { container } = renderWithAgents(onNewTab, getItems);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 0 });
+			vi.advanceTimersByTime(200);
+			fireEvent.pointerUp(btn);
+			fireEvent.click(btn);
+			vi.advanceTimersByTime(1000);
+
+			expect(onNewTab).toHaveBeenCalledTimes(1);
+			expect(getItems).not.toHaveBeenCalled();
+		});
+
+		it("leaving the button cancels the press", () => {
+			const getItems = vi.fn(() => [{ label: "Claude Code", action: () => {} }]);
+			const { container } = renderWithAgents(() => {}, getItems);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 0 });
+			fireEvent.pointerLeave(btn);
+			vi.advanceTimersByTime(1000);
+
+			expect(getItems).not.toHaveBeenCalled();
+		});
+
+		it("with no agents available a long press falls back to opening a plain tab", () => {
+			const onNewTab = vi.fn();
+			const { container } = renderWithAgents(onNewTab, () => []);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 0 });
+			vi.advanceTimersByTime(500);
+			fireEvent.pointerUp(btn);
+			fireEvent.click(btn);
+
+			expect(onNewTab).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	it("right-clicking new tab button opens split context menu", () => {
