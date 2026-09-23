@@ -1,17 +1,15 @@
-import { type Accessor, createMemo } from "solid-js";
+import { type Accessor, createMemo, onCleanup } from "solid-js";
 import { type ActionEntry, getActionEntries } from "../actions/actionRegistry";
 import { t } from "../i18n";
-import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { commandPaletteStore } from "../stores/commandPalette";
 import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
+import { designModeStore } from "../stores/designMode";
 import { pluginStore } from "../stores/pluginStore";
 import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
-import { toastsStore } from "../stores/toasts";
 import { updaterStore } from "../stores/updater";
-import { isTauri } from "../transport";
 import type { useGitOperations } from "./useGitOperations";
 import type { ShortcutHandlers } from "./useKeyboardShortcuts";
 import type { useSplitPanes } from "./useSplitPanes";
@@ -25,6 +23,7 @@ interface CommandPaletteActionOptions {
 
 /** Builds the command palette's static registry plus reactive repository, plugin, terminal, and prompt actions. */
 export function useCommandPaletteActions(options: CommandPaletteActionOptions): Accessor<ActionEntry[]> {
+	onCleanup(designModeStore.subscribe());
 	return createMemo(() => {
 		const entries = getActionEntries(options.shortcutHandlers);
 		const repos = Object.values(repositoriesStore.state.repositories);
@@ -137,35 +136,20 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 		}
 
 		const activeTermId = terminalsStore.state.activeId;
-		if (terminalsStore.findTerminalWithSession()?.agentType) {
+		// The active terminal only: the label names no tab, so a fallback to
+		// another session would open Chrome for an agent the user cannot see.
+		const designTarget = activeTermId ? terminalsStore.get(activeTermId) : undefined;
+		const designSessionId = designTarget?.agentType ? designTarget.sessionId : null;
+		if (designSessionId) {
+			const armed = designModeStore.isArmed(designSessionId);
 			entries.push({
-				id: "start-design-mode",
-				label: t("tabBar.startDesignMode", "Start Design Mode"),
+				id: armed ? "stop-design-mode" : "start-design-mode",
+				label: armed
+					? t("tabBar.stopDesignMode", "Stop Design Mode")
+					: t("tabBar.startDesignMode", "Start Design Mode"),
 				category: "Terminal",
 				keybinding: "",
-				execute: () => {
-					const target = terminalsStore.findTerminalWithSession();
-					if (!target?.agentType) return;
-					void invoke("start_design_mode", { sessionId: target.sessionId }).then(
-						() => {
-							if (!isTauri()) {
-								toastsStore.add(
-									t("tabBar.designModeTitle", "Design Mode"),
-									t("tabBar.designModeHostNotice", "Chrome opened on the host machine."),
-									"info",
-								);
-							}
-						},
-						(error) => {
-							appLogger.error("app", "Failed to start Design Mode", error);
-							toastsStore.add(
-								t("tabBar.designModeError", "Design Mode failed"),
-								error instanceof Error ? error.message : String(error),
-								"error",
-							);
-						},
-					);
-				},
+				execute: () => designModeStore.toggle(designSessionId),
 			});
 		}
 		if (activeTermId) {

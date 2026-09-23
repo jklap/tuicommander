@@ -5,7 +5,7 @@ Design Mode lets you point at an element in a local web app and send its context
 ## Start and use it
 
 1. Start your development server. In the repository's **Repo Settings → Scripts** tab, set **Dev Server URL** to its address. This setting is local to your TUICommander installation; it is not read from `.tuic.json`.
-2. Open an agent terminal for that repository. Choose **Start Design Mode** from its tab context menu or the Command Palette. The action is available for agent terminals, not plain shells.
+2. Open an agent terminal for that repository. Choose **Start Design Mode** from its tab context menu or the Command Palette. The action is available for agent terminals, not plain shells. The Command Palette acts on the active terminal only. When that terminal's repository is already armed, both places offer **Stop Design Mode** instead.
 3. In the Chrome window, hover to see Chrome's element highlight, then click the element. The click selects the element for Design Mode instead of activating the page's own click handler.
 4. Return to the bound agent terminal. The draft includes a selector, DOM path, nearby text, an HTML snippet, selected computed styles, its rectangle, source location when available, and an `[image: …]` line when the screenshot was saved. You can click more elements; each grab is appended to the draft. Add your request and press Enter when ready.
 

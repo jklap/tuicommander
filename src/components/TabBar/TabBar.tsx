@@ -16,9 +16,9 @@ import { openPathsAsTabs } from "../../hooks/useFileDrop";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
-import { invoke, listen } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
+import { designModeStore } from "../../stores/designMode";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { findPaneGroupAtPoint } from "../../stores/dragDrop";
 import { editorTabsStore } from "../../stores/editorTabs";
@@ -29,8 +29,6 @@ import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
-import { toastsStore } from "../../stores/toasts";
-import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { copyPathToClipboard, writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
@@ -68,51 +66,8 @@ export interface TabBarProps {
 }
 
 export const TabBar: Component<TabBarProps> = (props) => {
-	type DesignModeEvent = { repo_path: string; session_id: string; status: "armed" | "stopped" };
-	type DesignModeSnapshot = { repoPath: string; sessionId: string; status: "armed" | "stopped" };
-	const [designModes, setDesignModes] = createSignal<Record<string, DesignModeEvent>>({});
-	onMount(() => {
-		let disposed = false;
-		let unlisten: (() => void) | undefined;
-		void listen<DesignModeEvent>("design-mode-changed", ({ payload }) => {
-			if (!payload || typeof payload.repo_path !== "string" || typeof payload.session_id !== "string") return;
-			if (payload.status !== "armed" && payload.status !== "stopped") return;
-			setDesignModes((current) => ({ ...current, [payload.repo_path]: payload }));
-		})
-			.then((off) => {
-				if (disposed) {
-					off();
-					return;
-				}
-				unlisten = off;
-				void invoke<DesignModeSnapshot[]>("get_design_mode_status")
-					.then((snapshot) => {
-						if (disposed || !Array.isArray(snapshot)) return;
-						setDesignModes((current) => {
-							const next = { ...current };
-							for (const mode of snapshot) {
-								if (!mode || typeof mode.repoPath !== "string" || typeof mode.sessionId !== "string") continue;
-								if (mode.status !== "armed" && mode.status !== "stopped") continue;
-								// A push received while the snapshot was in flight is newer.
-								if (!(mode.repoPath in next)) {
-									next[mode.repoPath] = { repo_path: mode.repoPath, session_id: mode.sessionId, status: mode.status };
-								}
-							}
-							return next;
-						});
-					})
-					.catch((error) => appLogger.error("app", "Failed to read Design Mode status", error));
-			})
-			.catch((error) => appLogger.error("app", "Failed to listen for Design Mode changes", error));
-		onCleanup(() => {
-			disposed = true;
-			unlisten?.();
-		});
-	});
-	const designModeForTab = (id: string) => {
-		const sessionId = terminalsStore.get(id)?.sessionId;
-		return sessionId ? Object.values(designModes()).find((mode) => mode.session_id === sessionId) : undefined;
-	};
+	onMount(() => onCleanup(designModeStore.subscribe()));
+	const designModeForTab = (id: string) => designModeStore.forSession(terminalsStore.get(id)?.sessionId);
 	const [dragOverId, setDragOverId] = createSignal<string | null>(null);
 	const [dragOverSide, setDragOverSide] = createSignal<"left" | "right" | null>(null);
 	const [draggingId, setDraggingId] = createSignal<string | null>(null);
@@ -179,6 +134,13 @@ export const TabBar: Component<TabBarProps> = (props) => {
 
 	const openNewTabMenu = (e: MouseEvent) => {
 		e.stopPropagation();
+		// A touch long press also fires the native contextmenu. A right click
+		// never starts the timer (button 0 only), so a pending or fired press
+		// means this event belongs to the agent list, not to the split menu.
+		if (longPressTimer !== undefined || longPressFired) {
+			e.preventDefault();
+			return;
+		}
 		const btn = e.currentTarget as HTMLElement;
 		const rect = btn.getBoundingClientRect();
 		newTabMenu.openAt(rect.left, rect.bottom + 4);
@@ -450,37 +412,14 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		// instrumentation: on in dev, wakeable in a release build.
 		const sessionId = term?.sessionId;
 		if (term?.agentType && sessionId && !exited) {
-			const mode = designModeForTab(id);
-			const isArmed = mode?.status === "armed";
+			const isArmed = designModeStore.isArmed(sessionId);
 			items.push(
 				{ label: "", separator: true, action: () => {} },
 				{
 					label: isArmed
 						? t("tabBar.stopDesignMode", "Stop Design Mode")
 						: t("tabBar.startDesignMode", "Start Design Mode"),
-					action: () => {
-						const command = isArmed ? "stop_design_mode" : "start_design_mode";
-						const args = isArmed ? { repoPath: mode.repo_path } : { sessionId };
-						void invoke(command, args).then(
-							() => {
-								if (!isArmed && !isTauri()) {
-									toastsStore.add(
-										t("tabBar.designModeTitle", "Design Mode"),
-										t("tabBar.designModeHostNotice", "Chrome opened on the host machine."),
-										"info",
-									);
-								}
-							},
-							(error) => {
-								appLogger.error("app", `Failed to ${isArmed ? "stop" : "start"} Design Mode`, error);
-								toastsStore.add(
-									t("tabBar.designModeError", "Design Mode failed"),
-									error instanceof Error ? error.message : String(error),
-									"error",
-								);
-							},
-						);
-					},
+					action: () => designModeStore.toggle(sessionId),
 				},
 			);
 		}
@@ -1144,7 +1083,12 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				x={newAgentMenu.position().x}
 				y={newAgentMenu.position().y}
 				visible={newAgentMenu.visible()}
-				onClose={newAgentMenu.close}
+				onClose={() => {
+					// A release off the button fires no click, so the flag would
+					// otherwise swallow the next keyboard activation of +.
+					longPressFired = false;
+					newAgentMenu.close();
+				}}
 			/>
 			<ContextMenu
 				items={overflowItems()}

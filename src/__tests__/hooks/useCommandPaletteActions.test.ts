@@ -49,12 +49,15 @@ vi.mock("../../stores/promptLibrary", () => ({
 }));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: mockRepositories }));
 vi.mock("../../stores/terminals", () => ({ terminalsStore: mockTerminals }));
-vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn().mockResolvedValue(undefined),
+	listen: vi.fn().mockResolvedValue(vi.fn()),
+}));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: vi.fn() } }));
 vi.mock("../../stores/updater", () => ({ updaterStore: { checkForUpdate: vi.fn().mockResolvedValue(undefined) } }));
 
 import { useCommandPaletteActions } from "../../hooks/useCommandPaletteActions";
-import { invoke } from "../../invoke";
+import { invoke, listen } from "../../invoke";
 import { toastsStore } from "../../stores/toasts";
 import * as transport from "../../transport";
 
@@ -62,7 +65,8 @@ describe("useCommandPaletteActions", () => {
 	let dispose: (() => void) | undefined;
 
 	beforeEach(() => {
-		mockGetActionEntries.mockReturnValue([
+		// A fresh array per call, as in production: the hook appends to it on every recompute.
+		mockGetActionEntries.mockImplementation(() => [
 			{ id: "static", label: "Static", category: "Test", keybinding: "", execute: vi.fn() },
 		]);
 		mockPluginStore.state.plugins = [
@@ -72,14 +76,13 @@ describe("useCommandPaletteActions", () => {
 		mockContextActions.getActions.mockReturnValue([
 			{ id: "inspect", label: "Inspect", action: vi.fn(), disabled: vi.fn() },
 		]);
-		mockTerminals.get.mockReturnValue({ sessionId: "session-1" });
+		mockTerminals.get.mockReturnValue({ sessionId: "session-1", agentType: "claude" });
 		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "session-1", agentType: "claude" });
 		vi.clearAllMocks();
 	});
 
-	it("starts design mode from the session finder, never the active terminal", async () => {
-		mockTerminals.get.mockReturnValue({ sessionId: "wrong-session", agentType: "claude" });
-		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "chosen-session", agentType: "claude" });
+	const renderActions = () => {
+		dispose?.();
 		let actions: ReturnType<typeof useCommandPaletteActions> | undefined;
 		createRoot((rootDispose) => {
 			dispose = rootDispose;
@@ -90,12 +93,49 @@ describe("useCommandPaletteActions", () => {
 				executeSmartPrompt: vi.fn().mockResolvedValue(undefined),
 			});
 		});
-		const action = actions?.().find((entry) => entry.id === "start-design-mode");
+		return (id: string) => actions?.().find((entry) => entry.id === id);
+	};
+
+	it("starts design mode for the active terminal, not for another session with a live agent", async () => {
+		// findTerminalWithSession falls back to the last active or the first
+		// terminal with a session — an agent the user may not be looking at.
+		mockTerminals.get.mockImplementation((id: string) =>
+			id === "term-1" ? { sessionId: "active-session", agentType: "claude" } : undefined,
+		);
+		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "other-session", agentType: "claude" });
+		const action = renderActions()("start-design-mode");
 		expect(action).toBeDefined();
 		action?.execute();
 		await Promise.resolve();
-		expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "chosen-session" });
-		expect(mockTerminals.get).not.toHaveBeenCalled();
+		expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "active-session" });
+	});
+
+	it("hides design mode when the active tab is not an agent terminal", () => {
+		mockTerminals.findTerminalWithSession.mockReturnValue({ sessionId: "other-session", agentType: "claude" });
+		mockTerminals.get.mockReturnValue(undefined);
+		expect(renderActions()("start-design-mode")).toBeUndefined();
+		mockTerminals.get.mockReturnValue({ sessionId: "shell-session", agentType: null });
+		expect(renderActions()("start-design-mode")).toBeUndefined();
+	});
+
+	it("offers Stop instead of Start while the active agent's repository is armed", async () => {
+		mockTerminals.get.mockReturnValue({ sessionId: "session-1", agentType: "claude" });
+		const byId = renderActions();
+		await Promise.resolve();
+		const push = vi.mocked(listen).mock.calls.find(([name]) => name === "design-mode-changed")?.[1];
+		expect(push).toBeDefined();
+		push?.({ payload: { repo_path: "/repo", session_id: "session-1", status: "armed" } } as never);
+
+		// Start again would silently rebind the armed repository to this session.
+		expect(byId("start-design-mode")).toBeUndefined();
+		const stop = byId("stop-design-mode");
+		expect(stop?.label).toBe("Stop Design Mode");
+		stop?.execute();
+		expect(invoke).toHaveBeenCalledWith("stop_design_mode", { repoPath: "/repo" });
+
+		push?.({ payload: { repo_path: "/repo", session_id: "session-1", status: "stopped" } } as never);
+		expect(byId("stop-design-mode")).toBeUndefined();
+		expect(byId("start-design-mode")).toBeDefined();
 	});
 
 	it("reports a design mode start failure with the backend message", async () => {
