@@ -1177,10 +1177,8 @@ async fn resolve_base_url(
             url,
             tls_fingerprint,
         } => resolve_direct_base_url(state, &connection.id, url, tls_fingerprint.as_deref()).await,
-        // Fails closed until the Local connect flow lands: no port is resolved
-        // and nothing is contacted.
-        RemoteTransport::Local { .. } => {
-            Err(crate::remote_connection::LOCAL_TRANSPORT_UNSUPPORTED.to_string())
+        RemoteTransport::Local { port, instance_id } => {
+            resolve_local_base_url(*port, instance_id.as_deref())
         }
         RemoteTransport::Ssh {
             remote_daemon_port, ..
@@ -1209,6 +1207,29 @@ async fn resolve_base_url(
             Ok(format!("http://127.0.0.1:{local_port}"))
         }
     }
+}
+
+/// Where a Local connection answers: another TUICommander instance on this
+/// machine, always plain HTTP on loopback (never TLS, never a relay).
+///
+/// A named instance's port is read from its own `config.json` on every connect
+/// (`resolve_local_instance_port`) — a restarted instance may have landed on a
+/// different port of the 9876→9877→9878 chain. A whitespace-only
+/// `instance_id` counts as absent, as in `validate` and Test Connection. Every
+/// failure is an error: nothing is contacted without a resolved port. Auth is
+/// the same as every transport's — `authenticate` trades the vault password
+/// for the instance's token and `/api/version` decides — so a Local
+/// connection is never treated as trusted just because it is loopback; the
+/// self-connection guard in `handshake` refuses this very instance.
+fn resolve_local_base_url(port: Option<u16>, instance_id: Option<&str>) -> Result<String, String> {
+    let port = match instance_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => crate::remote_connection::resolve_local_instance_port(id)
+            .map_err(|e| format!("Local instance {id:?}: {e}"))?,
+        None => port
+            .filter(|p| *p != 0)
+            .ok_or("Local connection has neither an instance id nor a port")?,
+    };
+    Ok(format!("http://127.0.0.1:{port}"))
 }
 
 /// Where a Direct connection answers, after deciding whether its certificate
@@ -3368,37 +3389,116 @@ mod tests {
         handle.shutdown();
     }
 
-    /// `Local` exists in the model before its connect flow does: connecting one
-    /// must fail closed — no route, no token, no tunnel — with the message the
-    /// UI shows, not guess a port.
-    #[tokio::test]
-    async fn a_local_connection_fails_closed_until_its_connect_flow_exists() {
-        let state = test_state();
+    fn local_connection(
+        state: &Arc<AppState>,
+        port: Option<u16>,
+        instance_id: Option<&str>,
+    ) -> String {
         let connection = crate::remote_connection::RemoteConnection {
             transport: RemoteTransport::Local {
-                port: Some(9877),
-                instance_id: None,
+                port,
+                instance_id: instance_id.map(str::to_string),
             },
+            auth_username: None,
             ..crate::remote_connection::RemoteConnection::new_direct("local", "http://x", "u")
         };
         let id = connection.id.clone();
         RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        id
+    }
+
+    /// A Local connection by port is a plain loopback connection with the same
+    /// handshake as any other: health, then the authenticated probe.
+    #[tokio::test]
+    async fn a_local_connection_by_port_connects_over_loopback() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body(r#"{"protocol_version":1}"#)
+            .create_async()
+            .await;
+        let version = server
+            .mock("GET", "/api/version")
+            .with_body("{}")
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let port = server.socket_address().port();
+        let state = test_state();
+        let id = local_connection(&state, Some(port), None);
+
+        connect(&state, &id).await.unwrap();
+
+        assert_eq!(
+            state.remote.base_url(&id).as_deref(),
+            Some(format!("http://127.0.0.1:{port}").as_str())
+        );
+        version.assert_async().await;
+        teardown(&state, &id);
+    }
+
+    /// Loopback is not a credential: a Local daemon that answers 401 leaves the
+    /// connection unauthenticated, with no route — never connected without auth.
+    #[tokio::test]
+    async fn a_local_daemon_that_demands_auth_is_not_connected_without_it() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body(r#"{"protocol_version":1}"#)
+            .create_async()
+            .await;
+        let _version = server
+            .mock("GET", "/api/version")
+            .with_status(401)
+            .create_async()
+            .await;
+        let state = test_state();
+        let id = local_connection(&state, Some(server.socket_address().port()), None);
+
+        connect(&state, &id).await.unwrap_err();
+
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Unauthenticated);
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(state.remote.token(&id).is_none());
+        teardown(&state, &id);
+    }
+
+    /// An instance id that resolves to nothing fails closed: no port is
+    /// guessed and nothing is contacted.
+    #[tokio::test]
+    async fn a_local_instance_that_does_not_exist_fails_closed() {
+        let state = test_state();
+        // "default" is reserved by `AppInstance::named`, so it never resolves.
+        let id = local_connection(&state, None, Some("default"));
         let mut events = state.event_bus.subscribe();
 
         let err = connect(&state, &id).await.unwrap_err();
 
-        assert!(
-            err.contains(crate::remote_connection::LOCAL_TRANSPORT_UNSUPPORTED),
-            "{err}"
-        );
+        assert!(err.contains("Local instance \"default\""), "{err}");
         assert_eq!(
             drain_statuses(&mut events).first().map(String::as_str),
             Some("connecting")
         );
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
         assert!(state.remote.base_url(&id).is_none());
-        assert!(state.remote.token(&id).is_none());
         assert!(state.tunnel_manager.list().is_empty());
         teardown(&state, &id);
+    }
+
+    #[test]
+    fn local_base_url_prefers_a_real_instance_id_and_rejects_nothing_to_resolve() {
+        assert_eq!(
+            resolve_local_base_url(Some(9877), None).unwrap(),
+            "http://127.0.0.1:9877"
+        );
+        // Whitespace-only id is absent, so the port is used.
+        assert_eq!(
+            resolve_local_base_url(Some(9878), Some("  ")).unwrap(),
+            "http://127.0.0.1:9878"
+        );
+        assert!(resolve_local_base_url(None, None).is_err());
+        assert!(resolve_local_base_url(Some(0), None).is_err());
+        assert!(resolve_local_base_url(Some(9877), Some("default")).is_err());
     }
 
     #[tokio::test]

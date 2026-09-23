@@ -2622,7 +2622,7 @@ Settings → **Remote Servers** (it replaced the separate **Remote Machines** pa
   and overlapping requests over IPC, HTTP, or MCP receive an error.
 - **Local** — Connects to another named/isolated TUICommander instance on the **same machine** (`tuic-remote --instance <id>` / `TUIC_APP_INSTANCE=<id>`)
   - Fields: either an instance ID (port resolved by reading that instance's own on-disk config at connect time — never cached) or a manually-entered port (for an unnamed instance), never both; optional auth username/password
-  - No host/user/identity/TLS fields — loopback only. Saved and testable, but Connect still fails closed ("Local connections are not yet supported")
+  - No host/user/identity/TLS fields — loopback only. Connect resolves the port (instance id read from its `config.json` on every attempt) and connects to `http://127.0.0.1:<port>` with the normal token handshake — loopback is not a credential; an unresolvable instance fails closed; Update & restart is refused for Local
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
@@ -2630,7 +2630,7 @@ Settings → **Remote Servers** (it replaced the separate **Remote Machines** pa
 - Each connection has UUID, name, transport, optional auth username (`null` when unset), enabled flag,
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
-- Transports: `Ssh` (nested `ssh: SshConnectionParams` + `remote_daemon_port`), `Direct` (`url`, optional pinned `tls_fingerprint`), `Local` (`port` or `instance_id`; stored but not connectable yet — every runtime path fails closed with "Local connections are not yet supported")
+- Transports: `Ssh` (nested `ssh: SshConnectionParams` + `remote_daemon_port`), `Direct` (`url`, optional pinned `tls_fingerprint`), `Local` (`port` or `instance_id`; connects over loopback HTTP, update refused)
 - A `connections.json` written with the older flat SSH fields still loads and is rewritten once at startup, keeping `connections.json.pre-nested-ssh-<UTC>.bak`
 - The Basic Auth **password** (`set_remote_connection_password` — an empty string forgets it — and `remote_connection_password_exists`; HTTP `PUT`/`GET /config/remote-connections/{id}/password`) goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection (IPC and HTTP share one delete path that also deletes the pairing token)
 - No username + a stored password fails closed: the empty username is refused by the daemon

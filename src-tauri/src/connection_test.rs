@@ -23,8 +23,8 @@
 //!   Connect will use) before testing — a missing/unreadable instance
 //!   directory reports `InstanceNotFound`/`Unreachable`, distinct from a real
 //!   daemon that's just down. Test Connection only probes `/health`; Connect
-//!   itself still refuses a Local connection
-//!   (`remote_connection::LOCAL_TRANSPORT_UNSUPPORTED`).
+//!   resolves the port the same way (`remote_runtime::resolve_local_base_url`)
+//!   and then runs the full token handshake.
 //!
 //! A password with no username is sent as Basic `:<password>`, exactly like
 //! Connect's token exchange: a daemon refuses it (`AuthFailed`) rather than the

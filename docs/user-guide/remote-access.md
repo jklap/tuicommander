@@ -344,9 +344,15 @@ second daemon on the same machine (a different port) is still a valid peer.
 **Remote Server — Local** points at another TUICommander instance on the same
 machine (`tuic-remote --instance <id>` or `TUIC_APP_INSTANCE=<id>`): either a
 **Named instance** (its port is read from that instance's own config when used,
-never cached) or a **Manual port** for an unnamed one. It can be saved and
-checked with **Test Connection**; **Connect** does not support it yet and fails
-with "Local connections are not yet supported".
+never cached) or a **Manual port** for an unnamed one. **Connect** reaches it
+at `http://127.0.0.1:<port>` and authenticates exactly like any other
+connection: set the auth username and password the other instance expects —
+being on the same machine is not treated as a credential, and a rejected or
+missing password leaves it **unauthenticated**. A named instance that cannot be
+found (never started, typo) fails Connect without contacting anything. Pointing
+it at the instance you are configuring is refused like a Direct self-connection.
+**Update & restart** is not offered for a Local connection's binary: update
+that install directly.
 
 ### Connect or Install
 
@@ -504,9 +510,8 @@ user, identity file, keepalive, host-key policy, compression) in the same nested
 by an older build is upgraded once at startup; the original is kept beside it as
 `<file>.pre-nested-ssh-<timestamp>.bak` (restore it if you go back to an older
 build, which cannot read the new shape). **Local** — another TUICommander
-instance on this same machine, by port or by instance id — is part of the
-stored model but cannot be connected yet: Connect reports "Local connections
-are not yet supported".
+instance on this same machine, by port or by instance id — connects over
+loopback HTTP with the usual authentication.
 
 #### Remote agent notices
 

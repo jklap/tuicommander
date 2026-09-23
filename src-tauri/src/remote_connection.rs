@@ -61,10 +61,12 @@ const fn default_survive_secs() -> u64 {
     1_800
 }
 
-/// What a connect attempt reports for a `Local` transport until its connect
-/// flow exists: every runtime path (connect, update, deploy) refuses it with
-/// this message instead of guessing a port.
-pub(crate) const LOCAL_TRANSPORT_UNSUPPORTED: &str = "Local connections are not yet supported";
+/// What "Update & restart remote" reports for a `Local` connection. Connect
+/// works (`remote_runtime::resolve_local_base_url`), but streaming a binary to
+/// another instance on this machine would have it replace its own executable —
+/// a local install is updated like one, so the runtime refuses instead.
+/// Deployment needs SSH and refuses a Local transport on its own.
+pub(crate) const LOCAL_TRANSPORT_UPDATE_UNSUPPORTED: &str = "Update & restart is not available for a Local connection: it is another instance on this machine — update that install directly";
 
 /// Transport layer for a remote connection.
 ///
@@ -108,8 +110,10 @@ pub(crate) enum RemoteTransport {
     /// case (e.g. a plain `make dev` second debug instance on 9877, which
     /// has no `instances/<id>/` directory to discover).
     ///
-    /// Not connectable yet: every runtime path fails closed with
-    /// [`LOCAL_TRANSPORT_UNSUPPORTED`].
+    /// Connect resolves it to `http://127.0.0.1:<port>` with the ordinary
+    /// token handshake; update refuses it with
+    /// [`LOCAL_TRANSPORT_UPDATE_UNSUPPORTED`] and deployment (SSH only) refuses
+    /// it too.
     Local {
         port: Option<u16>,
         instance_id: Option<String>,
