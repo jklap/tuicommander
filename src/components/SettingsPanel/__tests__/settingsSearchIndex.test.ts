@@ -13,6 +13,7 @@ const TAB_SOURCES: Record<string, string> = {
 	dictation: "DictationSettings.tsx",
 	github: "tabs/GitHubTab.tsx",
 	services: "tabs/ServicesTab.tsx",
+	"remote-access": "tabs/RemoteAccessTab.tsx",
 	plugins: "tabs/PluginsTab.tsx",
 	"smart-prompts": "tabs/SmartPromptsTab.tsx",
 	selection: "tabs/SelectionTab.tsx",
@@ -37,6 +38,7 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	dictation: { dynamic: 0, orphans: 0 },
 	github: { dynamic: 0, orphans: 0 },
 	services: { dynamic: 0, orphans: 0 },
+	"remote-access": { dynamic: 0, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 3, orphans: 11 },
 	selection: { dynamic: 2, orphans: 3 },
@@ -104,7 +106,7 @@ describe("searchSettings", () => {
 	it("finds a setting in a tab that is not mounted", () => {
 		const hits = searchSettings("relay server url", ALL_TABS);
 		expect(hits).toEqual([
-			expect.objectContaining({ tab: "services", section: "Cloud Relay", label: "Relay Server URL" }),
+			expect.objectContaining({ tab: "remote-access", section: "Cloud Relay", label: "Relay Server URL" }),
 		]);
 	});
 

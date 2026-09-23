@@ -224,14 +224,6 @@ Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh`
 
 ## Services & MCP Tab
 
-### HTTP API Server
-
-Enable the HTTP API server for external tool integration:
-- Serves the REST API and MCP protocol for AI agents and automation tools
-- Local MCP connections use a Unix domain socket at `<config_dir>/mcp.sock` — no port configuration needed
-- AI agents connect via the `tuic-bridge` sidecar (auto-installed on first launch for every supported agent that is installed on the machine — see [MCP bridge auto-install](../backend/config.md#mcp-bridge-auto-install))
-- Shows server status (running/stopped) and active session count
-
 ### TUIC Tools
 
 Native tools exposed to AI agents via MCP. Each tool can be individually enabled or disabled to restrict what agents can access.
@@ -266,13 +258,23 @@ Proxy external MCP servers through TUICommander. Their tools appear prefixed as 
 
 **Additional Readable Directories** — absolute directories that web and remote clients may **read** files from, in addition to your registered repositories. Ships with `~/.claude/plans` enabled by default, so clicking a Claude Code plan-file link an agent printed works out of the box in browser/remote mode. Desktop reads are never restricted — this setting only affects the HTTP transport used by browser/PWA/remote clients. It never widens writing, copying, or moving a file — those stay confined to registered repository roots. Remove an entry here if you don't want it readable over HTTP; the setting applies regardless of whether Remote Access itself is enabled, since it also governs the headless `tuic-remote` daemon.
 
-### Remote Access
-
-Enable HTTP/WebSocket access from other devices on your network. See [Remote Access](remote-access.md) for full setup guide.
-
 ### Voice Dictation
 
 See [Voice Dictation](dictation.md) for full details.
+
+## Remote Access Tab
+
+### HTTP API Server
+
+Enable the HTTP API server for external tool integration:
+- Serves the REST API and MCP protocol for AI agents and automation tools
+- Local MCP connections use a Unix domain socket at `<config_dir>/mcp.sock` — no port configuration needed
+- AI agents connect via the `tuic-bridge` sidecar (auto-installed on first launch for every supported agent that is installed on the machine — see [MCP bridge auto-install](../backend/config.md#mcp-bridge-auto-install))
+- Shows server status (running/stopped) and active session count
+
+### Remote Access
+
+Enable HTTP/WebSocket access from other devices on your network. See [Remote Access](remote-access.md) for full setup guide.
 
 ## Keyboard Shortcuts (Help panel)
 
