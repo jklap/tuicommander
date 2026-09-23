@@ -1884,7 +1884,7 @@ describe("transport", () => {
 		});
 	});
 
-	describe("tunnel & remote-connection command mappings (13 COMMAND_TABLE entries)", () => {
+	describe("tunnel & remote-connection command mappings (14 COMMAND_TABLE entries)", () => {
 		it("maps list_remote_connections to GET /config/remote-connections", () => {
 			const result = mapCommandToHttp("list_remote_connections", {});
 			expect(result.method).toBe("GET");
@@ -1909,6 +1909,18 @@ describe("transport", () => {
 			const result = mapCommandToHttp("delete_remote_connection", { id: "conn/weird id" });
 			expect(result.method).toBe("DELETE");
 			expect(result.path).toBe("/config/remote-connections/conn%2Fweird%20id");
+		});
+
+		it("maps test_connection to POST /config/remote-connections/test with the request as the body", () => {
+			const request = {
+				transport: { type: "Direct", url: "http://h:9877" },
+				auth_username: "alice",
+				password: "hunter2",
+			};
+			const result = mapCommandToHttp("test_connection", { request });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/config/remote-connections/test");
+			expect(result.body).toEqual(request);
 		});
 
 		it("maps list_tunnel_profiles to GET /tunnels/profiles", () => {

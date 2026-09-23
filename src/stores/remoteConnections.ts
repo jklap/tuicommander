@@ -35,6 +35,30 @@ export type RemoteTransport =
 			instance_id: string | null;
 	  };
 
+/**
+ * Test Connection input (story: SSH Tunnels + Remote Servers consolidation,
+ * Phase 2) — enough data to test a connection that may not be saved yet.
+ * `password` is plaintext, in-memory only for this one call; it is never
+ * persisted (not to `connections.json`, not to the keyring).
+ */
+export interface TestConnectionRequest {
+	transport: RemoteTransport;
+	auth_username?: string | null;
+	password?: string | null;
+}
+
+/**
+ * Result of `testConnection`. Mirrors the Rust `ConnectionTestResult` enum
+ * (`src-tauri/src/connection_test.rs`) — a `#[serde(tag = "type")]` shape, so
+ * `result.type` narrows the rest of the fields.
+ */
+export type ConnectionTestResult =
+	| { type: "Reachable" }
+	| { type: "AuthFailed" }
+	| { type: "NotConfigured" }
+	| { type: "InstanceNotFound" }
+	| { type: "Unreachable"; reason: string };
+
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
 export interface ConnectionState {
@@ -346,6 +370,16 @@ function createRemoteConnectionsStore() {
 		/** Reactive getter for a single connection's state */
 		getConnectionState(id: string): ConnectionState | undefined {
 			return state.connections[id];
+		},
+
+		/**
+		 * Test connectivity for a transport that may not be saved yet (Phase 2 —
+		 * no UI wired to this yet, Phase 3 owns that). Never mutates store state:
+		 * a pure passthrough to the backend, which itself has no side effects
+		 * beyond the outbound probe (no tunnel started, nothing persisted).
+		 */
+		async testConnection(request: TestConnectionRequest): Promise<ConnectionTestResult> {
+			return invoke<ConnectionTestResult>("test_connection", { request });
 		},
 	};
 

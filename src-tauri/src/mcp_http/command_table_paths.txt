@@ -102,6 +102,7 @@
 /config/provider-key/exists
 /config/provider-registry
 /config/remote-connections
+/config/remote-connections/test
 /config/remote-connections/x
 /config/repo-defaults
 /config/repo-local-config
