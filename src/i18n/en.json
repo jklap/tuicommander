@@ -1043,6 +1043,7 @@
 	"services.hint.ipv6Description": "Binds the server to both IPv4 and IPv6 addresses. Requires save + server restart.",
 	"services.hint.mcpConnection": "AI agents connect via the tuic-bridge sidecar. MCP configs are auto-installed in supported agents (Claude Code, Cursor, etc.).",
 	"services.hint.passwordLeaveBlank": "Leave blank to keep the current password",
+	"services.hint.perAgentAutoConfigure": "The MCP server can also be configured automatically for a specific agent from that agent's own settings, under Settings → Agents.",
 	"services.hint.port": "TCP port for the remote access web server",
 	"services.hint.qrScan": "Scan the QR code to connect from another device",
 	"services.hint.regenerateToken": "Generates a new token, disconnecting all active remote sessions",

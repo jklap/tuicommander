@@ -44,6 +44,7 @@ import {
 	GitHubTab,
 	KeyboardShortcutsTab,
 	LocalMcpPanel,
+	McpIntegrationsSection,
 	NotificationsTab,
 	PluginsTab,
 	RemoteAccessPanel,
@@ -426,6 +427,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				<Show when={activeTab() === "mcp"}>
 					<SettingsHelpScope page="mcp">
 						<LocalMcpPanel />
+						<McpIntegrationsSection />
 					</SettingsHelpScope>
 				</Show>
 				<Show when={activeTab() === "remote-access"}>
