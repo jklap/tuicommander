@@ -319,6 +319,21 @@ For an installed service, Connect waits for the SSH forwarding port and retries 
 4. Set the auth username and password
 5. Optionally click **Test Connection**, then Save, then click **Connect**
 
+**Self-signed HTTPS.** An `https://` daemon whose certificate no authority your
+system trusts (typically its own self-signed one, see **Self-Signed HTTPS**
+above) is checked when you press **Connect**: a **Verify certificate** dialog
+shows its SHA-256 fingerprint. Compare it with the fingerprint the remote
+machine shows under **Settings → Remote Access → Self-Signed HTTPS**, then
+**Accept and connect** to pin it (trust on first use). From then on TUICommander
+talks to that daemon only through a local relay that accepts exactly the pinned
+certificate; if the certificate ever changes, Connect fails with
+"Certificate changed" instead of trusting the new one. After a legitimate
+certificate change, open the connection's editor and click **Forget pinned
+certificate** (changing the URL forgets it too); the next Connect asks again.
+Automatic reconnects never pin anything: an unpinned self-signed daemon stays in
+error until you confirm it. Test Connection does not use the pin and reports a
+self-signed target as unreachable.
+
 A URL that points back at the TUICommander you are configuring is refused with
 "this very TUICommander instance — a machine cannot mirror itself". The check
 compares the `instance_id` in `GET /health` against this process's own, so a

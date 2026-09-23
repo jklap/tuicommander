@@ -35,6 +35,7 @@ pub(crate) mod content_index;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
+pub(crate) mod direct_proxy;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
 // Tests of the sidecar config override that build.rs also compiles; a build
@@ -2619,6 +2620,7 @@ pub fn run() {
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
             connection_test::test_connection,
+            direct_proxy::probe_direct_tls_connection,
             open_secondary_window,
             native_notification::show_native_notification,
             panel_window::open_panel_window,

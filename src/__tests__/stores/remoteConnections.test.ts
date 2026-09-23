@@ -230,6 +230,79 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			expect(store.getConnectionState("c1")?.protocolVersion).toBe(2);
 		});
 
+		describe("a self-signed Direct certificate is pinned only on an explicit accept", () => {
+			const fingerprint = "ab".repeat(32);
+			const answerProbe = (result: unknown) =>
+				invokeMock.mockImplementation((command: string) => {
+					calls.push(command);
+					if (command === "probe_direct_tls_connection") {
+						return result instanceof Error ? Promise.reject(result) : Promise.resolve(result);
+					}
+					return Promise.resolve(undefined);
+				});
+			const commandsAfterHydrate = () => calls.slice(calls.indexOf("remote_connection_statuses") + 1);
+
+			it("probes with the stored pin and connects when no confirmation is needed", async () => {
+				answerProbe({ type: "NoTlsNeeded" });
+				await store.connect("c1");
+				expect(invokeMock).toHaveBeenCalledWith("probe_direct_tls_connection", {
+					url: "http://remote.test:9876",
+					tlsFingerprint: null,
+				});
+				expect(commandsAfterHydrate()).toEqual(["probe_direct_tls_connection", "connect_remote_connection"]);
+			});
+
+			it("asks, then saves the pin before connecting when the user accepts", async () => {
+				answerProbe({ type: "NeedsConfirmation", fingerprint });
+				const connecting = store.connect("c1");
+				await vi.waitFor(() => expect(store.getPendingFingerprintConfirmation()).not.toBeNull());
+				expect(store.getPendingFingerprintConfirmation()).toMatchObject({
+					connectionId: "c1",
+					url: "http://remote.test:9876",
+					fingerprint,
+				});
+				expect(commandsAfterHydrate()).toEqual(["probe_direct_tls_connection"]);
+
+				store.resolveFingerprintConfirmation(true);
+				await connecting;
+
+				expect(store.getPendingFingerprintConfirmation()).toBeNull();
+				expect(commandsAfterHydrate()).toEqual([
+					"probe_direct_tls_connection",
+					"save_remote_connection",
+					"connect_remote_connection",
+				]);
+				const saved = invokeMock.mock.calls.find((c) => c[0] === "save_remote_connection")?.[1];
+				expect(saved.connection.transport).toEqual({
+					type: "Direct",
+					url: "http://remote.test:9876",
+					tls_fingerprint: fingerprint,
+				});
+			});
+
+			it("declining pins nothing and connects nothing", async () => {
+				answerProbe({ type: "NeedsConfirmation", fingerprint });
+				const connecting = store.connect("c1");
+				await vi.waitFor(() => expect(store.getPendingFingerprintConfirmation()).not.toBeNull());
+				store.resolveFingerprintConfirmation(false);
+				await connecting;
+				expect(commandsAfterHydrate()).toEqual(["probe_direct_tls_connection"]);
+			});
+
+			it("a changed certificate is left to the backend, which refuses it", async () => {
+				answerProbe({ type: "PinnedMismatch", presented_fingerprint: fingerprint });
+				await store.connect("c1");
+				expect(store.getPendingFingerprintConfirmation()).toBeNull();
+				expect(commandsAfterHydrate()).toEqual(["probe_direct_tls_connection", "connect_remote_connection"]);
+			});
+
+			it("a failed probe still lets the backend report the real error", async () => {
+				answerProbe(new Error("Unreachable"));
+				await store.connect("c1");
+				expect(commandsAfterHydrate()).toEqual(["probe_direct_tls_connection", "connect_remote_connection"]);
+			});
+		});
+
 		it("keeps the deployment step from the backend status", () => {
 			push({ id: "c1", status: "deploying", step: "starting daemon" });
 
@@ -316,7 +389,14 @@ describe("remoteConnectionsStore renders what the backend reports", () => {
 			expect(fetchMock).not.toHaveBeenCalled();
 			expect(eventSourceCtor).not.toHaveBeenCalled();
 			const commands = invokeMock.mock.calls.map((c) => c[0]);
-			expect(commands).toEqual(["list_remote_connections", "remote_connection_statuses", "connect_remote_connection"]);
+			// The certificate probe is a backend command too (it classifies, the
+			// renderer only asks the user) — still no networking here.
+			expect(commands).toEqual([
+				"list_remote_connections",
+				"remote_connection_statuses",
+				"probe_direct_tls_connection",
+				"connect_remote_connection",
+			]);
 		});
 
 		it("disconnect forgets the token and tells the backend", async () => {

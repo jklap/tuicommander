@@ -150,6 +150,53 @@ describe("RemoteConnectionEditor", () => {
 		expect(actions.setPassword).not.toHaveBeenCalled();
 	});
 
+	describe("a pinned Direct certificate", () => {
+		const pin = "ab".repeat(32);
+		const pinned = {
+			id: "machine-2",
+			name: "Self-signed box",
+			transport: { type: "Direct" as const, url: "https://box:9877", tls_fingerprint: pin },
+			auth_username: "tuic",
+			enabled: true,
+			deploy: "never" as const,
+			survive_secs: 1800,
+		};
+		const edit = () => {
+			const onClose = vi.fn();
+			const view = render(() => (
+				<RemoteConnectionEditor target={{ kind: "edit-connection", connection: pinned }} onClose={onClose} />
+			));
+			return { ...view, onClose };
+		};
+		const savedTransport = () => (actions.addConnection.mock.calls[0][0] as { transport: unknown }).transport;
+
+		it("is shown and survives a save that edits something else", async () => {
+			const { container, getByText, onClose } = edit();
+			expect(container.textContent).toContain(pin);
+			fireEvent.input(field(container, "Name"), { target: { value: "Renamed" } });
+			fireEvent.click(getByText("Save"));
+			await waitFor(() => expect(onClose).toHaveBeenCalled());
+			expect(savedTransport()).toEqual({ type: "Direct", url: "https://box:9877", tls_fingerprint: pin });
+		});
+
+		it("is dropped when the URL changes: a pin belongs to its target", async () => {
+			const { container, getByText, onClose } = edit();
+			fireEvent.input(field(container, "URL"), { target: { value: "https://other:9877" } });
+			expect(container.textContent).not.toContain(pin);
+			fireEvent.click(getByText("Save"));
+			await waitFor(() => expect(onClose).toHaveBeenCalled());
+			expect(savedTransport()).toEqual({ type: "Direct", url: "https://other:9877" });
+		});
+
+		it("Forget pinned certificate removes it so the next Connect asks again", async () => {
+			const { getByText, onClose } = edit();
+			fireEvent.click(getByText("Forget pinned certificate"));
+			fireEvent.click(getByText("Save"));
+			await waitFor(() => expect(onClose).toHaveBeenCalled());
+			expect(savedTransport()).toEqual({ type: "Direct", url: "https://box:9877" });
+		});
+	});
+
 	it("Clear stored password forgets it through the vault's empty-password request", async () => {
 		actions.hasPassword.mockResolvedValueOnce(true);
 		const { findByText } = render(() => (

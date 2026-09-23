@@ -81,6 +81,7 @@
 /config/project-mcp-upstreams
 /config/prompt-library
 /config/remote-connections
+/config/remote-connections/probe-direct-tls
 /config/remote-connections/status
 /config/remote-connections/test
 /config/remote-connections/x

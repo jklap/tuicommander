@@ -2,6 +2,7 @@ import { type Component, createSignal, onMount, Show } from "solid-js";
 import { t } from "../../../i18n";
 import type { DiscoveredSshHost, RemoteConnection } from "../../../stores/remoteConnections";
 import { type TunnelProfile, tunnelsStore } from "../../../stores/tunnels";
+import { DirectCertConfirmDialog } from "../../shared/DirectCertConfirmDialog";
 import s from "../Settings.module.css";
 import { RemoteMachinesTab } from "./RemoteMachinesTab";
 import { SshTunnelsSection } from "./SshTunnelsSection";
@@ -43,6 +44,8 @@ export const RemoteServersTab: Component = () => {
 
 	return (
 		<>
+			{/* Connect asks here before pinning a self-signed Direct certificate. */}
+			<DirectCertConfirmDialog />
 			<div class={s.section}>
 				<h3>{t("remoteServers.heading", "Remote Servers")}</h3>
 				{/* A saved SSH connection does NOT create a tunnel at Save time — the
