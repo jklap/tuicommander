@@ -3,7 +3,9 @@ import {
 	CONVENTION_HEADER,
 	ensureConventionHeader,
 	findSourceMatch,
+	findTweakCommentBlocks,
 	injectTweakSentinels,
+	insertTweakBlockComment,
 	insertTweakComment,
 	OverlappingCommentError,
 	parseTweakComments,
@@ -20,6 +22,51 @@ import {
 const offsets = (m: { start: number; end: number }): [number, number] => [m.start, m.end];
 
 describe("tweakComments parser/serializer", () => {
+	describe("block comments", () => {
+		it("maps rendered blocks to exact raw markdown ranges across formatting and links", () => {
+			const source = [
+				"# Product thesis",
+				"",
+				"A **formatted** paragraph with a [reference](SPEC.md).",
+				"",
+				"- first item",
+				"- second item",
+			].join("\n");
+
+			const blocks = findTweakCommentBlocks(source);
+
+			expect(blocks.map(({ start, end, tag }) => ({ source: source.slice(start, end), tag }))).toEqual([
+				{ source: "# Product thesis", tag: "H1" },
+				{ source: "A **formatted** paragraph with a [reference](SPEC.md).", tag: "P" },
+				{ source: "- first item\n- second item", tag: "UL" },
+			]);
+		});
+
+		it("stores a block comment before the exact block without wrapping or changing its markdown", () => {
+			const source = "# Heading\n\nParagraph with **formatting**.";
+			const block = findTweakCommentBlocks(source)[0];
+			const out = insertTweakBlockComment(
+				source,
+				{
+					id: "c_block",
+					highlighted: source.slice(block.start, block.end),
+					comment: "Clarify this section",
+					createdAt: "2026-09-22T12:00:00.000Z",
+				},
+				block,
+			);
+
+			expect(out).toContain("<!--tweak:block:c_block @2026-09-22T12:00:00.000Z\nClarify this section-->\n# Heading");
+			expect(injectTweakSentinels(out)).toContain("# Heading\n\nParagraph with **formatting**.");
+			expect(parseTweakComments(out)).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ id: "c_block", anchor: "block", comment: "Clarify this section" }),
+				]),
+			);
+			expect(removeTweakComment(out, "c_block")).toBe(source);
+		});
+	});
+
 	describe("serializeTweakComment", () => {
 		it("wraps highlighted text with begin/end markers containing plain-text body", () => {
 			const out = serializeTweakComment({

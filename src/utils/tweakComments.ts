@@ -1,3 +1,5 @@
+import { marked } from "marked";
+
 /**
  * Inline review comments for markdown files.
  *
@@ -22,6 +24,15 @@ export interface TweakComment {
 	highlighted: string;
 	comment: string;
 	createdAt: string;
+	anchor?: "block";
+	sourceStart?: number;
+	sourceEnd?: number;
+}
+
+export interface TweakCommentBlock {
+	start: number;
+	end: number;
+	tag: "P" | "H1" | "H2" | "H3" | "H4" | "H5" | "H6" | "UL" | "OL" | "BLOCKQUOTE" | "PRE" | "TABLE";
 }
 
 export const CONVENTION_HEADER =
@@ -37,6 +48,7 @@ export const CONVENTION_HEADER =
 // end marker with timestamp + body. Lazy matching is safe because the body
 // cannot contain `-->` (escaped at write time).
 const FULL_RE = /<!--tweak:begin:([A-Za-z0-9_-]+)-->([\s\S]*?)<!--tweak:end:\1 @(\S+)\s([\s\S]*?)-->/g;
+const BLOCK_RE = /<!--tweak:block:([A-Za-z0-9_-]+) @(\S+)\s([\s\S]*?)-->\r?\n?/g;
 
 /** Escape the only sequence that would break the enclosing HTML comment. */
 function escapeBody(body: string): string {
@@ -55,19 +67,106 @@ export function serializeTweakComment(c: TweakComment): string {
 
 /** Parse all tweak comments from a markdown source, in document order. */
 export function parseTweakComments(source: string): TweakComment[] {
-	const results: TweakComment[] = [];
+	const indexed: Array<{ index: number; comment: TweakComment }> = [];
 	FULL_RE.lastIndex = 0;
 	let match: RegExpExecArray | null;
 	while ((match = FULL_RE.exec(source)) !== null) {
 		const [, id, highlighted, createdAt, body] = match;
-		results.push({
-			id,
-			highlighted,
-			comment: unescapeBody(body),
-			createdAt,
+		indexed.push({
+			index: match.index,
+			comment: { id, highlighted, comment: unescapeBody(body), createdAt },
 		});
 	}
-	return results;
+	const blocks = findTweakCommentBlocks(source);
+	BLOCK_RE.lastIndex = 0;
+	while ((match = BLOCK_RE.exec(source)) !== null) {
+		const [, id, createdAt, body] = match;
+		const block = blocks.find((candidate) => candidate.start >= BLOCK_RE.lastIndex);
+		indexed.push({
+			index: match.index,
+			comment: {
+				id,
+				highlighted: block ? source.slice(block.start, block.end) : "",
+				comment: unescapeBody(body),
+				createdAt,
+				anchor: "block",
+				sourceStart: block?.start,
+				sourceEnd: block?.end,
+			},
+		});
+	}
+	return indexed.sort((a, b) => a.index - b.index).map(({ comment }) => comment);
+}
+
+function tokenTag(token: ReturnType<typeof marked.lexer>[number]): TweakCommentBlock["tag"] | null {
+	switch (token.type) {
+		case "paragraph":
+			return "P";
+		case "heading":
+			return `H${token.depth}` as TweakCommentBlock["tag"];
+		case "list":
+			return token.ordered ? "OL" : "UL";
+		case "blockquote":
+			return "BLOCKQUOTE";
+		case "code":
+			return "PRE";
+		case "table":
+			return "TABLE";
+		default:
+			return null;
+	}
+}
+
+/** Build the visible markdown plus an index back to the raw source. */
+function visibleSourceIndex(source: string): { visible: string; map: number[] } {
+	const hidden = buildVisibilityMask(source);
+	const chars: string[] = [];
+	const map: number[] = [];
+	for (let i = 0; i < source.length; i++) {
+		if (!hidden[i]) continue;
+		chars.push(source[i]);
+		map.push(i);
+	}
+	return { visible: chars.join(""), map };
+}
+
+/** Exact raw-source ranges for the top-level Markdown blocks rendered by marked. */
+export function findTweakCommentBlocks(source: string): TweakCommentBlock[] {
+	const { visible, map } = visibleSourceIndex(source);
+	const tokens = marked.lexer(visible);
+	const blocks: TweakCommentBlock[] = [];
+	let cursor = 0;
+	for (const token of tokens) {
+		const tokenStart = cursor;
+		cursor += token.raw.length;
+		const tag = tokenTag(token);
+		if (!tag || token.raw.length === 0) continue;
+		let visibleEnd = cursor;
+		while (visibleEnd > tokenStart && /\s/.test(visible[visibleEnd - 1])) visibleEnd--;
+		if (visibleEnd <= tokenStart || map[tokenStart] === undefined || map[visibleEnd - 1] === undefined) continue;
+		blocks.push({ start: map[tokenStart], end: map[visibleEnd - 1] + 1, tag });
+	}
+	return blocks;
+}
+
+export function serializeTweakBlockComment(comment: TweakComment): string {
+	return `<!--tweak:block:${comment.id} @${comment.createdAt}\n${escapeBody(comment.comment)}-->`;
+}
+
+/** Insert a comment marker immediately before an exact Markdown block range. */
+export function insertTweakBlockComment(
+	source: string,
+	comment: TweakComment,
+	block: Pick<TweakCommentBlock, "start" | "end">,
+): string {
+	if (block.start < 0 || block.end <= block.start || block.end > source.length) {
+		throw new Error("insertTweakBlockComment: invalid source range");
+	}
+	if (source.slice(block.start, block.end) !== comment.highlighted) {
+		throw new Error("insertTweakBlockComment: source range no longer matches the rendered block");
+	}
+	const marker = `${serializeTweakBlockComment(comment)}\n`;
+	return ensureConventionHeader(source.slice(0, block.start) + marker + source.slice(block.start));
 }
 
 /** Prepend the convention header if not already present. */
@@ -139,7 +238,21 @@ function buildVisibilityMask(source: string): boolean[] {
 		let m: RegExpExecArray | null;
 		while ((m = re.exec(source)) !== null) hide(m.index, m.index + m[0].length);
 	}
+	BLOCK_RE.lastIndex = 0;
+	let blockMatch: RegExpExecArray | null;
+	while ((blockMatch = BLOCK_RE.exec(source)) !== null) hide(blockMatch.index, blockMatch.index + blockMatch[0].length);
 	return visible;
+}
+
+/** Hide tweak syntax without changing source line/column coordinates. */
+export function maskTweakCommentSyntax(source: string): string {
+	const visible = buildVisibilityMask(source);
+	let masked = "";
+	for (let i = 0; i < source.length; i++) {
+		const char = source[i];
+		masked += visible[i] || char === "\n" || char === "\r" ? char : " ";
+	}
+	return masked;
 }
 
 /**
@@ -269,9 +382,14 @@ export function removeTweakComment(source: string, id: string): string {
 		"g",
 	);
 	let changed = false;
-	const out = source.replace(re, (_, highlighted) => {
+	let out = source.replace(re, (_, highlighted) => {
 		changed = true;
 		return highlighted;
+	});
+	const blockRe = new RegExp(`<!--tweak:block:${escapedId} @\\S+\\s[\\s\\S]*?-->\\r?\\n?`, "g");
+	out = out.replace(blockRe, () => {
+		changed = true;
+		return "";
 	});
 	if (!changed) return source;
 	if (parseTweakComments(out).length === 0) {
@@ -287,9 +405,14 @@ export function updateTweakComment(source: string, id: string, newComment: strin
 		`<!--tweak:begin:${escapedId}-->([\\s\\S]*?)<!--tweak:end:${escapedId} @(\\S+)\\s[\\s\\S]*?-->`,
 		"g",
 	);
-	return source.replace(re, (_, highlighted, createdAt) =>
+	let out = source.replace(re, (_, highlighted, createdAt) =>
 		serializeTweakComment({ id, highlighted, comment: newComment, createdAt }),
 	);
+	const blockRe = new RegExp(`<!--tweak:block:${escapedId} @(\\S+)\\s[\\s\\S]*?-->`, "g");
+	out = out.replace(blockRe, (_, createdAt) =>
+		serializeTweakBlockComment({ id, highlighted: "", comment: newComment, createdAt, anchor: "block" }),
+	);
+	return out;
 }
 
 // Private-use Unicode delimiters used to mark a highlight's begin/end boundaries
@@ -322,6 +445,8 @@ export function injectTweakSentinels(source: string): string {
 	let out = source.startsWith(CONVENTION_HEADER) ? source.slice(CONVENTION_HEADER.length) : source;
 	FULL_RE.lastIndex = 0;
 	out = out.replace(FULL_RE, (_, id, highlighted) => `${tweakBeginSentinel(id)}${highlighted}${tweakEndSentinel(id)}`);
+	BLOCK_RE.lastIndex = 0;
+	out = out.replace(BLOCK_RE, "");
 	return out;
 }
 

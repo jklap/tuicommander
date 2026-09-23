@@ -5,6 +5,7 @@ import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { ContentRenderer, stripEventHandlers } from "../../components/ui/ContentRenderer";
 import { stripAnsi } from "../../utils/stripAnsi";
+import { findTweakCommentBlocks, insertTweakBlockComment } from "../../utils/tweakComments";
 
 describe("stripAnsi", () => {
 	it("strips ANSI escape codes", () => {
@@ -39,6 +40,44 @@ describe("stripEventHandlers", () => {
 });
 
 describe("ContentRenderer", () => {
+	it("annotates rendered markdown blocks with exact source ranges when comments are enabled", async () => {
+		const source = "# Heading\n\nA **formatted** [paragraph](SPEC.md).";
+		const { container } = render(() => <ContentRenderer content={source} commentableBlocks />);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+		const heading = container.querySelector("h1") as HTMLElement;
+		const paragraph = container.querySelector("p") as HTMLElement;
+		expect(source.slice(Number(heading.dataset.commentSourceStart), Number(heading.dataset.commentSourceEnd))).toBe(
+			"# Heading",
+		);
+		expect(source.slice(Number(paragraph.dataset.commentSourceStart), Number(paragraph.dataset.commentSourceEnd))).toBe(
+			"A **formatted** [paragraph](SPEC.md).",
+		);
+	});
+
+	it("keeps structural markdown intact and highlights an existing block comment", async () => {
+		const source = "# Heading\n\nParagraph.";
+		const heading = findTweakCommentBlocks(source)[0];
+		const commented = insertTweakBlockComment(
+			source,
+			{
+				id: "c_heading",
+				highlighted: source.slice(heading.start, heading.end),
+				comment: "Clarify this heading",
+				createdAt: "2026-09-22T12:00:00.000Z",
+			},
+			heading,
+		);
+
+		const { container } = render(() => <ContentRenderer content={commented} commentableBlocks />);
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+		const renderedHeading = container.querySelector("h1");
+		expect(renderedHeading?.textContent).toBe("Heading");
+		expect(renderedHeading?.classList.contains("tweak-block-highlight")).toBe(true);
+		expect(renderedHeading?.getAttribute("data-tweak-id")).toBe("c_heading");
+	});
+
 	it("renders markdown content as HTML", () => {
 		const { container } = render(() => <ContentRenderer content="# Hello" />);
 		const content = container.querySelector("#markdown-content");
@@ -141,6 +180,18 @@ describe("ContentRenderer", () => {
 	});
 
 	describe("GFM task-list checkboxes", () => {
+		it("ignores checkbox-shaped lines inside block comment bodies when mapping source lines", () => {
+			const onToggle = vi.fn();
+			const md =
+				"<!--tweak:block:c_tasks @2026-09-23T08:00:00.000Z\n- [ ] Mentioned only in the comment-->\n- [ ] Real task";
+			const { container } = render(() => <ContentRenderer content={md} onCheckboxToggle={onToggle} />);
+			const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+
+			expect(checkbox?.dataset.sourceLine).toBe("2");
+			fireEvent.click(checkbox!);
+			expect(onToggle).toHaveBeenCalledWith(2, "x");
+		});
+
 		it("renders checkboxes as enabled input elements with data-source-line", () => {
 			const md = "- [ ] First\n- [x] Second\n- [ ] Third";
 			const { container } = render(() => <ContentRenderer content={md} />);

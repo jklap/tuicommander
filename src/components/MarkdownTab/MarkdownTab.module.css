@@ -39,6 +39,87 @@
   background: color-mix(in srgb, var(--tweak-highlight) 40%, transparent);
 }
 
+/* Whole-block comment target. The inset rule sits in the gutter without moving
+   the Markdown layout; the fill is intentionally quieter than a saved comment. */
+.content :global(.tweak-block-target) {
+  position: relative;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.content :global(.tweak-block-highlight) {
+  position: relative;
+  background: color-mix(in srgb, var(--tweak-highlight) 16%, transparent);
+  cursor: pointer;
+}
+
+.content :global(.tweak-block-target)::before,
+.content :global(.tweak-block-highlight)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -10px;
+  width: 2px;
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+  pointer-events: none;
+}
+
+.content :global(.tweak-block-highlight)::before {
+  background: color-mix(in srgb, var(--tweak-highlight) 75%, transparent);
+}
+
+.agentActions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent) 82%, var(--border));
+  border-radius: var(--radius-sm);
+}
+
+.agentLabel {
+  padding: 2px 7px;
+  color: var(--accent);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.agentSelect {
+  min-width: 100px;
+  max-width: 160px;
+  color: var(--fg-primary);
+  background: var(--bg-secondary);
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-left: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 0;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: var(--font-xs);
+}
+
+.agentSelect:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.agentActions button {
+  border: 0;
+  border-radius: 0;
+}
+
+.agentActions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.agentActions button:disabled:hover {
+  background: none;
+  color: var(--fg-secondary);
+}
+
 /* Hover tooltip for existing highlights */
 .tooltip {
   position: fixed;

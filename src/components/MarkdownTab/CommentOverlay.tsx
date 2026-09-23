@@ -19,6 +19,8 @@ export interface CommentOverlayProps {
 	 *  is the 0-based ordinal of the selected text among identical rendered
 	 *  occurrences, used to anchor the correct instance in the source. */
 	onSave: (comment: TweakComment, occurrenceIndex: number) => void;
+	/** Save a whole rendered Markdown block using its exact raw-source range. */
+	onSaveBlock?: (comment: TweakComment, range: { start: number; end: number }) => void;
 	/** Called with the comment id when the user deletes a comment. */
 	onDelete: (id: string) => void;
 }
@@ -32,6 +34,8 @@ interface PopoverState {
 	existingComment?: string;
 	existingCreatedAt?: string;
 	selectionText?: string;
+	sourceStart?: number;
+	sourceEnd?: number;
 }
 
 interface TooltipState {
@@ -42,6 +46,13 @@ interface TooltipState {
 
 export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	const [btnPos, setBtnPos] = createSignal<{ x: number; y: number } | null>(null);
+	const [blockBtn, setBlockBtn] = createSignal<{
+		x: number;
+		y: number;
+		start: number;
+		end: number;
+		text: string;
+	} | null>(null);
 	const [popover, setPopover] = createSignal<PopoverState | null>(null);
 	const [tooltip, setTooltip] = createSignal<TooltipState | null>(null);
 	const [draft, setDraft] = createSignal("");
@@ -52,6 +63,13 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	// 0-based ordinal of the selection among identical rendered occurrences,
 	// captured alongside the text so the correct source instance is anchored.
 	let pendingOccurrence = 0;
+	let hoveredBlock: HTMLElement | null = null;
+
+	const clearBlockTarget = () => {
+		hoveredBlock?.classList.remove("tweak-block-target");
+		hoveredBlock = null;
+		setBlockBtn(null);
+	};
 
 	// ── Selection detection ──
 	//
@@ -99,6 +117,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		const rects = range.getClientRects();
 		const rect = rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect();
 		const BTN_SIZE = 28;
+		clearBlockTarget();
 		setBtnPos({
 			x: rect.right + 4,
 			y: rect.top + rect.height / 2 - BTN_SIZE / 2,
@@ -118,7 +137,8 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	const handleClick = (e: MouseEvent) => {
 		// Ignore if click is inside an open popover (handled by popover itself).
 		const target = e.target as HTMLElement;
-		const span = target.closest(".tweak-highlight") as HTMLElement | null;
+		if (target.closest("a, button, input, select, textarea, label")) return;
+		const span = target.closest(".tweak-highlight, .tweak-block-highlight") as HTMLElement | null;
 		if (!span) return;
 
 		const id = span.dataset["tweakId"];
@@ -145,7 +165,7 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	// Hover tooltip: uses mouseover/mouseout (delegated) so no per-span listener.
 	const handleMouseOver = (e: MouseEvent) => {
 		const target = e.target as HTMLElement;
-		const span = target.closest(".tweak-highlight") as HTMLElement | null;
+		const span = target.closest(".tweak-highlight, .tweak-block-highlight") as HTMLElement | null;
 		if (!span) return;
 		const comment = span.dataset["tweakComment"];
 		if (!comment) return;
@@ -159,25 +179,67 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 	const handleMouseOut = (e: MouseEvent) => {
 		const target = e.target as HTMLElement;
 		const related = e.relatedTarget as HTMLElement | null;
-		const leavingSpan = target.closest(".tweak-highlight");
+		const leavingSpan = target.closest(".tweak-highlight, .tweak-block-highlight");
 		if (!leavingSpan) return;
 		// Still inside the same highlight span — don't clear.
 		if (related && leavingSpan.contains(related)) return;
 		setTooltip(null);
 	};
 
+	const handleBlockGutterMove = (e: MouseEvent) => {
+		if (popover() || btnPos()) return;
+		const blocks = Array.from(
+			props.contentRef.querySelectorAll<HTMLElement>("[data-comment-source-start][data-comment-source-end]"),
+		);
+		const block = blocks.find((candidate) => {
+			const rect = candidate.getBoundingClientRect();
+			return (
+				e.clientY >= rect.top && e.clientY <= rect.bottom && e.clientX >= rect.left - 36 && e.clientX <= rect.left + 8
+			);
+		});
+		if (!block || block.classList.contains("tweak-block-highlight") || block.querySelector(".tweak-highlight")) {
+			clearBlockTarget();
+			return;
+		}
+		const start = Number(block.dataset.commentSourceStart);
+		const end = Number(block.dataset.commentSourceEnd);
+		if (!Number.isFinite(start) || !Number.isFinite(end)) {
+			clearBlockTarget();
+			return;
+		}
+		if (hoveredBlock !== block) {
+			hoveredBlock?.classList.remove("tweak-block-target");
+			hoveredBlock = block;
+			block.classList.add("tweak-block-target");
+		}
+		const rect = block.getBoundingClientRect();
+		setBlockBtn({
+			x: Math.max(4, rect.left - 30),
+			y: rect.top + 2,
+			start,
+			end,
+			text: (block.textContent ?? "").trim(),
+		});
+	};
+
 	onMount(() => {
+		const scrollHost = props.contentRef.parentElement ?? props.contentRef;
 		props.contentRef.addEventListener("mouseup", handleMouseUp);
 		props.contentRef.addEventListener("keyup", handleKeyUp);
 		props.contentRef.addEventListener("click", handleClick);
 		props.contentRef.addEventListener("mouseover", handleMouseOver);
 		props.contentRef.addEventListener("mouseout", handleMouseOut);
+		scrollHost.addEventListener("mousemove", handleBlockGutterMove);
+		scrollHost.addEventListener("scroll", clearBlockTarget, { passive: true });
 		onCleanup(() => {
 			props.contentRef.removeEventListener("mouseup", handleMouseUp);
 			props.contentRef.removeEventListener("keyup", handleKeyUp);
 			props.contentRef.removeEventListener("click", handleClick);
 			props.contentRef.removeEventListener("mouseover", handleMouseOver);
 			props.contentRef.removeEventListener("mouseout", handleMouseOut);
+			scrollHost.removeEventListener("mousemove", handleBlockGutterMove);
+			scrollHost.removeEventListener("scroll", clearBlockTarget);
+			clearBlockTarget();
 		});
 	});
 
@@ -211,11 +273,41 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 		});
 	};
 
+	const openBlockCommentPopover = () => {
+		const block = blockBtn();
+		if (!block) return;
+		clearBlockTarget();
+		setDraft("");
+		setPopover({
+			x: block.x + 30,
+			y: block.y + 28,
+			mode: "new",
+			selectionText: block.text,
+			sourceStart: block.start,
+			sourceEnd: block.end,
+		});
+	};
+
 	const handleSave = () => {
 		const state = popover();
 		if (!state) return;
 
 		if (state.mode === "new") {
+			if (state.sourceStart !== undefined && state.sourceEnd !== undefined) {
+				if (!draft().trim()) return;
+				props.onSaveBlock?.(
+					{
+						id: generateTweakCommentId(),
+						highlighted: state.selectionText ?? "",
+						comment: draft().trim(),
+						createdAt: new Date().toISOString(),
+						anchor: "block",
+					},
+					{ start: state.sourceStart, end: state.sourceEnd },
+				);
+				closePopover();
+				return;
+			}
 			const highlighted = pendingSelection;
 			if (!highlighted || !draft().trim()) return;
 			props.onSave(
@@ -297,6 +389,24 @@ export const CommentOverlay: Component<CommentOverlayProps> = (props) => {
 					}}
 					title="Add inline comment"
 					aria-label="Add inline comment"
+				>
+					<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+						<path d="M2 2h12v9H9.5l-1.5 2-1.5-2H2V2zm1 1v7h4.17l.83 1.11L8.83 10H13V3H3z" />
+						<path d="M5 6h6v1H5zm0 2h4v1H5z" opacity="0.6" />
+					</svg>
+				</button>
+			</Show>
+
+			<Show when={blockBtn() && !btnPos() && !popover()}>
+				<button
+					class={s.commentBtn}
+					style={{ left: `${blockBtn()!.x}px`, top: `${blockBtn()!.y}px` }}
+					onMouseDown={(e) => {
+						e.preventDefault();
+						openBlockCommentPopover();
+					}}
+					title="Comment on this block"
+					aria-label="Comment on this block"
 				>
 					<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M2 2h12v9H9.5l-1.5 2-1.5-2H2V2zm1 1v7h4.17l.83 1.11L8.83 10H13V3H3z" />
