@@ -109,6 +109,11 @@ impl BrowserLink {
         self.capture.lock().drain(..).collect()
     }
 
+    /// How much captured audio is waiting for the next [`drain_capture`](Self::drain_capture).
+    pub fn pending_capture(&self) -> usize {
+        self.capture.lock().len()
+    }
+
     /// Watch what the server wants played.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Downlink> {
         self.playback.subscribe()

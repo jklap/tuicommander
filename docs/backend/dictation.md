@@ -43,13 +43,19 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `arm_hands_free_dictation(sessionId, owner)` | `POST /dictation/hands-free/arm` | Bind the delivery target and the audio owner, open a generation, return `HandsFreeStatus`. Refused when the target cannot take a Compose entry. Does **not** open a microphone. |
 | `disarm_hands_free_dictation()` | `POST /dictation/hands-free/disarm` | Disarm the whole mode, cancel the voice entries it still owns, return `HandsFreeDisarmed`. Idempotent. |
 | `get_hands_free_status()` | `GET /dictation/hands-free` | `HandsFreeStatus`. |
+| `get_hands_free_default_notice()` | `GET /dictation/hands-free/default-notice` | The built-in start notice (`MODE_ENTRY_HINT`) as a string, so a settings surface can show it and reset to it without a copy of the text. |
 
 Both transports serialize the same structs, camelCase on the wire:
-`HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error }` and
+`HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error, deliveredTurns, droppedTurns }` and
 `HandsFreeDisarmed { wasArmed, generation, cancelled, alreadyDelivered, discardedPending, discardedCapture, status }`.
 `sessionId` and `owner` are bounded at 256 bytes and may not be blank.
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
+`deliveredTurns` (bumped in `HandsFree::note_enqueued`) and `droppedTurns`
+(bumped on `TranscriptOutcome::Rejected`) are monotonic for the process and
+never reset on arm; the frontend plays its earcons when one moves between two
+polls (`turnEarcon` in `stores/dictation.ts`), unless `hands_free_earcons`
+(dictation config, default **true**, read by the frontend only) is `false`.
 
 ### Tauri Events
 
@@ -100,7 +106,7 @@ own identity so the binding can be checked — see "Who may speak" below.
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model`, `speech_command` and `speech_voice`). Writes the whole document — see "Configuration persistence" |
+| `set_dictation_config(config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model`, `hands_free_start_notice`, `hands_free_earcons`, `speech_command` and `speech_voice`). Writes the whole document — see "Configuration persistence" |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -238,7 +244,7 @@ owner disconnect and device failure disarm the same way.
 
 **Delivery is the existing Compose queue and nothing else.** `VoiceQueue` is the
 only exit, and its one production implementation appends through
-`pty::enqueue_voice_command` — the same FIFO, idle gate and id space the Compose
+`pty::enqueue_voice_command` — the same FIFO, gate and id space the Compose
 panel uses. There is no PTY write, no `sendCommand`, no submit and no ACP
 prompt. A target that cannot take a Compose entry (not an agent PTY session)
 is refused at `arm` and at the queue; it stays unavailable, with no fallback.
@@ -249,6 +255,31 @@ removes only entries that are both voice-owned and named by the caller, so a
 disarm can never clear a human's Compose command, a peer notice or an exit hint.
 Ids that already left the queue come back in `already_delivered` rather than
 being reported as cancelled — the composer has them and nothing can retract them.
+
+**A voice turn does not wait for idle.** The gate picks its rule from the kind
+of the entry at the head of the queue (`pty::InjectionGate`). A `VoiceCommand`
+head is typed at once, **even while the agent is busy** — the same as a line
+the user types by hand into a working Claude Code, which the agent queues or
+takes mid-turn itself. Parking it until idle measured a median delay of 103 s,
+max 594 s. The mid-turn claim leaves the shell atom BUSY, and a write that does
+not start never reports the agent idle. Every other kind keeps the idle rule: a
+confirmed idle agent, one submission per idle window. Both rules refuse a
+confident question and a draft in the composer, so speech never answers a
+permission dialog. The start and exit notices are `VoiceCommand` entries too,
+so they follow the voice rule. `enqueue_voice_command` logs each turn at INFO
+as `hands-free turn typed now` or `hands-free turn parked` with the reason.
+
+The voice rule is a head rule. A voice turn behind an older typed command, a
+notice or an initial prompt waits for that entry. When the entry goes out, the
+same flush types the voice turns behind it without waiting for another idle.
+
+Voice turns that were held back leave together. The flush types the whole run
+of `VoiceCommand` entries at the head of the queue as **one** submission — each
+turn intact, in spoken order, one per line (`pty::take_next_submission`). The
+run stops at the first entry of any other kind, so a typed Compose command, a
+notice or an initial prompt is still its own submission and nothing overtakes
+it. The run leaves the queue under one lock, so every joined id is delivered
+together and a disarm reports all of them in `already_delivered`.
 
 ### The runtime that drives it
 
@@ -392,10 +423,22 @@ a turn. Set, it must open each new turn, and three properties are the contract:
   disconnected, capture failure — closes it, so a fresh arm is always gated.
 
 Matching is on **complete leading words**, where a word is a maximal run of
-alphanumeric characters. Case and punctuation therefore never decide a match
-(`"Attività, Tuic!"` matches `attività tuic`), Unicode case folding handles
-Italian accents, and a longer word that merely starts with the phrase is a
-different word rather than a prefix — `Tuicommander` does not match `tuic`. A
+alphanumeric characters. Both the setting and the transcript are lowercased and
+accent-folded (`fold_word`: `à á â … → a`, `ç → c`, `ñ → n`), so case,
+punctuation and accents never decide a match — `"Attività, Tuic!"` matches
+`attività tuic`, and `"Sentì, Mac."` matches `senti mac`. Two spellings Whisper
+invents are tolerated, and nothing else:
+
+- **Joined words.** One heard word may be several phrase words run together, in
+  order — `Sentimac` matches `senti mac`. `Sentimento` does not.
+- **One extra trailing letter** on a phrase word of three or more letters —
+  `Mack` matches `mac`. The tolerance is one-sided on purpose: a shorter word or
+  a different last letter is how ordinary speech starts (`Senti, ma…`,
+  `Senti mai…`, `Senti Max…` are a person being addressed), so none of those
+  match. There is no general edit distance.
+
+A longer word that merely starts with the phrase is otherwise a different word
+rather than a prefix — `Tuicommander` does not match `tuic`. A
 phrase heard mid-sentence does not activate: it must lead. The phrase is
 stripped from what is submitted, including when it is repeated inside an open
 window, so a model never reads it. Spoken alone, it opens the window and submits
@@ -426,11 +469,22 @@ a notice the feature ships a voice nobody ever hears. Two constants in
 and changes nothing else — in particular, a disarm still revokes speech, because
 that is a fact about this machine rather than a message to a model.
 
+`hands_free_start_notice` (default empty) replaces the start notice with the
+user's own text; empty or blank means `MODE_ENTRY_HINT`. It is read at arm time
+and passed through `entry_hint_text`, which folds line breaks and whitespace
+runs to single spaces — the settings field is multiline, and the queue submits
+on a newline. The reply language is **not** part of the user's text:
+`deliver_entry_hint` appends `Reply in <Name>.` by code when the dictation
+setting names a language, so a custom notice cannot drop it. Under `auto` the
+notice names nothing and the first spoken turn carries the language instead —
+see "The requirement travels in the Compose entry". The exit notice is not
+configurable.
+
 Five rules, and each of them is a test:
 
 - **The Compose FIFO, like everything else.** `deliver_entry_hint` goes through
-  `VoiceQueue::enqueue`, so a notice queues behind whatever the terminal is
-  doing, waits out the busy/dialog gate, and lands in the session the mode bound
+  `VoiceQueue::enqueue`, so a notice queues behind any older entry, waits out
+  an open dialog or a draft (not a busy agent — it is a voice entry), and lands in the session the mode bound
   to rather than in whatever tab the user has since focused. It is one line, for
   the reason `compose_entry` gives: the queue types an entry and submits it, and
   a newline submits half of it.
@@ -1092,6 +1146,14 @@ load-bearing:
   level trigger would open one per 50 ms tick and every reply the model wrote
   for the turn in progress would be refused as stale while the user was still
   speaking one sentence.
+- **On sustained speech, not the first frame.** The edge is the tick where the
+  open utterance first holds `min_speech_ms` of speech (`Segmenter::has_speech`,
+  the same rule `close` uses to decide whether to send it). AEC3 removes the
+  linear echo but not all of it: with laptop speakers a few residual frames sit
+  above `activity_rms`, and one 20 ms frame opens the gate, so hushing on the
+  open edge stopped every reply on its first syllable. The gate still opens on
+  the first frame, so the pre-roll keeps the user's first words. One rule,
+  whether a reply is playing or not.
 - **The slot, not the queue.** The port is `commands::ArmedSpeaker`, which holds
   `DictationState.speaker` itself rather than the `Speaker` that was in it when
   the loop started. Under Auto there *is* no queue at arm time — the language is
@@ -1117,7 +1179,7 @@ turns those into numbers. Measured 2026-09-22, macOS 27 arm64:
 
 | | |
 |---|---|
-| Stop latency | **50 ms** — one `POLL_INTERVAL_MS`, the floor. Cancellation and detection add nothing measurable on top of the poll. |
+| Stop latency | **200 ms** (re-measured 2026-09-23) — `min_speech_ms` of sustained speech, landing on a `POLL_INTERVAL_MS` tick. Was 50 ms while the hush fired on the first frame over the floor; that edge let residual echo stop every reply. |
 | False triggers | **0** over 1200 ms of reply reaching the microphone with no user speech at all |
 | Pre-roll preserved | **280 ms** of audio ahead of the user's first sample, out of the 300 ms ring |
 | Utterance length | **1720 ms**, against 280 ms of pre-roll plus 600 ms of speech — nothing was truncated |
@@ -1137,6 +1199,10 @@ with `PassThrough` installed *must* interrupt the reply before the user has said
 a word. Without it, a false-trigger count of zero would be equally consistent
 with a fixture too quiet to trip anything.
 
+`a_residual_echo_burst_does_not_stop_the_reply` models what the linear room
+cannot: a 100 ms burst the canceller cannot see, above the activity floor but
+below `min_speech_ms`. It must not hush the reply.
+
 **Neither is a substitute for a real microphone and a real speaker in a room.**
 That probe is in `to-test.md`.
 
@@ -1151,8 +1217,10 @@ beside it is a gap, not an omission from the documentation.
 | Scenario | Held by |
 |---|---|
 | Optional activation, on and off | `an_empty_activation_phrase_lets_every_turn_through`, `speech_without_the_activation_phrase_never_reaches_the_queue`, `a_configured_phrase_gates_a_turn_and_is_stripped_from_what_is_sent` |
+| Phrase matching tolerates Whisper spellings, not look-alike speech | `the_phrase_matches_the_spellings_whisper_invents_for_it`, `speech_that_only_resembles_the_phrase_does_not_activate`, `an_accented_or_capitalised_phrase_setting_matches_the_plain_transcript`, `the_rejection_excerpt_keeps_the_first_words_verbatim_and_nothing_more` |
 | Phrase-only timeout | `the_phrase_alone_opens_the_window_without_sending_anything`, `follow_up_speech_inside_the_window_needs_no_phrase`, `speech_after_the_window_expires_needs_the_phrase_again` |
 | Hold-back cancellation | `nothing_is_enqueued_before_the_hold_back_expires`, `an_abort_inside_the_hold_back_sends_nothing` |
+| Pause mid-sentence during the hold-back — the continuation is appended to the pending text and restarts the hold-back, never replaces it | `speech_that_arrives_during_the_hold_back_joins_the_pending_turn` |
 | Manual disarm | `a_manual_abort_disarms_the_whole_mode_and_discards_the_pending_send`, `disarming_a_mode_that_was_never_armed_reports_no_work` |
 | Busy or dialog target | `a_busy_target_or_one_holding_a_dialog_parks_the_turn_and_stays_a_target`, `arming_against_a_target_that_cannot_take_a_compose_entry_is_refused` |
 | Target closure | `a_closed_target_disarms_the_running_mode`, `a_closed_target_disarms_and_a_different_session_does_not`, `closing_the_bound_session_disarms_the_running_mode_and_releases_the_device` |
@@ -1190,7 +1258,7 @@ places enforce it, and they all read the same source.
 |---|---|
 | `transcribe.rs` | `TranscribeResult.language` — the two-letter code whisper used, read off `full_lang_id_from_state()` |
 | `continuous.rs` | `HandsFree.turn_language`, set by `accept_transcript`, cleared on arm and disarm |
-| `continuous.rs` | `compose_entry` appends `(reply in <Name>)` to every voice entry |
+| `continuous.rs` | `HandsFree.announced_language` — the language the model was last told; `compose_entry` appends `(reply in <Name>)` only when a turn's language differs from it |
 | `commands.rs` | `speech_language` picks the voice, and `Armed.language` records which one |
 
 **There is one language, not one per subsystem.** The dictation setting is the
@@ -1234,9 +1302,16 @@ the user changed underneath the setting — and in both, speaking in a voice
 nobody chose is worse than saying why nothing was spoken. The message reaches
 the user through the hands-free status rather than a log.
 
-**The requirement travels in the Compose entry.** `esegui i test` is queued as
-`esegui i test (reply in Italian)`. In the entry rather than in a mode hint,
-because hints are optional and this is not; on one line, because the queue types
+**The requirement travels in the Compose entry, once per conversation.**
+`esegui i test` is queued as `esegui i test (reply in Italian)`; the next
+Italian turn is queued as spoken, and a turn in English announces
+`(reply in English)` again. The model is told once, not on every message:
+`HandsFree.announced_language` records the language last stated, set only when
+the queue accepted the entry that stated it (a refused entry told the model
+nothing) and cleared on arm and disarm. A turn with no nameable language
+leaves it alone. With a fixed dictation language the start notice already
+states it, so the first turn carries nothing either. In the entry rather than
+only in a mode hint, because hints are optional and this is not; on one line, because the queue types
 the entry into a terminal and submits it, and a newline in the middle submits
 half a sentence. The English name comes from `dictation/language.rs`, whose
 table is checked against `WHISPER_LANGUAGES` in `src/stores/dictation.ts` by a
@@ -1272,7 +1347,7 @@ so the capture stream stays open and the echo is subtracted from it instead.
 speaker::render_loop ──note_rendered(SpeechAudio)──┐
                                                    v
                                               ┌─────────┐
-                                              │ FarEnd  │  16 kHz, ≤2 s
+                                              │ FarEnd  │  16 kHz, ≤120 s
                                               └────┬────┘
                                                    │ take(n), padded with silence
  capture (mono 16 kHz) ──clean(&[f32])──> EchoGuard┴──> Canceller ──> cleaned capture
@@ -1301,11 +1376,42 @@ residual offset — the device's own output latency — is what the canceller's
 delay estimator is for. `note_stopped` (called on `hush`) clears the buffer,
 because audio that will never be heard must never be subtracted.
 
-The buffer is bounded at two seconds. It is only reached when playback and
-capture are out of step — the mode was disarmed mid-reply, or the device stopped
-delivering — and the oldest samples are dropped, counted in `dropped_far_end()`.
-Holding more would not improve cancellation: audio that old no longer
-corresponds to anything the microphone is about to hear.
+The buffer must hold **every reply the speaker has accepted**, not a window of
+recent audio. A reply is pushed whole before any of it plays, and the next
+reply is pushed while the current one is still playing. So the head of the
+buffer is always what the microphone hears next. The bound is 120 s (~7.7 MB,
+only while that much is queued). It is reached only when capture stops
+consuming, and then the **newest** samples are dropped, counted in
+`dropped_far_end()` and logged at WARN (`echo: far-end reference full`).
+
+Until 2026-09-23 the bound was two seconds and the *oldest* samples were
+dropped. The oldest samples were the start of the reply, which had not played
+yet. Every reply longer than 2 s was cut to its last two seconds: the start of
+playback was matched against the end of the reply, then against silence.
+Nothing was cancelled, and with laptop speakers hands-free heard itself, cut
+its own replies off and sent them back as turns.
+`a_reply_longer_than_two_seconds_reaches_the_canceller_from_its_first_sample`
+holds that closed.
+
+**The start of a reply is aligned to the capture backlog.** Sample counting
+works only if the far end starts counting when the device starts playing. The
+capture loop drains every `POLL_INTERVAL_MS` and runs Whisper inline, so when a
+reply is handed over, up to several seconds of capture can still wait in the
+endpoint's buffer. That audio was recorded *before* the reply. So
+`note_rendered`, when the far end is empty, first queues silence equal to that
+backlog plus the carried partial frame, and then the reply. Otherwise the
+reference runs ahead of its echo, which AEC3 cannot cancel. A reply queued
+behind one still playing gets no padding, because the device plays it
+back-to-back. The backlog is read through `EchoGuard::attach_capture(Backlog)`,
+a probe installed by `open_endpoint` for the desktop buffer and for
+`BrowserLink::pending_capture`. Attaching a stream also clears what the
+previous stream left behind.
+
+Two log lines make a self-heard episode reconstructible from `tuic.log`:
+`speech: hushed, turn N begins` (INFO, `speaking`, `into_playback_ms` since the
+current run of replies was handed to the device, `interrupted`) and
+`Hands-free turn accepted` (INFO, `heard=` the first four words), to compare
+with the reply text.
 
 ### Everything runs at 16 kHz
 

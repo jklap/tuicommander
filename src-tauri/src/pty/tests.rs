@@ -10338,6 +10338,199 @@ fn enqueue_refuses_shells_and_dead_sessions() {
     assert_eq!(queued_command_count(&state, "blank"), 0);
 }
 
+fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .expect("agent session")
+        .question_confident = confident;
+}
+
+fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
+    state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .expect("shell atom")
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Boss's rule: a hands-free turn goes straight to the agent, even while it
+/// works — the way a line typed by hand into a busy Claude Code does, which the
+/// agent queues or takes mid-turn itself. The Compose queue is for something
+/// else (one message, let the agent work, then the next), so the turn never
+/// enters it. Parking it there until idle cost a median 103 s, max 594 s.
+#[cfg(unix)]
+#[test]
+fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "voice-now", SHELL_BUSY);
+    let bytes = insert_recording_session(&state, "voice-now");
+
+    assert_eq!(
+        write_voice_turn(&state, "voice-now", "check the logs"),
+        Ok(VoiceWrite::Written)
+    );
+
+    assert_eq!(
+        String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+        "\u{15}check the logs\r",
+        "the same framed write every delivery uses, never raw text"
+    );
+    assert_eq!(queued_command_count(&state, "voice-now"), 0);
+    assert_eq!(
+        shell_state_of(&state, "voice-now"),
+        SHELL_BUSY,
+        "the agent is still working; a mid-turn write must not report it idle"
+    );
+}
+
+/// An idle agent takes it too, through the same claim the queue uses, and is
+/// busy afterwards — the write started a turn.
+#[cfg(unix)]
+#[test]
+fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "voice-idle", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "voice-idle");
+
+    assert_eq!(
+        write_voice_turn(&state, "voice-idle", "hello"),
+        Ok(VoiceWrite::Written)
+    );
+    assert_eq!(
+        String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+        "\u{15}hello\r"
+    );
+    assert_eq!(shell_state_of(&state, "voice-idle"), SHELL_BUSY);
+}
+
+/// A confident question owns the composer even mid-turn: speech aimed at the
+/// agent must not answer a permission dialog.
+#[cfg(unix)]
+#[test]
+fn a_voice_turn_is_held_by_a_confident_question() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "voice-dialog", SHELL_BUSY);
+    let bytes = insert_recording_session(&state, "voice-dialog");
+    set_question_confident(&state, "voice-dialog", true);
+
+    assert_eq!(
+        write_voice_turn(&state, "voice-dialog", "yes do it"),
+        Ok(VoiceWrite::Held(VoiceHold::Question))
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+    assert_eq!(queued_command_count(&state, "voice-dialog"), 0, "held, not queued");
+}
+
+/// A draft in the composer holds the turn: the Ctrl-U that opens every write
+/// would erase what the user is typing.
+#[cfg(unix)]
+#[test]
+fn a_voice_turn_is_held_by_partial_input() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "voice-draft", SHELL_BUSY);
+    let bytes = insert_recording_session(&state, "voice-draft");
+    let mut buffer = InputLineBuffer::new();
+    buffer.feed("half typed");
+    state
+        .session_maps
+        .input_buffers
+        .insert("voice-draft".to_string(), parking_lot::Mutex::new(buffer));
+
+    assert_eq!(
+        write_voice_turn(&state, "voice-draft", "spoken"),
+        Ok(VoiceWrite::Held(VoiceHold::Draft))
+    );
+    assert!(bytes.lock().unwrap().is_empty());
+    assert_eq!(shell_state_of(&state, "voice-draft"), SHELL_BUSY);
+}
+
+/// The Compose queue is not touched: a typed entry parked for the next idle
+/// stays parked, in place, and a busy agent still receives nothing of it.
+#[cfg(unix)]
+#[test]
+fn a_voice_turn_leaves_the_compose_queue_alone() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "voice-compose", SHELL_BUSY);
+    let bytes = insert_recording_session(&state, "voice-compose");
+    let parked = enqueue_user_command(&state, "voice-compose", "run the tests").expect("enqueued");
+    assert!(!parked.typed);
+
+    assert_eq!(
+        write_voice_turn(&state, "voice-compose", "spoken"),
+        Ok(VoiceWrite::Written)
+    );
+
+    assert_eq!(
+        String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+        "\u{15}spoken\r"
+    );
+    assert_eq!(
+        list_queued_commands(&state, "voice-compose")
+            .iter()
+            .map(|entry| (entry.text.as_str(), entry.kind))
+            .collect::<Vec<_>>(),
+        vec![("run the tests", "user_command")]
+    );
+}
+
+/// A write that never started is held, not lost, and leaves the agent busy:
+/// releasing a claim that never took the idle atom must not invent an idle edge.
+#[cfg(unix)]
+#[test]
+fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "voice-fail", SHELL_BUSY);
+    insert_session_with_writer(&state, "voice-fail", Box::new(FailingWriter), TtyMode::Raw);
+
+    assert!(matches!(
+        write_voice_turn(&state, "voice-fail", "spoken"),
+        Ok(VoiceWrite::Held(VoiceHold::WriteNotStarted))
+    ));
+    assert_eq!(shell_state_of(&state, "voice-fail"), SHELL_BUSY);
+    assert!(
+        !state
+            .session_maps
+            .silence_states
+            .get("voice-fail")
+            .expect("silence")
+            .lock()
+            .idle_confirmed(),
+        "no idle evidence is restored for a turn that was never idle"
+    );
+    // And the claim was released: the next attempt is not refused as in flight.
+    insert_recording_session(&state, "voice-fail");
+    assert_eq!(
+        write_voice_turn(&state, "voice-fail", "spoken"),
+        Ok(VoiceWrite::Written)
+    );
+}
+
+/// Refused outright, as before: not an agent, gone, or empty.
+#[cfg(unix)]
+#[test]
+fn a_voice_turn_is_refused_for_shells_dead_sessions_and_empty_text() {
+    use std::sync::atomic::AtomicU8;
+    let state = crate::state::tests_support::make_test_app_state();
+    state
+        .session_maps
+        .shell_states
+        .insert("shell".to_string(), AtomicU8::new(SHELL_IDLE));
+    state
+        .session_maps
+        .session_states
+        .insert("shell".to_string(), crate::state::SessionState::default());
+    insert_recording_session(&state, "shell");
+    assert!(write_voice_turn(&state, "shell", "ls").is_err());
+    agent_session(&state, "gone", SHELL_BUSY);
+    assert!(write_voice_turn(&state, "gone", "hi").is_err());
+    agent_session(&state, "blank", SHELL_BUSY);
+    insert_recording_session(&state, "blank");
+    assert!(write_voice_turn(&state, "blank", "  ").is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn clear_queued_commands_preserves_peer_deliveries() {

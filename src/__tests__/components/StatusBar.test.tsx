@@ -448,6 +448,12 @@ describe("StatusBar", () => {
 		expect(onDictationStop).toHaveBeenCalled();
 	});
 
+	it("offers no hands-free control: it starts from the Command Palette", () => {
+		mockDictationState.enabled = true;
+		const { container } = render(() => <StatusBar {...defaultProps} />);
+		expect(findToggleByTitle(container, "hands-free")).toBeNull();
+	});
+
 	it("does not show PrBadge for CLOSED PR", () => {
 		mockGitHubStatus.mockReturnValue({
 			current_branch: "main",

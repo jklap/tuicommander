@@ -430,7 +430,10 @@ async fn progress_flow_detail(
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn progress_mark_viewed(project: String, pty_id: Option<String>) -> Result<progress::ProgressViewedReceipt, String> {
+fn progress_mark_viewed(
+    project: String,
+    pty_id: Option<String>,
+) -> Result<progress::ProgressViewedReceipt, String> {
     progress::progress_mark_viewed(&project, pty_id.as_deref())
 }
 
@@ -1968,6 +1971,7 @@ pub fn run() {
             dictation::commands::list_audio_devices,
             dictation::commands::inject_text,
             dictation::commands::get_dictation_config,
+            dictation::commands::get_hands_free_default_notice,
             dictation::commands::set_dictation_config,
             dictation::commands::check_microphone_permission,
             dictation::commands::open_microphone_settings,

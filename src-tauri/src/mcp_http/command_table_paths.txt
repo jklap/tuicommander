@@ -99,6 +99,7 @@
 /dictation/devices
 /dictation/hands-free
 /dictation/hands-free/arm
+/dictation/hands-free/default-notice
 /dictation/hands-free/disarm
 /dictation/inject
 /dictation/models

@@ -241,6 +241,10 @@ struct State {
     /// queue, so these resolve together when it goes quiet — which is correct,
     /// since it drains in order.
     playing: VecDeque<UtteranceId>,
+    /// When the device was handed the first reply of the run now in
+    /// `playing`. Only logged, by `hush`: a barge-in 300 ms into a reply is
+    /// the speaker hearing itself, one 4 s in is more likely the user.
+    playing_since: Option<std::time::Instant>,
 }
 
 impl State {
@@ -375,6 +379,7 @@ impl Speaker {
                 changes: Vec::new(),
                 tracked: VecDeque::new(),
                 playing: VecDeque::new(),
+                playing_since: None,
             }),
             wake: Condvar::new(),
             observer: std::sync::OnceLock::new(),
@@ -476,9 +481,24 @@ impl Speaker {
             } else {
                 Utterance::Interrupted
             };
+            let into_playback_ms = state
+                .playing_since
+                .take()
+                .map(|since| since.elapsed().as_millis());
+            let interrupted = state.playing.len();
             while let Some(id) = state.playing.pop_front() {
                 state.set(id, outcome.clone());
             }
+            // One line per interruption, so a reply that keeps cutting itself
+            // off can be told apart from a user talking over it.
+            tracing::info!(
+                source = "dictation",
+                speaking = !heard_everything,
+                into_playback_ms = ?into_playback_ms,
+                interrupted,
+                "speech: hushed, turn {} begins",
+                state.generation
+            );
             state.generation
         };
         // Outside the lock: the render thread takes it when synthesis returns,
@@ -573,6 +593,9 @@ fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
                     // Handed over, not heard. `Finished` is set by the poll in
                     // `next_reply` once the device reports it has nothing left.
                     state.set(reply.id, Utterance::Speaking);
+                    if state.playing.is_empty() {
+                        state.playing_since = Some(std::time::Instant::now());
+                    }
                     state.playing.push_back(reply.id);
                 }
                 Err(reason) => {
@@ -605,6 +628,7 @@ fn note_playback_drained(state: &mut State, output: &dyn Output) {
     if state.playing.is_empty() || output.is_speaking() {
         return;
     }
+    state.playing_since = None;
     while let Some(id) = state.playing.pop_front() {
         state.set(id, Utterance::Finished);
     }

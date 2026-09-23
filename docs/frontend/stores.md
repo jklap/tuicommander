@@ -433,6 +433,13 @@ settings panel renders.
   leaves the key exactly where it was.
 - `handsFree` / `speech` — polled status, never pushed. `refreshHandsFree` is
   deliberately **one** command, because the dictation hotkey asks on every press.
+- `turnEarcon(previous, next, owner)` — `applyHandsFree` plays an earcon
+  (`utils/earcon.ts`, Web Audio, 80 ms) when `deliveredTurns` or `droppedTurns`
+  moved since the last stored status. Only the client that owns the audio plays
+  it, and the first status a client reads is only a baseline. `armHandsFree`
+  primes the audio context inside the user's gesture, and reads
+  `hands_free_earcons` into `handsFreeEarcons` there, because `refreshConfig` is
+  desktop-only. `setHandsFreeEarcons(value)` saves it; off, nothing plays.
 - `armHandsFree(sessionId)` sends `DESKTOP_AUDIO_OWNER` on the desktop and
   `browserAudioOwner` — a per-tab random id — in a browser. In browser mode it
   opens the audio socket (`utils/browserVoice.ts`) **before** arming, because
@@ -440,6 +447,12 @@ settings panel renders.
   server's microphone. A refused arm closes that socket again in the `catch`, so
   a failure never leaves the device light on; `disarmHandsFree` closes it in a
   `finally`. The refusal is stored in `handsFreeError` rather than thrown.
+- `handsFreeStartNotice` — the saved start notice, `""` meaning the built-in
+  text. `setHandsFreeStartNotice(value)` saves it trimmed,
+  `resetHandsFreeStartNotice()` saves `""`, and
+  `getDefaultHandsFreeStartNotice()` asks Rust for the built-in text
+  (`get_hands_free_default_notice`) — the frontend keeps no copy of it. Its save
+  falls back to the stored value, like the other one-panel fields.
 - `saveConfig` abandons the save when `get_dictation_config` cannot be read or
   answers something that is not a config. `hands_free_hold_back_ms`,
   `hands_free_activation_phrase` and `speech_voice` fall back to the **stored**

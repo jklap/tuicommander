@@ -60,6 +60,10 @@ describe("keybindingDefaults", () => {
 			}
 		});
 
+		it("leaves the hands-free toggle unbound: it is a Command Palette action", () => {
+			expect(DEFAULT_BINDINGS["toggle-hands-free"]).toBe("");
+		});
+
 		it("has no duplicate key combos", () => {
 			// Find duplicates for a better error message
 			const seen = new Map<string, string[]>();

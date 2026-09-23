@@ -41,13 +41,15 @@ vi.mock("../../stores/updater", () => ({ updaterStore: { checkForUpdate: mockUpd
 vi.mock("../../stores/registryStore", () => ({ registryStore: { fetch: mockRegistryFetch } }));
 vi.mock("../../stores/github", () => ({ githubStore: { startPolling: vi.fn(), stopPolling: vi.fn() } }));
 vi.mock("../../stores/prNotifications", () => ({ prNotificationsStore: { startFocusTimer: vi.fn() } }));
-vi.mock("../../stores/dictation", () => ({
-	dictationStore: {
+const { mockDictation } = vi.hoisted(() => ({
+	mockDictation: {
 		state: { enabled: false },
 		refreshConfig: vi.fn().mockResolvedValue(undefined),
 		refreshStatus: vi.fn(),
+		refreshHandsFree: vi.fn(),
 	},
 }));
+vi.mock("../../stores/dictation", () => ({ dictationStore: mockDictation }));
 vi.mock("../../stores/userActivity", () => ({ userActivityStore: { startListening: vi.fn() } }));
 
 import { type AppBootstrapOptions, runAppBootstrap } from "../../hooks/useAppBootstrap";
@@ -109,6 +111,21 @@ describe("runAppBootstrap", () => {
 		expect(mockRegistryFetch).toHaveBeenCalledOnce();
 		expect(options.setWhatsNewVersion).toHaveBeenCalledWith("2.0.0");
 		expect(mockDeepLink).toHaveBeenCalledWith(expect.objectContaining({ openSettings: options.openSettings }));
+	});
+
+	it("finds a hands-free conversation still armed across a reload, only when dictation is on", async () => {
+		const refreshWith = async (enabled: boolean) => {
+			mockDictation.state.enabled = enabled;
+			mockDictation.refreshHandsFree.mockClear();
+			mockInitApp.mockImplementationOnce(async (deps) => deps.stores.refreshDictationConfig());
+			await runAppBootstrap(makeOptions());
+			await flushPromises();
+			return mockDictation.refreshHandsFree.mock.calls.length;
+		};
+
+		expect(await refreshWith(true)).toBe(1);
+		expect(await refreshWith(false)).toBe(0);
+		mockDictation.state.enabled = false;
 	});
 
 	it("starts agent detection only after splash-gating hydration completes", async () => {

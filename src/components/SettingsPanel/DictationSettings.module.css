@@ -409,3 +409,28 @@
   color: var(--error);
   border-color: var(--error);
 }
+
+/* Layout shared by the sections */
+
+/* A section's description, directly under its heading. */
+.intro {
+  margin: 0 0 12px;
+}
+
+/* A row of buttons, or a picker and the button that acts on it. */
+.controlRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.controlRow select {
+  flex: 1;
+  min-width: 0;
+}
+
+.controlRow button {
+  flex: none;
+  white-space: nowrap;
+}

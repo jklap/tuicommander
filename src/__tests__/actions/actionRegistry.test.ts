@@ -1,7 +1,18 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import "../mocks/tauri";
 import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry";
+import * as handsFree from "../../actions/handsFreeConversation";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
+import { dictationStore } from "../../stores/dictation";
+import { mockInvoke } from "../mocks/tauri";
+
+/** Turn dictation on the way the app does: by reading the backend config. */
+async function enableDictation() {
+	mockInvoke.mockImplementation(async (cmd: string) =>
+		cmd === "get_dictation_config" ? { enabled: true, hotkey: "F5", language: "auto" } : undefined,
+	);
+	await dictationStore.refreshConfig();
+	mockInvoke.mockReset().mockResolvedValue(undefined);
+}
 
 function createMockHandlers(): ShortcutHandlers {
 	return {
@@ -167,6 +178,30 @@ describe("actionRegistry", () => {
 
 			expect(handlers.closeActiveTabOrPane).toHaveBeenCalled();
 			expect(handlers.closeTerminal).not.toHaveBeenCalled();
+		});
+
+		it("hides the hands-free toggle on a desktop where dictation is off", () => {
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "toggle-hands-free");
+			expect(entry).toBeUndefined();
+		});
+
+		it("registers the hands-free toggle, unbound and labelled for what it will do", async () => {
+			await enableDictation();
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "toggle-hands-free");
+			expect(entry).toBeDefined();
+			// Nothing is armed in a fresh store, so the palette offers to start.
+			expect(entry?.label).toBe("Start hands-free conversation");
+			expect(entry?.category).toBe("Dictation");
+			expect(entry?.keybinding).toBe("");
+		});
+
+		it("routes the hands-free palette entry through the shared toggle", async () => {
+			await enableDictation();
+			const spy = vi.spyOn(handsFree, "toggleHandsFreeConversation").mockResolvedValue(undefined);
+			const entry = getActionEntries(createMockHandlers()).find((e) => e.id === "toggle-hands-free");
+			entry?.execute();
+			expect(spy).toHaveBeenCalledOnce();
+			spy.mockRestore();
 		});
 
 		it("execute calls the corresponding handler", () => {

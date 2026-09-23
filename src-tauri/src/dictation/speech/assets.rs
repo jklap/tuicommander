@@ -816,10 +816,302 @@ static ITALIAN: Asset = Asset {
     payload: Payload::Files(ITALIAN_FILES),
 };
 
+// The other languages follow Italian's shape. Each voice is the one Kyutai's
+// README lists as native to that language. French ships upstream only as the
+// larger 24-layer model; the engine reads the layer count from `bundle.json`.
+
+static ENGLISH_FILES: &[Fetch] = &[
+    Fetch {
+        name: "bundle.json",
+        url: pocket_onnx_url!("english_2026-04", "bundle.json"),
+        sha256: "bab643150f437f37df080a710520ff39ed9ebd9a339f8ebdc739f7eddfc28b3f",
+        size_bytes: 24_381,
+    },
+    Fetch {
+        name: "tokenizer.model",
+        url: pocket_onnx_url!("english_2026-04", "tokenizer.model"),
+        sha256: "d461765ae179566678c93091c5fa6f2984c31bbe990bf1aa62d92c64d91bc3f6",
+        size_bytes: 59_339,
+    },
+    Fetch {
+        name: "text_conditioner.onnx",
+        url: pocket_onnx_url!("english_2026-04", "text_conditioner.onnx"),
+        sha256: "4ecee995fb69f85c7a7493d11f7b5ee15d9950facc7ab3f5c9c49ef1e03847bb",
+        size_bytes: 16_388_344,
+    },
+    Fetch {
+        name: "flow_lm_main_int8.onnx",
+        url: pocket_onnx_url!("english_2026-04", "flow_lm_main_int8.onnx"),
+        sha256: "f9bd8106b79a0192c1c43399ab938fb24900a95c1c599870d75a884e99000116",
+        size_bytes: 76_341_079,
+    },
+    Fetch {
+        name: "flow_lm_flow_int8.onnx",
+        url: pocket_onnx_url!("english_2026-04", "flow_lm_flow_int8.onnx"),
+        sha256: "3dd781ee5abee9e195320bf0106bebd6372a852b3b36352524ee78b40554635d",
+        size_bytes: 9_962_530,
+    },
+    Fetch {
+        name: "mimi_decoder_int8.onnx",
+        url: pocket_onnx_url!("english_2026-04", "mimi_decoder_int8.onnx"),
+        sha256: "3630450a3297a101792a6ac66619ebc70ab916b265e6220c2afaef8b1673f925",
+        size_bytes: 22_684_077,
+    },
+    Fetch {
+        name: "voices/alba.safetensors",
+        url: voice_url!("english_2026-04", "alba"),
+        sha256: "69c32db63ca56843d994f81f343f62e0bf2d73f7e4c9bc73e44bb1110b1d8845",
+        size_bytes: 6_194_424,
+    },
+];
+
+static ENGLISH: Asset = Asset {
+    id: "english",
+    display_name: "English",
+    kind: Kind::Language {
+        language: "english",
+        code: "en",
+        voices: &["alba"],
+    },
+    payload: Payload::Files(ENGLISH_FILES),
+};
+
+static FRENCH_FILES: &[Fetch] = &[
+    Fetch {
+        name: "bundle.json",
+        url: pocket_onnx_url!("french_24l", "bundle.json"),
+        sha256: "8a5fe6c59985e3ccb5a6ccb1ffb2e84ac08488c5bfa704053618851436741427",
+        size_bytes: 42_235,
+    },
+    Fetch {
+        name: "tokenizer.model",
+        url: pocket_onnx_url!("french_24l", "tokenizer.model"),
+        sha256: "521c85bdb2da10618f4be52021ed1cb2a7a6299b040708487f133193f7b305e2",
+        size_bytes: 60_173,
+    },
+    Fetch {
+        name: "text_conditioner.onnx",
+        url: pocket_onnx_url!("french_24l", "text_conditioner.onnx"),
+        sha256: "89d1b6ac55e618e42d2bd840438ce918bffb14960475ef091847ca39be641e65",
+        size_bytes: 16_388_344,
+    },
+    Fetch {
+        name: "flow_lm_main_int8.onnx",
+        url: pocket_onnx_url!("french_24l", "flow_lm_main_int8.onnx"),
+        sha256: "6130a6b98fae175147d82752263e250fb7b8483c1ef5373753ad335c16f4a129",
+        size_bytes: 305_144_125,
+    },
+    Fetch {
+        name: "flow_lm_flow_int8.onnx",
+        url: pocket_onnx_url!("french_24l", "flow_lm_flow_int8.onnx"),
+        sha256: "d340c549d5a1e0e7b88a0fb26fcae53c3b76486872f4418398a395bb1bc88701",
+        size_bytes: 9_962_530,
+    },
+    Fetch {
+        name: "mimi_decoder_int8.onnx",
+        url: pocket_onnx_url!("french_24l", "mimi_decoder_int8.onnx"),
+        sha256: "b329ff3de3aa95455d2dee1cf371943dec269dd8711008017501ca129cb18d8c",
+        size_bytes: 22_684_077,
+    },
+    Fetch {
+        name: "voices/estelle.safetensors",
+        url: voice_url!("french_24l", "estelle"),
+        sha256: "f1fa8ea7ea7f39f4d9a14c403ea3bd97af17e63e1e64ca9c8484efaedca93170",
+        size_bytes: 33_035_296,
+    },
+];
+
+static FRENCH: Asset = Asset {
+    id: "french",
+    display_name: "French",
+    kind: Kind::Language {
+        language: "french",
+        code: "fr",
+        voices: &["estelle"],
+    },
+    payload: Payload::Files(FRENCH_FILES),
+};
+
+static GERMAN_FILES: &[Fetch] = &[
+    Fetch {
+        name: "bundle.json",
+        url: pocket_onnx_url!("german", "bundle.json"),
+        sha256: "7f032e4df0db3a02e24871dfa496e2b7ffa095dd98640bfcf12c04b8671ac60e",
+        size_bytes: 24_362,
+    },
+    Fetch {
+        name: "tokenizer.model",
+        url: pocket_onnx_url!("german", "tokenizer.model"),
+        sha256: "389079b9c67cd17ff1c565d53bc695df390b4ca8abf2300947e659585edd9d2a",
+        size_bytes: 59_837,
+    },
+    Fetch {
+        name: "text_conditioner.onnx",
+        url: pocket_onnx_url!("german", "text_conditioner.onnx"),
+        sha256: "a004c74047bc1c4208f6ca150c6337fb541ab03e154493f456d43baa0fd469f1",
+        size_bytes: 16_388_344,
+    },
+    Fetch {
+        name: "flow_lm_main_int8.onnx",
+        url: pocket_onnx_url!("german", "flow_lm_main_int8.onnx"),
+        sha256: "3d5e9cd303ecd26fc75b91e2766bce6de3d274d397d3ee9a392f6299366681ef",
+        size_bytes: 76_341_079,
+    },
+    Fetch {
+        name: "flow_lm_flow_int8.onnx",
+        url: pocket_onnx_url!("german", "flow_lm_flow_int8.onnx"),
+        sha256: "2b0eb8381c49672ac1050c50221db02033b5dc6c346ab45c67bd05344257f06c",
+        size_bytes: 9_962_530,
+    },
+    Fetch {
+        name: "mimi_decoder_int8.onnx",
+        url: pocket_onnx_url!("german", "mimi_decoder_int8.onnx"),
+        sha256: "3fe868810d66fa0c26bb3ae0d5ee65cae83028c0fe83398bcf3d96478f68083b",
+        size_bytes: 22_684_077,
+    },
+    Fetch {
+        name: "voices/juergen.safetensors",
+        url: voice_url!("german", "juergen"),
+        sha256: "826efa0f02676cb34743e329ff3042f406b9aa05e6110e7ce9a342e289e5f29c",
+        size_bytes: 6_243_576,
+    },
+];
+
+static GERMAN: Asset = Asset {
+    id: "german",
+    display_name: "German",
+    kind: Kind::Language {
+        language: "german",
+        code: "de",
+        voices: &["juergen"],
+    },
+    payload: Payload::Files(GERMAN_FILES),
+};
+
+static PORTUGUESE_FILES: &[Fetch] = &[
+    Fetch {
+        name: "bundle.json",
+        url: pocket_onnx_url!("portuguese", "bundle.json"),
+        sha256: "389ab9d942f044a6a71d04e86ba89b100dee21ed91ca9d099b19ac45b122d242",
+        size_bytes: 24_371,
+    },
+    Fetch {
+        name: "tokenizer.model",
+        url: pocket_onnx_url!("portuguese", "tokenizer.model"),
+        sha256: "3aa51309c55f114771c156aaeb86f6fc325991364aa3c38af74aecf1cbd0fade",
+        size_bytes: 60_995,
+    },
+    Fetch {
+        name: "text_conditioner.onnx",
+        url: pocket_onnx_url!("portuguese", "text_conditioner.onnx"),
+        sha256: "693523a9b8e8853a7130676fd0e8189939255411700f0207664715226a26c409",
+        size_bytes: 16_388_344,
+    },
+    Fetch {
+        name: "flow_lm_main_int8.onnx",
+        url: pocket_onnx_url!("portuguese", "flow_lm_main_int8.onnx"),
+        sha256: "119e5ce926cadc273508565143c86a7a9cd86450fa99cad6a37a79ba50f9db02",
+        size_bytes: 76_341_079,
+    },
+    Fetch {
+        name: "flow_lm_flow_int8.onnx",
+        url: pocket_onnx_url!("portuguese", "flow_lm_flow_int8.onnx"),
+        sha256: "53c50fc75f892687920c316513715bfbefbdb3b7642786e287c7971df53edb26",
+        size_bytes: 9_962_530,
+    },
+    Fetch {
+        name: "mimi_decoder_int8.onnx",
+        url: pocket_onnx_url!("portuguese", "mimi_decoder_int8.onnx"),
+        sha256: "691f89f074585c828914cecd5396e30e0e2a14dbfa4890bd1b5806d303daeb4e",
+        size_bytes: 22_684_077,
+    },
+    Fetch {
+        name: "voices/rafael.safetensors",
+        url: voice_url!("portuguese", "rafael"),
+        sha256: "7e7194d9ab6f1fb78db6f3a0574a605cd5ac666e6c78825f68028aa5e14592bd",
+        size_bytes: 6_194_424,
+    },
+];
+
+static PORTUGUESE: Asset = Asset {
+    id: "portuguese",
+    display_name: "Portuguese",
+    kind: Kind::Language {
+        language: "portuguese",
+        code: "pt",
+        voices: &["rafael"],
+    },
+    payload: Payload::Files(PORTUGUESE_FILES),
+};
+
+static SPANISH_FILES: &[Fetch] = &[
+    Fetch {
+        name: "bundle.json",
+        url: pocket_onnx_url!("spanish", "bundle.json"),
+        sha256: "c9f18b5fc326c2a99f645588b79ef27ef3c9c6c3066f8df73bccb7f7c1f855b3",
+        size_bytes: 24_365,
+    },
+    Fetch {
+        name: "tokenizer.model",
+        url: pocket_onnx_url!("spanish", "tokenizer.model"),
+        sha256: "aac2b96478e3e3068712bd5c45dc196f84b7341ea72587c33a2094957f0c1b0c",
+        size_bytes: 60_895,
+    },
+    Fetch {
+        name: "text_conditioner.onnx",
+        url: pocket_onnx_url!("spanish", "text_conditioner.onnx"),
+        sha256: "836ad5231fffe6d8fd23c8340d6d91676f466cd35057afd06b7db6ab69baae11",
+        size_bytes: 16_388_344,
+    },
+    Fetch {
+        name: "flow_lm_main_int8.onnx",
+        url: pocket_onnx_url!("spanish", "flow_lm_main_int8.onnx"),
+        sha256: "9b020318976e0437bcc78ad0f4a49bf1de6e6e2193c6b0380398038601f9a270",
+        size_bytes: 76_341_079,
+    },
+    Fetch {
+        name: "flow_lm_flow_int8.onnx",
+        url: pocket_onnx_url!("spanish", "flow_lm_flow_int8.onnx"),
+        sha256: "4cc630a8fc1d28e3b432349e492f5f81696aab88b1067b5282b15427fde19efe",
+        size_bytes: 9_962_530,
+    },
+    Fetch {
+        name: "mimi_decoder_int8.onnx",
+        url: pocket_onnx_url!("spanish", "mimi_decoder_int8.onnx"),
+        sha256: "309efd11b65c58cd176e554d09241f3e2c9aaabd8cbf74b8f01bdd3ec8f7d8e5",
+        size_bytes: 22_684_077,
+    },
+    Fetch {
+        name: "voices/lola.safetensors",
+        url: voice_url!("spanish", "lola"),
+        sha256: "5ec51484cea179be24582c3d3326398c5175a6d4ed7e1f2eb3491f8933e5a243",
+        size_bytes: 5_948_664,
+    },
+];
+
+static SPANISH: Asset = Asset {
+    id: "spanish",
+    display_name: "Spanish",
+    kind: Kind::Language {
+        language: "spanish",
+        code: "es",
+        voices: &["lola"],
+    },
+    payload: Payload::Files(SPANISH_FILES),
+};
+
 /// Everything a user may install, and nothing else. A download request names
 /// an entry here; an id that is not in this list is refused rather than
 /// resolved, which is what makes this an allowlist instead of a hint.
-pub static CATALOGUE: &[&Asset] = &[&ONNXRUNTIME, &ITALIAN];
+pub static CATALOGUE: &[&Asset] = &[
+    &ONNXRUNTIME,
+    &ENGLISH,
+    &FRENCH,
+    &GERMAN,
+    &ITALIAN,
+    &PORTUGUESE,
+    &SPANISH,
+];
 
 /// Look an asset up by id.
 pub fn find(id: &str) -> Option<&'static Asset> {
@@ -1056,25 +1348,31 @@ mod tests {
         // become a path or a URL anywhere downstream.
         assert!(find("italian").is_some());
         assert!(find("../whisper").is_none());
-        assert!(find("french").is_none());
+        assert!(find("japanese").is_none());
     }
 
     #[test]
     fn a_language_code_resolves_to_the_bundle_that_speaks_it() {
         // One language setting drives dictation and the reply, so the code
         // Whisper is configured with has to reach the right voice.
-        assert_eq!(
-            for_language_code("it").map(|asset| asset.id),
-            Some("italian")
-        );
+        for (code, id) in [
+            ("en", "english"),
+            ("fr", "french"),
+            ("de", "german"),
+            ("it", "italian"),
+            ("pt", "portuguese"),
+            ("es", "spanish"),
+        ] {
+            assert_eq!(for_language_code(code).map(|asset| asset.id), Some(id));
+        }
     }
 
     #[test]
     fn a_language_we_do_not_ship_resolves_to_nothing_rather_than_to_english() {
         // The failure this exists to prevent: replying in a language the user
         // did not ask for because a fallback looked friendlier than an error.
-        assert!(for_language_code("fr").is_none());
-        assert!(for_language_code("en").is_none());
+        assert!(for_language_code("ja").is_none());
+        assert!(for_language_code("ru").is_none());
         assert!(for_language_code("auto").is_none());
         assert!(for_language_code("").is_none());
     }

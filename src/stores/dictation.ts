@@ -2,6 +2,7 @@ import { createStore } from "solid-js/store";
 import { invoke, listen } from "../invoke";
 import { isTauri } from "../transport";
 import { type BrowserVoiceSession, connectBrowserVoice } from "../utils/browserVoice";
+import { type Earcon, playEarcon, primeEarcons } from "../utils/earcon";
 import { appLogger } from "./appLogger";
 
 /** Dictation config persisted to ~/.tuicommander/dictation-config.json */
@@ -21,6 +22,10 @@ interface DictationConfig {
 	hands_free_activation_phrase: string;
 	/** Tell the bound model when hands-free starts and stops. On by default. */
 	hands_free_notify_model: boolean;
+	/** Start notice sent to the model; empty means the built-in text. */
+	hands_free_start_notice: string;
+	/** Play the hands-free earcons on the owning client. On by default. */
+	hands_free_earcons: boolean;
 	/** A user-supplied speech engine as argv; empty means the bundled one. No UI control. */
 	speech_command: string[];
 	/** Which of the language's voices speaks. Empty means the first one it ships. */
@@ -76,6 +81,10 @@ export interface HandsFreeStatus {
 	queuedIds: number[];
 	holdBackMs: number;
 	error: string | null;
+	/** Spoken turns handed to the agent. Monotonic for the backend's life. */
+	deliveredTurns: number;
+	/** Turns the activation-phrase gate dropped. Monotonic like the above. */
+	droppedTurns: number;
 }
 
 /** Whether a reply can be spoken, and what the speaker is doing. */
@@ -131,6 +140,27 @@ export const DESKTOP_AUDIO_OWNER = "desktop";
  * exactly the lifetime of the socket it names.
  */
 export const browserAudioOwner = `browser-${Math.random().toString(36).slice(2, 10)}`;
+
+/**
+ * Which earcon, if any, the move from `previous` to `next` calls for.
+ *
+ * Keyed on the turn counters rather than the phase: the status is polled, a
+ * `delivered` phase can be overwritten by the next utterance between two polls,
+ * and a gate drop goes straight back to `waiting` with no phase of its own.
+ * Only the client whose hardware the conversation uses plays it — a phone
+ * holding the conversation must not make the desktop beep, nor the reverse.
+ * No baseline, no sound: the first status a client reads is not news.
+ */
+export function turnEarcon(
+	previous: HandsFreeStatus | null,
+	next: HandsFreeStatus,
+	owner: string,
+): Earcon | null {
+	if (!previous || !next.armed || next.owner !== owner) return null;
+	if (next.deliveredTurns > previous.deliveredTurns) return "delivered";
+	if (next.droppedTurns > previous.droppedTurns) return "dropped";
+	return null;
+}
 
 /** Whisper's own no_speech_thold default, mirrored from `transcribe.rs`. */
 export const DEFAULT_NO_SPEECH_THRESHOLD = 0.6;
@@ -197,6 +227,21 @@ function normalizeAudioLevel(value: number | undefined): number {
 	return Number.isFinite(value) ? Math.max(0, Math.min(1, value as number)) : 0;
 }
 
+// The hands-free meter shows the voice, not the room. Below the floor sits
+// fan and keyboard noise (the reported level is sqrt(rms * 20), so 0.35 is an
+// rms of ~0.006, under the 0.01 the segmenter treats as speech). Above it the
+// needle rises at once and falls back slowly, so a sentence reads as one
+// steady swell instead of a flicker per poll.
+const METER_NOISE_FLOOR = 0.35;
+const METER_RELEASE = 0.8;
+
+/** Next hands-free meter value from the previous one and a raw level. */
+export function easeMeterLevel(previous: number, raw: number | undefined): number {
+	const voice = Math.max(0, (normalizeAudioLevel(raw) - METER_NOISE_FLOOR) / (1 - METER_NOISE_FLOOR));
+	const released = previous * METER_RELEASE;
+	return voice > released ? voice : released < 0.01 ? 0 : released;
+}
+
 /** Supported languages for Whisper */
 export const WHISPER_LANGUAGES: Record<string, string> = {
 	auto: "Auto-detect",
@@ -241,10 +286,17 @@ interface DictationStoreState {
 	 * in text.
 	 */
 	notifyModelOnHandsFree: boolean;
+	/**
+	 * The hands-free start notice as saved. Empty means the built-in text,
+	 * which `getDefaultHandsFreeStartNotice` returns.
+	 */
+	handsFreeStartNotice: string;
 	/** Hold-back between a hands-free transcript and its enqueue, in ms. */
 	handsFreeHoldBackMs: number;
 	/** Phrase that must open each hands-free turn; empty means ungated. */
 	handsFreeActivationPhrase: string;
+	/** Whether the delivered/dropped earcons play. Defaults to true, as in Rust. */
+	handsFreeEarcons: boolean;
 	/** Which voice speaks. Empty means the language's first, decided in Rust. */
 	speechVoice: string;
 	/** The speech catalogue and what state each entry is in. */
@@ -319,8 +371,10 @@ function createDictationStore() {
 		longPressMs: 400,
 		autoSend: false,
 		notifyModelOnHandsFree: true,
+		handsFreeStartNotice: "",
 		handsFreeHoldBackMs: DEFAULT_HOLD_BACK_MS,
 		handsFreeActivationPhrase: "",
+		handsFreeEarcons: true,
 		speechVoice: "",
 		speechAssets: [],
 		speechDownloads: {},
@@ -395,6 +449,43 @@ function createDictationStore() {
 		}, 75);
 	};
 
+	// While a hands-free conversation is armed, the toast shows its meter and
+	// phase wherever the user is, not only inside Settings. The level is
+	// polled at the push-to-talk rate; phase and speaker state change on the
+	// scale of an utterance, so every fifth tick is enough. Started and
+	// stopped from `applyHandsFree`, the one place that stores the status.
+	const HANDS_FREE_STATUS_EVERY = 5;
+	let handsFreeTimer: ReturnType<typeof setInterval> | null = null;
+	const stopHandsFreeMonitor = () => {
+		if (handsFreeTimer) clearInterval(handsFreeTimer);
+		handsFreeTimer = null;
+	};
+	const startHandsFreeMonitor = () => {
+		if (handsFreeTimer) return;
+		let tick = 0;
+		handsFreeTimer = setInterval(() => {
+			void invoke<DictationStatus>("get_dictation_status")
+				.then((status) => setState("audioLevel", (previous) => easeMeterLevel(previous, status.audio_level)))
+				.catch(() => {});
+			tick += 1;
+			if (tick % HANDS_FREE_STATUS_EVERY === 0) {
+				void actions.refreshHandsFree();
+				void actions.refreshSpeechStatus();
+			}
+		}, 75);
+	};
+	const applyHandsFree = (status: HandsFreeStatus) => {
+		const earcon = turnEarcon(state.handsFree, status, isTauri() ? DESKTOP_AUDIO_OWNER : browserAudioOwner);
+		if (earcon && state.handsFreeEarcons) playEarcon(earcon);
+		setState("handsFree", status);
+		if (status.armed) {
+			startHandsFreeMonitor();
+		} else {
+			stopHandsFreeMonitor();
+			setState("audioLevel", 0);
+		}
+	};
+
 	// Listen for backend info (gpu/cpu) after model load
 	listen<{ backend: DictationBackend }>("dictation-backend-info", (event) => {
 		setState("backendInfo", event.payload.backend);
@@ -415,8 +506,10 @@ function createDictationStore() {
 					longPressMs: config.long_press_ms ?? 400,
 					autoSend: config.auto_send ?? false,
 					notifyModelOnHandsFree: config.hands_free_notify_model ?? true,
+					handsFreeStartNotice: config.hands_free_start_notice ?? "",
 					handsFreeHoldBackMs: config.hands_free_hold_back_ms ?? DEFAULT_HOLD_BACK_MS,
 					handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
+					handsFreeEarcons: config.hands_free_earcons ?? true,
 					speechVoice: config.speech_voice ?? "",
 					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
 					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
@@ -468,7 +561,12 @@ function createDictationStore() {
 					// them, which is why they may read from state.
 					hands_free_hold_back_ms: partial.hands_free_hold_back_ms ?? stored.hands_free_hold_back_ms,
 					hands_free_activation_phrase: partial.hands_free_activation_phrase ?? stored.hands_free_activation_phrase,
+					hands_free_start_notice: partial.hands_free_start_notice ?? stored.hands_free_start_notice ?? "",
 					speech_voice: partial.speech_voice ?? stored.speech_voice,
+					// Stored fallback for the same reason: its control lives in
+					// the one panel, and a browser never loads it into state
+					// until it arms.
+					hands_free_earcons: partial.hands_free_earcons ?? stored.hands_free_earcons,
 					rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
 					no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
 				};
@@ -488,7 +586,10 @@ function createDictationStore() {
 					storeUpdate.handsFreeHoldBackMs = partial.hands_free_hold_back_ms;
 				if (partial.hands_free_activation_phrase !== undefined)
 					storeUpdate.handsFreeActivationPhrase = partial.hands_free_activation_phrase;
+				if (partial.hands_free_start_notice !== undefined)
+					storeUpdate.handsFreeStartNotice = partial.hands_free_start_notice;
 				if (partial.speech_voice !== undefined) storeUpdate.speechVoice = partial.speech_voice;
+				if (partial.hands_free_earcons !== undefined) storeUpdate.handsFreeEarcons = partial.hands_free_earcons;
 				if (partial.rms_threshold !== undefined) storeUpdate.rmsThreshold = partial.rms_threshold;
 				if (partial.no_speech_threshold !== undefined) storeUpdate.noSpeechThreshold = partial.no_speech_threshold;
 				setState(storeUpdate);
@@ -517,6 +618,10 @@ function createDictationStore() {
 			actions.saveConfig({ hands_free_notify_model: value });
 		},
 
+		setHandsFreeEarcons(value: boolean): void {
+			actions.saveConfig({ hands_free_earcons: value });
+		},
+
 		setHandsFreeHoldBackMs(value: number): void {
 			actions.saveConfig({ hands_free_hold_back_ms: value });
 		},
@@ -530,6 +635,29 @@ function createDictationStore() {
 		 */
 		setHandsFreeActivationPhrase(value: string): void {
 			actions.saveConfig({ hands_free_activation_phrase: value.trim() });
+		},
+
+		/**
+		 * Set the start notice the model reads when hands-free arms.
+		 *
+		 * Saved as typed; Rust folds it to one line when it sends it. An empty
+		 * or blank value means the built-in text — that is the reset.
+		 */
+		setHandsFreeStartNotice(value: string): void {
+			actions.saveConfig({ hands_free_start_notice: value.trim() });
+		},
+
+		/** Clear the custom start notice so the built-in text is sent again. */
+		resetHandsFreeStartNotice(): void {
+			actions.saveConfig({ hands_free_start_notice: "" });
+		},
+
+		/**
+		 * The built-in start notice, for a placeholder or a "reset" preview.
+		 * Rust owns the text; the frontend never keeps a copy of it.
+		 */
+		async getDefaultHandsFreeStartNotice(): Promise<string> {
+			return invoke<string>("get_hands_free_default_notice");
 		},
 
 		setSpeechVoice(value: string): void {
@@ -767,7 +895,7 @@ function createDictationStore() {
 		 */
 		async refreshHandsFree(): Promise<void> {
 			try {
-				setState("handsFree", await invoke<HandsFreeStatus>("get_hands_free_status"));
+				applyHandsFree(await invoke<HandsFreeStatus>("get_hands_free_status"));
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get hands-free status", err);
 			}
@@ -800,12 +928,22 @@ function createDictationStore() {
 			setState("handsFreeError", null);
 			try {
 				const owner = isTauri() ? DESKTOP_AUDIO_OWNER : browserAudioOwner;
+				// Inside the arming gesture, so the first earcon is not lost
+				// to a context that started suspended.
+				primeEarcons();
+				// `refreshConfig` is desktop-only, so this is where a browser
+				// tab learns whether to play them. Never a reason to refuse.
+				void invoke<DictationConfig>("get_dictation_config")
+					.then((config) => {
+						if (typeof config?.hands_free_earcons === "boolean")
+							setState("handsFreeEarcons", config.hands_free_earcons);
+					})
+					.catch(() => {});
 				if (!isTauri()) {
 					browserVoice?.stop();
 					browserVoice = await connectBrowserVoice(owner);
 				}
-				setState(
-					"handsFree",
+				applyHandsFree(
 					await invoke<HandsFreeStatus>("arm_hands_free_dictation", {
 						sessionId,
 						owner,
@@ -840,7 +978,7 @@ function createDictationStore() {
 					alreadyDelivered: number[];
 					status: HandsFreeStatus;
 				}>("disarm_hands_free_dictation");
-				setState("handsFree", result.status);
+				applyHandsFree(result.status);
 				await actions.refreshSpeechStatus();
 				return result.alreadyDelivered;
 			} catch (err) {

@@ -42,6 +42,8 @@ const mockStore = vi.hoisted(() => ({
 		// this file is about is ever drawn.
 		notifyModelOnHandsFree: true,
 		handsFreeHoldBackMs: 1500,
+		handsFreeEarcons: true,
+		handsFreeStartNotice: "",
 		handsFreeActivationPhrase: "",
 		speechVoice: "",
 		speechAssets: [] as unknown[],
@@ -82,13 +84,17 @@ const mockStore = vi.hoisted(() => ({
 	armHandsFree: vi.fn(),
 	disarmHandsFree: vi.fn(),
 	setHandsFreeHoldBackMs: vi.fn(),
+	setHandsFreeEarcons: vi.fn(),
 	setHandsFreeActivationPhrase: vi.fn(),
 	setNotifyModelOnHandsFree: vi.fn(),
+	setHandsFreeStartNotice: vi.fn(),
+	resetHandsFreeStartNotice: vi.fn(),
+	getDefaultHandsFreeStartNotice: vi.fn(() => Promise.resolve("")),
 }));
 
 vi.mock("../../stores/dictation", () => ({
 	dictationStore: mockStore,
-	WHISPER_LANGUAGES: { auto: "Auto-detect", en: "English" },
+	WHISPER_LANGUAGES: { auto: "Auto-detect", en: "English", it: "Italian", ja: "Japanese" },
 }));
 
 import { DictationSettings } from "../../components/SettingsPanel/DictationSettings";
@@ -449,5 +455,208 @@ describe("DictationSettings – Spoken replies", () => {
 		expect(cancel.textContent).toBe("×");
 		fireEvent.click(cancel);
 		expect(mockStore.cancelSpeechDownload).toHaveBeenCalledWith("english");
+	});
+});
+
+describe("DictationSettings – Language without spoken replies", () => {
+	const languageAsset = (language: string) => ({
+		id: language,
+		display_name: language,
+		kind: "language",
+		language,
+		voices: [],
+		download_bytes: 1_000_000,
+		state: "ready",
+	});
+
+	const languageSelect = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("select")).find((select) =>
+			Array.from(select.options).some((option) => option.value === "ja"),
+		)!;
+	const optionText = (container: HTMLElement, code: string) =>
+		Array.from(languageSelect(container).options).find((option) => option.value === code)?.textContent;
+	const noVoiceHint = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("p")).find((p) => p.textContent?.includes("will not be spoken"));
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.state.speechDownloads = {};
+		mockStore.state.speechAssets = [languageAsset("it"), languageAsset("en")];
+	});
+
+	it("marks only the languages no speech bundle ships for, never auto", () => {
+		mockStore.state.language = "auto";
+		const { container } = render(() => <DictationSettings />);
+		expect(optionText(container, "ja")).toBe("Japanese — no spoken replies");
+		expect(optionText(container, "it")).toBe("Italian");
+		expect(optionText(container, "en")).toBe("English");
+		expect(optionText(container, "auto")).toBe("Auto-detect");
+	});
+
+	it("warns under the select when the chosen language cannot be spoken back", () => {
+		mockStore.state.language = "ja";
+		const { container } = render(() => <DictationSettings />);
+		const hint = noVoiceHint(container);
+		expect(hint).toBeDefined();
+		expect(hint!.textContent).toContain("Auto-detect");
+		expect(hint!.classList.contains("hint")).toBe(true);
+	});
+
+	it("does not warn for a language with a speech bundle, or for auto", () => {
+		mockStore.state.language = "it";
+		const first = render(() => <DictationSettings />);
+		expect(noVoiceHint(first.container)).toBeUndefined();
+		first.unmount();
+		mockStore.state.language = "auto";
+		const { container } = render(() => <DictationSettings />);
+		expect(noVoiceHint(container)).toBeUndefined();
+	});
+
+	it("claims nothing before the speech catalogue has loaded", () => {
+		mockStore.state.language = "ja";
+		mockStore.state.speechAssets = [];
+		const { container } = render(() => <DictationSettings />);
+		expect(optionText(container, "ja")).toBe("Japanese");
+		expect(noVoiceHint(container)).toBeUndefined();
+	});
+});
+
+describe("DictationSettings – layout", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.getDefaultHandsFreeStartNotice.mockResolvedValue("Built-in notice from Rust");
+		mockStore.state.notifyModelOnHandsFree = true;
+		mockStore.state.handsFreeStartNotice = "";
+	});
+
+	/** Which section heading each label renders under, in DOM order. */
+	const sectionOf = (container: HTMLElement): Record<string, string> => {
+		const owner: Record<string, string> = {};
+		let section = "";
+		for (const node of Array.from(container.querySelectorAll("h3, label"))) {
+			if (node.tagName === "H3") section = node.textContent ?? "";
+			else owner[node.textContent ?? ""] = section;
+		}
+		return owner;
+	};
+
+	it("keeps speech-to-text and text-to-speech in separate titled sections", () => {
+		const { container } = render(() => <DictationSettings />);
+		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.textContent);
+		expect(headings).toEqual([
+			"Dictation",
+			"Speech recognition",
+			"Auto-Corrections",
+			"Hands-free conversation",
+			"Spoken replies",
+		]);
+	});
+
+	it("puts each side's advanced settings inside its own section, never in a shared one", () => {
+		// The speech gates tune recognition, so they belong to it; nothing that
+		// tunes recognition may land under the text-to-speech heading.
+		mockStore.state.language = "it";
+		mockStore.state.speechAssets = [
+			{
+				id: "italian",
+				display_name: "Italian",
+				kind: "language",
+				language: "it",
+				voices: ["a", "b"],
+				download_bytes: 1,
+				state: "ready",
+			},
+		];
+		const owner = sectionOf(render(() => <DictationSettings />).container);
+		for (const label of [
+			"Input device",
+			"Whisper Model",
+			"Language",
+			"Voice tuning",
+			"Level gate",
+			"Speech confidence gate",
+		]) {
+			expect(owner[label]).toBe("Speech recognition");
+		}
+		expect(owner.Voice).toBe("Spoken replies");
+	});
+
+	it("keeps the hands-free switches inside the hands-free section", () => {
+		// The "notify model" toggle only matters while a conversation runs, so it
+		// must not sit among the push-to-talk settings at the top.
+		const owner = sectionOf(render(() => <DictationSettings />).container);
+		for (const label of [
+			"Activation phrase",
+			"Hold-back before sending",
+			"Earcons",
+			"Notify model when hands-free changes",
+			"Start notice",
+		]) {
+			expect(owner[label]).toBe("Hands-free conversation");
+		}
+	});
+
+	it("turns the hands-free earcons off from their own toggle", () => {
+		const { container } = render(() => <DictationSettings />);
+		const group = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === "Earcons")
+			?.parentElement as HTMLElement;
+		const toggle = group.querySelector('input[type="checkbox"]') as HTMLInputElement;
+		expect(toggle.checked).toBe(true);
+		fireEvent.change(toggle, { target: { checked: false } });
+		expect(mockStore.setHandsFreeEarcons).toHaveBeenCalledWith(false);
+	});
+
+	it("suggests “computer” as the activation phrase", () => {
+		const { container } = render(() => <DictationSettings />);
+		const group = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === "Activation phrase")
+			?.parentElement as HTMLElement;
+		expect((group.querySelector('input[type="text"]') as HTMLInputElement).placeholder).toBe("computer");
+		expect(group.textContent).toContain("Try “computer”");
+	});
+
+	describe("start notice", () => {
+		const noticeField = (container: HTMLElement) => container.querySelector("textarea");
+
+		it("shows the built-in text from Rust as the placeholder, never a frontend copy", async () => {
+			const { container } = render(() => <DictationSettings />);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(mockStore.getDefaultHandsFreeStartNotice).toHaveBeenCalledOnce();
+			expect(noticeField(container)?.placeholder).toBe("Built-in notice from Rust");
+		});
+
+		it("saves an edited notice", () => {
+			const { container } = render(() => <DictationSettings />);
+			fireEvent.change(noticeField(container) as HTMLTextAreaElement, { target: { value: "Speak Italian." } });
+			expect(mockStore.setHandsFreeStartNotice).toHaveBeenCalledWith("Speak Italian.");
+		});
+
+		it("resets a custom notice, and offers no reset when the default is already in use", () => {
+			mockStore.state.handsFreeStartNotice = "Custom";
+			const custom = render(() => <DictationSettings />);
+			fireEvent.click(custom.getByText("Reset to default"));
+			expect(mockStore.resetHandsFreeStartNotice).toHaveBeenCalledOnce();
+			custom.unmount();
+
+			mockStore.state.handsFreeStartNotice = "";
+			const builtIn = render(() => <DictationSettings />);
+			expect((builtIn.getByText("Reset to default") as HTMLButtonElement).disabled).toBe(true);
+		});
+
+		it("is hidden while the model is not notified, because nothing would send it", () => {
+			mockStore.state.notifyModelOnHandsFree = false;
+			const { container } = render(() => <DictationSettings />);
+			expect(noticeField(container)).toBeNull();
+		});
+
+		it("still renders when Rust cannot supply the default text", async () => {
+			mockStore.getDefaultHandsFreeStartNotice.mockRejectedValue(new Error("unknown command"));
+			const { container } = render(() => <DictationSettings />);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(noticeField(container)?.placeholder).toBe("");
+		});
 	});
 });

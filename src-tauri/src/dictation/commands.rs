@@ -181,6 +181,18 @@ pub fn get_dictation_status(
     } else {
         "downloaded" // Downloaded but not loaded yet
     };
+    // Read one at a time: nesting the two locks would add a lock order that
+    // nothing else in the module follows.
+    let push_to_talk_level = dictation
+        .audio
+        .lock()
+        .as_ref()
+        .map(audio::AudioCapture::level);
+    let hands_free_level = dictation
+        .hands_free_audio
+        .lock()
+        .as_ref()
+        .map(audio::AudioCapture::level);
 
     Ok(DictationStatus {
         model_status: model_status.to_string(),
@@ -188,12 +200,15 @@ pub fn get_dictation_status(
         model_size_mb: snapshot.size_mb,
         recording: dictation.recording.load(Ordering::Acquire),
         processing: dictation.processing.load(Ordering::Acquire),
-        audio_level: dictation
-            .audio
-            .lock()
-            .as_ref()
-            .map_or(0.0, audio::AudioCapture::level),
+        audio_level: capture_level(push_to_talk_level, hands_free_level),
     })
+}
+
+/// The microphone level to show: push-to-talk's capture when it is open,
+/// otherwise the hands-free one. Only one listens at a time; without the
+/// fallback a hands-free conversation reads as a silent microphone.
+fn capture_level(push_to_talk: Option<f32>, hands_free: Option<f32>) -> f32 {
+    push_to_talk.or(hands_free).unwrap_or(0.0)
 }
 
 #[tauri::command]
@@ -837,7 +852,8 @@ pub struct SpeechStatus {
 pub(crate) enum Caller<'a> {
     /// The user's own UI, on either transport.
     Owner,
-    /// A model, named by the TUIC session its MCP connection is bound to.
+    /// A model, named by the live PTY its MCP connection is bound to — the
+    /// same key a hands-free binding holds.
     Model(&'a str),
 }
 
@@ -1583,6 +1599,10 @@ pub struct HandsFreeStatus {
     pub queued_ids: Vec<u64>,
     pub hold_back_ms: u64,
     pub error: Option<String>,
+    /// Monotonic turn counts; a client plays an earcon when one moves. See
+    /// `continuous::HandsFree::delivered_turns`.
+    pub delivered_turns: u64,
+    pub dropped_turns: u64,
 }
 
 /// What a disarm did.
@@ -1618,6 +1638,8 @@ pub(crate) fn hands_free_status(dictation: &DictationState) -> HandsFreeStatus {
         queued_ids: mode.owned_ids().to_vec(),
         hold_back_ms: mode.hold_back_ms(),
         error: mode.last_error().map(str::to_string),
+        delivered_turns: mode.delivered_turns(),
+        dropped_turns: mode.dropped_turns(),
     }
 }
 
@@ -1730,6 +1752,13 @@ fn open_endpoint(
         // runs on this machine whichever microphone fed it. Only the audio is
         // remote.
         let transcriber = ensure_transcriber(None, dictation, resolve_model(&config.model))?;
+        // The canceller aligns a reply's start against capture not yet
+        // drained; this stream's backlog is what it has to count.
+        let backlog = Arc::clone(&link);
+        dictation
+            .echo
+            .lock()
+            .attach_capture(Box::new(move || backlog.pending_capture()));
         return Ok(Box::new(browser::BrowserVoiceEndpoint::new(
             link,
             transcriber,
@@ -1742,6 +1771,12 @@ fn open_endpoint(
     let device_name = config.device.as_deref().filter(|name| !name.is_empty());
     let capture = audio::AudioCapture::start_with_device(device_name)?;
     let buffer = capture.buffer_handle();
+    // See the browser branch above: the canceller counts this backlog.
+    let backlog = Arc::clone(&buffer);
+    dictation
+        .echo
+        .lock()
+        .attach_capture(Box::new(move || backlog.lock().len()));
     *dictation.hands_free_audio.lock() = Some(capture);
     dictation
         .hands_free_owner_alive
@@ -1860,10 +1895,13 @@ pub(crate) fn arm_hands_free_with(
     // microphone works, the Compose queue works for ordinary turns, and a
     // conversation the model was not told about is a worse conversation rather
     // than no conversation — the reason is visible in the hands-free status.
-    if get_dictation_config().hands_free_notify_model
+    let config = get_dictation_config();
+    if config.hands_free_notify_model
         && let Some(Err(error)) = continuous::deliver_entry_hint(
             &mut dictation.hands_free.lock(),
             &continuous::PtyVoiceQueue(state.as_ref()),
+            &continuous::entry_hint_text(&config.hands_free_start_notice),
+            Some(&config.language),
         )
     {
         tracing::warn!(
@@ -2050,6 +2088,18 @@ pub struct DictationConfig {
     /// is a fact about this machine rather than a message to a model.
     #[serde(default = "default_notify_model")]
     pub hands_free_notify_model: bool,
+    /// The start notice sent when `hands_free_notify_model` is on. Empty means
+    /// the built-in text, which [`get_hands_free_default_notice`] returns so a
+    /// settings surface can show it and reset to it. Folded to one line before
+    /// it is sent — see [`continuous::entry_hint_text`].
+    #[serde(default)]
+    pub hands_free_start_notice: String,
+    /// Play a short sound on the owning client when a spoken turn reaches the
+    /// agent, and a softer one when the activation phrase drops it. On by
+    /// default. Read by the frontend only; the backend reports the turns
+    /// either way (`HandsFreeStatus::delivered_turns`).
+    #[serde(default = "default_earcons")]
+    pub hands_free_earcons: bool,
     /// A speech engine the user supplies, as argv rather than a shell line.
     /// Empty means the bundled engine. See
     /// [`speech::external`](crate::dictation::speech::external) for the
@@ -2091,6 +2141,11 @@ fn default_notify_model() -> bool {
     true
 }
 
+/// See [`DictationConfig::hands_free_earcons`].
+fn default_earcons() -> bool {
+    true
+}
+
 impl DictationConfig {
     /// The speech gates this configuration asks for.
     pub fn gates(&self) -> transcribe::VoiceGates {
@@ -2116,6 +2171,8 @@ impl Default for DictationConfig {
             hands_free_hold_back_ms: default_hold_back_ms(),
             hands_free_activation_phrase: String::new(),
             hands_free_notify_model: default_notify_model(),
+            hands_free_start_notice: String::new(),
+            hands_free_earcons: default_earcons(),
             speech_command: Vec::new(),
             speech_voice: String::new(),
         }
@@ -2123,6 +2180,13 @@ impl Default for DictationConfig {
 }
 
 const DICTATION_CONFIG_FILE: &str = "dictation-config.json";
+
+/// The built-in hands-free start notice, sent while
+/// [`DictationConfig::hands_free_start_notice`] is empty.
+#[tauri::command]
+pub fn get_hands_free_default_notice() -> String {
+    continuous::MODE_ENTRY_HINT.to_string()
+}
 
 #[tauri::command]
 pub fn get_dictation_config() -> DictationConfig {
@@ -2447,6 +2511,26 @@ mod tests {
             wire["holdBackMs"],
             serde_json::json!(default_hold_back_ms())
         );
+        assert_eq!(wire["deliveredTurns"], serde_json::json!(0));
+        assert_eq!(wire["droppedTurns"], serde_json::json!(0));
+    }
+
+    /// A config written before the earcons setting existed must load with
+    /// them on, and an explicit off must survive the whole-document rewrite.
+    #[test]
+    fn the_earcons_setting_defaults_on_and_survives_a_rewrite() {
+        let older: DictationConfig =
+            serde_json::from_str(r#"{"enabled":true,"hotkey":"F5","language":"auto"}"#)
+                .expect("an older config loads");
+        assert!(older.hands_free_earcons);
+
+        let off = DictationConfig {
+            hands_free_earcons: false,
+            ..Default::default()
+        };
+        let wire = serde_json::to_string(&off).expect("serialize");
+        let back: DictationConfig = serde_json::from_str(&wire).expect("deserialize");
+        assert!(!back.hands_free_earcons);
     }
 
     /// The hold-back is a setting, not a constant, and arming is what reads it.
@@ -3468,6 +3552,14 @@ mod tests {
         );
     }
 
+    /// A hands-free conversation must not read as a silent microphone.
+    #[test]
+    fn the_level_falls_back_to_the_hands_free_capture() {
+        assert_eq!(capture_level(None, Some(0.4)), 0.4);
+        assert_eq!(capture_level(Some(0.2), Some(0.4)), 0.2);
+        assert_eq!(capture_level(None, None), 0.0);
+    }
+
     /// The frontend keys its bar on `asset` and ends it on `done`; a progress
     /// event must never carry `done`, or the bar would vanish mid-download.
     #[test]
@@ -3475,7 +3567,11 @@ mod tests {
         let finished = download_finished("italian");
         assert_eq!(finished["asset"], serde_json::json!("italian"));
         assert_eq!(finished["done"], serde_json::json!(true));
-        assert!(download_progress(Some("italian"), 4, 4).get("done").is_none());
+        assert!(
+            download_progress(Some("italian"), 4, 4)
+                .get("done")
+                .is_none()
+        );
     }
 
     /// Auto has no language until somebody speaks, and a voice assistant that
@@ -3823,6 +3919,45 @@ mod tests {
     }
 
     // --- Telling the model the mode changed (821-842a) --------------------
+
+    /// The setting is read at arm time: what the user wrote is what the model
+    /// reads, folded to one line, and the built-in text is not sent beside it.
+    #[cfg(unix)]
+    #[test]
+    fn arming_sends_the_configured_start_notice_instead_of_the_built_in_one() {
+        let _config = config_of_this_test(DictationConfig {
+            hands_free_start_notice: "Voice on.\nAnswer in Italian.".to_string(),
+            ..DictationConfig::default()
+        });
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::test_support::agent_session(&state, "voice-custom", crate::pty::SHELL_IDLE);
+        let typed = crate::test_support::insert_recording_session(&state, "voice-custom");
+        let dictation = DictationState::new();
+
+        arm_hands_free_with(
+            &state,
+            &dictation,
+            "voice-custom",
+            "desktop",
+            &silent_endpoint(),
+        )
+        .expect("arm");
+        let terminal = wait_for_typed(&typed, "Voice on. Answer in Italian.");
+
+        assert!(
+            !terminal.contains(continuous::MODE_ENTRY_HINT),
+            "{terminal:?}"
+        );
+        disarm_hands_free(&state, &dictation);
+    }
+
+    #[test]
+    fn the_default_notice_accessor_returns_the_text_an_empty_setting_sends() {
+        assert_eq!(
+            get_hands_free_default_notice(),
+            continuous::entry_hint_text(&DictationConfig::default().hands_free_start_notice)
+        );
+    }
 
     /// Criterion 1, end to end against a real terminal: the model is told it
     /// can answer out loud when the conversation opens, and told to go back to

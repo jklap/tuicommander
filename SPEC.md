@@ -582,10 +582,12 @@ Some frontend-only stores persist to localStorage:
 - [x] Floating toast for partial transcription results
 - [x] Prompt token carry-forward across windows
 - [x] Hands-free conversation — one bound terminal, continuous VAD segmentation, optional activation phrase with a timed window, cancellable hold-back before sending. Disarms itself on target closure, owner disconnect or capture failure
+- [x] Custom start notice: `hands_free_start_notice` replaces the built-in `MODE_ENTRY_HINT` (empty = built-in, folded to one line); `get_hands_free_default_notice` serves the default for a reset control
+- [x] Earcons: an 80 ms Web Audio blip on a delivered turn and a softer one on a gate drop, keyed on the monotonic `deliveredTurns`/`droppedTurns` status counters and played only by the audio owner
 - [x] Speech reaches the agent only through the Compose queue — a busy agent or an open permission dialog holds the turn; there is deliberately no second delivery path
 - [x] Spoken replies via local Kokoro (`speech/`), driven over IPC, HTTP and MCP by the same functions; downloadable per-language voice bundles verified by hash
 - [x] The conversation holds one language end to end — Whisper's detection picks the voice and the model is asked to answer in it
-- [x] Barge-in — WebRTC AEC3 (`echo.rs`) keeps our own reply out of the segmenter; the user talking stops playback and opens the next turn (measured: 50 ms stop latency, 0 false triggers)
+- [x] Barge-in — WebRTC AEC3 (`echo.rs`) keeps our own reply out of the segmenter; the user talking stops playback and opens the next turn (measured: 200 ms stop latency — hush waits for `min_speech_ms` of speech so residual echo cannot stop a reply — 0 false triggers)
 - [x] Download progress and utterance state are pushed on `/events` as well as to the desktop window, from one serialized payload per event; utterance transitions come from the render thread that performs them, through an observer port, so `finished` and `interrupted` reach a client that never polls
 - [x] A browser tab is its own microphone and speaker over one WebSocket (`dictation/browser.rs`), so a remote client holds a whole conversation on its own hardware. Neither owner falls back to the other's devices, a client that vanishes disarms on the same path as a dead local device, and the frontend half stays transport only — segmentation, the activation phrase and the hold-back all remain in Rust
 

@@ -140,6 +140,20 @@ impl Segmenter {
         self.open.is_some()
     }
 
+    /// True once the open utterance holds enough speech to be sent — the same
+    /// `min_speech_ms` rule [`close`](Self::close) applies. Opening needs one
+    /// frame over the floor; this needs a sustained voice, which is what tells
+    /// a person apart from a few frames of echo the canceller left behind.
+    pub fn has_speech(&self) -> bool {
+        self.open
+            .as_ref()
+            .is_some_and(|open| self.is_speech(open.speech_ms))
+    }
+
+    fn is_speech(&self, speech_ms: u32) -> bool {
+        speech_ms >= self.config.min_speech_ms
+    }
+
     /// Samples currently retained. Bounded by the pre-roll while idle and by
     /// `max_utterance_ms` while capturing; the assertion a silence test makes.
     pub fn retained_samples(&self) -> usize {
@@ -224,7 +238,7 @@ impl Segmenter {
     fn close(&mut self, end: UtteranceEnd) -> Option<Utterance> {
         let open = self.open.take()?;
         self.pre_roll.clear();
-        if open.speech_ms < self.config.min_speech_ms {
+        if !self.is_speech(open.speech_ms) {
             return None;
         }
         Some(Utterance {
@@ -467,12 +481,50 @@ impl Activation {
     }
 }
 
-/// Split a configured phrase into the words a transcript must begin with.
+/// Split a configured phrase into the folded words a transcript must begin with.
 fn phrase_words(phrase: &str) -> Vec<String> {
     leading_words(phrase, usize::MAX)
         .into_iter()
-        .map(|range| phrase[range].to_lowercase())
+        .map(|range| fold_word(&phrase[range]))
         .collect()
+}
+
+/// A word as the gate compares it: lowercase, with the accent removed from
+/// every Latin vowel and from `ç` and `ñ`.
+///
+/// Case folding alone is not enough: Whisper writes "Sentì" for a spoken
+/// "senti" when it reads the verb as past tense, and `ì` does not lowercase to
+/// `i`. A table rather than Unicode decomposition, because Whisper emits
+/// precomposed characters and the table needs no new dependency.
+fn fold_word(word: &str) -> String {
+    word.chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| match character {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+            'è' | 'é' | 'ê' | 'ë' => 'e',
+            'ì' | 'í' | 'î' | 'ï' => 'i',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            other => other,
+        })
+        .collect()
+}
+
+/// Whether a heard, folded word is `expected`, allowing one extra trailing
+/// letter on an expected word of three or more letters ("mac" → "mack").
+///
+/// That is the whole tolerance, and it is one-sided on purpose. A recogniser
+/// spelling a name by its sound tends to *add* a letter. A shorter word or a
+/// different last letter is how ordinary speech starts: after "senti", "ma",
+/// "mai" and "max" are all a person being addressed, not the tool. Short words
+/// get no tolerance at all, because "ok" plus one letter is too many words.
+fn word_matches(heard: &str, expected: &str) -> bool {
+    heard == expected
+        || (expected.chars().count() >= 3
+            && heard.starts_with(expected)
+            && heard[expected.len()..].chars().count() == 1)
 }
 
 /// Byte ranges of the first `count` words in `text`.
@@ -502,25 +554,48 @@ fn leading_words(text: &str, count: usize) -> Vec<std::ops::Range<usize>> {
     ranges
 }
 
+/// How many words of a rejected transcript the DEBUG log keeps: the phrase
+/// plus a word or two, never the whole remark.
+const REJECTED_EXCERPT_WORDS: usize = 4;
+
+/// The first `count` words of `text`, verbatim: punctuation, accents and case
+/// between them are kept, because they are what a matching miss is made of.
+fn leading_excerpt(text: &str, count: usize) -> &str {
+    let words = leading_words(text, count);
+    match (words.first(), words.last()) {
+        (Some(first), Some(last)) => &text[first.start..last.end],
+        _ => "",
+    }
+}
+
 /// The text after a leading `phrase`, or `None` when it does not begin with it.
 ///
 /// Only the separators between the phrase and the speech are removed: sentence
 /// punctuation, dashes and the *closing* half of a delimiter pair. An opening
 /// quote or bracket survives, because after the phrase it belongs to the speech
 /// rather than to the phrase, and this function may not edit what was said.
+///
+/// A heard word may also be several phrase words run together, because
+/// Whisper joins a short name onto the word before it ("Sentimac"). The joined
+/// form must still be exactly the phrase words in order, so "sentimento" stays
+/// a different word.
 fn strip_leading_phrase<'a>(phrase: &[String], text: &'a str) -> Option<&'a str> {
     let words = leading_words(text, phrase.len());
-    if words.len() < phrase.len() {
+    let mut next = 0;
+    let mut end = 0;
+    for range in words {
+        if next == phrase.len() {
+            break;
+        }
+        let heard = fold_word(&text[range.clone()]);
+        let joined = (next + 1..=phrase.len())
+            .find(|&upto| word_matches(&heard, &phrase[next..upto].concat()))?;
+        next = joined;
+        end = range.end;
+    }
+    if next < phrase.len() {
         return None;
     }
-    if words
-        .iter()
-        .zip(phrase)
-        .any(|(range, expected)| text[range.clone()].to_lowercase() != *expected)
-    {
-        return None;
-    }
-    let end = words.last().map_or(0, |range| range.end);
     Some(
         text[end..]
             .trim_start_matches(|character: char| {
@@ -540,6 +615,12 @@ pub struct HandsFree {
     /// Queue ids this mode owns, in enqueue order.
     owned: Vec<u64>,
     last_error: Option<String>,
+    /// Spoken turns handed to the Compose queue, and turns the activation
+    /// gate dropped. Monotonic for the process, never reset on arm: a client
+    /// plays an earcon when one moves between two polls, and a reset would
+    /// read as nothing — or, against a stale baseline, as a turn.
+    delivered_turns: u64,
+    dropped_turns: u64,
     activation: Activation,
     /// The language of the last transcript this mode accepted.
     ///
@@ -556,6 +637,15 @@ pub struct HandsFree {
     /// entry hint, and after the cancel this id is the only way to ask whether
     /// it did.
     entry_hint: Option<u64>,
+    /// The language this conversation's model was last told to reply in.
+    ///
+    /// Stated once — by the start notice when the language is already known,
+    /// otherwise by the first spoken turn — and again only when the user
+    /// switches language. Set only after the queue accepted the entry that
+    /// said it, because a refused entry told the model nothing. Cleared on arm
+    /// and disarm with `turn_language`: a new conversation has been told
+    /// nothing yet.
+    announced_language: Option<String>,
 }
 
 impl HandsFree {
@@ -568,14 +658,27 @@ impl HandsFree {
             pending: None,
             owned: Vec::new(),
             last_error: None,
+            delivered_turns: 0,
+            dropped_turns: 0,
             activation: Activation::default(),
             turn_language: None,
             entry_hint: None,
+            announced_language: None,
         }
     }
 
     pub fn phase(&self) -> &Phase {
         &self.phase
+    }
+
+    /// See the field. Counts [`note_enqueued`](Self::note_enqueued) calls.
+    pub fn delivered_turns(&self) -> u64 {
+        self.delivered_turns
+    }
+
+    /// See the field. Counts [`TranscriptOutcome::Rejected`].
+    pub fn dropped_turns(&self) -> u64 {
+        self.dropped_turns
     }
 
     /// The hold-back this mode will apply to the next transcript.
@@ -652,6 +755,7 @@ impl HandsFree {
         // Nothing has been said to the model about this conversation yet, so
         // nothing is owed to it when the conversation ends.
         self.entry_hint = None;
+        self.announced_language = None;
         Ok(self.generation)
     }
 
@@ -720,6 +824,7 @@ impl HandsFree {
                 // Not addressed here, so its language is not ours either.
                 // Recording it would let a remark across the room choose the
                 // voice the next real turn is answered in.
+                self.dropped_turns += 1;
                 self.phase = Phase::Waiting;
                 return TranscriptOutcome::Rejected;
             }
@@ -727,9 +832,17 @@ impl HandsFree {
         let language = language.map(str::to_string);
         self.turn_language = language.clone();
         let send_at_ms = now_ms + self.hold_back_ms;
+        // A transcript that arrives while another is held back is the same
+        // turn: the user paused mid-sentence long enough for the segmenter to
+        // close the first half. Join it and restart the hold-back, because
+        // they are still talking; replacing it would drop the first half.
+        let text = match self.pending.take() {
+            Some(pending) => format!("{} {text}", pending.text),
+            None => text.to_string(),
+        };
         self.pending = Some(PendingSend {
             generation,
-            text: text.to_string(),
+            text,
             language,
             send_at_ms,
         });
@@ -763,6 +876,7 @@ impl HandsFree {
     pub fn note_enqueued(&mut self, generation: u64, id: u64) {
         if generation == self.generation && self.binding.is_some() {
             self.owned.push(id);
+            self.delivered_turns += 1;
             self.phase = Phase::Delivered;
         }
     }
@@ -778,6 +892,16 @@ impl HandsFree {
             self.owned.push(id);
             self.entry_hint = Some(id);
         }
+    }
+
+    /// The name of `language` if the model still has to be told it: a
+    /// language this conversation has not announced yet. `None` for a turn
+    /// nobody could name — it says nothing, and must not make the model forget
+    /// what it was already told.
+    fn language_to_announce(&self, language: Option<&str>) -> Option<&'static str> {
+        let code = language?;
+        let name = super::language::name_for(code)?;
+        (self.announced_language.as_deref() != Some(code)).then_some(name)
     }
 
     /// Queue ids this mode still owns.
@@ -824,6 +948,7 @@ impl HandsFree {
         // this point belongs to a conversation nobody is having.
         self.activation.close();
         self.turn_language = None;
+        self.announced_language = None;
         self.phase = match &reason {
             DisarmReason::DeviceFailed(message) => {
                 self.last_error = Some(message.clone());
@@ -884,12 +1009,14 @@ impl VoiceQueue for PtyVoiceQueue<'_> {
 
 /// What a spoken turn looks like once it reaches the model.
 ///
-/// The transcript, plus the one thing the model cannot work out for itself: a
-/// spoken conversation has a language, and a model that answers a question in
-/// English because English is what it defaults to has ended the conversation.
-/// The requirement travels in the entry rather than in a system prompt or a
-/// mode hint, because the Compose queue is the only thing that reaches the
-/// model — hints can be turned off, and the requirement may not be.
+/// The transcript, plus — when the model has not been told it yet — the one
+/// thing it cannot work out for itself: a spoken conversation has a language,
+/// and a model that answers a question in English because English is what it
+/// defaults to has ended the conversation. The requirement travels in the
+/// entry rather than in a system prompt, because the Compose queue is the only
+/// thing that reaches the model — hints can be turned off, and the requirement
+/// may not be. It is stated once per conversation and again on a switch
+/// ([`HandsFree::language_to_announce`]), not on every turn.
 ///
 /// One line, never two. The queue types this into a terminal and submits it,
 /// and a newline in the middle submits half a sentence.
@@ -897,8 +1024,8 @@ impl VoiceQueue for PtyVoiceQueue<'_> {
 /// An unnamed language adds nothing. There is no default to fall back to: an
 /// invented "reply in English" is the exact failure this exists to prevent, so
 /// a turn nobody could name goes to the model as the user said it.
-fn compose_entry(text: &str, language: Option<&str>) -> String {
-    match language.and_then(super::language::name_for) {
+fn compose_entry(text: &str, announce: Option<&str>) -> String {
+    match announce {
         Some(name) => format!("{text} (reply in {name})"),
         None => text.to_string(),
     }
@@ -915,10 +1042,14 @@ pub fn deliver_due(
     now_ms: u64,
 ) -> Option<Result<u64, String>> {
     let send = mode.poll_send(now_ms)?;
-    let entry = compose_entry(&send.text, send.language.as_deref());
+    let announce = mode.language_to_announce(send.language.as_deref());
+    let entry = compose_entry(&send.text, announce);
     match queue.enqueue(&send.session_id, &entry, send.generation) {
         Ok(id) => {
             mode.note_enqueued(send.generation, id);
+            if announce.is_some() {
+                mode.announced_language = send.language;
+            }
             Some(Ok(id))
         }
         Err(error) => Some(Err(error)),
@@ -942,6 +1073,22 @@ pub const MODE_ENTRY_HINT: &str = "Hands-free voice is now on for this terminal:
      here on was spoken out loud, and you can answer out loud with the voice tool (call it with \
      action \"speak\"). Keep spoken replies short enough to listen to.";
 
+/// The start notice to send, given the `hands_free_start_notice` setting.
+///
+/// Blank means the built-in [`MODE_ENTRY_HINT`]. The reply language is not
+/// part of it: [`deliver_entry_hint`] appends it by code when it is known, so
+/// a user-written notice cannot drop it. Line breaks and runs of whitespace fold to single spaces, because
+/// the queue submits on a newline and a notice typed on three lines would
+/// reach the model as three prompts.
+pub fn entry_hint_text(configured: &str) -> String {
+    let folded = configured.split_whitespace().collect::<Vec<_>>().join(" ");
+    if folded.is_empty() {
+        MODE_ENTRY_HINT.to_string()
+    } else {
+        folded
+    }
+}
+
 /// What the model is told when the conversation ends.
 ///
 /// Sent only to a model that read the entry hint — see [`deliver_exit_hint`].
@@ -959,16 +1106,30 @@ pub const MODE_EXIT_HINT: &str = "Hands-free voice is off for this terminal. The
 ///
 /// The caller decides whether the user asked for this at all; the mode only
 /// remembers that it was sent.
+///
+/// `language` is the dictation setting. A fixed language is known before
+/// anybody speaks, so the notice states it and the first turn need not; `auto`
+/// names nothing, and the first spoken turn carries it instead.
 pub fn deliver_entry_hint(
     mode: &mut HandsFree,
     queue: &dyn VoiceQueue,
+    notice: &str,
+    language: Option<&str>,
 ) -> Option<Result<u64, String>> {
     let binding = mode.binding()?;
     let session_id = binding.session_id.clone();
     let generation = mode.generation();
-    match queue.enqueue(&session_id, MODE_ENTRY_HINT, generation) {
+    let announce = mode.language_to_announce(language);
+    let notice = match announce {
+        Some(name) => format!("{notice} Reply in {name}."),
+        None => notice.to_string(),
+    };
+    match queue.enqueue(&session_id, &notice, generation) {
         Ok(id) => {
             mode.note_hint_enqueued(generation, id);
+            if announce.is_some() {
+                mode.announced_language = language.map(str::to_string);
+            }
             Some(Ok(id))
         }
         Err(error) => Some(Err(error)),
@@ -1188,15 +1349,20 @@ pub fn tick(
     // what matters: `hush` opens a new turn on every call, so a level trigger
     // would open one per tick and refuse every reply the model wrote for the
     // turn in progress.
-    let was_capturing = capture.segmenter.is_capturing();
+    let had_speech = capture.segmenter.has_speech();
     let closed = capture.segmenter.push(&samples);
-    // Started talking. The cleaned capture above is what makes this edge
-    // trustworthy: whatever opened the gate is the user and not us, so the
-    // reply in flight is something they chose to talk over. A whole utterance
-    // that opened and closed inside one chunk counts too — the gate is shut
-    // again by now, but somebody still spoke.
-    if !was_capturing
-        && (capture.segmenter.is_capturing() || !closed.is_empty())
+    // Started talking — sustained, not merely over the floor. The canceller
+    // removes the linear echo and not all of it: a real room with laptop
+    // speakers leaves a few frames of residual, and one 20 ms frame opens the
+    // gate, so hushing on the open edge stopped every reply on its first
+    // syllable. The edge is therefore the one where the utterance first holds
+    // `min_speech_ms` of speech — the length below which it would not be sent
+    // as a turn either. The first words are not lost to the wait: the gate
+    // still opens on the first frame, with its pre-roll. A closed utterance
+    // has passed that same bar, so one that opened and closed inside a single
+    // chunk counts too.
+    if !had_speech
+        && (capture.segmenter.has_speech() || !closed.is_empty())
         && let Some(speaker) = capture.speaker.as_ref()
     {
         speaker.hush();
@@ -1223,16 +1389,28 @@ pub fn tick(
                     now_ms,
                 );
                 // A dropped turn is otherwise indistinguishable from a deaf
-                // microphone. The text stays out of the log: speech the user
-                // did not address here is not ours to record either.
+                // microphone, and a miss is undiagnosable without what Whisper
+                // wrote. Only the first words go to the log, and only at DEBUG:
+                // enough to see how the phrase was spelled, not the remark
+                // the user did not address here.
                 match outcome {
                     TranscriptOutcome::Rejected => tracing::debug!(
                         source = "dictation",
+                        heard = leading_excerpt(&transcript.text, REJECTED_EXCERPT_WORDS),
                         "Hands-free turn dropped: it did not begin with the activation phrase"
                     ),
                     TranscriptOutcome::Activated { window_until_ms } => tracing::debug!(
                         source = "dictation",
                         "Hands-free activated; the next turn needs no phrase before {window_until_ms}ms"
+                    ),
+                    // At INFO, unlike the drop above: an accepted turn is sent
+                    // to the model anyway, and its first words are what tells
+                    // a turn the user spoke from the reply the microphone
+                    // heard coming back out of the speaker.
+                    TranscriptOutcome::HeldBack { .. } => tracing::info!(
+                        source = "dictation",
+                        heard = leading_excerpt(&transcript.text, REJECTED_EXCERPT_WORDS),
+                        "Hands-free turn accepted"
                     ),
                     _ => {}
                 }
@@ -1662,6 +1840,34 @@ mod tests {
         assert!(mode.poll_send(2_500).is_some());
     }
 
+    /// A pause mid-sentence longer than the trailing silence closes the first
+    /// half as an utterance of its own. The continuation arrives while the
+    /// first half is still held back, and it belongs to the same turn: losing
+    /// either half sends the model a sentence the user never said.
+    #[test]
+    fn speech_that_arrives_during_the_hold_back_joins_the_pending_turn() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "open the file", None, 0);
+
+        assert_eq!(
+            mode.accept_transcript(generation, "and run the tests", Some("en"), 1_000),
+            TranscriptOutcome::HeldBack { send_at_ms: 2_500 },
+            "the user is still talking, so the hold-back starts again"
+        );
+        assert!(
+            mode.poll_send(1_500).is_none(),
+            "the first half's deadline must not send the turn early"
+        );
+        let send = mode.poll_send(2_500).expect("hold-back expired");
+        assert_eq!(send.text, "open the file and run the tests");
+        assert_eq!(send.language.as_deref(), Some("en"));
+        assert!(
+            mode.poll_send(u64::MAX).is_none(),
+            "two utterances are one turn, delivered once"
+        );
+    }
+
     /// Boss's rule: the abort kills the mode, not just the utterance.
     #[test]
     fn a_manual_abort_disarms_the_whole_mode_and_discards_the_pending_send() {
@@ -1806,6 +2012,94 @@ mod tests {
             TranscriptOutcome::Rejected
         );
         assert!(mode.pending_text().is_none());
+    }
+
+    /// What Whisper large-v3-turbo may write for a spoken "senti mac" in
+    /// Italian. It invents the accent on a verb it reads as past tense, joins a
+    /// short name onto the word before it, and spells an English name the way
+    /// it sounds. Every one of these was the user addressing the tool.
+    #[test]
+    fn the_phrase_matches_the_spellings_whisper_invents_for_it() {
+        for spoken in [
+            "Senti, Mac. Che ore sono?",
+            "Senti Mac, che ore sono?",
+            "Senti, Mack, che ore sono?",
+            "Sentì mac che ore sono?",
+            "SENTÌ, MACK! Che ore sono?",
+            "Sentimac, che ore sono?",
+            "Senti-Mac, che ore sono?",
+        ] {
+            let mut mode = armed_with_phrase("senti mac");
+            let generation = mode.generation();
+
+            assert_eq!(
+                mode.accept_transcript(generation, spoken, None, 0),
+                TranscriptOutcome::HeldBack { send_at_ms: 1_500 },
+                "{spoken:?} must activate"
+            );
+            assert_eq!(
+                mode.pending_text().map(str::to_lowercase).as_deref(),
+                Some("che ore sono?"),
+                "{spoken:?} must submit the speech without the phrase"
+            );
+        }
+    }
+
+    /// The tolerance above is one extra trailing letter on a word of three or
+    /// more, plus the joined form. Everything below is ordinary Italian that
+    /// starts close to the phrase and is addressed to a person: a shorter word
+    /// ("ma"), a different last letter ("mai", "max"), a longer word
+    /// ("sentimento", "macchina"), a different verb ("sento"), or the phrase in
+    /// the middle of a sentence.
+    #[test]
+    fn speech_that_only_resembles_the_phrase_does_not_activate() {
+        for spoken in [
+            "Senti, ma che ore sono?",
+            "Senti mai niente?",
+            "Senti Max, vieni qui",
+            "Sentimento e ragione",
+            "Senti macchina nuova",
+            "Sento mac che parte",
+            "Senti, maccheroni stasera?",
+            "Ehi, senti mac, che ore sono?",
+            "Senti",
+        ] {
+            let mut mode = armed_with_phrase("senti mac");
+            let generation = mode.generation();
+
+            assert_eq!(
+                mode.accept_transcript(generation, spoken, None, 0),
+                TranscriptOutcome::Rejected,
+                "{spoken:?} must not activate"
+            );
+            assert!(mode.pending_text().is_none(), "{spoken:?}");
+        }
+    }
+
+    /// A configured phrase carries its own accents and capitals; the setting
+    /// is folded exactly like the transcript, so either spelling works.
+    #[test]
+    fn an_accented_or_capitalised_phrase_setting_matches_the_plain_transcript() {
+        let mut mode = armed_with_phrase("  Sentì   MAC ");
+        let generation = mode.generation();
+
+        assert_eq!(
+            mode.accept_transcript(generation, "senti mac apri il file", None, 0),
+            TranscriptOutcome::HeldBack { send_at_ms: 1_500 }
+        );
+        assert_eq!(mode.pending_text(), Some("apri il file"));
+    }
+
+    /// The rejection log names what was heard, bounded, so a miss can be
+    /// diagnosed without recording the whole remark.
+    #[test]
+    fn the_rejection_excerpt_keeps_the_first_words_verbatim_and_nothing_more() {
+        assert_eq!(
+            leading_excerpt("Sentì, Mack. Che ore sono adesso?", 4),
+            "Sentì, Mack. Che ore"
+        );
+        assert_eq!(leading_excerpt("  Ciao.  ", 4), "Ciao");
+        assert_eq!(leading_excerpt("", 4), "");
     }
 
     /// Saying only the phrase is how a user opens a turn before knowing what
@@ -2030,6 +2324,59 @@ mod tests {
         assert_eq!(*mode.phase(), Phase::Delivered);
     }
 
+    /// The earcons key on these counters, not on the phase: a poll can miss a
+    /// `Delivered` the next utterance overwrote, and a gate drop never has a
+    /// phase of its own at all.
+    #[test]
+    fn only_a_delivered_turn_advances_the_delivered_count() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+        mode.accept_transcript(generation, "run the tests", None, 0);
+        assert_eq!(mode.delivered_turns(), 0, "held back is not delivered");
+
+        assert!(matches!(deliver_due(&mut mode, &queue, 1_500), Some(Ok(_))));
+        assert_eq!(mode.delivered_turns(), 1);
+        mode.note_hint_enqueued(generation, 7);
+        assert_eq!(
+            mode.delivered_turns(),
+            1,
+            "the entry hint is not a spoken turn"
+        );
+        assert_eq!(mode.dropped_turns(), 0);
+    }
+
+    #[test]
+    fn only_a_gate_rejection_advances_the_dropped_count() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+
+        mode.accept_transcript(generation, "   ", None, 0);
+        mode.accept_transcript(generation, "Ciao Tuic", None, 0);
+        assert_eq!(
+            mode.dropped_turns(),
+            0,
+            "silence and the bare phrase are not drops"
+        );
+
+        mode.accept_transcript(generation, "passami il sale", None, 20_000);
+        assert_eq!(mode.dropped_turns(), 1);
+        assert_eq!(mode.delivered_turns(), 0);
+    }
+
+    /// Monotonic across arms, so a client comparing two polls never reads a
+    /// re-arm as a turn.
+    #[test]
+    fn the_turn_counts_survive_a_disarm_and_re_arm() {
+        let mut mode = armed_with_phrase("ciao tuic");
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "passami il sale", None, 0);
+        mode.disarm(DisarmReason::Manual);
+        mode.arm("target", "desktop", true).expect("re-arm");
+
+        assert_eq!(mode.dropped_turns(), 1);
+    }
+
     /// The cancellation half of criterion 6: a disarm drops what is still
     /// parked, leaves everything it does not own alone, and says plainly that
     /// the entry already typed is gone for good.
@@ -2108,7 +2455,7 @@ mod tests {
         let generation = mode.generation();
         let queue = FakeQueue::default();
 
-        let sent = deliver_entry_hint(&mut mode, &queue).expect("armed");
+        let sent = deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None).expect("armed");
 
         assert_eq!(sent, Ok(1));
         assert_eq!(
@@ -2154,6 +2501,52 @@ mod tests {
         );
     }
 
+    /// An empty setting is "no preference", not "say nothing": turning the
+    /// notice off is `hands_free_notify_model`'s job, and a blank field that
+    /// silenced it would ship the voice tool with no reason to call it.
+    #[test]
+    fn an_empty_start_notice_setting_sends_the_built_in_notice() {
+        for configured in ["", "   ", "\n\t "] {
+            assert_eq!(
+                entry_hint_text(configured),
+                MODE_ENTRY_HINT,
+                "{configured:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_configured_start_notice_is_what_the_model_reads() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+        let notice = entry_hint_text("  Voice is on. Answer in one sentence.  ");
+
+        deliver_entry_hint(&mut mode, &queue, &notice, None)
+            .expect("armed")
+            .expect("enqueued");
+
+        assert_eq!(
+            queue.enqueued.borrow().as_slice(),
+            [(
+                "target".to_string(),
+                "Voice is on. Answer in one sentence.".to_string(),
+                generation,
+                1
+            )]
+        );
+        assert_eq!(mode.owned_ids(), [1], "a custom notice is cancellable too");
+    }
+
+    /// The settings field is multiline, but the queue submits on a newline:
+    /// a notice typed on three lines would reach the model as three prompts.
+    #[test]
+    fn a_multiline_start_notice_reaches_the_terminal_as_one_line() {
+        let notice = entry_hint_text("Voice is on.\nKeep it short.\r\n\n  Use Italian.");
+
+        assert_eq!(notice, "Voice is on. Keep it short. Use Italian.");
+    }
+
     /// Criterion 3, the contradictory pair: a notice the composer never typed
     /// is pulled back out, and nothing may be queued to undo something the
     /// model never read.
@@ -2161,7 +2554,9 @@ mod tests {
     fn a_start_notice_the_model_never_read_is_cancelled_and_not_contradicted() {
         let mut mode = armed();
         let queue = FakeQueue::default();
-        deliver_entry_hint(&mut mode, &queue).expect("armed");
+        deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
+            .expect("armed")
+            .expect("enqueued");
 
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
         let cancellation = cancel_disarmed(&queue, &disarmed);
@@ -2186,7 +2581,9 @@ mod tests {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeQueue::default();
-        deliver_entry_hint(&mut mode, &queue).expect("armed");
+        deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
+            .expect("armed")
+            .expect("enqueued");
         queue.mark_delivered(1);
 
         let disarmed = mode.disarm(DisarmReason::TargetClosed).expect("armed");
@@ -2227,14 +2624,20 @@ mod tests {
     fn rapid_arming_leaves_the_model_holding_off_then_on_in_that_order() {
         let mut mode = armed();
         let queue = FakeQueue::default();
-        deliver_entry_hint(&mut mode, &queue).expect("armed");
+        deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
+            .expect("armed")
+            .expect("enqueued");
         queue.mark_delivered(1);
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
         let cancellation = cancel_disarmed(&queue, &disarmed);
-        deliver_exit_hint(&queue, &disarmed, &cancellation).expect("the model was told");
+        deliver_exit_hint(&queue, &disarmed, &cancellation)
+            .expect("the model was told")
+            .expect("enqueued");
 
         mode.arm("target", "desktop", true).expect("re-arm");
-        deliver_entry_hint(&mut mode, &queue).expect("armed again");
+        deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
+            .expect("armed again")
+            .expect("enqueued");
 
         let texts: Vec<String> = queue
             .enqueued
@@ -2260,7 +2663,7 @@ mod tests {
         let mut mode = HandsFree::new(1_500);
         let queue = FakeQueue::default();
 
-        assert!(deliver_entry_hint(&mut mode, &queue).is_none());
+        assert!(deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None).is_none());
         assert!(queue.enqueued.borrow().is_empty());
     }
 
@@ -2272,7 +2675,7 @@ mod tests {
         let queue = FakeQueue::default();
         *queue.fail.borrow_mut() = Some("Session is not running an agent".to_string());
 
-        let sent = deliver_entry_hint(&mut mode, &queue).expect("armed");
+        let sent = deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None).expect("armed");
 
         assert_eq!(sent, Err("Session is not running an agent".to_string()));
         assert!(mode.owned_ids().is_empty());
@@ -2463,34 +2866,209 @@ mod tests {
         );
     }
 
-    /// The requirement is part of the entry, not of a mode hint. Nothing turns
-    /// it off, because a conversation that loses it is a conversation the model
-    /// answers in English.
+    /// Boss's requirement: the language is stated once per conversation, not on
+    /// every message. A second turn in the same language already has it.
     #[test]
-    fn every_turn_carries_the_requirement_and_it_names_the_language_just_spoken() {
+    fn a_second_turn_in_the_same_language_carries_no_requirement() {
         let mut mode = armed();
         let generation = mode.generation();
         let queue = FakeQueue::default();
 
         mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
-        deliver_due(&mut mode, &queue, 1_500).expect("first turn is due");
-        mode.accept_transcript(generation, "now run them again", Some("en"), 2_000);
-        deliver_due(&mut mode, &queue, 4_000).expect("second turn is due");
+        deliver_due(&mut mode, &queue, 1_500)
+            .expect("first turn is due")
+            .expect("enqueued");
+        mode.accept_transcript(generation, "ora rilanciali", Some("it"), 2_000);
+        deliver_due(&mut mode, &queue, 4_000)
+            .expect("second turn is due")
+            .expect("enqueued");
 
-        let entries: Vec<String> = queue
+        assert_eq!(
+            entries(&queue),
+            vec![
+                "esegui i test (reply in Italian)".to_string(),
+                "ora rilanciali".to_string(),
+            ],
+            "the model was told once; repeating it on every turn is the noise this removes"
+        );
+    }
+
+    /// A conversation that changes language must not keep requiring the
+    /// previous one, so a switch is announced again — and only the switch.
+    #[test]
+    fn a_language_switch_is_announced_again() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        for (at, text, language) in [
+            (0, "esegui i test", "it"),
+            (2_000, "now run them again", "en"),
+            (4_000, "and once more", "en"),
+            (6_000, "di nuovo", "it"),
+        ] {
+            mode.accept_transcript(generation, text, Some(language), at);
+            deliver_due(&mut mode, &queue, at + 1_500)
+                .expect("due")
+                .expect("enqueued");
+        }
+
+        assert_eq!(
+            entries(&queue),
+            vec![
+                "esegui i test (reply in Italian)".to_string(),
+                "now run them again (reply in English)".to_string(),
+                "and once more".to_string(),
+                "di nuovo (reply in Italian)".to_string(),
+            ]
+        );
+    }
+
+    /// A turn the recogniser could not name says nothing, and must not make
+    /// the model forget the language it was already told.
+    #[test]
+    fn an_unnamed_turn_does_not_reset_the_announced_language() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        for (at, text, language) in [
+            (0, "esegui i test", Some("it")),
+            (2_000, "mh", None),
+            (4_000, "ora rilanciali", Some("it")),
+        ] {
+            mode.accept_transcript(generation, text, language, at);
+            deliver_due(&mut mode, &queue, at + 1_500)
+                .expect("due")
+                .expect("enqueued");
+        }
+
+        assert_eq!(
+            entries(&queue),
+            vec![
+                "esegui i test (reply in Italian)".to_string(),
+                "mh".to_string(),
+                "ora rilanciali".to_string(),
+            ]
+        );
+    }
+
+    /// A refused turn never reached the model, so it announced nothing: the
+    /// next turn that does land still has to name the language.
+    #[test]
+    fn a_refused_turn_does_not_count_as_an_announcement() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        assert!(
+            deliver_due(&mut mode, &RefusingQueue, 1_500)
+                .expect("due")
+                .is_err()
+        );
+
+        let queue = FakeQueue::default();
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 2_000);
+        deliver_due(&mut mode, &queue, 3_500)
+            .expect("due")
+            .expect("enqueued");
+
+        assert_eq!(
+            entries(&queue),
+            vec!["esegui i test (reply in Italian)".to_string()]
+        );
+    }
+
+    /// The start notice is where the language is stated when it is already
+    /// known — a fixed dictation language — so the first turn need not repeat it.
+    #[test]
+    fn the_start_notice_names_a_known_language_and_the_first_turn_does_not_repeat_it() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, Some("it"))
+            .expect("armed")
+            .expect("enqueued");
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        deliver_due(&mut mode, &queue, 1_500)
+            .expect("due")
+            .expect("enqueued");
+        mode.accept_transcript(generation, "now in English", Some("en"), 2_000);
+        deliver_due(&mut mode, &queue, 3_500)
+            .expect("due")
+            .expect("enqueued");
+
+        assert_eq!(
+            entries(&queue),
+            vec![
+                format!("{MODE_ENTRY_HINT} Reply in Italian."),
+                "esegui i test".to_string(),
+                "now in English (reply in English)".to_string(),
+            ],
+            "the language line is added by code, whatever the configured notice says"
+        );
+    }
+
+    /// With `auto` nothing is known at arm, so the notice names nothing and the
+    /// first spoken turn carries the language instead.
+    #[test]
+    fn a_notice_without_a_known_language_leaves_the_first_turn_to_name_it() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeQueue::default();
+
+        deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, Some("auto"))
+            .expect("armed")
+            .expect("enqueued");
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        deliver_due(&mut mode, &queue, 1_500)
+            .expect("due")
+            .expect("enqueued");
+
+        assert_eq!(
+            entries(&queue),
+            vec![
+                MODE_ENTRY_HINT.to_string(),
+                "esegui i test (reply in Italian)".to_string()
+            ]
+        );
+    }
+
+    /// A new conversation is a new model context as far as this mode knows:
+    /// what the last one was told does not carry over.
+    #[test]
+    fn a_new_arm_announces_the_language_again() {
+        let mut mode = armed();
+        let queue = FakeQueue::default();
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        deliver_due(&mut mode, &queue, 1_500)
+            .expect("due")
+            .expect("enqueued");
+        mode.disarm(DisarmReason::Manual);
+
+        let generation = mode.arm("target", "desktop", true).expect("re-arm");
+        mode.accept_transcript(generation, "di nuovo", Some("it"), 2_000);
+        deliver_due(&mut mode, &queue, 3_500)
+            .expect("due")
+            .expect("enqueued");
+
+        assert_eq!(
+            entries(&queue),
+            vec![
+                "esegui i test (reply in Italian)".to_string(),
+                "di nuovo (reply in Italian)".to_string(),
+            ]
+        );
+    }
+
+    fn entries(queue: &FakeQueue) -> Vec<String> {
+        queue
             .enqueued
             .borrow()
             .iter()
             .map(|(_, text, _, _)| text.clone())
-            .collect();
-        assert_eq!(
-            entries,
-            vec![
-                "esegui i test (reply in Italian)".to_string(),
-                "now run them again (reply in English)".to_string(),
-            ],
-            "a conversation that changes language must not keep requiring the previous one"
-        );
+            .collect()
     }
 
     /// The failure this whole story exists to prevent, at its smallest: an
@@ -2502,7 +3080,9 @@ mod tests {
         let queue = FakeQueue::default();
 
         mode.accept_transcript(generation, "run the tests", None, 0);
-        deliver_due(&mut mode, &queue, 1_500).expect("due");
+        deliver_due(&mut mode, &queue, 1_500)
+            .expect("due")
+            .expect("enqueued");
 
         assert_eq!(
             queue.enqueued.borrow()[0].1,
@@ -2520,7 +3100,9 @@ mod tests {
         let queue = FakeQueue::default();
 
         mode.accept_transcript(generation, "rhedwch y profion", Some("cy"), 0);
-        deliver_due(&mut mode, &queue, 1_500).expect("due");
+        deliver_due(&mut mode, &queue, 1_500)
+            .expect("due")
+            .expect("enqueued");
 
         assert_eq!(queue.enqueued.borrow()[0].1, "rhedwch y profion");
     }
@@ -2623,11 +3205,6 @@ mod tests {
 
         fn feed(&self, samples: Vec<f32>) {
             self.chunks.borrow_mut().push_back(samples);
-        }
-
-        fn speaking(self, code: &str) -> Self {
-            *self.language.borrow_mut() = Some(code.to_string());
-            self
         }
     }
 
@@ -2785,6 +3362,29 @@ mod tests {
         assert!(
             capture.segmenter.is_capturing(),
             "the test needs one utterance that is still open"
+        );
+        assert_eq!(speaker.hushes(), 1);
+    }
+
+    /// A short sentence can open and close inside one device chunk. The gate is
+    /// shut again by the end of the tick, so the hush has to come from the
+    /// closed utterance — once, not zero times and not once per rule.
+    #[test]
+    fn an_utterance_opened_and_closed_in_one_chunk_stops_the_reply_once() {
+        let mode = armed_shared();
+        let (mut capture, speaker) = capture_with_a_voice();
+        let mut endpoint = FakeEndpoint::new("no");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeQueue::default();
+
+        let mut chunk = speech(300);
+        chunk.extend(silence(500));
+        endpoint.feed(chunk);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+
+        assert!(
+            !capture.segmenter.is_capturing() && endpoint.calls.get() == 1,
+            "the test needs one utterance that opened and closed inside the chunk"
         );
         assert_eq!(speaker.hushes(), 1);
     }
@@ -3456,6 +4056,26 @@ mod tests {
     const ROOM_DELAY_MS: u32 = 40;
     /// And this much quieter.
     const ROOM_GAIN: f32 = 0.35;
+
+    /// How the reply comes back to the microphone.
+    struct Room {
+        delay_ms: u32,
+        gain: f32,
+        /// Heard on top of the echo, starting with the reply's first audible
+        /// sample and uncorrelated with it: what no canceller can subtract
+        /// because it is not in the reference. Empty in the linear room.
+        residual: Vec<f32>,
+    }
+
+    /// The linear room an echo canceller is specified against.
+    fn linear_room() -> Room {
+        Room {
+            delay_ms: ROOM_DELAY_MS,
+            gain: ROOM_GAIN,
+            residual: Vec::new(),
+        }
+    }
+
     const REPLY_MS: u32 = 1_800;
     const USER_ONSET_MS: u32 = 1_200;
     const USER_MS: u32 = 600;
@@ -3483,8 +4103,8 @@ mod tests {
     /// One rendered reply, one room, one user talking over it.
     ///
     /// The room is a model, and the model *is* the fixture: the microphone
-    /// hears the reply [`ROOM_DELAY_MS`] late and [`ROOM_GAIN`] quieter, with
-    /// the user added on top. That is the signal an echo canceller is specified
+    /// hears the reply `room.delay_ms` late and `room.gain` quieter, plus any
+    /// residual the room adds, with the user added on top. That is the signal an echo canceller is specified
     /// against — a linear path with a delay — which is what makes these numbers
     /// comparable from run to run. What it deliberately does not model is a
     /// real room's reverberation, the microphone's own noise floor, and a
@@ -3497,7 +4117,7 @@ mod tests {
     /// of the machine waits through rather than the detection stage on its own.
     /// The device's own capture latency is on top of it and is not ours to
     /// measure here.
-    fn play_over_the_user(canceller: Box<dyn super::super::echo::Canceller>) -> Run {
+    fn play_over_the_user(canceller: Box<dyn super::super::echo::Canceller>, room: Room) -> Run {
         let mode = armed_shared();
         let speaker = std::sync::Arc::new(CountingSpeaker::default());
         let echo = std::sync::Arc::new(parking_lot::Mutex::new(
@@ -3529,7 +4149,7 @@ mod tests {
         // A different pitch from the reply, so a canceller cannot subtract the
         // user by subtracting the echo and still look like it worked.
         let user = tone(USER_MS, 220.0);
-        let delay = ms_to_samples(ROOM_DELAY_MS);
+        let delay = ms_to_samples(room.delay_ms);
         let onset = ms_to_samples(USER_ONSET_MS);
 
         // How much of the reply the speaker has actually emitted. Unbounded
@@ -3551,7 +4171,10 @@ mod tests {
                     if let Some(played) = sample.checked_sub(delay)
                         && played < reply.len().min(emitted)
                     {
-                        heard += ROOM_GAIN * reply[played];
+                        heard += room.gain * reply[played];
+                        if let Some(residual) = room.residual.get(played) {
+                            heard += residual;
+                        }
                     }
                     if let Some(spoken) = sample.checked_sub(onset)
                         && spoken < user.len()
@@ -3658,9 +4281,10 @@ mod tests {
     /// printed line, which nextest shows when this test fails.
     #[test]
     fn talking_over_the_reply_stops_it_without_losing_the_first_words() {
-        let measured = play_over_the_user(Box::new(
-            super::super::echo::webrtc::WebRtc::new().expect("the bundled APM starts"),
-        ))
+        let measured = play_over_the_user(
+            Box::new(super::super::echo::webrtc::WebRtc::new().expect("the bundled APM starts")),
+            linear_room(),
+        )
         .measured();
         println!("816-cbbf barge-in over a real AEC3 canceller: {measured:?}");
 
@@ -3669,8 +4293,11 @@ mod tests {
             "the reply interrupted itself {} times before the user said anything",
             measured.false_triggers
         );
+        // The hush waits for `min_speech_ms` of speech, so that is the floor;
+        // one poll interval on top is the tick the threshold lands inside.
+        let bound = SegmenterConfig::default().min_speech_ms + POLL_INTERVAL_MS as u32;
         assert!(
-            measured.stop_latency_ms <= 200,
+            measured.stop_latency_ms <= bound,
             "the user had to talk for {}ms before the reply stopped",
             measured.stop_latency_ms
         );
@@ -3701,7 +4328,7 @@ mod tests {
     /// it must interrupt the reply before the user has said a word.
     #[test]
     fn without_the_canceller_the_same_room_interrupts_the_reply_on_its_own_echo() {
-        let run = play_over_the_user(Box::new(super::super::echo::PassThrough));
+        let run = play_over_the_user(Box::new(super::super::echo::PassThrough), linear_room());
         let spurious = run
             .hushes
             .iter()
@@ -3712,6 +4339,54 @@ mod tests {
             spurious > 0,
             "the room is too quiet to prove anything: {USER_ONSET_MS}ms of reply reached \
              the microphone uncancelled and never opened the gate"
+        );
+    }
+
+    /// The failure seen in a real room: with laptop speakers every reply
+    /// stopped on its first syllable while the user said nothing.
+    ///
+    /// The linear room above leaves AEC3 nothing it cannot subtract, so it
+    /// never reproduced that. A real one does — reverberation, a speaker driven
+    /// into distortion, a canceller that has not converged at the start of a
+    /// reply — and what survives cancellation is a few frames above the
+    /// activity floor. This room models only that survivor: a canceller that
+    /// removes the linear echo exactly, and a burst it cannot see. The burst
+    /// opens the gate but is shorter than `min_speech_ms`, which is the
+    /// difference between echo that leaked and a person who started talking.
+    #[test]
+    fn a_residual_echo_burst_does_not_stop_the_reply() {
+        const BURST_MS: u32 = 100;
+        // Deterministic white noise at an RMS of about 0.035, three and a half
+        // times the activity floor.
+        let mut seed: u32 = 0x9e37_79b9;
+        let burst: Vec<f32> = (0..ms_to_samples(BURST_MS))
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed as f32 / u32::MAX as f32 * 2.0 - 1.0) * 0.06
+            })
+            .collect();
+        let config = SegmenterConfig::default();
+        assert!(
+            frame_rms(&burst[..FRAME_SAMPLES]) >= config.activity_rms
+                && BURST_MS < config.min_speech_ms,
+            "the burst must open the gate and stay short of speech, or this proves nothing"
+        );
+
+        let run = play_over_the_user(
+            Box::new(Subtract),
+            Room {
+                delay_ms: 0,
+                gain: 1.0,
+                residual: burst,
+            },
+        );
+
+        // `measured` also proves the user who does talk over the reply still
+        // stops it and still keeps their first words.
+        let measured = run.measured();
+        assert_eq!(
+            measured.false_triggers, 0,
+            "the reply stopped itself on its own residual echo"
         );
     }
 }

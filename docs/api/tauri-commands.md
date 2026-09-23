@@ -467,7 +467,8 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `set_correction_map` | `map` | `()` | Save corrections |
 | `list_audio_devices` | -- | `Vec<AudioDevice>` | List input devices |
 | `get_dictation_config` | -- | `DictationConfig` | Load config |
-| `set_dictation_config` | `config` | `()` | Save config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; every other field leaves it alone. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed |
+| `get_hands_free_default_notice` | -- | `string` | The built-in hands-free start notice, sent while `hands_free_start_notice` is empty |
+| `set_dictation_config` | `config` | `()` | Save config. A changed `language`, `speechCommand` or `speech_voice` also drops the voice built for the previous one, cancelling what it was speaking; every other field leaves it alone. `hands_free_earcons` (default true) turns the hands-free earcons off; only the frontend reads it. `hands_free_notify_model` (default true) is read at arm time only — turning it off mid-conversation does not cancel the end notice the model is already owed. `hands_free_start_notice` (default empty = built-in text) replaces the start notice, also at arm time only, folded to one line |
 | `check_microphone_permission` | -- | `String` | Check macOS microphone TCC permission status |
 | `open_microphone_settings` | -- | `()` | Open macOS System Settings > Privacy > Microphone |
 

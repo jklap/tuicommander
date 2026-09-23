@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScope, testInScopeAsync } from "../helpers/store";
+import type { HandsFreeStatus } from "../../stores/dictation";
 import { mockInvoke } from "../mocks/tauri";
 
 /**
@@ -16,6 +17,14 @@ vi.mock("../../utils/browserVoice", () => ({
 	connectBrowserVoice: (owner: string) => connectBrowserVoice(owner),
 }));
 
+/** The earcon player, stubbed: jsdom has no Web Audio, and what the store owns is *when* it plays. */
+const playEarcon = vi.fn();
+const primeEarcons = vi.fn();
+vi.mock("../../utils/earcon", () => ({
+	playEarcon: (kind: string) => playEarcon(kind),
+	primeEarcons: () => primeEarcons(),
+}));
+
 /**
  * Load the store the way a browser tab loads it: no Tauri internals, so
  * `src/invoke.ts` routes every command over HTTP.
@@ -24,12 +33,15 @@ vi.mock("../../utils/browserVoice", () => ({
  * has to survive the trip to the server, and a test that stubbed `invoke`
  * itself would prove only that the store said the right word to itself.
  */
-async function browserMode(options: { armFails?: boolean } = {}) {
+async function browserMode(
+	options: { armFails?: boolean; config?: unknown; handsFree?: (owner: string) => unknown[] } = {},
+) {
 	const internals = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
 	const realFetch = globalThis.fetch;
 	delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
 
 	const calls: { path: string; body: unknown }[] = [];
+	let handsFree: unknown[] = [];
 	const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
 		const path = new URL(String(input), "http://localhost").pathname;
 		calls.push({
@@ -39,7 +51,13 @@ async function browserMode(options: { armFails?: boolean } = {}) {
 		if (path.endsWith("/hands-free/arm") && options.armFails) {
 			return new Response("the terminal is gone", { status: 400 });
 		}
-		return new Response(JSON.stringify({ armed: true, phase: "waiting" }), {
+		const body =
+			path.endsWith("/dictation/hands-free") && handsFree.length > 0
+				? handsFree.shift()
+				: path.endsWith("/dictation/config") && options.config
+					? options.config
+					: { armed: true, phase: "waiting" };
+		return new Response(JSON.stringify(body), {
 			status: 200,
 			headers: { "content-type": "application/json" },
 		});
@@ -48,6 +66,9 @@ async function browserMode(options: { armFails?: boolean } = {}) {
 
 	vi.resetModules();
 	const module = await import("../../stores/dictation");
+	// Built after the import: the statuses name this tab's owner, which only
+	// the freshly imported module knows.
+	handsFree = options.handsFree?.(module.browserAudioOwner) ?? [];
 	return {
 		store: module.dictationStore,
 		owner: module.browserAudioOwner,
@@ -65,12 +86,30 @@ async function browserMode(options: { armFails?: boolean } = {}) {
 
 describe("dictationStore", () => {
 	let store: typeof import("../../stores/dictation").dictationStore;
+	// An armed conversation polls on an interval, and every test imports a
+	// fresh store, so no test can reach the previous one's timer to disarm it.
+	// Clearing what the test started keeps one test's poll out of the next.
+	let intervals: ReturnType<typeof setInterval>[] = [];
+
+	afterEach(() => {
+		for (const interval of intervals) clearInterval(interval);
+		intervals = [];
+		vi.mocked(globalThis.setInterval).mockRestore();
+	});
 
 	beforeEach(async () => {
+		const realSetInterval = globalThis.setInterval;
+		vi.spyOn(globalThis, "setInterval").mockImplementation(((...args: Parameters<typeof setInterval>) => {
+			const interval = realSetInterval(...args);
+			intervals.push(interval);
+			return interval;
+		}) as typeof setInterval);
 		vi.resetModules();
 		mockInvoke.mockReset();
 		connectBrowserVoice.mockClear();
 		stopBrowserVoice.mockClear();
+		playEarcon.mockClear();
+		primeEarcons.mockClear();
 		// `get_dictation_config` answers with a config, never with nothing:
 		// `saveConfig` reads fields off it directly to hold the load-modify-save
 		// rule, so a bare `undefined` here would be a shape Rust cannot produce
@@ -821,6 +860,31 @@ describe("dictationStore", () => {
 				expect(sent.hands_free_activation_phrase).toBe("stored:hands_free_activation_phrase");
 				expect(sent.hands_free_hold_back_ms).toBe("stored:hands_free_hold_back_ms");
 				expect(sent.speech_voice).toBe("stored:speech_voice");
+				expect(sent.hands_free_earcons).toBe("stored:hands_free_earcons");
+				expect(sent.hands_free_start_notice).toBe("stored:hands_free_start_notice");
+			});
+		});
+
+		it("saves a custom start notice and resets it to empty, which Rust reads as the built-in text", async () => {
+			let stored: Record<string, unknown> = { hands_free_start_notice: "" };
+			mockInvoke.mockReset();
+			mockInvoke.mockImplementation((command: string, args?: { config: Record<string, unknown> }) => {
+				if (command === "get_dictation_config") return Promise.resolve(stored);
+				if (command === "set_dictation_config" && args) stored = args.config;
+				if (command === "get_hands_free_default_notice") return Promise.resolve("built-in notice");
+				return Promise.resolve(undefined);
+			});
+
+			await testInScopeAsync(async () => {
+				store.setHandsFreeStartNotice("  Answer in Italian.\n");
+				await vi.waitFor(() => expect(store.state.handsFreeStartNotice).toBe("Answer in Italian."));
+				expect(stored.hands_free_start_notice).toBe("Answer in Italian.");
+
+				store.resetHandsFreeStartNotice();
+				await vi.waitFor(() => expect(store.state.handsFreeStartNotice).toBe(""));
+				expect(stored.hands_free_start_notice, "empty is the reset; the default text is never copied").toBe("");
+
+				expect(await store.getDefaultHandsFreeStartNotice()).toBe("built-in notice");
 			});
 		});
 
@@ -1055,6 +1119,54 @@ describe("dictationStore", () => {
 			});
 		});
 	});
+
+	/**
+	 * The hands-free meter runs for the whole conversation, so it must show the
+	 * voice and ignore the room: a fan that kept the needle twitching would read
+	 * as "it hears something" when nothing will be sent.
+	 */
+	describe("easeMeterLevel()", () => {
+		let easeMeterLevel: typeof import("../../stores/dictation").easeMeterLevel;
+
+		beforeEach(async () => {
+			({ easeMeterLevel } = await import("../../stores/dictation"));
+		});
+
+		it("reads room noise below the floor as silence", () => {
+			expect(easeMeterLevel(0, 0.2)).toBe(0);
+			expect(easeMeterLevel(0, 0.35)).toBe(0);
+		});
+
+		it("rises to a speech level on the first poll", () => {
+			expect(easeMeterLevel(0, 1)).toBe(1);
+			const speech = easeMeterLevel(0, 0.8);
+			expect(speech).toBeGreaterThan(0.5);
+			// A louder poll right after is not held back by the previous value.
+			expect(easeMeterLevel(speech, 1)).toBe(1);
+		});
+
+		it("falls back to silence gradually and ends at exactly zero", () => {
+			let level = easeMeterLevel(0, 1);
+			let polls = 0;
+			while (level > 0 && polls < 100) {
+				const next = easeMeterLevel(level, 0);
+				expect(next).toBeLessThan(level);
+				level = next;
+				polls += 1;
+			}
+			// One sentence must not drop out between two 75 ms polls.
+			expect(polls).toBeGreaterThan(5);
+			expect(level).toBe(0);
+		});
+
+		it("treats a missing or non-numeric level as silence", () => {
+			expect(easeMeterLevel(0, undefined)).toBe(0);
+			expect(easeMeterLevel(0, Number.NaN)).toBe(0);
+			// And it releases rather than jumping to zero.
+			expect(easeMeterLevel(0.5, undefined)).toBeCloseTo(0.4);
+		});
+	});
+
 	/**
 	 * The push half of the speech contract (833-6fd4).
 	 *
@@ -1144,6 +1256,154 @@ describe("dictationStore", () => {
 				expect(store.state.speech?.rendering).toBe(false);
 				expect(store.state.speech?.queued).toBe(3);
 			});
+		});
+	});
+
+	describe("hands-free earcons", () => {
+		const status = (overrides: Partial<HandsFreeStatus> = {}): HandsFreeStatus => ({
+			armed: true,
+			phase: "waiting",
+			sessionId: "sess-1",
+			owner: "desktop",
+			generation: 1,
+			pendingText: null,
+			queuedIds: [],
+			holdBackMs: 1500,
+			error: null,
+			deliveredTurns: 0,
+			droppedTurns: 0,
+			...overrides,
+		});
+
+		/** Answer each `get_hands_free_status` poll with the next status. */
+		const polls = (...statuses: HandsFreeStatus[]) => {
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(command === "get_hands_free_status" ? statuses.shift() : {}),
+			);
+		};
+
+		it("plays the delivered earcon when a turn reaches the agent", async () => {
+			polls(status(), status({ phase: "delivered", deliveredTurns: 1 }));
+			await store.refreshHandsFree();
+			await store.refreshHandsFree();
+			expect(playEarcon.mock.calls).toEqual([["delivered"]]);
+		});
+
+		/**
+		 * The phase alone would miss this: the next utterance overwrote
+		 * `delivered` before the poll saw it. The counter did not forget.
+		 */
+		it("still plays when the delivered phase was overwritten between two polls", async () => {
+			polls(status({ phase: "holding_back" }), status({ phase: "capturing", deliveredTurns: 1 }));
+			await store.refreshHandsFree();
+			await store.refreshHandsFree();
+			expect(playEarcon.mock.calls).toEqual([["delivered"]]);
+		});
+
+		it("plays the dropped earcon when the activation gate drops a turn", async () => {
+			polls(status(), status({ droppedTurns: 1 }));
+			await store.refreshHandsFree();
+			await store.refreshHandsFree();
+			expect(playEarcon.mock.calls).toEqual([["dropped"]]);
+		});
+
+		it("stays silent while nothing moved, and on the first status it reads", async () => {
+			polls(status({ deliveredTurns: 4, droppedTurns: 2 }), status({ deliveredTurns: 4, droppedTurns: 2 }));
+			await store.refreshHandsFree();
+			await store.refreshHandsFree();
+			expect(playEarcon).not.toHaveBeenCalled();
+		});
+
+		/** A phone holding the conversation must not make the desktop beep. */
+		it("stays silent on a client whose hardware the conversation does not use", async () => {
+			polls(status({ owner: "browser-phone" }), status({ owner: "browser-phone", deliveredTurns: 1 }));
+			await store.refreshHandsFree();
+			await store.refreshHandsFree();
+			expect(playEarcon).not.toHaveBeenCalled();
+		});
+
+		it("stays silent on the status a disarm returns", async () => {
+			polls(status(), status({ armed: false, owner: null, phase: "disarmed", deliveredTurns: 1 }));
+			await store.refreshHandsFree();
+			await store.refreshHandsFree();
+			expect(playEarcon).not.toHaveBeenCalled();
+		});
+
+		it("prefers the delivered earcon when both counters moved in one poll", async () => {
+			const { turnEarcon } = await import("../../stores/dictation");
+			expect(turnEarcon(status(), status({ deliveredTurns: 1, droppedTurns: 1 }), "desktop")).toBe("delivered");
+		});
+
+		it("plays on the browser tab that owns the conversation", async () => {
+			const browser = await browserMode({
+				handsFree: (owner) => [status({ owner }), status({ owner, droppedTurns: 1 })],
+			});
+			try {
+				await browser.store.refreshHandsFree();
+				await browser.store.refreshHandsFree();
+				expect(playEarcon.mock.calls).toEqual([["dropped"]]);
+			} finally {
+				browser.restore();
+			}
+		});
+
+		describe("turned off", () => {
+			it("plays nothing for a delivered or a dropped turn", async () => {
+				mockInvoke.mockImplementationOnce(() => Promise.resolve({ hands_free_earcons: false }));
+				await store.refreshConfig();
+				expect(store.state.handsFreeEarcons).toBe(false);
+				polls(status(), status({ deliveredTurns: 1 }), status({ deliveredTurns: 1, droppedTurns: 1 }));
+				await store.refreshHandsFree();
+				await store.refreshHandsFree();
+				await store.refreshHandsFree();
+				expect(playEarcon).not.toHaveBeenCalled();
+			});
+
+			/**
+			 * `refreshConfig` is desktop-only, so a browser tab learns the
+			 * setting when it arms — the moment the earcons start to matter.
+			 */
+			it("is read when a browser tab arms", async () => {
+				const browser = await browserMode({
+					config: { hands_free_earcons: false },
+					handsFree: (owner) => [status({ owner }), status({ owner, deliveredTurns: 1 })],
+				});
+				try {
+					expect(await browser.store.armHandsFree("sess-1")).toBe(true);
+					expect(browser.store.state.handsFreeEarcons).toBe(false);
+					await browser.store.refreshHandsFree();
+					await browser.store.refreshHandsFree();
+					expect(playEarcon).not.toHaveBeenCalled();
+				} finally {
+					browser.restore();
+				}
+			});
+
+			it("saves the choice under hands_free_earcons and plays again once back on", async () => {
+				await testInScopeAsync(async () => {
+					store.setHandsFreeEarcons(false);
+					await vi.waitFor(() => expect(store.state.handsFreeEarcons).toBe(false));
+					expect(mockInvoke).toHaveBeenCalledWith("set_dictation_config", {
+						config: expect.objectContaining({ hands_free_earcons: false }),
+					});
+					store.setHandsFreeEarcons(true);
+					await vi.waitFor(() => expect(store.state.handsFreeEarcons).toBe(true));
+				});
+				polls(status(), status({ droppedTurns: 1 }));
+				await store.refreshHandsFree();
+				await store.refreshHandsFree();
+				expect(playEarcon.mock.calls).toEqual([["dropped"]]);
+			});
+		});
+
+		it("primes the audio context inside the arming gesture", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(command === "arm_hands_free_dictation" ? status() : undefined),
+			);
+			await testInScopeAsync(async () => {
+				expect(await store.armHandsFree("sess-1")).toBe(true);
+			});
+			expect(primeEarcons).toHaveBeenCalled();
 		});
 	});
 });

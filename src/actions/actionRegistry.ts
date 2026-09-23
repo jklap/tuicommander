@@ -7,11 +7,14 @@
 
 import type { ShortcutHandlers } from "../hooks/useKeyboardShortcuts";
 import type { ActionName } from "../keybindingDefaults";
+import { dictationStore } from "../stores/dictation";
 import { keybindingsStore } from "../stores/keybindings";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
+import { isTauri } from "../transport";
 import { comboToDisplay } from "../utils/hotkey";
+import { isHandsFreeArmed, toggleHandsFreeConversation } from "./handsFreeConversation";
 
 export interface ActionEntry {
 	id: string; // ActionName for static entries, or dynamic IDs like "switch-repo:/path"
@@ -99,6 +102,8 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"block-fold-toggle": { label: "Toggle block fold", category: "Terminal" },
 	"block-search-toggle": { label: "Search in block", category: "Terminal" },
 	"toggle-compose-panel": { label: "Toggle compose panel", category: "Panels" },
+	// Label is replaced per build by what the toggle will do — see getActionEntries.
+	"toggle-hands-free": { label: "Start hands-free conversation", category: "Dictation" },
 };
 
 /**
@@ -182,6 +187,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"block-fold-toggle": handlers.blockFoldToggle,
 		"block-search-toggle": handlers.blockSearchToggle,
 		"toggle-compose-panel": handlers.toggleComposePanel,
+		"toggle-hands-free": () => void toggleHandsFreeConversation(),
 	};
 
 	// Defensive dedup-by-id — today ACTION_META is a Record so ids are unique by
@@ -192,13 +198,17 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		if (!meta) continue;
 		if (seen.has(actionId)) continue;
 		if (actionId === "toggle-ai-chat" && !settingsStore.isAiChatEnabled()) continue;
+		// A browser tab never loads the dictation config (`refreshConfig` is
+		// desktop-only), so there the backend's answer to arming is the gate.
+		if (actionId === "toggle-hands-free" && isTauri() && !dictationStore.state.enabled) continue;
 		const handler = handlerMap[actionId as ActionName];
 		if (!handler) continue;
 
 		const combo = keybindingsStore.getKeyForAction(actionId as ActionName);
+		const label = actionId === "toggle-hands-free" && isHandsFreeArmed() ? "Stop hands-free conversation" : meta.label;
 		entries.push({
 			id: actionId as ActionName,
-			label: meta.label,
+			label,
 			category: meta.category,
 			keybinding: combo ? comboToDisplay(combo) : "",
 			execute: handler,

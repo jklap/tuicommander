@@ -220,6 +220,11 @@ export function getShortcutSections(): ShortcutSection[] {
 				{ action: "toggle-compose-panel", keys: keyFor("toggle-compose-panel"), description: "Toggle compose panel" },
 				{ action: "toggle-tunnels", keys: keyFor("toggle-tunnels"), description: "SSH Tunnels" },
 				{
+					action: "toggle-hands-free",
+					keys: keyFor("toggle-hands-free"),
+					description: "Start/stop hands-free conversation",
+				},
+				{
 					action: "open-secondary-window",
 					keys: keyFor("open-secondary-window"),
 					description: "Open secondary window",

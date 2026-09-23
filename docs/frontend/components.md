@@ -184,8 +184,23 @@ Tabbed settings overlay.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 
-Lives under **Services**. Below the Whisper model and voice-tuning controls it
-renders two sections:
+The **Dictation** tab. One `<h3>` per section. Speech-to-text and
+text-to-speech are separate sections, and each keeps its own advanced controls
+at its bottom — there is deliberately no shared "Advanced" section:
+
+1. **Dictation** — enable, hotkey, long-press threshold, auto-send
+2. **Speech recognition** (`SpeechRecognition`) — input device (desktop only),
+   Whisper model, language, then voice tuning: the test recording and both
+   speech gates
+3. **Auto-Corrections**
+4. **Hands-free conversation** (`HandsFreeControls`)
+5. **Spoken replies** (`SpeechSetup`)
+
+`SpeechRecognition`, `HandsFreeControls` and `SpeechSetup` each open with their
+own heading: the settings search index reads source order, so a sub-component
+without one would file its labels under the wrong section.
+
+The two voice sections:
 
 - **Spoken replies** (`SpeechSetup`) — the installable speech assets from
   `get_speech_assets`, each with Download / Repair / Cancel / delete, and a voice
@@ -195,7 +210,10 @@ renders two sections:
   of the conversation"). The select is hidden unless the language asset ships
   more than one voice.
 - **Hands-free conversation** (`HandsFreeControls`) — a terminal picker, Start /
-  Stop, the polled phase, the activation phrase and the hold-back slider.
+  Stop, the polled phase, the activation phrase, the hold-back slider, the
+  earcons toggle, the "notify model" toggle and, while that is on, the start
+  notice textarea. Its placeholder is `getDefaultHandsFreeStartNotice()` — Rust
+  owns the built-in text, the frontend keeps no copy.
 
 **Nothing here arms on mount.** Opening this panel must never open the
 microphone, and neither must starting the app: `onMount` only starts a 500 ms

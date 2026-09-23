@@ -103,3 +103,21 @@
   66% { content: ".."; width: auto; }
   100% { content: "..."; width: auto; }
 }
+
+.voiceMeter {
+  position: relative;
+  width: 72px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.voiceFill {
+  position: absolute;
+  inset: 0;
+  background: var(--activity);
+  transform-origin: left center;
+  transition: transform 120ms ease-out;
+}
