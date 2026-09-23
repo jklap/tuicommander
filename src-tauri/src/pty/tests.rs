@@ -8,6 +8,31 @@ use crate::state::VtLogBuffer;
 use crate::test_support::{RecordingWriter, TtyMode, insert_session_with_writer};
 use crate::test_support::{agent_session, insert_recording_session};
 
+#[cfg(unix)]
+#[test]
+fn prefill_agent_input_preserves_partial_input_and_accumulates_grabs() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let bytes = insert_recording_session(&state, "agent-prefill");
+    agent_session(&state, "agent-prefill", SHELL_IDLE);
+    crate::mcp_http::session::write_pty_input(&state, "agent-prefill", "my note ").unwrap();
+    prefill_agent_input(&state, "agent-prefill", "<first>\n").unwrap();
+    prefill_agent_input(&state, "agent-prefill", "<second>\n").unwrap();
+    assert_eq!(
+        *bytes.lock().unwrap(),
+        b"my note \x1b[200~<first>\n\x1b[201~\x1b[200~<second>\n\x1b[201~"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn prefill_agent_input_refuses_unknown_and_plain_shell_sessions() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    assert!(prefill_agent_input(&state, "missing", "text").is_err());
+    let bytes = insert_recording_session(&state, "shell-prefill");
+    assert!(prefill_agent_input(&state, "shell-prefill", "text").is_err());
+    assert!(bytes.lock().unwrap().is_empty());
+}
+
 /// Closing a workspace's terminals is a loop over `close_pty`, and its body
 /// waits on two 100 ms `sleep` deadlines per session before it may also delete
 /// a worktree. As a plain `fn` command that ran inline on the IPC thread — the

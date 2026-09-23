@@ -38,6 +38,7 @@
 - **Plugin System** — Extend TUICommander with JavaScript plugins. Full API for terminals, git, notifications, and status bar widgets
 - **MCP Bridge** — Expose app capabilities to AI agents via Model Context Protocol
 - **[Project Progress](./user-guide/project-progress.md)** — Append-only journal per project: agent `done` and `blocked` reports plus the `intent:` markers TUICommander captures, surfaced through the toolbar bell
+- **[Design Mode](./user-guide/design-mode.md)** — Pick an element in a dedicated Chrome window and add its context to an agent terminal's editable draft
 - **[Remote Daemon](./user-guide/remote-access.md#tuic-remote-beta)** — `tuic-remote` runs the backend headless on a server or build host: same HTTP/WebSocket API, no Tauri, no GUI
 
 The complete, always-current capability inventory lives in the [Feature Reference](./FEATURES.md).

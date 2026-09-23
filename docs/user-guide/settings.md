@@ -254,6 +254,7 @@ Per-repository settings accessed via sidebar `⋯` → "Repo Settings".
 - **Setup Script** — Runs once after worktree creation (e.g., `npm install`)
 - **Run Script** — On-demand script launchable from toolbar with `Cmd+R`
 - **Archive Script** — Runs before a worktree is archived or deleted; non-zero exit blocks the operation
+- **Dev Server URL** — Optional address of this repository's development server. Design Mode opens it in a dedicated Chrome window; with no URL, Chrome opens `about:blank` so you can navigate manually. See [Design Mode](design-mode.md).
 
 ### Repo-Local Config (`.tuic.json`)
 
@@ -263,7 +264,7 @@ A `.tuic.json` file in the repository root provides team-shareable settings that
 
 Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `setup_script`, `run_script`, `archive_script`, `worktree_storage`, `delete_branch_on_remove`, `auto_archive_merged`, `orphan_cleanup`, `pr_merge_strategy`, `after_merge`, `auto_delete_on_pr_close`.
 
-User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intentionally excluded from `.tuic.json`.
+User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`, and the Dev Server URL) are intentionally excluded from `.tuic.json`.
 
 ## Notification Settings
 

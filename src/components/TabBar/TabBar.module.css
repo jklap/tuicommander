@@ -154,6 +154,25 @@
   opacity: 0.3;
 }
 
+.designModeBadge {
+  flex-shrink: 0;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-3xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.designModeArmed {
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+.designModeStopped {
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+
 .tabName {
   font-size: var(--font-md);
   color: var(--fg-secondary);

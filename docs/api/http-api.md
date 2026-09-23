@@ -498,6 +498,48 @@ rename from subsequent OSC/intent titles; spawn-assigned and dynamic titles use
 DELETE /sessions/:id?cleanup_worktree=false
 ```
 
+## Design Mode Endpoints
+
+The inspector opens a dedicated Chrome window on the machine running
+TUICommander. It binds to an agent terminal, even when the request comes from
+a browser/PWA client. The page URL is read from the local per-repository
+`dev_server_url` setting; an unset URL opens `about:blank`.
+
+### Start or rebind inspection
+
+```
+POST /design-mode/start
+Content-Type: application/json
+
+{ "sessionId": "<agent session ID>" }
+```
+
+Starting another terminal in the same repository reuses its Chrome window and
+changes the bound session. A plain shell or unknown session is refused.
+
+### Stop inspection
+
+```
+POST /design-mode/stop
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repository" }
+```
+
+### Read status
+
+```
+GET /design-mode
+```
+
+The status endpoint returns an array of `{ "repoPath": string, "sessionId":
+string, "status": "armed" | "stopped" }` objects. Start, stop and status use the same backend state as
+their Tauri command counterparts. Status changes also arrive as the
+`design-mode-changed` event on `GET /events` with the snake_case payload
+`{ "repo_path": string, "session_id": string, "status": "armed" | "stopped" }`.
+A grab is
+prefilled into the bound agent draft, never submitted by these endpoints.
+
 ## Streaming Endpoints
 
 ### WebSocket PTY Stream
@@ -690,6 +732,7 @@ the server is back to the filter the connection was opened with.
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id}` | Session ended |
+| `design-mode-changed` | `{repo_path, session_id, status}` | Design Mode for the repository changed to `armed` or `stopped`; the bound agent tab follows this status |
 | `repo-changed` | `{repo_path, kind}` | Repository changed. `kind` is `"git-state"` (`.git/` was written — a commit, ref or index change) or `"working-tree"` (files changed and `.git` did not). A git-state emit cancels the pending working-tree one, so `"git-state"` does **not** mean "only `.git` changed" — a client that needs working-tree news must react to both kinds. |
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |
 | `pty-parsed` | `{session_id, parsed}` | Structured output event from PTY parser |

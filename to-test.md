@@ -63,6 +63,35 @@ The List | Flow toggle is frontend and appears through HMR at once, but the runn
 - [ ] Click a task-list checkbox inside a commented block: it cycles state without opening the comment popover; task rows after a comment containing `- [ ]` still update the correct source line.
 - [ ] With tweak comments in the file, choose a same-repository agent in the Markdown topbar and click **Send**. An idle agent receives the request immediately; a busy agent shows one queued command and receives it on its next idle transition.
 
+## Design Mode (2026-09-23) — **Rust, needs a `make dev` restart**
+
+The existing `make dev` process does not hot-reload Rust. Restart it when the
+current agent sessions can be closed, or use a separate debug instance with
+`TUIC_APP_INSTANCE=<id>` to keep its configuration isolated. Targeted tests
+cover the individual contracts; this check joins them in a real Chrome and
+agent session.
+
+An isolated `make dev` attempt on 2026-09-23 stopped before launch because
+port 1421 was already serving a different checkout's Vite server. Do not stop
+that checkout merely to run this check.
+
+- [ ] In the restarted instance, set a repository's **Dev Server URL** to a
+      local page with a click handler. Start Design Mode from an agent tab: a
+      dedicated Chrome window opens the configured URL, hovering highlights an
+      element, and clicking selects it without firing the page handler.
+- [ ] Begin typing a note in the bound agent's composer, select two elements,
+      and confirm both grab blocks appear alongside the untouched note without
+      submitting. Check selector, path, style subset, rectangle, HTML snippet,
+      nearby text, source location when the dev build supplies one, and a valid
+      `[image: …]` PNG path.
+- [ ] Start Design Mode from another agent terminal in the same repository.
+      Confirm the existing Chrome window is reused and subsequent grabs go to
+      the newly bound terminal. Close that terminal, then Chrome: the status
+      indicator must show Stopped and no further grab may be delivered.
+- [ ] With a separate debug instance, check that quitting TUICommander closes
+      only the Chrome windows it owns. A browser/PWA start must explain that
+      Chrome opens on the host machine.
+
 ## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
 
 - [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**.
