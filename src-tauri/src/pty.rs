@@ -7601,17 +7601,23 @@ pub(crate) fn write_agent_submission_to_pty(
     }
 }
 
-/// Build the first write of an injection: Ctrl-U clears any pending input, and
-/// multiline text rides inside a bracketed paste (ESC[200~ … ESC[201~) so the
-/// TUI keeps embedded newlines as paste content and the trailing CR (sent as a
-/// separate write) lands as a real Enter keypress. Mirrors the frontend
-/// `sendCommand.ts` recipe exactly — raw multiline text merely PREFILLS
-/// codex/claude without submitting (verified live, story 091).
+/// Build the text write of an injection: multiline text rides inside a
+/// bracketed paste (ESC[200~ … ESC[201~) so the TUI keeps embedded newlines as
+/// paste content and the trailing CR (sent as a separate write) lands as a real
+/// Enter keypress. Mirrors the frontend `sendCommand.ts` recipe exactly — raw
+/// multiline text merely PREFILLS codex/claude without submitting (verified
+/// live, story 091).
+///
+/// The Ctrl-U that clears pending input is NOT part of it: it goes out
+/// `INJECT_ENTER_GAP` earlier, in its own read. Claude Code (verified live on
+/// v2.1.280) treats a long chunk as a paste, strips a Ctrl-U inside it as an
+/// invisible character and then refuses the Enter — a 584-char submission
+/// stayed unsent even with a 500ms Enter gap.
 fn injection_payload(text: &str) -> String {
     if text.contains('\n') {
-        format!("\x15\x1b[200~{text}\x1b[201~")
+        format!("\x1b[200~{text}\x1b[201~")
     } else {
-        format!("\x15{text}")
+        text.to_string()
     }
 }
 
@@ -7760,6 +7766,19 @@ fn write_agent_command_with_boundary(
     // splicing bytes into the command while the child is allowed to consume the
     // payload as a separate read.
     let mut writer = writer.lock();
+    // Ctrl-U first, alone: see `injection_payload`. It types nothing, so a
+    // failure before the first text byte cannot make a retry type the command
+    // twice — hence it reports `NotStarted` and the text write counts from zero.
+    if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\x15", 0) {
+        return (InjectionOutcome::NotStarted(error), 0);
+    }
+    if let Err(error) = writer.flush() {
+        return (
+            InjectionOutcome::NotStarted(format!("Flush failed: {error}")),
+            0,
+        );
+    }
+    std::thread::sleep(INJECT_ENTER_GAP);
     if let Err((written, error)) = write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0) {
         return (
             if written == 0 {

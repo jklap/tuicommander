@@ -29,6 +29,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Dictation auto-send submits long transcriptions to Claude Code again. Claude
+  treated a long text as a paste, stripped the Ctrl-U prefix inside it as an
+  invisible character and refused the following Enter. Agents now receive
+  Ctrl-U, the text and Enter as separate, time-spaced writes — both from the
+  frontend and from MCP `session submit` and peer delivery.
 - Restore captured agent intent and the last substantial prompt from backend
   session snapshots, including reconnects and state updates. An idle Grok tab
   no longer needs another parsed output event to recover its Context bar.

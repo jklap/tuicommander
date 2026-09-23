@@ -47,7 +47,29 @@ describe("sendCommand", () => {
 		setPlatform("Win32");
 		const { writeFn, calls } = makeRecorder();
 		await sendCommand(writeFn, "ls", "claude", "windows-native");
-		expect(calls).toEqual(["\x15ls", "\r"]);
+		expect(calls).toEqual(["\x15", "ls", "\r"]);
+	});
+
+	/**
+	 * Regression: Claude Code (verified live on v2.1.280) treats a long input
+	 * chunk as a paste. A Ctrl-U bundled into that chunk becomes pasted content:
+	 * Claude strips it ("Removed 1 invisible character · review and press Enter
+	 * to send") and refuses the following Enter, however late it arrives. A
+	 * 584-char dictation stayed unsent with a 500ms Enter gap; with Ctrl-U in its
+	 * own earlier read, 584 and 1500 chars both submitted.
+	 */
+	it("sends Ctrl-U to an agent in its own write, separated in TIME from the text", async () => {
+		setPlatform("MacIntel");
+		const stamps: number[] = [];
+		const calls: string[] = [];
+		const writeFn = async (data: string): Promise<void> => {
+			calls.push(data);
+			stamps.push(performance.now());
+		};
+		const longText = "dictated text ".repeat(50).trim();
+		await sendCommand(writeFn, longText, "claude", "posix");
+		expect(calls).toEqual(["\x15", longText, "\r"]);
+		expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
 	});
 
 	it("sends Ctrl-U for POSIX shellFamily even when running on Windows (git-bash regression)", async () => {
@@ -142,9 +164,9 @@ describe("sendCommand", () => {
 			stamps.push(performance.now());
 		};
 		await sendCommand(writeFn, "run the tests", "codex", "posix");
-		expect(stamps.length).toBe(2);
+		expect(stamps.length).toBe(3);
 		// setTimeout never fires early; allow a small scheduler tolerance.
-		expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
+		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
 	});
 
 	it("does not delay the Enter on a plain shell (line-buffered, no coalescing risk)", async () => {
@@ -175,17 +197,18 @@ describe("sendCommand", () => {
 			stamps.push(performance.now());
 		};
 		await sendCommand(writeFn, "say only the word OK", "pi", "posix");
-		expect(calls).toEqual(["\x15say only the word OK", "\r"]);
-		expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
+		expect(calls).toEqual(["\x15", "say only the word OK", "\r"]);
+		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
 	});
 
-	it("does not delay when the Enter is withheld", async () => {
+	it("does not pay the Enter gap when the Enter is withheld", async () => {
 		setPlatform("MacIntel");
 		const started = performance.now();
 		const { writeFn, calls } = makeRecorder();
 		await sendCommand(writeFn, "run the tests", "codex", "posix", false);
-		expect(calls).toEqual(["\x15run the tests"]);
-		expect(performance.now() - started).toBeLessThan(AGENT_ENTER_GAP_MS);
+		expect(calls).toEqual(["\x15", "run the tests"]);
+		// Only the Ctrl-U gap elapses; a second gap would mean the Enter's was paid too.
+		expect(performance.now() - started).toBeLessThan(2 * AGENT_ENTER_GAP_MS);
 	});
 });
 

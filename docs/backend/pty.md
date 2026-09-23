@@ -427,7 +427,7 @@ A debounce (`last_session_conflict_mark`) prevents creating multiple flag files 
 Single-key PTY writes that should clear the current input line prepend `\x15` (Ctrl-U) on POSIX shells. The selection is **shell-family aware**, not host-platform aware: the detected shell (`bash`/`zsh`/`fish` → POSIX, `powershell`/`cmd` → Windows) drives the choice. Mixing PowerShell on macOS or a POSIX shell via WSL/MSYS now behaves correctly. Native Windows shells skip the prefix entirely to avoid inserting a literal `^U`.
 
 Frontend input helpers route through `src/utils/sendCommand.ts`:
-- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. Handles Ink raw-mode split writes.
+- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. With an agent attached, Ctrl-U, text and `\r` are three writes 50 ms apart (Claude Code strips a Ctrl-U inside a long pasted text and refuses the Enter).
 - `sendPtyKey(fn, key)` — pass-through single key/escape sequence. No prefix, no trailing CR. Use for `ChoicePrompt` option keys, TUI app navigation, and any raw-stdin interaction.
 
 Never write `text + "\r"` directly to a PTY — see `AGENTS.md`.
@@ -588,7 +588,8 @@ Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
-spans Ctrl-U, optional bracketed paste, the 50 ms scheduling gap, and CR, so
+spans Ctrl-U, a 50 ms gap, the text in optional bracketed paste, a second
+50 ms gap, and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.
 

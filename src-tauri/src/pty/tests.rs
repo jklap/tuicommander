@@ -11251,9 +11251,68 @@ fn flush_keeps_pending_while_question_confident() {
 }
 
 #[test]
-fn injection_payload_single_line_ctrl_u_only() {
-    // Single-line: Ctrl-U prefix clears pending input; no paste wrapper.
-    assert_eq!(injection_payload("hello"), "\x15hello");
+fn injection_payload_single_line_is_the_text_alone() {
+    // Single-line: no paste wrapper, and no Ctrl-U — that travels in its own write.
+    assert_eq!(injection_payload("hello"), "hello");
+}
+
+/// Records every `write` call with the instant it arrived, so a test can tell
+/// two writes apart in time rather than only in order.
+#[cfg(unix)]
+struct TimedWriter {
+    writes: Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>,
+}
+
+#[cfg(unix)]
+impl std::io::Write for TimedWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((std::time::Instant::now(), bytes.to_vec()));
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Claude Code (verified live on v2.1.280) treats a long input chunk as a
+/// paste. A Ctrl-U inside it is stripped as an invisible character, and Claude
+/// then refuses the Enter that follows ("review and press Enter to send") —
+/// a 584-char submission stayed unsent even with a 500ms Enter gap. Ctrl-U
+/// must reach the child in its own read, so it goes out a real gap before the
+/// text, and the text a real gap before the Enter.
+#[cfg(unix)]
+#[test]
+fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    insert_session_with_writer(
+        &state,
+        "timed-submit",
+        Box::new(TimedWriter {
+            writes: Arc::clone(&writes),
+        }),
+        TtyMode::Raw,
+    );
+    let text = "dictated text ".repeat(50);
+    let text = text.trim();
+
+    write_agent_command_to_pty(&state, "timed-submit", text).unwrap();
+
+    let writes = writes.lock().unwrap();
+    let chunks: Vec<&[u8]> = writes.iter().map(|(_, bytes)| bytes.as_slice()).collect();
+    assert_eq!(chunks, vec![b"\x15".as_slice(), text.as_bytes(), b"\r".as_slice()]);
+    assert!(
+        writes[1].0 - writes[0].0 >= INJECT_ENTER_GAP,
+        "Ctrl-U and the text must not share a read"
+    );
+    assert!(
+        writes[2].0 - writes[1].0 >= INJECT_ENTER_GAP,
+        "the text and the Enter must not share a read"
+    );
 }
 
 #[test]
@@ -11263,7 +11322,7 @@ fn injection_payload_multiline_bracketed_paste() {
     // separately-written CR a genuine Enter (story 091, verified live).
     assert_eq!(
         injection_payload("line1\nline2"),
-        "\x15\x1b[200~line1\nline2\x1b[201~"
+        "\x1b[200~line1\nline2\x1b[201~"
     );
 }
 
