@@ -681,6 +681,11 @@ function createTerminalsStore() {
 			pendingAliases.set(sessionId, alias);
 		},
 
+		/** Drop an alias retained for a session that closed before any tab bound it. */
+		forgetPendingAlias(sessionId: string): void {
+			pendingAliases.delete(sessionId);
+		},
+
 		/** Record the repo that owns this terminal (null = no registered repo does).
 		 *  Set from the resolver at assignment time; never from the focused repo. */
 		setRepoPath(id: string, repoPath: string | null): void {

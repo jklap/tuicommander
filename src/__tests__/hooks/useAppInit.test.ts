@@ -232,22 +232,19 @@ describe("initApp", () => {
 		expect(terminal?.nameIsCustom).toBe(true);
 	});
 
-	// `term-alias-assigned` fires once, at spawn. A WebView reload rebuilds every
-	// tab from this list, so the list is the only place the alias survives — a tab
-	// without it loses the address other agents reach it by, and the next restart
-	// snapshot saves `alias: null` and asks the backend for a fresh one.
 	// An explicit spawn name must survive the agent's own OSC 0/2 title. After a
-	// reload nothing but the row says it was one, so it is derived from the row:
-	// a remote agent session with a non-custom display name.
-	it("derives the spawn-name flag for re-adopted sessions from the row", async () => {
+	// reload only the row says it was one, so the backend records the origin.
+	// It cannot be inferred from the row's shape: every OSC or intent title is
+	// synced back as a non-custom name, and every HTTP-created session is remote,
+	// so an inferred flag froze the title of any browser-opened agent tab.
+	it("takes the spawn-name flag for re-adopted sessions from the backend's record", async () => {
 		const deps = createMockDeps({
 			pty: {
 				listActiveSessions: vi.fn().mockResolvedValue([
-					{ session_id: "spawned", cwd: "/repo", display_name: "call-map", display_name_is_custom: false, is_remote: true, state: { agent_type: "claude" } },
+					{ session_id: "spawned", cwd: "/repo", display_name: "call-map", display_name_is_custom: false, display_name_from_spawn: true, is_remote: true, state: { agent_type: "claude" } },
+					{ session_id: "osc-synced", cwd: "/repo", display_name: "main-wise-beacon", display_name_is_custom: false, display_name_from_spawn: false, is_remote: true, state: { agent_type: "claude" } },
 					{ session_id: "renamed", cwd: "/repo", display_name: "mine", display_name_is_custom: true, is_remote: true, state: { agent_type: "claude" } },
 					{ session_id: "unnamed", cwd: "/repo", is_remote: true, state: { agent_type: "claude" } },
-					{ session_id: "shell", cwd: "/repo", display_name: "zsh", display_name_is_custom: false, is_remote: true },
-					{ session_id: "local", cwd: "/repo", display_name: "Tab", display_name_is_custom: false, is_remote: false, state: { agent_type: "claude" } },
 				]),
 				close: vi.fn().mockResolvedValue(undefined),
 			},
@@ -257,10 +254,32 @@ describe("initApp", () => {
 
 		const flag = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!)?.nameFromSpawn;
 		expect(flag("spawned")).toBe(true);
+		expect(flag("osc-synced")).toBe(false);
 		expect(flag("renamed")).toBe(false);
 		expect(flag("unnamed")).toBe(false);
-		expect(flag("shell")).toBe(false);
-		expect(flag("local")).toBe(false);
+	});
+
+	// The spawn parent is published once, on `session-created`. A reload (or a
+	// browser that connects later) rebuilds the tab from the row alone, so the
+	// sub-agent tag survives only if the row carries the parent.
+	it("re-adopts the spawning agent of a surviving sub-agent session", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "lead", cwd: "/repo", display_name: "lead" },
+					{ session_id: "child", cwd: "/repo", parent_session: "lead" },
+					{ session_id: "plain", cwd: "/repo" },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const child = terminalsStore.getTerminalForSession("child")!;
+		expect(terminalsStore.get(child)?.parentSession).toBe("lead");
+		expect(terminalsStore.getSubAgentTag(child)).toBe("lead");
+		expect(terminalsStore.get(terminalsStore.getTerminalForSession("plain")!)?.parentSession).toBeNull();
 	});
 
 	it("marks a session-created tab as spawn-named only when the spawn passed a name", async () => {
@@ -279,6 +298,10 @@ describe("initApp", () => {
 		expect(byId("unnamed")?.nameFromSpawn).toBe(false);
 	});
 
+	// `term-alias-assigned` fires once, at spawn. A WebView reload rebuilds every
+	// tab from this list, so the list is the only place the alias survives — a tab
+	// without it loses the address other agents reach it by, and the next restart
+	// snapshot saves `alias: null` and asks the backend for a fresh one.
 	it("re-adopts a surviving session with the alias the backend holds for it", async () => {
 		const deps = createMockDeps({
 			pty: {
@@ -735,6 +758,35 @@ describe("initApp", () => {
 
 			getCb()!({ payload: { session_id: "sess-bound", alias: "tc-10" } });
 			expect(terminalsStore.get(id)?.alias).toBe("tc-10");
+		});
+
+		// A mirrored alias names a session on another machine; retaining it would
+		// grow the pending map by one entry per remote spawn, never consumed.
+		it("ignores an alias event mirrored from a remote daemon", async () => {
+			const getCb = captureAliasAssigned();
+			await initApp(createMockDeps());
+
+			getCb()!({ payload: { session_id: "sess-mirrored", alias: "tc-11", __tuic_origin: { connection: "mac-mint" } } as never });
+			const id = terminalsStore.add(makeTerminal({ name: "Local tab" }));
+			terminalsStore.setSessionId(id, "sess-mirrored");
+			expect(terminalsStore.get(id)?.alias).toBeNull();
+		});
+
+		// Desktop-created PTYs publish an alias but no bus `session-created`, so a
+		// browser client never binds them. The close is the last chance to forget it.
+		it("forgets a retained alias once its session closes", async () => {
+			const handlers = new Map<string, (event: { payload: unknown }) => void>();
+			vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				handlers.set(event, handler);
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			await initApp(createMockDeps());
+
+			handlers.get("term-alias-assigned")!({ payload: { session_id: "sess-gone", alias: "tc-12" } });
+			handlers.get("session-closed")!({ payload: { session_id: "sess-gone" } });
+			const id = terminalsStore.add(makeTerminal({ name: "Reused id" }));
+			terminalsStore.setSessionId(id, "sess-gone");
+			expect(terminalsStore.get(id)?.alias).toBeNull();
 		});
 	});
 

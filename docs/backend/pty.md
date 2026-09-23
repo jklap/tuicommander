@@ -255,7 +255,10 @@ Named agent sessions propagate their stable `display_name` through the
 `session-created` event. That launch label is a replaceable base title: OSC and
 structured intent titles may update it. An independent
 `display_name_is_custom` flag protects only an explicit user rename and survives
-frontend reconnection. Session snapshots also carry `is_remote`, so reconnecting
+frontend reconnection. `display_name_from_spawn` records that `agent action=spawn`
+named the session, so a reloaded tab still refuses the agent's OSC 0/2 title; a
+non-custom `set_session_name` (an OSC or intent title synced back) keeps it, and
+only a user rename clears it. Session snapshots also carry `is_remote`, so reconnecting
 an HTTP/MCP-created PTY does not lose orchestration-only notification muting.
 
 ## Shell Resolution

@@ -393,6 +393,7 @@ pub(super) async fn spawn_agent_session(
             cwd: body.cwd.clone(),
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: true,
             shell: binary_path.clone(),
         },

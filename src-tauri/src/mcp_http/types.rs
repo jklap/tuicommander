@@ -39,6 +39,9 @@ pub(crate) struct SessionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     pub display_name_is_custom: bool,
+    /// The name came from the agent spawn, not from an OSC/intent title the UI
+    /// synced back. A reload cannot infer it from the other fields.
+    pub display_name_from_spawn: bool,
     pub is_remote: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pty_description: Option<String>,
@@ -46,6 +49,11 @@ pub(crate) struct SessionInfo {
     /// reload: `term-alias-assigned` fires once, at spawn.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+    /// Session (or `$TUIC_SESSION`) of the agent that spawned this one. Published
+    /// once on `session-created`, so a reload or a late browser client needs it
+    /// here. Never a `pending-mcp:` placeholder: no tab can match one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session: Option<String>,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,

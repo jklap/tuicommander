@@ -102,7 +102,9 @@ export interface AppInitDeps {
 				pty_description?: string | null;
 				alias?: string | null;
 				display_name_is_custom?: boolean;
+				display_name_from_spawn?: boolean;
 				is_remote?: boolean;
+				parent_session?: string | null;
 				state?: {
 					shell_state?: "busy" | "idle";
 					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
@@ -591,7 +593,10 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.setPtyDescription(termId, event.payload.description ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register pty-description listener", err));
 
-	listen<{ session_id: string; alias: string }>("term-alias-assigned", (event) => {
+	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
+		// A mirrored alias names a session on another machine: no tab here ever
+		// binds it, so retaining it would only grow the pending-alias map.
+		if (event.payload.__tuic_origin !== undefined) return;
 		const { session_id, alias } = event.payload;
 		// applyAlias is race-safe: it retains the alias if this event beats
 		// setSessionId's binding of session_id to a terminal, and applies it
@@ -695,6 +700,9 @@ export async function initApp(deps: AppInitDeps) {
 
 	listen<{ session_id: string; agent_type?: string }>("session-closed", (event) => {
 		const { session_id, agent_type } = event.payload;
+		// An alias retained for a session no tab ever bound (a desktop-created PTY
+		// seen from a browser) is dead once the session is.
+		terminalsStore.forgetPendingAlias(session_id);
 		// Prefer the persistent remoteSessionTabs map: the store's reverse map may
 		// have been cleared already by Terminal.tsx resetting sessionId on pty-exit.
 		const termId = remoteSessionTabs.get(session_id) ?? terminalsStore.getTerminalForSession(session_id);
@@ -825,11 +833,10 @@ export async function initApp(deps: AppInitDeps) {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
 				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
-				// Only the row survives a reload, so re-derive the spawn-name flag the
-				// session-created handler set: a remote agent with a non-custom name.
-				nameFromSpawn: Boolean(
-					session.is_remote && session.state?.agent_type && session.display_name && !session.display_name_is_custom,
-				),
+				// Only the row survives a reload, and only the backend knows where the
+				// name came from: every OSC/intent title is synced back as non-custom.
+				nameFromSpawn: session.display_name_from_spawn === true,
+				parentSession: session.parent_session ?? null,
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				ptyDescription: session.pty_description ?? null,
 				...(session.alias ? { alias: session.alias } : {}),

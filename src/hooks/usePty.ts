@@ -76,7 +76,13 @@ export interface ActiveSessionInfo {
 	worktree_branch: string | null;
 	display_name?: string | null;
 	display_name_is_custom: boolean;
+	/** The name was given by the agent spawn that created the session, and no
+	 *  user rename has replaced it. The agent's own OSC title must not override it. */
+	display_name_from_spawn?: boolean;
 	is_remote: boolean;
+	/** Session (or `$TUIC_SESSION`) of the agent that spawned this one. Only the
+	 *  resolved id is sent — never an unregistered caller's placeholder. */
+	parent_session?: string | null;
 	pty_description?: string | null;
 	/** Terminal alias (e.g. `tu-3`). The only record of it after a WebView reload:
 	 *  `term-alias-assigned` fires once, at spawn. */

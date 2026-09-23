@@ -4070,7 +4070,9 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         if target == SHELL_IDLE {
             reevaluate_orchestrator_mail_wake(state, session_id);
             // The session's own reader thread, not a tokio worker: it must not
-            // race ahead of the bytes it is about to publish.
+            // race ahead of the bytes it is about to publish. Accepted cost: a
+            // queued message stops this thread reading PTY output for two
+            // `INJECT_ENTER_GAP`s (~100ms) on the idle transition that types it.
             flush_pending_injections_blocking(state, session_id);
         }
     }
@@ -7643,8 +7645,8 @@ type InjectionJob = Box<dyn FnOnce() + Send + 'static>;
 ///
 /// Three producers reach injection from a tokio worker — the session-state
 /// accumulator, the per-session silence timer, and the `agent wait` guard's
-/// `Drop` — and each would park that worker for 50ms per message. They enqueue
-/// here instead.
+/// `Drop` — and each would park that worker for two gaps (~100ms: one before
+/// the text, one before the Enter) per message. They enqueue here instead.
 ///
 /// ONE thread, not one per job, and that is the whole design: lifecycle
 /// notifications for a parent (`idle` → `completed` → `exited`) must reach its
@@ -8291,8 +8293,8 @@ pub(crate) fn deliver_notice_to_managed_pty(
 ///
 /// This is the entry point for every caller that runs on a tokio worker — the
 /// session-state accumulator, the silence timer, desktop input bookkeeping.
-/// The flush itself sleeps `INJECT_ENTER_GAP` under the session writer mutex,
-/// so waiting for it here would park a worker for 50ms per queued message.
+/// The flush itself sleeps `INJECT_ENTER_GAP` twice under the session writer
+/// mutex, so waiting for it here would park a worker for ~100ms per queued message.
 ///
 /// Callers that must observe the result before returning — `deliver_notice_to_pty`
 /// reads the queue to tell `Typed` from `Queued`, and the OSC handler already

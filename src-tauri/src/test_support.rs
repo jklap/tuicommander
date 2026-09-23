@@ -459,6 +459,7 @@ pub(crate) fn insert_session_with_writer(
             cwd: None,
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: false,
             shell: "/bin/sh".to_string(),
         }),

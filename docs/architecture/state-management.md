@@ -48,6 +48,7 @@ pub struct PtySession {
     pub cwd: Option<String>,                            // Working directory
     pub display_name: Option<String>,                   // UI/agent/intent title
     pub display_name_is_custom: bool,                   // Explicit user rename wins over OSC/intent
+    pub display_name_from_spawn: bool,                  // Named by agent spawn; OSC title must not replace it
     pub is_remote: bool,                                // Created through HTTP/MCP, not the desktop UI
     pub shell: String,                                  // Resolved spawn command, kept for shell-family classification
 }

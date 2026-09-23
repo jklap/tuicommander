@@ -10100,7 +10100,8 @@ fn agent_submission_writer_lock_prevents_raw_input_splicing() {
     );
 }
 
-/// `INJECT_ENTER_GAP` is 50 ms of REAL time that cannot be shortened, and it is
+/// `INJECT_ENTER_GAP` is 50 ms of REAL time that cannot be shortened, paid
+/// twice per message (~100 ms: before the text and before the Enter), and it is
 /// held under the session writer mutex on purpose — `agent_submission_writer_
 /// lock_prevents_raw_input_splicing` pins that exact byte sequence. So the only
 /// way a caller stops paying it is to stop being the thread that waits.
@@ -10895,6 +10896,106 @@ fn shared_pty_write_reports_writer_failure_and_teardown() {
     write_terminal_reply(&state, "failed-writer", b"late reply", "test");
 }
 
+/// Accepts every write before `fail_at` whole. At `fail_at` it either fails
+/// outright or, when `partial`, takes two bytes and fails the next call.
+#[cfg(unix)]
+struct FailsAtWrite {
+    calls: usize,
+    fail_at: usize,
+    partial: bool,
+}
+
+#[cfg(unix)]
+impl std::io::Write for FailsAtWrite {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let call = self.calls;
+        self.calls += 1;
+        if call < self.fail_at || (self.partial && call == self.fail_at) {
+            return Ok(if call < self.fail_at {
+                bytes.len()
+            } else {
+                bytes.len().min(2)
+            });
+        }
+        Err(std::io::Error::other("injected PTY failure"))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Ctrl-U types nothing, and a claim requires an empty composer, so a text
+/// write that fails before its first byte left the composer as it was: the
+/// submission is retry-safe. Counting the text's progress from the Ctrl-U byte
+/// would silently turn this into `Uncertain` and forbid the retry.
+#[cfg(unix)]
+#[test]
+fn text_write_failing_after_ctrl_u_is_a_clean_failure_and_releases_the_claim() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "ctrl-u-then-fail", SHELL_IDLE);
+    insert_session_with_writer(
+        &state,
+        "ctrl-u-then-fail",
+        Box::new(FailsAtWrite {
+            calls: 0,
+            fail_at: 1,
+            partial: false,
+        }),
+        TtyMode::Raw,
+    );
+
+    let outcome = write_agent_submission_to_pty(&state, "ctrl-u-then-fail", "retry me");
+
+    assert!(
+        matches!(outcome, AgentSubmissionWrite::Failed(ref e) if e.contains("injected PTY failure")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get("ctrl-u-then-fail")
+            .map(|value| value.load(Ordering::Acquire)),
+        Some(SHELL_IDLE),
+        "a clean failure must hand the idle composer back for the retry"
+    );
+}
+
+/// Part of the text reached the composer: a retry would type it twice.
+#[cfg(unix)]
+#[test]
+fn partial_text_write_after_ctrl_u_is_uncertain() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "ctrl-u-then-partial", SHELL_IDLE);
+    insert_session_with_writer(
+        &state,
+        "ctrl-u-then-partial",
+        Box::new(FailsAtWrite {
+            calls: 0,
+            fail_at: 1,
+            partial: true,
+        }),
+        TtyMode::Raw,
+    );
+
+    let outcome = write_agent_submission_to_pty(&state, "ctrl-u-then-partial", "retry me");
+
+    assert!(
+        matches!(outcome, AgentSubmissionWrite::Uncertain(_)),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .shell_states
+            .get("ctrl-u-then-partial")
+            .map(|value| value.load(Ordering::Acquire)),
+        Some(SHELL_BUSY),
+        "an uncertain delivery keeps the claim"
+    );
+}
+
 #[test]
 fn uncertain_injection_preserves_busy_and_surfaces_status_flag() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -11096,6 +11197,7 @@ fn spawn_real_pty_session(state: &crate::state::AppState, sid: &str, rows: u16, 
             cwd: None,
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: false,
             shell: "/bin/sh".to_string(),
         }),
@@ -13642,6 +13744,7 @@ fn close_pty_core_kills_agent_grandchild() {
             cwd: None,
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: false,
             shell: "/bin/sh".to_string(),
         }),
@@ -14070,6 +14173,7 @@ fn spawn_short_session(state: &crate::state::AppState, sid: &str) {
             cwd: None,
             display_name: None,
             display_name_is_custom: false,
+            display_name_from_spawn: false,
             is_remote: false,
             shell: "/bin/sh".to_string(),
         }),
