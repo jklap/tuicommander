@@ -235,19 +235,53 @@ async fn classify_http_response(resp: reqwest::Response) -> ConnectionTestResult
 /// Human-readable classification of a `reqwest::Error` for the UI. The URL is
 /// stripped first (`without_url`): a Direct URL can carry `user:pass@`
 /// userinfo, and an error message is not a place for it.
+///
+/// The TLS check runs BEFORE `is_connect()`: reqwest reports a failed TLS
+/// handshake as a connect error too, so checked after it the TLS branch could
+/// never fire and every certificate/handshake failure read as a generic
+/// "connection failed" (code review 2026-09-23).
 fn describe_reqwest_error(e: reqwest::Error) -> String {
     let timeout = e.is_timeout();
     let connect = e.is_connect();
     let e = e.without_url();
     if timeout {
         "timed out waiting for a response".to_string()
+    } else if mentions_tls(&e) {
+        format!("TLS error: {e}")
     } else if connect {
         format!("connection failed: {e}")
-    } else if e.to_string().to_lowercase().contains("tls") {
-        format!("TLS error: {e}")
     } else {
         e.to_string()
     }
+}
+
+/// Whether `e` failed in TLS: any error in its `source()` chain is a
+/// `rustls::Error` (directly, or inside `io::Error`s — the TLS connector
+/// nests one in another) or names TLS. reqwest's own `Display` stops at
+/// "error sending request"; the handshake failure that explains it sits
+/// further down, and rustls' wording ("received corrupt message of type
+/// InvalidContentType") does not say "TLS" at all.
+fn mentions_tls(e: &reqwest::Error) -> bool {
+    fn is_rustls(err: &(dyn std::error::Error + 'static)) -> bool {
+        if err.is::<rustls::Error>() {
+            return true;
+        }
+        match err
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+        {
+            Some(inner) => is_rustls(inner),
+            None => false,
+        }
+    }
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(e);
+    while let Some(err) = current {
+        if is_rustls(err) || err.to_string().to_lowercase().contains("tls") {
+            return true;
+        }
+        current = err.source();
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +331,20 @@ mod tests {
                 reason: "timed out waiting for ssh".to_string()
             }
         );
+    }
+
+    /// End to end through the real runner with a fake `ssh` that exits 0 —
+    /// the spawn/timeout wiring itself, not just the classifier.
+    #[tokio::test]
+    async fn an_ssh_that_exits_zero_is_reachable() {
+        let ssh_binary = fake_ssh_script("connection_test_exit_zero", "exit 0", "exit /b 0");
+        let result = crate::tunnels::exec::ssh_check_with_binary(
+            &SshConnectionParams::new("example.com", "alice"),
+            Duration::from_secs(30),
+            &ssh_binary,
+        )
+        .await;
+        assert_eq!(classify_ssh_result(result), ConnectionTestResult::Reachable);
     }
 
     /// End to end through the real runner with a fake `ssh` that fails the
@@ -457,6 +505,42 @@ mod tests {
         assert!(!reason.is_empty());
         assert!(!reason.contains("URL_SECRET_1457"), "{reason}");
         assert!(!reason.contains("PASSWORD_SECRET_1457"), "{reason}");
+    }
+
+    /// A server that answers a TLS ClientHello with plain HTTP is a handshake
+    /// failure, which reqwest also flags `is_connect()` — it must still read as
+    /// a TLS error, while a refused port keeps reading "connection failed".
+    #[tokio::test]
+    async fn a_tls_handshake_failure_is_reported_as_tls_not_as_a_connect_failure() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+        let result = test_http_health(&format!("https://{address}"), None, None).await;
+        let ConnectionTestResult::Unreachable { reason } = result else {
+            panic!("expected Unreachable, got {result:?}");
+        };
+        assert!(reason.starts_with("TLS error"), "{reason}");
+
+        let refused = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let refused_address = refused.local_addr().expect("address");
+        drop(refused);
+        let result = test_http_health(&format!("http://{refused_address}"), None, None).await;
+        let ConnectionTestResult::Unreachable { reason } = result else {
+            panic!("expected Unreachable, got {result:?}");
+        };
+        assert!(reason.starts_with("connection failed"), "{reason}");
     }
 
     #[test]
