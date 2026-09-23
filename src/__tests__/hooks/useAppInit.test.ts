@@ -232,6 +232,71 @@ describe("initApp", () => {
 		expect(terminal?.nameIsCustom).toBe(true);
 	});
 
+	// `term-alias-assigned` fires once, at spawn. A WebView reload rebuilds every
+	// tab from this list, so the list is the only place the alias survives — a tab
+	// without it loses the address other agents reach it by, and the next restart
+	// snapshot saves `alias: null` and asks the backend for a fresh one.
+	// An explicit spawn name must survive the agent's own OSC 0/2 title. After a
+	// reload nothing but the row says it was one, so it is derived from the row:
+	// a remote agent session with a non-custom display name.
+	it("derives the spawn-name flag for re-adopted sessions from the row", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "spawned", cwd: "/repo", display_name: "call-map", display_name_is_custom: false, is_remote: true, state: { agent_type: "claude" } },
+					{ session_id: "renamed", cwd: "/repo", display_name: "mine", display_name_is_custom: true, is_remote: true, state: { agent_type: "claude" } },
+					{ session_id: "unnamed", cwd: "/repo", is_remote: true, state: { agent_type: "claude" } },
+					{ session_id: "shell", cwd: "/repo", display_name: "zsh", display_name_is_custom: false, is_remote: true },
+					{ session_id: "local", cwd: "/repo", display_name: "Tab", display_name_is_custom: false, is_remote: false, state: { agent_type: "claude" } },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const flag = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!)?.nameFromSpawn;
+		expect(flag("spawned")).toBe(true);
+		expect(flag("renamed")).toBe(false);
+		expect(flag("unnamed")).toBe(false);
+		expect(flag("shell")).toBe(false);
+		expect(flag("local")).toBe(false);
+	});
+
+	it("marks a session-created tab as spawn-named only when the spawn passed a name", async () => {
+		let sessionCreated: ((event: { payload: Record<string, unknown> }) => void) | null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") sessionCreated = handler as typeof sessionCreated;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		await initApp(createMockDeps());
+
+		sessionCreated!({ payload: { session_id: "named", cwd: "/repo", agent_type: "claude", display_name: "call-map" } });
+		sessionCreated!({ payload: { session_id: "unnamed", cwd: "/repo", agent_type: "claude", display_name: null } });
+		const byId = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
+		expect(byId("named")).toMatchObject({ name: "call-map", nameFromSpawn: true, nameIsCustom: false });
+		expect(byId("unnamed")?.nameFromSpawn).toBe(false);
+	});
+
+	it("re-adopts a surviving session with the alias the backend holds for it", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "sess-aliased", cwd: "/repo", alias: "tu-23" },
+					{ session_id: "sess-plain", cwd: "/repo" },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const bySession = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
+		expect(bySession("sess-aliased")?.alias).toBe("tu-23");
+		expect(bySession("sess-plain")?.alias).toBeNull();
+	});
+
 	it("re-adopts a remote spawn name as an intent-replaceable base title", async () => {
 		let activeSessions = [
 			{
@@ -1533,6 +1598,7 @@ describe("initApp", () => {
 			cwd: string | null;
 			agent_type?: string | null;
 			display_name?: string | null;
+			parent_session?: string | null;
 		};
 		type SessionClosedPayload = { session_id: string; reason: string; agent_type?: string | null };
 
@@ -1573,6 +1639,20 @@ describe("initApp", () => {
 
 			// Tab must be gone
 			expect(terminalsStore.get(termId)).toBeUndefined();
+		});
+
+		it("records the spawning agent on a sub-agent tab and nothing on a plain one", async () => {
+			const { getCreated } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCreated()!({ payload: { session_id: "child", cwd: null, agent_type: "claude", parent_session: "tuic-lead" } });
+			getCreated()!({ payload: { session_id: "plain", cwd: null, agent_type: "claude" } });
+			const byPty = (sid: string) => terminalsStore.get(terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === sid)!);
+
+			// The sidebar and Activity Dashboard tag a tab only from this field.
+			expect(byPty("child")?.parentSession).toBe("tuic-lead");
+			expect(byPty("plain")?.parentSession).toBeNull();
 		});
 
 		it("auto-removes a remote tab after REMOTE_TAB_AUTOCLOSE_MS when agent_type is absent", async () => {

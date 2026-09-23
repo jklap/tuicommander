@@ -292,8 +292,8 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
-- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, and the optional stable `display_name`. Frontend uses this to auto-add remote tabs; a spawn-assigned name remains replaceable by OSC/intent titles, while session-list snapshots carry independent `display_name_is_custom` and `is_remote` flags for reconnect.
-- **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Frontend uses this to update tab tooltips.
+- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn`; the UI tags such tabs as sub-agents with the parent tab's name). Frontend uses this to auto-add remote tabs; a spawn-assigned name may be refined by an `intent:` title or replaced by a user rename, but an agent's OSC 0/2 title (Claude Code's own session title) never replaces it, while session-list snapshots carry independent `display_name_is_custom` and `is_remote` flags for reconnect.
+- **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Published after `session-created` on the bus, and also as a desktop window event. Frontend uses this to update tab tooltips; it fires once, so after a reload the alias comes from the session list (`alias` on `GET /sessions` / `list_active_sessions`).
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 
 These events are available on the SSE `/events` stream used by the mobile PWA and any connected WebSocket clients.

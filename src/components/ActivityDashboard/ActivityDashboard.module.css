@@ -108,6 +108,17 @@
   text-overflow: ellipsis;
 }
 
+/* Marks a PTY another agent spawned; names the parent so the pair reads at a glance. */
+.subAgentTag {
+  font-size: var(--font-xs);
+  color: var(--accent);
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
 .project {
   font-size: var(--font-xs);
   color: var(--fg-muted);

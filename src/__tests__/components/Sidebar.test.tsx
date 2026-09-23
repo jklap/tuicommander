@@ -9,6 +9,7 @@ const {
 	mockGetOrderedRepos,
 	mockReorderRepo,
 	mockTerminalsGet,
+	mockGetSubAgentTag,
 	mockGetCheckSummary,
 	mockGetPrStatus,
 	mockGetGroupedLayout,
@@ -30,6 +31,7 @@ const {
 	mockGetOrderedRepos: vi.fn<() => unknown[]>(() => []),
 	mockReorderRepo: vi.fn(),
 	mockTerminalsGet: vi.fn<(id: string) => unknown>(() => null),
+	mockGetSubAgentTag: vi.fn<(id: string) => string | null>(() => null),
 	mockGetCheckSummary: vi.fn<() => unknown>(() => null),
 	mockGetPrStatus: vi.fn<(...args: unknown[]) => unknown>(() => null),
 	mockGetGroupedLayout: vi.fn<() => unknown>(() => ({ groups: [], ungrouped: [] })),
@@ -96,6 +98,7 @@ vi.mock("../../stores/repoSettings", () => ({
 vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		get: mockTerminalsGet,
+		getSubAgentTag: mockGetSubAgentTag,
 		isBusy: vi.fn(() => false),
 		onRemove: vi.fn(() => () => {}),
 		state: { activeId: null as string | null },
@@ -201,6 +204,7 @@ describe("Sidebar", () => {
 		setRepos({});
 		mockGetActive.mockReturnValue(null);
 		mockTerminalsGet.mockReturnValue(null);
+		mockGetSubAgentTag.mockReturnValue(null);
 		mockGetCheckSummary.mockReturnValue(null);
 		mockGetPrStatus.mockReturnValue(null);
 		mockLastActivityAt.mockReturnValue(0);
@@ -1655,6 +1659,46 @@ describe("Sidebar", () => {
 			expect(mockNavigateToTerminal).toHaveBeenCalledWith("t2");
 		});
 
+		it("tags a sub-agent row with its parent and leaves other rows untagged", () => {
+			mockTerminalsGet.mockImplementation((id: string) => ({
+				name: id === "t1" ? "Orchestrator" : "Worker",
+				agentType: "claude",
+				agentIntent: null,
+				currentTask: null,
+				lastPrompt: null,
+				lastDataAt: null,
+				shellState: "idle",
+				agentState: "idle",
+				backgroundWork: false,
+				sessionId: id,
+				unseen: false,
+				awaitingInput: null,
+			}));
+			mockGetSubAgentTag.mockImplementation((id: string) => (id === "t2" ? "Orchestrator" : null));
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1", "t2"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const rows = container.querySelectorAll(".branchTabItem");
+
+			// Only the spawned worker says who launched it; the orchestrator row stays plain.
+			expect(rows[0].querySelector(".branchSubAgentTag")).toBeNull();
+			expect(rows[1].querySelector(".branchSubAgentTag")?.textContent).toBe("↳ Orchestrator");
+		});
+
 		it("renders the activity card for a single terminal", () => {
 			mockTerminalsGet.mockImplementation(() => ({
 				name: "term",
@@ -1836,6 +1880,32 @@ describe("Sidebar", () => {
 			expect(toggle.querySelector(".branchAgentCount")?.textContent).toBe("3");
 			expect(toggle.getAttribute("aria-label")).toContain("3");
 		});
+
+		it("branch icon hides the session count while the list is expanded", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						"feature/open": {
+							workspaceId: "feature/open",
+							branchName: "feature/open",
+							isMain: false,
+							worktreePath: "/wt/open",
+							terminals: ["t1", "t2", "t3"],
+							additions: 0,
+							deletions: 0,
+							tabsCollapsed: false,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const toggle = branchRow(container, "feature/open").querySelector(".branchIconToggle")!;
+
+			// The expanded rows already show every session; a badge would repeat them.
+			expect(toggle.querySelector(".branchAgentCount")).toBeNull();
+			// Screen readers keep the count: the toggle label still carries it.
+			expect(toggle.getAttribute("aria-label")).toContain("3");
+		});
 	});
 
 	describe("branch tab list (gating: setting off)", () => {
@@ -1921,32 +1991,6 @@ describe("Sidebar", () => {
 
 			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "main");
 			expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
-		});
-
-		it("branch icon hides the session count while the list is expanded", () => {
-			setRepos({
-				"/repo1": makeRepo({
-					workspaces: {
-						"feature/open": {
-							workspaceId: "feature/open",
-							branchName: "feature/open",
-							isMain: false,
-							worktreePath: "/wt/open",
-							terminals: ["t1", "t2", "t3"],
-							additions: 0,
-							deletions: 0,
-							tabsCollapsed: false,
-						},
-					},
-				}),
-			});
-			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			const toggle = branchRow(container, "feature/open").querySelector(".branchIconToggle")!;
-
-			// The expanded rows already show every session; a badge would repeat them.
-			expect(toggle.querySelector(".branchAgentCount")).toBeNull();
-			// Screen readers keep the count: the toggle label still carries it.
-			expect(toggle.getAttribute("aria-label")).toContain("3");
 		});
 	});
 

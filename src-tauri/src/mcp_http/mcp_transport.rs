@@ -4009,6 +4009,11 @@ fn handle_agent_with_parent_cwd(
                         initial_prompt,
                     ));
             }
+            // Resolved before the session-created broadcast so the event names the
+            // parent; the parent map entry below uses the same value.
+            let spawn_parent = caller_tuic
+                .clone()
+                .or_else(|| mcp_session_id.map(pending_parent_id));
             // Buffers, alias, metrics, grid watch and the session-created
             // broadcast, sharing one helper with session::spawn_pty_session so the
             // VT screen can only ever be built at the geometry the PTY was opened
@@ -4032,6 +4037,7 @@ fn handle_agent_with_parent_cwd(
                 cols,
                 effective_agent_type.clone(),
                 None,
+                spawn_parent.clone(),
             );
             let cwd_str = effective_cwd.clone();
 
@@ -4048,6 +4054,7 @@ fn handle_agent_with_parent_cwd(
                             "cwd": cwd_str,
                             "agent_type": agent_type_val,
                             "display_name": requested_name,
+                            "parent_session": spawn_parent,
                         }),
                     );
                 }
@@ -4072,10 +4079,15 @@ fn handle_agent_with_parent_cwd(
             // Bidirectional communication additionally needs an identified
             // parent. The child receives TUIC_PARENT + the spawn preamble; the
             // parent receives the child target in the response below.
-            if let Some(parent_id) = caller_tuic
-                .clone()
-                .or_else(|| mcp_session_id.map(pending_parent_id))
-            {
+            if let Some(parent_id) = spawn_parent {
+                journal_hand_off(
+                    state,
+                    crate::progress::ProgressKind::Delegated,
+                    &parent_id,
+                    &session_id,
+                    Some(&peer_name),
+                    &prompt,
+                );
                 state
                     .session_maps
                     .session_parent
@@ -16201,10 +16213,17 @@ mod tests {
             crate::state::AppEvent::SessionCreated {
                 session_id: event_session_id,
                 display_name,
+                parent_session,
                 ..
             } => {
                 assert_eq!(event_session_id, session_id);
                 assert_eq!(display_name.as_deref(), Some("linux-primary"));
+                // The UI tags the tab with its parent from this event alone; the
+                // parent map is filled later and is never pushed to the frontend.
+                assert_eq!(
+                    parent_session.as_deref(),
+                    Some("550e8400-e29b-41d4-a716-446655440b01")
+                );
             }
             other => panic!("expected session-created, got {other:?}"),
         }

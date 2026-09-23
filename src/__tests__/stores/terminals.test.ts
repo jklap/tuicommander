@@ -401,6 +401,48 @@ describe("terminalsStore", () => {
 		});
 	});
 
+	describe("getSubAgentTag()", () => {
+		it("returns null for a terminal no agent spawned", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal({ name: "Plain", sessionId: "s-plain" }));
+				expect(store.getSubAgentTag(id)).toBeNull();
+			});
+		});
+
+		it("names the parent tab matched by its TUIC_SESSION", () => {
+			testInScope(() => {
+				store.add(makeTerminal({ name: "Orchestrator", sessionId: "pty-parent", tuicSession: "tuic-parent" }));
+				const child = store.add(makeTerminal({ name: "Worker", sessionId: "pty-child", parentSession: "tuic-parent" }));
+				expect(store.getSubAgentTag(child)).toBe("Orchestrator");
+			});
+		});
+
+		it("names the parent tab matched by its PTY session id", () => {
+			testInScope(() => {
+				// A spawned parent has no frontend tuicSession: its PTY id IS its TUIC_SESSION.
+				store.add(makeTerminal({ name: "Spawned lead", sessionId: "pty-lead" }));
+				const child = store.add(makeTerminal({ name: "Worker", sessionId: "pty-child", parentSession: "pty-lead" }));
+				expect(store.getSubAgentTag(child)).toBe("Spawned lead");
+			});
+		});
+
+		it("follows a rename of the parent tab", () => {
+			testInScope(() => {
+				const parent = store.add(makeTerminal({ name: "Before", sessionId: "pty-p" }));
+				const child = store.add(makeTerminal({ name: "Worker", sessionId: "pty-c", parentSession: "pty-p" }));
+				store.update(parent, { name: "After" });
+				expect(store.getSubAgentTag(child)).toBe("After");
+			});
+		});
+
+		it("still marks the terminal as a sub-agent when the parent has no tab", () => {
+			testInScope(() => {
+				const child = store.add(makeTerminal({ name: "Worker", sessionId: "pty-c", parentSession: "external-caller" }));
+				expect(store.getSubAgentTag(child)).toBe("sub");
+			});
+		});
+	});
+
 	describe("sessionToTerminal reverse map", () => {
 		it("getTerminalForSession returns terminal ID when session is assigned", () => {
 			testInScope(() => {

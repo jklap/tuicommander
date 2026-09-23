@@ -52,6 +52,7 @@ export function snapshotToRows(snap: ActivitySnapshot, prev?: readonly TerminalR
 			activeSubTasks: t.activeSubTasks,
 			isActive: t.isActive,
 			isPromoted: t.isPromoted,
+			subAgentTag: t.subAgentTag,
 		}),
 	);
 	return reconcileTerminalRows(rows, prev);

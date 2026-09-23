@@ -26,7 +26,7 @@ import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
 import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
-import { handleIntentEvent } from "./intentTitle";
+import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import s from "./Terminal.module.css";
 import { TerminalSearch } from "./TerminalSearch";
@@ -721,7 +721,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				if (disposed) return;
 				const title = event.payload;
 				const term = terminalsStore.get(props.id);
-				if (term?.nameIsCustom || (term?.agentIntent && settingsStore.state.intentTabTitle)) return;
+				if (
+					!term ||
+					!shouldApplyOscTitle({
+						nameIsCustom: term.nameIsCustom,
+						nameFromSpawn: term.nameFromSpawn,
+						agentIntent: term.agentIntent,
+						intentTabTitle: settingsStore.state.intentTabTitle,
+					})
+				)
+					return;
 				if (!title) {
 					if (originalName) terminalsStore.update(props.id, { name: originalName });
 				} else {

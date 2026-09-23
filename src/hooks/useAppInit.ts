@@ -81,6 +81,8 @@ interface SessionCreatedPayload {
 	cwd: string | null;
 	agent_type?: string | null;
 	display_name?: string | null;
+	/** `$TUIC_SESSION` of the agent that spawned this PTY; absent for other tabs. */
+	parent_session?: string | null;
 	/** Present only on an event mirrored from a remote daemon (`remote_mirror.rs`). */
 	__tuic_origin?: unknown;
 }
@@ -98,6 +100,7 @@ export interface AppInitDeps {
 				cwd: string | null;
 				display_name?: string | null;
 				pty_description?: string | null;
+				alias?: string | null;
 				display_name_is_custom?: boolean;
 				is_remote?: boolean;
 				state?: {
@@ -518,7 +521,7 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<SessionCreatedPayload>("session-created", (event) => {
-		const { session_id, cwd, agent_type, display_name } = event.payload;
+		const { session_id, cwd, agent_type, display_name, parent_session } = event.payload;
 		const parsedAgentType = parseAgentType(agent_type);
 		// A mirrored event describes a session on ANOTHER machine. It is stamped
 		// `__tuic_origin` by `remote_mirror.rs`; building a tab for it attaches the
@@ -546,14 +549,17 @@ export async function initApp(deps: AppInitDeps) {
 				(parsedAgentType
 					? `Session ${terminalsStore.getCount() + 1}`
 					: `PTY: Session ${terminalsStore.getCount() + 1}`),
-			// A spawn-assigned display name is the base title, not a manual rename.
-			// Intent/OSC titles may replace it until the user explicitly renames the tab.
+			// A spawn-assigned display name is the base title, not a manual rename:
+			// an intent title may refine it and a user rename replaces it, but the
+			// agent's own OSC title (Claude's session title) must not.
 			nameIsCustom: false,
+			nameFromSpawn: Boolean(display_name),
 			cwd: cwd ?? null,
 			awaitingInput: null,
 			isRemote: true,
 			agentType: parsedAgentType,
 			ptyDescription: null,
+			parentSession: parent_session ?? null,
 		});
 		remoteSessionTabs.set(session_id, id);
 
@@ -819,8 +825,14 @@ export async function initApp(deps: AppInitDeps) {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
 				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
+				// Only the row survives a reload, so re-derive the spawn-name flag the
+				// session-created handler set: a remote agent with a non-custom name.
+				nameFromSpawn: Boolean(
+					session.is_remote && session.state?.agent_type && session.display_name && !session.display_name_is_custom,
+				),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				ptyDescription: session.pty_description ?? null,
+				...(session.alias ? { alias: session.alias } : {}),
 				agentState: session.state?.agent_state ?? null,
 				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
 				awaitingInputConfident: session.state?.question_confident === true,

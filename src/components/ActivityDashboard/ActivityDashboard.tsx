@@ -79,6 +79,8 @@ export type TerminalRow = {
 	activeSubTasks: number;
 	isActive: boolean;
 	isPromoted: boolean;
+	/** Spawning agent's tab name when this PTY is a sub-agent; null otherwise. */
+	subAgentTag: string | null;
 };
 
 /** Field-equality for a row. `status` is derived fresh on every build, so it is
@@ -186,6 +188,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			activeSubTasks: term.activeSubTasks,
 			isActive: terminalsStore.state.activeId === id,
 			isPromoted: globalWorkspaceStore.isPromoted(id),
+			subAgentTag: terminalsStore.getSubAgentTag(id),
 		};
 	};
 
@@ -243,6 +246,13 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 							<div class={s.rowMain}>
 								<div class={s.nameCell}>
 									<span class={s.termName}>{term.name}</span>
+									<Show when={term.subAgentTag}>
+										{(parent) => (
+											<span class={s.subAgentTag} title={`Spawned by ${parent()}`}>
+												↳ {parent()}
+											</span>
+										)}
+									</Show>
 									<Show when={term.project}>
 										<span class={s.project} style={term.projectColor ? { color: term.projectColor } : undefined}>
 											{term.project}

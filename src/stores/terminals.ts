@@ -49,6 +49,9 @@ export interface TerminalData {
 	fontSize: number;
 	name: string;
 	nameIsCustom: boolean; // When true, OSC/status-line title changes are ignored
+	/** The name came from an explicit spawn name. OSC 0/2 titles leave it alone;
+	 *  an `intent:` title and a user rename may still replace it. */
+	nameFromSpawn: boolean;
 	cwd: string | null;
 	/**
 	 * The registered repo that owns this terminal, resolved from `cwd`.
@@ -104,6 +107,7 @@ export interface TerminalData {
 	userPromptLines: number[]; // Absolute lines where the user submitted a prompt (UserInput.line), for the green scrollbar marker
 	alias: string | null; // Human-friendly alias from Rust (e.g. "tc-1")
 	standby: boolean; // Session is SIGSTOP'd (auto-standby)
+	parentSession: string | null; // Session or TUIC_SESSION of the agent that spawned this one (sub-agent PTY)
 }
 
 /** Fields auto-populated with defaults when creating a terminal — callers only provide the remaining fields. */
@@ -120,6 +124,7 @@ type TerminalCreateData = Omit<
 	| "queuedCommands"
 	| "completionNotified"
 	| "nameIsCustom"
+	| "nameFromSpawn"
 	| "agentType"
 	| "agentLaunchCommand"
 	| "pendingResumeCommand"
@@ -146,12 +151,15 @@ type TerminalCreateData = Omit<
 	| "alias"
 	| "standby"
 	| "repoPath"
+	| "parentSession"
 > & {
 	repoPath?: string | null;
+	parentSession?: string | null;
 	tuicSession?: string | null;
 	alias?: string | null;
 	isRemote?: boolean;
 	nameIsCustom?: boolean;
+	nameFromSpawn?: boolean;
 	agentType?: AgentType | null;
 	agentSessionId?: string | null;
 	agentLaunchCommand?: string | null;
@@ -426,6 +434,7 @@ function createTerminalsStore() {
 				queuedCommands: 0,
 				completionNotified: false,
 				nameIsCustom: false,
+				nameFromSpawn: false,
 				agentType: null,
 				agentLaunchCommand: null,
 				pendingResumeCommand: null,
@@ -452,6 +461,7 @@ function createTerminalsStore() {
 				alias: null,
 				standby: false,
 				repoPath: null,
+				parentSession: null,
 				...data,
 			});
 			if (data.sessionId) {
@@ -476,6 +486,7 @@ function createTerminalsStore() {
 				queuedCommands: 0,
 				completionNotified: false,
 				nameIsCustom: false,
+				nameFromSpawn: false,
 				agentType: null,
 				agentLaunchCommand: null,
 				pendingResumeCommand: null,
@@ -502,6 +513,7 @@ function createTerminalsStore() {
 				alias: null,
 				standby: false,
 				repoPath: null,
+				parentSession: null,
 				...data,
 			});
 			if (data.sessionId) {
@@ -858,6 +870,18 @@ function createTerminalsStore() {
 		/** Get the terminal ID for a PTY session, or null if not found */
 		getTerminalForSession(sessionId: string): string | null {
 			return sessionToTerminal.get(sessionId) ?? null;
+		},
+
+		/** Tag for a sub-agent PTY: the spawning agent's tab name, "sub" when that
+		 *  parent has no tab here (external caller, closed tab), null when the
+		 *  terminal was not spawned by an agent. Read live, so a parent rename follows. */
+		getSubAgentTag(id: string): string | null {
+			const parent = state.terminals[id]?.parentSession;
+			if (!parent) return null;
+			const parentTerm = Object.values(state.terminals).find(
+				(t) => t.sessionId === parent || t.tuicSession === parent,
+			);
+			return parentTerm?.name ?? "sub";
 		},
 
 		/** Get the agentType for a PTY session, or null if not found */

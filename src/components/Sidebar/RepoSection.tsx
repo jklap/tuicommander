@@ -265,6 +265,13 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 										)}
 									</Show>
 									<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
+									<Show when={terminalsStore.getSubAgentTag(id)}>
+										{(parent) => (
+											<span class={s.branchSubAgentTag} title={`Spawned by ${parent()}`}>
+												↳ {parent()}
+											</span>
+										)}
+									</Show>
 									<span class={s.branchAgentTime}>{compactActivityAge(t().lastDataAt)}</span>
 								</button>
 							)}

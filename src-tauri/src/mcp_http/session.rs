@@ -87,6 +87,11 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
                     .pty_descriptions
                     .get(&session_id)
                     .map(|value| value.value().clone()),
+                alias: state
+                    .session_maps
+                    .term_aliases
+                    .get(&session_id)
+                    .map(|value| value.value().clone()),
                 state: state.session_state_with_shell(&session_id),
                 connection_id: None,
                 session_id,
@@ -554,6 +559,7 @@ pub(super) fn register_pty_session(
     cols: u16,
     agent_type: Option<String>,
     requested_alias: Option<&str>,
+    parent_session: Option<String>,
 ) {
     let cwd = session.cwd.clone();
     let display_name = session.display_name.clone();
@@ -562,7 +568,6 @@ pub(super) fn register_pty_session(
         .session_maps
         .sessions
         .insert(session_id.to_string(), Mutex::new(session));
-    state.assign_term_alias(session_id, requested_alias);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -598,7 +603,11 @@ pub(super) fn register_pty_session(
         cwd,
         agent_type,
         display_name,
+        parent_session,
     });
+    // After `SessionCreated`: the alias is also published on the bus, and a
+    // consumer must learn that a session exists before an event about it.
+    state.assign_term_alias(session_id, requested_alias);
 }
 
 /// Shared PTY setup: opens a PTY, spawns the shell, registers buffers and reader thread.
@@ -693,6 +702,7 @@ pub(super) fn spawn_pty_session(
         cols,
         None,
         requested.alias.as_deref(),
+        None,
     );
 
     #[cfg(feature = "desktop")]
@@ -3497,5 +3507,34 @@ mod tests {
             second, "dup-id",
             "duplicate requested id must fall back to a fresh uuid"
         );
+    }
+
+    /// The session list is the only record of an alias after a WebView reload:
+    /// `term-alias-assigned` fires once, at spawn, and the reload re-adopts every
+    /// tab from this list. A row without it leaves the tab unaddressable in the UI
+    /// and makes the next restart snapshot request a fresh alias.
+    #[tokio::test]
+    async fn session_rows_carry_the_terminal_alias() {
+        let state = super::super::tests::test_state();
+        let session_id = match super::spawn_pty_session(
+            state.clone(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            None,
+            24,
+            80,
+            None,
+            super::RequestedIdentity {
+                session_id: Some("aliased-row".to_string()),
+                alias: Some("tu-7".to_string()),
+            },
+        ) {
+            Ok(id) => id,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+        let row = super::session_rows_including_remote(&state)
+            .into_iter()
+            .find(|row| row.session_id == session_id)
+            .expect("the spawned session is listed");
+        assert_eq!(row.alias.as_deref(), Some("tu-7"));
     }
 }

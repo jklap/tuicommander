@@ -42,6 +42,10 @@ pub(crate) struct SessionInfo {
     pub is_remote: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pty_description: Option<String>,
+    /// Terminal alias (e.g. `tu-3`). The only record of it after a WebView
+    /// reload: `term-alias-assigned` fires once, at spawn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,

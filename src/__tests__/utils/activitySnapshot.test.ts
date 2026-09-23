@@ -138,6 +138,7 @@ describe("activitySnapshot", () => {
 					backgroundWork: false,
 					isBusy: true,
 					isPromoted: false,
+					subAgentTag: null,
 				},
 			],
 		})[0];
