@@ -1191,7 +1191,7 @@ fn render_mcp_instructions(
         }
         if spawn_preferred {
             // Wording chosen from an empirical A/B harness
-            // (plans/agent-teams-wording-harness/), not by inspection: the
+            // (plans/docs/agent-teams-wording-harness/), not by inspection: the
             // old hedged phrasing ("whenever spawning an AI peer that
             // should be observable...") scored 0/10 against a real Claude
             // Code Opus session choosing between this tool and tmux; a
@@ -14631,7 +14631,7 @@ mod tests {
     }
 
     /// Regression coverage for the 2026-09-04 wording change (see
-    /// plans/agent-teams-wording-investigation.md, main checkout): an A/B
+    /// plans/docs/agent-teams-wording-investigation.md, main checkout): an A/B
     /// harness found the old hedged phrasing ("use TUIC's `agent
     /// action=spawn` MCP tool (not your host's native subagent/Task/team
     /// tool) whenever spawning an AI peer that should be observable...")

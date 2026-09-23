@@ -5077,7 +5077,7 @@ and are not repeated here. What's left needs a human pass:
 - [ ] **Reworded the "Prefer TUICommander for peers/teams" connect-time bullet
   (needs `make dev` restart to take effect).** _(changed 2026-09-04, based on
   an n=10-confirmed A/B harness result — see
-  `plans/agent-teams-wording-harness/README.md`.)_ The old hedged phrasing
+  `plans/docs/agent-teams-wording-harness/README.md`.)_ The old hedged phrasing
   ("use TUIC's `agent action=spawn` MCP tool (not your host's native
   subagent/Task/team tool) whenever spawning an AI peer that should be
   observable, messageable, and visible as a tab in TUICommander...") scored
