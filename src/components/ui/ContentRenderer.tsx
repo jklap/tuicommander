@@ -10,7 +10,12 @@ import { type Component, createEffect, createMemo, Index, onCleanup, Show } from
 import { appLogger } from "../../stores/appLogger";
 import { type MarkdownSegment, type StreamSplit, splitStream } from "../../utils/incrementalMarkdown";
 import { stripAnsi } from "../../utils/stripAnsi";
-import { injectTweakSentinels, parseTweakComments } from "../../utils/tweakComments";
+import {
+	findTweakCommentBlocks,
+	injectTweakSentinels,
+	maskTweakCommentSyntax,
+	parseTweakComments,
+} from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
 
 /** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
@@ -43,6 +48,8 @@ export interface ContentRendererProps {
 	contentRef?: (el: HTMLDivElement) => void;
 	/** Override the root font size in pixels (children use em, so everything scales). */
 	fontSize?: number;
+	/** Add exact raw-source ranges to top-level Markdown blocks for gutter comments. */
+	commentableBlocks?: boolean;
 	/**
 	 * Render a growing answer as a committed prefix plus a live tail, so a tick
 	 * only re-parses the block still being written instead of the whole
@@ -56,6 +63,30 @@ export interface ContentRendererProps {
 /** Strip event handler attributes (on*) as defense-in-depth before DOMPurify */
 export function stripEventHandlers(html: string): string {
 	return html.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, "");
+}
+
+/** Attach raw-source ranges to the top-level elements produced by marked. */
+export function applyCommentBlockMetadata(container: HTMLElement, source: string): void {
+	const blocks = findTweakCommentBlocks(source);
+	const comments = parseTweakComments(source).filter((comment) => comment.anchor === "block");
+	const renderRoot = container.firstElementChild ?? container;
+	const elements = Array.from(renderRoot.children) as HTMLElement[];
+	let elementIndex = 0;
+	for (const block of blocks) {
+		while (elementIndex < elements.length && elements[elementIndex].tagName !== block.tag) elementIndex++;
+		const element = elements[elementIndex++];
+		if (!element) break;
+		element.dataset.commentSourceStart = String(block.start);
+		element.dataset.commentSourceEnd = String(block.end);
+		const comment = comments.find(
+			(candidate) => candidate.sourceStart === block.start && candidate.sourceEnd === block.end,
+		);
+		if (!comment) continue;
+		element.classList.add("tweak-block-highlight");
+		element.dataset.tweakId = comment.id;
+		element.dataset.tweakAt = comment.createdAt;
+		element.dataset.tweakComment = comment.comment;
+	}
 }
 
 // Configure marked for safe rendering
@@ -254,10 +285,11 @@ function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOff
 
 		// 2. Build source-line map BEFORE any transforms: domIndex → sourceLine.
 		//    This must use the tilde-cleaned source (same checkbox count as marked sees).
-		const lineMap = buildCheckboxLineMap(cleaned);
+		const mappingSource = maskTweakCommentSyntax(cleaned);
+		const lineMap = buildCheckboxLineMap(mappingSource);
 		//    Table cells need their own map: marked emits no <input> for them, so
 		//    they cannot share the sequential index of the marked-rendered ones.
-		const tableMap = buildTableCheckboxMap(cleaned);
+		const tableMap = buildTableCheckboxMap(mappingSource);
 
 		// 3. Replace tweak markers with sentinel delimiters (highlight spans are
 		//    applied to the rendered DOM afterwards), then parse markdown.
@@ -438,7 +470,9 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 			});
 			// Turn highlight sentinels into <span class="tweak-highlight"> wrappers.
 			const comments = tweakComments();
-			if (comments.length > 0) applyTweakDomHighlights(containerRef, comments);
+			const inlineComments = comments.filter((comment) => comment.anchor !== "block");
+			if (inlineComments.length > 0) applyTweakDomHighlights(containerRef, inlineComments);
+			if (props.commentableBlocks && !props.incremental) applyCommentBlockMetadata(containerRef, props.content ?? "");
 			renderMermaidBlocks(containerRef);
 		});
 		onCleanup(() => cancelAnimationFrame(raf));

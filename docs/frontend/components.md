@@ -35,7 +35,7 @@ App.tsx (central orchestrator)
 │   ├── MarkdownPanel/        # Markdown file browser
 │   │   └── ContentRenderer  # Markdown to HTML (DOMPurify), interactive checkboxes, tweak highlights
 │   ├── HtmlPreviewTab/       # Multi-format preview tab (HTML, PDF, images, video, audio, text)
-│   ├── MarkdownTab/          # Individual markdown file tab (checkbox toggle, tweak comments, search)
+│   ├── MarkdownTab/          # Markdown tab (checkboxes, tweak comments, queued agent review, search)
 │   ├── IdeasPanel/           # Ideas panel with edit, send, delete
 │   ├── FileBrowserPanel/     # File tree browser with content search
 │   │   └── TreeNode          # Recursive tree node (lazy-loaded)

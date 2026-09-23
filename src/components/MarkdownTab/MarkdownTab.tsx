@@ -1,4 +1,5 @@
-import { type Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { usePty } from "../../hooks/usePty";
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -8,13 +9,16 @@ import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { type FileTab, type MdTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
 import {
+	insertTweakBlockComment,
 	insertTweakComment,
 	OverlappingCommentError,
+	parseTweakComments,
 	removeTweakComment,
 	type TweakComment,
 	toggleCheckbox,
@@ -60,8 +64,11 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const [matchIndex, setMatchIndex] = createSignal(-1);
 	const [matchCount, setMatchCount] = createSignal(0);
 	const [overviewFractions, setOverviewFractions] = createSignal<number[]>([]);
+	const [selectedAgentSession, setSelectedAgentSession] = createSignal("");
+	const [sendingChanges, setSendingChanges] = createSignal(false);
 	const [scrollEl, setScrollEl] = createSignal<HTMLElement>();
 	const repo = useRepository();
+	const pty = usePty();
 	const contextMenu = createContextMenu();
 	let wrapperRef: HTMLDivElement | undefined;
 	let contentRef: HTMLDivElement | undefined;
@@ -310,7 +317,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const handleTweakSave = async (comment: TweakComment, occurrenceIndex: number) => {
 		const current = content();
 		// If the id already exists in the source, it's an edit; otherwise it's a new insert.
-		const isExisting = current.includes(`<!--tweak:begin:${comment.id}-->`);
+		const isExisting =
+			current.includes(`<!--tweak:begin:${comment.id}-->`) || current.includes(`<!--tweak:block:${comment.id} `);
 		try {
 			const updated = isExisting
 				? updateTweakComment(current, comment.id, comment.comment)
@@ -337,6 +345,25 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 					"error",
 				);
 			}
+		}
+	};
+
+	const handleTweakBlockSave = async (comment: TweakComment, range: { start: number; end: number }) => {
+		const current = content();
+		try {
+			const updated = insertTweakBlockComment(
+				current,
+				{ ...comment, highlighted: current.slice(range.start, range.end) },
+				range,
+			);
+			await writeTweakedSource(updated);
+		} catch (err) {
+			appLogger.error("app", `handleTweakBlockSave failed: ${err instanceof Error ? err.message : String(err)}`);
+			toastsStore.add(
+				t("markdownTab.commentAnchorFailed", "Couldn't add comment"),
+				t("markdownTab.commentBlockChanged", "The Markdown block changed before the comment was saved. Try again."),
+				"error",
+			);
 		}
 	};
 
@@ -387,6 +414,55 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		return root ? `${root}/${ft.filePath}` : ft.filePath;
 	};
 
+	const reviewComments = createMemo(() => parseTweakComments(content()));
+	const reviewAgents = createMemo(() => {
+		const tab = props.tab;
+		if (tab.type !== "file") return [];
+		return terminalsStore
+			.getIds()
+			.map((id) => terminalsStore.get(id))
+			.filter((terminal): terminal is NonNullable<typeof terminal> =>
+				Boolean(terminal?.sessionId && terminal.agentType && terminal.repoPath === tab.repoPath),
+			)
+			.map((terminal) => ({ sessionId: terminal.sessionId!, label: terminal.name }));
+	});
+
+	createEffect(() => {
+		const agents = reviewAgents();
+		if (agents.some((agent) => agent.sessionId === selectedAgentSession())) return;
+		setSelectedAgentSession(agents[0]?.sessionId ?? "");
+	});
+
+	const handleSendChanges = async () => {
+		const sessionId = selectedAgentSession();
+		const path = fullPath()?.replace(/[\r\n\0]/g, "");
+		const count = reviewComments().length;
+		if (!sessionId || !path || count === 0 || sendingChanges()) return;
+		setSendingChanges(true);
+		try {
+			const noun = count === 1 ? "comment" : "comments";
+			const outcome = await pty.enqueueCommand(
+				sessionId,
+				`Open ${path}, apply the ${count} embedded tweak review ${noun}, remove each resolved tweak marker, and leave unrelated files unchanged.`,
+			);
+			const terminalId = terminalsStore.findBySessionId(sessionId);
+			if (terminalId) terminalsStore.update(terminalId, { queuedCommands: outcome.queued });
+			toastsStore.add(
+				t("markdownTab.sentToAgent", "Sent to agent"),
+				outcome.typed
+					? t("markdownTab.sentToAgentNow", "The review request was delivered now.")
+					: t("markdownTab.sentToAgentQueued", "The review request is queued for the agent's next idle window."),
+				"info",
+			);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			appLogger.error("network", `Failed to queue Markdown review: ${message}`);
+			toastsStore.add(t("markdownTab.sendFailed", "Couldn't send changes"), message, "error");
+		} finally {
+			setSendingChanges(false);
+		}
+	};
+
 	const handleCopyPath = () => {
 		const path = fullPath();
 		if (!path) return;
@@ -435,6 +511,38 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							{t("markdownTab.diffBtn", "Diff")}
 						</button>
 					</Show>
+					<Show when={reviewComments().length > 0}>
+						<div class={s.agentActions}>
+							<label class={s.agentLabel} for={`review-agent-${props.tab.id}`}>
+								{t("markdownTab.agentLabel", "Agent")}
+							</label>
+							<select
+								id={`review-agent-${props.tab.id}`}
+								class={s.agentSelect}
+								aria-label={t("markdownTab.reviewAgent", "Review agent")}
+								value={selectedAgentSession()}
+								disabled={reviewAgents().length === 0 || sendingChanges()}
+								onChange={(event) => setSelectedAgentSession(event.currentTarget.value)}
+							>
+								<Show when={reviewAgents().length === 0}>
+									<option value="">{t("markdownTab.noAgents", "No agents")}</option>
+								</Show>
+								<For each={reviewAgents()}>{(agent) => <option value={agent.sessionId}>{agent.label}</option>}</For>
+							</select>
+							<button
+								class={e.btn}
+								disabled={!selectedAgentSession() || sendingChanges()}
+								onClick={() => void handleSendChanges()}
+								title={t("markdownTab.sendChanges", "Send changes to agent")}
+								aria-label={t("markdownTab.sendChanges", "Send changes to agent")}
+							>
+								<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+									<path d="M1.5 2.25 14.75 8 1.5 13.75l1.35-5L9.5 8 2.85 7.25l-1.35-5Z" />
+								</svg>
+								{sendingChanges() ? t("markdownTab.sending", "Sending…") : t("markdownTab.send", "Send")}
+							</button>
+						</div>
+					</Show>
 				</Show>
 			</div>
 
@@ -455,6 +563,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				</Show>
 				<ContentRenderer
 					content={content()}
+					commentableBlocks={props.tab.type === "file"}
 					baseDir={baseDir()}
 					onLinkClick={handleMdLink}
 					onCheckboxToggle={(idx, mark, col) => {
@@ -484,6 +593,9 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 						contentRef={el}
 						onSave={(c, occ) => {
 							void handleTweakSave(c, occ);
+						}}
+						onSaveBlock={(comment, range) => {
+							void handleTweakBlockSave(comment, range);
 						}}
 						onDelete={(id) => {
 							void handleTweakDelete(id);
