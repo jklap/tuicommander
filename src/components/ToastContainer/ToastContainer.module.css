@@ -11,9 +11,14 @@
 
 .toast {
   pointer-events: auto;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  /* Two columns, two rows: the dot and the text share the first row, and the
+     buttons get their own row underneath. Inline buttons took ~190px out of a
+     480px toast, so the title wrapped one or two words deep while the buttons
+     sat in empty space beside it. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 4px 8px;
   padding: 10px 14px;
   /* Never wider than the viewport: the container is right-anchored, so an
      over-wide toast would run off the left edge on a narrow window. */
@@ -48,13 +53,10 @@
 }
 
 .body {
+  grid-column: 2;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  /* Claim the row rather than being sized by content, so the title and the
-     message share one width instead of the title getting whatever the action
-     button leaves over. */
-  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -136,12 +138,18 @@
   font-weight: 600;
 }
 
+/* Second row, under the text, aligned right. Empty when a toast carries no
+   action — the row collapses because the span has no content. */
 .actions {
+  grid-column: 2;
   display: flex;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
-  margin-top: 2px;
-  margin-left: auto;
+}
+
+.actions:empty {
+  display: none;
 }
 
 .repoAction {
