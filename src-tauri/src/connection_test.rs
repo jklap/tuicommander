@@ -42,6 +42,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::mcp_http::auth::INVALID_CREDENTIALS_BODY;
 use crate::remote_connection::{
     LocalInstancePortError, RemoteTransport, resolve_local_instance_port,
 };
@@ -211,12 +212,6 @@ fn classify_ssh_failure(stderr: &str, code: Option<i32>) -> ConnectionTestResult
 // Direct / Local (HTTP health check)
 // ---------------------------------------------------------------------------
 
-/// Response body text `mcp_http::auth::basic_auth_middleware` sends for a
-/// real credential mismatch (`AuthResult::Invalid`) — kept as the single
-/// source of truth here so a future wording change to that middleware fails
-/// this module's own test instead of silently breaking classification.
-const AUTH_INVALID_BODY: &str = "Invalid credentials";
-
 const HTTP_TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn test_http_health(
@@ -257,7 +252,7 @@ async fn classify_http_response(resp: reqwest::Response) -> ConnectionTestResult
     }
     if status == reqwest::StatusCode::UNAUTHORIZED {
         let body = resp.text().await.unwrap_or_default();
-        return if body.contains(AUTH_INVALID_BODY) {
+        return if body.contains(INVALID_CREDENTIALS_BODY) {
             ConnectionTestResult::AuthFailed
         } else {
             // Either `AuthResult::NotConfigured` or `::MissingHeader` — both
@@ -276,13 +271,20 @@ async fn classify_http_response(resp: reqwest::Response) -> ConnectionTestResult
 /// yet — Phase 4 adds pinning; today this always surfaces here as
 /// `Unreachable`, never a silent success) from a plain connection failure or
 /// a timeout.
+///
+/// Code review 2026-09-23 found the TLS check used to run AFTER `is_connect()`,
+/// but reqwest classifies a TLS handshake failure as a connect error too —
+/// `is_connect()` is true for it — so the TLS-specific branch could never
+/// actually fire; every TLS failure fell through to the generic "connection
+/// failed" message. Fixed by checking the TLS substring first, regardless of
+/// `is_connect()`/`is_request()`.
 fn describe_reqwest_error(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         "timed out waiting for a response".to_string()
+    } else if e.to_string().to_lowercase().contains("tls") {
+        format!("TLS error: {e}")
     } else if e.is_connect() {
         format!("connection failed: {e}")
-    } else if e.is_request() && e.to_string().to_lowercase().contains("tls") {
-        format!("TLS error: {e}")
     } else {
         e.to_string()
     }
@@ -565,11 +567,7 @@ mod tests {
         );
     }
 
-    // --- test_connection_impl: SSH dispatch (argument construction only —
-    // spawning a real `ssh` against a fake host is covered by
-    // `tunnels::supervisor`'s existing fake-ssh-script pattern; this module
-    // sticks to what's unit-testable without a real network round trip, per
-    // this phase's own instructions) ---
+    // --- test_connection_impl: SSH dispatch (argument construction) ---
 
     #[test]
     fn ssh_test_args_are_what_test_ssh_connection_would_actually_spawn() {
@@ -582,5 +580,75 @@ mod tests {
         let args = build_ssh_test_args(&ssh);
         assert_eq!(args[0], "ssh");
         assert!(args.len() > 1, "must have more than just argv[0]");
+    }
+
+    // --- test_ssh_connection: real spawn path ---
+    //
+    // Code review 2026-09-23 found this module's tests never actually spawned
+    // a process through `test_ssh_connection` — everything else exercises the
+    // pure `classify_ssh_failure`/`build_ssh_test_args` functions only, so a
+    // regression in the spawn/`kill_on_drop`/timeout wiring itself wouldn't be
+    // caught. `tunnels::supervisor`'s fake-ssh-script pattern lives in that
+    // module's own private `#[cfg(test)]` block and isn't shared, so this
+    // reimplements the same warm-up-exec caching trick locally (see
+    // `tunnels::supervisor`'s `fake_ssh_script` doc comment for why the
+    // warm-up exists: a first exec of a freshly-written executable can be
+    // held for 6s-102s by macOS's exec-time code scanner, so the script is
+    // written once per machine, to a stable path, and warmed up immediately).
+
+    /// Mirrors `tunnels::supervisor::tests::WARMUP_VAR` but under its own name
+    /// so a warm-up exec here can never be confused with that module's.
+    const CONNTEST_WARMUP_VAR: &str = "TUIC_FAKE_SSH_CONNTEST_WARMUP";
+
+    fn fake_ssh_script(name: &str, posix_body: &str) -> std::path::PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/fake-ssh-conntest");
+        std::fs::create_dir_all(&dir).expect("create fake-ssh-conntest dir");
+        let desired =
+            format!("#!/bin/sh\n[ -n \"${CONNTEST_WARMUP_VAR}\" ] && exit 0\n{posix_body}\n");
+        let path = dir.join(format!("{name}.sh"));
+
+        if std::fs::read_to_string(&path).is_ok_and(|found| found == desired) {
+            return path;
+        }
+
+        let staging = dir.join(format!("{name}.sh.{}", std::process::id()));
+        std::fs::write(&staging, &desired).expect("write fake ssh script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake ssh script");
+        }
+        std::fs::rename(&staging, &path).expect("install fake ssh script");
+
+        let _ = std::process::Command::new(&path)
+            .env(CONNTEST_WARMUP_VAR, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        path
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_ssh_connection_reachable_when_fake_ssh_exits_zero() {
+        let script = fake_ssh_script("exit-zero", "exit 0");
+        let ssh = SshConnectionParams::new("example.com", "alice");
+        let result = test_ssh_connection(&script, &ssh).await;
+        assert_eq!(result, ConnectionTestResult::Reachable);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_ssh_connection_auth_failed_when_fake_ssh_denies_permission() {
+        let script = fake_ssh_script(
+            "permission-denied",
+            "echo 'Permission denied (publickey).' 1>&2; exit 255",
+        );
+        let ssh = SshConnectionParams::new("example.com", "alice");
+        let result = test_ssh_connection(&script, &ssh).await;
+        assert_eq!(result, ConnectionTestResult::AuthFailed);
     }
 }

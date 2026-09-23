@@ -1953,15 +1953,19 @@ describe("transport", () => {
 		});
 
 		it("maps start_direct_proxy to POST /config/remote-connections/{connectionId}/direct-proxy", () => {
+			// No `url` in the request: the backend derives the proxy target from
+			// the connection's own stored transport, never a caller-supplied url
+			// (security review 2026-09-23 — a caller-supplied url let any caller
+			// pair a legitimate connectionId with an attacker-controlled host to
+			// exfiltrate that connection's saved password).
 			const result = mapCommandToHttp("start_direct_proxy", {
 				connectionId: "c1",
-				url: "https://h:9877",
 				tlsFingerprint: "abc",
 				useNativeRoots: false,
 			});
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/config/remote-connections/c1/direct-proxy");
-			expect(result.body).toEqual({ url: "https://h:9877", tls_fingerprint: "abc", use_native_roots: false });
+			expect(result.body).toEqual({ tls_fingerprint: "abc", use_native_roots: false });
 		});
 
 		it("maps stop_direct_proxy to DELETE /config/remote-connections/{connectionId}/direct-proxy", () => {

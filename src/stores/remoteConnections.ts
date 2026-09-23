@@ -624,9 +624,11 @@ function createRemoteConnectionsStore() {
 					// unless credentials are configured, which `start_direct_proxy`
 					// itself checks server-side.
 
+					// `start_direct_proxy` derives its target from the connection's own
+					// stored `transport` server-side (never from a caller-supplied
+					// url) — see direct_proxy.rs's security-review doc comment.
 					const proxyPort = await invoke<number | null>("start_direct_proxy", {
 						connectionId: id,
-						url: transport.url,
 						tlsFingerprint,
 						useNativeRoots,
 					});
@@ -646,16 +648,27 @@ function createRemoteConnectionsStore() {
 					// credentials are configured, otherwise it's a no-op and baseUrl is
 					// the resolved URL directly, exactly like an unauthenticated Direct
 					// http:// connection today.
-					const port = transport.instance_id
-						? await invoke<number>("get_local_instance_port", { instanceId: transport.instance_id })
+					// `.trim()`, not bare truthiness — code review 2026-09-23 found a
+					// real bug: `RemoteConnection::validate` (remote_connection.rs:198)
+					// treats a whitespace-only `instance_id` as ABSENT and explicitly
+					// allows saving a connection with a real `port` alongside one, so a
+					// backend-valid connection can have both set. Bare JS truthiness on
+					// `"   "` is `true`, so connect() would wrongly try (and fail)
+					// instance-id resolution instead of using the perfectly good
+					// configured port.
+					const trimmedInstanceId = transport.instance_id?.trim();
+					const port = trimmedInstanceId
+						? await invoke<number>("get_local_instance_port", { instanceId: trimmedInstanceId })
 						: transport.port;
 					if (!port) {
 						throw new Error("Local connection has neither an instance_id nor a port configured");
 					}
 					const url = `http://127.0.0.1:${port}`;
+					// `start_direct_proxy` re-resolves the Local instance's port itself
+					// server-side (never trusts a caller-supplied url) — see
+					// direct_proxy.rs's security-review doc comment.
 					const proxyPort = await invoke<number | null>("start_direct_proxy", {
 						connectionId: id,
-						url,
 						tlsFingerprint: null,
 						useNativeRoots: false,
 					});

@@ -240,10 +240,13 @@ describe("remoteConnectionsStore.connect() (Local)", () => {
 		await remoteConnectionsStore.connect("loc1");
 
 		expect(mockInvoke).toHaveBeenCalledWith("get_local_instance_port", { instanceId: "dev-box" });
-		expect(mockInvoke).toHaveBeenCalledWith(
-			"start_direct_proxy",
-			expect.objectContaining({ connectionId: "loc1", url: "http://127.0.0.1:9878" }),
-		);
+		// No `url` in this call: the backend re-resolves the Local connection's
+		// own target server-side (security review 2026-09-23 — a caller-supplied
+		// url let any caller pair a legitimate connectionId with an
+		// attacker-controlled host to exfiltrate that connection's saved
+		// password).
+		expect(mockInvoke).toHaveBeenCalledWith("start_direct_proxy", expect.objectContaining({ connectionId: "loc1" }));
+		expect(mockInvoke.mock.calls.find((c) => c[0] === "start_direct_proxy")?.[1]).not.toHaveProperty("url");
 		expect(remoteConnectionsStore.getConnectionState("loc1")?.status).toBe("connected");
 		expect(remoteConnectionsStore.getBaseUrl("loc1")).toBe("http://127.0.0.1:9878");
 	});
@@ -258,6 +261,32 @@ describe("remoteConnectionsStore.connect() (Local)", () => {
 
 		expect(mockInvoke).not.toHaveBeenCalledWith("get_local_instance_port", expect.anything());
 		expect(remoteConnectionsStore.getBaseUrl("loc2")).toBe("http://127.0.0.1:9877");
+	});
+
+	it("whitespace-only instance_id alongside a real port uses the port, not instance-id resolution (code review 2026-09-23)", async () => {
+		// Regression test for a real bug: `RemoteConnection::validate`
+		// (remote_connection.rs) treats a whitespace-only instance_id as ABSENT
+		// and explicitly allows a connection to be saved with a real `port`
+		// alongside one — a backend-valid shape. connect() used bare JS
+		// truthiness on `transport.instance_id`, and `"   "` is truthy, so it
+		// wrongly called get_local_instance_port("   ") (which always fails,
+		// not a valid DNS label) instead of using the perfectly good port.
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "start_direct_proxy") return Promise.resolve(null);
+			return defaultMockInvokeImpl(cmd);
+		});
+		await remoteConnectionsStore.addConnection({
+			id: "loc3",
+			name: "local-loc3",
+			transport: { type: "Local", port: 9877, instance_id: "   " },
+			auth_username: null,
+			enabled: true,
+		});
+		await remoteConnectionsStore.connect("loc3");
+
+		expect(mockInvoke).not.toHaveBeenCalledWith("get_local_instance_port", expect.anything());
+		expect(remoteConnectionsStore.getConnectionState("loc3")?.status).toBe("connected");
+		expect(remoteConnectionsStore.getBaseUrl("loc3")).toBe("http://127.0.0.1:9877");
 	});
 
 	it("routes through the proxy port when auth is configured (start_direct_proxy returns a port)", async () => {
