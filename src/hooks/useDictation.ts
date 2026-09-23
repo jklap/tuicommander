@@ -31,7 +31,7 @@ export interface DictationDeps {
 		startRecording: () => Promise<void>;
 		stopRecording: () => Promise<TranscribeResponse | null>;
 		refreshHandsFree: () => Promise<void>;
-		disarmHandsFree: () => Promise<number[]>;
+		disarmHandsFree: () => Promise<void>;
 	};
 	setStatusInfo: (msg: string) => void;
 	openSettings: (tab?: string) => void;
@@ -56,20 +56,16 @@ export function useDictation(deps: DictationDeps) {
 		// start control for a push-to-talk recording, and a hands-free
 		// conversation is already holding the microphone. Asked while one is
 		// running, the key ends it — all of it: the capture, the transcript
-		// waiting out its hold-back, whatever is queued and whatever is being
-		// spoken. Rust decides what that means; this only asks.
+		// waiting out its hold-back or held by the composer, and whatever is
+		// being spoken. Rust decides what that means; this only asks.
 		//
 		// Re-read first rather than trusting the stored flag: the mode ends by
 		// itself when its terminal closes, and a stale `armed` here would eat
 		// the keypress that was meant to start a recording.
 		await deps.dictation.refreshHandsFree();
 		if (deps.dictation.state.handsFree?.armed) {
-			const delivered = await deps.dictation.disarmHandsFree();
-			deps.setStatusInfo(
-				delivered.length > 0
-					? `Hands-free: stopped — ${delivered.length} spoken ${delivered.length === 1 ? "entry" : "entries"} had already been typed`
-					: "Hands-free: stopped",
-			);
+			await deps.dictation.disarmHandsFree();
+			deps.setStatusInfo("Hands-free: stopped");
 			return;
 		}
 

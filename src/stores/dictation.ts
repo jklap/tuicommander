@@ -76,9 +76,11 @@ export interface HandsFreeStatus {
 	/** The bound audio endpoint. */
 	owner: string | null;
 	generation: number;
-	/** The transcript waiting out its hold-back, while there is still time to stop it. */
+	/**
+	 * The transcript waiting out its hold-back, or held by a dialog or a draft
+	 * in the composer, while there is still time to stop it.
+	 */
 	pendingText: string | null;
-	queuedIds: number[];
 	holdBackMs: number;
 	error: string | null;
 	/** Spoken turns handed to the agent. Monotonic for the backend's life. */
@@ -965,26 +967,18 @@ function createDictationStore() {
 
 		/**
 		 * Stop the conversation: the microphone, the pending transcript and
-		 * anything queued or being spoken.
-		 *
-		 * Reports what it could not take back. Voice entries the composer
-		 * already typed cannot be retracted, and saying so is the difference
-		 * between an honest outcome and a claim.
+		 * anything being spoken. Turns already typed into the terminal stay
+		 * there; nothing else is parked anywhere to take back.
 		 */
-		async disarmHandsFree(): Promise<number[]> {
+		async disarmHandsFree(): Promise<void> {
 			setState("handsFreeError", null);
 			try {
-				const result = await invoke<{
-					alreadyDelivered: number[];
-					status: HandsFreeStatus;
-				}>("disarm_hands_free_dictation");
+				const result = await invoke<{ status: HandsFreeStatus }>("disarm_hands_free_dictation");
 				applyHandsFree(result.status);
 				await actions.refreshSpeechStatus();
-				return result.alreadyDelivered;
 			} catch (err) {
 				setState("handsFreeError", String(err));
 				appLogger.error("dictation", "Failed to disarm hands-free", err);
-				return [];
 			} finally {
 				// Whether or not the backend answered: the conversation is over
 				// as far as this tab is concerned, and the microphone closes.

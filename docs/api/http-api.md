@@ -1727,21 +1727,25 @@ first** — arming an owner with no socket is refused with `No client is connect
 for audio owner '<owner>'`, because the backend will not substitute the server's
 own microphone for a client's (see `docs/backend/dictation.md`).
 
-`POST /dictation/hands-free/disarm` disarms the whole mode and cancels the voice
-entries the generation still owns. It is idempotent: the second call reports
-`wasArmed: false` and cancels nothing. Entries that already reached the composer
-come back under `alreadyDelivered` — nothing can take those back.
+`POST /dictation/hands-free/disarm` disarms the whole mode and drops the
+transcript that never reached the model (`discardedPending`). It is idempotent:
+the second call reports `wasArmed: false`. Spoken turns are typed straight into
+the bound agent's composer — busy or not — and never parked in the Compose
+queue, so there is nothing to cancel and nothing typed can be taken back.
 
 Both bodies are the structs `dictation::commands` serializes, camelCase on the
 wire and identical on both transports:
 
-- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error, deliveredTurns, droppedTurns }`
-- `HandsFreeDisarmed { wasArmed, generation, cancelled, alreadyDelivered, discardedPending, discardedCapture, status }`
+- `HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }`
+- `HandsFreeDisarmed { wasArmed, generation, discardedPending, discardedCapture, status }`
+
+`pendingText` is the turn waiting out its hold-back, or held by a permission
+dialog or a draft in the composer (phase `holding_back`) until it can be typed.
 
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
 
-`deliveredTurns` counts spoken turns handed to the Compose queue and
+`deliveredTurns` counts spoken turns typed into the composer and
 `droppedTurns` counts turns the activation phrase dropped. Both are monotonic
 for the life of the backend process and are never reset on arm, so a client
 detects a turn by comparing two polls — the earcons key on them, because a
@@ -1752,12 +1756,12 @@ turns them off; only the frontend reads it.
 Arming and disarming also tell the bound model so, unless
 `hands_free_notify_model` is `false` in the dictation config (it defaults to
 `true`; `DictationConfig` is snake_case on the wire, unlike the two structs
-above). The notice is an ordinary Compose entry, so it appears in `queuedIds`
-until the composer types it, and a disarm that arrives first cancels it — in
+above). The start notice is typed like a spoken turn; a dialog or a draft holds
+it in the mode, ahead of any turn, and a disarm that arrives first drops it — in
 which case no end notice is sent, because the model never read the start one.
 `hands_free_start_notice` replaces the start notice's text (empty means the
 built-in one, which `GET /dictation/hands-free/default-notice` returns as a JSON
-string); Rust folds it to one line before it is queued.
+string); Rust folds it to one line before it is typed.
 `error` carries the reason when the queue refuses a notice; arming still
 succeeds. Turning the setting off never leaves speech running: a disarm revokes
 it either way.

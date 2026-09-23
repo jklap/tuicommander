@@ -10,9 +10,10 @@
 
 ## Hands-free turns reach a busy agent at once (2026-09-23) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, arm hands-free on a Claude Code tab, give it a long task, and speak while it works. The turn appears in the terminal within a second or two (Claude queues it or takes it mid-turn), not after the turn ends. `GET /logs?source=...` shows `hands-free turn typed now`.
-- [ ] While Claude shows a permission dialog, speak: nothing is typed into the dialog; the log shows `hands-free turn parked` with `reason="confident question on screen"`. Answer the dialog: the turn is typed.
-- [ ] Queue a typed command in the Compose panel while the agent is busy, then speak: the spoken turn waits behind the typed one and follows it right after the next idle.
+- [ ] After a `make dev` restart, arm hands-free on a Claude Code tab, give it a long task, and speak while it works. The turn appears in the terminal within a second or two (Claude queues it or takes it mid-turn), not after the turn ends. `GET /logs?source=dictation` shows `Hands-free turn typed now` with the session.
+- [ ] While Claude shows a permission dialog, speak: nothing is typed into the dialog; the hands-free panel keeps showing the turn, and the log shows `Hands-free turn held` with `reason="confident question on screen"` once (not every 50 ms). Answer the dialog: the turn is typed.
+- [ ] Queue a typed command in the Compose panel while the agent is busy, then speak: the spoken turn is typed now, and the Compose badge still shows the typed command, which goes out at the next idle as before.
+- [ ] Stop hands-free: the status bar reads "Hands-free: stopped" (no "entries had already been typed" count any more).
 
 ## Opening AI Chat no longer aborts the app (2026-09-23) — Rust, needs `make dev` restart
 
@@ -3144,6 +3145,8 @@ Rust — needs a `make dev` restart.
 
 ## Hands-free voice entries in the Compose queue (#814-6d13)
 
+_(NOTE 2026-09-23: superseded — hands-free turns and notices are now typed straight into the terminal, busy or not, and never enter the Compose queue; there is no `voice_command` kind, no `queuedIds`, no `cancelled`/`alreadyDelivered`. Read "reaches the Compose queue" as "is typed into the terminal"; a dialog or draft holds the turn in the hands-free panel. See "Hands-free turns reach a busy agent at once" at the top.)_
+
 Rust — needs a `make dev` restart. The hands-free mode has no UI control yet
 (Step 8), so this checks the queue half through the existing HTTP surface.
 
@@ -3177,6 +3180,8 @@ TUIC_POCKET_BUNDLE_DIR=<bundle> [TUIC_POCKET_VOICE=<voice>] \
       taking the process down inside `ort`.
 
 ## Hands-free arm and disarm (#814-6d13)
+
+_(NOTE 2026-09-23: superseded — hands-free turns and notices are now typed straight into the terminal, busy or not, and never enter the Compose queue; there is no `voice_command` kind, no `queuedIds`, no `cancelled`/`alreadyDelivered`. Read "reaches the Compose queue" as "is typed into the terminal"; a dialog or draft holds the turn in the hands-free panel. See "Hands-free turns reach a busy agent at once" at the top.)_
 
 Rust — needs a `make dev` restart. There is still no UI control, so the HTTP
 surface is the only way to reach it.
@@ -3225,6 +3230,8 @@ and disarm before walking away.
       most here.
 
 ## Hands-free activation phrase (#815-7c76)
+
+_(NOTE 2026-09-23: superseded — hands-free turns and notices are now typed straight into the terminal, busy or not, and never enter the Compose queue; there is no `voice_command` kind, no `queuedIds`, no `cancelled`/`alreadyDelivered`. Read "reaches the Compose queue" as "is typed into the terminal"; a dialog or draft holds the turn in the hands-free panel. See "Hands-free turns reach a busy agent at once" at the top.)_
 
 Rust — needs a `make dev` restart. **There is no UI control for the phrase**;
 `DictationSettings.tsx` has no field for it, so the only way to set one today is
@@ -3388,6 +3395,8 @@ model must never answer in a language the user is not speaking.
       voice.
 
 ## The model is told when hands-free starts and stops (story `821-842a`, 2026-09-22) — **Rust, needs a `make dev` restart**
+
+_(NOTE 2026-09-23: superseded — hands-free turns and notices are now typed straight into the terminal, busy or not, and never enter the Compose queue; there is no `voice_command` kind, no `queuedIds`, no `cancelled`/`alreadyDelivered`. Read "reaches the Compose queue" as "is typed into the terminal"; a dialog or draft holds the turn in the hands-free panel. See "Hands-free turns reach a busy agent at once" at the top.)_
 
 Automated coverage is in place for the mechanism: the notice reaches the Compose
 FIFO of the bound session, a notice the agent never read is withdrawn instead of

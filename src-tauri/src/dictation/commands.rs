@@ -1592,11 +1592,10 @@ pub struct HandsFreeStatus {
     /// The bound audio endpoint.
     pub owner: Option<String>,
     pub generation: u64,
-    /// The transcript waiting out its hold-back, so the UI can show what is
-    /// about to be sent while there is still time to stop it.
+    /// The transcript waiting out its hold-back, or held by a dialog or a
+    /// draft in the composer, so the UI can show what is about to be sent
+    /// while there is still time to stop it.
     pub pending_text: Option<String>,
-    /// Compose-queue ids this mode owns and would cancel on disarm.
-    pub queued_ids: Vec<u64>,
     pub hold_back_ms: u64,
     pub error: Option<String>,
     /// Monotonic turn counts; a client plays an earcon when one moves. See
@@ -1613,11 +1612,8 @@ pub struct HandsFreeDisarmed {
     /// rather than implying work that did not happen.
     pub was_armed: bool,
     pub generation: u64,
-    /// Voice entries pulled back out of the Compose queue.
-    pub cancelled: Vec<u64>,
-    /// Voice entries the composer already had. Nothing can retract these, and
-    /// reporting them is the difference between an honest outcome and a claim.
-    pub already_delivered: Vec<u64>,
+    /// A transcript that never reached the model — inside its hold-back, or
+    /// held by the composer — was dropped. Everything already typed stays.
     pub discarded_pending: bool,
     pub discarded_capture: bool,
     pub status: HandsFreeStatus,
@@ -1635,7 +1631,6 @@ pub(crate) fn hands_free_status(dictation: &DictationState) -> HandsFreeStatus {
         owner: mode.binding().map(|binding| binding.owner.clone()),
         generation: mode.generation(),
         pending_text: mode.pending_text().map(str::to_string),
-        queued_ids: mode.owned_ids().to_vec(),
         hold_back_ms: mode.hold_back_ms(),
         error: mode.last_error().map(str::to_string),
         delivered_turns: mode.delivered_turns(),
@@ -1824,11 +1819,11 @@ fn reap_finished_runtime(dictation: &DictationState) {
 /// Bind hands-free capture to a session and an audio owner.
 ///
 /// This binds the target and the audio owner, opens the endpoint that owner
-/// names, and starts the runtime that carries speech from it to the Compose
-/// queue. Arming is also what 817's speech capability and 821's entry hint key
+/// names, and starts the runtime that types speech from it into the bound
+/// agent's composer. Arming is also what 817's speech capability and 821's entry hint key
 /// off, which is why it is reachable before any UI exists.
 ///
-/// Refused when the target cannot take a Compose-queue entry. There is no
+/// Refused when the target cannot take hands-free input. There is no
 /// fallback delivery path, so an unsupported target stays unavailable — and so
 /// does an audio endpoint this build does not implement.
 pub(crate) fn arm_hands_free(
@@ -1843,8 +1838,8 @@ pub(crate) fn arm_hands_free(
 /// `arm_hands_free` with the capture endpoint supplied.
 ///
 /// The seam exists so a test can drive the whole armed path — bind, capture,
-/// segment, transcribe, hold back, enqueue — without a microphone or a
-/// multi-gigabyte model, against a real session and the real Compose queue.
+/// segment, transcribe, hold back, write — without a microphone or a
+/// multi-gigabyte model, against a real session and the real sink.
 pub(crate) fn arm_hands_free_with(
     state: &Arc<crate::state::AppState>,
     dictation: &DictationState,
@@ -1886,20 +1881,21 @@ pub(crate) fn arm_hands_free_with(
         return Err(error);
     }
 
-    // Tell the model the conversation opened, if the user asked us to. First
-    // into the FIFO, before the runtime can put a spoken turn behind it: a
-    // model that reads "you can answer out loud" after the question it applies
-    // to has been told nothing useful.
+    // Tell the model the conversation opened, if the user asked us to. Before
+    // the runtime starts, so no spoken turn can go first: a model that reads
+    // "you can answer out loud" after the question it applies to has been told
+    // nothing useful. A dialog or a draft holds it in the mode, and the
+    // runtime retries it before any turn.
     //
     // A refusal is recorded on the mode rather than failing the arm. The
-    // microphone works, the Compose queue works for ordinary turns, and a
-    // conversation the model was not told about is a worse conversation rather
-    // than no conversation — the reason is visible in the hands-free status.
+    // microphone works, ordinary turns may still land, and a conversation the
+    // model was not told about is a worse conversation rather than no
+    // conversation — the reason is visible in the hands-free status.
     let config = get_dictation_config();
     if config.hands_free_notify_model
         && let Some(Err(error)) = continuous::deliver_entry_hint(
             &mut dictation.hands_free.lock(),
-            &continuous::PtyVoiceQueue(state.as_ref()),
+            &continuous::PtyVoiceSink(state.as_ref()),
             &continuous::entry_hint_text(&config.hands_free_start_notice),
             Some(&config.language),
         )
@@ -1961,15 +1957,16 @@ pub(crate) fn arm_hands_free_with(
     Ok(hands_free_status(dictation))
 }
 
-/// Disarm the whole mode and cancel what it still owns.
+/// Disarm the whole mode and drop what never reached the model.
 ///
 /// Idempotent: disarming a mode that was never armed reports `was_armed: false`
-/// and cancels nothing, rather than inventing an outcome.
+/// rather than inventing an outcome. Nothing typed can be taken back, and
+/// nothing is parked anywhere else, so there is nothing to cancel.
 pub(crate) fn disarm_hands_free(
     state: &crate::state::AppState,
     dictation: &DictationState,
 ) -> HandsFreeDisarmed {
-    use crate::dictation::continuous::{DisarmReason, PtyVoiceQueue, cancel_disarmed};
+    use crate::dictation::continuous::{DisarmReason, PtyVoiceSink};
 
     let disarmed = dictation.hands_free.lock().disarm(DisarmReason::Manual);
     // Stop talking first, and unconditionally. Dropping the queue cancels the
@@ -1992,24 +1989,19 @@ pub(crate) fn disarm_hands_free(
         return HandsFreeDisarmed {
             was_armed: false,
             generation: status.generation,
-            cancelled: Vec::new(),
-            already_delivered: Vec::new(),
             discarded_pending: false,
             discarded_capture: false,
             status,
         };
     };
-    let cancellation = cancel_disarmed(&PtyVoiceQueue(state), &disarmed);
-    // Driven by what this arm actually sent, never by the setting as it reads
+    // Driven by what this arm actually typed, never by the setting as it reads
     // now. A user who turns the notice off mid-conversation has changed what
     // the *next* arm says; the model that already read "you can answer out
     // loud" still has to be told that stopped being true.
-    continuous::report_exit_hint(&PtyVoiceQueue(state), &disarmed, &cancellation);
+    continuous::report_exit_hint(&PtyVoiceSink(state), &disarmed);
     HandsFreeDisarmed {
         was_armed: true,
         generation: disarmed.generation,
-        cancelled: cancellation.cancelled,
-        already_delivered: cancellation.already_delivered,
         discarded_pending: disarmed.discarded_pending,
         discarded_capture: disarmed.discarded_capture,
         status: hands_free_status(dictation),
@@ -2320,28 +2312,17 @@ mod tests {
         panic!("{needle:?} was never typed into the terminal; it holds {typed:?}");
     }
 
-    /// Whether `needle` reached the session — parked in its Compose FIFO, or
-    /// already typed into its terminal.
-    ///
-    /// Both are the same fact for a caller that enqueued it: the composer's
-    /// busy gate decides which of the two it is at any instant, and a test
-    /// that demanded one of them would be asserting the gate's timing rather
-    /// than the delivery.
-    fn wait_for_voice_text(
-        state: &crate::state::AppState,
-        session_id: &str,
-        typed: &Arc<std::sync::Mutex<Vec<u8>>>,
+    /// Whether `needle` is typed into the recorded terminal inside `window`.
+    /// Used for the assertion that it is not; the caller measures the window
+    /// rather than guessing it.
+    fn typed_within(
+        bytes: &Arc<std::sync::Mutex<Vec<u8>>>,
         needle: &str,
+        window: std::time::Duration,
     ) -> bool {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + window;
         while std::time::Instant::now() < deadline {
-            let parked = state
-                .pending_injections
-                .get(session_id)
-                .is_some_and(|queue| queue.iter().any(|entry| entry.text() == needle));
-            let written =
-                String::from_utf8_lossy(&typed.lock().expect("recorder")).contains(needle);
-            if parked || written {
+            if String::from_utf8_lossy(&bytes.lock().expect("recorder")).contains(needle) {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -2368,52 +2349,6 @@ mod tests {
                 transcript: transcript.to_string(),
             }))
         }
-    }
-
-    /// Wait for the runtime thread to park a voice entry, or say what it did
-    /// instead. A fixed sleep would be a guess about scheduling; the hold-back
-    /// is a real deadline and the slack above it is the harness bound.
-    fn wait_for_voice_entry(
-        state: &crate::state::AppState,
-        session_id: &str,
-        hold_back_ms: u64,
-    ) -> u64 {
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_millis(hold_back_ms + 10_000);
-        while std::time::Instant::now() < deadline {
-            let voice = state.pending_injections.get(session_id).and_then(|queue| {
-                queue
-                    .iter()
-                    .find(|entry| entry.voice_generation().is_some())
-                    .map(crate::state::PendingInjection::id)
-            });
-            if let Some(id) = voice {
-                return id;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        panic!("the hands-free runtime never parked a voice entry");
-    }
-
-    /// Whether a voice entry turns up inside `window`. Used for the assertion
-    /// that none does; the caller measures the window rather than guessing it.
-    fn voice_entry_within(
-        state: &crate::state::AppState,
-        session_id: &str,
-        window: std::time::Duration,
-    ) -> bool {
-        let deadline = std::time::Instant::now() + window;
-        while std::time::Instant::now() < deadline {
-            let present = state
-                .pending_injections
-                .get(session_id)
-                .is_some_and(|queue| queue.iter().any(|entry| entry.voice_generation().is_some()));
-            if present {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        false
     }
 
     /// Both halves of a binding are attacker-shaped input on the HTTP transport:
@@ -2485,8 +2420,6 @@ mod tests {
         let outcome = disarm_hands_free(&state, &dictation);
 
         assert!(!outcome.was_armed);
-        assert!(outcome.cancelled.is_empty());
-        assert!(outcome.already_delivered.is_empty());
         assert!(!outcome.discarded_pending);
         assert_eq!(outcome.status.phase, "disarmed");
     }
@@ -2506,7 +2439,10 @@ mod tests {
         assert_eq!(wire["owner"], serde_json::Value::Null);
         assert_eq!(wire["generation"], serde_json::json!(0));
         assert_eq!(wire["pendingText"], serde_json::Value::Null);
-        assert_eq!(wire["queuedIds"], serde_json::json!([]));
+        assert!(
+            wire.get("queuedIds").is_none(),
+            "nothing is parked in the Compose queue on hands-free's behalf any more"
+        );
         assert_eq!(
             wire["holdBackMs"],
             serde_json::json!(default_hold_back_ms())
@@ -2577,9 +2513,9 @@ mod tests {
     /// shape of a matcher with no caller.
     #[cfg(unix)]
     #[test]
-    fn a_configured_activation_phrase_decides_which_speech_reaches_the_queue() {
+    fn a_configured_activation_phrase_decides_which_speech_reaches_the_model() {
         // The start notice is story 821's and has its own tests. Off here, so
-        // the first voice entry this test waits for is the spoken turn.
+        // the first thing typed is the spoken turn.
         let _config = config_of_this_test(DictationConfig {
             hands_free_activation_phrase: "ciao tuic".to_string(),
             hands_free_hold_back_ms: 100,
@@ -2588,13 +2524,13 @@ mod tests {
         });
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::test_support::agent_session(&state, "voice-gate", crate::pty::SHELL_BUSY);
-        crate::test_support::insert_recording_session(&state, "voice-gate");
+        let typed = crate::test_support::insert_recording_session(&state, "voice-gate");
 
         // The addressed half first, and timed: the gate decides in the same
         // tick as the transcription, so how long an accepted turn takes to
         // appear on this machine bounds how long a rejected one could.
         let dictation = DictationState::new();
-        let armed = arm_hands_free_with(
+        arm_hands_free_with(
             &state,
             &dictation,
             "voice-gate",
@@ -2603,18 +2539,12 @@ mod tests {
         )
         .expect("arm");
         let started = std::time::Instant::now();
-        let voice_id = wait_for_voice_entry(&state, "voice-gate", armed.hold_back_ms);
+        // The whole submission, Enter included: the text and the Enter are two
+        // writes with a real gap between them.
+        let terminal = wait_for_typed(&typed, "run the tests (reply in Italian)\r");
         let accepted_in = started.elapsed();
-        let text = state
-            .pending_injections
-            .get("voice-gate")
-            .expect("queue")
-            .iter()
-            .find(|entry| entry.id() == voice_id)
-            .map(|entry| entry.text().to_string())
-            .expect("the queued entry");
         assert_eq!(
-            text, "run the tests (reply in Italian)",
+            terminal, "\u{15}run the tests (reply in Italian)\r",
             "the phrase addresses the tool and may not reach the model, and the language the \
              user spoke it in must"
         );
@@ -2633,32 +2563,32 @@ mod tests {
         .expect("arm");
         let window = (accepted_in * 5).max(std::time::Duration::from_secs(2));
         assert!(
-            !voice_entry_within(&state, "voice-gate", window),
-            "speech without the activation phrase must not reach the Compose queue"
+            !typed_within(&typed, "cancella", window),
+            "speech without the activation phrase must not reach the model"
         );
         disarm_hands_free(&state, &dictation);
     }
 
     /// The whole feature, once, against a real session: arm binds, the status
-    /// reports the binding, a held-back transcript reaches the Compose queue,
-    /// and disarm cancels what it owns and nothing else.
+    /// reports the binding, a held-back transcript is typed into the agent's
+    /// composer, and the Compose queue is left exactly as it was.
     ///
-    /// The target is deliberately BUSY. An idle one would have its entry typed
-    /// by the flush, and then there would be nothing parked left to cancel —
-    /// the case this test exists to check.
+    /// The target is deliberately BUSY with work parked in its Compose queue:
+    /// Boss's rule is that speech reaches a working agent at once, like a line
+    /// typed by hand, and never waits in — or reorders — that queue.
     #[cfg(unix)]
     #[test]
-    fn arming_binds_a_real_session_and_disarm_cancels_only_its_own_entries() {
-        // Its own configuration, with the start notice off: this test counts
-        // the entries the mode owns, and the notice is one of them. Story 821
-        // proves the notice itself.
+    fn arming_types_speech_into_a_busy_session_and_leaves_its_compose_queue_alone() {
+        // Its own configuration, with the start notice off: this test reads
+        // what the terminal holds, and the notice would be part of it. Story
+        // 821 proves the notice itself.
         let _config = config_of_this_test(DictationConfig {
             hands_free_notify_model: false,
             ..Default::default()
         });
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::test_support::agent_session(&state, "voice-e2e", crate::pty::SHELL_BUSY);
-        crate::test_support::insert_recording_session(&state, "voice-e2e");
+        let typed = crate::test_support::insert_recording_session(&state, "voice-e2e");
         let dictation = DictationState::new();
         // Work a human and a peer already parked on the same session.
         let (human, notice) = {
@@ -2689,22 +2619,16 @@ mod tests {
 
         // No further pokes: the runtime thread started by `arm` captures the
         // phrase, segments it, transcribes it, waits out the hold-back and
-        // enqueues it on its own.
-        let voice_id = wait_for_voice_entry(&state, "voice-e2e", armed.hold_back_ms);
+        // types it on its own — into an agent that is still working.
+        let terminal = wait_for_typed(&typed, "run the tests (reply in Italian)\r");
+        assert_eq!(terminal, "\u{15}run the tests (reply in Italian)\r");
 
         let status = hands_free_status(&dictation);
-        assert_eq!(
-            status.queued_ids,
-            [voice_id],
-            "the status must own exactly the entry it queued"
-        );
         assert_eq!(status.session_id.as_deref(), Some("voice-e2e"));
 
         let disarmed = disarm_hands_free(&state, &dictation);
 
         assert!(disarmed.was_armed);
-        assert_eq!(disarmed.cancelled, [voice_id]);
-        assert!(disarmed.already_delivered.is_empty());
         let remaining: Vec<u64> = state
             .pending_injections
             .get("voice-e2e")
@@ -2715,7 +2639,7 @@ mod tests {
         assert_eq!(
             remaining,
             [human, notice],
-            "the human's command and the peer notice must survive a voice disarm"
+            "the human's command and the peer notice stay parked, in order"
         );
         assert!(!disarmed.status.armed);
         assert!(
@@ -3963,9 +3887,10 @@ mod tests {
     /// can answer out loud when the conversation opens, and told to go back to
     /// text when it ends.
     ///
-    /// The target is IDLE on purpose. The composer types into an idle terminal
-    /// straight away, which is the only state in which the model has actually
-    /// *read* the notice — and reading it is what the exit notice is owed to.
+    /// Both notices are typed at once: the start notice into the idle agent,
+    /// the end notice into the agent the start notice just set working. Typed
+    /// is the only state in which the model has *read* the start notice — and
+    /// reading it is what the end notice is owed to.
     #[cfg(unix)]
     #[test]
     fn arming_tells_the_model_it_can_answer_out_loud_and_disarming_takes_it_back() {
@@ -3979,7 +3904,7 @@ mod tests {
         let typed = crate::test_support::insert_recording_session(&state, "voice-hint");
         let dictation = DictationState::new();
 
-        let armed = arm_hands_free_with(
+        arm_hands_free_with(
             &state,
             &dictation,
             "voice-hint",
@@ -3994,41 +3919,42 @@ mod tests {
             "one arm, one notice"
         );
 
-        let disarmed = disarm_hands_free(&state, &dictation);
+        disarm_hands_free(&state, &dictation);
 
+        let terminal = String::from_utf8_lossy(&typed.lock().expect("recorder")).to_string();
+        assert!(
+            terminal.ends_with(&format!("\u{15}{}\r", continuous::MODE_EXIT_HINT)),
+            "the end notice is typed into the session the mode was bound to by the time \
+             disarm returns; the terminal holds {terminal:?}"
+        );
         assert_eq!(
-            disarmed.already_delivered, armed.queued_ids,
-            "the composer had already typed the start notice, so the model holds it"
-        );
-        assert!(
-            disarmed.cancelled.is_empty(),
-            "nothing may be cancelled on behalf of a notice already typed"
-        );
-        // Into the same FIFO, behind whatever the terminal is doing. Whether
-        // the composer has typed it yet is its own decision — the contract is
-        // that the notice is queued for the session the mode was bound to.
-        let exit = wait_for_voice_text(&state, "voice-hint", &typed, continuous::MODE_EXIT_HINT);
-        assert!(
-            exit,
-            "the end notice must reach the FIFO of the session the mode was bound to"
+            crate::pty::queued_command_count(&state, "voice-hint"),
+            0,
+            "neither notice waits in the Compose queue"
         );
     }
 
     /// Criterion 3: a notice the model never read is withdrawn, and nothing is
-    /// queued to contradict something it was never told.
+    /// written to contradict something it was never told.
     ///
-    /// The target is BUSY, so the notice is still parked when the user changes
-    /// their mind — the rapid arm/disarm case.
+    /// A permission dialog owns the composer, so the notice is still held when
+    /// the user changes their mind — the rapid arm/disarm case.
     #[cfg(unix)]
     #[test]
     fn a_start_notice_the_model_never_read_is_withdrawn_rather_than_contradicted() {
         let _config = config_of_this_test(DictationConfig::default());
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         crate::test_support::agent_session(&state, "voice-rapid", crate::pty::SHELL_BUSY);
+        state
+            .session_maps
+            .session_states
+            .get_mut("voice-rapid")
+            .expect("the session was just inserted")
+            .question_confident = true;
         let typed = crate::test_support::insert_recording_session(&state, "voice-rapid");
         let dictation = DictationState::new();
 
-        let armed = arm_hands_free_with(
+        arm_hands_free_with(
             &state,
             &dictation,
             "voice-rapid",
@@ -4036,25 +3962,26 @@ mod tests {
             &silent_endpoint(),
         )
         .expect("arm");
+        disarm_hands_free(&state, &dictation);
+        // The dialog closes after the disarm: nothing may be waiting anywhere
+        // to be typed into it then.
+        state
+            .session_maps
+            .session_states
+            .get_mut("voice-rapid")
+            .expect("session")
+            .question_confident = false;
+
         assert_eq!(
-            armed.queued_ids.len(),
-            1,
-            "a parked notice is visible as an entry the mode owns"
+            crate::pty::queued_command_count(&state, "voice-rapid"),
+            0,
+            "nothing may be parked to undo it"
         );
-
-        let disarmed = disarm_hands_free(&state, &dictation);
-
-        assert_eq!(disarmed.cancelled, armed.queued_ids);
-        assert!(disarmed.already_delivered.is_empty());
-        let remaining = state
-            .pending_injections
-            .get("voice-rapid")
-            .map_or(0, |queue| queue.len());
-        assert_eq!(remaining, 0, "nothing new may be parked to undo it");
         let terminal = String::from_utf8_lossy(&typed.lock().expect("recorder")).to_string();
         assert!(
-            !terminal.contains(continuous::MODE_EXIT_HINT),
-            "an end notice on its own is the only thing the model would ever hear about the mode"
+            terminal.is_empty(),
+            "neither notice reached the model: the start notice was never read, and an end \
+             notice on its own is the only thing it would hear about the mode; got {terminal:?}"
         );
 
         // Criterion 4, on the same disarm: speech is revoked whether or not
@@ -4091,7 +4018,6 @@ mod tests {
         .expect("arm");
 
         assert!(armed.armed, "the mode still arms; only the notices are off");
-        assert!(armed.queued_ids.is_empty());
         let disarmed = disarm_hands_free(&state, &dictation);
         assert!(disarmed.was_armed);
         let terminal = String::from_utf8_lossy(&typed.lock().expect("recorder")).to_string();
@@ -4124,7 +4050,6 @@ mod tests {
 
         let status = hands_free_status(&dictation);
         assert!(!status.armed, "push-to-talk may not arm hands-free");
-        assert!(status.queued_ids.is_empty());
         assert!(
             dictation.hands_free_runtime.lock().is_none(),
             "no VAD runtime, so no activation phrase and no continuous capture"

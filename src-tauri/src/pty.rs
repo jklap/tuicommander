@@ -8542,7 +8542,7 @@ pub(crate) fn enqueue_user_command(
 /// how many entries remain. Shared by every enqueue path so the append-then-flush
 /// order — which is what keeps the FIFO honest across producers — has one
 /// spelling. `typed` is read back per entry rather than from an emptied queue:
-/// a voice turn behind a peer notice is still parked even though the flush
+/// a command behind a peer notice is still parked even though the flush
 /// delivered something.
 fn append_and_flush(
     state: &AppState,
@@ -8564,39 +8564,9 @@ fn append_and_flush(
     (id, !still_parked, queued_command_count(state, session_id))
 }
 
-/// Route a hands-free dictation turn through the Compose queue.
-///
-/// This is the *only* way hands-free speech reaches a model. It shares the FIFO,
-/// the idle gate and the id space with the Compose panel on purpose: a second
-/// delivery path would be a way to type into a busy agent or a permission
-/// dialog, which is exactly what the queue exists to prevent. An unsupported
-/// target is refused here rather than served by a fallback.
-pub(crate) fn enqueue_voice_command(
-    state: &AppState,
-    session_id: &str,
-    text: &str,
-    generation: u64,
-) -> Result<crate::state::VoiceEnqueued, String> {
-    if text.trim().is_empty() {
-        return Err("Command text is empty".to_string());
-    }
-    if !state.session_maps.sessions.contains_key(session_id) {
-        return Err("Session not found".to_string());
-    }
-    if !session_is_agent(state, session_id) {
-        return Err("Session is not running an agent".to_string());
-    }
-    let (id, typed, queued) = append_and_flush(
-        state,
-        session_id,
-        crate::state::PendingInjection::voice_command(text, generation),
-    );
-    Ok(crate::state::VoiceEnqueued { id, typed, queued })
-}
-
 /// What became of a hands-free turn written to an agent's composer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum VoiceWrite {
+pub enum VoiceWrite {
     /// Typed and submitted. Also returned when the write was cut short after
     /// its first byte: typing it again could submit it twice.
     Written,
@@ -8606,7 +8576,7 @@ pub(crate) enum VoiceWrite {
 
 /// Why a hands-free turn was not typed yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum VoiceHold {
+pub enum VoiceHold {
     /// A confident question or permission dialog owns the composer.
     Question,
     /// The user has a draft in the composer.
@@ -8618,7 +8588,7 @@ pub(crate) enum VoiceHold {
 }
 
 impl VoiceHold {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Question => "confident question on screen",
             Self::Draft => "partial user input in the composer",
@@ -8662,15 +8632,22 @@ pub(crate) fn write_voice_turn(
         return Ok(VoiceWrite::Held(VoiceHold::Draft));
     }
     let Some(claim) = claim_composer_for_voice(state, session_id) else {
-        return Ok(VoiceWrite::Held(if has_partial_user_input(state, session_id) {
-            VoiceHold::Draft
-        } else {
-            VoiceHold::InFlight
-        }));
+        return Ok(VoiceWrite::Held(
+            if has_partial_user_input(state, session_id) {
+                VoiceHold::Draft
+            } else {
+                VoiceHold::InFlight
+            },
+        ));
     };
     Ok(
-        match run_claimed_injection(state, session_id, text, claim, ClaimedInjectionKind::Message)
-        {
+        match run_claimed_injection(
+            state,
+            session_id,
+            text,
+            claim,
+            ClaimedInjectionKind::Message,
+        ) {
             InjectionOutcome::Submitted | InjectionOutcome::Uncertain(_) => VoiceWrite::Written,
             InjectionOutcome::NotStarted(_) => VoiceWrite::Held(VoiceHold::WriteNotStarted),
         },
@@ -8679,43 +8656,12 @@ pub(crate) fn write_voice_turn(
 
 /// Whether a session can take hands-free speech at all.
 ///
-/// The same two conditions `enqueue_voice_command` enforces, asked *before*
-/// arming so an unsupported target is refused where the user can see it rather
-/// than after the first utterance. Deliberately not a "can we reach it somehow"
-/// check: an ACP target has no Compose queue, and there is no fallback for it.
+/// The same two conditions `write_voice_turn` enforces, asked *before* arming
+/// so an unsupported target is refused where the user can see it rather than
+/// after the first utterance. Deliberately not a "can we reach it somehow"
+/// check: an ACP target has no PTY composer, and there is no fallback for it.
 pub(crate) fn session_accepts_voice(state: &AppState, session_id: &str) -> bool {
     state.session_maps.sessions.contains_key(session_id) && session_is_agent(state, session_id)
-}
-
-/// Drop the named voice entries that are still parked.
-///
-/// Only entries that are voice-owned *and* named by the caller are removed: an
-/// id the caller does not own cannot be used to clear a human's Compose command
-/// or a peer's notice. Ids that are no longer parked are reported as delivered —
-/// the composer has them, and nothing can take them back.
-pub(crate) fn cancel_voice_commands(
-    state: &AppState,
-    session_id: &str,
-    ids: &[u64],
-) -> crate::state::VoiceCancellation {
-    let mut cancellation = crate::state::VoiceCancellation::default();
-    let mut queue = state.pending_injections.get_mut(session_id);
-    for id in ids {
-        let removable = queue.as_ref().is_some_and(|queue| {
-            queue
-                .iter()
-                .any(|entry| entry.id() == *id && entry.voice_generation().is_some())
-        });
-        if removable {
-            if let Some(queue) = queue.as_mut() {
-                queue.retain(|entry| entry.id() != *id);
-            }
-            cancellation.cancelled.push(*id);
-        } else {
-            cancellation.already_delivered.push(*id);
-        }
-    }
-    cancellation
 }
 
 /// Drop everything still waiting for this session. Returns the count removed.

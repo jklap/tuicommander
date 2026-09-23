@@ -74,7 +74,6 @@ describe("DictationToast", () => {
 			owner: armed ? "desktop" : null,
 			generation: 1,
 			pendingText: null,
-			queuedIds: [],
 			holdBackMs: 1500,
 			error: null,
 		});
@@ -86,7 +85,7 @@ describe("DictationToast", () => {
 					return Promise.resolve(status(hands.armed, hands.phase));
 				}
 				if (cmd === "disarm_hands_free_dictation") {
-					return Promise.resolve({ alreadyDelivered: [], status: status(false, "disarmed") });
+					return Promise.resolve({ status: status(false, "disarmed") });
 				}
 				if (cmd === "get_dictation_status") return Promise.resolve({ audio_level: level });
 				if (cmd === "get_speech_status") return Promise.resolve({ speaking });

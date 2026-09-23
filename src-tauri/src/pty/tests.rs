@@ -10421,7 +10421,11 @@ fn a_voice_turn_is_held_by_a_confident_question() {
         Ok(VoiceWrite::Held(VoiceHold::Question))
     );
     assert!(bytes.lock().unwrap().is_empty());
-    assert_eq!(queued_command_count(&state, "voice-dialog"), 0, "held, not queued");
+    assert_eq!(
+        queued_command_count(&state, "voice-dialog"),
+        0,
+        "held, not queued"
+    );
 }
 
 /// A draft in the composer holds the turn: the Ctrl-U that opens every write
@@ -11628,7 +11632,10 @@ fn agent_submission_sends_ctrl_u_a_real_gap_before_the_text() {
 
     let writes = writes.lock().unwrap();
     let chunks: Vec<&[u8]> = writes.iter().map(|(_, bytes)| bytes.as_slice()).collect();
-    assert_eq!(chunks, vec![b"\x15".as_slice(), text.as_bytes(), b"\r".as_slice()]);
+    assert_eq!(
+        chunks,
+        vec![b"\x15".as_slice(), text.as_bytes(), b"\r".as_slice()]
+    );
     assert!(
         writes[1].0 - writes[0].0 >= INJECT_ENTER_GAP,
         "Ctrl-U and the text must not share a read"

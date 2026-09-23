@@ -64,15 +64,15 @@ them. Turn them off with the **Earcons** setting.
 | Notify model when hands-free changes | Tells the agent that it can answer out loud when the conversation starts, and to go back to text when it ends. |
 | Start notice | Shown while **Notify model** is on. The text the agent reads when the conversation starts; the built-in text is shown in grey. Write your own instructions here; leave it empty or press **Reset to default** to send the built-in text. Line breaks are sent as spaces. When the dictation language is set explicitly, TUICommander adds "Reply in <language>." to the notice itself. |
 
-Speech goes to the bound terminal through the same queue as the Compose panel.
-It does not wait for the agent to finish: a turn is typed at once, even while
-the agent is working, the same as when you type into a busy agent by hand. A
+Speech is typed straight into the bound terminal. It does not wait for the
+agent to finish: a turn is typed at once, even while the agent is working, the
+same as when you type into a busy agent by hand. It does not use the Compose
+queue, so commands you queued there keep their order and their timing. A
 permission prompt, or text you are typing in the terminal, **keeps** your turn
-until it is gone — your speech is never typed into a dialog. A turn also waits
-behind a command you queued earlier in the Compose panel. Several turns that
-were kept arrive together as one message, in the order you said them. The
-conversation ends by itself when the bound terminal closes or the audio device
-goes away.
+until it is gone — your speech is never typed into a dialog. A kept turn stays
+visible in the hands-free panel, and anything you say meanwhile is added to it,
+so it arrives as one message in the order you said it. The conversation ends by
+itself when the bound terminal closes or the audio device goes away.
 
 Say the activation phrase on its own to open a short window in which the
 following turns need no phrase.
