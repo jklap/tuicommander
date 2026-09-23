@@ -24,6 +24,7 @@ import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
+import { submitCompose } from "./composeSubmit";
 import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
 import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
@@ -1400,35 +1401,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							}
 						}}
 						onEnqueue={async (text) => {
-							if (!sessionId) return;
-							try {
-								const outcome = await pty.enqueueCommand(sessionId, text);
+							await submitCompose("enqueue", sessionId, async (id) => {
+								const outcome = await pty.enqueueCommand(id, text);
 								// Trust the call's own count instead of waiting for the next 1s
 								// lifecycle poll — the badge must react to the click.
 								terminalsStore.update(props.id, { queuedCommands: outcome.queued });
-								finishCompose();
-							} catch (err) {
-								appLogger.error("terminal", "ComposePanel enqueue failed", { sessionId, error: err });
-								toastsStore.add("Could not queue the command", String(err), "error");
-								// Rethrown so a pinned panel keeps the text it failed to queue.
-								throw err;
-							}
+							});
+							finishCompose();
 						}}
 						onClose={() => {
 							if (!composePinned()) setComposeOpen(false);
 							canvasTerminalRef()?.focus();
 						}}
 						onSend={async (text) => {
-							if (sessionId) {
-								try {
-									const term = terminalsStore.get(props.id);
-									await pty.sendCommand(sessionId, text, term?.agentType);
-								} catch (err) {
-									appLogger.error("terminal", "ComposePanel send failed", { sessionId, error: err });
-									// Rethrown so a pinned panel keeps the text it failed to send.
-									throw err;
-								}
-							}
+							await submitCompose("send", sessionId, (id) =>
+								pty.sendCommand(id, text, terminalsStore.get(props.id)?.agentType),
+							);
 							finishCompose();
 						}}
 					/>

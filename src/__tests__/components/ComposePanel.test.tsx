@@ -69,6 +69,8 @@ describe("ComposePanel", () => {
 		fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
 		expect(props.onSend).toHaveBeenCalledWith("run the tests");
 		expect(props.onEnqueue).not.toHaveBeenCalled();
+		// Let the send settle: a second submit while one is in flight is dropped.
+		await new Promise<void>((resolve) => setImmediate(resolve));
 
 		fireEvent.keyDown(content, { key: "Enter", ctrlKey: true, shiftKey: true });
 		expect(props.onEnqueue).toHaveBeenCalledWith("run the tests");
@@ -189,6 +191,46 @@ describe("ComposePanel", () => {
 
 			fireEvent.click(container.querySelector('[title^="Queue for the next idle moment"]') as HTMLElement);
 			expect(props.onEnqueue).toHaveBeenCalledWith("then push");
+			await waitFor(() => expect(editorText(container)).toBe(""));
+		});
+
+		it("keeps what was typed while the send was in flight — only the sent text is cleared", async () => {
+			let resolveSend: () => void = () => {};
+			const onSend = vi.fn(() => new Promise<void>((resolve) => (resolveSend = resolve)));
+			const { container } = renderPanel({ pinned: () => true, onSend });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "run the tests");
+
+			fireEvent.keyDown(container.querySelector(".cm-content") as HTMLElement, { key: "Enter", ctrlKey: true });
+			expect(onSend).toHaveBeenCalledWith("run the tests");
+			// The user starts the next message while sendCommand is still writing.
+			const view = EditorView.findFromDOM(container.querySelector(".cm-editor") as HTMLElement);
+			view?.dispatch({ changes: { from: view.state.doc.length, insert: "\nthen push" } });
+
+			resolveSend();
+			await waitFor(() => expect(editorText(container)).toBe("then push"));
+		});
+
+		it("drops a second submit while the first is in flight, so the text is not sent twice", async () => {
+			let resolveSend: () => void = () => {};
+			const onSend = vi.fn(() => new Promise<void>((resolve) => (resolveSend = resolve)));
+			const { container } = renderPanel({ pinned: () => true, onSend });
+			await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+			typeIntoEditor(container, "run the tests");
+			const content = container.querySelector(".cm-content") as HTMLElement;
+
+			fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
+			fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
+			fireEvent.click(container.querySelector('[title^="Queue for the next idle moment"]') as HTMLElement);
+			expect(onSend).toHaveBeenCalledTimes(1);
+
+			resolveSend();
+			await waitFor(() => expect(editorText(container)).toBe(""));
+			// Once settled, the panel accepts the next message.
+			typeIntoEditor(container, "then push");
+			fireEvent.keyDown(content, { key: "Enter", ctrlKey: true });
+			expect(onSend).toHaveBeenCalledTimes(2);
+			resolveSend();
 			await waitFor(() => expect(editorText(container)).toBe(""));
 		});
 

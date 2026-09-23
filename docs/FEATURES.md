@@ -44,7 +44,7 @@ per cell and the configured history limit still apply.
 
 ### 1.0 Design Mode for agent terminals
 
-- Start from an agent terminal's tab context menu or the Command Palette. TUICommander opens a separate Chrome window for the repository's configured development-server URL, or `about:blank` when none is configured.
+- Start from an agent terminal's tab context menu or the Command Palette (the palette acts on the active terminal only). While the repository is armed, both offer Stop instead. TUICommander opens a separate Chrome window for the repository's configured development-server URL, or `about:blank` when none is configured.
 - Chrome highlights hovered elements. A click collects the selected element's selector, paths, nearby text, HTML snippet, selected styles, rectangle, source location when development metadata permits, and an optional PNG reference.
 - The grab is appended to the bound agent's draft without submitting it; repeated grabs and the user's existing text remain editable. Starting from another agent terminal in the same repository rebinds the Chrome window.
 - The tab indicator follows Design Mode status. Browser/PWA clients can request inspection, but Chrome opens on the host running TUICommander. See the [user guide](user-guide/design-mode.md).
@@ -227,7 +227,7 @@ A multi-line editor docked under the terminal for writing a prompt without fight
 - **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients
 - **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting
 - **Agents only** — queueing is hidden for a plain shell: its idle state says nothing about which program currently owns stdin
-- **Pin** — the pin button docks the panel under the terminal instead of over it: the terminal shrinks and the PTY resizes, so no output hides behind the panel. A pinned panel stays open after a send or a queue and empties itself for the next message, so it can replace the agent's own input box. `Esc` and `Cmd+I` move the caret between the panel and the terminal instead of closing it. Per tab, not persisted
+- **Pin** — the pin button docks the panel under the terminal instead of over it: the terminal shrinks and the PTY resizes, so no output hides behind the panel. A pinned panel stays open after a send or a queue and removes the sent text, so it can replace the agent's own input box. Text typed while the send runs is kept, and a second send before the first finishes is ignored. When the terminal has no session or the send fails, a toast shows the error and the text stays. `Esc` and `Cmd+I` move the caret between the panel and the terminal instead of closing it. Per tab, not persisted
 
 ### 1.21 Auto-Standby (Unix)
 

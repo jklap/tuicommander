@@ -199,6 +199,42 @@ describe("TabBar", () => {
 			expect(getItems).not.toHaveBeenCalled();
 		});
 
+		it("a long press released off the button does not swallow the next keyboard activation", () => {
+			// No click follows a release elsewhere, so only the menu closing can
+			// tell the button that the long press is over.
+			const onNewTab = vi.fn();
+			const { container } = renderWithAgents(onNewTab, () => [{ label: "Claude Code", action: () => {} }]);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 0 });
+			vi.advanceTimersByTime(500);
+			fireEvent.pointerLeave(btn);
+			fireEvent.keyDown(document, { key: "Escape" });
+			expect(menuLabels(container)).not.toContain("Claude Code");
+
+			fireEvent.click(btn);
+			expect(onNewTab).toHaveBeenCalledTimes(1);
+		});
+
+		it("the native contextmenu of a touch long press does not also open the split menu", () => {
+			const { container } = renderWithAgents(
+				() => {},
+				() => [{ label: "Claude Code", action: () => {} }],
+			);
+			const btn = container.querySelector(".newBtn")!;
+			// Before the agent list opens: the press is still pending.
+			fireEvent.pointerDown(btn, { button: 0 });
+			const early = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+			btn.dispatchEvent(early);
+			expect(early.defaultPrevented).toBe(true);
+			expect(menuLabels(container)).not.toContain("Split Vertically");
+
+			// After it opened.
+			vi.advanceTimersByTime(500);
+			fireEvent.contextMenu(btn);
+			expect(menuLabels(container)).toContain("Claude Code");
+			expect(menuLabels(container)).not.toContain("Split Vertically");
+		});
+
 		it("with no agents available a long press falls back to opening a plain tab", () => {
 			const onNewTab = vi.fn();
 			const { container } = renderWithAgents(onNewTab, () => []);

@@ -28,6 +28,7 @@ export interface CommandPaletteProps {
  */
 const BROWSER_ACTION_IDS = new Set([
 	"start-design-mode",
+	"stop-design-mode",
 	"new-terminal",
 	"close-terminal",
 	"reopen-closed-tab",

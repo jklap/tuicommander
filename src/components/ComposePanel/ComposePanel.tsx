@@ -85,17 +85,36 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 
 	/** An unpinned panel is closed by the parent after a successful submit; a
 	 *  pinned one stays, so the editor is emptied here for the next message. A
-	 *  rejected submit keeps the text — the parent has already logged the error. */
+	 *  rejected submit keeps the text — the parent has already logged the error.
+	 *  A pinned panel stays editable while the send runs, so only the submitted
+	 *  document is removed: whatever the user typed after it is the next message.
+	 *  A submit while another is in flight is dropped, so no text goes out twice. */
+	let inFlight = false;
 	const submit = (handler: (text: string) => void | Promise<void>, text: string) => {
-		Promise.resolve(handler(text)).then(
-			() => {
-				const view = editorView();
-				if (!props.pinned() || !view) return;
-				view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
-				view.focus();
-			},
-			() => {},
-		);
+		if (inFlight) return;
+		inFlight = true;
+		const submitted = editorView()?.state.doc.toString() ?? "";
+		// The executor calls the handler synchronously and turns a throw into a
+		// rejection, so the flag is always released.
+		new Promise<void>((resolve) => resolve(handler(text)))
+			.then(
+				() => {
+					const view = editorView();
+					if (!props.pinned() || !view) return;
+					const doc = view.state.doc.toString();
+					// The user edited the sent text itself: no safe cut, leave it all.
+					if (doc.startsWith(submitted)) {
+						const rest = doc.slice(submitted.length);
+						const to = submitted.length + (rest.length - rest.trimStart().length);
+						view.dispatch({ changes: { from: 0, to, insert: "" } });
+					}
+					view.focus();
+				},
+				() => {},
+			)
+			.finally(() => {
+				inFlight = false;
+			});
 	};
 
 	createExtension(composeTheme);

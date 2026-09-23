@@ -247,6 +247,11 @@
   color: var(--fg-secondary);
   font-size: var(--font-xl);
   cursor: pointer;
+  /* Long press opens the agent list: no text selection, iOS callout or pan. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   transition: background 0.15s, color 0.15s;
   align-self: stretch;
 }

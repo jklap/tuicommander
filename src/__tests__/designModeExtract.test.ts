@@ -23,13 +23,15 @@ type Extracted = {
 
 const source = readFileSync(join(process.cwd(), "src-tauri/src/design_mode/extract.js"), "utf8");
 
-function extract(html: string, target: string, setup?: (node: Element) => void): Extracted {
+function extract(html: string, target: string, setup?: (node: Element) => void): Extracted & { pageMutated: boolean } {
 	const dom = new JSDOM(html);
 	const node = dom.window.document.querySelector(target);
 	if (!node) throw new Error(`Missing test node ${target}`);
 	setup?.(node);
 	const fn = dom.window.eval(`(${source.trim()})`) as (this: Element) => Extracted;
-	return fn.call(node);
+	const before = dom.window.document.documentElement.outerHTML;
+	const result = fn.call(node);
+	return { ...result, pageMutated: dom.window.document.documentElement.outerHTML !== before };
 }
 
 describe("design mode extraction", () => {
@@ -39,7 +41,8 @@ describe("design mode extraction", () => {
 		expect(result.selector).toBe("#save");
 		expect(result.attributes).toEqual({ id: "save", class: "stable" });
 		expect(result.htmlSnippet).toContain("Save");
-		expect(result.selector).toBeTruthy();
+		// The pick runs inside the user's live page: extraction must leave no trace.
+		expect(result.pageMutated).toBe(false);
 	});
 
 	it("uses stable classes, then nth-of-type when hashes collide", () => {
@@ -83,6 +86,9 @@ describe("design mode extraction", () => {
 		expect(result.styles.color).toBe("rgb(255, 0, 0)");
 		expect(result.styles.fontSize).toBe("16px");
 		expect(Object.keys(result.styles).length).toBeLessThanOrEqual(13);
+		// DEFERRED (2026-09-23) — review TEST-1(c): Rust discards this `rect` and uses
+		// the CDP box model (manager.rs). Drop the field from extract.js (a backend asset)
+		// together with this assertion; it only proves jsdom returns zeros.
 		expect(result.rect).toEqual({ x: 0, y: 0, width: 0, height: 0 });
 	});
 
