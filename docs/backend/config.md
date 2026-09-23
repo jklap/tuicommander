@@ -895,8 +895,16 @@ claimed.
 A journal created before the hand-off kinds has a `CHECK` constraint that
 refuses them. SQLite cannot alter a `CHECK`, so opening such a database copies
 `entries` into a new table in one `IMMEDIATE` transaction. Ids are copied as
-they are, and the `sqlite_sequence` high-water mark is carried over so a
-deleted newest id is never issued again.
+they are, and the high-water mark is carried over so a deleted newest id is
+never issued again. The mark is the larger of the `sqlite_sequence` value and
+the highest id present: the earliest journals used a bare `INTEGER PRIMARY KEY`
+and have no `sqlite_sequence` table at all.
+
+`list` skips a row whose kind this build does not know, with one warning,
+instead of failing the whole read: debug and release builds share this file, so
+a newer build's kind must not blank an older build's list. The repeated-`intent:`
+check ignores `delegated` and `message` rows, so a hand-off between two
+repaints of the same intent does not record it twice.
 
 A terminal's project is its cwd's registered repository or, for a managed
 worktree outside the repository root, its registered workspace, which then

@@ -216,6 +216,45 @@ describe("progressStore", () => {
 		await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith("progress_flow", { project: "/repo", input: {} }));
 	});
 
+	// A Flow scoped to a terminal also draws its parent and children. A child's
+	// `done` or the parent's message is on screen, so it must redraw the Flow
+	// and must not be counted as unread.
+	it("refreshes a scoped Flow for an entry from one of its participants", async () => {
+		const flow = {
+			project: "/repo",
+			participants: [
+				{ id: "pty-a", kind: "terminal", title: "A", state: "busy", toolCalls: 0, ptyId: "pty-a" },
+				{ id: "pty-child", kind: "terminal", title: "C", state: "idle", toolCalls: 0, ptyId: "pty-child" },
+			],
+			events: [],
+			truncated: false,
+		};
+		invokeMock.mockImplementation((command: string) => Promise.resolve(command === "progress_flow" ? flow : list([])));
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open();
+		store.setView("flow");
+		await vi.waitFor(() => expect(store.state.flows["/repo"]?.data).toEqual(flow));
+		const flowReads = () => invokeMock.mock.calls.filter(([command]) => command === "progress_flow").length;
+		const before = flowReads();
+
+		store.presentLive({ repo_path: "/repo", payload: { entry: { ...entry(5, 500), ptyId: "pty-child" } } });
+		expect(flowReads()).toBe(before + 1);
+		expect(store.unreadCount).toBe(0);
+
+		// A message from outside the Flow, addressed to a participant.
+		store.presentLive({
+			repo_path: "/repo",
+			payload: { entry: { ...entry(6, 600, "message"), ptyId: "pty-far", targetPtyId: "pty-a" } },
+		});
+		expect(flowReads()).toBe(before + 2);
+
+		// A terminal the Flow does not draw is still unread.
+		store.presentLive({ repo_path: "/repo", payload: { entry: { ...entry(7, 700), ptyId: "pty-far" } } });
+		expect(flowReads()).toBe(before + 2);
+		expect(store.unreadCount).toBe(1);
+	});
+
 	it("does not read the Flow while the List is showing", async () => {
 		invokeMock.mockResolvedValue(list([]));
 		const { createProgressStore } = await import("../../stores/progress");

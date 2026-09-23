@@ -413,20 +413,20 @@ fn progress_delete(
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn progress_flow(
+async fn progress_flow(
     state: State<'_, Arc<AppState>>,
     project: String,
     input: progress::ProgressFlowInput,
 ) -> Result<progress::ProgressFlow, String> {
-    progress::progress_flow(state.inner(), &project, input)
+    progress::progress_flow_blocking(state.inner().clone(), project, input).await
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn progress_flow_detail(
+async fn progress_flow_detail(
     state: State<'_, Arc<AppState>>,
     input: progress::ProgressFlowDetailInput,
 ) -> Result<progress::ProgressFlowDetail, String> {
-    progress::progress_flow_detail(state.inner(), input)
+    progress::progress_flow_detail_blocking(state.inner().clone(), input).await
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]

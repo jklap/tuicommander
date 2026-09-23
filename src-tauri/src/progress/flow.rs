@@ -112,6 +112,11 @@ pub struct FlowDetailRef {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FlowEvent {
+    /// Stable across refreshes: `entry:<journal id>` for a journal row,
+    /// `<participant id>:spawn` or `:return` for a subagent arrow. The view
+    /// keys its expanded rows by it, because the position of an event moves
+    /// whenever an earlier one is added or the oldest falls out of the window.
+    pub id: String,
     pub kind: FlowEventKind,
     pub from: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,6 +280,7 @@ pub(crate) fn build_flow(
         };
         let (summary, more) = summarize(&entry.text);
         events.push(FlowEvent {
+            id: format!("entry:{}", entry.id),
             kind,
             from: pty.to_string(),
             to,
@@ -326,6 +332,7 @@ pub(crate) fn build_flow(
             if let Some(at_ms) = lane.started_at_ms {
                 let (summary, more) = summarize(&lane.prompt);
                 events.push(FlowEvent {
+                    id: format!("{id}:spawn"),
                     kind: FlowEventKind::SubagentSpawn,
                     from: parent.clone(),
                     to: Some(id.clone()),
@@ -341,6 +348,7 @@ pub(crate) fn build_flow(
             {
                 let (summary, more) = summarize(&lane.report);
                 events.push(FlowEvent {
+                    id: format!("{id}:return"),
                     kind: FlowEventKind::SubagentReturn,
                     from: id.clone(),
                     to: Some(parent.clone()),
@@ -437,9 +445,7 @@ pub fn progress_flow(
     input: ProgressFlowInput,
 ) -> Result<ProgressFlow, String> {
     let project = super::service::project_of(project)?;
-    let list = super::store::ProgressStore::open()?.list(&project, &Default::default())?;
-    let truncated = list.entries.len() >= LIST_LIMIT;
-    let mut entries = list.entries;
+    let (mut entries, truncated) = newest_entries(&project)?;
     entries.reverse();
 
     let mut ids: HashSet<String> = entries
@@ -497,6 +503,10 @@ pub fn progress_flow(
         }
     }
 
+    if let Some(cutoff) = std::time::Instant::now().checked_sub(crate::subagent_map::CACHE_IDLE) {
+        state.subagent_map_cache.lock().evict_idle_before(cutoff);
+    }
+
     Ok(build_flow(
         &project,
         &entries,
@@ -505,6 +515,41 @@ pub fn progress_flow(
         input.pty_id.as_deref(),
         truncated,
     ))
+}
+
+/// The newest `LIST_LIMIT` journal entries, newest first, and whether older
+/// ones exist. One extra row is read: a journal of exactly `LIST_LIMIT`
+/// entries was not cut and must not say so.
+fn newest_entries(project: &str) -> Result<(Vec<ProgressEntry>, bool), String> {
+    let mut entries = super::store::ProgressStore::open()?
+        .list_limited(project, &Default::default(), LIST_LIMIT + 1)?
+        .entries;
+    let truncated = entries.len() > LIST_LIMIT;
+    entries.truncate(LIST_LIMIT);
+    Ok((entries, truncated))
+}
+
+/// `progress_flow` on the blocking pool. It reads SQLite and parses Claude
+/// transcripts (the largest here is 31 MB) under the shared transcript-cache
+/// mutex, so neither the Tauri main thread nor a tokio worker may run it.
+pub async fn progress_flow_blocking(
+    state: std::sync::Arc<crate::state::AppState>,
+    project: String,
+    input: ProgressFlowInput,
+) -> Result<ProgressFlow, String> {
+    tokio::task::spawn_blocking(move || progress_flow(&state, &project, input))
+        .await
+        .map_err(|e| format!("progress flow task failed: {e}"))?
+}
+
+/// `progress_flow_detail` on the blocking pool, for the same reason.
+pub async fn progress_flow_detail_blocking(
+    state: std::sync::Arc<crate::state::AppState>,
+    input: ProgressFlowDetailInput,
+) -> Result<ProgressFlowDetail, String> {
+    tokio::task::spawn_blocking(move || progress_flow_detail(&state, input))
+        .await
+        .map_err(|e| format!("progress flow task failed: {e}"))?
 }
 
 /// The full, redacted prompt or report behind one subagent arrow.
@@ -918,5 +963,73 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.starts_with("not_found"), "{err}");
+    }
+
+    /// The view keys its expanded rows by event id. An event's id must not
+    /// move when an earlier event arrives or the oldest leaves the window —
+    /// its position does both.
+    #[test]
+    fn flow_event_ids_survive_an_earlier_event_arriving() {
+        let subs = HashMap::from([(
+            "lead".to_string(),
+            vec![lane("a1", None, false, "Survey", "Found two")],
+        )]);
+        let ids = |entries: &[ProgressEntry]| -> HashMap<String, FlowEventKind> {
+            build_flow("/repo", entries, &HashMap::new(), &subs, None, false)
+                .events
+                .into_iter()
+                .map(|e| (e.id, e.kind))
+                .collect()
+        };
+        let before = ids(&orchestration());
+        assert_eq!(before.len(), orchestration().len() + 2, "ids are unique");
+        assert_eq!(before.get("entry:5"), Some(&FlowEventKind::Done));
+        assert_eq!(before.get("lead/a1:spawn"), Some(&FlowEventKind::SubagentSpawn));
+        assert_eq!(before.get("lead/a1:return"), Some(&FlowEventKind::SubagentReturn));
+
+        let mut earlier = vec![entry(0, ProgressKind::Intent, "lead", "Plan", None)];
+        earlier[0].created_at_ms = 0;
+        earlier.extend(orchestration());
+        let after = ids(&earlier);
+        for (id, kind) in &before {
+            assert_eq!(after.get(id), Some(kind), "{id} kept its identity");
+        }
+    }
+
+    /// "The earliest hand-offs may be missing" is a claim about the journal.
+    /// A journal of exactly `LIST_LIMIT` entries lost nothing.
+    #[test]
+    fn flow_is_truncated_only_past_the_list_limit() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir().unwrap();
+        let hint = repo.path().to_string_lossy().to_string();
+        let project = super::super::service::project_of(&hint).unwrap();
+        let store = super::super::store::ProgressStore::open().unwrap();
+        let insert = |n: usize| {
+            let mut conn = rusqlite::Connection::open(store.database_path()).unwrap();
+            let tx = conn.transaction().unwrap();
+            for i in 0..n {
+                tx.execute(
+                    "INSERT INTO entries (project, created_at_ms, kind, text, pty_id)
+                     VALUES (?1, ?2, 'done', 'step', 'pty')",
+                    rusqlite::params![project, i as i64],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        };
+        let state = crate::state::tests_support::make_test_app_state();
+        let read = || progress_flow(&state, &hint, ProgressFlowInput::default()).unwrap();
+
+        insert(LIST_LIMIT);
+        let full = read();
+        assert!(!full.truncated, "exactly LIST_LIMIT entries were not cut");
+        assert_eq!(full.events.len(), LIST_LIMIT);
+
+        insert(1);
+        let cut = read();
+        assert!(cut.truncated);
+        assert_eq!(cut.events.len(), LIST_LIMIT, "only the newest are drawn");
     }
 }

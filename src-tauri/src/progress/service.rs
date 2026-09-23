@@ -93,12 +93,22 @@ pub(crate) fn project_for_session(
     })
 }
 
+/// What an empty hand-off text is journaled as.
+pub(crate) const EMPTY_HAND_OFF: &str = "(no text)";
+
 /// What a hand-off entry keeps of a prompt or a message: redacted first, then
 /// cut to the journal's cap. The cap is the contract — the full text is not
 /// stored anywhere else.
+///
+/// An empty text becomes `EMPTY_HAND_OFF` rather than a rejected entry: the
+/// row is the parent-child edge, and without it the child's outcome is drawn
+/// as a note instead of a return to its parent.
 pub(crate) fn hand_off_text(text: &str) -> String {
     let redacted = crate::redaction::redact_secrets(text);
     let trimmed = redacted.trim();
+    if trimmed.is_empty() {
+        return EMPTY_HAND_OFF.to_string();
+    }
     if trimmed.chars().count() <= MAX_TEXT_CHARS {
         return trimmed.to_string();
     }
@@ -372,6 +382,24 @@ mod tests {
         assert!(!kept.contains("ghp_"), "{kept}");
         assert!(kept.chars().count() <= MAX_TEXT_CHARS);
         assert_eq!(hand_off_text("  short  "), "short");
+    }
+
+    /// `agent action=spawn` accepts an empty prompt. The hand-off row is the
+    /// only record of who spawned whom, so it must still pass validation.
+    #[test]
+    fn an_empty_hand_off_text_still_journals_the_edge() {
+        for text in ["", "  \n\t "] {
+            let kept = hand_off_text(text);
+            assert_eq!(kept, EMPTY_HAND_OFF);
+            NewProgressEntry {
+                kind: ProgressKind::Delegated,
+                text: kept,
+                step: None,
+                agent_name: None,
+            }
+            .validate()
+            .expect("an empty prompt still records the delegation");
+        }
     }
 
     /// Only a spawn and a send are hand-offs; the other kinds have their own
