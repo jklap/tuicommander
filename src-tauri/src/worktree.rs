@@ -2516,7 +2516,7 @@ pub(crate) fn list_local_branches(repo_path: String) -> Result<Vec<String>, Stri
     let out = git_cmd(Path::new(&repo_path))
         .args(["branch", "--format=%(refname:short)"])
         .run()
-        .map_err(|e| format!("git branch failed: {e}"))?;
+        .map_err(|e| format!("git branch failed for {repo_path}: {e}"))?;
 
     let branches: Vec<String> = out
         .stdout

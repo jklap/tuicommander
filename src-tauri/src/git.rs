@@ -1759,7 +1759,7 @@ pub(crate) async fn get_git_branches(path: String) -> Result<Vec<serde_json::Val
                 "--format=%(refname:short) %(HEAD) %(refname)",
             ])
             .run()
-            .map_err(|e| format!("git branch failed: {e}"))?;
+            .map_err(|e| format!("git branch failed for {path}: {e}"))?;
 
         let mut branches: Vec<serde_json::Value> = out
             .stdout
