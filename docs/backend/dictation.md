@@ -707,15 +707,15 @@ re-tagged — produces a refused install rather than a different model.
 | Part | Published by | Source | Pinned to |
 |---|---|---|---|
 | ONNX graphs, tokenizer, `bundle.json` | `KevinAHM/pocket-tts-onnx` (exports of Kyutai's weights) | Hugging Face | commit `58a6d00c` |
-| Speaker embeddings (voices) | Kyutai, **re-published by us** | TUICommander release | tag `speech-voices-v1` |
+| Speaker embeddings (voices) | Kyutai (`kyutai/pocket-tts-without-voice-cloning`) | Hugging Face | commit `00eac05e` |
 | onnxruntime | Microsoft | GitHub release | `v1.23.0` |
 
-Two upstreams for one reason: `kyutai/pocket-tts` is a **gated** repository, so
-an application cannot download the voices on a user's behalf — not even their
-metadata is readable without a token. CC-BY-4.0 allows redistribution with
-attribution, so the embedding files (4.6 MB each, against 125 MB for a
-language) are re-published unmodified on our own release. The graphs are public
-and are not re-hosted.
+The voices do not come from `kyutai/pocket-tts`: that repository is **gated**,
+because it ships the weights that clone a voice from a sample, so an application
+cannot download from it on a user's behalf. Kyutai's
+`kyutai/pocket-tts-without-voice-cloning` is public, leaves those weights out,
+and carries the same speaker embeddings byte for byte (same sha256). Only the
+preset voices are used, so nothing is re-hosted.
 
 **onnxruntime is pinned at 1.23.0 rather than the newest release.** 1.24 dropped
 the macOS Intel and universal2 builds and TUICommander still ships for Intel
