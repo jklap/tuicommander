@@ -58,8 +58,7 @@ vi.mock("solid-js", async (importOriginal) => {
 	};
 });
 
-import { invoke } from "@tauri-apps/api/core";
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { invoke, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { createSignal, For } from "solid-js";
 import { injectThemeVars, PluginPanel } from "../../components/PluginPanel/PluginPanel";
 import { TUIC_SDK_SCRIPT } from "../../components/PluginPanel/tuicSdk";
@@ -909,7 +908,7 @@ describe("PluginPanel", () => {
 
 				dispatchFromIframe(iframe, { type: "tuic:edit", path: "src/index.ts", line: 42 });
 
-				expect(addSpy).toHaveBeenCalledWith("/repo-x", "src/index.ts", 42);
+				expect(addSpy).toHaveBeenCalledWith("/repo-x", "src/index.ts", 42, undefined);
 			});
 
 			it("passes undefined for line when omitted or zero", () => {
@@ -921,7 +920,7 @@ describe("PluginPanel", () => {
 
 				dispatchFromIframe(iframe, { type: "tuic:edit", path: "src/index.ts" });
 
-				expect(addSpy).toHaveBeenCalledWith("/repo-x", "src/index.ts", undefined);
+				expect(addSpy).toHaveBeenCalledWith("/repo-x", "src/index.ts", undefined, undefined);
 			});
 
 			it("logs a warning and opens nothing when path is missing", () => {
@@ -1135,6 +1134,31 @@ describe("PluginPanel", () => {
 			expect(pluginRegistry.handlePanelMessage).toHaveBeenCalledWith("tab-1", {
 				type: "custom-plugin-event",
 				value: 42,
+			});
+		});
+	});
+
+	describe("file:// tab content", () => {
+		it("reads the file over IPC and injects it as srcdoc", async () => {
+			vi.mocked(tauriInvoke).mockResolvedValueOnce("<html><body>hi</body></html>");
+			const tab = makeTab({ html: "", url: "file:///Users/dev/notes.html" });
+			const { container } = render(() => <PluginPanel tab={tab} />);
+
+			expect(tauriInvoke).toHaveBeenCalledWith("read_external_file", { path: "/Users/dev/notes.html" });
+			await vi.waitFor(() => {
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				expect(iframe.getAttribute("srcdoc")).toContain("hi");
+			});
+		});
+
+		it("still shows the raw error for a real failure (regression guard)", async () => {
+			vi.mocked(tauriInvoke).mockRejectedValueOnce(new Error("permission denied"));
+			const tab = makeTab({ html: "", url: "file:///Users/dev/notes.html" });
+			const { container } = render(() => <PluginPanel tab={tab} />);
+
+			await vi.waitFor(() => {
+				const iframe = container.querySelector("iframe") as HTMLIFrameElement;
+				expect(iframe.getAttribute("srcdoc")).toContain("permission denied");
 			});
 		});
 	});
