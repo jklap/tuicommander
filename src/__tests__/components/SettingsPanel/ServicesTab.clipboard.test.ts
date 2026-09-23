@@ -1,29 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { copyConnectUrl, copyMcpSnippet } from "../../../components/SettingsPanel/tabs/ServicesTab";
+import { copyMcpSnippet } from "../../../components/SettingsPanel/tabs/ServicesTab";
 import { appLogger } from "../../../stores/appLogger";
 import { mockInvoke } from "../../mocks/tauri";
-
-describe("copyConnectUrl", () => {
-	beforeEach(() => {
-		mockInvoke.mockReset();
-	});
-
-	it("returns true when the clipboard write succeeds", async () => {
-		mockInvoke.mockResolvedValue(undefined);
-
-		await expect(copyConnectUrl("https://example.com/connect")).resolves.toBe(true);
-		expect(mockInvoke).toHaveBeenCalledWith("plugin:clipboard-manager|write_text", {
-			text: "https://example.com/connect",
-			label: undefined,
-		});
-	});
-
-	it("returns false without throwing when the clipboard write is denied", async () => {
-		mockInvoke.mockRejectedValue(new DOMException("Write permission denied.", "NotAllowedError"));
-
-		await expect(copyConnectUrl("https://example.com/connect")).resolves.toBe(false);
-	});
-});
 
 describe("copyMcpSnippet", () => {
 	beforeEach(() => {

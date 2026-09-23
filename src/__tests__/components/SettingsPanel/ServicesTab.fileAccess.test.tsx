@@ -16,35 +16,12 @@ vi.mock("../../../stores/settings", () => ({
 	},
 }));
 
-// `ServicesTab` unconditionally mounts `LocalServicesPanel`, which fetches
-// `get_local_ips` from a `createResource` on mount whose result nothing in
-// this test's rendered tree ever reads — same shape as the leak documented in
-// `DeepLinkSection.test.tsx`. The global Tauri mock has no case for it (it's
-// added on the fly by `RemoteQrDialog.test.tsx`'s own local switch), so it
-// falls through to `setup.ts`'s reject-everything stub; because nothing
-// subscribes to this resource's error, that rejection escapes as a genuinely
-// unhandled one, which fails this whole test FILE even though every
-// individual assertion in it passes. Intercept only this one command —
-// everything else keeps going through the real `rpc()`, so the load-bearing
-// "load_config resolves undefined" assumption the first test below documents
-// stays intact.
-vi.mock("../../../transport", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("../../../transport")>();
-	return {
-		...actual,
-		rpc: (async (command: string, ...rest: unknown[]) => {
-			if (command === "get_local_ips") return [];
-			// biome-ignore lint/suspicious/noExplicitAny: forwarding to the real overloaded rpc()
-			return (actual.rpc as any)(command, ...rest);
-		}) as typeof actual.rpc,
-	};
-});
-
 import { ServicesTab } from "../../../components/SettingsPanel/tabs/ServicesTab";
 
-/** ServicesTab's onMount fires several fire-and-forget rpc calls (status poll,
- *  load_config, tailscale status) that stay unresolved past the synchronous test
- *  body — flush them so vitest's leak detector doesn't flag them as dangling. */
+/** ServicesTab's onMount fires a fire-and-forget `load_config` rpc call (for
+ *  the TUIC Tools section's disabled-tools/collapse-tools state) that stays
+ *  unresolved past the synchronous test body — flush it so vitest's leak
+ *  detector doesn't flag it as dangling. */
 async function flushMicrotasks(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -60,11 +37,10 @@ describe("ServicesTab — File Access", () => {
 		await flushMicrotasks();
 	});
 
-	it("renders the File Access section with remote access disabled (placement regression guard)", async () => {
-		// Remote access is disabled by default in this test (loadRemoteConfig's
-		// rpc("load_config") resolves undefined via the global Tauri mock, so
-		// `raEnabled()` stays at its false default) — the section must still render,
-		// proving it lives outside the `<Show when={raEnabled()}>` block.
+	it("renders the File Access section on mount", async () => {
+		// `load_config` resolves undefined via the global Tauri mock (no case for
+		// it), which the tools-config loader's own try/catch swallows — the File
+		// Access section renders unconditionally regardless.
 		const { getByText, unmount } = render(() => <ServicesTab />);
 		await flushMicrotasks();
 
