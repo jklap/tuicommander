@@ -2831,9 +2831,16 @@ mod tests {
         // File I/O approach
         let file_url = read_remote_url(&repo_root);
 
-        // Subprocess approach (ground truth)
+        // Subprocess approach (ground truth). `read_remote_url` is a raw
+        // `.git/config` file read by design (no subprocess) and so never
+        // applies a `url.<base>.insteadOf` rewrite rule — isolate this
+        // comparison from the machine's global/system git config (which may
+        // define one, e.g. rewriting `git@github.com:` to `https://github.com/`)
+        // so the two sides compare the same, un-rewritten URL either way.
         let git_url = git_cmd(&repo_root)
             .args(["remote", "get-url", "origin"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .run_silent()
             .map(|o| o.stdout.trim().to_string());
 
@@ -3669,7 +3676,13 @@ mod tests {
         git(&["checkout", "-"]);
         std::fs::write(path.join("file.rs"), "main\n").expect("write main");
         git(&["commit", "-am", "main"]);
-        git(&["merge", "other"]);
+        // `--no-ff` forces a real three-way merge attempt regardless of the
+        // machine's ambient `merge.ff` config (e.g. `merge.ff = only` refuses
+        // a non-fast-forward merge outright with no conflict markers at all,
+        // which silently turned this into a no-op on a machine with that
+        // setting — the merge "succeeded" by doing nothing, leaving the repo
+        // clean instead of conflicted).
+        git(&["merge", "--no-ff", "other"]);
 
         let info = get_repo_info_impl(&path.to_string_lossy());
         assert_eq!(info.status, "conflict", "an unmerged file.rs is a conflict");
