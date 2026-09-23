@@ -27,19 +27,6 @@
 - [ ] Every branch with terminals starts expanded after the reload; a branch collapsed via its icon stays collapsed after a restart.
 - [ ] [VISUAL] Repo header: GitHub badge sits right next to the repo chevron; on hover ⋯ and + appear to its left, nothing shifts.
 
-## Clean theme bundled (2026-09-22) — **Rust, needs a `make dev` restart**
-
-`clean.json` is in `BUILTIN_THEMES`, but `seed_builtin_themes` is a no-op once
-`<config>/themes` exists, so no existing install receives it from the bundle.
-Verified live on 2026-09-22 by copying the file into
-`~/Library/Application Support/com.tuic.commander/themes/` (the watcher picked
-it up): pure black chrome, white accent, neutral tab-type tints on
-`html[data-theme="clean"]`, toast clamp at four lines. Font smoothing
-(`antialiased`, 0.01em tracking) is global on `html`, verified live on both
-Clean and VS Code Dark.
-
-- [ ] In a **restarted** instance with an empty `<config>/themes` (or
-      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Ink" (key `clean`) without
 ## Theme review applied (2026-09-23) — **Rust, needs a `make dev` restart**
 
 Bundled JSONs updated (VS Code Dark now follows VS Code Dark 2026), Deep Black / Delicate One removed, "Clean"
@@ -58,6 +45,19 @@ new colors or names until the JSONs are copied into that folder.
       smear, a colored repo name is readable, and the active tab row in the
       sidebar is visible.
 
+## Clean theme bundled (2026-09-22) — **Rust, needs a `make dev` restart**
+
+`clean.json` is in `BUILTIN_THEMES`, but `seed_builtin_themes` is a no-op once
+`<config>/themes` exists, so no existing install receives it from the bundle.
+Verified live on 2026-09-22 by copying the file into
+`~/Library/Application Support/com.tuic.commander/themes/` (the watcher picked
+it up): pure black chrome, white accent, neutral tab-type tints on
+`html[data-theme="clean"]`, toast clamp at four lines. Font smoothing
+(`antialiased`, 0.01em tracking) is global on `html`, verified live on both
+Clean and VS Code Dark.
+
+- [ ] In a **restarted** instance with an empty `<config>/themes` (or
+      `TUIC_APP_INSTANCE=<id>`), Settings > Appearance must list "Ink" (key `clean`) without
       any manual copy.
 - [x] Selecting "Ink" (then named "Clean") applies the black chrome and antialiased text at once.
       _(verified: live screenshot + `document.documentElement.dataset.theme ===
