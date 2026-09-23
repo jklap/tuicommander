@@ -13,7 +13,8 @@ OS drops are a cross-machine operation: desktop-only `fs_transfer_remote_paths` 
 | File | Purpose |
 |------|---------|
 | `src/invoke.ts` | Smart `invoke()` wrapper — zero overhead in Tauri |
-| `src/transport.ts` | HTTP transport implementation and command-to-endpoint mapping |
+| `src/transport.ts` | HTTP transport implementation and command-to-endpoint mapping (`COMMAND_TABLE`) |
+| `src/transportExtended.ts` | Desktop/Settings-only `COMMAND_TABLE` entries mobile's bundle doesn't need — see below |
 
 ## invoke.ts
 
@@ -52,6 +53,38 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 ```
 
 This replaces the previous 370-line switch statement with a flat lookup table for easier maintenance and review.
+
+### The `transportExtended.ts` split
+
+`mobile.html` (phone/PWA clients — always browser mode, no Tauri IPC bridge) has a
+hard 100KB-gzip bundle-size budget (`scripts/report-frontend-bundles.mjs`, run by
+`pnpm build`). `COMMAND_TABLE` is one flat object literal a bundler can't
+tree-shake per entry, so every mapping shipped to every bundle that imports
+`mapCommandToHttp`/`rpc` — including mobile, which never calls most of the
+desktop-only Settings/GitHub/ACP/Remote-access surface — until that surface's
+steady growth finally pushed mobile over budget (2026-09-23).
+
+The fix: `src/transportExtended.ts` holds exactly the commands that no module
+reachable from mobile's entry references — traced over mobile's whole import
+graph, its lazily loaded screens included (chat/ACP, Files, Settings, Activity,
+session detail). Mostly GitHub PR/issue/account management, Git Panel,
+Worktrees, Remote Connections/SSH/Tunnels/daemon provisioning, dictation and
+speech, Session Diff review, and the desktop File Browser; the ACP, Files and
+Settings commands mobile's own screens call stay in `transport.ts`. It merges
+its table into the live `COMMAND_TABLE` via `registerCommandTableEntries()` as
+a module-load side effect, and is imported **only** by the non-mobile entries —
+the desktop app (`src/appEntry.tsx`) and the dev fixture pages (`src/dev/`).
+Mobile's entry (`src/mobile/index.tsx`) must never import it, directly or
+transitively, or the split stops shrinking anything.
+
+A command that might plausibly be called from mobile — including from one of its
+lazy screens or a shared store/component it renders — belongs in `transport.ts`'s
+own `COMMAND_TABLE`, not here — there is no lazy-load fallback, so a command only
+registered by `transportExtended.ts` throws "No HTTP mapping for command" the
+first time mobile's code tries to call it.
+
+The `COMMAND_TABLE → router parity` gate (`transport.test.ts`) treats both
+files' tables as one set — see `docs/api/http-api.md`'s "Route Parity Gate".
 
 ### HTTP Response Semantics
 

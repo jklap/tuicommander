@@ -91,7 +91,7 @@ When adding or changing Tauri commands:
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/lib.rs` | `invoke_handler!` macro registration |
-| `src/transport.ts` | `COMMAND_TABLE` entry, or `INTENTIONALLY_UNMAPPED` if host-only |
+| `src/transport.ts` / `src/transportExtended.ts` | `COMMAND_TABLE` entry (in `transport.ts` if any mobile-reachable code calls it, else `transportExtended.ts` — see `docs/frontend/transport.md`), or `INTENTIONALLY_UNMAPPED` if host-only |
 | `src-tauri/src/mcp_http/command_table_paths.txt` | **Generated** — regenerate with `pnpm vitest run src/__tests__/transport.test.ts -u`. The Rust route probe reads it; never hand-edit |
 | `docs/api/tauri-commands.md` | Command signature + description |
 | `docs/api/http-api.md` | HTTP endpoint mapping (if browser/remote mode) |
