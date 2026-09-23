@@ -148,6 +148,36 @@ objects," not "any field of any list item changing." Verify empirically
 same DOM node stays focused) before either claiming or ruling out this bug in
 a sibling list.
 
+## `<Show>` Never Remounts on a Truthy→Truthy Value Change
+
+`<Show when={signal()}>{(value) => <Child target={value()} />}</Show>` only
+re-invokes its render callback on a **falsy→truthy transition** — Solid's own
+implementation memoizes the outer condition with an `equals` comparator that
+treats any two truthy values as equal, so switching `signal()` from one
+truthy value to a *different* truthy value does **not** recreate `<Child>`.
+If `Child` reads its prop once at setup time (`const target = props.target`)
+and seeds `createSignal`s from that snapshot, it silently keeps showing the
+FIRST value forever — found in `RemoteServersTab.tsx` (code review
+2026-09-23): a shared, non-modal inline editor mounted via `<Show
+when={editorTarget()}>`, where only the "Add" button (not each row's own
+"Edit" button) was gated behind `!editorTarget()`. Clicking Edit on a second
+row while the editor was already open left the form showing the first row's
+stale data, and Save would have written the second row's edits to the
+first row's id.
+
+**Fix: mount through a reference-keyed `<For>` instead of `<Show>`, when the
+child must remount on every distinct target, not just null→value.**
+`<For each={target() ? [target()] : []}>{(t) => <Child target={t} />}</For>`
+works because `<For>` keys by array-item reference, and any code path that
+calls `setSignal({...})` (a fresh object literal) produces a new reference
+every time — so `<For>`'s reconciler sees the old and new single-element
+arrays disagree at index 0 and unmounts+remounts the child, catching BOTH
+null→value and value→different-value transitions. This is not a workaround
+specific to that one component: any inline (non-modal) editor/panel gated by
+a "target object" signal, where more than one entry point can retarget it
+while it's already open, has the same latent bug if it's mounted via
+`<Show>`.
+
 
 ## solid-js Signals Inside `vi.mock` Factories
 
