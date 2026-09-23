@@ -158,10 +158,7 @@ fn row_text_of(message: &serde_json::Value) -> Option<String> {
 /// A join text as it is kept: redacted first, then cut. Both sides of the join
 /// go through here, so containment still matches.
 fn redact_and_cap(text: &str) -> String {
-    truncate_chars(
-        &crate::redaction::redact_secrets(text),
-        MAX_JOIN_TEXT_CHARS,
-    )
+    truncate_chars(&crate::redaction::redact_secrets(text), MAX_JOIN_TEXT_CHARS)
 }
 
 fn row_timestamp(row: &serde_json::Value) -> Option<i64> {
@@ -1807,7 +1804,13 @@ mod tests {
         for p in [&old, &fresh] {
             append(p, &format!("{}\n", row("2026-09-21T10:00:00Z", "Read")));
         }
-        append(&parent, &format!("{}\n", serde_json::json!({"timestamp":"2026-09-21T10:00:00Z","message":{"content":[{"type":"tool_use","id":"t","name":"Agent","input":{"prompt":"p"}}]}})));
+        append(
+            &parent,
+            &format!(
+                "{}\n",
+                serde_json::json!({"timestamp":"2026-09-21T10:00:00Z","message":{"content":[{"type":"tool_use","id":"t","name":"Agent","input":{"prompt":"p"}}]}})
+            ),
+        );
         let mut cache = MapCache::default();
         cache.ingest(&old).expect("read");
         cache.ingest_spawns(&parent).expect("read");
@@ -1819,6 +1822,9 @@ mod tests {
         cache.evict_idle_before(cutoff);
         assert!(cache.summary(&old).is_none(), "the idle lane is dropped");
         assert!(cache.summary(&fresh).is_some(), "the lane in use is kept");
-        assert!(cache.spawns(&parent).is_empty(), "the idle parent is dropped too");
+        assert!(
+            cache.spawns(&parent).is_empty(),
+            "the idle parent is dropped too"
+        );
     }
 }

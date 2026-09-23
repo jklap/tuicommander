@@ -984,8 +984,14 @@ mod tests {
         let before = ids(&orchestration());
         assert_eq!(before.len(), orchestration().len() + 2, "ids are unique");
         assert_eq!(before.get("entry:5"), Some(&FlowEventKind::Done));
-        assert_eq!(before.get("lead/a1:spawn"), Some(&FlowEventKind::SubagentSpawn));
-        assert_eq!(before.get("lead/a1:return"), Some(&FlowEventKind::SubagentReturn));
+        assert_eq!(
+            before.get("lead/a1:spawn"),
+            Some(&FlowEventKind::SubagentSpawn)
+        );
+        assert_eq!(
+            before.get("lead/a1:return"),
+            Some(&FlowEventKind::SubagentReturn)
+        );
 
         let mut earlier = vec![entry(0, ProgressKind::Intent, "lead", "Plan", None)];
         earlier[0].created_at_ms = 0;
