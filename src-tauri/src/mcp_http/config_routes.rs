@@ -783,6 +783,62 @@ pub(super) async fn test_connection_http(
     Json(crate::connection_test::test_connection_impl(&request).await).into_response()
 }
 
+// --- Remote connection password (keyring) — plan Phase 3 auth wiring ---
+//
+// Auth-gated the same way as put_remote_connection/delete_remote_connection
+// above (unlike the provider-key routes, which are State-free/loopback-only):
+// a remote connection's password can be set/read-existence/cleared over a
+// connection reachable to an unauthenticated LAN caller otherwise.
+
+#[derive(serde::Deserialize)]
+pub(super) struct SaveRemoteConnectionPasswordReq {
+    pub password: String,
+}
+
+pub(super) async fn remote_connection_password_exists_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::remote_connection::remote_connection_password_exists(
+        id,
+    ))
+    .into_response()
+}
+
+pub(super) async fn save_remote_connection_password_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(id): Path<String>,
+    Json(body): Json<SaveRemoteConnectionPasswordReq>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::remote_connection::save_remote_connection_password(
+        id,
+        body.password,
+    ))
+    .into_response()
+}
+
+pub(super) async fn delete_remote_connection_password_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::remote_connection::delete_remote_connection_password(
+        id,
+    ))
+    .into_response()
+}
+
 // --- Story 066: config / themes / notes / misc stateless parity (loopback router) ---
 //
 // Mutating / action handlers carry the same `require_local_or_auth` guard as the
@@ -1315,6 +1371,93 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    // ── remote connection password routes ─────────────────────
+    //
+    // Thin wiring tests, same shape as delete_remote_connection_http's above:
+    // the actual keyring CRUD is shared with the Tauri commands and tested
+    // directly in `remote_connection::tests` — these just confirm the routes
+    // are auth-gated and delegate to the shared functions correctly.
+
+    #[tokio::test]
+    async fn remote_connection_password_routes_require_local_or_auth() {
+        crate::credentials::reset_test_faults();
+        let not_local = std::net::SocketAddr::from(([203, 0, 113, 5], 12345));
+        let id = uuid::Uuid::new_v4().to_string();
+
+        let resp =
+            remote_connection_password_exists_http(ConnectInfo(not_local), None, Path(id.clone()))
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = save_remote_connection_password_http(
+            ConnectInfo(not_local),
+            None,
+            Path(id.clone()),
+            Json(SaveRemoteConnectionPasswordReq {
+                password: "x".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = delete_remote_connection_password_http(ConnectInfo(not_local), None, Path(id))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn remote_connection_password_http_round_trips() {
+        crate::credentials::reset_test_faults();
+        let id = uuid::Uuid::new_v4().to_string();
+
+        let resp =
+            remote_connection_password_exists_http(ConnectInfo(loopback()), None, Path(id.clone()))
+                .await
+                .into_response();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"false");
+
+        let resp = save_remote_connection_password_http(
+            ConnectInfo(loopback()),
+            None,
+            Path(id.clone()),
+            Json(SaveRemoteConnectionPasswordReq {
+                password: "hunter2".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp =
+            remote_connection_password_exists_http(ConnectInfo(loopback()), None, Path(id.clone()))
+                .await
+                .into_response();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"true");
+
+        let resp =
+            delete_remote_connection_password_http(ConnectInfo(loopback()), None, Path(id.clone()))
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = remote_connection_password_exists_http(ConnectInfo(loopback()), None, Path(id))
+            .await
+            .into_response();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"false");
     }
 
     // ── test_connection_http ─────────────────────────────────

@@ -1071,12 +1071,14 @@ const App: Component = () => {
 				</Suspense>
 			</Show>
 
-			{/* SSH Tunnels panel (experimental) */}
-			<Show when={settingsStore.state.experimentalFeaturesEnabled}>
-				<Suspense>
-					<TunnelsPanel />
-				</Suspense>
-			</Show>
+			{/* SSH Tunnels panel — graduated out of the experimental flag (story:
+			    SSH Tunnels + Remote Servers consolidation). Nothing else
+			    (actionRegistry's "toggle-tunnels", the native menu case, the
+			    sidebar shield icon, which already only checks profiles.length > 0)
+			    is separately flag-gated, so this removal is sufficient. */}
+			<Suspense>
+				<TunnelsPanel onOpenSettings={openSettings} />
+			</Suspense>
 
 			{/* Worktree manager */}
 			<Suspense>

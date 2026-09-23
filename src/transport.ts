@@ -2074,6 +2074,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	test_connection: {
 		map: (args) => ({ method: "POST", path: "/config/remote-connections/test", body: args.request }),
 	},
+	// Remote connection password (keyring-proxied) — plan Phase 3 auth wiring.
+	remote_connection_password_exists: {
+		map: (_args, p) => ({ method: "GET", path: `/config/remote-connections/${p("id")}/password/exists` }),
+	},
+	save_remote_connection_password: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("id")}/password`,
+			body: { password: args.password },
+		}),
+	},
+	delete_remote_connection_password: {
+		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}/password` }),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },

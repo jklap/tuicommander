@@ -1,5 +1,5 @@
 import { batch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { setRemoteBaseUrlLookup } from "../transportRuntime";
 import { startRemoteEventBridge } from "../utils/remoteEventBridge";
@@ -177,8 +177,13 @@ function createRemoteConnectionsStore() {
 				for (const conn of connections ?? []) {
 					connectionsMap[conn.id] = { connection: conn, status: "disconnected" };
 				}
+				// `reconcile`, not a plain-object `setState`, which SolidJS store
+				// setters MERGE onto the existing key rather than replace — a
+				// connection the backend no longer reports would otherwise linger
+				// in state forever (fixed, story: SSH Tunnels + Remote Servers
+				// consolidation).
 				batch(() => {
-					setState("connections", connectionsMap);
+					setState("connections", reconcile(connectionsMap));
 					setState("hydrated", true);
 				});
 				hydrated = true;
@@ -380,6 +385,29 @@ function createRemoteConnectionsStore() {
 		 */
 		async testConnection(request: TestConnectionRequest): Promise<ConnectionTestResult> {
 			return invoke<ConnectionTestResult>("test_connection", { request });
+		},
+
+		/**
+		 * Whether a password is currently stored in the keyring for this
+		 * connection id — never returns the password itself. Used by the
+		 * editor to show "password set" without round-tripping the secret.
+		 */
+		async connectionPasswordExists(id: string): Promise<boolean> {
+			return invoke<boolean>("remote_connection_password_exists", { id });
+		},
+
+		/**
+		 * Save (or overwrite) this connection's password in the OS keyring.
+		 * Never written to `connections.json` — see `RemoteConnection.auth_username`'s
+		 * doc comment in `remote_connection.rs`.
+		 */
+		async saveConnectionPassword(id: string, password: string): Promise<void> {
+			await invoke("save_remote_connection_password", { id, password });
+		},
+
+		/** Clear a connection's stored password from the keyring. */
+		async deleteConnectionPassword(id: string): Promise<void> {
+			await invoke("delete_remote_connection_password", { id });
 		},
 	};
 

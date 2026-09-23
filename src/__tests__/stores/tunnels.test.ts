@@ -222,17 +222,12 @@ describe("tunnelsStore.refreshProfiles() / refreshActiveTunnels()", () => {
 		expect(tunnelsStore.getActiveTunnels()).toEqual(expect.objectContaining({ t1: active[0], t2: active[1] }));
 	});
 
-	// `setState("activeTunnels", activeTunnelsMap)` passes a plain object, which
-	// SolidJS's store setter MERGES onto the existing "activeTunnels" object key
-	// by key — it does not delete keys the plain-object form omits (only `produce`
-	// or an explicit function form does that). Concretely: a tunnel that existed
-	// in a previous refresh but is no longer in the backend's `list_active_tunnels`
-	// response is never removed by refreshActiveTunnels() — it lingers until
-	// something else (stopTunnel's `produce` delete, or the poll loop's own
-	// "tunnel gone" branch) removes that specific key. This is current behavior,
-	// not a fix — documented here so a future change to "replace wholesale"
-	// semantics doesn't silently break without a failing test calling it out.
-	it("does NOT remove a stale id that the backend stopped reporting (merge, not replace — current behavior)", async () => {
+	// Fixed (story: SSH Tunnels + Remote Servers consolidation) — `setState`
+	// now writes via `reconcile()`, which diffs and replaces wholesale, instead
+	// of a plain object (which SolidJS's store setter MERGES onto the existing
+	// "activeTunnels" key by key, never deleting keys the new value omits). A
+	// tunnel the backend stops reporting is now actually removed.
+	it("removes a stale id the backend stopped reporting (replace, not merge)", async () => {
 		mockInvoke.mockImplementation((cmd: string) =>
 			cmd === "list_active_tunnels"
 				? Promise.resolve([{ id: "stale1", status: { type: "connected" }, started_at: "x" }])
@@ -250,7 +245,7 @@ describe("tunnelsStore.refreshProfiles() / refreshActiveTunnels()", () => {
 		await tunnelsStore.refreshActiveTunnels();
 
 		expect(tunnelsStore.getTunnelStatus("other")).toEqual({ type: "connected" });
-		expect(tunnelsStore.getTunnelStatus("stale1")).toEqual({ type: "connected" }); // lingers — not removed
+		expect(tunnelsStore.getTunnelStatus("stale1")).toBeUndefined();
 	});
 
 	it("refreshActiveTunnels swallows a backend error without throwing, leaving state as-is", async () => {

@@ -108,7 +108,10 @@ impl RemoteConnection {
 
     /// Create a new Local connection pointing at a named instance, resolved
     /// by instance id rather than a manually-entered port.
-    pub(crate) fn new_local_instance(name: impl Into<String>, instance_id: impl Into<String>) -> Self {
+    pub(crate) fn new_local_instance(
+        name: impl Into<String>,
+        instance_id: impl Into<String>,
+    ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
@@ -158,8 +161,7 @@ impl RemoteConnection {
                 match (port, has_instance) {
                     (None, false) => {
                         return Err(
-                            "Local connection requires either a port or an instance_id"
-                                .to_string(),
+                            "Local connection requires either a port or an instance_id".to_string()
                         );
                     }
                     (Some(_), true) => {
@@ -233,7 +235,9 @@ struct MinimalServerConfigForPort {
 /// in `config.json`) by reading that instance's own config directory off
 /// disk, using the real platform config dir and home dir. Re-read on every
 /// call, never cached — see `RemoteTransport::Local`'s doc comment for why.
-pub(crate) fn resolve_local_instance_port(instance_id: &str) -> Result<u16, LocalInstancePortError> {
+pub(crate) fn resolve_local_instance_port(
+    instance_id: &str,
+) -> Result<u16, LocalInstancePortError> {
     let platform_config = dirs::config_dir();
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     resolve_local_instance_port_at(instance_id, platform_config.as_deref(), &home)
@@ -257,10 +261,7 @@ fn resolve_local_instance_port_at(
 
     let config_path = dir.join("config.json");
     let content = std::fs::read_to_string(&config_path).map_err(|e| {
-        LocalInstancePortError::Unreadable(format!(
-            "failed to read {}: {e}",
-            config_path.display()
-        ))
+        LocalInstancePortError::Unreadable(format!("failed to read {}: {e}", config_path.display()))
     })?;
     let parsed: MinimalAppConfigForPort = serde_json::from_str(&content).map_err(|e| {
         LocalInstancePortError::Unreadable(format!(
@@ -357,7 +358,8 @@ pub(crate) fn delete_remote_connection_impl(
     state.tunnel_manager.stop_if_running(id);
     let _ = crate::credentials::delete(crate::credentials::Credential::RemoteConnection(id));
 
-    let mut connections = RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
+    let mut connections =
+        RemoteConnectionStore::load(&state.data_dir).map_err(|e| e.to_string())?;
     let before = connections.len();
     connections.retain(|c| c.id != id);
     if connections.len() == before {
@@ -398,6 +400,45 @@ pub async fn delete_remote_connection(
     let _guard = state.connections_lock.lock().await;
     delete_remote_connection_impl(&state, &id)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Remote connection password (keyring) — story: SSH Tunnels + Remote Servers
+// consolidation, Phase 3 auth wiring.
+//
+// State-free (the keyring vault is a process-global, not per-`AppState`), so
+// these mirror `provider_registry.rs`'s `get_provider_api_key_exists` /
+// `save_provider_api_key` / `delete_provider_api_key` exactly: only the
+// `#[tauri::command]` attribute is conditional on the `desktop` feature, the
+// function body itself is not gated, so both the Tauri command AND the HTTP
+// handler (`mcp_http::config_routes`) call the same function directly with no
+// separate `_impl` split needed.
+//
+// The password itself is NEVER written to `connections.json` — see
+// `RemoteConnection::auth_username`'s doc comment and
+// `credentials::Credential::RemoteConnection`.
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn remote_connection_password_exists(id: String) -> Result<bool, String> {
+    crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id))
+        .map(|v| v.is_some())
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn save_remote_connection_password(id: String, password: String) -> Result<(), String> {
+    if password.is_empty() {
+        return Err("Password must not be empty".to_string());
+    }
+    crate::credentials::set(
+        crate::credentials::Credential::RemoteConnection(&id),
+        &password,
+    )
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn delete_remote_connection_password(id: String) -> Result<(), String> {
+    crate::credentials::delete(crate::credentials::Credential::RemoteConnection(&id))
 }
 
 // ---------------------------------------------------------------------------
@@ -767,6 +808,44 @@ mod tests {
         assert!(!deleted);
     }
 
+    // --- Remote connection password commands (plan Phase 3 auth wiring) ---
+
+    #[test]
+    fn remote_connection_password_exists_false_when_unset() {
+        crate::credentials::reset_test_faults();
+        let id = uuid::Uuid::new_v4().to_string();
+        assert_eq!(remote_connection_password_exists(id).unwrap(), false);
+    }
+
+    #[test]
+    fn save_remote_connection_password_then_exists_is_true() {
+        crate::credentials::reset_test_faults();
+        let id = uuid::Uuid::new_v4().to_string();
+        save_remote_connection_password(id.clone(), "hunter2".to_string()).unwrap();
+        assert_eq!(remote_connection_password_exists(id.clone()).unwrap(), true);
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id)).unwrap(),
+            Some("hunter2".to_string())
+        );
+    }
+
+    #[test]
+    fn save_remote_connection_password_rejects_empty() {
+        crate::credentials::reset_test_faults();
+        let id = uuid::Uuid::new_v4().to_string();
+        let err = save_remote_connection_password(id, String::new()).unwrap_err();
+        assert!(err.contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn delete_remote_connection_password_clears_it() {
+        crate::credentials::reset_test_faults();
+        let id = uuid::Uuid::new_v4().to_string();
+        save_remote_connection_password(id.clone(), "hunter2".to_string()).unwrap();
+        delete_remote_connection_password(id.clone()).unwrap();
+        assert_eq!(remote_connection_password_exists(id).unwrap(), false);
+    }
+
     #[test]
     fn delete_remote_connection_impl_deletes_the_stored_credential() {
         crate::credentials::reset_test_faults();
@@ -774,19 +853,20 @@ mod tests {
         let conn = RemoteConnection::new_ssh("test", "127.0.0.1", "nobody");
         let id = conn.id.clone();
         upsert_remote_connection(&state.data_dir, conn).unwrap();
-        crate::credentials::set(crate::credentials::Credential::RemoteConnection(&id), "hunter2")
-            .unwrap();
+        crate::credentials::set(
+            crate::credentials::Credential::RemoteConnection(&id),
+            "hunter2",
+        )
+        .unwrap();
         assert_eq!(
-            crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id))
-                .unwrap(),
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id)).unwrap(),
             Some("hunter2".to_string())
         );
 
         delete_remote_connection_impl(&state, &id).unwrap();
 
         assert_eq!(
-            crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id))
-                .unwrap(),
+            crate::credentials::get(crate::credentials::Credential::RemoteConnection(&id)).unwrap(),
             None
         );
     }

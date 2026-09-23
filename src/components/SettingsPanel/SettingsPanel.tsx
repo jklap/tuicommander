@@ -35,6 +35,7 @@ import {
 	NotificationsTab,
 	PluginsTab,
 	RemoteAccessTab,
+	RemoteServersTab,
 	RepoScriptsTab,
 	RepoWorktreeTab,
 	SelectionTab,
@@ -329,6 +330,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</Show>
 				<Show when={activeTab() === "remote-access"}>
 					<RemoteAccessTab />
+				</Show>
+				<Show when={activeTab() === "remote-servers"}>
+					<RemoteServersTab />
 				</Show>
 				<Show when={activeTab() === "plugins"}>
 					<PluginsTab onClose={props.onClose} />

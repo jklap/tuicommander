@@ -159,34 +159,40 @@ Indexed on `tunnel_id` and `timestamp`.
 
 ## UI Components
 
-### TunnelsPanel
+Create/edit lives in **Settings → Remote Servers** (story: SSH Tunnels + Remote Servers consolidation) — the standalone `TunnelsPanel` overlay is status/control-only now (Start/Stop/Log/Del + an "Edit in Settings" link); it no longer has its own "+ New Tunnel" entry point or per-row Edit button.
 
-Main panel listing all tunnel profiles with:
+### TunnelProfileList
+
+Extracted from `TunnelsPanel.tsx` so it renders identically in two places: the `TunnelsPanel` overlay (no `onEdit` — Settings owns editing) and the "SSH Tunnel" kind section of Settings → Remote Servers (`onEdit` opens the merged editor pre-filled). Lists all tunnel profiles with:
 - Profile name and host
 - TunnelStatusBadge showing current state
 - Start/Stop toggle button
-- Edit button opening TunnelEditorModal
+- Optional Edit button (Settings context only)
+- Log (inline audit-event timeline) and Del
 
-### TunnelEditorModal
+### RemoteConnectionEditor (the merged connection editor)
 
-Form for creating and editing profiles:
-- Name, host, port, user, identity file fields
-- Port forwards list with add/remove and type-aware endpoint fields: Local forwards save `remote_host`/`remote_port`, Remote forwards save `local_host`/`local_port`
-- Options section (keepalive, host key checking)
+One form — Name + a Kind dropdown (SSH Tunnel / Remote Server — SSH / Remote Server — Direct / Remote Server — Local) — used for both tunnel profiles and remote-server connections. For Kind "SSH Tunnel":
+- Name, then the shared `SshConnectionFields` component (host with `~/.ssh/config` autocomplete, port, user, identity file with Browse, live agent detection including each key's fingerprint, ServerAliveInterval, ServerAliveCountMax — now has its own field, previously fixed with no UI — and StrictHostKeyChecking)
+- `PortForwardsEditor` (extracted from the old `TunnelEditorModal`): add/remove and type-aware endpoint fields — Local forwards save `remote_host`/`remote_port`, Remote forwards save `local_host`/`local_port`
+- "Connect automatically on startup" checkbox
+- A Test Connection button (one-shot SSH connectivity check, no forwards, before Save)
 - Validation errors shown inline
 
-### TunnelStatusBadge
+`SshConnectionFields` and `PortForwardsEditor` are also used by `TunnelEditorModal.tsx`, which still exists and is still fully tested, but nothing in the live app opens it anymore — Settings owns tunnel editing end to end now.
 
-Color-coded status indicator:
+### TunnelStatusBadge / ConnectionStatusBadge
+
+`TunnelStatusBadge` is now a thin wrapper around a shared `ConnectionStatusBadge` presentation component (also used by the Remote Servers connection list, which has its own connecting/connected/error/disconnected vocabulary) — one status-dot-plus-label implementation instead of two independently-drifting copies. Color-coded status indicator:
 - Green: Connected
 - Blue (pulsing): Starting
 - Orange: Reconnecting (shows attempt number)
 - Red: Error
 - Grey: Stopped
 
-## Integration with Remote Connection Manager
+## Integration with Remote Servers
 
-When creating an SSH remote connection (`RemoteConnection` with `RemoteTransport::Ssh`), a tunnel profile is automatically created to forward the daemon port. The tunnel supervisor manages the SSH connection, and the remote connection routes API calls through the forwarded port.
+When creating a "Remote Server — SSH" connection (`RemoteConnection` with `RemoteTransport::Ssh`), a tunnel profile is automatically created to forward the daemon port. The tunnel supervisor manages the SSH connection, and the remote connection routes API calls through the forwarded port.
 
 ## Module Map
 

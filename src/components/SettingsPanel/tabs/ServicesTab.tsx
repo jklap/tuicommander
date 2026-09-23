@@ -7,15 +7,8 @@ import { writeClipboard } from "../../../utils/clipboard";
 import { isAbsolutePath } from "../../../utils/pathUtils";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
 import s from "../Settings.module.css";
-import { RemoteMachinesPanel } from "./services/RemoteMachinesPanel";
 import { UpstreamMcpPanel } from "./services/UpstreamMcpPanel";
 
-export {
-	emptyRemoteForm,
-	remoteStatusColor,
-	remoteStatusLabel,
-	transportSummary,
-} from "./services/RemoteMachinesPanel";
 export { authFromUpstreamForm, shouldShowAuthorize, startAuthorizeFlow } from "./services/UpstreamMcpPanel";
 
 /** Only the slice of the full backend config this tab reads/writes — `save_config`
@@ -297,7 +290,6 @@ export const ServicesTab: Component = () => (
 	<div class={s.section}>
 		<LocalServicesPanel />
 		<UpstreamMcpPanel />
-		<RemoteMachinesPanel />
 		<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
 			{t("services.hint.autoSave", "Settings are saved automatically when changed")}
 		</p>

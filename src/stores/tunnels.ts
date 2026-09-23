@@ -1,5 +1,5 @@
 import { batch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { appLogger } from "./appLogger";
 
@@ -90,7 +90,7 @@ function createTunnelsStore() {
 
 				batch(() => {
 					setState("profiles", profiles ?? []);
-					setState("activeTunnels", activeTunnelsMap);
+					setState("activeTunnels", reconcile(activeTunnelsMap));
 					setState("hydrated", true);
 				});
 
@@ -128,7 +128,11 @@ function createTunnelsStore() {
 				for (const tunnel of activeTunnels ?? []) {
 					activeTunnelsMap[tunnel.id] = tunnel;
 				}
-				setState("activeTunnels", activeTunnelsMap);
+				// `reconcile`, not a plain-object `setState`, which SolidJS store
+				// setters MERGE onto the existing key rather than replace — a tunnel
+				// the backend stopped reporting would otherwise linger in state
+				// forever (fixed, story: SSH Tunnels + Remote Servers consolidation).
+				setState("activeTunnels", reconcile(activeTunnelsMap));
 			} catch (err) {
 				appLogger.error("store", "Failed to refresh active tunnels", err);
 			}
