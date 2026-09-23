@@ -519,3 +519,50 @@ async fn automation_and_mcp_launch_share_name_hold_and_retry_policy() {
     close(&state, &automated.session_id);
     close(&state, child);
 }
+
+// Catches: an unattended launch starts its child while the Setup Script is still
+// running (C18a), or starts it at all after the script failed.
+#[cfg(unix)]
+#[tokio::test]
+async fn launch_transaction_waits_for_the_setup_script_and_blocks_on_its_failure() {
+    let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _config = crate::config::set_config_dir_override(root.path().join("config"));
+    let repo = repo(root.path());
+    let state = state();
+
+    let mut defaults = crate::config::RepoDefaultsConfig::default();
+    defaults.setup_script = "sleep 1; echo ready > setup.marker".into();
+    crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+        .unwrap();
+    let mut ok_request = request();
+    ok_request["idempotency_key"] = json!("setup-ok");
+    ok_request["workspace"] = json!({"repo_path":repo, "branch":"feat/launch-setup-ok"});
+    let result = execute(&state, addr(), &ok_request).await;
+    assert!(result.get("error").is_none(), "{result}");
+    assert_ne!(result["status"], "blocked", "{result}");
+    let path = PathBuf::from(result["workspace_path"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(path.join("setup.marker"))
+            .expect("the Setup Script must finish before the child is launched")
+            .trim(),
+        "ready"
+    );
+    close(&state, result["session_id"].as_str().unwrap());
+    crate::worktree::clear_warm(&path);
+
+    let mut defaults = crate::config::RepoDefaultsConfig::default();
+    defaults.setup_script = "echo setup-went-wrong >&2; exit 3".into();
+    crate::config::save_repo_defaults(crate::config::RepoDefaultsConfig::default(), defaults)
+        .unwrap();
+    let sessions_before = state.session_maps.sessions.len();
+    let mut failing = request();
+    failing["idempotency_key"] = json!("setup-fails");
+    failing["name"] = json!("setup-fails-child");
+    failing["workspace"] = json!({"repo_path":repo, "branch":"feat/launch-setup-fails"});
+    let result = execute(&state, addr(), &failing).await;
+    assert_eq!(result["status"], "blocked", "{result}");
+    let reason = result["reason"].as_str().unwrap();
+    assert!(reason.contains("setup_script_failed"), "{reason}");
+    assert!(reason.contains("setup-went-wrong"), "{reason}");
+    assert_eq!(state.session_maps.sessions.len(), sessions_before);
+}

@@ -415,6 +415,7 @@ cleartext copy does not survive on disk.
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent idle system sleep while backend-owned agent work remains live |
 | `standby_timeout_minutes` | `u16` | `5` | Minutes of idle + unfocused before SIGSTOP on the process group. `0` disables it |
 | `custom_launchers` | `Vec<CustomLauncher>` | `[]` | User-defined launchers shown in the "Open in" menu alongside built-ins |
+| `additional_readable_dirs` | `Vec<String>` | `["~/.claude/plans"]` | Extra absolute directories the HTTP `read-external`/`read-editor-external` routes may serve, on top of registered repository roots. Global, read-only — never widens the write/copy/move/transfer routes. See [`mcp-http.md`](mcp-http.md#security-model) |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Opts in to the AI Chat panel shell and SSH Tunnels. It has no sub-flags: `ai_chat_enabled`, `ai_triage_enabled` and `ai_watchers_enabled` went with the embedded AI engine (#784-0aec). A `config.json` written before that upgrade still carries them and still loads — `AppConfig` has no `deny_unknown_fields`, and `a_config_written_before_the_ai_engine_was_deleted_still_loads` holds that open |
@@ -788,7 +789,7 @@ keys whenever `extra` is non-empty.
 `copy_ignored_files`/`copy_untracked_files`/`copy_paths` are resolved via
 `resolve_effective_copy_settings(repo_path)` (three-tier for the two
 booleans, repo-specific-only for `copy_paths`) and consumed by
-`worktree::spawn_worktree_file_sync`, which runs in the background after a
+`worktree::run_worktree_file_sync`, which runs in the background after a
 worktree is actually created — see `src-tauri/src/worktree_sync.rs` for the
 copy/symlink engine and `docs/sync-matrix.md`'s event table for the
 `worktree-sync-*` events it emits.
@@ -1252,9 +1253,6 @@ The Design Mode `dev_server_url` is deliberately absent from this format: a comm
 | `base_branch` | `String` | Base branch for worktrees |
 | `copy_ignored_files` | `bool` | Copy .gitignored files to worktree |
 | `copy_untracked_files` | `bool` | Copy untracked files to worktree |
-| `setup_script` | `String` | Script to run after worktree creation |
-| `run_script` | `String` | Default run command |
-| `archive_script` | `String` | Script to run before archive/delete |
 | `worktree_storage` | `WorktreeStorage` | Storage strategy (sibling/app-dir/inside-repo) |
 | `delete_branch_on_remove` | `bool` | Delete branch when removing worktree |
 | `auto_archive_merged` | `bool` | Auto-archive merged worktrees |
@@ -1262,6 +1260,8 @@ The Design Mode `dev_server_url` is deliberately absent from this format: a comm
 | `pr_merge_strategy` | `MergeStrategy` | PR merge method preference |
 | `after_merge` | `WorktreeAfterMerge` | Post-merge worktree action |
 | `auto_delete_on_pr_close` | `AutoDeleteOnPrClose` | Auto-delete on PR close |
+
+**`setup_script`/`run_script`/`archive_script` are deliberately NOT fields of `RepoLocalConfig`** — executing a repo-committed script with no trust-on-first-use confirmation would let a malicious branch run arbitrary code the moment its worktree is created. Configure these per-repo (`repo-settings.json`, via Settings) or as a global default (`repo-defaults.json`) instead — see `resolve_archive_script`/`resolve_effective_setup_script` in `src-tauri/src/worktree.rs`/`config.rs`, both of which skip this tier explicitly.
 
 **Command:** `load_repo_local_config(repo_path)` — returns `RepoLocalConfig` or `null` if file is missing or malformed.
 

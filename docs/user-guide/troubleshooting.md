@@ -60,6 +60,18 @@ The Command Palette, native file picker, global hotkey, dictation, IDE launcher,
 
 For a connection problem, verify that the backend is listening on the expected port and that the browser can reach it from the same network. Inspect the browser console and the backend logs before restarting.
 
+## Opening a file in browser/remote mode shows "Access denied" (403)
+
+Opening an absolute file path (a Markdown/plan-file link, or a file opened
+directly in the code editor) from a browser/remote/PWA client is gated to your
+registered repositories, plus any directory listed under **Settings → Services
+& MCP → File Access → Additional Readable Directories** (`~/.claude/plans` is
+included by default). This never happens in the desktop app, where reads are
+unrestricted. If you see a message like "outside your registered repositories
+and allowed directories," add the file's folder to that list. See
+[Remote Access](remote-access.md#reading-a-file-outside-your-registered-repositories)
+for the full explanation.
+
 ## Clipboard or file opening behaves differently in a browser
 
 Browser mode uses browser clipboard and file-opening APIs where native integrations are unavailable. Permissions, HTTPS requirements, popup blocking, and browser focus can affect the result. Retry the action from the desktop app to distinguish a browser limitation from a backend problem.
