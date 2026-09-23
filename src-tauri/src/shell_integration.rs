@@ -38,7 +38,7 @@ if [[ -n "$TUIC_SESSION" ]]; then
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
     done
-    if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude "$@" --settings "$TUIC_CLAUDE_SETTINGS"; else command claude "$@"; fi
+    if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude --settings "$TUIC_CLAUDE_SETTINGS" "$@"; else command claude "$@"; fi
   }
   codex() {
     local a prev; for a in "$@"; do
@@ -91,7 +91,7 @@ if [[ -n "$TUIC_SESSION" ]]; then
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
     done
-    if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude "$@" --settings "$TUIC_CLAUDE_SETTINGS"; else command claude "$@"; fi
+    if [[ -n "$TUIC_CLAUDE_SETTINGS" ]]; then command claude --settings "$TUIC_CLAUDE_SETTINGS" "$@"; else command claude "$@"; fi
   }
   codex() {
     local a prev; for a in "$@"; do
@@ -140,7 +140,7 @@ if set -q TUIC_SESSION
       end
     end
     if set -q TUIC_CLAUDE_SETTINGS
-      command claude $argv --settings $TUIC_CLAUDE_SETTINGS
+      command claude --settings $TUIC_CLAUDE_SETTINGS $argv
     else
       command claude $argv
     end
@@ -420,6 +420,19 @@ mod tests {
         /// it, and it is the one command to run on a new machine.
         const LAUNCH_SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
+        /// A staging path next to `dir/name` that no other test thread uses.
+        ///
+        /// The process id alone is not enough: the launch tests run as threads
+        /// of one process, and two of them staging the same `name` under the
+        /// same pid raced — one renamed the file away while the other was
+        /// still about to rename it, and the second failed with `NotFound`.
+        fn staging_path(dir: &Path, name: &str) -> PathBuf {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static SEQ: AtomicUsize = AtomicUsize::new(0);
+            let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+            dir.join(format!("{name}.{}.{seq}", std::process::id()))
+        }
+
         /// A `PATH` prefix holding `claude` and `codex` stand-ins.
         fn agent_bin_dir() -> PathBuf {
             assert!(
@@ -435,10 +448,9 @@ mod tests {
                 if std::fs::read_link(&link).is_ok_and(|target| target == Path::new(REAL_ECHO)) {
                     continue;
                 }
-                // Stage under a process-unique name and rename over the target,
-                // so tests running in parallel never observe a missing link.
-                let staging = dir.join(format!("{agent}.{}", std::process::id()));
-                let _ = std::fs::remove_file(&staging);
+                // Stage under a unique name and rename over the target, so
+                // tests running in parallel never observe a missing link.
+                let staging = staging_path(&dir, agent);
                 std::os::unix::fs::symlink(REAL_ECHO, &staging).expect("stage agent symlink");
                 std::fs::rename(&staging, &link).expect("install agent symlink");
             }
@@ -460,7 +472,7 @@ mod tests {
             let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/shell-integration-tests");
             std::fs::create_dir_all(&dir).expect("create integration script dir");
             let path = dir.join(name);
-            let staging = dir.join(format!("{name}.{}", std::process::id()));
+            let staging = staging_path(&dir, name);
             std::fs::write(&staging, body).expect("write integration script");
             std::fs::rename(&staging, &path).expect("install integration script");
             path
@@ -583,7 +595,7 @@ mod tests {
         /// the test name and the run log names every shell that was launched.
         ///
         /// One test per case looping over the matrix would hide the shell: a
-        /// log line reading `setting_on_appends_launch_scoped_status_flags`
+        /// log line reading `setting_on_prepends_launch_scoped_status_flags`
         /// says nothing about whether fish was among the shells it tried,
         /// which is exactly how the fish half stayed unexecuted.
         macro_rules! launch_matrix {
@@ -600,7 +612,7 @@ mod tests {
         }
 
         launch_matrix!(
-            setting_on_appends_launch_scoped_status_flags,
+            setting_on_prepends_launch_scoped_status_flags,
             an_explicit_user_flag_suppresses_injection,
             setting_off_leaves_the_command_line_untouched,
         );
@@ -615,14 +627,19 @@ mod tests {
             ]
         }
 
-        fn setting_on_appends_launch_scoped_status_flags(shell: &str) {
-            let claude = format!("--model opus --settings {CLAUDE_SETTINGS}");
+        fn setting_on_prepends_launch_scoped_status_flags(shell: &str) {
+            // Before the user's arguments, not after: `--settings` belongs to
+            // the root command, and subcommands such as `doctor`, `update`,
+            // `mcp` and `auth` reject it as an unknown option when it trails.
+            let claude = format!("--settings {CLAUDE_SETTINGS} --model opus");
+            let doctor = format!("--settings {CLAUDE_SETTINGS} doctor");
             assert_in_shell(
                 shell,
-                "Claude gets the TUIC settings file appended",
+                "Claude gets the TUIC settings file before its own arguments",
                 &signals_on(),
-                "claude --model opus",
-                &[claude.as_str()],
+                "claude --model opus\n\
+                 claude doctor",
+                &[claude.as_str(), doctor.as_str()],
             );
             let codex = format!("exec --full-auto -c notify=[\"{CODEX_NOTIFY}\"]");
             assert_in_shell(
