@@ -5,6 +5,7 @@ import { subscribeEvents } from "../transport";
 import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../transportRuntime";
 import { ensureAgentConfigs, invalidateAgentConfigs } from "./agentConfigs";
 import { appLogger } from "./appLogger";
+import type { SshConnectionParams } from "./tunnels";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -14,7 +15,11 @@ export interface RemoteConnection {
 	id: string;
 	name: string;
 	transport: RemoteTransport;
-	auth_username: string;
+	/**
+	 * Basic Auth username, optional (`null` when unset). With a stored password
+	 * and no username the backend's token exchange is refused by the daemon.
+	 */
+	auth_username?: string | null;
 	enabled: boolean;
 	auto_update?: boolean;
 	deploy: DeployMode;
@@ -54,13 +59,17 @@ export interface SshHostStatus {
 export type RemoteTransport =
 	| {
 			type: "Ssh";
-			ssh_host: string;
-			ssh_port: number;
-			ssh_user: string;
-			identity_file: string | null;
+			/** Host/port/user/identity/keepalive config — shared shape with `TunnelProfile.ssh`. */
+			ssh: SshConnectionParams;
 			remote_daemon_port: number;
 	  }
-	| { type: "Direct"; url: string };
+	| { type: "Direct"; url: string }
+	| {
+			type: "Local";
+			/** Exactly one of `port`/`instance_id` is set. */
+			port: number | null;
+			instance_id: string | null;
+	  };
 
 /**
  * `unauthenticated` is deliberately not `error`: the daemon is reachable and

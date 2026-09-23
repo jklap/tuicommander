@@ -2256,12 +2256,17 @@ describe("transport", () => {
 			const profile = {
 				id: "p1",
 				name: "dev",
-				host: "h",
-				port: 22,
-				user: "u",
-				identity_file: null,
+				ssh: {
+					host: "h",
+					port: 22,
+					user: "u",
+					identity_file: null,
+					server_alive_interval: 15,
+					server_alive_count_max: 3,
+					strict_host_key_checking: "AcceptNew",
+					compression: true,
+				},
 				forwards: [],
-				options: { server_alive_interval: 15, server_alive_count_max: 3, strict_host_key_checking: "AcceptNew" },
 				auto_connect: false,
 			};
 			const result = mapCommandToHttp("save_tunnel_profile", { profile });

@@ -36,7 +36,7 @@ pub(crate) async fn ssh_exec_with_binary(
     let mut args = build_ssh_base_args(profile);
     args.push("-T".to_string());
     args.push("--".to_string());
-    args.push(format!("{}@{}", profile.user, profile.host));
+    args.push(format!("{}@{}", profile.ssh.user, profile.ssh.host));
     args.push(remote_command.to_string());
 
     run_process(ssh_binary, &args, stdin, timeout).await
@@ -72,7 +72,7 @@ pub(crate) async fn scp_push_with_binaries(
     let mut args = build_ssh_base_args(profile);
     args.push("--".to_string());
     args.push(local.to_string_lossy().into_owned());
-    args.push(format!("{}@{}:{staged}", profile.user, profile.host));
+    args.push(format!("{}@{}:{staged}", profile.ssh.user, profile.ssh.host));
 
     run_process(scp_binary, &args, None, timeout).await?;
 
@@ -235,7 +235,7 @@ mod tests {
         let _ = std::fs::remove_file(format!("{}.log", ssh.display()));
         let _ = std::fs::remove_file(format!("{}.log", scp.display()));
         let mut hostile = profile();
-        hostile.user = "-oProxyCommand=evil".to_string();
+        hostile.ssh.user = "-oProxyCommand=evil".to_string();
         let local_dir = tempfile::tempdir().expect("temp dir");
         let local = local_dir.path().join("bin");
         std::fs::write(&local, b"x").expect("write local");

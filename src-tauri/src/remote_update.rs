@@ -142,6 +142,9 @@ pub(crate) async fn perform_update_and_restart(
         return Err("Selected remote binary changed while preparing transfer".to_string());
     }
     match &connection.transport {
+        RemoteTransport::Local { .. } => {
+            return Err(crate::remote_connection::LOCAL_TRANSPORT_UNSUPPORTED.to_string());
+        }
         RemoteTransport::Direct { .. } => {
             let file = tokio::fs::File::open(&asset.binary.path)
                 .await

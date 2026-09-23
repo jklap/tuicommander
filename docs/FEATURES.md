@@ -2549,11 +2549,13 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Indexed on `tunnel_id` and `timestamp` for fast lookups
 
 ### 23.5 Profile Configuration
-- TOML-based profiles with name, host, port, user, identity file, and port forwards
+- TOML-based profiles with name, an `[ssh]` table (host, port, user, identity file, keepalive, host-key policy, compression — `SshConnectionParams`, shared with remote connections), and port forwards
+- Profiles written by older builds (flat `host`/`port`/`user` + `[options]`) still load; global ones are rewritten to `[ssh]` once at startup, keeping `<id>.toml.pre-nested-ssh-<UTC>.bak`
 - Global scope: `<config_dir>/tunnels/*.toml` — available across all repos
 - Per-repo scope: `<repo>/.tuic/tunnels/*.toml` — overrides global profiles with same ID
 - Forward types: Local (`-L`) and Remote (`-R`) port forwarding
-- Options: ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes/AcceptNew)
+- Options: ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes/AcceptNew), Compression (default on)
+- Save mints a UUID for an empty id and delete of a missing profile is an error on both IPC and HTTP (one shared body each)
 - Validation: duplicate bind ports, empty fields, port range (1-65535)
 - Pre-spawn port availability check for local forwards
 
@@ -2616,10 +2618,13 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
 - Atomic writes via temp file + rename
-- Each connection has UUID, name, transport, auth username, enabled flag,
+- Each connection has UUID, name, transport, optional auth username (`null` when unset), enabled flag,
   `deploy` (`never | on_connect | installed`), `survive_secs` and
   `auto_update` (defaults to false)
-- The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection
+- Transports: `Ssh` (nested `ssh: SshConnectionParams` + `remote_daemon_port`), `Direct` (`url`), `Local` (`port` or `instance_id`; stored but not connectable yet — every runtime path fails closed with "Local connections are not yet supported")
+- A `connections.json` written with the older flat SSH fields still loads and is rewritten once at startup, keeping `connections.json.pre-nested-ssh-<UTC>.bak`
+- The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection (IPC and HTTP share one delete path that also deletes the pairing token)
+- No username + a stored password fails closed: the empty username is refused by the daemon
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
   desktop restart so Connect can rejoin the same daemon

@@ -151,6 +151,7 @@ mod shell_integration;
 #[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
+pub(crate) mod ssh_connection;
 pub(crate) mod state;
 pub(crate) mod stories;
 pub(crate) mod subagent_map;
@@ -2073,6 +2074,7 @@ pub fn run() {
     let data_dir = config::config_dir();
 
     agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
+    ssh_connection::legacy::migrate_persisted_shapes(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, config.clone(), log_buffer);
     *app_state.github.token.get_mut() = github_token;
@@ -3516,6 +3518,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
+    ssh_connection::legacy::migrate_persisted_shapes(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;

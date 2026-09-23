@@ -23,7 +23,6 @@
 //!   no base URL in the snapshot, so `rpcImpl` refuses rather than retrying a
 //!   401 on a widening backoff.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -738,10 +737,13 @@ async fn authenticate(
     if !crate::remote_connection::connection_password_exists(&connection.id)? {
         return Ok(None);
     }
+    // An absent username is sent as an empty one: no daemon has an empty
+    // username configured, so the exchange fails closed with "Authentication
+    // rejected" rather than authenticating as anybody.
     crate::remote_connection::fetch_connection_token(
         &connection.id,
         base_url,
-        &connection.auth_username,
+        connection.auth_username.as_deref().unwrap_or_default(),
     )
     .await
     .map(Some)
@@ -1166,6 +1168,11 @@ async fn resolve_base_url(
 ) -> Result<String, String> {
     match &connection.transport {
         RemoteTransport::Direct { url } => Ok(url.trim_end_matches('/').to_string()),
+        // Fails closed until the Local connect flow lands: no port is resolved
+        // and nothing is contacted.
+        RemoteTransport::Local { .. } => {
+            Err(crate::remote_connection::LOCAL_TRANSPORT_UNSUPPORTED.to_string())
+        }
         RemoteTransport::Ssh {
             remote_daemon_port, ..
         } => {
@@ -1198,28 +1205,21 @@ async fn resolve_base_url(
 pub(crate) fn ssh_profile(
     connection: &RemoteConnection,
 ) -> Option<crate::tunnels::profile::TunnelProfile> {
-    let RemoteTransport::Ssh {
-        ssh_host,
-        ssh_port,
-        ssh_user,
-        identity_file,
-        ..
-    } = &connection.transport
-    else {
+    let RemoteTransport::Ssh { ssh, .. } = &connection.transport else {
         return None;
     };
-    use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
+    use crate::ssh_connection::StrictHostKeyChecking;
+    use crate::tunnels::profile::TunnelProfile;
     let mut profile = TunnelProfile::new(
         format!("remote connection {}", connection.name),
-        ssh_host.clone(),
-        ssh_user.clone(),
+        ssh.host.clone(),
+        ssh.user.clone(),
     );
-    profile.port = *ssh_port;
-    profile.identity_file = identity_file.as_ref().map(PathBuf::from);
-    profile.options = ProfileOptions {
-        strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
-        ..ProfileOptions::default()
-    };
+    // The connection's own SSH settings — the struct a tunnel profile carries
+    // too — with one exception: this tunnel is created on the user's behalf,
+    // so a first connection cannot stop to ask about a fingerprint.
+    profile.ssh = ssh.clone();
+    profile.ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
     Some(profile)
 }
 
@@ -3003,7 +3003,7 @@ mod tests {
                     "example.invalid",
                     "boss",
                 ),
-                PathBuf::from("/nonexistent/ssh"),
+                std::path::PathBuf::from("/nonexistent/ssh"),
             )
             .await
             .expect("the manager records a tunnel before its ssh child matters")
@@ -3172,6 +3172,39 @@ mod tests {
             supervisor_finishes(&state, &id).await,
             "a rejected connection must not keep probing"
         );
+    }
+
+    /// `Local` exists in the model before its connect flow does: connecting one
+    /// must fail closed — no route, no token, no tunnel — with the message the
+    /// UI shows, not guess a port.
+    #[tokio::test]
+    async fn a_local_connection_fails_closed_until_its_connect_flow_exists() {
+        let state = test_state();
+        let connection = crate::remote_connection::RemoteConnection {
+            transport: RemoteTransport::Local {
+                port: Some(9877),
+                instance_id: None,
+            },
+            ..crate::remote_connection::RemoteConnection::new_direct("local", "http://x", "u")
+        };
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        let mut events = state.event_bus.subscribe();
+
+        let err = connect(&state, &id).await.unwrap_err();
+
+        assert!(
+            err.contains(crate::remote_connection::LOCAL_TRANSPORT_UNSUPPORTED),
+            "{err}"
+        );
+        assert_eq!(
+            drain_statuses(&mut events).first().map(String::as_str),
+            Some("connecting")
+        );
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(state.remote.token(&id).is_none());
+        assert!(state.tunnel_manager.list().is_empty());
+        teardown(&state, &id);
     }
 
     #[tokio::test]
@@ -3368,7 +3401,7 @@ mod tests {
         let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
         connection.deploy = DeployMode::OnConnect;
         let profile = delete_stop_profile(&connection).expect("ephemeral daemon");
-        assert_eq!(profile.host, "host");
+        assert_eq!(profile.ssh.host, "host");
 
         connection.deploy = DeployMode::Installed;
         assert!(delete_stop_profile(&connection).is_none());
