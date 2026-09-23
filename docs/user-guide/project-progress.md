@@ -1,6 +1,6 @@
 # Project Progress
 
-Progress answers one question: **what happened in this project while I was not
+Progress answers one question: **what happened in this terminal while I was not
 watching?**
 
 It is a journal. Entries are appended, never edited. You read it, and you delete
@@ -36,14 +36,14 @@ The MCP `progress` tool takes three fields.
 {"type": "done", "text": "OpenRouter applications can now be identified.", "step": "Shadow AI Detection"}
 ```
 
-TUICommander adds the project, the time and the agent's name. The agent does not
-supply them.
+TUICommander adds the project, the time, the agent's name and the source PTY
+when it can identify one. The agent does not supply them.
 
 The receipt is `{"id": <n>}` and nothing more. Each call appends one entry: the
 journal does not deduplicate agent reports, because an agent that reported the
 same step twice did the work twice, and only you can decide what that means.
 Intents are the exception. TUICommander reads them off the screen, and a repaint
-of the same `intent:` line is not a new intent, so a repeat of the project's
+of the same `intent:` line is not a new intent, so a repeat of the PTY's
 newest intent — same text, same agent — returns that entry instead of adding one.
 
 `step` is a free-text label, not a registered object. Nothing has to be created
@@ -55,9 +55,16 @@ the same label.
 Open the Progress dialog from the command palette (`progress`) or from the
 toolbar bell, which shows how many entries arrived since you last opened it.
 
-The dialog shows one project — the active one — newest first, with a divider
-marking where your last visit ended. The divider is frozen while the dialog is
-open: it moves when you close it, never under the line you are reading.
+The dialog opens on the active PTY, newest first. The selector switches to
+another PTY in the project or **All repo**, which combines their histories.
+Closed PTYs with saved entries remain selectable. A PTY with no entries has an
+empty view; it does not inherit another PTY's work. Entries recorded before
+terminal identity was stored, and direct local reports with no PTY binding,
+appear in **All repo** as **Terminal unknown**. They are never assigned by guess.
+
+Each PTY and **All repo** has its own last-visit divider. The divider stays
+fixed while you read a view; switching views loads that view's mark. Closing
+the dialog marks every view you visited during that opening.
 
 Blocked entries are red. `intent` entries are muted, because they are what an
 agent set out to do rather than a result. A checkbox narrows the list to blocked
@@ -79,7 +86,7 @@ reporting. The global switch wins: off globally means off everywhere.
 ## Where it is stored
 
 One SQLite database, `progress.sqlite3`, in TUICommander's configuration
-directory, with the project as a column. **Nothing is written inside your
+directory, with the project and nullable PTY ID as columns. **Nothing is written inside your
 repositories** — no `.tuic` directory, nothing for Git to ignore, nothing for a
 file watcher to react to.
 

@@ -8,6 +8,12 @@
 
 # To Test
 
+## Terminal Progress (2026-09-23) — Rust, needs a `make dev` restart
+
+- [ ] After restarting an isolated dev instance, open two agent PTYs in one repo and record different `intent:`/`progress` entries. Progress should open on the active PTY, allow switching to the other PTY, and show both in **All repo**.
+- [ ] In **All repo**, existing entries recorded before this change should remain visible as **Terminal unknown**. Closing a PTY should leave its saved history selectable.
+- [ ] Open PTY A, switch to PTY B, then **All repo** and close Progress. Reopen each view and confirm each has its own last-visit divider; viewing A alone must not mark B or **All repo** as seen.
+
 ## Branch icon toggles agents (2026-09-22) — frontend, live via HMR
 
 - [ ] [VISUAL] Hover the icon of a branch with terminals: it swaps to a chevron (pointing down when expanded) in the same box; the row does not shift.

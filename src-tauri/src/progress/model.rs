@@ -118,6 +118,8 @@ pub(crate) fn validate_text(field: &str, value: &str, max: usize) -> Result<(), 
 pub struct ProgressEntry {
     pub id: i64,
     pub project: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pty_id: Option<String>,
     pub created_at_ms: u64,
     #[serde(rename = "type")]
     pub kind: ProgressKind,
@@ -138,6 +140,7 @@ pub struct ProgressEntry {
 pub struct ProgressList {
     pub project: String,
     pub entries: Vec<ProgressEntry>,
+    pub pty_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_viewed_ms: Option<u64>,
 }
@@ -148,6 +151,9 @@ pub struct ProgressListInput {
     /// The dialog's single filter.
     #[serde(default)]
     pub blocked_only: Option<bool>,
+    /// None includes every terminal in the project.
+    #[serde(default)]
+    pub pty_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

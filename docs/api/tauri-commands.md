@@ -5,9 +5,9 @@
 | Command | Parameters | Result | Description |
 |---|---|---|---|
 | `report_progress_event` | `project, report` | `{id}` | Appends one `done` or `blocked` entry through the same core as MCP and HTTP. |
-| `progress_list` | `project, input.blockedOnly` | `ProgressList` | The project's newest 500 entries, newest first, with the stored last-visit mark. |
+| `progress_list` | `project, input.blockedOnly?, input.ptyId?` | `ProgressList` | The selected PTY's or project's newest 500 entries, available PTY IDs, and the stored last-visit mark. |
 | `progress_delete` | `project, input.ids` | `{deleted}` | Deletes entries by id, scoped to the project — one project cannot delete another's. |
-| `progress_mark_viewed` | `project` | `{lastViewedMs}` | Moves the last-visit mark to now. Deliberately not an MCP action: it is the reader's, not the agent's. |
+| `progress_mark_viewed` | `project, ptyId?` | `{lastViewedMs}` | Moves the selected PTY's or repository aggregate's last-visit mark to now. Deliberately not an MCP action: it is the reader's, not the agent's. |
 
 The journal is append-only. There is no pause, clear, correction or export
 command: an entry is written once and either kept or deleted. `intent` entries

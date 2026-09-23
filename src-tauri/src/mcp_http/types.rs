@@ -116,6 +116,13 @@ pub(super) struct PathQuery {
     pub path: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ProgressViewedQuery {
+    pub path: String,
+    pub pty_id: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 pub(super) struct OptionalRepoQuery {
     #[serde(default, rename = "repoPath")]

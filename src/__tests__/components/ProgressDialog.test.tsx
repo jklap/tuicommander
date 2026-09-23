@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProgressDialog } from "../../components/ProgressDialog";
 import { progressStore } from "../../stores/progress";
 
-const { close, deleteEntries, open, setBlockedOnly, projectState, defaults } = vi.hoisted(() => {
+const { close, deleteEntries, open, selectPty, setBlockedOnly, projectState, defaults } = vi.hoisted(() => {
 	const entry = (id: number, type: string, text: string, createdAtMs: number) => ({
 		id,
 		project: "/repo",
@@ -18,6 +18,7 @@ const { close, deleteEntries, open, setBlockedOnly, projectState, defaults } = v
 			entry(2, "intent", "Rewriting the dialog.", 200),
 			entry(1, "done", "Shipped the store.", 100),
 		],
+		ptyIds: ["pty-a", "pty-b"],
 		// Everything at or below this timestamp was on screen last visit.
 		dividerMs: 200,
 		loading: false,
@@ -27,6 +28,7 @@ const { close, deleteEntries, open, setBlockedOnly, projectState, defaults } = v
 		close: vi.fn(),
 		deleteEntries: vi.fn(),
 		open: vi.fn(),
+		selectPty: vi.fn(),
 		setBlockedOnly: vi.fn(),
 		projectState: defaults() as ReturnType<typeof defaults>,
 		defaults,
@@ -38,10 +40,22 @@ vi.mock("../../stores/modalStack", () => ({ registerModal: vi.fn() }));
 vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: { get: () => ({ displayName: "Example" }) },
 }));
+vi.mock("../../stores/terminals", () => ({
+	terminalsStore: {
+		state: {
+			terminals: {
+				a: { sessionId: "pty-a", repoPath: "/repo", name: "Agent A" },
+				b: { sessionId: "pty-b", repoPath: "/repo", name: "Agent B" },
+			},
+		},
+	},
+}));
 
 vi.mock("../../stores/progress", () => ({
 	progressStore: {
 		requestedProject: () => "/repo",
+		selectedPtyId: () => "pty-a",
+		selectPty,
 		blockedOnly: () => false,
 		setBlockedOnly,
 		open,
@@ -57,6 +71,16 @@ beforeEach(() => {
 });
 
 describe("ProgressDialog", () => {
+	it("lets the reader switch PTYs and see the whole repository", () => {
+		render(() => <ProgressDialog />);
+		const selector = screen.getByLabelText("Progress terminal") as HTMLSelectElement;
+		expect(selector.value).toBe("pty-a");
+		expect(Array.from(selector.options).map((option) => option.text)).toEqual(["All repo", "Agent A", "Agent B"]);
+		fireEvent.change(selector, { target: { value: "pty-b" } });
+		expect(selectPty).toHaveBeenCalledWith("pty-b");
+		fireEvent.change(selector, { target: { value: "" } });
+		expect(selectPty).toHaveBeenCalledWith(null);
+	});
 	it("renders one newest-first list with the last-visit divider above the first old entry", () => {
 		render(() => <ProgressDialog />);
 
@@ -91,13 +115,13 @@ describe("ProgressDialog", () => {
 		expect(screen.queryByText(/Nothing is blocked/)).toBeNull();
 	});
 
-	it("says nothing was recorded only when the read succeeded", () => {
+	it("says nothing was recorded for the selected terminal only when the read succeeded", () => {
 		projectState.entries = [];
 		projectState.error = null as unknown as string;
 
 		render(() => <ProgressDialog />);
 
-		expect(screen.getByText("No progress recorded for this project yet.")).toBeTruthy();
+		expect(screen.getByText("No progress recorded for this terminal yet.")).toBeTruthy();
 	});
 
 	it("shows one aggregated failure line and keeps the entries visible", () => {

@@ -394,6 +394,7 @@ async fn post_progress_report(
         input,
         None,
         None,
+        None,
     ))
 }
 
@@ -433,12 +434,12 @@ async fn post_progress_delete(
 async fn post_progress_viewed(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
-    Query(q): Query<types::PathQuery>,
+    Query(q): Query<types::ProgressViewedQuery>,
 ) -> Response {
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
-    json_result(crate::progress::progress_mark_viewed(&q.path))
+    json_result(crate::progress::progress_mark_viewed(&q.path, q.pty_id.as_deref()))
 }
 
 /// Serve plugin data files over HTTP.

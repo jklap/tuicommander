@@ -111,7 +111,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 	const entries: ActionEntry[] = [
 		{
 			id: "progress",
-			label: "Open Project Progress",
+			label: "Open Terminal Progress",
 			category: "Navigation",
 			keybinding: "",
 			execute: progressStore.toggle,
