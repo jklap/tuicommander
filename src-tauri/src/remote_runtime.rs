@@ -233,6 +233,10 @@ pub(crate) struct RemoteRuntime {
     /// the pool away each time, so every 5s heartbeat paid a fresh TCP and TLS
     /// handshake against a daemon it had just talked to.
     client: reqwest::Client,
+    /// Pinned loopback relays for Direct connections to a self-signed daemon,
+    /// keyed by connection id — the Direct transport's analogue of the SSH
+    /// tunnel an entry records in `tunnel_id`. Stopped wherever that tunnel is.
+    direct_proxies: crate::direct_proxy::DirectProxies,
 }
 
 impl Default for RemoteRuntime {
@@ -248,6 +252,7 @@ impl Default for RemoteRuntime {
             client: reqwest::Client::builder().build().expect(
                 "the default HTTP client must build — Client::new panics on the same failure",
             ),
+            direct_proxies: Default::default(),
         }
     }
 }
@@ -1153,6 +1158,7 @@ fn stop_tunnel(state: &Arc<AppState>, id: &str) {
     if let Some(tunnel_id) = tunnel_id {
         state.tunnel_manager.stop_if_running(&tunnel_id);
     }
+    state.remote.direct_proxies.stop(id);
 }
 
 /// Where the daemon answers.
@@ -1167,7 +1173,10 @@ async fn resolve_base_url(
     connection: &RemoteConnection,
 ) -> Result<String, String> {
     match &connection.transport {
-        RemoteTransport::Direct { url } => Ok(url.trim_end_matches('/').to_string()),
+        RemoteTransport::Direct {
+            url,
+            tls_fingerprint,
+        } => resolve_direct_base_url(state, &connection.id, url, tls_fingerprint.as_deref()).await,
         // Fails closed until the Local connect flow lands: no port is resolved
         // and nothing is contacted.
         RemoteTransport::Local { .. } => {
@@ -1198,6 +1207,55 @@ async fn resolve_base_url(
             });
             wait_for_tunnel(state, &tunnel_id).await?;
             Ok(format!("http://127.0.0.1:{local_port}"))
+        }
+    }
+}
+
+/// Where a Direct connection answers, after deciding whether its certificate
+/// can be trusted. Fails closed: an `https://` daemon nobody vouches for is
+/// refused until the user has pinned its fingerprint, and a pinned one that now
+/// presents a different certificate is refused outright — never re-pinned here.
+///
+/// * `http://`, or `https://` the OS trusts: the URL itself, as before.
+/// * `https://` with a pin that still matches: a loopback relay
+///   (`direct_proxy::DirectProxies`) that accepts only the pinned certificate,
+///   so `reqwest` and the WebView both reach the daemon through it, the same way
+///   an SSH connection's traffic goes through its tunnel. The relay carries no
+///   credential: the daemon still demands the token `authenticate` obtains.
+async fn resolve_direct_base_url(
+    state: &Arc<AppState>,
+    id: &str,
+    url: &str,
+    tls_fingerprint: Option<&str>,
+) -> Result<String, String> {
+    use crate::direct_proxy::{ProbeResult, https_target, normalize_fingerprint, probe_direct_tls};
+    let url = url.trim().trim_end_matches('/');
+    let Some(target) = https_target(url)? else {
+        return Ok(url.to_string());
+    };
+    match probe_direct_tls(url, tls_fingerprint).await? {
+        ProbeResult::NoTlsNeeded | ProbeResult::Trusted => Ok(url.to_string()),
+        ProbeResult::NeedsConfirmation { fingerprint } => Err(format!(
+            "{}'s certificate is not trusted by this system (SHA-256 {fingerprint}). \
+             Press Connect in Settings → Remote Servers to compare and pin it; \
+             nothing was sent to the server.",
+            target.host
+        )),
+        ProbeResult::PinnedMismatch {
+            presented_fingerprint,
+        } => Err(format!(
+            "Certificate changed: pinned SHA-256 {}, {} now presents {presented_fingerprint}. \
+             Refusing to connect. Verify the server, then forget the pinned certificate \
+             in the connection editor to pin the new one.",
+            tls_fingerprint.unwrap_or_default(),
+            target.host
+        )),
+        ProbeResult::PinnedMatch => {
+            let pin = tls_fingerprint
+                .and_then(normalize_fingerprint)
+                .ok_or("stored certificate pin is not a SHA-256 fingerprint")?;
+            let port = state.remote.direct_proxies.start(id, target, &pin).await?;
+            Ok(format!("http://127.0.0.1:{port}"))
         }
     }
 }
@@ -1340,6 +1398,7 @@ fn dispose(state: &Arc<AppState>, id: &str, mut entry: Entry) {
     if let Some(tunnel_id) = entry.tunnel_id.take() {
         state.tunnel_manager.stop_if_running(&tunnel_id);
     }
+    state.remote.direct_proxies.stop(id);
     // The entry is gone, so there is nothing left for `update` to diff against:
     // the departure is announced by hand, and only when the connection was not
     // already sitting at `Disconnected`.
@@ -3172,6 +3231,141 @@ mod tests {
             supervisor_finishes(&state, &id).await,
             "a rejected connection must not keep probing"
         );
+    }
+
+    /// A daemon serving `/health` + `/api/version` over HTTPS with a throwaway
+    /// self-signed certificate — what a remote `selfsigned.rs` serves. Returns
+    /// its `https://` URL, the certificate's fingerprint and a request counter.
+    async fn self_signed_daemon() -> (
+        String,
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        axum_server::Handle<std::net::SocketAddr>,
+    ) {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+        let fingerprint = crate::direct_proxy::cert_fingerprint_sha256(cert.der());
+        let tls = axum_server::tls_rustls::RustlsConfig::from_der(
+            vec![cert.der().to_vec()],
+            signing_key.serialize_der(),
+        )
+        .await
+        .unwrap();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (h1, h2) = (Arc::clone(&hits), Arc::clone(&hits));
+        let app = axum::Router::new()
+            .route(
+                "/health",
+                axum::routing::get(move || {
+                    h1.fetch_add(1, Ordering::SeqCst);
+                    async { r#"{"protocol_version":1}"# }
+                }),
+            )
+            .route(
+                "/api/version",
+                axum::routing::get(move || {
+                    h2.fetch_add(1, Ordering::SeqCst);
+                    async { "{}" }
+                }),
+            );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("https://{}", listener.local_addr().unwrap());
+        let handle = axum_server::Handle::new();
+        tokio::spawn(
+            axum_server::from_tcp_rustls(listener, tls)
+                .unwrap()
+                .handle(handle.clone())
+                .serve(app.into_make_service()),
+        );
+        (url, fingerprint, hits, handle)
+    }
+
+    fn pinned_direct_connection(state: &Arc<AppState>, url: &str, pin: Option<&str>) -> String {
+        let mut connection = RemoteConnection::new_direct("self-signed", url, "boss");
+        connection.transport = RemoteTransport::Direct {
+            url: url.to_string(),
+            tls_fingerprint: pin.map(str::to_string),
+        };
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        id
+    }
+
+    /// Trust on first use means the FIRST use asks: an unpinned self-signed
+    /// daemon is refused with its fingerprint, before any HTTP request.
+    #[tokio::test]
+    async fn an_unpinned_self_signed_daemon_is_refused_with_its_fingerprint() {
+        let (url, fingerprint, hits, handle) = self_signed_daemon().await;
+        let state = test_state();
+        let id = pinned_direct_connection(&state, &url, None);
+
+        let err = connect(&state, &id).await.unwrap_err();
+
+        assert!(
+            err.contains(&fingerprint),
+            "the user must see what to compare: {err}"
+        );
+        assert!(err.contains("not trusted"), "{err}");
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        assert!(state.remote.base_url(&id).is_none());
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "no request may reach an unverified daemon"
+        );
+        teardown(&state, &id);
+        handle.shutdown();
+    }
+
+    /// A pinned daemon is reached through the pinned loopback relay — by the
+    /// backend's own probes here, and by the WebView through the same base URL.
+    #[tokio::test]
+    async fn a_pinned_self_signed_daemon_connects_through_the_pinned_relay() {
+        let (url, fingerprint, hits, handle) = self_signed_daemon().await;
+        let state = test_state();
+        let id = pinned_direct_connection(&state, &url, Some(&fingerprint));
+
+        connect(&state, &id).await.unwrap();
+
+        let base = state.remote.base_url(&id).expect("connected");
+        assert!(base.starts_with("http://127.0.0.1:"), "{base}");
+        assert_ne!(base, url);
+        assert!(
+            hits.load(Ordering::SeqCst) >= 2,
+            "health + version went through the relay"
+        );
+        assert!(state.remote.direct_proxies.port_for(&id).is_some());
+
+        teardown(&state, &id);
+        assert!(
+            state.remote.direct_proxies.port_for(&id).is_none(),
+            "teardown stops the relay like it stops a tunnel"
+        );
+        handle.shutdown();
+    }
+
+    /// A changed certificate is a hard stop, never a silent re-pin.
+    #[tokio::test]
+    async fn a_pinned_daemon_presenting_another_certificate_is_refused() {
+        let (url, fingerprint, hits, handle) = self_signed_daemon().await;
+        let state = test_state();
+        let id = pinned_direct_connection(&state, &url, Some(&"0".repeat(64)));
+
+        let err = connect(&state, &id).await.unwrap_err();
+
+        assert!(err.contains("Certificate changed"), "{err}");
+        assert!(err.contains(&fingerprint), "{err}");
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(state.remote.direct_proxies.port_for(&id).is_none());
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        let stored = load_connection(&state, &id).unwrap();
+        assert!(
+            matches!(stored.transport, RemoteTransport::Direct { tls_fingerprint: Some(ref p), .. } if *p == "0".repeat(64)),
+            "the pin is never rewritten by a connect"
+        );
+        teardown(&state, &id);
+        handle.shutdown();
     }
 
     /// `Local` exists in the model before its connect flow does: connecting one

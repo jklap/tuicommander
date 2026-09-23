@@ -2258,6 +2258,25 @@ describe("transport", () => {
 			expect(result.body).toEqual(request);
 		});
 
+		it("maps probe_direct_tls_connection to POST /config/remote-connections/probe-direct-tls", () => {
+			const result = mapCommandToHttp("probe_direct_tls_connection", {
+				url: "https://h:9877",
+				tlsFingerprint: "ab".repeat(32),
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/config/remote-connections/probe-direct-tls");
+			expect(result.body).toEqual({ url: "https://h:9877", tls_fingerprint: "ab".repeat(32) });
+			expect(mapCommandToHttp("probe_direct_tls_connection", { url: "http://h" }).body).toEqual({
+				url: "http://h",
+				tls_fingerprint: null,
+			});
+		});
+
+		it("has no command that starts or stops a Direct relay from the client", () => {
+			expect(() => mapCommandToHttp("start_direct_proxy", { connectionId: "c", url: "https://evil" })).toThrow();
+			expect(() => mapCommandToHttp("stop_direct_proxy", { connectionId: "c" })).toThrow();
+		});
+
 		it("maps list_tunnel_profiles to GET /tunnels/profiles", () => {
 			const result = mapCommandToHttp("list_tunnel_profiles", {});
 			expect(result.method).toBe("GET");

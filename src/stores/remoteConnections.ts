@@ -1,4 +1,4 @@
-import { batch } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { subscribeEvents } from "../transport";
@@ -63,7 +63,15 @@ export type RemoteTransport =
 			ssh: SshConnectionParams;
 			remote_daemon_port: number;
 	  }
-	| { type: "Direct"; url: string }
+	| {
+			type: "Direct";
+			url: string;
+			/** SHA-256 fingerprint (lowercase hex) of a pinned self-signed/untrusted
+			 * certificate, set only after the user confirms it in
+			 * `DirectCertConfirmDialog`. Absent/`null` for `http://`, a CA-trusted
+			 * `https://`, or a target not yet confirmed (the backend omits it then). */
+			tls_fingerprint?: string | null;
+	  }
 	| {
 			type: "Local";
 			/** Exactly one of `port`/`instance_id` is set. */
@@ -100,6 +108,25 @@ export type ConnectionTestResult =
  * `/health` answers, but every other route needs a credential this client does
  * not have. The fix is a password, not a network one, and the panel says so.
  */
+/**
+ * What a Direct URL presents. Mirrors Rust `direct_proxy::ProbeResult`
+ * (`#[serde(tag = "type")]`).
+ */
+export type ProbeResult =
+	| { type: "NoTlsNeeded" }
+	| { type: "Trusted" }
+	| { type: "NeedsConfirmation"; fingerprint: string }
+	| { type: "PinnedMatch" }
+	| { type: "PinnedMismatch"; presented_fingerprint: string };
+
+/** A self-signed certificate waiting for the user's decision before it is pinned. */
+export interface PendingFingerprintConfirmation {
+	connectionId: string;
+	connectionName: string;
+	url: string;
+	fingerprint: string;
+}
+
 export type ConnectionStatus = "disconnected" | "connecting" | "deploying" | "connected" | "unauthenticated" | "error";
 
 export interface ConnectionState {
@@ -195,6 +222,21 @@ function createRemoteConnectionsStore() {
 		connections: {},
 		hydrated: false,
 	});
+
+	// Certificate confirmation is one modal at a time: `connect()` awaits
+	// `requestFingerprintConfirmation`, which resolves when `DirectCertConfirmDialog`
+	// calls `resolveFingerprintConfirmation`. A second request declines the first
+	// rather than leaving its promise hanging.
+	const [pendingConfirmation, setPendingConfirmation] = createSignal<PendingFingerprintConfirmation | null>(null);
+	let confirmationResolver: ((accepted: boolean) => void) | null = null;
+
+	function requestFingerprintConfirmation(request: PendingFingerprintConfirmation): Promise<boolean> {
+		confirmationResolver?.(false);
+		return new Promise((resolve) => {
+			confirmationResolver = resolve;
+			setPendingConfirmation(request);
+		});
+	}
 
 	// ---------------------------------------------------------------------------
 	// Internal helpers
@@ -297,11 +339,54 @@ function createRemoteConnectionsStore() {
 		 * `unauthenticated` status; callers that only render can ignore the throw.
 		 */
 		async connect(id: string): Promise<void> {
-			if (!state.connections[id]) {
+			const current = state.connections[id];
+			if (!current) {
 				appLogger.warn("store", `connect: unknown connection ${id}`);
 				return;
 			}
+			const conn = current.connection;
+			// A Direct `https://` daemon nobody vouches for is refused by the backend
+			// until its certificate is pinned. Ask the user here, where a person
+			// pressed Connect: the probe reports the fingerprint, nothing is pinned
+			// without an explicit accept, and a changed certificate is left to the
+			// backend, which refuses it with the explanation.
+			if (conn.transport.type === "Direct") {
+				const transport = conn.transport;
+				let probe: ProbeResult | undefined;
+				try {
+					probe = await invoke<ProbeResult>("probe_direct_tls_connection", {
+						url: transport.url,
+						tlsFingerprint: transport.tls_fingerprint ?? null,
+					});
+				} catch (err) {
+					// Unreachable and the like: the connect below reports it properly.
+					appLogger.warn("store", `Certificate probe failed for ${id}`, err);
+				}
+				if (probe?.type === "NeedsConfirmation") {
+					const accepted = await requestFingerprintConfirmation({
+						connectionId: id,
+						connectionName: conn.name,
+						url: transport.url,
+						fingerprint: probe.fingerprint,
+					});
+					if (!accepted) return;
+					await actions.addConnection({ ...conn, transport: { ...transport, tls_fingerprint: probe.fingerprint } });
+				}
+			}
 			await invoke("connect_remote_connection", { id });
+		},
+
+		/** The certificate confirmation the dialog should show, if any (reactive). */
+		getPendingFingerprintConfirmation(): PendingFingerprintConfirmation | null {
+			return pendingConfirmation();
+		},
+
+		/** Answer the pending confirmation: `true` pins and connects, `false` aborts. */
+		resolveFingerprintConfirmation(accepted: boolean): void {
+			const resolve = confirmationResolver;
+			confirmationResolver = null;
+			setPendingConfirmation(null);
+			resolve?.(accepted);
 		},
 
 		/** Ask the backend to take a connection down. */

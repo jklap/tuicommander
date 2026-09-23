@@ -2206,6 +2206,16 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	test_connection: {
 		map: (args) => ({ method: "POST", path: "/config/remote-connections/test", body: args.request }),
 	},
+	// What certificate a Direct URL presents, before the user pins it. There is
+	// deliberately no command to start/stop the pinned relay: only the backend's
+	// connect flow starts one, from the saved connection.
+	probe_direct_tls_connection: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/remote-connections/probe-direct-tls",
+			body: { url: args.url, tls_fingerprint: args.tlsFingerprint ?? null },
+		}),
+	},
 
 	// --- Tunnels ---
 	start_design_mode: {

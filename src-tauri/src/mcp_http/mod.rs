@@ -1983,6 +1983,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/test",
             post(config_routes::test_connection_http),
         )
+        .route(
+            "/config/remote-connections/probe-direct-tls",
+            post(config_routes::probe_direct_tls_http),
+        )
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))

@@ -108,7 +108,10 @@ pub(crate) async fn test_connection_impl(request: &TestConnectionRequest) -> Con
         RemoteTransport::Ssh { ssh, .. } => {
             classify_ssh_result(crate::tunnels::exec::ssh_check(ssh, SSH_TEST_TIMEOUT).await)
         }
-        RemoteTransport::Direct { url } => test_http_health(url, username, password).await,
+        // A pinned self-signed certificate is honoured by Connect (the pinned
+        // relay in `direct_proxy`), not here: such a target reports
+        // Unreachable with the TLS error, exactly as before pinning existed.
+        RemoteTransport::Direct { url, .. } => test_http_health(url, username, password).await,
         RemoteTransport::Local { port, instance_id } => {
             let resolved_port = match (port, instance_id) {
                 (_, Some(id)) if !id.trim().is_empty() => match resolve_local_instance_port(id) {
@@ -461,6 +464,7 @@ mod tests {
         let request = TestConnectionRequest {
             transport: RemoteTransport::Direct {
                 url: "http://h".to_string(),
+                tls_fingerprint: None,
             },
             auth_username: Some("alice".to_string()),
             password: Some("hunter2".to_string()),
@@ -528,7 +532,10 @@ mod tests {
             .await;
 
         let request = TestConnectionRequest {
-            transport: RemoteTransport::Direct { url: server.url() },
+            transport: RemoteTransport::Direct {
+                url: server.url(),
+                tls_fingerprint: None,
+            },
             auth_username: None,
             password: None,
         };

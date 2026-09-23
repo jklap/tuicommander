@@ -1629,6 +1629,7 @@ GET    /config/remote-connections
 PUT    /config/remote-connections
 DELETE /config/remote-connections/{id}
 POST   /config/remote-connections/test
+POST   /config/remote-connections/probe-direct-tls
 PUT    /config/remote-connections/{id}/password
 GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
@@ -1654,7 +1655,7 @@ A connection is
 | `type` | Fields |
 |--------|--------|
 | `Ssh` | `ssh: { host, port, user, identity_file, server_alive_interval, server_alive_count_max, strict_host_key_checking: "Yes" \| "AcceptNew", compression }`, `remote_daemon_port` |
-| `Direct` | `url` |
+| `Direct` | `url`, `tls_fingerprint` (optional: SHA-256 hex of a pinned self-signed certificate; omitted when unset) |
 | `Local` | `port`, `instance_id` — exactly one set; not connectable yet (connect/update/deploy fail with `Local connections are not yet supported`) |
 
 The `ssh` object is the same `SshConnectionParams` a tunnel profile carries. The
@@ -1687,6 +1688,27 @@ no username is sent as `:<password>` and refused, like Connect). `Local` resolve
 `require_local_or_auth` (403 from a public address without credentials) because
 it makes this machine dial an arbitrary host. Against a headless `tuic-remote`,
 whose `/health` is public, a 2xx is `Reachable` whatever the credentials.
+
+`POST /config/remote-connections/probe-direct-tls` reports what certificate a
+Direct URL presents, so the UI can show a fingerprint before the user pins it.
+Body `{ "url": "https://host:9877", "tls_fingerprint": "<hex>" | null }`; answers
+200 with `{ "type": "NoTlsNeeded" }` (an `http://` URL — nothing is contacted),
+`{ "type": "Trusted" }` (the OS root store vouches for it),
+`{ "type": "NeedsConfirmation", "fingerprint": "<64 hex>" }` (self-signed/untrusted,
+nothing pinned), `{ "type": "PinnedMatch" }`, or
+`{ "type": "PinnedMismatch", "presented_fingerprint": "<64 hex>" }`; 500 with
+`{ "error": "Unreachable: …" }` when no TLS handshake completes within 10 s. It
+persists nothing and sends no application data; it is guarded by
+`require_local_or_auth` because it dials a caller-supplied host. Pinning itself is
+an ordinary `PUT /config/remote-connections` that sets `transport.tls_fingerprint`
+(validated: 64 hex digits, `https://` URL only). On connect, an unpinned
+`https://` daemon the OS does not trust fails closed with its fingerprint in the
+status error; a pinned one is reached through a backend-owned loopback relay that
+accepts only that certificate (the status `base_url` is then
+`http://127.0.0.1:<port>`), and a changed certificate fails with
+`Certificate changed: …` — it is never re-pinned automatically. The relay carries
+no credentials; the daemon's own token check still applies. There is no route to
+start or stop a relay.
 
 The install pair is SSH-only. `POST .../install` stages the matching release
 binary, installs and starts a systemd user unit or launchd agent, and persists

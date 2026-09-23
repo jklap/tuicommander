@@ -157,6 +157,11 @@ Remote pairing tokens use the credential vault key
 `remote/connection/<uuid>/pairing-token`; they never live in either directory or
 in `connections.json`.
 Each connection stores `auto_update` there. Missing values default to `false`.
+A Direct transport may carry `tls_fingerprint` (SHA-256 hex of a self-signed
+certificate the user pinned; `direct_proxy.rs`). It is additive: absent means
+unpinned, it is written only when set (an unpinned connection keeps the exact
+older shape), older builds ignore it, and no migration is involved. A save
+rejects a value that is not 64 hex digits or that sits on an `http://` URL.
 
 **Nested SSH shape and its one-time migration.** An SSH connection in
 `connections.json` and every `tunnels/*.toml` profile keep their SSH settings in
