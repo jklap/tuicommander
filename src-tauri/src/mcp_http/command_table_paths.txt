@@ -102,8 +102,10 @@
 /config/provider-key/exists
 /config/provider-registry
 /config/remote-connections
+/config/remote-connections/probe-direct-tls
 /config/remote-connections/test
 /config/remote-connections/x
+/config/remote-connections/x/direct-proxy
 /config/remote-connections/x/password
 /config/remote-connections/x/password/exists
 /config/repo-defaults

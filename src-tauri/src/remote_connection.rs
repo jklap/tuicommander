@@ -54,6 +54,13 @@ pub(crate) enum RemoteTransport {
     },
     Direct {
         url: String,
+        /// SHA-256 fingerprint (lowercase hex) of a pinned, self-signed/
+        /// untrusted certificate, set once the user explicitly confirms it
+        /// (see `direct_proxy.rs`'s `probe_direct_tls`/`ProbeResult`). `None`
+        /// for `http://`, for a CA-trusted `https://`, or for a self-signed
+        /// target not yet confirmed.
+        #[serde(default)]
+        tls_fingerprint: Option<String>,
     },
     /// Another named/isolated TUICommander instance running on this same
     /// machine (`tuic-remote --instance <id>`, or `TUIC_APP_INSTANCE=<id>`
@@ -100,7 +107,10 @@ impl RemoteConnection {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
-            transport: RemoteTransport::Direct { url: url.into() },
+            transport: RemoteTransport::Direct {
+                url: url.into(),
+                tls_fingerprint: None,
+            },
             auth_username: Some(auth_username.into()),
             enabled: true,
         }
@@ -151,7 +161,7 @@ impl RemoteConnection {
             RemoteTransport::Ssh { ssh, .. } => {
                 ssh.validate()?;
             }
-            RemoteTransport::Direct { url } => {
+            RemoteTransport::Direct { url, .. } => {
                 if url.trim().is_empty() {
                     return Err("url must not be empty".to_string());
                 }
@@ -481,7 +491,10 @@ mod tests {
         assert_eq!(decoded.auth_username, Some("bob".to_string()));
         assert!(decoded.enabled);
         match decoded.transport {
-            RemoteTransport::Direct { url } => assert_eq!(url, "http://office:9877"),
+            RemoteTransport::Direct { url, tls_fingerprint } => {
+                assert_eq!(url, "http://office:9877");
+                assert!(tls_fingerprint.is_none());
+            }
             other => panic!("expected Direct, got {other:?}"),
         }
     }

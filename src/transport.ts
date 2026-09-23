@@ -2088,6 +2088,28 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	delete_remote_connection_password: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}/password` }),
 	},
+	// Direct connection TLS proxy — plan Phase 4 ("Self-signed HTTPS for Direct").
+	probe_direct_tls_connection: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/remote-connections/probe-direct-tls",
+			body: { url: args.url, tls_fingerprint: args.tlsFingerprint ?? null },
+		}),
+	},
+	start_direct_proxy: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("connectionId")}/direct-proxy`,
+			body: {
+				url: args.url,
+				tls_fingerprint: args.tlsFingerprint ?? null,
+				use_native_roots: args.useNativeRoots ?? false,
+			},
+		}),
+	},
+	stop_direct_proxy: {
+		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("connectionId")}/direct-proxy` }),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },

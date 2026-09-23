@@ -108,6 +108,16 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			? target.connection.transport.url
 			: "",
 	);
+	// Never edited directly here — pinned only through the Connect-time
+	// confirmation dialog (Phase 4). Carried through on Save so re-saving an
+	// existing Direct connection's other fields doesn't silently un-pin it;
+	// reset to null whenever the URL changes, since a pin is only valid for
+	// the exact URL it was captured against.
+	const [directTlsFingerprint, setDirectTlsFingerprint] = createSignal<string | null>(
+		target.kind === "edit-connection" && target.connection.transport.type === "Direct"
+			? target.connection.transport.tls_fingerprint
+			: null,
+	);
 	const initialLocal =
 		target.kind === "edit-connection" && target.connection.transport.type === "Local"
 			? target.connection.transport
@@ -157,7 +167,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 			return { type: "Ssh", ssh: trimmedSsh(), remote_daemon_port: kind() === "RemoteSsh" ? remoteDaemonPort() : 0 };
 		}
 		if (kind() === "RemoteDirect") {
-			return { type: "Direct", url: directUrl().trim() };
+			return { type: "Direct", url: directUrl().trim(), tls_fingerprint: directTlsFingerprint() };
 		}
 		return {
 			type: "Local",
@@ -240,7 +250,7 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						setSaving(false);
 						return;
 					}
-					transport = { type: "Direct", url };
+					transport = { type: "Direct", url, tls_fingerprint: directTlsFingerprint() };
 				} else {
 					if (localMode() === "instance") {
 						const id = localInstanceId().trim();
@@ -364,8 +374,19 @@ export const RemoteConnectionEditor: Component<RemoteConnectionEditorProps> = (p
 						<input
 							placeholder="http://192.168.1.100:9877"
 							value={directUrl()}
-							onInput={(e) => setDirectUrl(e.currentTarget.value)}
+							onInput={(e) => {
+								setDirectUrl(e.currentTarget.value);
+								// A pinned fingerprint is only valid for the exact URL it was
+								// captured against — editing the URL invalidates it; Connect
+								// will re-probe and re-confirm against the new target.
+								setDirectTlsFingerprint(null);
+							}}
 						/>
+						<Show when={directTlsFingerprint()}>
+							<p class={s.hint}>
+								Certificate pinned: <code>{directTlsFingerprint()}</code>
+							</p>
+						</Show>
 					</div>
 					<AuthFields />
 				</Show>

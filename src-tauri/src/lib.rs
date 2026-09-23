@@ -31,6 +31,7 @@ pub(crate) mod content_index;
 pub(crate) mod cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) mod credentials;
+pub(crate) mod direct_proxy;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod diff_triage;
@@ -2400,6 +2401,9 @@ pub fn run() {
             remote_connection::save_remote_connection_password,
             remote_connection::delete_remote_connection_password,
             connection_test::test_connection,
+            direct_proxy::probe_direct_tls_connection,
+            direct_proxy::start_direct_proxy,
+            direct_proxy::stop_direct_proxy,
             open_secondary_window,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,

@@ -105,7 +105,12 @@ pub(crate) async fn test_connection_impl(request: &TestConnectionRequest) -> Con
     let password = request.password.as_deref();
     match &request.transport {
         RemoteTransport::Ssh { ssh, .. } => test_ssh_connection(Path::new("ssh"), ssh).await,
-        RemoteTransport::Direct { url } => test_http_health(url, username, password).await,
+        // Phase 4's self-signed-cert pinning is a Connect-time concern (the
+        // proxy), not Test Connection's — a self-signed target will simply
+        // report Unreachable here via a plain TLS error, same as before
+        // Phase 4 existed. Not a regression: Test Connection never promised
+        // to validate a pinned fingerprint.
+        RemoteTransport::Direct { url, .. } => test_http_health(url, username, password).await,
         RemoteTransport::Local { port, instance_id } => {
             let resolved_port = match (port, instance_id) {
                 (_, Some(id)) if !id.trim().is_empty() => match resolve_local_instance_port(id) {
@@ -547,7 +552,10 @@ mod tests {
             .await;
 
         let request = TestConnectionRequest {
-            transport: RemoteTransport::Direct { url: server.url() },
+            transport: RemoteTransport::Direct {
+                url: server.url(),
+                tls_fingerprint: None,
+            },
             auth_username: None,
             password: None,
         };

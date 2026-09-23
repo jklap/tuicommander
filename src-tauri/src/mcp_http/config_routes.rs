@@ -783,6 +783,80 @@ pub(super) async fn test_connection_http(
     Json(crate::connection_test::test_connection_impl(&request).await).into_response()
 }
 
+// --- Direct connection TLS proxy (story: SSH Tunnels + Remote Servers
+// consolidation, Phase 4 — "Self-signed HTTPS for Direct") ---
+//
+// Guarded the same way as test_connection_http above: these can make the
+// backend open outbound connections to an arbitrary caller-supplied host
+// (probe) or start a long-lived local listener + outbound relay (start), so
+// an unauthenticated remote caller must never reach them.
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProbeDirectTlsRequest {
+    pub url: String,
+    #[serde(default)]
+    pub tls_fingerprint: Option<String>,
+}
+
+pub(super) async fn probe_direct_tls_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(request): Json<ProbeDirectTlsRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(
+        crate::direct_proxy::probe_direct_tls(&request.url, request.tls_fingerprint.as_deref()).await,
+    )
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct StartDirectProxyRequest {
+    pub url: String,
+    #[serde(default)]
+    pub tls_fingerprint: Option<String>,
+    #[serde(default)]
+    pub use_native_roots: bool,
+}
+
+pub(super) async fn start_direct_proxy_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(connection_id): Path<String>,
+    Json(request): Json<StartDirectProxyRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(
+        crate::direct_proxy::start_direct_proxy_impl(
+            &state,
+            &connection_id,
+            &request.url,
+            request.tls_fingerprint.as_deref(),
+            request.use_native_roots,
+        )
+        .await,
+    )
+    .into_response()
+}
+
+pub(super) async fn stop_direct_proxy_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(connection_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    state.direct_proxy_manager.stop(&connection_id);
+    Json(serde_json::json!({"ok": true})).into_response()
+}
+
 // --- Remote connection password (keyring) — plan Phase 3 auth wiring ---
 //
 // Auth-gated the same way as put_remote_connection/delete_remote_connection

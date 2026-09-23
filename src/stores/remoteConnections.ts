@@ -1,4 +1,4 @@
-import { batch } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { setRemoteBaseUrlLookup } from "../transportRuntime";
@@ -27,7 +27,15 @@ export type RemoteTransport =
 			ssh: SshConnectionParams;
 			remote_daemon_port: number;
 	  }
-	| { type: "Direct"; url: string }
+	| {
+			type: "Direct";
+			url: string;
+			/** SHA-256 fingerprint (lowercase hex) of a pinned, self-signed/
+			 * untrusted certificate, set once the user explicitly confirms it
+			 * (see `probeDirectTls`/`ProbeResult`). `null` for `http://`, a
+			 * CA-trusted `https://`, or a self-signed target not yet confirmed. */
+			tls_fingerprint: string | null;
+	  }
 	| {
 			type: "Local";
 			/** Exactly one of `port`/`instance_id` is set. */
@@ -59,6 +67,30 @@ export type ConnectionTestResult =
 	| { type: "InstanceNotFound" }
 	| { type: "Unreachable"; reason: string };
 
+/**
+ * Result of `probeDirectTls`. Mirrors the Rust `ProbeResult` enum
+ * (`src-tauri/src/direct_proxy.rs`) — a `#[serde(tag = "type")]` shape.
+ * Story: SSH Tunnels + Remote Servers consolidation, Phase 4.
+ */
+export type ProbeResult =
+	| { type: "NoTlsNeeded" }
+	| { type: "Trusted" }
+	| { type: "NeedsConfirmation"; fingerprint: string }
+	| { type: "PinnedMatch" }
+	| { type: "PinnedMismatch"; presented_fingerprint: string };
+
+/**
+ * A Direct connection's certificate needs the user's explicit confirmation
+ * before it can be pinned and proxied — set by `connect()`, cleared by
+ * `resolveFingerprintConfirmation`. Rendered by a dialog in `RemoteServersTab`.
+ */
+export interface PendingFingerprintConfirmation {
+	connectionId: string;
+	connectionName: string;
+	url: string;
+	fingerprint: string;
+}
+
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
 export interface ConnectionState {
@@ -68,6 +100,9 @@ export interface ConnectionState {
 	protocolVersion?: number;
 	error?: string;
 	tunnelProfileId?: string;
+	/** Whether a Direct-transport TLS/auth proxy (Phase 4) is running for
+	 * this connection — so `disconnect()` knows whether to stop one. */
+	directProxyStarted?: boolean;
 }
 
 interface RemoteConnectionsState {
@@ -102,6 +137,24 @@ function createRemoteConnectionsStore() {
 		connections: {},
 		hydrated: false,
 	});
+
+	// Fingerprint confirmation is a one-at-a-time modal flow (Phase 4): `connect()`
+	// awaits `requestFingerprintConfirmation`, which resolves once the dialog that
+	// reads `pendingConfirmation` calls `resolveFingerprintConfirmation`.
+	const [pendingConfirmation, setPendingConfirmation] = createSignal<PendingFingerprintConfirmation | null>(null);
+	let confirmationResolver: ((accepted: boolean) => void) | null = null;
+
+	function requestFingerprintConfirmation(
+		connectionId: string,
+		connectionName: string,
+		url: string,
+		fingerprint: string,
+	): Promise<boolean> {
+		return new Promise((resolve) => {
+			confirmationResolver = resolve;
+			setPendingConfirmation({ connectionId, connectionName, url, fingerprint });
+		});
+	}
 
 	// ---------------------------------------------------------------------------
 	// Internal helpers
@@ -268,12 +321,64 @@ function createRemoteConnectionsStore() {
 					eventBridges.get(id)?.();
 					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
 				} else if (transport.type === "Direct") {
-					// Direct transport — baseUrl is already known
-					setState("connections", id, { baseUrl: transport.url });
+					// Direct transport (story: SSH Tunnels + Remote Servers
+					// consolidation, Phase 4). Probe first: a plain `http://` or an
+					// already-CA-trusted `https://` with no credentials configured
+					// talks straight to the URL exactly as before Phase 4. Anything
+					// else (auth configured, or a self-signed cert) needs the local
+					// TLS/auth proxy — see `direct_proxy.rs`'s module doc comment for
+					// why the password never crosses into this frontend code.
+					const probe = await invoke<ProbeResult>("probe_direct_tls_connection", {
+						url: transport.url,
+						tlsFingerprint: transport.tls_fingerprint,
+					});
+
+					let tlsFingerprint: string | null = null;
+					let useNativeRoots = false;
+					if (probe.type === "Trusted") {
+						useNativeRoots = true;
+					} else if (probe.type === "PinnedMatch") {
+						tlsFingerprint = transport.tls_fingerprint;
+					} else if (probe.type === "PinnedMismatch") {
+						setState("connections", id, {
+							status: "error",
+							error: `Certificate changed: expected fingerprint ${transport.tls_fingerprint}, server now presents ${probe.presented_fingerprint}. Refusing to connect automatically — verify the server before retrying.`,
+						});
+						return;
+					} else if (probe.type === "NeedsConfirmation") {
+						const accepted = await requestFingerprintConfirmation(
+							id,
+							connState.connection.name,
+							transport.url,
+							probe.fingerprint,
+						);
+						if (!accepted) {
+							setState("connections", id, { status: "disconnected" });
+							return;
+						}
+						tlsFingerprint = probe.fingerprint;
+						const pinned: RemoteConnection = {
+							...connState.connection,
+							transport: { ...transport, tls_fingerprint: tlsFingerprint },
+						};
+						await actions.addConnection(pinned);
+					}
+					// `NoTlsNeeded` needs neither flag — plain TCP, no auth-only proxy
+					// unless credentials are configured, which `start_direct_proxy`
+					// itself checks server-side.
+
+					const proxyPort = await invoke<number | null>("start_direct_proxy", {
+						connectionId: id,
+						url: transport.url,
+						tlsFingerprint,
+						useNativeRoots,
+					});
+					const baseUrl = proxyPort ? `http://127.0.0.1:${proxyPort}` : transport.url;
+					setState("connections", id, { baseUrl, directProxyStarted: proxyPort !== null });
 					await pollHealth(id);
 					startHealthPolling(id);
 					eventBridges.get(id)?.();
-					eventBridges.set(id, startRemoteEventBridge(id, transport.url));
+					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
 				} else {
 					// Local transport — instance-id/port resolution and the actual
 					// connect flow land in a later phase of the SSH Tunnels + Remote
@@ -301,7 +406,7 @@ function createRemoteConnectionsStore() {
 				eventBridges.delete(id);
 			}
 
-			const { tunnelProfileId } = connState;
+			const { tunnelProfileId, directProxyStarted } = connState;
 			if (tunnelProfileId) {
 				try {
 					await tunnelsStore.stopTunnel(tunnelProfileId);
@@ -311,6 +416,13 @@ function createRemoteConnectionsStore() {
 					appLogger.warn("store", `Failed to stop/delete tunnel for connection ${id}`, err);
 				}
 			}
+			if (directProxyStarted) {
+				try {
+					await invoke("stop_direct_proxy", { connectionId: id });
+				} catch (err) {
+					appLogger.warn("store", `Failed to stop direct proxy for connection ${id}`, err);
+				}
+			}
 
 			setState("connections", id, {
 				status: "disconnected",
@@ -318,6 +430,7 @@ function createRemoteConnectionsStore() {
 				protocolVersion: undefined,
 				error: undefined,
 				tunnelProfileId: undefined,
+				directProxyStarted: undefined,
 			});
 			appLogger.info("store", `Disconnected remote connection ${id}`);
 		},
@@ -408,6 +521,20 @@ function createRemoteConnectionsStore() {
 		/** Clear a connection's stored password from the keyring. */
 		async deleteConnectionPassword(id: string): Promise<void> {
 			await invoke("delete_remote_connection_password", { id });
+		},
+
+		/** Reactive getter for a pending self-signed-cert confirmation, if any
+		 * Direct connection is currently mid-Connect and awaiting one. */
+		getPendingFingerprintConfirmation(): PendingFingerprintConfirmation | null {
+			return pendingConfirmation();
+		},
+
+		/** Resolve the current pending fingerprint confirmation — `true` pins the
+		 * fingerprint and lets `connect()` proceed, `false` aborts the connect. */
+		resolveFingerprintConfirmation(accepted: boolean): void {
+			setPendingConfirmation(null);
+			confirmationResolver?.(accepted);
+			confirmationResolver = null;
 		},
 	};
 

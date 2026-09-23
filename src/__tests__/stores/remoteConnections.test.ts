@@ -13,8 +13,33 @@ vi.mock("../../utils/remoteEventBridge", () => ({
 // remoteConnectionsStore's SSH path drives tunnelsStore internally, and
 // tunnelsStore imports this exact mocked "../invoke" module too (both
 // specifiers resolve to the same file), so one mock has to cover both.
-const mockInvoke = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+// Phase 4 (self-signed HTTPS proxy) added two new invoke() calls to the
+// Direct connect path: `probe_direct_tls_connection` and `start_direct_proxy`.
+// Every existing Direct test here uses a plain `http://` URL with no pinning
+// concern, so the default mock answers exactly what a plain-http probe would:
+// no TLS involved, no proxy needed — baseUrl stays the raw URL, preserving
+// every pre-Phase-4 test's behavior unchanged. Individual it()s can still
+// override via `mockInvoke.mockImplementationOnce`/`mockResolvedValueOnce`.
+const defaultMockInvokeImpl = async (command: string): Promise<unknown> => {
+	if (command === "probe_direct_tls_connection") return { type: "NoTlsNeeded" };
+	if (command === "start_direct_proxy") return null;
+	return undefined;
+};
+const mockInvoke = vi.hoisted(() => vi.fn());
 vi.mock("../../invoke", () => ({ invoke: mockInvoke }));
+mockInvoke.mockImplementation(defaultMockInvokeImpl);
+
+/** `mockInvoke.mockReset()` (used throughout this file between describe
+ * blocks/tests to clear call history AND any one-off `mockImplementation`)
+ * also wipes the default handler, so every reset must be paired with
+ * restoring it — otherwise the Direct connect path's `probe_direct_tls_connection`/
+ * `start_direct_proxy` calls resolve to `undefined` and `connect()` throws
+ * reading `.type` off it, exactly as it did before Phase 4's mock support
+ * was added here. */
+function resetMockInvokeToDefault() {
+	mockInvoke.mockReset();
+	mockInvoke.mockImplementation(defaultMockInvokeImpl);
+}
 
 import type { RemoteConnection } from "../../stores/remoteConnections";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
@@ -26,7 +51,7 @@ function directConn(id: string): RemoteConnection {
 	return {
 		id,
 		name: `conn-${id}`,
-		transport: { type: "Direct", url: "http://remote.test:9876" },
+		transport: { type: "Direct", url: "http://remote.test:9876", tls_fingerprint: null },
 		auth_username: "user",
 		enabled: true,
 	};
@@ -155,8 +180,7 @@ function tunnelProfileFixture(id: string, name: string): TunnelProfile {
 describe("remoteConnectionsStore.connect() (SSH)", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
-		mockInvoke.mockReset();
-		mockInvoke.mockResolvedValue(undefined);
+		resetMockInvokeToDefault();
 		startBridge.mockClear();
 		bridgeCleanup.mockClear();
 		fetchMock.mockReset();
@@ -334,8 +358,7 @@ describe("remoteConnectionsStore.connect() (SSH)", () => {
 
 describe("remoteConnectionsStore.addConnection() / removeConnection()", () => {
 	beforeEach(() => {
-		mockInvoke.mockReset();
-		mockInvoke.mockResolvedValue(undefined);
+		resetMockInvokeToDefault();
 		startBridge.mockClear();
 		bridgeCleanup.mockClear();
 		fetchMock.mockReset();
@@ -402,8 +425,7 @@ describe("remoteConnectionsStore.addConnection() / removeConnection()", () => {
 describe("remoteConnectionsStore health-poll failure transitions", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
-		mockInvoke.mockReset();
-		mockInvoke.mockResolvedValue(undefined);
+		resetMockInvokeToDefault();
 		startBridge.mockClear();
 		bridgeCleanup.mockClear();
 		fetchMock.mockReset();
@@ -494,8 +516,7 @@ describe("remoteConnectionsStore.hydrate()", () => {
 // the store calls the right command with the right args.
 describe("remoteConnectionsStore password actions", () => {
 	beforeEach(() => {
-		mockInvoke.mockReset();
-		mockInvoke.mockResolvedValue(undefined);
+		resetMockInvokeToDefault();
 	});
 
 	it("connectionPasswordExists calls remote_connection_password_exists and returns its result", async () => {

@@ -9,6 +9,7 @@ import {
 	remoteConnectionStatusColor,
 	remoteConnectionStatusLabel,
 } from "../../shared/ConnectionStatusBadge";
+import { DirectCertConfirmDialog } from "../../shared/DirectCertConfirmDialog";
 import { TunnelProfileList } from "../../TunnelsPanel/TunnelProfileList";
 import s from "../Settings.module.css";
 import type { EditorTarget } from "./services/RemoteConnectionEditor";
@@ -97,6 +98,7 @@ export const RemoteServersTab: Component = () => {
 
 	return (
 		<div class={s.section}>
+			<DirectCertConfirmDialog />
 			<h3>{t("remoteServers.heading", "Remote Servers")}</h3>
 			{/* Corrected lifecycle wording (UI/copy fix from the doc audit): a saved
 			    SSH connection does NOT create a tunnel at Save time — the encrypted

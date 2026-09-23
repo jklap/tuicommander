@@ -18,7 +18,7 @@ describe("RemoteServersTab transport presentation", () => {
 				remote_daemon_port: 9877,
 			}),
 		).toBe("boss@dev.example.test:2222");
-		expect(transportSummary({ type: "Direct", url: "https://dev.example.test" })).toBe("https://dev.example.test");
+		expect(transportSummary({ type: "Direct", url: "https://dev.example.test", tls_fingerprint: null })).toBe("https://dev.example.test");
 		expect(transportSummary({ type: "Local", port: 9877, instance_id: null })).toBe("local: 127.0.0.1:9877");
 		expect(transportSummary({ type: "Local", port: null, instance_id: "dev-box" })).toBe("local: dev-box");
 	});
@@ -39,7 +39,7 @@ describe("RemoteServersTab transport presentation", () => {
 				remote_daemon_port: 9877,
 			}),
 		).toBe("SSH");
-		expect(transportBadgeLabel({ type: "Direct", url: "http://h" })).toBe("DIRECT");
+		expect(transportBadgeLabel({ type: "Direct", url: "http://h", tls_fingerprint: null })).toBe("DIRECT");
 		expect(transportBadgeLabel({ type: "Local", port: 9877, instance_id: null })).toBe("LOCAL");
 	});
 });
