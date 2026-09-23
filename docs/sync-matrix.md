@@ -230,7 +230,7 @@ When changing an agent's hook event map, adding/removing an OSC 7770 verb, or to
 | `docs/backend/tuic-hook.md` | CLI reference, derivation table, stdin fields, env vars, exit-code contract |
 | `docs/user-guide/ai-agents.md` | "Native Hook Instrumentation" user-facing section |
 | `docs/FEATURES.md` | Section 1.19 (red-tick tier description) |
-| `plans/hook-lifecycle.html` (main checkout only, gitignored — NOT repo-root/tracked despite this table's other rows; confirmed absent from `git ls-files` 2026-09-15) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
+| `plans/docs/hook-lifecycle.html` (main checkout only, gitignored — NOT repo-root/tracked despite this table's other rows; confirmed absent from `git ls-files` 2026-09-15) | Full event→verb→feature lifecycle diagram, CLI surface, and rationale |
 | `agent-signal-architecture.html` (repo root, tracked) | Per-agent signal matrix and the command-block/scrollbar-tick section — update if a hook map, block producer, or per-agent classifier changes |
 
 ### Session state explain (troubleshooting dump for agent state detection)
@@ -684,7 +684,7 @@ When adding, renaming or moving a docs page:
 | `CONTRIBUTING.md` | Contributor guide (test requirements, PR quality gates) |
 | `to-test.md` | Manual testing tracker |
 | **plans/ (main checkout only, gitignored)** | |
-| `plans/hook-lifecycle.html` | Native hook instrumentation reference — event→wire→feature pipeline, CLI surface, per-agent event tables, rationale. Despite the name matching `agent-signal-architecture.html`'s style, this one is NOT tracked at repo root — confirmed absent from `git ls-files` (2026-09-15); it only exists as a `plans/`-directory reference doc in the main checkout, same as `plans/network-aware-remote-access.md` below |
+| `plans/docs/hook-lifecycle.html` | Native hook instrumentation reference — event→wire→feature pipeline, CLI surface, per-agent event tables, rationale. Despite the name matching `agent-signal-architecture.html`'s style, this one is NOT tracked at repo root — confirmed absent from `git ls-files` (2026-09-15); it only exists as a `plans/docs/`-directory reference doc in the main checkout, same as `plans/network-aware-remote-access.md` below |
 | **docs/** | |
 | `docs/FEATURES.md` | Canonical feature inventory (single source of truth) |
 | `docs/plugins.md` | Plugin developer authoring guide |
