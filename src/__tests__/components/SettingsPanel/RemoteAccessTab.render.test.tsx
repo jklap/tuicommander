@@ -36,7 +36,7 @@ describe("RemoteAccessTab — placement regression guard", () => {
 		await flushMicrotasks();
 	});
 
-	it("renders every section moved out of Services & MCP", async () => {
+	it("renders every section moved out of the old Services & MCP tab (now MCP Servers)", async () => {
 		const { getByText, unmount } = render(() => <RemoteAccessTab />);
 		await flushMicrotasks();
 

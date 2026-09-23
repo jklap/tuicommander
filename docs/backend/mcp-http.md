@@ -34,7 +34,7 @@ For isolated desktop verification, `TUIC_PORT=<port>` overrides the configured T
 port for the process without persisting the value. The normal startup retry still
 tries the next two ports when the selected port is occupied.
 
-Configuration via Settings > Services & MCP, or `config.json`:
+Configuration via Settings > Remote Access, or `config.json`:
 
 ```json
 {
@@ -423,7 +423,7 @@ does not add another blanket wrapper.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
-When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
+When `collapse_tools: true` in `config.json` (or via Settings > MCP Servers > TUIC MCP Server > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
 
 | Meta-tool | Purpose |
 |-----------|---------|
@@ -745,7 +745,7 @@ per-prefix counter past it so the next auto-assignment cannot collide. A restore
 is untrusted input, so a malformed or already-taken value is dropped and the session
 gets a freshly minted alias instead.
 
-**Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > Services & MCP. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
+**Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > MCP Servers. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
 
 | Tool | Params | Description |
 |------|--------|-------------|

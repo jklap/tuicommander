@@ -241,12 +241,24 @@ impl TunnelManager {
     /// process itself may terminate before that completes — use
     /// `shutdown_all_and_wait` there instead.
     pub fn shutdown_all(&self) {
-        for entry in self.tunnels.iter() {
-            if let TunnelSlot::Running(handle) = entry.value() {
+        // Collect keys, then remove one at a time — NOT iterate-then-clear().
+        // A separate `clear()` after a snapshot iteration is a real TOCTOU: a
+        // concurrent `start()` that publishes into the map in the gap between
+        // the snapshot and the clear is wiped out by `clear()` without ever
+        // being asked to stop (found by code review, 2026-09-23). Removing
+        // each key individually means a handle published after our snapshot
+        // was taken is simply left alone (picked up by a later shutdown call)
+        // instead of being silently destroyed.
+        let ids: Vec<String> = self
+            .tunnels
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        for id in ids {
+            if let Some((_, TunnelSlot::Running(handle))) = self.tunnels.remove(&id) {
                 handle.lock().supervisor.stop();
             }
         }
-        self.tunnels.clear();
     }
 
     /// Like `stop`, but waits — bounded by `GRACEFUL_SHUTDOWN_TIMEOUT` — for
@@ -256,6 +268,19 @@ impl TunnelManager {
     /// test cleanup, primarily, so a `#[tokio::test]`'s per-test runtime
     /// isn't torn down (aborting the supervision task before it finishes
     /// killing its child) before the process is actually gone.
+    ///
+    /// Known, accepted gap: if `id` is still a `TunnelSlot::Starting`
+    /// reservation (its `start_with` hasn't published a real supervisor yet),
+    /// this only removes the reservation and returns immediately — it does
+    /// NOT wait for that in-flight `start_with` call's own eventual cleanup
+    /// (see its lost-publish-race branch), because nothing here has a handle
+    /// to that unrelated task to wait on. No caller in this codebase hits
+    /// this today (every caller awaits its own `start()`/`start_with()` to
+    /// completion before ever calling `stop_and_wait`), so the "confirmed
+    /// stopped" contract is honored in practice; a future caller that calls
+    /// this on a tunnel it knows is still starting would need a real fix
+    /// (threading a completion signal through `TunnelSlot::Starting`), not
+    /// just this doc comment.
     pub async fn stop_and_wait(&self, id: &str) -> Result<(), String> {
         let handle = self
             .tunnels
@@ -286,15 +311,26 @@ impl TunnelManager {
     /// bound — this does not scale with tunnel count, so app exit can never
     /// hang indefinitely no matter how many tunnels are running.
     pub async fn shutdown_all_and_wait(&self) {
-        let tasks: Vec<tokio::task::JoinHandle<()>> = self
+        // Collect keys, then remove one at a time — NOT iterate-then-clear().
+        // Same real TOCTOU as `shutdown_all` (see its comment): a separate
+        // `clear()` after the snapshot can silently drop a tunnel a
+        // concurrent `start()` publishes in the gap, with no stop signal and
+        // no wait — directly undermining the "no orphaned SSH process on
+        // exit" guarantee this method exists to provide.
+        let ids: Vec<String> = self
             .tunnels
             .iter()
-            .filter_map(|entry| match entry.value() {
-                TunnelSlot::Running(handle) => handle.lock().supervisor.stop_and_take_task(),
-                TunnelSlot::Starting(_) => None,
+            .map(|entry| entry.key().clone())
+            .collect();
+        let tasks: Vec<tokio::task::JoinHandle<()>> = ids
+            .into_iter()
+            .filter_map(|id| match self.tunnels.remove(&id) {
+                Some((_, TunnelSlot::Running(handle))) => {
+                    handle.lock().supervisor.stop_and_take_task()
+                }
+                _ => None,
             })
             .collect();
-        self.tunnels.clear();
 
         let joined = async {
             for task in tasks {

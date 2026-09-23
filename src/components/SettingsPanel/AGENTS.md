@@ -36,6 +36,23 @@ mechanism — if you find a stale reference to `settingSlugId` or
 `settingsSearchCoverage.test.ts` anywhere, it's describing the old
 mechanism; there is no `settingSlugId` function in the codebase today.)*
 
+**`extractTab` reads only the ONE file `TAB_SOURCES` maps a tab key to — it never follows
+imports, and it only recognizes `<h3>` tags as section headings.** Content inside a component the
+tab imports and renders (e.g. `UpstreamMcpPanel.tsx`, rendered by `ServicesTab.tsx`) is invisible
+to the extractor no matter how it's marked up, and a heading-shaped element that isn't a literal
+`<h3>` (e.g. a `<label>` or a `<div class={a.expandedLabel}>`) is invisible even in the tab's own
+file — neither case can be added to `SETTINGS_SEARCH_INDEX` at all; the drift-guard test in
+`settingsSearchIndex.test.ts` will fail with an "expected \[...\] to deeply equal \[...\]"
+diff naming exactly the phantom entry if you try. Confirmed twice: "Upstream MCP Servers" (lives
+in the imported `UpstreamMcpPanel.tsx`) and "MCP integrations" (a `.expandedLabel` div, not an
+`<h3>`, even after moving its whole component into `ServicesTab.tsx`'s own file) are both
+genuinely unsearchable today — pre-existing gaps, not something a future move or rename can fix by
+itself. Closing this for real needs either giving the content its own real `<h3>` in the tab's own
+file (works for the `<label>`/`<div>` case, not the imported-component case) or teaching
+`extractTab` to follow imports (a bigger, cross-cutting change to shared test infra) — don't try to
+paper over it with a hand-added index entry, the drift-guard test exists specifically to catch
+exactly that mismatch.
+
 **A sentinel value sharing its namespace with real, externally-sourced data is a latent collision, not just a style nitpick.** `RepoWorktreeTab.tsx`'s "Branch From" dropdown uses the string `"automatic"` as a sentinel meaning "let TUIC detect the default branch" — fine while the dropdown was a hardcoded list, but once it was changed to render the repo's actual branches, a real branch literally named `automatic` (a legal git ref name) would render as a second `<option value="automatic">`, indistinguishable from the sentinel and permanently unselectable. Fixed narrowly by filtering any ref matching a reserved sentinel (`automatic`, `__inherit__`) out of the rendered list — a display-only fix, not a sentinel-scheme redesign (that would be a wire-format/migration concern). Any dropdown that mixes a fixed sentinel value with a dynamically-fetched, open-ended real-world value (branch names, file paths, user-typed strings) needs the same check: either namespace the sentinel so it can never collide (e.g. `__automatic__`), or filter colliding real values out of the rendered options.
 
 ## Export/Import Settings Collections & Native File Save

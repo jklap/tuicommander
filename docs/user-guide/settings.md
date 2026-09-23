@@ -222,11 +222,13 @@ described under [Repository Settings](#repository-settings).
 
 Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh` CLI config → `gh auth token` subprocess.
 
-## Services & MCP Tab
+## MCP Servers Tab
 
-### TUIC Tools
+### TUIC MCP Server
 
 Native tools exposed to AI agents via MCP. Each tool can be individually enabled or disabled to restrict what agents can access.
+
+MCP can also be configured automatically for a specific agent from that agent's own settings — see **MCP Integration** under [Agents Tab](#agents-tab) — a note above "Manual MCP configuration" points there.
 
 **Manual MCP configuration** (expandable) — shows the `tuic-bridge` binary path and a ready-to-paste JSON snippet for manually configuring MCP clients that aren't auto-installed. Click "Copy" to copy the snippet to clipboard.
 
@@ -254,9 +256,9 @@ Proxy external MCP servers through TUICommander. Their tools appear prefixed as 
 - Reconnect and remove controls per upstream
 - Per-repo scoping: each repo can define an allowlist of active upstream servers via **Cmd+Shift+I** popup (or repo settings). Empty/null allowlist = all servers active
 
-### File Access
+### MCP Integrations
 
-**Additional Readable Directories** — absolute directories that web and remote clients may **read** files from, in addition to your registered repositories. Ships with `~/.claude/plans` enabled by default, so clicking a Claude Code plan-file link an agent printed works out of the box in browser/remote mode. Desktop reads are never restricted — this setting only affects the HTTP transport used by browser/PWA/remote clients. It never widens writing, copying, or moving a file — those stay confined to registered repository roots. Remove an entry here if you don't want it readable over HTTP; the setting applies regardless of whether Remote Access itself is enabled, since it also governs the headless `tuic-remote` daemon.
+Lists every client (Claude Code, Cursor, Zed, etc.) that currently has a `tuic-bridge` MCP entry written into its own config, with a **Remove all MCP integrations** button that clears them all in one action and stops TUICommander from reinstalling them — do this before uninstalling TUICommander, or each client will report a missing MCP server on its next launch. Only shown when at least one client has a bridge entry.
 
 ### Voice Dictation
 
@@ -271,6 +273,10 @@ Enable the HTTP API server for external tool integration:
 - Local MCP connections use a Unix domain socket at `<config_dir>/mcp.sock` — no port configuration needed
 - AI agents connect via the `tuic-bridge` sidecar (auto-installed on first launch for every supported agent that is installed on the machine — see [MCP bridge auto-install](../backend/config.md#mcp-bridge-auto-install))
 - Shows server status (running/stopped) and active session count
+
+### File Access
+
+**Additional Readable Directories** — absolute directories that web and remote clients may **read** files from, in addition to your registered repositories. Ships with `~/.claude/plans` enabled by default, so clicking a Claude Code plan-file link an agent printed works out of the box in browser/remote mode. Desktop reads are never restricted — this setting only affects the HTTP transport used by browser/PWA/remote clients. It never widens writing, copying, or moving a file — those stay confined to registered repository roots. Remove an entry here if you don't want it readable over HTTP; the setting applies regardless of whether Remote Access itself is enabled, since it also governs the headless `tuic-remote` daemon.
 
 ### Remote Access
 

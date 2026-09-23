@@ -8,6 +8,15 @@
 
 # To Test
 
+## Tunnel process-group kill + wait-based shutdown on real app exit (2026-09-23) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] After restarting `make dev`, connect a real (or throwaway VM) SSH tunnel or "Remote Server — SSH" connection so it's actively `Connected`, then quit the app (not just close the window — a real process exit via Cmd+Q or the menu). Confirm via `ps aux | grep ssh` on the host that the `ssh` process (and, if the remote command was a shell script rather than a single binary, any child it forked) is actually gone within a couple seconds of the app closing — not just that the app's own window disappeared. This exercises `RunEvent::Exit`'s new `shutdown_all_and_wait()` call, which cannot be verified by any unit test (there is no way to drive a real Tauri process-exit event from `cargo test`).
+- [ ] [HUMAN] With the same tunnel connected, force the app to become unresponsive or kill it via `kill -9` (simulating a crash rather than a clean quit) and confirm the `ssh` process is orphaned but eventually reaped by the OS (expected — `shutdown_all_and_wait` only runs on a clean `RunEvent::Exit`, never on a hard kill; this just confirms the fix doesn't change that pre-existing, accepted behavior).
+
+## SSH remote daemon "unconfigured" probe fix (2026-09-23, security review follow-up) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] Against a real (or throwaway VM) host running `tuic-remote` with a password ALREADY set, connect a "Remote Server — SSH" connection with an `auth_username` configured but whose saved keyring password does NOT match the daemon's real one. Confirm the app does NOT offer "…has no password configured yet. Set it…" (previously it would have, misclassifying any already-configured daemon as unconfigured and offering to silently overwrite its real password — see `offerToConfigureIfUnconfigured` in `src/stores/remoteConnections.ts`). Unit-tested via mocked fetch (`remoteConnections.test.ts`); this confirms the real backend's `validate_basic_auth` response shape matches what the tests assume.
+
 ## Launch-scoped native agent status signals (story `746-30a9`, 2026-09-13) — **Rust, needs a `make dev` restart**
 
 - [ ] [HUMAN] After restarting `make dev`, launch Claude from a TUIC shell and confirm the generated `--settings` hooks coexist with and execute alongside a same-event hook in global/project settings; confirm OSC 7770 busy/awaiting/idle reaches the tab.
