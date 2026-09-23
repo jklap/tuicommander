@@ -73,7 +73,7 @@ The desktop app can open any file you can see, but a browser/remote/PWA client
 is a narrower-trust caller: opening an absolute file path (a Markdown/plan-file
 link, or a file opened directly in the code editor) is gated to your
 **registered repositories**, plus any directory you've explicitly added under
-**Settings → Services & MCP → File Access → Additional Readable Directories**.
+**Settings → Remote Access → File Access → Additional Readable Directories**.
 `~/.claude/plans` is included by default, so a Claude Code plan-file link an
 agent printed opens with no extra setup. If you click a link elsewhere and see
 a friendly "outside your registered repositories and allowed directories"

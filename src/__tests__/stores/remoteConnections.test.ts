@@ -617,7 +617,10 @@ describe("remoteConnectionsStore.connect() (SSH)", () => {
 		// pollHealth's own `${baseUrl}/health` call succeeds (sets status
 		// "connected"); offerToConfigureIfUnconfigured makes its OWN, separate
 		// `${baseUrl}/health` call afterward — the second call is the one that
-		// must see the 401.
+		// must see the 401. A daemon that already has a password set responds
+		// "Invalid credentials" to our deliberately-bogus probe credentials
+		// (see mcp_http/auth.rs::validate_basic_auth) — this is the realistic
+		// shape a configured daemon actually returns to this probe.
 		let healthCallCount = 0;
 		fetchMock.mockImplementation(async () => {
 			healthCallCount += 1;
@@ -663,6 +666,43 @@ describe("remoteConnectionsStore.connect() (SSH)", () => {
 		await connectDone;
 
 		expect(mockInvoke).toHaveBeenCalledWith("configure_ssh_daemon_password", { connectionId: id });
+	});
+
+	it("always sends a bogus Authorization header on the unconfigured-probe health check, so a daemon that already requires auth can never be misclassified as unconfigured (security review 2026-09-23)", async () => {
+		// Regression test for a real MEDIUM finding: `validate_basic_auth`
+		// returns the identical "Scan the QR code" 401 body for BOTH
+		// AuthResult::NotConfigured and AuthResult::MissingHeader — an
+		// unauthenticated probe can never tell them apart, so every daemon
+		// that already has a password would be misclassified as unconfigured.
+		// Sending a bogus (but present) Authorization header makes
+		// MissingHeader structurally unreachable: validate_basic_auth checks
+		// for an empty configured username/hash BEFORE even looking at the
+		// header, so the response can only be NotConfigured (still "Scan the
+		// QR code") or Invalid ("Invalid credentials", proving auth exists).
+		const id = "ssh-auth3";
+		await remoteConnectionsStore.addConnection(sshConn(id));
+		const createdProfile = tunnelProfileFixture("auto-authp3", `__remote_${id}`);
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "save_tunnel_profile") return Promise.resolve();
+			if (cmd === "list_tunnel_profiles") return Promise.resolve([createdProfile]);
+			if (cmd === "start_tunnel") return Promise.resolve();
+			if (cmd === "get_tunnel_status")
+				return Promise.resolve({ id: createdProfile.id, status: { type: "connected" }, started_at: "t" });
+			return Promise.resolve();
+		});
+		let healthCallCount = 0;
+		fetchMock.mockImplementation(async () => {
+			healthCallCount += 1;
+			if (healthCallCount === 1) return { ok: true, json: async () => ({ protocol_version: 2 }) };
+			return { ok: false, status: 401, text: async () => "Invalid credentials" };
+		});
+
+		const connectDone = remoteConnectionsStore.connect(id);
+		await vi.advanceTimersByTimeAsync(2000);
+		await connectDone;
+
+		const probeCall = fetchMock.mock.calls[1];
+		expect(probeCall[1]?.headers?.Authorization).toMatch(/^Basic /);
 	});
 
 	it("disconnect stops a daemon this session started when leave_running_on_disconnect is false", async () => {

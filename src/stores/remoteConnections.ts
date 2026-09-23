@@ -385,6 +385,22 @@ function createRemoteConnectionsStore() {
 	 * Settings editor's in-progress form does, a separate flow). Best-effort:
 	 * any failure here just leaves the connection in its current
 	 * (already-reported) state.
+	 *
+	 * Security review 2026-09-23 (ssh-provision-security, real MEDIUM finding):
+	 * `validate_basic_auth` (`mcp_http/auth.rs`) returns the exact same 401
+	 * body — "Scan the QR code or authenticate with Basic Auth" — for BOTH
+	 * `AuthResult::NotConfigured` (no password set at all) AND
+	 * `AuthResult::MissingHeader` (a password IS set, this request just didn't
+	 * send one). A plain unauthenticated `fetch` here can therefore never
+	 * distinguish "unconfigured" from "configured, we just didn't ask" — every
+	 * already-configured daemon would get misclassified as unconfigured and
+	 * offered for a silent password overwrite. Fixed by ALWAYS sending a
+	 * deliberately-bogus Basic Auth header on this probe: `validate_basic_auth`
+	 * checks `expected_username`/`expected_password_hash` emptiness BEFORE even
+	 * looking at the header, so a bogus header can only ever produce
+	 * `NotConfigured` (still "Scan the QR code", header ignored) or `Invalid`
+	 * ("Invalid credentials", proving a real password exists) — `MissingHeader`
+	 * is now structurally unreachable on this path.
 	 */
 	async function offerToConfigureIfUnconfigured(
 		id: string,
@@ -394,13 +410,13 @@ function createRemoteConnectionsStore() {
 	): Promise<void> {
 		if (!hasAuthUsername) return;
 		try {
-			const resp = await fetch(`${baseUrl}/health`);
+			const bogusAuth = `Basic ${btoa("__tuic_unconfigured_probe__:__tuic_unconfigured_probe__")}`;
+			const resp = await fetch(`${baseUrl}/health`, { headers: { Authorization: bogusAuth } });
 			if (resp.status !== 401) return;
 			const bodyText = await resp.text().catch(() => "");
-			// "Scan the QR code or authenticate with Basic Auth" (NotConfigured
-			// /MissingHeader) is textually distinct from "Invalid credentials"
-			// (Invalid) — see mcp_http/auth.rs. A wrong password must NEVER
-			// trigger this offer, only a daemon that has no credentials at all.
+			// With a header always attached, only a genuinely unconfigured daemon
+			// can still produce this exact "Scan the QR code" body — a configured
+			// one now unambiguously falls through to "Invalid credentials" instead.
 			if (!bodyText.includes("Scan the QR code")) return;
 		} catch {
 			return;

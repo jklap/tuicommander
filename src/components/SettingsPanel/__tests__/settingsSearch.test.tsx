@@ -7,7 +7,7 @@ import { searchSettings } from "../settingsSearchIndex";
 const TABS: SettingsShellTab[] = [
 	{ key: "general", label: "General" },
 	{ key: "appearance", label: "Appearance" },
-	{ key: "services", label: "Services & MCP" },
+	{ key: "services", label: "MCP Servers" },
 	{ key: "remote-access", label: "Remote Access" },
 	{ key: "notifications", label: "Notifications" },
 	{ key: "__sep__", label: "─" },

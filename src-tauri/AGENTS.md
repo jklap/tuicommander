@@ -1116,6 +1116,69 @@ state, unrelated to any code change. If a regression shows up only in
 git-merge/remote-URL tests with no plausible connection to your diff, suspect
 the environment before the code.
 
+## Killing a Child Process: Signal the Group, Confirm the Reap, Bound Every Wait
+
+`tunnels/supervisor.rs`'s `graceful_kill` (SIGTERM, wait up to 5s, escalate to SIGKILL) used to
+signal only the direct spawned child's PID. **A single-PID signal is not enough whenever the
+child can itself fork a further child that doesn't die with its parent** — found via a real
+leaked-process bug (2026-09-23): a fake-ssh test fixture was a multi-line shell script (`#!/bin/sh`
+... `sleep 3600`), and `/bin/sh` forked `sleep` as its own child rather than exec-replacing itself
+with it. SIGTERM to the shell's PID killed the shell; the orphaned `sleep 3600` kept running for a
+full hour, invisible to every test assertion (which only watched the *supervisor's* status, not
+the real OS process) until it surfaced as a completely unrelated symptom — inheriting a duplicate
+of an enclosing shell script's pipe file descriptor and making a `check-gate.sh` run *appear*
+hung for ~27 minutes after the real work had already finished and passed. The fix: spawn into a
+fresh process group (`Command::process_group(0)`) and signal the group (`kill(-pid, ...)`), not
+the single PID — mirroring the tree-kill this same function already did for Windows via
+`taskkill /T`, which turned out to be a real Unix gap too, not just a Windows-specific quirk. A
+real `ssh` with a `ProxyCommand` has the identical shape, so this isn't purely a test-fixture
+concern.
+
+**Confirm the reap, don't just fire the signal.** Every kill path (SIGTERM's happy path, the
+SIGKILL escalation, the PID-overflow fallback) now ends with an explicit `child.wait()` before
+returning — "this function returned" is meant to be a real guarantee that the OS process is gone,
+not an assumption. This matters because callers built on top of it (`stop_and_wait`,
+`shutdown_all_and_wait`) exist specifically to give a caller that confirmation.
+
+**Fire-and-forget shutdown (`TunnelSupervisor::stop()`/`TunnelManager::stop()`/`shutdown_all()`)
+is fine for a live, long-running app process** — the async cleanup keeps running on the same
+runtime and finishes within a few seconds regardless of who's watching — **but is a real gap
+wherever the caller's own lifetime is about to end before that "eventually" arrives.** Two such
+callers existed and both needed the wait-based variant instead: a `#[tokio::test]`'s per-test
+tokio runtime (torn down the instant the test function returns, which can race the still-running
+`graceful_kill` task and abandon it mid-flight) and real app exit (`RunEvent::Exit` in `lib.rs`,
+which used to call the fire-and-forget `shutdown_all()` and then keep going — if the process
+itself exited before the up-to-5s grace period elapsed, a real SSH child could be orphaned,
+directly contradicting this repo's own shipped docs). Fixed with `stop_and_wait`/
+`shutdown_all_and_wait`, both bounded by a shared `GRACEFUL_SHUTDOWN_TIMEOUT` (7s: the 5s SIGTERM
+grace period plus a scheduling/signal-delivery buffer) so neither can hang indefinitely no matter
+how many tunnels are running or how unresponsive one is — `RunEvent::Exit` blocks on the async one
+via `tauri::async_runtime::block_on`, the same way the dictation/streamdock shutdown steps in that
+same handler already block on their own cleanup. **The general rule: before treating a
+fire-and-forget stop/signal API as sufficient, check whether the caller's own process/runtime is
+about to disappear** — if so, it needs a bounded wait-based variant, not just "send the signal and
+trust it'll get handled."
+
+**`TunnelManager::shutdown_all`/`shutdown_all_and_wait` had their own separate bug, found by code
+review the same day: iterate-then-`clear()` is a real TOCTOU, not just a style nit.** Both methods
+used to snapshot the map via `.iter()` into a `Vec`, then call a SEPARATE `self.tunnels.clear()`
+afterward. A concurrent `start()` that publishes a brand-new tunnel into the map in the gap between
+the snapshot and the clear was silently wiped out by `clear()` — never asked to stop, never waited
+on — directly reproducing the exact "orphaned SSH process on exit" bug this whole fix exists to
+close. Fixed by collecting just the *keys*, then removing each one individually
+(`self.tunnels.remove(&id)`) instead of a blanket `clear()` — a tunnel published after the key
+snapshot was taken is simply left alone (picked up by a later call) rather than destroyed. **Any
+"snapshot then bulk-clear a concurrent map" pattern has this same shape of gap — prefer per-key
+remove over iterate-then-clear whenever the map can be mutated by another task/thread between the
+two steps.**
+
+**Reuse note, not fixed:** `graceful_kill`'s process-group SIGTERM/wait/SIGKILL-escalation sequence
+duplicates `worktree.rs`'s `run_shell_capture` (`setsid` via `pre_exec` + `killpg`), which solves the
+identical problem (a spawned child's own grandchild surviving a single-PID signal) for script
+timeouts. The two can drift independently — a future fix to the grace period, the PID-overflow
+fallback, or the reap-confirmation step applied to one is easy to forget in the other. Worth a
+shared helper if a third call site needs the same pattern; not extracted yet since only two exist.
+
 ## Notification Sound Playback (`rodio` decoder features, custom-file fallback)
 
 `notification_sound.rs` generates its built-in tones procedurally (`EnvelopedTone`,
