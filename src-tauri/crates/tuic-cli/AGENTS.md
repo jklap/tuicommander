@@ -74,7 +74,7 @@ form — even if the test doesn't care what gets printed.
 `new-session`/`new-window`/`split-window`'s `cwd` field only ever gets a value from an
 explicit `-c` flag (`args.rs`'s `p.value('c')`). Real Claude Code swarm calls **never** pass
 `-c` — confirmed empirically, both live and via the synthetic wording harness
-(`plans/agent-teams-wording-harness/` in the main checkout). Without `exec.rs`'s
+(`plans/docs/agent-teams-wording-harness/` in the main checkout). Without `exec.rs`'s
 `resolve_cwd()` fallback, that leaves `cwd: None` all the way down to `spawn_pty_session`
 (`session.rs`), which only calls `cmd.cwd(dir)` when a `cwd` is actually given — so the
 spawned pane's PTY silently inherits whatever directory the **TUICommander app process
