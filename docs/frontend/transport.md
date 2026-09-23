@@ -7,7 +7,8 @@ The transport layer provides a unified IPC abstraction so the same frontend code
 | File | Purpose |
 |------|---------|
 | `src/invoke.ts` | Smart `invoke()` wrapper — zero overhead in Tauri |
-| `src/transport.ts` | HTTP transport implementation and command-to-endpoint mapping |
+| `src/transport.ts` | HTTP transport implementation and command-to-endpoint mapping (`COMMAND_TABLE`) |
+| `src/transportExtended.ts` | Desktop/Settings-only `COMMAND_TABLE` entries mobile's bundle doesn't need — see below |
 
 ## invoke.ts
 
@@ -46,6 +47,34 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 ```
 
 This replaces the previous 370-line switch statement with a flat lookup table for easier maintenance and review.
+
+### The `transportExtended.ts` split
+
+`mobile.html` (phone/PWA clients — always browser mode, no Tauri IPC bridge) has a
+hard 100KB-gzip bundle-size budget (`scripts/report-frontend-bundles.mjs`, run by
+`pnpm build`). `COMMAND_TABLE` is one flat object literal a bundler can't
+tree-shake per entry, so every mapping shipped to every bundle that imports
+`mapCommandToHttp`/`rpc` — including mobile, which never calls most of the
+desktop-only Settings/GitHub/ACP/Remote-access surface — until that surface's
+steady growth finally pushed mobile over budget (2026-09-23).
+
+The fix: `src/transportExtended.ts` holds exactly the commands mobile's real
+(traced) call graph — including its plugin-host API surface — never reaches:
+ACP, GitHub PR/issue/account management, Git Panel, Worktrees, AI chat/watchers/
+scheduler, Remote Connections/SSH/Tunnels, dictation, provider registry,
+terminal-grid-frame commands, and the desktop File Browser. It merges its table
+into the live `COMMAND_TABLE` via `registerCommandTableEntries()` as a
+module-load side effect, and is imported **only** by the desktop entry
+(`src/index.tsx`) — mobile's entry (`src/mobile/index.tsx`) must never import it,
+directly or transitively, or the split stops shrinking anything.
+
+A command that might plausibly be called from mobile belongs in `transport.ts`'s
+own `COMMAND_TABLE`, not here — there is no lazy-load fallback, so a command only
+registered by `transportExtended.ts` throws "No HTTP mapping for command" the
+first time mobile's code tries to call it.
+
+The `COMMAND_TABLE → router parity` gate (`transport.test.ts`) treats both
+files' tables as one set — see `docs/api/http-api.md`'s "Route Parity Gate".
 
 ### HTTP Response Semantics
 
