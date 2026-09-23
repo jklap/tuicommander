@@ -1095,18 +1095,16 @@ describe("dictationStore", () => {
 		});
 
 		/**
-		 * Voice entries the composer already typed cannot be pulled back.
-		 * Reporting them is the difference between an honest outcome and a
-		 * claim, and the caller is what puts that on screen.
+		 * A stop takes the state the backend reports after it, so the UI
+		 * never shows a conversation that has ended as armed.
 		 */
-		it("reports the entries a stop could not take back", async () => {
+		it("applies the status a stop returns", async () => {
 			mockInvoke.mockImplementation((command: string) =>
 				Promise.resolve(
 					command === "disarm_hands_free_dictation"
 						? {
 								wasArmed: true,
-								cancelled: [11],
-								alreadyDelivered: [9, 10],
+								discardedPending: false,
 								status: { armed: false, phase: "disarmed" },
 							}
 						: undefined,
@@ -1114,7 +1112,7 @@ describe("dictationStore", () => {
 			);
 
 			await testInScopeAsync(async () => {
-				expect(await store.disarmHandsFree()).toEqual([9, 10]);
+				await store.disarmHandsFree();
 				expect(store.state.handsFree?.armed).toBe(false);
 			});
 		});
@@ -1267,7 +1265,6 @@ describe("dictationStore", () => {
 			owner: "desktop",
 			generation: 1,
 			pendingText: null,
-			queuedIds: [],
 			holdBackMs: 1500,
 			error: null,
 			deliveredTurns: 0,

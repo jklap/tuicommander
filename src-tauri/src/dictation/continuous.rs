@@ -12,10 +12,15 @@
 //! caller, so a test states the timeline instead of sleeping through it and a
 //! loaded machine cannot turn a behaviour assertion into a flake.
 //!
-//! Delivery is a port: [`VoiceQueue`]. The only production implementation is
-//! [`PtyVoiceQueue`], which appends to the existing Compose FIFO through
-//! `pty::enqueue_voice_command`. There is deliberately no other way out of this
-//! module — no PTY write, no `sendCommand`, no submit, no ACP prompt.
+//! Delivery is a port: [`VoiceSink`]. The only production implementation is
+//! [`PtyVoiceSink`], which types the turn into the bound agent's composer
+//! through `pty::write_voice_turn` — at once, even while the agent works, the
+//! way a line typed by hand reaches a working agent. It is not the Compose
+//! queue: that queue is "one message, let the agent work, then the next", and
+//! speech is not that. A confident question or a draft in the composer holds
+//! the turn here, in the mode, until the next tick can write it. There is
+//! deliberately no other way out of this module — no raw PTY write, no ACP
+//! prompt.
 //!
 //! # The activation phrase
 //!
@@ -27,7 +32,7 @@
 //!   does not reduce what is recognised; it reduces what is *submitted*.
 //! * **It gates new model input, never the microphone.** A rejected transcript
 //!   is dropped at [`HandsFree::accept_transcript`], which is upstream of the
-//!   send slot, so it cannot reach the Compose FIFO — and the FIFO is the only
+//!   send slot, so it cannot reach the sink — and the sink is the only
 //!   exit, which is what makes "it never reaches PTY, ACP or MCP" a structural
 //!   fact rather than a check that has to be repeated per call site.
 //! * **It bounds a conversation, not a sentence.** One accepted turn opens
@@ -41,7 +46,8 @@
 //! whatever stops playback, the words that follow are new model input and stay
 //! gated whenever a phrase is configured.
 
-use crate::state::{AppState, VoiceCancellation};
+use crate::pty::VoiceWrite;
+use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
 // Utterance segmentation
@@ -286,9 +292,10 @@ pub enum Phase {
     Waiting,
     Capturing,
     Transcribing,
-    /// Transcribed and visible, counting down the hold-back before enqueue.
+    /// Transcribed and visible, counting down the hold-back before the write
+    /// — or past it, held by a dialog or a draft in the composer.
     HoldingBack,
-    /// Handed to the Compose queue.
+    /// Typed into the bound agent's composer.
     Delivered,
     Error,
 }
@@ -325,8 +332,8 @@ pub enum DisarmReason {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArmError {
     AlreadyArmed,
-    /// The target cannot accept Compose-queue entries (not an agent PTY
-    /// session, or an ACP target). It stays unavailable — there is no fallback.
+    /// The target cannot take hands-free input (not an agent PTY session, or
+    /// an ACP target). It stays unavailable — there is no fallback.
     UnsupportedTarget,
 }
 
@@ -336,17 +343,15 @@ pub struct Disarmed {
     /// The generation that was current. Anything asynchronous still carrying it
     /// is stale from here on.
     pub generation: u64,
-    /// The target the cancelled ids were enqueued against. Carried here because
-    /// the binding is gone by the time a caller sees this, and cancelling needs
-    /// the session name the entries are parked under.
+    /// The target this mode was bound to. Carried here because the binding is
+    /// gone by the time a caller sees this, and the exit hint needs it.
     pub session_id: String,
-    /// Voice-owned queue ids to cancel. Only ever entries this mode enqueued.
-    pub cancel_ids: Vec<u64>,
-    /// The entry hint's queue id, when this arm sent one. `None` means the
-    /// model was never told this conversation began, so it is owed no notice
-    /// that it ended. Also present in `cancel_ids`.
-    pub entry_hint: Option<u64>,
-    /// A transcript was waiting out its hold-back and never reached the queue.
+    /// The composer typed this arm's entry hint. `false` means the model was
+    /// never told this conversation began — no notice sent, or one still held
+    /// back by a dialog — so it is owed no notice that it ended.
+    pub entry_hint_written: bool,
+    /// A transcript was waiting out its hold-back, or held by the composer,
+    /// and never reached the model.
     pub discarded_pending: bool,
     /// An utterance was open or a transcription was in flight.
     pub discarded_capture: bool,
@@ -356,7 +361,7 @@ pub struct Disarmed {
 /// What happened to a transcript handed back by the transcriber.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TranscriptOutcome {
-    /// Accepted and visible; it will be enqueued at `send_at_ms` unless the
+    /// Accepted and visible; it will be written at `send_at_ms` unless the
     /// user disarms first.
     HeldBack { send_at_ms: u64 },
     /// Carried an old generation — a result from before a disarm or re-arm.
@@ -373,7 +378,7 @@ pub enum TranscriptOutcome {
     Activated { window_until_ms: u64 },
 }
 
-/// A transcript whose hold-back has expired, ready for the Compose queue.
+/// A transcript whose hold-back has expired, ready for the composer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VoiceSend {
     pub generation: u64,
@@ -407,9 +412,8 @@ struct PendingSend {
 /// DEFERRED (2026-09-21) — the window is anchored on *acceptance*, not on the
 /// model's reply. A user who asks something, waits out a long answer and then
 /// speaks again will have to say the phrase a second time. Anchoring it on the
-/// reply needs a signal this module deliberately does not have: it enqueues and
-/// observes nothing coming back, which is what keeps the Compose FIFO its only
-/// exit. Story 816-cbbf adds spoken playback and is the first caller that will
+/// reply needs a signal this module deliberately does not have: it writes and
+/// observes nothing coming back, which is what keeps the sink its only exit. Story 816-cbbf adds spoken playback and is the first caller that will
 /// know when an answer ended; revisit the anchor there rather than teaching
 /// this module to watch agent state.
 pub const ACTIVATION_WINDOW_MS: u64 = 15_000;
@@ -612,10 +616,11 @@ pub struct HandsFree {
     binding: Option<Binding>,
     phase: Phase,
     pending: Option<PendingSend>,
-    /// Queue ids this mode owns, in enqueue order.
-    owned: Vec<u64>,
+    /// Why the last write was held, so a hold that lasts many ticks is
+    /// reported once rather than on every tick.
+    last_hold: Option<crate::pty::VoiceHold>,
     last_error: Option<String>,
-    /// Spoken turns handed to the Compose queue, and turns the activation
+    /// Spoken turns typed into the composer, and turns the activation
     /// gate dropped. Monotonic for the process, never reset on arm: a client
     /// plays an earcon when one moves between two polls, and a reset would
     /// read as nothing — or, against a stale baseline, as a turn.
@@ -630,19 +635,15 @@ pub struct HandsFree {
     /// cleared on arm and on disarm — a reply must never be spoken in the
     /// language of a conversation that has ended.
     turn_language: Option<String>,
-    /// The queue id of this arm's entry hint, when one was sent.
-    ///
-    /// Also in `owned`, so a disarm cancels it like any other voice entry. Kept
-    /// separately because the exit hint is owed only to a model that read the
-    /// entry hint, and after the cancel this id is the only way to ask whether
-    /// it did.
-    entry_hint: Option<u64>,
+    /// Where this arm's entry hint is. The exit hint is owed only to a model
+    /// that read it, so `Written` is the only state that buys one.
+    entry_hint: EntryHint,
     /// The language this conversation's model was last told to reply in.
     ///
     /// Stated once — by the start notice when the language is already known,
     /// otherwise by the first spoken turn — and again only when the user
-    /// switches language. Set only after the queue accepted the entry that
-    /// said it, because a refused entry told the model nothing. Cleared on arm
+    /// switches language. Set only after the sink typed the entry that said
+    /// it, because a held or refused entry told the model nothing. Cleared on arm
     /// and disarm with `turn_language`: a new conversation has been told
     /// nothing yet.
     announced_language: Option<String>,
@@ -656,13 +657,13 @@ impl HandsFree {
             binding: None,
             phase: Phase::Disarmed,
             pending: None,
-            owned: Vec::new(),
+            last_hold: None,
             last_error: None,
             delivered_turns: 0,
             dropped_turns: 0,
             activation: Activation::default(),
             turn_language: None,
-            entry_hint: None,
+            entry_hint: EntryHint::NotSent,
             announced_language: None,
         }
     }
@@ -671,7 +672,7 @@ impl HandsFree {
         &self.phase
     }
 
-    /// See the field. Counts [`note_enqueued`](Self::note_enqueued) calls.
+    /// See the field. Counts [`note_written`](Self::note_written) calls.
     pub fn delivered_turns(&self) -> u64 {
         self.delivered_turns
     }
@@ -725,8 +726,8 @@ impl HandsFree {
 
     /// Bind a target session and an audio owner, and open a new generation.
     ///
-    /// `target_supported` is the caller's answer to "can this session take a
-    /// Compose-queue entry"; a `false` keeps the mode unavailable rather than
+    /// `target_supported` is the caller's answer to "can this session take
+    /// hands-free input"; a `false` keeps the mode unavailable rather than
     /// arming it against a target that would need a bypass to reach.
     pub fn arm(
         &mut self,
@@ -754,8 +755,9 @@ impl HandsFree {
         self.turn_language = None;
         // Nothing has been said to the model about this conversation yet, so
         // nothing is owed to it when the conversation ends.
-        self.entry_hint = None;
+        self.entry_hint = EntryHint::NotSent;
         self.announced_language = None;
+        self.last_hold = None;
         Ok(self.generation)
     }
 
@@ -809,7 +811,7 @@ impl HandsFree {
         }
         // The gate sits here on purpose: after the local recogniser, before the
         // send slot. Everything past this point is on its way to a model, and
-        // the send slot is the only thing `poll_send` can hand to the queue.
+        // the send slot is the only thing `poll_send` can hand to the sink.
         let text = match self.activation.admit(text, now_ms) {
             Admission::Ungated => text,
             Admission::Accept(rest) => rest,
@@ -853,7 +855,7 @@ impl HandsFree {
     /// Take the pending transcript once its hold-back has expired.
     ///
     /// Returns `None` while the hold-back is still running, which is what makes
-    /// the hold-back visible *and* cancellable: nothing has been enqueued yet.
+    /// the hold-back visible *and* cancellable: nothing has been written yet.
     pub fn poll_send(&mut self, now_ms: u64) -> Option<VoiceSend> {
         let ready = self
             .pending
@@ -872,26 +874,45 @@ impl HandsFree {
         })
     }
 
-    /// Record the queue id the Compose FIFO gave a delivered voice entry.
-    pub fn note_enqueued(&mut self, generation: u64, id: u64) {
+    /// A spoken turn reached the composer.
+    pub fn note_written(&mut self, generation: u64) {
         if generation == self.generation && self.binding.is_some() {
-            self.owned.push(id);
             self.delivered_turns += 1;
             self.phase = Phase::Delivered;
+            self.last_hold = None;
         }
     }
 
-    /// Record the queue id the Compose FIFO gave this arm's entry hint.
+    /// This arm's entry hint reached the composer.
     ///
-    /// Owned like any other voice entry, so a disarm pulls it back out of the
-    /// queue if the composer has not typed it yet. The phase is deliberately
-    /// left alone: the phase describes what the *user's* speech is doing, and a
-    /// mode that has heard nothing yet is still `Waiting`.
-    pub fn note_hint_enqueued(&mut self, generation: u64, id: u64) {
+    /// The phase is deliberately left alone: the phase describes what the
+    /// *user's* speech is doing, and a mode that has heard nothing yet is still
+    /// `Waiting`.
+    pub fn note_hint_written(&mut self, generation: u64) {
         if generation == self.generation && self.binding.is_some() {
-            self.owned.push(id);
-            self.entry_hint = Some(id);
+            self.entry_hint = EntryHint::Written;
+            self.last_hold = None;
         }
+    }
+
+    /// Put a due turn back because the composer held it. It stays due, so the
+    /// next tick retries it; a transcript that arrives meanwhile joins it.
+    /// Returns whether this is a new hold, for a log that is not per tick.
+    fn hold(&mut self, send: VoiceSend, reason: crate::pty::VoiceHold) -> bool {
+        if send.generation == self.generation && self.binding.is_some() {
+            self.pending = Some(PendingSend {
+                generation: send.generation,
+                text: send.text,
+                language: send.language,
+                send_at_ms: 0,
+            });
+            self.phase = Phase::HoldingBack;
+        }
+        self.note_hold(reason)
+    }
+
+    fn note_hold(&mut self, reason: crate::pty::VoiceHold) -> bool {
+        self.last_hold.replace(reason) != Some(reason)
     }
 
     /// The name of `language` if the model still has to be told it: a
@@ -904,18 +925,7 @@ impl HandsFree {
         (self.announced_language.as_deref() != Some(code)).then_some(name)
     }
 
-    /// Queue ids this mode still owns.
-    pub fn owned_ids(&self) -> &[u64] {
-        &self.owned
-    }
-
-    /// Forget an id the queue has typed. Nothing can retract it any more, so
-    /// keeping it would make a later cancel claim a delivered message back.
-    pub fn note_delivered(&mut self, id: u64) {
-        self.owned.retain(|owned| *owned != id);
-    }
-
-    /// The Compose queue refused a delivery.
+    /// The sink refused a delivery.
     ///
     /// The mode stays armed — the target is still bound and the next utterance
     /// may well land — but the failure is reported rather than swallowed, so a
@@ -934,8 +944,8 @@ impl HandsFree {
         let disarmed = Disarmed {
             generation: self.generation,
             session_id,
-            cancel_ids: std::mem::take(&mut self.owned),
-            entry_hint: self.entry_hint.take(),
+            entry_hint_written: std::mem::replace(&mut self.entry_hint, EntryHint::NotSent)
+                == EntryHint::Written,
             discarded_pending: self.pending.take().is_some(),
             discarded_capture,
             reason: reason.clone(),
@@ -949,6 +959,7 @@ impl HandsFree {
         self.activation.close();
         self.turn_language = None;
         self.announced_language = None;
+        self.last_hold = None;
         self.phase = match &reason {
             DisarmReason::DeviceFailed(message) => {
                 self.last_error = Some(message.clone());
@@ -985,26 +996,48 @@ impl HandsFree {
 // Delivery port
 // ---------------------------------------------------------------------------
 
-/// The only exit from hands-free capture to a model.
-pub trait VoiceQueue {
-    /// Append to the Compose FIFO. Returns the entry's queue id.
-    fn enqueue(&self, session_id: &str, text: &str, generation: u64) -> Result<u64, String>;
-    /// Drop the named voice-owned entries that are still parked.
-    fn cancel(&self, session_id: &str, ids: &[u64]) -> VoiceCancellation;
+/// Where this arm's entry hint is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EntryHint {
+    NotSent,
+    /// Held by a dialog or a draft; retried on every tick before any turn, so
+    /// the model never reads a spoken turn before the notice it depends on.
+    /// `language` is set when the text announces one.
+    Pending {
+        text: String,
+        language: Option<String>,
+    },
+    Written,
 }
 
-/// Production adapter: the existing Compose queue, nothing else.
-pub struct PtyVoiceQueue<'a>(pub &'a AppState);
+/// The only exit from hands-free capture to a model.
+pub trait VoiceSink {
+    /// Type one line into the bound agent's composer now, or say why not.
+    fn write(&self, session_id: &str, text: &str) -> Result<VoiceWrite, String>;
+}
 
-impl VoiceQueue for PtyVoiceQueue<'_> {
-    fn enqueue(&self, session_id: &str, text: &str, generation: u64) -> Result<u64, String> {
-        crate::pty::enqueue_voice_command(self.0, session_id, text, generation)
-            .map(|enqueued| enqueued.id)
-    }
+/// Production adapter: `pty::write_voice_turn`, nothing else.
+pub struct PtyVoiceSink<'a>(pub &'a AppState);
 
-    fn cancel(&self, session_id: &str, ids: &[u64]) -> VoiceCancellation {
-        crate::pty::cancel_voice_commands(self.0, session_id, ids)
+impl VoiceSink for PtyVoiceSink<'_> {
+    fn write(&self, session_id: &str, text: &str) -> Result<VoiceWrite, String> {
+        crate::pty::write_voice_turn(self.0, session_id, text)
     }
+}
+
+/// What one delivery attempt did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// A spoken turn reached the composer.
+    Turn,
+    /// The held entry hint reached the composer.
+    Notice,
+    /// Nothing was typed; the mode keeps what it tried. `first` is false while
+    /// the same hold lasts, so the runtime logs it once.
+    Held {
+        reason: crate::pty::VoiceHold,
+        first: bool,
+    },
 }
 
 /// What a spoken turn looks like once it reaches the model.
@@ -1013,12 +1046,12 @@ impl VoiceQueue for PtyVoiceQueue<'_> {
 /// thing it cannot work out for itself: a spoken conversation has a language,
 /// and a model that answers a question in English because English is what it
 /// defaults to has ended the conversation. The requirement travels in the
-/// entry rather than in a system prompt, because the Compose queue is the only
-/// thing that reaches the model — hints can be turned off, and the requirement
+/// entry rather than in a system prompt, because the sink is the only thing
+/// that reaches the model — hints can be turned off, and the requirement
 /// may not be. It is stated once per conversation and again on a switch
 /// ([`HandsFree::language_to_announce`]), not on every turn.
 ///
-/// One line, never two. The queue types this into a terminal and submits it,
+/// One line, never two. The sink types this into a terminal and submits it,
 /// and a newline in the middle submits half a sentence.
 ///
 /// An unnamed language adds nothing. There is no default to fall back to: an
@@ -1031,29 +1064,58 @@ fn compose_entry(text: &str, announce: Option<&str>) -> String {
     }
 }
 
-/// Deliver a transcript whose hold-back expired, and record its queue identity.
+/// Write what is due: a held entry hint first, then a transcript whose
+/// hold-back expired. `None` when there was nothing to try.
 ///
-/// Split out so the enqueue/record pair cannot drift apart: an id recorded
-/// without an enqueue would cancel a stranger's entry, and an enqueue without a
-/// recorded id would leave a voice message no disarm can retract.
+/// The hint goes first and alone: a model that reads "you can answer out
+/// loud" after the question it applies to has been told nothing useful, so no
+/// turn is written while the hint is still held. A held turn goes back into
+/// the mode and is retried on the next tick — never into the Compose queue.
+/// The announced language is recorded only after a write, because a held or
+/// refused entry told the model nothing.
 pub fn deliver_due(
     mode: &mut HandsFree,
-    queue: &dyn VoiceQueue,
+    sink: &dyn VoiceSink,
     now_ms: u64,
-) -> Option<Result<u64, String>> {
+) -> Option<Result<Delivery, String>> {
+    if let EntryHint::Pending { text, language } = mode.entry_hint.clone() {
+        let session_id = mode.binding()?.session_id.clone();
+        let generation = mode.generation();
+        return Some(match sink.write(&session_id, &text) {
+            Ok(VoiceWrite::Written) => {
+                mode.note_hint_written(generation);
+                if language.is_some() {
+                    mode.announced_language = language;
+                }
+                Ok(Delivery::Notice)
+            }
+            Ok(VoiceWrite::Held(reason)) => Ok(Delivery::Held {
+                reason,
+                first: mode.note_hold(reason),
+            }),
+            Err(error) => {
+                mode.entry_hint = EntryHint::NotSent;
+                Err(error)
+            }
+        });
+    }
     let send = mode.poll_send(now_ms)?;
     let announce = mode.language_to_announce(send.language.as_deref());
     let entry = compose_entry(&send.text, announce);
-    match queue.enqueue(&send.session_id, &entry, send.generation) {
-        Ok(id) => {
-            mode.note_enqueued(send.generation, id);
+    Some(match sink.write(&send.session_id, &entry) {
+        Ok(VoiceWrite::Written) => {
+            mode.note_written(send.generation);
             if announce.is_some() {
                 mode.announced_language = send.language;
             }
-            Some(Ok(id))
+            Ok(Delivery::Turn)
         }
-        Err(error) => Some(Err(error)),
-    }
+        Ok(VoiceWrite::Held(reason)) => Ok(Delivery::Held {
+            reason,
+            first: mode.hold(send, reason),
+        }),
+        Err(error) => Err(error),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1067,18 +1129,20 @@ pub fn deliver_due(
 /// out loud. Without the second half the `voice` tool is listed and never used,
 /// because a model with no reason to speak writes text.
 ///
-/// One line, for the reason [`compose_entry`] gives: the queue types this into
+/// One line, for the reason [`compose_entry`] gives: the sink types this into
 /// a terminal and submits it, and a newline in the middle submits half of it.
 pub const MODE_ENTRY_HINT: &str = "Hands-free voice is now on for this terminal: what arrives from \
-     here on was spoken out loud, and you can answer out loud with the voice tool (call it with \
-     action \"speak\"). Keep spoken replies short enough to listen to.";
+     here on was spoken out loud, and you can answer out loud with the `voice` tool of the \
+     TUICommander MCP server (tuicommander), called with action \"speak\". If that tool is not \
+     loaded yet, search your deferred tools for \"voice\". Keep spoken replies short enough to \
+     listen to.";
 
 /// The start notice to send, given the `hands_free_start_notice` setting.
 ///
 /// Blank means the built-in [`MODE_ENTRY_HINT`]. The reply language is not
 /// part of it: [`deliver_entry_hint`] appends it by code when it is known, so
 /// a user-written notice cannot drop it. Line breaks and runs of whitespace fold to single spaces, because
-/// the queue submits on a newline and a notice typed on three lines would
+/// the sink submits on a newline and a notice typed on three lines would
 /// reach the model as three prompts.
 pub fn entry_hint_text(configured: &str) -> String {
     let folded = configured.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -1099,10 +1163,10 @@ pub const MODE_EXIT_HINT: &str = "Hands-free voice is off for this terminal. The
 
 /// Tell the bound model that a hands-free conversation just opened.
 ///
-/// Through the Compose FIFO like everything else — so it queues behind whatever
-/// the terminal is already doing, waits out a busy agent or an open dialog the
-/// same way, and lands in the session the mode bound to rather than in whatever
-/// tab the user has since focused. `None` when nothing is armed.
+/// Through the sink like every spoken turn — typed at once, even into a busy
+/// agent, and into the session the mode bound to rather than whatever tab the
+/// user has since focused. A dialog or a draft holds it in the mode, and
+/// [`deliver_due`] retries it before any turn. `None` when nothing is armed.
 ///
 /// The caller decides whether the user asked for this at all; the mode only
 /// remembers that it was sent.
@@ -1112,10 +1176,10 @@ pub const MODE_EXIT_HINT: &str = "Hands-free voice is off for this terminal. The
 /// names nothing, and the first spoken turn carries it instead.
 pub fn deliver_entry_hint(
     mode: &mut HandsFree,
-    queue: &dyn VoiceQueue,
+    sink: &dyn VoiceSink,
     notice: &str,
     language: Option<&str>,
-) -> Option<Result<u64, String>> {
+) -> Option<Result<Delivery, String>> {
     let binding = mode.binding()?;
     let session_id = binding.session_id.clone();
     let generation = mode.generation();
@@ -1124,13 +1188,24 @@ pub fn deliver_entry_hint(
         Some(name) => format!("{notice} Reply in {name}."),
         None => notice.to_string(),
     };
-    match queue.enqueue(&session_id, &notice, generation) {
-        Ok(id) => {
-            mode.note_hint_enqueued(generation, id);
-            if announce.is_some() {
-                mode.announced_language = language.map(str::to_string);
+    let language = announce.and(language).map(str::to_string);
+    match sink.write(&session_id, &notice) {
+        Ok(VoiceWrite::Written) => {
+            mode.note_hint_written(generation);
+            if language.is_some() {
+                mode.announced_language = language;
             }
-            Some(Ok(id))
+            Some(Ok(Delivery::Notice))
+        }
+        Ok(VoiceWrite::Held(reason)) => {
+            mode.entry_hint = EntryHint::Pending {
+                text: notice,
+                language,
+            };
+            Some(Ok(Delivery::Held {
+                reason,
+                first: mode.note_hold(reason),
+            }))
         }
         Err(error) => Some(Err(error)),
     }
@@ -1138,31 +1213,26 @@ pub fn deliver_entry_hint(
 
 /// Tell the model the conversation ended — but only if it heard it begin.
 ///
-/// The cancellation is the evidence. An entry hint still parked when the mode
-/// disarmed has just been pulled back out of the FIFO, so the model never read
-/// it: an exit hint after that would be the only thing it ever heard about a
-/// mode it never had, which is the contradictory pair criterion 3 forbids. An
-/// entry hint the composer had already typed cannot be retracted, so the model
-/// believes it can speak and has to be told otherwise.
+/// `entry_hint_written` is the evidence. An entry hint still held when the mode
+/// disarmed was never typed, so the model never read it: an exit hint after
+/// that would be the only thing it ever heard about a mode it never had, which
+/// is the contradictory pair criterion 3 forbids. An entry hint the composer
+/// typed cannot be retracted, so the model believes it can speak and has to be
+/// told otherwise.
 ///
-/// Not owned by anything. The mode that enqueued it is gone, and a later disarm
-/// must not be able to cancel the notice that the previous one ended — a rapid
-/// arm/disarm pair therefore leaves the FIFO holding "off" then "on", in the
-/// order they happened.
-///
-/// A target that has gone away refuses the enqueue, which is reported rather
+/// One attempt. The mode is gone, so there is nothing left to hold it in: a
+/// dialog or a draft on screen at disarm drops it (the caller logs a warning).
+/// A target that has gone away refuses the write, which is reported rather
 /// than swallowed: there is nobody left to tell, and that is not a failure of
 /// this call.
 pub fn deliver_exit_hint(
-    queue: &dyn VoiceQueue,
+    sink: &dyn VoiceSink,
     disarmed: &Disarmed,
-    cancellation: &VoiceCancellation,
-) -> Option<Result<u64, String>> {
-    let hint = disarmed.entry_hint?;
-    if !cancellation.already_delivered.contains(&hint) {
+) -> Option<Result<VoiceWrite, String>> {
+    if !disarmed.entry_hint_written {
         return None;
     }
-    Some(queue.enqueue(&disarmed.session_id, MODE_EXIT_HINT, disarmed.generation))
+    Some(sink.write(&disarmed.session_id, MODE_EXIT_HINT))
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,7 +1269,7 @@ pub struct Transcript {
     pub language: Option<String>,
 }
 
-/// Whether the bound session can still take a Compose-queue entry.
+/// Whether the bound session can still take hands-free input.
 pub trait TargetProbe {
     fn accepts(&self, session_id: &str) -> bool;
 }
@@ -1281,13 +1351,13 @@ impl Capture {
 pub enum Tick {
     /// Nothing to do: the mode is not armed. The driver stops.
     NotArmed,
-    /// Still armed. `enqueued` is the queue id a hold-back that expired this
-    /// tick produced; `send_error` is a delivery the queue refused.
+    /// Still armed. `delivered` is what the write attempted this tick did;
+    /// `send_error` is a delivery the sink refused.
     Running {
-        enqueued: Option<u64>,
+        delivered: Option<Delivery>,
         send_error: Option<String>,
     },
-    /// The mode disarmed itself. The driver cancels what it owned and stops.
+    /// The mode disarmed itself. The driver sends the exit hint and stops.
     Disarmed(Disarmed),
 }
 
@@ -1306,7 +1376,7 @@ pub fn tick(
     mode: &parking_lot::Mutex<HandsFree>,
     endpoint: &mut dyn VoiceEndpoint,
     target: &dyn TargetProbe,
-    queue: &dyn VoiceQueue,
+    sink: &dyn VoiceSink,
     now_ms: u64,
 ) -> Tick {
     let Some(binding) = mode.lock().binding().cloned() else {
@@ -1424,23 +1494,23 @@ pub fn tick(
     // Bound in its own statement, never in the `match` scrutinee: a temporary
     // there lives until the end of the whole match, and the error arm locks the
     // mode again. `parking_lot` is not reentrant, so that shape deadlocks the
-    // runtime — and every status poll behind it — the first time the queue
+    // runtime — and every status poll behind it — the first time the sink
     // refuses a delivery.
-    let delivered = deliver_due(&mut mode.lock(), queue, now_ms);
+    let delivered = deliver_due(&mut mode.lock(), sink, now_ms);
     match delivered {
-        Some(Ok(id)) => Tick::Running {
-            enqueued: Some(id),
+        Some(Ok(delivery)) => Tick::Running {
+            delivered: Some(delivery),
             send_error: None,
         },
         Some(Err(error)) => {
             mode.lock().note_send_failed(&error);
             Tick::Running {
-                enqueued: None,
+                delivered: None,
                 send_error: Some(error),
             }
         }
         None => Tick::Running {
-            enqueued: None,
+            delivered: None,
             send_error: None,
         },
     }
@@ -1482,8 +1552,8 @@ impl Drop for HandsFreeRuntime {
 /// Run the hands-free loop against a real session until it disarms.
 ///
 /// The thread owns nothing but the audio endpoint: the target probe and the
-/// queue are both built from `AppState` on each tick, so this path is the same
-/// Compose FIFO a hand-typed command uses and there is no second way out.
+/// sink are both built from `AppState` on each tick, and the sink is the only
+/// way out.
 pub fn spawn_runtime(
     state: std::sync::Arc<AppState>,
     mode: std::sync::Arc<parking_lot::Mutex<HandsFree>>,
@@ -1509,40 +1579,33 @@ pub fn spawn_runtime(
                     &mode,
                     endpoint.as_mut(),
                     &PtyTargetProbe(&state),
-                    &PtyVoiceQueue(&state),
+                    &PtyVoiceSink(&state),
                     now_ms,
                 );
                 match outcome {
                     Tick::NotArmed => break,
                     Tick::Disarmed(disarmed) => {
-                        // Whatever this mode parked in the Compose queue goes
-                        // with it. An entry the composer already typed is
-                        // reported by `cancel`, not silently claimed back.
-                        let cancellation = cancel_disarmed(&PtyVoiceQueue(&state), &disarmed);
                         tracing::info!(
                             source = "dictation",
-                            "Hands-free disarmed: {:?} (cancelled {:?}, already delivered {:?})",
-                            disarmed.reason,
-                            cancellation.cancelled,
-                            cancellation.already_delivered
+                            session = %disarmed.session_id,
+                            discarded_pending = disarmed.discarded_pending,
+                            "Hands-free disarmed: {:?}",
+                            disarmed.reason
                         );
                         // Every reason this loop ends for is one the user did
                         // not ask for — a closed target, a lost owner, a dead
                         // microphone — so a model that was told the mode began
                         // has to be told it ended here too, not only on the
                         // manual path in `commands::disarm_hands_free`.
-                        report_exit_hint(&PtyVoiceQueue(&state), &disarmed, &cancellation);
+                        report_exit_hint(&PtyVoiceSink(&state), &disarmed);
                         break;
                     }
                     Tick::Running {
-                        enqueued,
+                        delivered,
                         send_error,
                     } => {
-                        if let Some(id) = enqueued {
-                            tracing::info!(
-                                source = "dictation",
-                                "Hands-free turn queued as Compose entry {id}"
-                            );
+                        if let Some(delivery) = delivered {
+                            log_delivery(&mode.lock(), delivery);
                         }
                         if let Some(error) = send_error {
                             tracing::warn!(
@@ -1570,35 +1633,60 @@ fn disarmed_or_not_armed(disarmed: Option<Disarmed>) -> Tick {
     }
 }
 
+/// One INFO line per delivery: typed now, or held and why — a hold once, not
+/// once per tick while it lasts.
+pub(super) fn log_delivery(mode: &HandsFree, delivery: Delivery) {
+    let session = mode
+        .binding()
+        .map(|binding| binding.session_id.as_str())
+        .unwrap_or("");
+    match delivery {
+        Delivery::Turn => {
+            tracing::info!(source = "dictation", session, "Hands-free turn typed now")
+        }
+        Delivery::Notice => tracing::info!(
+            source = "dictation",
+            session,
+            "Hands-free start notice typed now"
+        ),
+        Delivery::Held {
+            reason,
+            first: true,
+        } => tracing::info!(
+            source = "dictation",
+            session,
+            reason = reason.as_str(),
+            "Hands-free turn held"
+        ),
+        Delivery::Held { first: false, .. } => {}
+    }
+}
+
 /// [`deliver_exit_hint`] with the outcome logged instead of returned.
 ///
 /// The two disarm paths — the user's and this loop's — both want the notice
 /// sent and neither has anybody to hand a failure to: by the time it is sent
 /// the mode is already gone.
-pub(super) fn report_exit_hint(
-    queue: &dyn VoiceQueue,
-    disarmed: &Disarmed,
-    cancellation: &VoiceCancellation,
-) {
-    match deliver_exit_hint(queue, disarmed, cancellation) {
-        Some(Ok(id)) => tracing::info!(
+pub(super) fn report_exit_hint(sink: &dyn VoiceSink, disarmed: &Disarmed) {
+    match deliver_exit_hint(sink, disarmed) {
+        Some(Ok(VoiceWrite::Written)) => tracing::info!(
             source = "dictation",
-            "Hands-free end notice queued as Compose entry {id}"
+            session = %disarmed.session_id,
+            "Hands-free end notice typed now"
+        ),
+        Some(Ok(VoiceWrite::Held(reason))) => tracing::warn!(
+            source = "dictation",
+            session = %disarmed.session_id,
+            reason = reason.as_str(),
+            "Hands-free end notice dropped: the composer could not take it at disarm"
         ),
         Some(Err(error)) => tracing::info!(
             source = "dictation",
+            session = %disarmed.session_id,
             "Hands-free end notice not delivered: {error}"
         ),
         None => {}
     }
-}
-
-/// Cancel everything a disarm made obsolete.
-pub fn cancel_disarmed(queue: &dyn VoiceQueue, disarmed: &Disarmed) -> VoiceCancellation {
-    if disarmed.cancel_ids.is_empty() {
-        return VoiceCancellation::default();
-    }
-    queue.cancel(&disarmed.session_id, &disarmed.cancel_ids)
 }
 
 #[cfg(test)]
@@ -2249,79 +2337,53 @@ mod tests {
 
     // --- Delivery ---------------------------------------------------------
 
-    /// A queue that records what it was asked to do, and nothing else — the
+    /// A sink that records what it was asked to type, and nothing else — the
     /// point being that a delivery path with any other exit would show up here
-    /// as a message that never reached `enqueue`.
+    /// as a message that never reached `write`. `hold` plays the composer
+    /// refusing (a dialog, a draft); `fail` plays a target that has gone.
     #[derive(Default)]
-    struct FakeQueue {
-        next_id: RefCell<u64>,
-        enqueued: RefCell<Vec<(String, String, u64, u64)>>,
-        /// Ids the queue has already typed; a cancel cannot retract them.
-        delivered: RefCell<Vec<u64>>,
-        parked: RefCell<Vec<u64>>,
+    struct FakeSink {
+        written: RefCell<Vec<(String, String)>>,
+        hold: RefCell<Option<crate::pty::VoiceHold>>,
         fail: RefCell<Option<String>>,
     }
 
-    impl FakeQueue {
-        fn mark_delivered(&self, id: u64) {
-            self.parked.borrow_mut().retain(|parked| *parked != id);
-            self.delivered.borrow_mut().push(id);
-        }
-    }
-
-    impl VoiceQueue for FakeQueue {
-        fn enqueue(&self, session_id: &str, text: &str, generation: u64) -> Result<u64, String> {
+    impl VoiceSink for FakeSink {
+        fn write(&self, session_id: &str, text: &str) -> Result<VoiceWrite, String> {
             if let Some(error) = self.fail.borrow().as_ref() {
                 return Err(error.clone());
             }
-            let mut next = self.next_id.borrow_mut();
-            *next += 1;
-            self.enqueued.borrow_mut().push((
-                session_id.to_string(),
-                text.to_string(),
-                generation,
-                *next,
-            ));
-            self.parked.borrow_mut().push(*next);
-            Ok(*next)
-        }
-
-        fn cancel(&self, _session_id: &str, ids: &[u64]) -> VoiceCancellation {
-            let mut cancellation = VoiceCancellation::default();
-            for id in ids {
-                if self.parked.borrow().contains(id) {
-                    self.parked.borrow_mut().retain(|parked| parked != id);
-                    cancellation.cancelled.push(*id);
-                } else {
-                    cancellation.already_delivered.push(*id);
-                }
+            if let Some(reason) = *self.hold.borrow() {
+                return Ok(VoiceWrite::Held(reason));
             }
-            cancellation
+            self.written
+                .borrow_mut()
+                .push((session_id.to_string(), text.to_string()));
+            Ok(VoiceWrite::Written)
         }
     }
 
+    fn written(text: &str) -> (String, String) {
+        ("target".to_string(), text.to_string())
+    }
+
     #[test]
-    fn a_held_back_transcript_reaches_the_queue_with_its_ownership() {
+    fn a_held_back_transcript_is_typed_when_its_hold_back_expires() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         mode.accept_transcript(generation, "run the tests", None, 0);
 
         assert!(deliver_due(&mut mode, &queue, 1_000).is_none());
         let delivered = deliver_due(&mut mode, &queue, 1_500).expect("hold-back expired");
 
-        assert_eq!(delivered, Ok(1));
+        assert_eq!(delivered, Ok(Delivery::Turn));
         assert_eq!(
-            queue.enqueued.borrow().as_slice(),
-            [(
-                "target".to_string(),
-                "run the tests".to_string(),
-                generation,
-                1
-            )]
+            queue.written.borrow().as_slice(),
+            [written("run the tests")]
         );
-        assert_eq!(mode.owned_ids(), [1]);
         assert_eq!(*mode.phase(), Phase::Delivered);
+        assert_eq!(mode.pending_text(), None);
     }
 
     /// The earcons key on these counters, not on the phase: a poll can miss a
@@ -2331,13 +2393,13 @@ mod tests {
     fn only_a_delivered_turn_advances_the_delivered_count() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         mode.accept_transcript(generation, "run the tests", None, 0);
         assert_eq!(mode.delivered_turns(), 0, "held back is not delivered");
 
         assert!(matches!(deliver_due(&mut mode, &queue, 1_500), Some(Ok(_))));
         assert_eq!(mode.delivered_turns(), 1);
-        mode.note_hint_enqueued(generation, 7);
+        mode.note_hint_written(generation);
         assert_eq!(
             mode.delivered_turns(),
             1,
@@ -2377,71 +2439,100 @@ mod tests {
         assert_eq!(mode.dropped_turns(), 1);
     }
 
-    /// The cancellation half of criterion 6: a disarm drops what is still
-    /// parked, leaves everything it does not own alone, and says plainly that
-    /// the entry already typed is gone for good.
+    /// A dialog or a draft holds the turn *here*, not in the Compose queue: it
+    /// stays visible and cancellable in the mode, is retried every tick, and is
+    /// typed the first tick the composer is free. The hold is reported once,
+    /// not once per tick.
     #[test]
-    fn a_disarm_cancels_only_its_own_parked_entries_and_reports_the_delivered_one() {
+    fn a_turn_the_composer_holds_stays_in_the_mode_and_is_retried() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
-        // An unrelated Compose entry already sits in the FIFO.
-        queue.parked.borrow_mut().push(99);
+        let queue = FakeSink::default();
+        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+        mode.accept_transcript(generation, "yes, go on", None, 0);
 
-        mode.accept_transcript(generation, "first", None, 0);
-        let _ = deliver_due(&mut mode, &queue, 1_500).expect("first send");
-        mode.accept_transcript(generation, "second", None, 2_000);
-        let _ = deliver_due(&mut mode, &queue, 3_500).expect("second send");
-        // The composer typed the first one before the user aborted.
-        queue.mark_delivered(1);
-
-        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
-        let cancellation = cancel_disarmed(&queue, &disarmed);
-
-        assert_eq!(cancellation.cancelled, [2]);
         assert_eq!(
-            cancellation.already_delivered,
-            [1],
-            "a typed message cannot be retracted, and saying so is the contract"
+            deliver_due(&mut mode, &queue, 1_500),
+            Some(Ok(Delivery::Held {
+                reason: crate::pty::VoiceHold::Question,
+                first: true
+            }))
         );
+        assert_eq!(mode.pending_text(), Some("yes, go on"));
+        assert_eq!(*mode.phase(), Phase::HoldingBack);
+        assert_eq!(mode.delivered_turns(), 0);
         assert_eq!(
-            queue.parked.borrow().as_slice(),
-            [99],
-            "an unrelated Compose entry must survive the disarm"
+            deliver_due(&mut mode, &queue, 1_550),
+            Some(Ok(Delivery::Held {
+                reason: crate::pty::VoiceHold::Question,
+                first: false
+            })),
+            "the same hold is not news on the next tick"
         );
+
+        *queue.hold.borrow_mut() = None;
+        assert_eq!(
+            deliver_due(&mut mode, &queue, 1_600),
+            Some(Ok(Delivery::Turn))
+        );
+        assert_eq!(queue.written.borrow().as_slice(), [written("yes, go on")]);
+        assert_eq!(mode.pending_text(), None);
     }
 
+    /// Speech that arrives while a turn is held is the same conversation, and
+    /// reaches the model as one message in the order it was said.
     #[test]
-    fn a_delivered_entry_is_no_longer_owned() {
+    fn speech_while_a_turn_is_held_joins_it() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
-        mode.accept_transcript(generation, "typed already", None, 0);
+        let queue = FakeSink::default();
+        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Draft);
+        mode.accept_transcript(generation, "first", None, 0);
         deliver_due(&mut mode, &queue, 1_500);
 
-        mode.note_delivered(1);
-
-        assert!(mode.owned_ids().is_empty());
-        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
+        mode.accept_transcript(generation, "second", None, 2_000);
+        *queue.hold.borrow_mut() = None;
         assert!(
-            disarmed.cancel_ids.is_empty(),
-            "nothing may be cancelled on behalf of a message already typed"
+            deliver_due(&mut mode, &queue, 2_100).is_none(),
+            "the joined turn restarts its hold-back"
         );
+        deliver_due(&mut mode, &queue, 3_500)
+            .expect("due")
+            .expect("written");
+
+        assert_eq!(queue.written.borrow().as_slice(), [written("first second")]);
+    }
+
+    /// A held turn never reached the model, so a disarm discards it like one
+    /// still inside its hold-back.
+    #[test]
+    fn a_disarm_discards_a_held_turn() {
+        let mut mode = armed();
+        let generation = mode.generation();
+        let queue = FakeSink::default();
+        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+        mode.accept_transcript(generation, "delete it", None, 0);
+        deliver_due(&mut mode, &queue, 1_500);
+
+        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
+
+        assert!(disarmed.discarded_pending);
+        assert!(queue.written.borrow().is_empty());
     }
 
     #[test]
-    fn a_rejected_enqueue_is_reported_and_owns_nothing() {
+    fn a_refused_write_is_reported_and_types_nothing() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         *queue.fail.borrow_mut() = Some("Session is not running an agent".to_string());
         mode.accept_transcript(generation, "run the tests", None, 0);
 
         let outcome = deliver_due(&mut mode, &queue, 1_500).expect("hold-back expired");
 
         assert_eq!(outcome, Err("Session is not running an agent".to_string()));
-        assert!(mode.owned_ids().is_empty());
-        assert!(queue.enqueued.borrow().is_empty());
+        assert!(queue.written.borrow().is_empty());
+        assert_eq!(mode.delivered_turns(), 0);
     }
 
     // --- Telling the model the mode changed (821-842a) --------------------
@@ -2452,26 +2543,15 @@ mod tests {
     #[test]
     fn a_new_conversation_tells_the_model_it_can_answer_out_loud() {
         let mut mode = armed();
-        let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let sent = deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None).expect("armed");
 
-        assert_eq!(sent, Ok(1));
+        assert_eq!(sent, Ok(Delivery::Notice));
         assert_eq!(
-            queue.enqueued.borrow().as_slice(),
-            [(
-                "target".to_string(),
-                MODE_ENTRY_HINT.to_string(),
-                generation,
-                1
-            )],
-            "the notice goes through the Compose FIFO like every other entry"
-        );
-        assert_eq!(
-            mode.owned_ids(),
-            [1],
-            "an unread notice must be cancellable like any other voice entry"
+            queue.written.borrow().as_slice(),
+            [written(MODE_ENTRY_HINT)],
+            "the notice goes through the sink like every spoken turn"
         );
         assert_eq!(
             *mode.phase(),
@@ -2480,8 +2560,25 @@ mod tests {
         );
     }
 
-    /// The queue types an entry into a terminal and submits it. A second line
+    /// The sink types an entry into a terminal and submits it. A second line
     /// submits the first half of a sentence and leaves the rest as a command.
+    /// In some Claude Code sessions MCP tools are deferred: listed by name
+    /// only, loaded on demand. A notice that says just "the voice tool" gives
+    /// the model nothing to search for, so it names the server and says how to
+    /// load the tool.
+    #[test]
+    fn the_start_notice_names_the_mcp_tool_and_how_to_load_it() {
+        assert!(
+            MODE_ENTRY_HINT.contains("`voice` tool of the TUICommander MCP server (tuicommander)"),
+            "{MODE_ENTRY_HINT}"
+        );
+        assert!(
+            MODE_ENTRY_HINT.contains("search your deferred tools for \"voice\""),
+            "{MODE_ENTRY_HINT}"
+        );
+        assert!(MODE_ENTRY_HINT.contains("action \"speak\""));
+    }
+
     #[test]
     fn neither_notice_can_submit_half_of_itself() {
         for notice in [MODE_ENTRY_HINT, MODE_EXIT_HINT] {
@@ -2492,7 +2589,7 @@ mod tests {
             assert!(!notice.trim().is_empty());
         }
         assert!(
-            MODE_ENTRY_HINT.contains("voice tool"),
+            MODE_ENTRY_HINT.contains("`voice` tool"),
             "the entry notice exists to name the capability"
         );
         assert!(
@@ -2518,27 +2615,20 @@ mod tests {
     #[test]
     fn a_configured_start_notice_is_what_the_model_reads() {
         let mut mode = armed();
-        let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         let notice = entry_hint_text("  Voice is on. Answer in one sentence.  ");
 
         deliver_entry_hint(&mut mode, &queue, &notice, None)
             .expect("armed")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
-            queue.enqueued.borrow().as_slice(),
-            [(
-                "target".to_string(),
-                "Voice is on. Answer in one sentence.".to_string(),
-                generation,
-                1
-            )]
+            queue.written.borrow().as_slice(),
+            [written("Voice is on. Answer in one sentence.")]
         );
-        assert_eq!(mode.owned_ids(), [1], "a custom notice is cancellable too");
     }
 
-    /// The settings field is multiline, but the queue submits on a newline:
+    /// The settings field is multiline, but the sink submits on a newline:
     /// a notice typed on three lines would reach the model as three prompts.
     #[test]
     fn a_multiline_start_notice_reaches_the_terminal_as_one_line() {
@@ -2547,31 +2637,67 @@ mod tests {
         assert_eq!(notice, "Voice is on. Keep it short. Use Italian.");
     }
 
-    /// Criterion 3, the contradictory pair: a notice the composer never typed
-    /// is pulled back out, and nothing may be queued to undo something the
-    /// model never read.
+    /// A notice the composer cannot take yet waits in the mode, is retried
+    /// every tick, and goes before any spoken turn: a turn read before "you
+    /// can answer out loud" has been answered in text already. Its language is
+    /// announced only once it is typed.
     #[test]
-    fn a_start_notice_the_model_never_read_is_cancelled_and_not_contradicted() {
+    fn a_held_start_notice_is_retried_before_any_turn() {
         let mut mode = armed();
-        let queue = FakeQueue::default();
+        let generation = mode.generation();
+        let queue = FakeSink::default();
+        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+
+        let sent =
+            deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, Some("it")).expect("armed");
+        assert!(matches!(sent, Ok(Delivery::Held { .. })));
+        mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
+        assert!(matches!(
+            deliver_due(&mut mode, &queue, 1_500),
+            Some(Ok(Delivery::Held { .. }))
+        ));
+
+        *queue.hold.borrow_mut() = None;
+        assert_eq!(
+            deliver_due(&mut mode, &queue, 1_550),
+            Some(Ok(Delivery::Notice)),
+            "the notice alone, on the tick the composer frees up"
+        );
+        assert_eq!(
+            deliver_due(&mut mode, &queue, 1_600),
+            Some(Ok(Delivery::Turn))
+        );
+        assert_eq!(
+            entries(&queue),
+            vec![
+                format!("{MODE_ENTRY_HINT} Reply in Italian."),
+                "esegui i test".to_string(),
+            ]
+        );
+    }
+
+    /// Criterion 3, the contradictory pair: a notice the composer never typed
+    /// is dropped with the mode, and nothing may be written to undo something
+    /// the model never read.
+    #[test]
+    fn a_start_notice_the_model_never_read_is_not_contradicted() {
+        let mut mode = armed();
+        let queue = FakeSink::default();
+        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
             .expect("armed")
-            .expect("enqueued");
+            .expect("held");
 
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
-        let cancellation = cancel_disarmed(&queue, &disarmed);
+        *queue.hold.borrow_mut() = None;
 
-        assert_eq!(cancellation.cancelled, [1]);
+        assert!(!disarmed.entry_hint_written);
         assert_eq!(
-            deliver_exit_hint(&queue, &disarmed, &cancellation),
+            deliver_exit_hint(&queue, &disarmed),
             None,
             "an end notice would be the only thing the model ever heard about the mode"
         );
-        assert_eq!(
-            queue.enqueued.borrow().len(),
-            1,
-            "nothing new may reach the queue"
-        );
+        assert!(queue.written.borrow().is_empty());
     }
 
     /// The other half: once the composer has typed it, nothing can take it
@@ -2579,26 +2705,41 @@ mod tests {
     #[test]
     fn a_start_notice_the_model_read_is_undone_when_the_conversation_ends() {
         let mut mode = armed();
-        let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
             .expect("armed")
-            .expect("enqueued");
-        queue.mark_delivered(1);
+            .expect("written");
 
         let disarmed = mode.disarm(DisarmReason::TargetClosed).expect("armed");
-        let cancellation = cancel_disarmed(&queue, &disarmed);
-        let sent = deliver_exit_hint(&queue, &disarmed, &cancellation).expect("the model was told");
+        let sent = deliver_exit_hint(&queue, &disarmed).expect("the model was told");
 
-        assert_eq!(sent, Ok(2));
+        assert_eq!(sent, Ok(VoiceWrite::Written));
         assert_eq!(
-            queue.enqueued.borrow().last(),
-            Some(&(
-                "target".to_string(),
-                MODE_EXIT_HINT.to_string(),
-                generation,
-                2
-            ))
+            queue.written.borrow().last(),
+            Some(&written(MODE_EXIT_HINT))
+        );
+    }
+
+    /// The mode is gone at disarm, so there is nothing left to hold the end
+    /// notice in: a dialog on screen then drops it rather than parking it.
+    #[test]
+    fn an_end_notice_the_composer_cannot_take_is_dropped() {
+        let mut mode = armed();
+        let queue = FakeSink::default();
+        deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
+            .expect("armed")
+            .expect("written");
+        *queue.hold.borrow_mut() = Some(crate::pty::VoiceHold::Question);
+
+        let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
+
+        assert_eq!(
+            deliver_exit_hint(&queue, &disarmed),
+            Some(Ok(VoiceWrite::Held(crate::pty::VoiceHold::Question)))
+        );
+        assert_eq!(
+            queue.written.borrow().as_slice(),
+            [written(MODE_ENTRY_HINT)]
         );
     }
 
@@ -2607,14 +2748,13 @@ mod tests {
     #[test]
     fn a_conversation_the_model_was_never_told_about_ends_quietly() {
         let mut mode = armed();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
-        let cancellation = cancel_disarmed(&queue, &disarmed);
 
-        assert_eq!(disarmed.entry_hint, None);
-        assert_eq!(deliver_exit_hint(&queue, &disarmed, &cancellation), None);
-        assert!(queue.enqueued.borrow().is_empty());
+        assert!(!disarmed.entry_hint_written);
+        assert_eq!(deliver_exit_hint(&queue, &disarmed), None);
+        assert!(queue.written.borrow().is_empty());
     }
 
     /// Criterion 3's other half: whatever the user does with the hotkey, what
@@ -2623,37 +2763,24 @@ mod tests {
     #[test]
     fn rapid_arming_leaves_the_model_holding_off_then_on_in_that_order() {
         let mut mode = armed();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
             .expect("armed")
-            .expect("enqueued");
-        queue.mark_delivered(1);
+            .expect("written");
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
-        let cancellation = cancel_disarmed(&queue, &disarmed);
-        deliver_exit_hint(&queue, &disarmed, &cancellation)
+        deliver_exit_hint(&queue, &disarmed)
             .expect("the model was told")
-            .expect("enqueued");
+            .expect("written");
 
         mode.arm("target", "desktop", true).expect("re-arm");
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None)
             .expect("armed again")
-            .expect("enqueued");
+            .expect("written");
 
-        let texts: Vec<String> = queue
-            .enqueued
-            .borrow()
-            .iter()
-            .map(|(_, text, _, _)| text.clone())
-            .collect();
         assert_eq!(
-            texts,
+            entries(&queue),
             [MODE_ENTRY_HINT, MODE_EXIT_HINT, MODE_ENTRY_HINT],
-            "the FIFO must read as the history of the mode, with no repeated state"
-        );
-        assert_eq!(
-            mode.owned_ids(),
-            [3],
-            "the new conversation owns its own notice and nothing from the old one"
+            "the terminal must read as the history of the mode, with no repeated state"
         );
     }
 
@@ -2661,123 +2788,56 @@ mod tests {
     #[test]
     fn nothing_is_announced_for_a_mode_that_is_not_armed() {
         let mut mode = HandsFree::new(1_500);
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         assert!(deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None).is_none());
-        assert!(queue.enqueued.borrow().is_empty());
+        assert!(queue.written.borrow().is_empty());
     }
 
-    /// A refused notice owns nothing, and — because the model never read it —
-    /// buys no end notice either.
+    /// A refused notice was never read, so it buys no end notice either.
     #[test]
-    fn a_refused_start_notice_owns_nothing_and_is_never_undone() {
+    fn a_refused_start_notice_is_never_undone() {
         let mut mode = armed();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         *queue.fail.borrow_mut() = Some("Session is not running an agent".to_string());
 
         let sent = deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, None).expect("armed");
 
         assert_eq!(sent, Err("Session is not running an agent".to_string()));
-        assert!(mode.owned_ids().is_empty());
         let disarmed = mode.disarm(DisarmReason::Manual).expect("armed");
-        assert_eq!(disarmed.entry_hint, None);
-        assert_eq!(
-            deliver_exit_hint(&queue, &disarmed, &VoiceCancellation::default()),
-            None
-        );
+        assert!(!disarmed.entry_hint_written);
+        assert_eq!(deliver_exit_hint(&queue, &disarmed), None);
     }
 
-    // --- The real Compose queue -------------------------------------------
+    // --- The real sink ----------------------------------------------------
 
-    /// The fake above proves the mode's bookkeeping; these prove the queue it
-    /// is bookkeeping *for*. Ownership is enforced in `pty`, so a test that
-    /// only ever sees `FakeQueue` would pass with the guard deleted.
-    #[test]
-    fn the_real_queue_cancels_only_voice_entries_the_caller_owns() {
-        let state = crate::state::tests_support::make_test_app_state();
-        let session = "voice-target";
-        let (mine, stranger, human) = {
-            let mut queue = state
-                .pending_injections
-                .entry(session.to_string())
-                .or_default();
-            let mine = crate::state::PendingInjection::voice_command("mine", 7);
-            let stranger = crate::state::PendingInjection::voice_command("another mode", 7);
-            let human = crate::state::PendingInjection::user_command("typed by hand");
-            let ids = (mine.id(), stranger.id(), human.id());
-            queue.push_back(mine);
-            queue.push_back(stranger);
-            queue.push_back(human);
-            ids
-        };
-
-        // The caller owns `mine`, and names `human` as well — an id it must not
-        // be able to clear, and one that was never delivered either.
-        let cancellation = crate::pty::cancel_voice_commands(&state, session, &[mine, human]);
-
-        assert_eq!(cancellation.cancelled, [mine]);
-        assert_eq!(
-            cancellation.already_delivered,
-            [human],
-            "a non-voice entry is never cancelled, and the caller is told so"
-        );
-        let remaining: Vec<u64> = state
-            .pending_injections
-            .get(session)
-            .expect("queue")
-            .iter()
-            .map(|entry| entry.id())
-            .collect();
-        assert_eq!(
-            remaining,
-            [stranger, human],
-            "unrelated Compose and peer entries keep their FIFO order"
-        );
-    }
-
-    /// An id that already left the queue is delivered, not cancelled.
-    #[test]
-    fn the_real_queue_reports_an_id_it_no_longer_holds_as_delivered() {
-        let state = crate::state::tests_support::make_test_app_state();
-
-        let cancellation = crate::pty::cancel_voice_commands(&state, "gone", &[42]);
-
-        assert!(cancellation.cancelled.is_empty());
-        assert_eq!(cancellation.already_delivered, [42]);
-    }
-
-    /// "Unsupported targets stay unavailable" is a refusal at the queue, not a
+    /// "Unsupported targets stay unavailable" is a refusal at the sink, not a
     /// fallback somewhere else: there is no other exit from this module.
     #[test]
-    fn the_real_queue_refuses_a_target_that_cannot_take_a_compose_entry() {
+    fn the_real_sink_refuses_a_target_that_cannot_take_hands_free_input() {
         let state = crate::state::tests_support::make_test_app_state();
 
         assert_eq!(
-            crate::pty::enqueue_voice_command(&state, "no-such-session", "hello", 1),
+            PtyVoiceSink(&state).write("no-such-session", "hello"),
             Err("Session not found".to_string())
         );
         assert_eq!(
-            crate::pty::enqueue_voice_command(&state, "no-such-session", "   ", 1),
+            PtyVoiceSink(&state).write("no-such-session", "   "),
             Err("Command text is empty".to_string())
         );
     }
 
-    /// A target that cannot take the entry *right now* is not a target that has
-    /// gone away (820-21a5 criterion 2).
+    /// Boss's rule against the real sink: a working agent takes the turn at
+    /// once, as it takes a line typed by hand; a dialog holds it. The idle case
+    /// is the control — without it "typed" would be equally true of a harness
+    /// that types into anything.
     ///
-    /// Three states down one path, in one test, because the interesting claim
-    /// is the difference between them. The idle case is the control: on its own
-    /// "it parked" is equally consistent with a fixture that cannot type at
-    /// all, and both assertions that matter would pass against a broken
-    /// harness.
-    ///
-    /// The dialog row is the one with a user-visible failure behind it. A
-    /// second delivery path — anything that wrote to the terminal instead of
-    /// queueing — would answer an open permission prompt with whatever the user
-    /// happened to say in the room.
+    /// The dialog row is the one with a user-visible failure behind it: a raw
+    /// write would answer an open permission prompt with whatever the user
+    /// happened to say in the room. None of the three ends the conversation.
     #[cfg(unix)]
     #[test]
-    fn a_busy_target_or_one_holding_a_dialog_parks_the_turn_and_stays_a_target() {
+    fn a_busy_target_takes_the_turn_a_dialog_holds_it_and_all_stay_targets() {
         let state = crate::state::tests_support::make_test_app_state();
         for (session, shell) in [
             ("voice-idle", crate::pty::SHELL_IDLE),
@@ -2796,29 +2856,28 @@ mod tests {
             .question_confident = true;
 
         let spoken = |session: &str| {
-            crate::pty::enqueue_voice_command(&state, session, "esegui i test", 1)
+            PtyVoiceSink(&state)
+                .write(session, "esegui i test")
                 .expect("a live agent session takes the entry")
         };
 
-        assert!(
-            spoken("voice-idle").typed,
-            "an idle agent is typed into straight away; without this the two \
-             assertions below are true of a harness that can never deliver"
+        assert_eq!(spoken("voice-idle"), VoiceWrite::Written);
+        assert_eq!(
+            spoken("voice-busy"),
+            VoiceWrite::Written,
+            "a working agent takes a spoken turn mid-turn, as it takes a typed line"
         );
-        assert!(
-            !spoken("voice-busy").typed,
-            "a working agent must not have a spoken turn spliced into what it is doing"
-        );
-        assert!(
-            !spoken("voice-dialog").typed,
+        assert_eq!(
+            spoken("voice-dialog"),
+            VoiceWrite::Held(crate::pty::VoiceHold::Question),
             "an open prompt must not be answered with speech the user aimed at the agent"
         );
-
-        // And none of the three is a reason to end the conversation. The probe
-        // answers whether the target exists and can take voice at all, never
-        // what it happens to be doing — a mode that disarmed on a busy agent
-        // would end itself on the first reply it asked for.
         for session in ["voice-idle", "voice-busy", "voice-dialog"] {
+            assert_eq!(
+                crate::pty::queued_command_count(&state, session),
+                0,
+                "{session}: speech never enters the Compose queue"
+            );
             assert!(
                 PtyTargetProbe(&state).accepts(session),
                 "{session} is still a target"
@@ -2829,10 +2888,10 @@ mod tests {
     /// Late asynchronous work is the failure this whole generation scheme
     /// exists for: a whisper pass that finishes after the abort must not send.
     #[test]
-    fn a_transcription_that_finishes_after_a_disarm_never_reaches_the_queue() {
+    fn a_transcription_that_finishes_after_a_disarm_never_reaches_the_sink() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         mode.note_transcribing();
         mode.disarm(DisarmReason::Manual);
 
@@ -2841,7 +2900,7 @@ mod tests {
             TranscriptOutcome::NotArmed
         );
         assert!(deliver_due(&mut mode, &queue, u64::MAX).is_none());
-        assert!(queue.enqueued.borrow().is_empty());
+        assert!(queue.written.borrow().is_empty());
     }
 
     // --- The language of the turn -----------------------------------------
@@ -2852,15 +2911,15 @@ mod tests {
     fn a_spoken_turn_tells_the_model_which_language_to_answer_in() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
         deliver_due(&mut mode, &queue, 1_500)
             .expect("the hold-back has expired")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
-            queue.enqueued.borrow()[0].1,
+            queue.written.borrow()[0].1,
             "esegui i test (reply in Italian)",
             "the requirement travels in the entry, which is the only thing that reaches the model"
         );
@@ -2872,16 +2931,16 @@ mod tests {
     fn a_second_turn_in_the_same_language_carries_no_requirement() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
         deliver_due(&mut mode, &queue, 1_500)
             .expect("first turn is due")
-            .expect("enqueued");
+            .expect("written");
         mode.accept_transcript(generation, "ora rilanciali", Some("it"), 2_000);
         deliver_due(&mut mode, &queue, 4_000)
             .expect("second turn is due")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
             entries(&queue),
@@ -2899,7 +2958,7 @@ mod tests {
     fn a_language_switch_is_announced_again() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         for (at, text, language) in [
             (0, "esegui i test", "it"),
@@ -2910,7 +2969,7 @@ mod tests {
             mode.accept_transcript(generation, text, Some(language), at);
             deliver_due(&mut mode, &queue, at + 1_500)
                 .expect("due")
-                .expect("enqueued");
+                .expect("written");
         }
 
         assert_eq!(
@@ -2930,7 +2989,7 @@ mod tests {
     fn an_unnamed_turn_does_not_reset_the_announced_language() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         for (at, text, language) in [
             (0, "esegui i test", Some("it")),
@@ -2940,7 +2999,7 @@ mod tests {
             mode.accept_transcript(generation, text, language, at);
             deliver_due(&mut mode, &queue, at + 1_500)
                 .expect("due")
-                .expect("enqueued");
+                .expect("written");
         }
 
         assert_eq!(
@@ -2961,16 +3020,16 @@ mod tests {
         let generation = mode.generation();
         mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
         assert!(
-            deliver_due(&mut mode, &RefusingQueue, 1_500)
+            deliver_due(&mut mode, &RefusingSink, 1_500)
                 .expect("due")
                 .is_err()
         );
 
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         mode.accept_transcript(generation, "esegui i test", Some("it"), 2_000);
         deliver_due(&mut mode, &queue, 3_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
             entries(&queue),
@@ -2984,19 +3043,19 @@ mod tests {
     fn the_start_notice_names_a_known_language_and_the_first_turn_does_not_repeat_it() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, Some("it"))
             .expect("armed")
-            .expect("enqueued");
+            .expect("written");
         mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
         deliver_due(&mut mode, &queue, 1_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
         mode.accept_transcript(generation, "now in English", Some("en"), 2_000);
         deliver_due(&mut mode, &queue, 3_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
             entries(&queue),
@@ -3015,15 +3074,15 @@ mod tests {
     fn a_notice_without_a_known_language_leaves_the_first_turn_to_name_it() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         deliver_entry_hint(&mut mode, &queue, MODE_ENTRY_HINT, Some("auto"))
             .expect("armed")
-            .expect("enqueued");
+            .expect("written");
         mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
         deliver_due(&mut mode, &queue, 1_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
             entries(&queue),
@@ -3039,19 +3098,19 @@ mod tests {
     #[test]
     fn a_new_arm_announces_the_language_again() {
         let mut mode = armed();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
         let generation = mode.generation();
         mode.accept_transcript(generation, "esegui i test", Some("it"), 0);
         deliver_due(&mut mode, &queue, 1_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
         mode.disarm(DisarmReason::Manual);
 
         let generation = mode.arm("target", "desktop", true).expect("re-arm");
         mode.accept_transcript(generation, "di nuovo", Some("it"), 2_000);
         deliver_due(&mut mode, &queue, 3_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
             entries(&queue),
@@ -3062,12 +3121,12 @@ mod tests {
         );
     }
 
-    fn entries(queue: &FakeQueue) -> Vec<String> {
+    fn entries(queue: &FakeSink) -> Vec<String> {
         queue
-            .enqueued
+            .written
             .borrow()
             .iter()
-            .map(|(_, text, _, _)| text.clone())
+            .map(|(_, text)| text.clone())
             .collect()
     }
 
@@ -3077,15 +3136,15 @@ mod tests {
     fn a_turn_the_recogniser_could_not_name_reaches_the_model_as_it_was_spoken() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         mode.accept_transcript(generation, "run the tests", None, 0);
         deliver_due(&mut mode, &queue, 1_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
 
         assert_eq!(
-            queue.enqueued.borrow()[0].1,
+            queue.written.borrow()[0].1,
             "run the tests",
             "no language means no requirement; inventing English here is the bug"
         );
@@ -3097,14 +3156,14 @@ mod tests {
     fn a_language_the_panel_does_not_offer_names_nothing() {
         let mut mode = armed();
         let generation = mode.generation();
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         mode.accept_transcript(generation, "rhedwch y profion", Some("cy"), 0);
         deliver_due(&mut mode, &queue, 1_500)
             .expect("due")
-            .expect("enqueued");
+            .expect("written");
 
-        assert_eq!(queue.enqueued.borrow()[0].1, "rhedwch y profion");
+        assert_eq!(queue.written.borrow()[0].1, "rhedwch y profion");
     }
 
     /// The voice that answers is chosen from this, so it has to be the language
@@ -3323,7 +3382,7 @@ mod tests {
         let (mut capture, speaker) = capture_with_a_voice();
         let mut endpoint = FakeEndpoint::new("actually, no");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         endpoint.feed(silence(200));
         tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
@@ -3352,7 +3411,7 @@ mod tests {
         let (mut capture, speaker) = capture_with_a_voice();
         let mut endpoint = FakeEndpoint::new("one long sentence");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         for tick_ms in [100, 400, 700, 1_000] {
             endpoint.feed(speech(300));
@@ -3375,7 +3434,7 @@ mod tests {
         let (mut capture, speaker) = capture_with_a_voice();
         let mut endpoint = FakeEndpoint::new("no");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let mut chunk = speech(300);
         chunk.extend(silence(500));
@@ -3409,7 +3468,7 @@ mod tests {
         );
         let mut endpoint = FakeEndpoint::new("the words we just said");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let reply = speech(500);
         echo.lock()
@@ -3444,7 +3503,7 @@ mod tests {
         let (mut capture, echo) = cancelling_capture();
         let mut endpoint = FakeEndpoint::new("the words we just said");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let reply = speech(500);
         echo.lock()
@@ -3467,7 +3526,7 @@ mod tests {
             "our own voice was transcribed as if the user had spoken"
         );
         assert!(
-            queue.enqueued.borrow().is_empty(),
+            queue.written.borrow().is_empty(),
             "the model was sent its own reply"
         );
         assert_eq!(*mode.lock().phase(), Phase::Waiting);
@@ -3482,7 +3541,7 @@ mod tests {
         let (mut capture, _echo) = cancelling_capture();
         let mut endpoint = FakeEndpoint::new("the words we just said");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         // Same capture, but nobody told the guard anything was played.
         let mut heard = speech(500);
@@ -3494,7 +3553,7 @@ mod tests {
 
         assert_eq!(endpoint.calls.get(), 1, "the utterance was never segmented");
         assert_eq!(
-            queue.enqueued.borrow().len(),
+            queue.written.borrow().len(),
             1,
             "a real user's words must still get through"
         );
@@ -3508,7 +3567,7 @@ mod tests {
         let (mut capture, echo) = cancelling_capture();
         let mut endpoint = FakeEndpoint::new("stop");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let reply = speech(500);
         echo.lock()
@@ -3528,22 +3587,21 @@ mod tests {
         tick(&mut capture, &mode, &mut endpoint, &target, &queue, 3_000);
 
         assert_eq!(
-            queue.enqueued.borrow().len(),
+            queue.written.borrow().len(),
             1,
             "the user was cancelled against a reply that was never played"
         );
     }
 
-    /// The whole point of the pass: audio in one end, a Compose-queue entry out
-    /// the other, with nobody touching a PTY in between.
+    /// The whole point of the pass: audio in one end, one write to the sink
+    /// out the other, and no other exit in between.
     #[test]
-    fn a_spoken_phrase_travels_from_capture_to_the_queue() {
+    fn a_spoken_phrase_travels_from_capture_to_the_sink() {
         let mode = armed_shared();
-        let generation = mode.lock().generation();
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("run the tests");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let mut input = speech(500);
         input.extend(silence(600));
@@ -3551,7 +3609,13 @@ mod tests {
 
         let first = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
         assert!(
-            matches!(first, Tick::Running { enqueued: None, .. }),
+            matches!(
+                first,
+                Tick::Running {
+                    delivered: None,
+                    ..
+                }
+            ),
             "the hold-back must still be running, got {first:?}"
         );
         assert_eq!(
@@ -3559,7 +3623,7 @@ mod tests {
             Some("run the tests"),
             "the transcript must be visible while it is held back"
         );
-        assert!(queue.enqueued.borrow().is_empty());
+        assert!(queue.written.borrow().is_empty());
 
         let sent = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 1_200);
 
@@ -3567,22 +3631,16 @@ mod tests {
             matches!(
                 sent,
                 Tick::Running {
-                    enqueued: Some(1),
+                    delivered: Some(Delivery::Turn),
                     ..
                 }
             ),
-            "the expired hold-back must enqueue, got {sent:?}"
+            "the expired hold-back must be typed, got {sent:?}"
         );
         assert_eq!(
-            queue.enqueued.borrow().as_slice(),
-            [(
-                "target".to_string(),
-                "run the tests".to_string(),
-                generation,
-                1
-            )]
+            queue.written.borrow().as_slice(),
+            [written("run the tests")]
         );
-        assert_eq!(mode.lock().owned_ids(), [1]);
     }
 
     /// An armed microphone in an empty room must cost nothing: no inference at
@@ -3593,7 +3651,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("should never be asked");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         // 60s of room silence, delivered the way cpal delivers it.
         for step in 0..1_200u64 {
@@ -3613,7 +3671,7 @@ mod tests {
             0,
             "silence must never reach the recogniser"
         );
-        assert!(queue.enqueued.borrow().is_empty());
+        assert!(queue.written.borrow().is_empty());
         assert!(
             capture.retained_samples() <= ms_to_samples(test_config().pre_roll_ms) + FRAME_SAMPLES,
             "silence retained {} samples — the pre-roll is the only buffer",
@@ -3629,7 +3687,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("   ");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let mut input = speech(500);
         input.extend(silence(600));
@@ -3642,7 +3700,7 @@ mod tests {
 
         assert_eq!(endpoint.calls.get(), 1, "the utterance was transcribed");
         assert!(
-            queue.enqueued.borrow().is_empty(),
+            queue.written.borrow().is_empty(),
             "an empty transcript is not a message"
         );
         assert_eq!(*mode.lock().phase(), Phase::Waiting);
@@ -3657,7 +3715,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("too late");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let aborting = mode.clone();
         *endpoint.during_transcribe.borrow_mut() = Some(Box::new(move || {
@@ -3676,7 +3734,7 @@ mod tests {
 
         assert_eq!(endpoint.calls.get(), 1);
         assert!(
-            queue.enqueued.borrow().is_empty(),
+            queue.written.borrow().is_empty(),
             "a result that outlived its mode must not reach a model"
         );
         assert!(mode.lock().binding().is_none());
@@ -3689,7 +3747,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("unused");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         target.0.set(false);
         let outcome = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
@@ -3709,7 +3767,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("unused");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         endpoint.connected.set(false);
         let outcome = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
@@ -3763,7 +3821,7 @@ mod tests {
         let mode = armed_shared();
         let mut capture = runtime_capture();
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         // Still connected, so the conversation survives a tick — the control
         // that keeps the assertion below from passing against an endpoint that
@@ -3795,7 +3853,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("unused");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         *endpoint.drain_error.borrow_mut() = Some("input device disappeared".to_string());
         let outcome = tick(&mut capture, &mode, &mut endpoint, &target, &queue, 0);
@@ -3819,7 +3877,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("unused");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         // Still inside the timeout: no samples yet, but not a failure either.
         assert!(matches!(
@@ -3847,7 +3905,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("unused");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         for step in 0..300u64 {
             endpoint.feed(silence(50));
@@ -3867,17 +3925,13 @@ mod tests {
         }
     }
 
-    /// A queue that refuses everything, and is `Send` so the tick under test
+    /// A sink that refuses everything, and is `Send` so the tick under test
     /// can run on a thread the test can put a deadline on.
-    struct RefusingQueue;
+    struct RefusingSink;
 
-    impl VoiceQueue for RefusingQueue {
-        fn enqueue(&self, _session_id: &str, _text: &str, _generation: u64) -> Result<u64, String> {
+    impl VoiceSink for RefusingSink {
+        fn write(&self, _session_id: &str, _text: &str) -> Result<VoiceWrite, String> {
             Err("Session not found".to_string())
-        }
-
-        fn cancel(&self, _session_id: &str, _ids: &[u64]) -> VoiceCancellation {
-            VoiceCancellation::default()
         }
     }
 
@@ -3909,7 +3963,7 @@ mod tests {
                     &mode,
                     &mut endpoint,
                     &FakeTarget(std::cell::Cell::new(true)),
-                    &RefusingQueue,
+                    &RefusingSink,
                     2_000,
                 );
                 let _ = tx.send(matches!(
@@ -3944,7 +3998,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("delete everything");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let mut input = speech(500);
         input.extend(silence(600));
@@ -3961,7 +4015,7 @@ mod tests {
             tick(&mut capture, &mode, &mut endpoint, &target, &queue, 10_000),
             Tick::NotArmed
         ));
-        assert!(queue.enqueued.borrow().is_empty());
+        assert!(queue.written.borrow().is_empty());
     }
 
     /// The gate against the real pass, not against `accept_transcript` alone:
@@ -3981,7 +4035,7 @@ mod tests {
         let mut capture = runtime_capture();
         let mut endpoint = FakeEndpoint::new("cancella tutto il repository");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         let mut input = speech(500);
         input.extend(silence(600));
@@ -3999,12 +4053,8 @@ mod tests {
             "a rejected transcript may not occupy the send slot"
         );
         assert!(
-            queue.enqueued.borrow().is_empty(),
-            "a rejected transcript may not reach the Compose queue"
-        );
-        assert!(
-            mode.lock().owned_ids().is_empty(),
-            "and it may not leave an entry behind to cancel"
+            queue.written.borrow().is_empty(),
+            "a rejected transcript may not reach the sink"
         );
     }
 
@@ -4134,7 +4184,7 @@ mod tests {
         );
         let mut endpoint = FakeEndpoint::new("no, stop");
         let target = FakeTarget(std::cell::Cell::new(true));
-        let queue = FakeQueue::default();
+        let queue = FakeSink::default();
 
         // Handed over whole, exactly as `speaker` hands it over. It has to fit
         // the far end's two-second buffer: a longer one loses its head, and the

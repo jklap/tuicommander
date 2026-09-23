@@ -12,7 +12,6 @@ const armedStatus = (sessionId: string) => ({
 	owner: "desktop",
 	generation: 1,
 	pendingText: null,
-	queuedIds: [],
 	holdBackMs: 0,
 	error: null,
 	deliveredTurns: 0,
@@ -33,7 +32,7 @@ describe("toggleHandsFreeConversation", () => {
 
 	afterEach(async () => {
 		// Leave the store disarmed so its status monitor stops.
-		mockInvoke.mockResolvedValue({ alreadyDelivered: [], status: { ...armedStatus(""), armed: false } });
+		mockInvoke.mockResolvedValue({ status: { ...armedStatus(""), armed: false } });
 		if (dictationStore.state.handsFree?.armed) await dictationStore.disarmHandsFree();
 		vi.restoreAllMocks();
 	});
@@ -60,7 +59,7 @@ describe("toggleHandsFreeConversation", () => {
 		mockInvoke.mockImplementation(async (cmd: string) => {
 			if (cmd === "arm_hands_free_dictation") return armedStatus("sess-active");
 			if (cmd === "disarm_hands_free_dictation")
-				return { alreadyDelivered: [], status: { ...armedStatus(""), armed: false, sessionId: null } };
+				return { status: { ...armedStatus(""), armed: false, sessionId: null } };
 			return undefined;
 		});
 		await toggleHandsFreeConversation();

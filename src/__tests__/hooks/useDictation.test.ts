@@ -38,7 +38,7 @@ describe("useDictation", () => {
 		startRecording: vi.fn().mockResolvedValue(undefined),
 		stopRecording: vi.fn().mockResolvedValue(transcribeOk("hello world")),
 		refreshHandsFree: vi.fn().mockResolvedValue(undefined),
-		disarmHandsFree: vi.fn().mockResolvedValue([]),
+		disarmHandsFree: vi.fn().mockResolvedValue(undefined),
 	};
 
 	const mockSetStatusInfo = vi.fn();
@@ -108,19 +108,6 @@ describe("useDictation", () => {
 			expect(mockDictationStore.disarmHandsFree).toHaveBeenCalled();
 			expect(mockDictationStore.startRecording).not.toHaveBeenCalled();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Hands-free: stopped");
-		});
-
-		// Entries the composer already typed cannot be pulled back, and the one
-		// place the user can learn that is the message the stop leaves behind.
-		it("says how many spoken entries the stop could not take back", async () => {
-			mockDictationStore.refreshHandsFree.mockImplementation(async () => {
-				mockDictationStore.state.handsFree = { armed: true };
-			});
-			mockDictationStore.disarmHandsFree.mockResolvedValue([7]);
-
-			await dictation.handleDictationStart();
-
-			expect(mockSetStatusInfo).toHaveBeenCalledWith("Hands-free: stopped — 1 spoken entry had already been typed");
 		});
 
 		// The mode ends by itself when its terminal closes. Trusting the stored

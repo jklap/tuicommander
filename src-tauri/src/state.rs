@@ -39,38 +39,6 @@ pub(crate) enum PendingInjection {
     /// The id is what the Compose panel deletes by: a queue position would shift
     /// under the caller as the FIFO drains on the next idle window.
     UserCommand { id: u64, text: String },
-    /// A hands-free dictation turn. Same FIFO, same idle gate, same id space as
-    /// every other entry — `generation` is what tells a disarm which voice
-    /// entries are its own, so cancelling obsolete speech cannot reach a human's
-    /// Compose command or a peer's notice.
-    VoiceCommand {
-        id: u64,
-        text: String,
-        generation: u64,
-    },
-}
-
-/// What the Compose FIFO did with a hands-free voice turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct VoiceEnqueued {
-    /// The entry's identity, for a later cancellation.
-    pub(crate) id: u64,
-    /// The agent was idle, so the text reached the composer at once.
-    pub(crate) typed: bool,
-    /// Entries still waiting, this one included when `typed` is false.
-    pub(crate) queued: usize,
-}
-
-/// What a voice cancellation actually achieved.
-///
-/// `already_delivered` is neither an error nor a silence: those entries reached
-/// the composer before the cancel arrived. Reporting them is the difference
-/// between an honest outcome and claiming a message was pulled back when the
-/// model already has it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct VoiceCancellation {
-    pub(crate) cancelled: Vec<u64>,
-    pub(crate) already_delivered: Vec<u64>,
 }
 
 /// Ids are unique per process, not per session — a Compose delete carries both.
@@ -102,20 +70,11 @@ impl PendingInjection {
         }
     }
 
-    pub(crate) fn voice_command(text: impl Into<String>, generation: u64) -> Self {
-        Self::VoiceCommand {
-            id: next_injection_id(),
-            text: text.into(),
-            generation,
-        }
-    }
-
     pub(crate) fn id(&self) -> u64 {
         match self {
             Self::Notice { id, .. }
             | Self::InitialPrompt { id, .. }
-            | Self::UserCommand { id, .. }
-            | Self::VoiceCommand { id, .. } => *id,
+            | Self::UserCommand { id, .. } => *id,
         }
     }
 
@@ -123,18 +82,7 @@ impl PendingInjection {
         match self {
             Self::Notice { text, .. }
             | Self::InitialPrompt { text, .. }
-            | Self::UserCommand { text, .. }
-            | Self::VoiceCommand { text, .. } => text,
-        }
-    }
-
-    /// The hands-free generation that owns this entry, if any. Only a voice
-    /// entry has one — which is exactly what keeps a cancellation off every
-    /// other producer's messages.
-    pub(crate) fn voice_generation(&self) -> Option<u64> {
-        match self {
-            Self::VoiceCommand { generation, .. } => Some(*generation),
-            _ => None,
+            | Self::UserCommand { text, .. } => text,
         }
     }
 
@@ -145,7 +93,6 @@ impl PendingInjection {
             Self::Notice { .. } => "notice",
             Self::InitialPrompt { .. } => "initial_prompt",
             Self::UserCommand { .. } => "user_command",
-            Self::VoiceCommand { .. } => "voice_command",
         }
     }
 }

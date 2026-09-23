@@ -40,18 +40,18 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 
 | Command | HTTP | Description |
 |---------|------|-------------|
-| `arm_hands_free_dictation(sessionId, owner)` | `POST /dictation/hands-free/arm` | Bind the delivery target and the audio owner, open a generation, return `HandsFreeStatus`. Refused when the target cannot take a Compose entry. Does **not** open a microphone. |
-| `disarm_hands_free_dictation()` | `POST /dictation/hands-free/disarm` | Disarm the whole mode, cancel the voice entries it still owns, return `HandsFreeDisarmed`. Idempotent. |
+| `arm_hands_free_dictation(sessionId, owner)` | `POST /dictation/hands-free/arm` | Bind the delivery target and the audio owner, open a generation, return `HandsFreeStatus`. Refused when the target cannot take hands-free input (not an agent PTY session). Does **not** open a microphone. |
+| `disarm_hands_free_dictation()` | `POST /dictation/hands-free/disarm` | Disarm the whole mode, drop the transcript that never reached the model, return `HandsFreeDisarmed`. Idempotent. |
 | `get_hands_free_status()` | `GET /dictation/hands-free` | `HandsFreeStatus`. |
 | `get_hands_free_default_notice()` | `GET /dictation/hands-free/default-notice` | The built-in start notice (`MODE_ENTRY_HINT`) as a string, so a settings surface can show it and reset to it without a copy of the text. |
 
 Both transports serialize the same structs, camelCase on the wire:
-`HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, queuedIds, holdBackMs, error, deliveredTurns, droppedTurns }` and
-`HandsFreeDisarmed { wasArmed, generation, cancelled, alreadyDelivered, discardedPending, discardedCapture, status }`.
+`HandsFreeStatus { armed, phase, sessionId, owner, generation, pendingText, holdBackMs, error, deliveredTurns, droppedTurns }` and
+`HandsFreeDisarmed { wasArmed, generation, discardedPending, discardedCapture, status }`.
 `sessionId` and `owner` are bounded at 256 bytes and may not be blank.
 `phase` is one of `disarmed`, `waiting`, `capturing`, `transcribing`,
 `holding_back`, `delivered`, `error`.
-`deliveredTurns` (bumped in `HandsFree::note_enqueued`) and `droppedTurns`
+`deliveredTurns` (bumped in `HandsFree::note_written`) and `droppedTurns`
 (bumped on `TranscriptOutcome::Rejected`) are monotonic for the process and
 never reset on arm; the frontend plays its earcons when one moves between two
 polls (`turnEarcon` in `stores/dictation.ts`), unless `hands_free_earcons`
@@ -236,56 +236,51 @@ all, which is what makes a redirected delivery impossible rather than merely
 unlikely. Every asynchronous result carries the generation it was captured
 under; one that no longer matches is rejected as stale.
 
-A transcript is held back for a visible interval **before** enqueue, so an
-unintended turn can be stopped while nothing has been queued yet. A manual abort
+A transcript is held back for a visible interval **before** it is written, so
+an unintended turn can be stopped while nothing has been typed yet. A manual abort
 disarms the whole mode — pending capture, transcription and the held-back
 transcript are discarded, and nothing re-arms by itself. Target closure, audio
 owner disconnect and device failure disarm the same way.
 
-**Delivery is the existing Compose queue and nothing else.** `VoiceQueue` is the
-only exit, and its one production implementation appends through
-`pty::enqueue_voice_command` — the same FIFO, gate and id space the Compose
-panel uses. There is no PTY write, no `sendCommand`, no submit and no ACP
-prompt. A target that cannot take a Compose entry (not an agent PTY session)
-is refused at `arm` and at the queue; it stays unavailable, with no fallback.
+**Delivery is a direct write, not the Compose queue.** `VoiceSink` is the only
+exit, and its one production implementation is `pty::write_voice_turn`. It
+types the turn into the bound agent's composer at once, **even while the agent
+is busy** — the same as a line the user types by hand into a working Claude
+Code, which the agent queues or takes mid-turn itself. The Compose queue is for
+something else ("one message, let the agent work, then the next"), so a voice
+turn never enters it and never reorders it. Parking speech there until idle
+measured a median delay of 103 s, max 594 s.
 
-Queue entries carry ownership: `PendingInjection::VoiceCommand` (wire `kind`
-`voice_command`) holds the hands-free generation. `pty::cancel_voice_commands`
-removes only entries that are both voice-owned and named by the caller, so a
-disarm can never clear a human's Compose command, a peer notice or an exit hint.
-Ids that already left the queue come back in `already_delivered` rather than
-being reported as cancelled — the composer has them and nothing can retract them.
+The write is the framed path every injection uses (`run_claimed_injection`:
+Ctrl-U, the text, then a separate Enter), never raw text plus `\r`. An idle
+agent is claimed IDLE→BUSY like any injection, without the confirmed-idle
+requirement. A busy agent is claimed without touching its BUSY atom, and a
+write that does not start never reports the agent idle.
 
-**A voice turn does not wait for idle.** The gate picks its rule from the kind
-of the entry at the head of the queue (`pty::InjectionGate`). A `VoiceCommand`
-head is typed at once, **even while the agent is busy** — the same as a line
-the user types by hand into a working Claude Code, which the agent queues or
-takes mid-turn itself. Parking it until idle measured a median delay of 103 s,
-max 594 s. The mid-turn claim leaves the shell atom BUSY, and a write that does
-not start never reports the agent idle. Every other kind keeps the idle rule: a
-confirmed idle agent, one submission per idle window. Both rules refuse a
-confident question and a draft in the composer, so speech never answers a
-permission dialog. The start and exit notices are `VoiceCommand` entries too,
-so they follow the voice rule. `enqueue_voice_command` logs each turn at INFO
-as `hands-free turn typed now` or `hands-free turn parked` with the reason.
+Two holds remain, and they are the reason this is not a raw write:
 
-The voice rule is a head rule. A voice turn behind an older typed command, a
-notice or an initial prompt waits for that entry. When the entry goes out, the
-same flush types the voice turns behind it without waiting for another idle.
+| Hold (`pty::VoiceHold`) | Why |
+|---|---|
+| `Question` | a confident question or permission dialog owns the composer; speech must never answer it |
+| `Draft` | the user has text in the composer; the opening Ctrl-U would erase it |
+| `InFlight` | another write holds the composer, or an earlier one is uncertain |
+| `WriteNotStarted` | the PTY refused the first byte |
 
-Voice turns that were held back leave together. The flush types the whole run
-of `VoiceCommand` entries at the head of the queue as **one** submission — each
-turn intact, in spoken order, one per line (`pty::take_next_submission`). The
-run stops at the first entry of any other kind, so a typed Compose command, a
-notice or an initial prompt is still its own submission and nothing overtakes
-it. The run leaves the queue under one lock, so every joined id is delivered
-together and a disarm reports all of them in `already_delivered`.
+A held turn stays **in the mode**: `pendingText` still shows it, the phase is
+`holding_back`, and `deliver_due` retries it on every tick. Speech that
+arrives meanwhile joins it, so turns that were held reach the model as one
+message, in spoken order. A disarm drops a held turn like one still inside its
+hold-back (`discardedPending`). A target that cannot take hands-free input is
+refused at `arm` and at the sink; it stays unavailable, with no fallback.
+
+Each attempt is logged at INFO with the session: `Hands-free turn typed now`,
+or `Hands-free turn held` with the reason — a hold once, not once per tick.
 
 ### The runtime that drives it
 
 The state machines above are inert. `spawn_runtime` starts the thread that feeds
 them: it wakes every `POLL_INTERVAL_MS` (50 ms) and calls `tick`, which is the
-whole capture -> segment -> transcribe -> hold-back -> enqueue path in one
+whole capture -> segment -> transcribe -> hold-back -> write path in one
 clock-free function. `tick` takes `now_ms` from the driver, so every test drives
 the real production path with a fake clock instead of sleeping.
 
@@ -305,14 +300,15 @@ One tick, in order:
    the mode lock**, transcribe, re-acquire and offer the transcript. The lock is
    deliberately not held across inference, which is what lets a manual abort
    land mid-transcription and reject the result that arrives after it;
-7. `deliver_due` — enqueue whatever the hold-back has now cleared.
+7. `deliver_due` — write a held start notice first, else whatever the
+   hold-back has now cleared; a held write goes back into the mode.
 
 Three details that are load-bearing rather than incidental:
 
 - **Never lock the mode in a `match` scrutinee.** `parking_lot` is not
   reentrant and a temporary in the scrutinee lives for the whole `match`, so
   `match deliver_due(&mut mode.lock(), ..)` deadlocks the runtime — and every
-  status poll behind it — the first time the queue refuses a delivery. Bind the
+  status poll behind it — the first time the sink refuses a delivery. Bind the
   result in its own statement.
 - A refused delivery is **not** a disarm: `note_send_failed` records the message
   and returns the mode to `Waiting`, still armed.
@@ -414,7 +410,7 @@ a turn. Set, it must open each new turn, and three properties are the contract:
 - **It gates new model input, never the microphone.** The match sits in
   `HandsFree::accept_transcript`, after transcription and before the send slot.
   A rejected transcript never enters that slot, and `poll_send` is the only
-  thing `deliver_due` can hand to the Compose FIFO — which is the module's only
+  thing `deliver_due` can hand to the sink — which is the module's only
   exit. "It never reaches PTY, ACP or MCP" is therefore structural, not a check
   repeated per call site.
 - **It bounds a conversation, not a sentence.** One accepted turn opens
@@ -445,8 +441,8 @@ window, so a model never reads it. Spoken alone, it opens the window and submits
 nothing.
 
 The window is anchored on **acceptance, not on the model's reply**: this module
-enqueues and observes nothing coming back, which is what keeps the Compose FIFO
-its only exit. A user who waits out a long answer will need the phrase again.
+writes and observes nothing coming back, which is what keeps the sink its only
+exit. A user who waits out a long answer will need the phrase again.
 Story 816-cbbf adds spoken playback and is the first caller that will know when
 an answer ended; the anchor is worth revisiting there. Interrupting playback is
 that story's work and belongs *upstream* of this gate — stopping a speaker is
@@ -472,33 +468,34 @@ that is a fact about this machine rather than a message to a model.
 `hands_free_start_notice` (default empty) replaces the start notice with the
 user's own text; empty or blank means `MODE_ENTRY_HINT`. It is read at arm time
 and passed through `entry_hint_text`, which folds line breaks and whitespace
-runs to single spaces — the settings field is multiline, and the queue submits
+runs to single spaces — the settings field is multiline, and the sink submits
 on a newline. The reply language is **not** part of the user's text:
 `deliver_entry_hint` appends `Reply in <Name>.` by code when the dictation
 setting names a language, so a custom notice cannot drop it. Under `auto` the
 notice names nothing and the first spoken turn carries the language instead —
-see "The requirement travels in the Compose entry". The exit notice is not
+see "The requirement travels in the spoken entry". The exit notice is not
 configurable.
 
 Five rules, and each of them is a test:
 
-- **The Compose FIFO, like everything else.** `deliver_entry_hint` goes through
-  `VoiceQueue::enqueue`, so a notice queues behind any older entry, waits out
-  an open dialog or a draft (not a busy agent — it is a voice entry), and lands in the session the mode bound
-  to rather than in whatever tab the user has since focused. It is one line, for
-  the reason `compose_entry` gives: the queue types an entry and submits it, and
-  a newline submits half of it.
-- **A parked notice is owned, so it is cancellable.** `note_hint_enqueued`
-  records the id in `owned` and in `entry_hint`, so a disarm pulls it back out
-  of the FIFO like any other voice entry. It does **not** move the phase: the
-  phase describes what the user's speech is doing, and nothing has been said.
+- **The sink, like every spoken turn.** `deliver_entry_hint` goes through
+  `VoiceSink::write`, so the notice is typed at once — into a busy agent too —
+  and lands in the session the mode bound to rather than in whatever tab the
+  user has since focused. It is one line, for the reason `compose_entry` gives:
+  the sink types an entry and submits it, and a newline submits half of it.
+- **A held notice waits in the mode, first.** A dialog or a draft holds it as
+  `EntryHint::Pending`; `deliver_due` retries it on every tick **before** any
+  spoken turn, so no turn reaches the model ahead of the notice it depends on.
+  A disarm drops it with the mode. It does **not** move the phase: the phase
+  describes what the user's speech is doing, and nothing has been said.
 - **The exit notice is owed only to a model that read the entry notice.** The
-  evidence is the cancellation: an id reported `cancelled` was pulled back
-  before the composer typed it, so the model never read it and an exit notice
-  after it would be the only thing it ever heard about a mode it never had. An
-  id reported `already_delivered` cannot be retracted, so the model believes it
-  can speak and has to be told otherwise. That is `deliver_exit_hint`, and it is
-  why a rapid arm/disarm leaves no contradictory pair.
+  evidence is `Disarmed::entry_hint_written`: a notice still held at disarm was
+  never typed, so the model never read it, and an exit notice after it would be
+  the only thing it ever heard about a mode it never had. A typed notice cannot
+  be retracted, so the model believes it can speak and has to be told
+  otherwise. That is `deliver_exit_hint`, and it is why a rapid arm/disarm
+  leaves no contradictory pair. The exit notice gets one attempt: the mode is
+  gone, so a dialog or a draft on screen at disarm drops it with a warning log.
 - **Driven by what this arm sent, never by the setting as it now reads.** A user
   who turns the notices off mid-conversation has changed what the *next* arm
   says; a model already holding "you can answer out loud" still gets its exit
@@ -506,13 +503,13 @@ Five rules, and each of them is a test:
 - **Both disarm paths, not just the user's.** `report_exit_hint` is called from
   `disarm_hands_free` and from the runtime thread's `Tick::Disarmed` arm, so a
   closed target, a lost owner and a dead microphone all end the model's
-  expectation too. A target that has gone away refuses the enqueue; that is
+  expectation too. A target that has gone away refuses the write; that is
   reported, not swallowed — there is nobody left to tell.
 
-A refused entry notice does not fail the arm. The microphone works and the
-Compose queue works for ordinary turns; the reason lands in
-`HandsFreeStatus::error` via `note_send_failed`, and the mode owns nothing, so
-no exit notice follows either.
+A refused entry notice does not fail the arm. The microphone works and ordinary
+turns may still land; the reason lands in `HandsFreeStatus::error` via
+`note_send_failed`, and the notice was never typed, so no exit notice follows
+either.
 
 Push-to-talk shares none of this. It never calls `arm_hands_free`, so it opens
 no VAD runtime, reads no activation phrase, makes no speech available and sends
@@ -1216,29 +1213,28 @@ beside it is a gap, not an omission from the documentation.
 
 | Scenario | Held by |
 |---|---|
-| Optional activation, on and off | `an_empty_activation_phrase_lets_every_turn_through`, `speech_without_the_activation_phrase_never_reaches_the_queue`, `a_configured_phrase_gates_a_turn_and_is_stripped_from_what_is_sent` |
+| Optional activation, on and off | `an_empty_activation_phrase_lets_every_turn_through`, `speech_without_the_activation_phrase_never_reaches_the_queue`, `a_configured_activation_phrase_decides_which_speech_reaches_the_model`, `a_configured_phrase_gates_a_turn_and_is_stripped_from_what_is_sent` |
 | Phrase matching tolerates Whisper spellings, not look-alike speech | `the_phrase_matches_the_spellings_whisper_invents_for_it`, `speech_that_only_resembles_the_phrase_does_not_activate`, `an_accented_or_capitalised_phrase_setting_matches_the_plain_transcript`, `the_rejection_excerpt_keeps_the_first_words_verbatim_and_nothing_more` |
 | Phrase-only timeout | `the_phrase_alone_opens_the_window_without_sending_anything`, `follow_up_speech_inside_the_window_needs_no_phrase`, `speech_after_the_window_expires_needs_the_phrase_again` |
 | Hold-back cancellation | `nothing_is_enqueued_before_the_hold_back_expires`, `an_abort_inside_the_hold_back_sends_nothing` |
 | Pause mid-sentence during the hold-back — the continuation is appended to the pending text and restarts the hold-back, never replaces it | `speech_that_arrives_during_the_hold_back_joins_the_pending_turn` |
 | Manual disarm | `a_manual_abort_disarms_the_whole_mode_and_discards_the_pending_send`, `disarming_a_mode_that_was_never_armed_reports_no_work` |
-| Busy or dialog target | `a_busy_target_or_one_holding_a_dialog_parks_the_turn_and_stays_a_target`, `arming_against_a_target_that_cannot_take_a_compose_entry_is_refused` |
+| Busy or dialog target | `a_busy_target_takes_the_turn_a_dialog_holds_it_and_all_stay_targets`, `a_turn_the_composer_holds_stays_in_the_mode_and_is_retried`, `arming_types_speech_into_a_busy_session_and_leaves_its_compose_queue_alone`, `arming_against_a_target_that_cannot_take_a_compose_entry_is_refused` |
 | Target closure | `a_closed_target_disarms_the_running_mode`, `a_closed_target_disarms_and_a_different_session_does_not`, `closing_the_bound_session_disarms_the_running_mode_and_releases_the_device` |
 | Owner disconnect | `a_disconnected_owner_disarms_the_running_mode`, `a_disconnected_owner_disarms_and_a_different_owner_does_not` |
-| No stale submission | `a_transcript_from_a_previous_generation_cannot_send`, `a_transcription_that_finishes_after_a_disarm_never_reaches_the_queue`, `an_abort_during_transcription_lands_and_its_result_is_refused` |
+| No stale submission | `a_transcript_from_a_previous_generation_cannot_send`, `a_transcription_that_finishes_after_a_disarm_never_reaches_the_sink`, `an_abort_during_transcription_lands_and_its_result_is_refused` |
 | No stale playback | `disarming_while_a_reply_is_playing_stops_the_device`, `a_reply_written_for_a_turn_the_user_talked_over_is_refused` |
 
 Two of those rows are worth reading before changing anything near them.
 
-**Busy is not closed.** `PtyTargetProbe::accepts` asks whether the target exists
-and can take voice at all — never what it is doing. A probe that also answered
-"is it free right now" would end the conversation on the first reply the user
-asked for. Waiting is the Compose queue's job, and it is the *only* exit from
-this module: a second delivery path would be a way to type into a working agent
-or an open permission prompt. That is why the busy row asserts on
-`VoiceEnqueued::typed` for three sessions at once — idle, busy, and idle with a
-confident question — with the idle one as the control. On its own, "it parked"
-is equally consistent with a fixture that could never deliver anything.
+**Busy is not closed, and not a hold.** `PtyTargetProbe::accepts` asks whether
+the target exists and can take voice at all — never what it is doing. A probe
+that also answered "is it free right now" would end the conversation on the
+first reply the user asked for. A busy agent takes the turn at once; only a
+dialog or a draft holds it, and the hold lives in the mode, never in the
+Compose queue. That is why the busy row asserts on `VoiceWrite` for three
+sessions at once — idle, busy, and idle with a confident question — with the
+idle one as the control, and checks that none of them gained a Compose entry.
 
 **Disarming silences by dropping, not by hushing.** `disarm_hands_free` sets the
 speaker slot to `None`; `Drop for Speaker` cancels the render in flight and calls
@@ -1302,16 +1298,16 @@ the user changed underneath the setting — and in both, speaking in a voice
 nobody chose is worse than saying why nothing was spoken. The message reaches
 the user through the hands-free status rather than a log.
 
-**The requirement travels in the Compose entry, once per conversation.**
-`esegui i test` is queued as `esegui i test (reply in Italian)`; the next
-Italian turn is queued as spoken, and a turn in English announces
+**The requirement travels in the spoken entry, once per conversation.**
+`esegui i test` is typed as `esegui i test (reply in Italian)`; the next
+Italian turn is typed as spoken, and a turn in English announces
 `(reply in English)` again. The model is told once, not on every message:
 `HandsFree.announced_language` records the language last stated, set only when
-the queue accepted the entry that stated it (a refused entry told the model
-nothing) and cleared on arm and disarm. A turn with no nameable language
+the sink typed the entry that stated it (a held or refused entry told the
+model nothing) and cleared on arm and disarm. A turn with no nameable language
 leaves it alone. With a fixed dictation language the start notice already
 states it, so the first turn carries nothing either. In the entry rather than
-only in a mode hint, because hints are optional and this is not; on one line, because the queue types
+only in a mode hint, because hints are optional and this is not; on one line, because the sink types
 the entry into a terminal and submits it, and a newline in the middle submits
 half a sentence. The English name comes from `dictation/language.rs`, whose
 table is checked against `WHISPER_LANGUAGES` in `src/stores/dictation.ts` by a
