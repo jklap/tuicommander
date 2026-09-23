@@ -8,7 +8,9 @@ import { extractRenderedTabComponents, extractRenderedTabKeys, extractTab } from
  * order. A page composed of several components (MCP = the local server panel
  * above the upstream proxy panel) is extracted from all of them, concatenated,
  * so a label keeps the `<h3>` the DOM puts above it. A component nested inside
- * one of these (RemoteMachinesTab wraps RemoteMachinesPanel) is listed by hand;
+ * one of these (RemoteServersTab renders the merged connection editor, the SSH
+ * Tunnels section and RemoteMachinesTab, which wraps RemoteMachinesPanel) is
+ * listed by hand;
  * the top-level ones are checked against `SettingsPanel` below. */
 const TAB_SOURCES: Record<string, string[]> = {
 	telegram: ["tabs/TelegramTab.tsx"],
@@ -22,7 +24,15 @@ const TAB_SOURCES: Record<string, string[]> = {
 	github: ["tabs/GitHubTab.tsx"],
 	mcp: ["tabs/services/LocalMcpPanel.tsx", "tabs/services/UpstreamMcpPanel.tsx"],
 	"remote-access": ["tabs/services/RemoteAccessPanel.tsx"],
-	"remote-machines": ["tabs/RemoteMachinesTab.tsx", "tabs/services/RemoteMachinesPanel.tsx"],
+	"remote-servers": [
+		"tabs/RemoteServersTab.tsx",
+		"tabs/services/RemoteConnectionEditor.tsx",
+		"../shared/SshConnectionFields.tsx",
+		"../TunnelsPanel/PortForwardsEditor.tsx",
+		"tabs/SshTunnelsSection.tsx",
+		"tabs/RemoteMachinesTab.tsx",
+		"tabs/services/RemoteMachinesPanel.tsx",
+	],
 	streamdock: ["tabs/StreamDockTab.tsx"],
 	plugins: ["tabs/PluginsTab.tsx"],
 	"smart-prompts": ["tabs/SmartPromptsTab.tsx"],
@@ -57,10 +67,11 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// text includes a runtime count.
 	mcp: { dynamic: 1, orphans: 0 },
 	"remote-access": { dynamic: 0, orphans: 0 },
-	// RemoteMachinesPanel: the SSH-host `<option label={`${host}…`}>` (a
-	// datalist entry, not a setting), and the "Deployment" and "Keep ephemeral
-	// daemon alive" labels, whose text sits in a nested `<span>`.
-	"remote-machines": { dynamic: 3, orphans: 0 },
+	// RemoteServersTab's merged editor: the "Named instance"/"Manual port" radio
+	// labels and the "Compress the channel" / "Connect automatically on startup"
+	// toggles wrap a nested input; the connection rows' `ConnectionStatusBadge
+	// label={…}` is a runtime status, not a setting.
+	"remote-servers": { dynamic: 5, orphans: 0 },
 	// StreamDockTab: the per-key role grid's labels come from a runtime <For>.
 	streamdock: { dynamic: 1, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },

@@ -39,7 +39,7 @@ import {
 	NotificationsTab,
 	PluginsTab,
 	RemoteAccessPanel,
-	RemoteMachinesTab,
+	RemoteServersTab,
 	RepoScriptsTab,
 	RepoWorktreeTab,
 	SelectionTab,
@@ -79,6 +79,8 @@ const RETIRED_TABS: Record<string, string> = {
 	// AI Providers became AI Chat.
 	services: "mcp",
 	providers: "ai-chat",
+	// Remote Machines and the SSH Tunnels editor merged into Remote Servers.
+	"remote-machines": "remote-servers",
 };
 
 /** The page to open for a requested tab key. */
@@ -359,8 +361,8 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				<Show when={activeTab() === "remote-access"}>
 					<RemoteAccessPanel />
 				</Show>
-				<Show when={activeTab() === "remote-machines"}>
-					<RemoteMachinesTab />
+				<Show when={activeTab() === "remote-servers"}>
+					<RemoteServersTab />
 				</Show>
 				<Show when={activeTab() === "telegram"}>
 					<TelegramTab />

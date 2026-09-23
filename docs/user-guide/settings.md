@@ -8,7 +8,7 @@ groups the pages by task:
 | **Application** | General, Appearance, Notifications |
 | **Workspace** | Terminal, Keyboard Shortcuts, Git & GitHub |
 | **AI** | Agents, AI Chat, Voice, Smart Prompts |
-| **Integrations** | MCP, Remote Access, Remote Machines, Plugins |
+| **Integrations** | MCP, Remote Access, Remote Servers, Plugins |
 | **Repositories** | One page for each repository in the sidebar |
 
 The **AI Chat** page is shown only while **Experimental Features** is on (see
@@ -103,7 +103,7 @@ never all expert: in basic mode it would show an empty page.
 | **ego profile** | Optional name of a profile in ego's user configuration for the AI Chat panel. Leave empty to use ego's normal profile selection. Names with whitespace or a leading dash are rejected. TUICommander passes the name to `ego acp`; the profile's rules remain in ego's configuration. |
 | **Default IDE** | IDE for "Open in..." actions (**IDE** section). Only installed apps are offered, grouped by category: Code Editors (VS Code, Cursor, Zed, Windsurf, Neovim, Xcode, `$EDITOR`), JetBrains (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet), Terminals (Ghostty, WezTerm, Alacritty, Kitty, Warp, iTerm2), Git Tools (Sourcetree, GitHub Desktop, Fork, GitKraken, Sublime Merge, Tower), System (Terminal, Finder) |
 | **Custom Launchers** | Define your own tools for the "Open in" menu. Each launcher has a name, an executable (bare name resolved on `PATH`, or absolute path), and arguments (one per line). Arguments may use placeholders, expanded at launch: `{path}`/`{file}` (focused file, else repo root), `{fileDir}` (directory of the focused file), `{repo}` (repo/worktree root), `{cwd}` (focused terminal's working directory), `{home}` (your home directory), `{line}`/`{column}` (1-based editor cursor position). Args are passed verbatim (no shell parsing), so paths with spaces are safe. |
-| **Experimental Features** | One toggle, no sub-toggles. It opts in to the **AI Chat** panel (ego over ACP, #785-58ca) and **SSH Tunnels**. It also shows the **AI Chat** settings page. The AI Chat, AI Triage and AI Watchers sub-toggles went with the embedded AI engine (#784-0aec). |
+| **Experimental Features** | One toggle, no sub-toggles. It opts in to the **AI Chat** panel (ego over ACP, #785-58ca) and shows the **AI Chat** settings page. SSH Tunnels graduated out of it (Settings → **Remote Servers**). The AI Chat, AI Triage and AI Watchers sub-toggles went with the embedded AI engine (#784-0aec). |
 
 ### Appearance
 
@@ -477,12 +477,27 @@ without authentication, **Tailscale HTTPS**, the connect QR code, and the
 
 **Additional Readable Directories** — absolute directories that web and remote clients may **read** files from, in addition to your registered repositories. Ships with `~/.claude/plans` enabled by default, so clicking a Claude Code plan-file link an agent printed works out of the box in browser/remote mode. Desktop reads are never restricted — this setting only affects the HTTP transport used by browser/PWA/remote clients. It never widens writing, copying, or moving a file — those stay confined to registered repository roots. Remove an entry here if you don't want it readable over HTTP; the setting applies regardless of whether Remote Access itself is enabled, since it also governs the headless `tuic-remote` daemon.
 
-### Remote Machines
+### Remote Servers
 
-Add, connect, and manage `tuic-remote` daemons on other machines over SSH or a
-direct URL. **Auto-update remote daemons** is a per-connection option, off by
-default. It updates on connect only when the daemon has no live PTY sessions.
-See [Remote Access → Remote Connection Manager](remote-access.md#remote-connection-manager).
+SSH tunnel profiles and remote-machine connections on one page (it replaced the
+separate **Remote Machines** page; an old `remote-machines` link opens it).
+**Add Connection** opens one merged editor: a **Name** and a **Kind** — SSH
+Tunnel, Remote Server — SSH, Remote Server — Direct or Remote Server — Local —
+then only that kind's fields, a **Test Connection** button and Save. Below it,
+**SSH Tunnels** lists the tunnel profiles (Start/Stop, Edit, Log, Del) and
+**Remote Machines** the `tuic-remote` connections: discovered SSH hosts, then
+each connection's status with Connect, Update, Install, Edit and Remove.
+
+- A Remote Server's **StrictHostKeyChecking** is fixed to `AcceptNew` — the
+  tunnel opened on your behalf always runs that way; a tunnel profile offers
+  `Yes` too
+- **Auto-update remote daemons** is a per-connection option, off by default. It
+  updates on connect only when the daemon has no live PTY sessions
+- The auth password goes to the OS credential vault; leave it blank on edit to
+  keep the stored one, or **Clear stored password** to forget it
+
+See [SSH Tunnel Management](remote-access.md#ssh-tunnel-management) and
+[Remote Access → Remote Connection Manager](remote-access.md#remote-connection-manager).
 
 ### StreamDock
 

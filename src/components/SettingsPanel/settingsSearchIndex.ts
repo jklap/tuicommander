@@ -52,11 +52,12 @@ import { globalTabLabel } from "./settingsTabs";
  * in that Show's `fallback` carries `platform: "browser"`; search offers each
  * client only what it renders.
  *
- * ## Composed pages (mcp, remote-machines)
+ * ## Composed pages (mcp, remote-servers)
  *
  * A page rendered by several components is extracted from all of them, in
  * render order: `mcp` is `LocalMcpPanel` then `UpstreamMcpPanel`,
- * `remote-machines` is `RemoteMachinesTab` wrapping `RemoteMachinesPanel`. The
+ * `remote-servers` is `RemoteServersTab` with the merged connection editor, then
+ * `SshTunnelsSection`, then `RemoteMachinesTab` wrapping `RemoteMachinesPanel`. The
  * drift test holds the source list and checks it against what `SettingsPanel`
  * renders for each tab.
  */
@@ -923,12 +924,30 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		hintKey: "services.hint.relayToken",
 	},
 	{ tab: "remote-access", section: "Cloud Relay", label: "Session ID", labelKey: "services.label.relaySessionId" },
-	// tabs/RemoteMachinesTab.tsx + tabs/services/RemoteMachinesPanel.tsx
-	{ tab: "remote-machines", section: "Remote Machines", sectionKey: "settings.remoteMachines" },
-	{ tab: "remote-machines", section: "Remote Machines", label: "Port" },
-	{ tab: "remote-machines", section: "Remote Machines", label: "User" },
-	{ tab: "remote-machines", section: "Remote Machines", label: "Remote daemon port" },
-	{ tab: "remote-machines", section: "Remote Machines", label: "Auto-update remote daemons" },
+	// tabs/RemoteServersTab.tsx + the merged connection editor (RemoteConnectionEditor,
+	// SshConnectionFields, PortForwardsEditor) + SshTunnelsSection + RemoteMachinesTab/Panel
+	{ tab: "remote-servers", section: "Remote Servers", sectionKey: "remoteServers.heading" },
+	{ tab: "remote-servers", section: "SSH Tunnels", sectionKey: "remoteServers.sshTunnels" },
+	{ tab: "remote-servers", section: "Remote Machines", sectionKey: "settings.remoteMachines" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Auto-update remote daemons" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Auth username (optional)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Auth password (optional)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Name" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Kind" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Remote daemon port" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Deployment" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Keep ephemeral daemon alive (minutes)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "URL" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Target" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Instance ID" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Port" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Host" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "User" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Identity / Authentication" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "ServerAliveInterval" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "ServerAliveCountMax" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "StrictHostKeyChecking" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Port Forwards" },
 	// tabs/PluginsTab.tsx
 	{ tab: "plugins", section: "Plugins" },
 	{

@@ -70,9 +70,11 @@ App.tsx (central orchestrator)
 │   ├── tabs/AgentsTab        # Agent detection, run configs, Claude Usage toggle
 │   ├── tabs/AiChatTab        # default model, providers
 │   ├── tabs/SmartPromptsTab  # Smart Prompts library
-│   ├── tabs/RemoteMachinesTab # Remote Machines page (wraps services/RemoteMachinesPanel)
+│   ├── tabs/RemoteServersTab # Remote Servers page: merged connection editor, SshTunnelsSection, RemoteMachinesTab
+│   ├── tabs/SshTunnelsSection # SSH Tunnels section (TunnelProfileList with Edit)
+│   ├── tabs/RemoteMachinesTab # Remote Machines section (wraps services/RemoteMachinesPanel)
 │   ├── tabs/PluginsTab       # Plugin management, logs
-│   ├── tabs/services/        # LocalMcpPanel + UpstreamMcpPanel (MCP page), RemoteAccessPanel, RemoteMachinesPanel
+│   ├── tabs/services/        # LocalMcpPanel + UpstreamMcpPanel (MCP page), RemoteAccessPanel, RemoteMachinesPanel, RemoteConnectionEditor (merged Kind-dropdown editor)
 │   ├── tabs/RepoScriptsTab   # Per-repo scripts
 │   └── tabs/RepoWorktreeTab  # Per-repo worktree options
 ├── HelpPanel/                # Keyboard shortcuts documentation
@@ -332,7 +334,7 @@ label row above its pages, and the configured repositories follow under
 - **Integrations**
   - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
   - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
-  - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
+  - **Remote Servers** (`RemoteServersTab`) — one merged editor (`RemoteConnectionEditor`: Kind SSH Tunnel / Remote Server — SSH / Direct / Local), then SSH Tunnels (`SshTunnelsSection` → `TunnelProfileList`) and Remote Machines (`RemoteMachinesTab` → `RemoteMachinesPanel`: discovered hosts, status, Connect/Update/Install/Edit/Remove). The retired `remote-machines` key opens it
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
 - **Repositories**
   - **Repo Scripts** — Setup and run scripts, plus the optional per-repository Dev Server URL for Design Mode
@@ -610,8 +612,10 @@ system and never turns an absent provider value into zero.
 |-----------|-------------|
 | `ColorPickerDialog` | Color selection dialog (used by repo groups) |
 | `ColorSwatchPicker` | Preset color swatch grid |
+| `ConnectionStatusBadge` | Status dot + label shared by `TunnelStatusBadge` and the Remote Machines list; `remoteConnectionStatusColor`/`remoteConnectionStatusLabel` map a remote connection's status |
 | `KeyComboCapture` | Keyboard shortcut capture input (for keybinding editor) |
 | `SearchBar` | Reusable search bar with regex/case-sensitive toggles |
+| `SshConnectionFields` | Shared SSH form (host autocomplete, port, user, identity file + desktop Browse, agent keys, keepalive, host-key checking — fixed to AcceptNew for a Remote Server — and compression), used by the merged connection editor and `TunnelEditorModal` |
 
 ## Panel Toggle States
 

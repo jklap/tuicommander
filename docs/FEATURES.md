@@ -1515,7 +1515,7 @@ The navigation groups the global pages by task. Each group is a static label row
 | Application | General (**11.1**), Appearance (**11.2**), Notifications (**11.5**) |
 | Workspace | Terminal (**11.9**), Keyboard Shortcuts (**11.6**), Git & GitHub (**11.10**) |
 | AI | Agents (**11.7**), AI Chat (**11.8**), Voice (section 9), Smart Prompts (**10.5**) |
-| Integrations | MCP (**11.3**), Remote Access (**11.3**), Remote Machines (**11.3**), Plugins (**17.2**) |
+| Integrations | MCP (**11.3**), Remote Access (**11.3**), Remote Servers (**11.3**, **24**), Plugins (**17.2**) |
 | Repositories | One page per configured repository (**11.4**) |
 
 ### 11.0 Search
@@ -1538,7 +1538,7 @@ The navigation groups the global pages by task. Each group is a static label row
 - TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
 - ego executable (**ego** section, after Code Intelligence): the ego binary the AI Chat panel talks to over ACP. Desktop: status line with Select…/Clear; browser: a text field. Always shown, also while Experimental Features is off
 - Default IDE, custom launchers (see **4.5**)
-- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
+- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel and the **AI Chat** settings page (**11.8**); SSH Tunnels graduated out of it (**23**). The three AI sub-flags went with the embedded engine (#784-0aec)
 
 ### 11.2 Appearance
 - Split tab mode: separate / unified
@@ -1554,8 +1554,8 @@ The navigation groups the global pages by task. Each group is a static label row
   restart, surviving theme switches. Four group headings (Tab Types, PR Status Badges, Git Repo
   Status, Diff Stats) additionally carry a show/hide toggle for that whole group. Help → UI Legend shows the same reference read-only.
 
-### 11.3 MCP, Remote Access and Remote Machines
-Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll.
+### 11.3 MCP, Remote Access and Remote Servers
+Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll. The former **Remote Machines** page is now a section of **Remote Servers** (an old `remote-machines` deep link opens it).
 - **MCP** — HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
 - **MCP** — MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
 - **MCP** — TUIC native tool toggles: enable/disable individual MCP tools (`session`, `agent`, `task`, `remote`, `repo`, `ui`, `plugin_dev_guide`, `config`, `debug`) to restrict what AI agents can access
@@ -1563,7 +1563,7 @@ Three pages under **Integrations**. They were one "Services & MCP" tab; each pag
 - MCP Per-Repo Scoping: each repo can define which upstream MCP servers are relevant via an allowlist in repo settings (3-layer: per-repo > `.tuic.json` > defaults). Null/empty allowlist = all servers. Quick toggle via **Cmd+Shift+M** popup
 - File Access: **Additional Readable Directories** — extra absolute directories a browser/remote/PWA client may read files from, on top of registered repository roots. Default: `~/.claude/plans` (so a Claude Code plan-file link an agent printed opens with no setup). Desktop reads are never restricted; never widens writing, copying, or moving — see **14.6**
 - **Remote Access** — port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, Tailscale HTTPS, cloud relay
-- **Remote Machines** — `tuic-remote` connections over SSH or a direct URL; the page lists SSH hosts discovered from `~/.ssh/config` and `known_hosts` (hashed entries are only counted), shows the loaded agent keys, probes hosts on demand and prefills the Add form from a click
+- **Remote Servers** — one page, one merged editor (**Add Connection**, a Kind of SSH Tunnel / Remote Server — SSH / Direct / Local), then the **SSH Tunnels** list and the **Remote Machines** list of `tuic-remote` connections; that list shows SSH hosts discovered from `~/.ssh/config` and `known_hosts` (hashed entries are only counted), the loaded agent keys, probes hosts on demand and opens the editor prefilled from a click (see **24**)
 - Voice dictation has its own **Voice** page (section 9)
 
 ### 11.4 Repository Settings (per-repo)
@@ -2588,20 +2588,26 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Stops all supervisors and clears the tunnel map — no orphaned SSH processes after app close
 
 ### 23.12 UI
-- **TunnelsPanel** — List of tunnel profiles with status badges and start/stop controls
-- **TunnelEditorModal** — Create and edit tunnel profiles with form validation; file browse dialog for identity file; remote host pre-populated from tunnel host when adding forwards; type-aware Local/Remote forward endpoint fields; numeric input mode for port fields
-- **TunnelStatusBadge** — Color-coded status indicator (green=connected, blue=starting, orange=reconnecting, red=error, grey=stopped)
-- **Command Palette** — `toggle-tunnels` action registered for quick access
+- Tunnel profile create/edit lives in **Settings → Remote Servers**, through the merged connection editor shared with remote-server connections (see §24) — Kind "SSH Tunnel". Tunnel-specific fields: Port Forwards list, "Connect automatically on startup"
+- **TunnelsPanel** — the standalone overlay is status/control-only: list of tunnel profiles with status badges, start/stop, audit log ("Log"), and delete. No "+ New Tunnel"/per-row Edit anymore — its header has an "Edit in Settings" link instead, which closes the overlay and navigates to Settings → Remote Servers
+- **TunnelProfileList** — the list/row rendering, extracted so both the overlay and Settings render the identical component
+- **`SshConnectionFields`** (shared) — host with `~/.ssh/config` autocomplete, port, user, identity file with Browse dialog (desktop only; the path field works everywhere), live SSH-agent detection (including each key's fingerprint), ServerAliveInterval, ServerAliveCountMax (now has its own field), StrictHostKeyChecking (fixed to AcceptNew, with a hint, for a Remote Server kind), compression (`ssh -C`). Used by both the "SSH Tunnel" and "Remote Server — SSH" kinds
+- **`PortForwardsEditor`** (shared, extracted from the old TunnelEditorModal) — add/remove, type-aware Local/Remote forward endpoint fields, numeric input mode for port fields
+- **TunnelEditorModal** — still exists, refactored to use the two shared components above, and still fully tested, but no longer opened anywhere in the live app now that Settings owns tunnel editing
+- **TunnelStatusBadge** — now a thin wrapper around a shared **ConnectionStatusBadge** presentation component (color=green/connected, blue/starting, orange/reconnecting, red/error, grey/stopped) — the same component the Remote Servers connection list uses for its own status vocabulary
+- **Command Palette** — `toggle-tunnels` action registered for quick access. No longer behind the experimental-features flag — tunnels are a fully graduated feature
 
-## 24. Remote Connection Manager
+## 24. Remote Servers
+
+Settings → **Remote Servers** (it replaced the separate **Remote Machines** page, which is now its last section; the old `remote-machines` key opens this page) hosts one merged connection editor for both SSH tunnel profiles and remote-server connections — a "Kind" dropdown with exactly four options: SSH Tunnel / Remote Server — SSH / Remote Server — Direct / Remote Server — Local. See §23.12 for the shared SSH-fields/Port-Forwards components.
 
 ### 24.1 Connection Types
 - **SSH** — Connects via SSH tunnel to a remote `tuic-remote` daemon; auto-creates port forwarding
-  - Fields: host, SSH port (default 22), SSH user, optional identity file, remote daemon port (default 9877), deploy policy, survive time
-  - The host picker probes deduplicated SSH config hosts on demand and labels
-    shell, no-shell, auth-failed and unreachable results; free text remains valid
+  - Fields: the shared SSH fields (host, port default 22, user, optional identity file, keepalive tuning, compression; host-key checking is fixed to accept-new — the runtime always opens a remote server's tunnel that way), remote daemon port (default 9877), deploy policy, survive time, auto-update, optional auth username/password
+  - The Remote Machines list probes deduplicated SSH config hosts on demand and labels
+    shell, no-shell, auth-failed and unreachable results; clicking a discovered host opens the editor prefilled with it
 - **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
-  - Fields: URL, auth username
+  - Fields: URL, auto-update, optional auth username/password
 - **Update & restart remote** — For either connection type, compare the
   daemon's `/health` build SHA-256 with the release asset or a matching local
   build, show an out-of-date badge, confirm the number of live sessions that
@@ -2614,6 +2620,9 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
   Progress, success and errors appear in Remote Machines. One update owns each
   connection at a time: manual and automatic updates both show in-progress,
   and overlapping requests over IPC, HTTP, or MCP receive an error.
+- **Local** — Connects to another named/isolated TUICommander instance on the **same machine** (`tuic-remote --instance <id>` / `TUIC_APP_INSTANCE=<id>`)
+  - Fields: either an instance ID (port resolved by reading that instance's own on-disk config at connect time — never cached) or a manually-entered port (for an unnamed instance), never both; optional auth username/password
+  - No host/user/identity/TLS fields — loopback only. Saved and testable, but Connect still fails closed ("Local connections are not yet supported")
 
 ### 24.2 Storage
 - Connections persisted in `<config_dir>/connections.json`
@@ -2623,9 +2632,9 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
   `auto_update` (defaults to false)
 - Transports: `Ssh` (nested `ssh: SshConnectionParams` + `remote_daemon_port`), `Direct` (`url`), `Local` (`port` or `instance_id`; stored but not connectable yet — every runtime path fails closed with "Local connections are not yet supported")
 - A `connections.json` written with the older flat SSH fields still loads and is rewritten once at startup, keeping `connections.json.pre-nested-ssh-<UTC>.bak`
-- The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection (IPC and HTTP share one delete path that also deletes the pairing token)
+- The Basic Auth **password** (`set_remote_connection_password` — an empty string forgets it — and `remote_connection_password_exists`; HTTP `PUT`/`GET /config/remote-connections/{id}/password`) goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection (IPC and HTTP share one delete path that also deletes the pairing token)
 - No username + a stored password fails closed: the empty username is refused by the daemon
-- Test Connection (`test_connection` / `POST /config/remote-connections/test`) checks an unsaved connection without persisting anything: SSH one-shot `true` with the tunnel's options (never over a live multiplexed master), Direct/Local `GET /health` (no redirects), Local `instance_id` resolved from disk; the password is request-only. No UI yet
+- Test Connection (`test_connection` / `POST /config/remote-connections/test`) checks an unsaved connection without persisting anything: SSH one-shot `true` with the tunnel's options (never over a live multiplexed master), Direct/Local `GET /health` (no redirects), Local `instance_id` resolved from disk; the password is request-only. The editor's **Test Connection** button runs it on the form's current values
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
   desktop restart so Connect can rejoin the same daemon

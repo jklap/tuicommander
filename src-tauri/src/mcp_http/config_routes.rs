@@ -1547,6 +1547,88 @@ mod tests {
         );
     }
 
+    // ── remote connection password routes ─────────────────────
+    //
+    // Thin wiring tests: the keyring CRUD is shared with the Tauri commands
+    // (`remote_connection::set_connection_password` /
+    // `connection_password_exists`) — these confirm both routes are auth-gated
+    // and that an empty password over HTTP forgets the stored one.
+
+    #[tokio::test]
+    async fn remote_connection_password_routes_require_local_or_auth() {
+        crate::credentials::reset_test_faults();
+        let not_local = std::net::SocketAddr::from(([203, 0, 113, 5], 12345));
+        let id = uuid::Uuid::new_v4().to_string();
+
+        let resp =
+            get_remote_connection_password_exists(ConnectInfo(not_local), None, Path(id.clone()))
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = put_remote_connection_password(
+            ConnectInfo(not_local),
+            None,
+            Path(id.clone()),
+            Json(RemoteConnectionPasswordRequest {
+                password: "x".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(!crate::remote_connection::connection_password_exists(&id).unwrap());
+    }
+
+    #[tokio::test]
+    async fn remote_connection_password_http_round_trips() {
+        crate::credentials::reset_test_faults();
+        let id = uuid::Uuid::new_v4().to_string();
+
+        async fn exists_body(id: &str) -> Vec<u8> {
+            let resp = get_remote_connection_password_exists(
+                ConnectInfo(loopback()),
+                None,
+                Path(id.to_string()),
+            )
+            .await
+            .into_response();
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec()
+        }
+
+        assert_eq!(exists_body(&id).await, b"false");
+
+        let resp = put_remote_connection_password(
+            ConnectInfo(loopback()),
+            None,
+            Path(id.clone()),
+            Json(RemoteConnectionPasswordRequest {
+                password: "hunter2".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(exists_body(&id).await, b"true");
+
+        // An empty password is the "forget it" request on this route.
+        let resp = put_remote_connection_password(
+            ConnectInfo(loopback()),
+            None,
+            Path(id.clone()),
+            Json(RemoteConnectionPasswordRequest {
+                password: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(exists_body(&id).await, b"false");
+    }
+
     // ── test_connection_http ─────────────────────────────────
     //
     // Thin wiring test: the actual classification logic (SSH one-shot check,

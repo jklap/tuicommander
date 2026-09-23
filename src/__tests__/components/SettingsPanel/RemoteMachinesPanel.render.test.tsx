@@ -17,6 +17,10 @@ import { RemoteMachinesPanel } from "../../../components/SettingsPanel/tabs/serv
 import { remoteConnectionsStore } from "../../../stores/remoteConnections";
 import { mockInvoke } from "../../mocks/tauri";
 
+// Creating and editing moved to the Remote Servers page's merged editor
+// (RemoteServersTab.render.test.tsx); this list only reports which row to edit.
+const handlers = { onEdit: vi.fn(), onAddFromHost: vi.fn() };
+
 async function flushMicrotasks(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -52,7 +56,7 @@ describe("RemoteMachinesPanel", () => {
 		mockInvoke.mockImplementation((cmd: string) =>
 			cmd === "list_remote_connections" ? Promise.resolve([]) : Promise.resolve(undefined),
 		);
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
 		expect(mockInvoke).toHaveBeenCalledWith("list_remote_connections");
@@ -70,7 +74,7 @@ describe("RemoteMachinesPanel", () => {
 			survive_secs: 1800,
 		});
 
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
 		expect(getByText("dev-box")).toBeTruthy();
@@ -78,60 +82,7 @@ describe("RemoteMachinesPanel", () => {
 		expect(getByText("DIRECT")).toBeTruthy();
 	});
 
-	it("adding an SSH connection calls addConnection (save_remote_connection) with the built transport", async () => {
-		const { getByText, getByTitle, getByPlaceholderText } = render(() => <RemoteMachinesPanel />);
-		await flushMicrotasks();
-
-		fireEvent.click(getByTitle("Add remote machine"));
-		fireEvent.input(getByPlaceholderText("Name (e.g. dev-server, staging)"), { target: { value: "staging" } });
-		fireEvent.input(getByPlaceholderText("Host (e.g. 192.168.1.100)"), { target: { value: "10.0.0.5" } });
-		fireEvent.input(getByPlaceholderText("SSH user"), { target: { value: "deploy" } });
-		fireEvent.click(getByText("Save"));
-		await flushMicrotasks();
-
-		const call = mockInvoke.mock.calls.find((c) => c[0] === "save_remote_connection");
-		expect(call).toBeTruthy();
-		const saved = call?.[1]?.connection;
-		expect(saved).toMatchObject({
-			name: "staging",
-			transport: {
-				type: "Ssh",
-				ssh: {
-					host: "10.0.0.5",
-					port: 22,
-					user: "deploy",
-					identity_file: null,
-				},
-				// Fixed (plan Phase 1) — 9877 matches `RemoteConnection::new_ssh`'s
-				// Rust default and what a real `tuic-remote` daemon actually
-				// listens on out of the box.
-				remote_daemon_port: 9877,
-			},
-		});
-		// No username typed: saved as `null`, never `""` (the field is optional;
-		// the backend sends an empty one, which every daemon refuses).
-		expect(saved.auth_username).toBeNull();
-		expect(saved.transport.ssh).toMatchObject({ strict_host_key_checking: "AcceptNew", compression: true });
-	});
-
-	it("refuses to save a new connection with no name", async () => {
-		const { getByText, getByTitle } = render(() => <RemoteMachinesPanel />);
-		await flushMicrotasks();
-
-		fireEvent.click(getByTitle("Add remote machine"));
-		fireEvent.click(getByText("Save"));
-		await flushMicrotasks();
-
-		expect(mockInvoke).not.toHaveBeenCalledWith("save_remote_connection", expect.anything());
-		expect(getByText("Name is required")).toBeTruthy();
-	});
-
-	it("editing an existing connection's URL calls addConnection with the updated transport", async () => {
-		// Note: the inline edit panel renders only <TransportFields/> — there is
-		// no "Name" input in edit mode (only the Add form has one, outside
-		// TransportFields), so an existing connection's name cannot currently be
-		// changed through this UI. `saveEdit()` always re-sends whatever name
-		// `startEdit()` captured, unchanged — asserted below rather than assumed.
+	it("Edit hands the row's connection to the page's editor", async () => {
 		await remoteConnectionsStore.addConnection({
 			id: "edit1",
 			name: "old-name",
@@ -141,23 +92,27 @@ describe("RemoteMachinesPanel", () => {
 			deploy: "never",
 			survive_secs: 1800,
 		});
-		mockInvoke.mockClear(); // drop the seed addConnection's own save_remote_connection call
-		const { getByTitle, getByText, getByDisplayValue } = render(() => <RemoteMachinesPanel />);
+		const { getByTitle } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
 		fireEvent.click(getByTitle("Edit"));
-		// main's startEdit() awaits the password-vault probe before filling the form.
-		await flushMicrotasks();
-		fireEvent.input(getByDisplayValue("http://host:9876"), { target: { value: "http://host2:9877" } });
-		fireEvent.click(getByText("Save"));
+
+		expect(handlers.onEdit).toHaveBeenCalledWith(expect.objectContaining({ id: "edit1", name: "old-name" }));
+	});
+
+	it("clicking a discovered SSH host asks the page to add a connection prefilled from it", async () => {
+		const host = { host: "build-box", target: "10.0.0.9", user: "ci", port: 2222, source: "config" as const };
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "list_discovered_ssh_hosts"
+				? Promise.resolve({ hosts: [host], hashed_count: 0 })
+				: Promise.resolve(undefined),
+		);
+		const { getByTitle } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
-		const call = mockInvoke.mock.calls.find((c) => c[0] === "save_remote_connection");
-		expect(call?.[1]?.connection).toMatchObject({
-			id: "edit1",
-			name: "old-name", // preserved — the field to change it doesn't exist in edit mode
-			transport: { type: "Direct", url: "http://host2:9877" },
-		});
+		fireEvent.click(getByTitle("Add a connection prefilled with this host"));
+
+		expect(handlers.onAddFromHost).toHaveBeenCalledWith(host);
 	});
 
 	it("deleting a connection confirms first, then calls removeConnection (delete_remote_connection)", async () => {
@@ -174,7 +129,7 @@ describe("RemoteMachinesPanel", () => {
 			"confirm",
 			vi.fn(() => true),
 		);
-		const { getByTitle } = render(() => <RemoteMachinesPanel />);
+		const { getByTitle } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
 		fireEvent.click(getByTitle("Remove"));
@@ -198,7 +153,7 @@ describe("RemoteMachinesPanel", () => {
 			"confirm",
 			vi.fn(() => false),
 		);
-		const { getByTitle } = render(() => <RemoteMachinesPanel />);
+		const { getByTitle } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
 		fireEvent.click(getByTitle("Remove"));
@@ -222,7 +177,7 @@ describe("RemoteMachinesPanel", () => {
 			deploy: "never",
 			survive_secs: 1800,
 		});
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
 		fireEvent.click(getByText("Connect"));
@@ -246,7 +201,7 @@ describe("RemoteMachinesPanel", () => {
 		statusHandlers.current?.({ id: "conn2", status: "connected", base_url: "http://host2:9876" });
 		expect(remoteConnectionsStore.getConnectionState("conn2")?.status).toBe("connected");
 
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await flushMicrotasks();
 
 		fireEvent.click(getByText("Disconnect"));

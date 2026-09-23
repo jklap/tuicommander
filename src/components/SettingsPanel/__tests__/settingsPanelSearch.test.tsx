@@ -220,11 +220,18 @@ describe("SettingsPanel search", () => {
 			expect(ownText(target)).toBe("Upstream MCP Servers");
 		});
 
-		it("the remote machines heading opens Remote Machines at its heading", async () => {
+		it("the remote machines heading opens Remote Servers at the Remote Machines section", async () => {
 			const { container } = open();
-			const target = await openResult(container, "remote machines", "Remote Machines", "Remote Machines");
+			const target = await openResult(container, "remote machines", "Remote Servers", "Remote Machines");
 			expect(target.tagName).toBe("H3");
 			expect(ownText(target)).toBe("Remote Machines");
+		});
+
+		it("the SSH tunnels heading opens Remote Servers at its section", async () => {
+			const { container } = open();
+			const target = await openResult(container, "ssh tunnels", "Remote Servers", "SSH Tunnels");
+			expect(target.tagName).toBe("H3");
+			expect(ownText(target)).toBe("SSH Tunnels");
 		});
 
 		it("the ego executable opens General at that control", async () => {

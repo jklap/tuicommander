@@ -1,5 +1,5 @@
 import { batch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { subscribeEvents } from "../transport";
 import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../transportRuntime";
@@ -262,8 +262,13 @@ function createRemoteConnectionsStore() {
 				for (const conn of connections ?? []) {
 					connectionsMap[conn.id] = { connection: conn, status: "disconnected" };
 				}
+				// `reconcile`, not a plain-object `setState`, which SolidJS store
+				// setters MERGE onto the existing key rather than replace — a
+				// connection the backend no longer reports would otherwise linger
+				// in state forever (fixed, story: SSH Tunnels + Remote Servers
+				// consolidation).
 				batch(() => {
-					setState("connections", connectionsMap);
+					setState("connections", reconcile(connectionsMap));
 					setState("hydrated", true);
 				});
 				hydrated = true;
