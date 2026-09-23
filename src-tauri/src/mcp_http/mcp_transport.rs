@@ -22385,6 +22385,7 @@ mod tests {
     /// out-of-band tokenizer counts (see docs/backend/mcp-http.md).
     #[test]
     fn mcp_instruction_surface_bytes_stay_within_budget() {
+        let ver = env!("CARGO_PKG_VERSION");
         let state = test_state();
 
         let empty = InstructionContext {
@@ -22517,12 +22518,27 @@ mod tests {
         // recorded zero entries — and it is paid for elsewhere: `repo` lost
         // eight progress actions in the same change. Raising a budget for prose
         // that carries no obligation is not the same trade.
+        //
+        // `env!("CARGO_PKG_VERSION")` (`ver`, above) appears twice in the
+        // shared identity/marker prose both variants render, and its length
+        // is not fixed: a release build reads e.g. "1.8.0" (5 bytes), but a
+        // local `make dev` orchestrator stamps a dated nightly version into
+        // `Cargo.toml` instead (e.g. "1.7.7-nightly.20260922.t1324c", 29
+        // bytes) — routinely true in this repo's own workflow, since running
+        // a live dev orchestrator alongside a worktree build is the normal
+        // case, not an edge case (see root AGENTS.md's "Test instance vs
+        // orchestrator instance"). The two budgets below measure absolute
+        // byte count including that string, so they must account for its
+        // actual length rather than assuming the release-length baseline the
+        // figures were originally measured against.
+        const BASELINE_VER_LEN: usize = 5; // e.g. "1.8.0"
+        let ver_overhead = ver.len().saturating_sub(BASELINE_VER_LEN) * 2;
         assert!(
-            instructions_classic_empty <= 1600,
+            instructions_classic_empty <= 1600 + ver_overhead,
             "classic instructions grew past their budget — {measured}"
         );
         assert!(
-            instructions_collapsed_empty <= 1664,
+            instructions_collapsed_empty <= 1664 + ver_overhead,
             "collapsed instructions grew past their budget — {measured}"
         );
         assert!(
