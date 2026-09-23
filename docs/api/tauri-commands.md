@@ -718,12 +718,14 @@ empty result.
 | `check_update_channel` | `channel` | `UpdateCheckResult` | Check beta/nightly channel for updates (hardcoded URLs, SSRF-safe) |
 | `clear_caches` | -- | `()` | Clear in-memory caches |
 | `get_local_ip` | -- | `Option<String>` | Get primary local IP |
-| `get_local_ips` | -- | `Vec<LocalIpEntry>` | List local network interfaces |
+| `get_local_ips` | -- | `Vec<LocalIpEntry>` | List local network interfaces; on macOS, includes an extra `{ ip: "<name>.local", label: "mDNS" }` entry for the machine's Bonjour hostname, appended last |
 | `regenerate_session_token` | -- | `()` | Regenerate MCP session token (invalidates all remote sessions) |
 | `fetch_update_manifest` | `url` | `JSON` | Fetch update manifest via Rust HTTP (bypasses WebView CSP) |
 | `read_external_file` | `path` | `String` | Read file outside repo (standalone file open) |
 | `get_relay_status` | -- | `JSON` | Cloud relay connection status |
 | `get_tailscale_status` | -- | `TailscaleState` | Tailscale daemon status (NotInstalled/NotRunning/Running with fqdn, https_enabled) |
+| `get_self_signed_cert_status` | -- | `JSON` | Self-signed LAN-HTTPS fallback cert status: `active`, `generated`, `not_after_unix`, `fingerprint_sha256` |
+| `regenerate_self_signed_cert` | -- | `Result<(), String>` | Force-regenerate the self-signed cert and restart the server to pick it up |
 
 ## Global Hotkey
 

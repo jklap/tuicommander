@@ -726,6 +726,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-access", section: "Connection status" },
 	{ tab: "remote-access", section: "Tailscale HTTPS" },
 	{ tab: "remote-access", section: "Danger zone" },
+	{ tab: "remote-access", section: "Self-Signed HTTPS", sectionKey: "services.heading.selfSignedHttps" },
 	{ tab: "remote-access", section: "Cloud Relay", sectionKey: "services.heading.cloudRelay" },
 	{
 		tab: "remote-access",
