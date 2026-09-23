@@ -8,6 +8,10 @@
 
 # To Test
 
+## Voices from Kyutai's ungated repository (2026-09-23) — **Rust, needs a `make dev` restart**
+
+- [ ] Settings → Dictation → Spoken replies: remove Italian if installed, then Download it. It reaches Ready with no hash error, and a spoken reply uses the giovanni voice.
+
 ## Dictation auto-send on long text (2026-09-23) — frontend, live via HMR
 
 - [ ] With Auto-send on, dictate 30+ seconds into a Claude tab: the text is submitted without pressing Enter, and no "Removed 1 invisible character" notice appears.

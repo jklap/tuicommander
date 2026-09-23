@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Voices download straight from Kyutai** — Speaker embeddings now come from Kyutai's ungated `pocket-tts-without-voice-cloning` repository, pinned to one commit, instead of a copy on a TUICommander release. The files are byte-identical; nothing has to be re-hosted to offer another language.
 - **Progress by terminal** — Opens on the active PTY, lets you switch between PTYs in the same repository, and retains an **All repo** view. Older entries remain visible there without a guessed terminal assignment.
 - **Bundled themes reviewed** — Commander, Darksun, Minimal Kiwi, Monokai, Tokyo Night, Solarized Dark, Ink and Paper separate the main area, sidebar, hover and selection more clearly and draw visible borders. Commander's chrome matches its terminal background and its accent is brighter; Minimal Kiwi's success green no longer equals its accent; Paper has readable terminal yellow and cyan. "Clean" is renamed **Ink** and "VS Code Light" **Paper** (theme keys unchanged, so saved settings keep working). VS Code Dark now follows VS Code's current default, Dark 2026 (darker, cooler greys), instead of the old Dark+ palette. Commander is now the default and the fallback for an unknown theme. The toolbar wordmark, sidebar tab selection and repository name colors follow the theme, so they stay readable on Paper.
 

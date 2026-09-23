@@ -16,16 +16,18 @@
 //!     voices/giovanni.safetensors
 //! ```
 //!
-//! # Two upstreams, for one reason
+//! # Two upstreams
 //!
-//! The ONNX graphs come from `KevinAHM/pocket-tts-onnx` on Hugging Face, which
-//! is public and serves a sha256 for every file. The voices come from
-//! `kyutai/pocket-tts`, which is **gated**: without an accepted licence and a
-//! token, not even the file metadata is readable, so an app cannot download
-//! them for the user. CC-BY-4.0 allows redistribution with attribution, so the
-//! voices — 4.6 MB each, against 125 MB for a language — are re-published on a
-//! TUICommander release and fetched from there. The attribution for both is in
-//! `THIRD_PARTY_NOTICES.md`.
+//! The ONNX graphs come from `KevinAHM/pocket-tts-onnx` on Hugging Face. The
+//! voices come from Kyutai's `kyutai/pocket-tts-without-voice-cloning`. Both are
+//! public and serve a sha256 for every file.
+//!
+//! Not `kyutai/pocket-tts`: that repository is **gated** because it ships the
+//! weights that clone a voice from a sample, and reaching it needs an accepted
+//! use policy and a token, which an app cannot supply for the user. The
+//! ungated repository leaves the cloning weights out and carries the same
+//! speaker embeddings byte for byte — only the preset voices are used here. The
+//! attribution for both is in `THIRD_PARTY_NOTICES.md`.
 //!
 //! # Why installing is two steps
 //!
@@ -661,12 +663,11 @@ fn write_library(dest: &Path, bytes: &[u8]) -> Result<(), InstallError> {
 #[cfg(test)]
 const POCKET_ONNX_REVISION: &str = "58a6d00cf13d239b6748cb0769f35c580a8f606c";
 
-/// Where the voices are re-published, for the gating reason in the module
-/// documentation. A tag, which on GitHub is as immutable as we make it — the
-/// sha256 below is what actually holds it still.
+/// The `kyutai/pocket-tts-without-voice-cloning` revision the voices are
+/// pinned to. A commit, for the same reason as the revision above.
 /// `cfg(test)` for the same reason as the revision above.
 #[cfg(test)]
-const VOICES_TAG: &str = "speech-voices-v1";
+const KYUTAI_VOICES_REVISION: &str = "00eac05ed3d16bdc3f6b5d598874019c34a89214";
 
 macro_rules! pocket_onnx_url {
     ($language:literal, $file:literal) => {
@@ -682,12 +683,15 @@ macro_rules! pocket_onnx_url {
 }
 
 macro_rules! voice_url {
-    ($file:literal) => {
+    ($language:literal, $voice:literal) => {
         concat!(
-            "https://github.com/sstraus/tuicommander/releases/download/",
-            "speech-voices-v1",
-            "/",
-            $file
+            "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/",
+            "00eac05ed3d16bdc3f6b5d598874019c34a89214",
+            "/languages/",
+            $language,
+            "/embeddings/",
+            $voice,
+            ".safetensors"
         )
     };
 }
@@ -737,7 +741,7 @@ static ITALIAN_FILES: &[Fetch] = &[
     },
     Fetch {
         name: "voices/giovanni.safetensors",
-        url: voice_url!("italian-giovanni.safetensors"),
+        url: voice_url!("italian", "giovanni"),
         sha256: "e2b47d9d63ad18cfb2e98591b714a0464456a739b1b4316b6427fcf9d5ea671f",
         size_bytes: 4_621_552,
     },
@@ -863,7 +867,7 @@ mod tests {
                 assert!(url.starts_with("https://"), "{url} is not https");
                 assert!(
                     url.contains(POCKET_ONNX_REVISION)
-                        || url.contains(VOICES_TAG)
+                        || url.contains(KYUTAI_VOICES_REVISION)
                         || url.contains("/releases/download/v1.23.0/"),
                     "{url} is not pinned to a revision this file declares"
                 );

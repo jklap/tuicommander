@@ -230,15 +230,11 @@ It arrives from two places, and the second one matters legally:
 | Part | Published by | Fetched from |
 |---|---|---|
 | Per-language ONNX graphs, SentencePiece tokenizer | Kevin Hill (`KevinAHM`), as ONNX exports of Kyutai's weights | `huggingface.co/KevinAHM/pocket-tts-onnx`, pinned to one commit |
-| Speaker embeddings (the voices) | Kyutai | **re-published by TUICommander**, see below |
+| Speaker embeddings (the voices) | Kyutai | `huggingface.co/kyutai/pocket-tts-without-voice-cloning`, pinned to one commit |
 
-The voices live in `kyutai/pocket-tts`, which is a gated repository: reaching
-them needs an accepted licence and a Hugging Face token, which an application
-cannot supply on a user's behalf. CC-BY-4.0 allows redistribution with
-attribution, so TUICommander re-publishes the embedding files unmodified on its
-own release (`speech-voices-v1`) and downloads them from there. They remain
-Kyutai's work under CC-BY-4.0; this notice is the attribution that travels with
-them, and it is also attached to the release itself.
+The voices come from Kyutai's ungated repository without the voice-cloning
+weights, not from the gated `kyutai/pocket-tts`. The speaker embeddings in the
+two are identical; TUICommander uses only these preset voices.
 
 Every file of both parts is pinned by sha256 in
 `src-tauri/src/dictation/speech/assets.rs` and verified before it is installed.
