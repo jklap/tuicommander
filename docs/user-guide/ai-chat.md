@@ -9,7 +9,7 @@ no tool loop and no sandbox of its own.
 
 1. Turn on **Experimental features** in `Settings > General`. The panel is behind
    it and there is no separate AI Chat switch.
-2. Set **ego executable** in the same tab. While it is empty, ACP is not
+2. Set **ego executable** in the same tab (**Select…** opens a file picker). While it is empty, ACP is not
    configured: the panel says so and launches nothing.
 
 ## Opening it
