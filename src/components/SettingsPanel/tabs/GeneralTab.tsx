@@ -6,6 +6,7 @@ import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/set
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
+import { openDialog } from "../../../utils/nativeDialog";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -101,6 +102,18 @@ export const GeneralTab: Component = () => {
 		}
 	};
 
+	const handleSelectEgo = async () => {
+		try {
+			const picked = await openDialog({
+				title: t("general.dialog.selectEgo", "Select the ego executable"),
+				defaultPath: settingsStore.state.egoExecutable || undefined,
+			});
+			if (picked) settingsStore.setEgoExecutable(picked);
+		} catch (err) {
+			appLogger.error("app", "Failed to pick the ego executable", err);
+		}
+	};
+
 	const ideOptions = Object.entries(IDE_NAMES).map(([value, label]) => ({ value, label }));
 
 	const languageOptions = AVAILABLE_LOCALES.map((value) => ({ value, label: localeName(value) }));
@@ -125,13 +138,16 @@ export const GeneralTab: Component = () => {
 		<div class={s.section}>
 			<h3>{t("general.heading.general", "General")}</h3>
 
-			<SettingSelect
-				label={t("general.label.language", "Language")}
-				value={settingsStore.state.language}
-				onChange={(v) => settingsStore.setLanguage(v)}
-				options={languageOptions}
-				hint={t("general.hint.language", "Language of the TUICommander interface")}
-			/>
+			{/* A picker with one option is not a choice. */}
+			<Show when={AVAILABLE_LOCALES.length > 1}>
+				<SettingSelect
+					label={t("general.label.language", "Language")}
+					value={settingsStore.state.language}
+					onChange={(v) => settingsStore.setLanguage(v)}
+					options={languageOptions}
+					hint={t("general.hint.language", "Language of the TUICommander interface")}
+				/>
+			</Show>
 
 			<SettingInput
 				label={t("general.label.shell", "Shell")}
@@ -145,22 +161,62 @@ export const GeneralTab: Component = () => {
 			    behind the experimental toggle, a path to its engine is a setting
 			    with nothing to act on. */}
 			<Show when={settingsStore.isAiChatEnabled()}>
-				<h3>{t("general.heading.aiChat", "AI Chat")}</h3>
+				<h3>
+					{t("general.heading.aiChat", "AI Chat")}
+					<span class={s.infoBadge}>
+						?
+						<span class={s.infoBadgeTip}>
+							{t(
+								"general.hint.aiChatInfo",
+								"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
+							)}
+						</span>
+					</span>
+				</h3>
 
-				<SettingInput
-					label={t("general.label.egoExecutable", "ego executable")}
-					value={settingsStore.state.egoExecutable}
-					onInput={(v) => settingsStore.setEgoExecutable(v)}
-					placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
-					hint={
-						settingsStore.isAcpConfigured()
-							? t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")
-							: t(
-									"general.hint.egoExecutableEmpty",
-									"Empty: ACP is not configured, so the AI Chat panel cannot start a conversation. Name the ego binary to enable it.",
-								)
+				{/* The native picker exists only on desktop; a browser client names the path by hand. */}
+				<Show
+					when={isTauri()}
+					fallback={
+						<SettingInput
+							label={t("general.label.egoExecutable", "ego executable")}
+							value={settingsStore.state.egoExecutable}
+							onInput={(v) => settingsStore.setEgoExecutable(v)}
+							placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
+							hint={t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")}
+						/>
 					}
-				/>
+				>
+					<div class={s.group}>
+						<Show
+							when={settingsStore.isAcpConfigured()}
+							fallback={
+								<p class={s.hint}>
+									{t(
+										"general.hint.egoExecutableEmpty",
+										"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
+									)}
+								</p>
+							}
+						>
+							<p class={s.hint} style={{ color: "var(--success)" }}>
+								{t("general.hint.egoConfigured", "Configured at {path}", {
+									path: settingsStore.state.egoExecutable,
+								})}
+							</p>
+						</Show>
+						<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
+							<button class={s.testBtn} onClick={handleSelectEgo}>
+								{t("general.btn.selectEgo", "Select…")}
+							</button>
+							<Show when={settingsStore.isAcpConfigured()}>
+								<button class={s.testBtn} onClick={() => settingsStore.setEgoExecutable("")}>
+									{t("general.btn.clearEgo", "Clear")}
+								</button>
+							</Show>
+						</div>
+					</div>
+				</Show>
 			</Show>
 
 			<Show when={isTauri() && cliStatus()}>

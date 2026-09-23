@@ -1,9 +1,17 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockInvoke, mockListen } = vi.hoisted(() => ({
+const { mockInvoke, mockListen, locales } = vi.hoisted(() => ({
 	mockInvoke: vi.fn(),
 	mockListen: vi.fn().mockResolvedValue(vi.fn()),
+	/** Only `en.json` ships today, so the real list would hide the picker. The
+	 * picker tests offer a second locale with no catalog; `t()` stays real. */
+	locales: ["en", "it"],
+}));
+
+vi.mock("../../i18n", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../i18n")>()),
+	AVAILABLE_LOCALES: locales,
 }));
 
 vi.mock("../../invoke", () => ({
@@ -61,8 +69,17 @@ describe("GeneralTab language picker", () => {
 
 	afterEach(() => {
 		cleanup();
+		locales.splice(0, locales.length, "en", "it");
 		setLocale("en");
 		vi.useRealTimers();
+	});
+
+	it("hides the picker while only one locale is available", () => {
+		locales.splice(0, locales.length, "en");
+		const { container } = render(() => <GeneralTab />);
+		const labels = Array.from(container.querySelectorAll("label")).map((el) => el.textContent);
+		expect(labels).not.toContain("Language");
+		expect(labels).toContain("Shell");
 	});
 
 	it("offers one option per locale that has a catalog", () => {
