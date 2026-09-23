@@ -5460,7 +5460,7 @@ path and passes a real `null` through for an unknown image id — in `transport.
   from-source checkout with no built sidecar) — confirm that failure mode doesn't also break
   anything else about the PTY spawn.
 - [ ] Worktree automation scripts (`TUIC_*` env injection) and PTY `TUIC_*` context
-  (`plans/our-repo-worktree-automation-refactored-aho.md`): Setup/Archive script injection and
+  (`plans/worktree-automation-tuic-env-injection.md`): Setup/Archive script injection and
   timeouts are unit-tested end-to-end against real subprocesses/worktrees, but the PTY-side
   injection (`pty.rs::inject_worktree_env`, called from every `bind_pty_identity` site) needs a
   **`make dev` restart** to take effect (Rust change, no hot-reload) — after restarting, open a
