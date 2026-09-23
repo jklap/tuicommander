@@ -2397,6 +2397,7 @@ pub fn run() {
             remote_connection::list_remote_connections,
             remote_connection::save_remote_connection,
             remote_connection::delete_remote_connection,
+            remote_connection::get_local_instance_port,
             remote_connection::remote_connection_password_exists,
             remote_connection::save_remote_connection_password,
             remote_connection::delete_remote_connection_password,

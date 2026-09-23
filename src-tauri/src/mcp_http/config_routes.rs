@@ -869,6 +869,26 @@ pub(super) struct SaveRemoteConnectionPasswordReq {
     pub password: String,
 }
 
+/// GET /config/remote-connections/local-instance-port/{instanceId} — resolve
+/// a named local instance's remote-access port off disk (story: SSH Tunnels +
+/// Remote Servers consolidation, `Local` transport Connect flow). Gated the
+/// same way as the sibling remote-connection routes in this file (e.g.
+/// `remote_connection_password_exists_http`) rather than left open like a
+/// pure-read route — it reveals which named instances exist on this machine
+/// and their ports, real (if mild) reconnaissance value for an unauthenticated
+/// caller, so consistency with the rest of this resource family wins over
+/// treating it as harmless.
+pub(super) async fn get_local_instance_port_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(instance_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::remote_connection::get_local_instance_port(instance_id)).into_response()
+}
+
 pub(super) async fn remote_connection_password_exists_http(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
@@ -1568,5 +1588,21 @@ mod tests {
             .expect("body");
         let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
         assert_eq!(json["type"], "Unreachable");
+    }
+
+    #[tokio::test]
+    async fn get_local_instance_port_http_surfaces_a_clear_error_for_an_invalid_id() {
+        // "default" is reserved by AppInstance::named — deterministic
+        // InstanceNotFound with no real filesystem dependency, matching the
+        // Tauri-command-side test of the same underlying function.
+        let resp = get_local_instance_port_http(ConnectInfo(loopback()), None, Path("default".to_string()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(json["error"], "instance not found");
     }
 }

@@ -1923,6 +1923,42 @@ describe("transport", () => {
 			expect(result.body).toEqual(request);
 		});
 
+		it("maps probe_direct_tls_connection to POST /config/remote-connections/probe-direct-tls", () => {
+			const result = mapCommandToHttp("probe_direct_tls_connection", { url: "https://h:9877", tlsFingerprint: "abc" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/config/remote-connections/probe-direct-tls");
+			expect(result.body).toEqual({ url: "https://h:9877", tls_fingerprint: "abc" });
+		});
+
+		it("maps probe_direct_tls_connection's missing tlsFingerprint to a null body field", () => {
+			const result = mapCommandToHttp("probe_direct_tls_connection", { url: "http://h:9877" });
+			expect(result.body).toEqual({ url: "http://h:9877", tls_fingerprint: null });
+		});
+
+		it("maps start_direct_proxy to POST /config/remote-connections/{connectionId}/direct-proxy", () => {
+			const result = mapCommandToHttp("start_direct_proxy", {
+				connectionId: "c1",
+				url: "https://h:9877",
+				tlsFingerprint: "abc",
+				useNativeRoots: false,
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/config/remote-connections/c1/direct-proxy");
+			expect(result.body).toEqual({ url: "https://h:9877", tls_fingerprint: "abc", use_native_roots: false });
+		});
+
+		it("maps stop_direct_proxy to DELETE /config/remote-connections/{connectionId}/direct-proxy", () => {
+			const result = mapCommandToHttp("stop_direct_proxy", { connectionId: "c1" });
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/config/remote-connections/c1/direct-proxy");
+		});
+
+		it("maps get_local_instance_port to GET /config/remote-connections/local-instance-port/{instanceId}", () => {
+			const result = mapCommandToHttp("get_local_instance_port", { instanceId: "dev-box" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/config/remote-connections/local-instance-port/dev-box");
+		});
+
 		it("maps list_tunnel_profiles to GET /tunnels/profiles", () => {
 			const result = mapCommandToHttp("list_tunnel_profiles", {});
 			expect(result.method).toBe("GET");

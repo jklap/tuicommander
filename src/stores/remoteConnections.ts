@@ -380,10 +380,33 @@ function createRemoteConnectionsStore() {
 					eventBridges.get(id)?.();
 					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
 				} else {
-					// Local transport — instance-id/port resolution and the actual
-					// connect flow land in a later phase of the SSH Tunnels + Remote
-					// Servers consolidation plan (Phase 1 only introduces the shape).
-					throw new Error("Local connections are not yet supported");
+					// Local transport: another named/isolated instance on this same
+					// machine. Always plain HTTP on loopback — never TLS (loopback is
+					// already a browser secure context) — so this reuses the Direct
+					// proxy machinery unchanged (Phase 4) purely for its auth-injection
+					// capability: `start_direct_proxy` only actually starts a proxy when
+					// credentials are configured, otherwise it's a no-op and baseUrl is
+					// the resolved URL directly, exactly like an unauthenticated Direct
+					// http:// connection today.
+					const port = transport.instance_id
+						? await invoke<number>("get_local_instance_port", { instanceId: transport.instance_id })
+						: transport.port;
+					if (!port) {
+						throw new Error("Local connection has neither an instance_id nor a port configured");
+					}
+					const url = `http://127.0.0.1:${port}`;
+					const proxyPort = await invoke<number | null>("start_direct_proxy", {
+						connectionId: id,
+						url,
+						tlsFingerprint: null,
+						useNativeRoots: false,
+					});
+					const baseUrl = proxyPort ? `http://127.0.0.1:${proxyPort}` : url;
+					setState("connections", id, { baseUrl, directProxyStarted: proxyPort !== null });
+					await pollHealth(id);
+					startHealthPolling(id);
+					eventBridges.get(id)?.();
+					eventBridges.set(id, startRemoteEventBridge(id, baseUrl));
 				}
 			} catch (err) {
 				appLogger.error("store", `Failed to connect remote connection ${id}`, err);

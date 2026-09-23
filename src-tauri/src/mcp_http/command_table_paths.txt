@@ -102,6 +102,7 @@
 /config/provider-key/exists
 /config/provider-registry
 /config/remote-connections
+/config/remote-connections/local-instance-port/x
 /config/remote-connections/probe-direct-tls
 /config/remote-connections/test
 /config/remote-connections/x
