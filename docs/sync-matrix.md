@@ -521,6 +521,7 @@ When modifying remote connection config, storage, or transport routing:
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport (`Ssh` nests `SshConnectionParams`; `Local` must fail closed in every runtime arm until its connect flow lands), RemoteConnectionStore, `migrate_legacy_connections_file`, `delete_remote_connection_impl` (the one delete path IPC and HTTP share), the password/token commands |
+| `src-tauri/src/connection_test.rs` | Test Connection (`test_connection` IPC / `POST /config/remote-connections/test`): `ConnectionTestResult`, the request-only password, no-redirect health check, SSH via `tunnels::exec::ssh_check`; keep `docs/api/http-api.md` and `docs/api/tauri-commands.md` in step |
 | `src-tauri/src/remote_runtime.rs` | The live half: status, base URL, session token, the status poll and the SSH tunnel. Every status change is dual-emitted as `remote-connection-status`. **`teardown()` is the one way a connection goes down** — poll, mirror task, mirrored rows, tunnel and token, in that order, idempotent and safe on an id nothing knows. Disconnect and delete both call it, over IPC and over HTTP alike; a second stop path is how the tunnel came to outlive the delete that removed its profile |
 | `src-tauri/src/remote_deploy/{mod,assets,service}.rs` | On-connect deployment, cached release assets, and systemd/launchd install/uninstall |
 | `src-tauri/src/remote_lifetime.rs` | Ephemeral daemon idle expiry and `/health.survive_secs` |

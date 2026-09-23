@@ -1628,6 +1628,7 @@ Load/save notes (opaque JSON, shape defined by frontend).
 GET    /config/remote-connections
 PUT    /config/remote-connections
 DELETE /config/remote-connections/{id}
+POST   /config/remote-connections/test
 PUT    /config/remote-connections/{id}/password
 GET    /config/remote-connections/{id}/password
 POST   /config/remote-connections/{id}/token
@@ -1669,6 +1670,23 @@ rewritten once at startup (see `docs/backend/config.md`).
 `auth_username` is optional. With a stored password and no username the token
 exchange sends an empty username, which every daemon refuses — a missing
 username fails closed, it never authenticates as anybody.
+
+`POST /config/remote-connections/test` (Test Connection) checks a connection that
+may not be saved yet and persists nothing. Body:
+`{ "transport": {...}, "auth_username": "alice" | null, "password": "..." | null }`
+— the password is plaintext for this one call only: never stored, never logged,
+never echoed. Answers 200 with
+`{ "type": "Reachable" | "AuthFailed" | "NotConfigured" | "InstanceNotFound" }` or
+`{ "type": "Unreachable", "reason": "..." }` (the reason never contains the URL
+or the password). SSH runs a one-shot `ssh … -- user@host true` with the tunnel's
+options, `ConnectTimeout=5` and `ControlPath=none` (so it never rides a live
+multiplexed master); Direct/Local send one `GET <base>/health` that follows no
+redirects, with Basic Auth when a username or password is given (a password with
+no username is sent as `:<password>` and refused, like Connect). `Local` resolves
+`instance_id` from that instance's `config.json` first. Guarded by
+`require_local_or_auth` (403 from a public address without credentials) because
+it makes this machine dial an arbitrary host. Against a headless `tuic-remote`,
+whose `/health` is public, a 2xx is `Reachable` whatever the credentials.
 
 The install pair is SSH-only. `POST .../install` stages the matching release
 binary, installs and starts a systemd user unit or launchd agent, and persists

@@ -1979,6 +1979,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(config_routes::post_remote_connection_install)
                 .delete(config_routes::delete_remote_connection_install),
         )
+        .route(
+            "/config/remote-connections/test",
+            post(config_routes::test_connection_http),
+        )
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))

@@ -890,6 +890,25 @@ pub(super) async fn delete_remote_connection_install(
     )
 }
 
+/// POST /config/remote-connections/test — Test Connection (story: SSH
+/// Tunnels + Remote Servers consolidation, Phase 2). Shared with the Tauri
+/// `test_connection` command via `connection_test::test_connection_impl`.
+/// Guarded the same way as `put_remote_connection`/`delete_remote_connection`
+/// above: it accepts a plaintext password (never persisted) and can make the
+/// backend open outbound SSH/HTTP connections to an arbitrary
+/// caller-supplied host, so an unauthenticated remote caller must never
+/// reach it.
+pub(super) async fn test_connection_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(request): Json<crate::connection_test::TestConnectionRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    Json(crate::connection_test::test_connection_impl(&request).await).into_response()
+}
+
 // --- Story 066: config / themes / notes / misc stateless parity (loopback router) ---
 //
 // Mutating / action handlers carry the same `require_local_or_auth` guard as the
@@ -1526,5 +1545,93 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    // ── test_connection_http ─────────────────────────────────
+    //
+    // Thin wiring test: the actual classification logic (SSH one-shot check,
+    // HTTP health-check dispatch, Local instance-id resolution) is shared
+    // with the Tauri command via `connection_test::test_connection_impl` and
+    // tested directly there (`connection_test::tests`) — this just confirms
+    // the route deserializes the request body and returns that shared
+    // result as JSON (plan Phase 2, mirrors `delete_remote_connection_http`'s
+    // own "thin wiring" test comment above).
+
+    #[tokio::test]
+    async fn test_connection_http_returns_the_shared_classification_as_json() {
+        // Port 1 is reserved and nothing listens there — a fast, reliable
+        // Unreachable classification with no real network dependency.
+        let resp = test_connection_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(crate::connection_test::TestConnectionRequest {
+                transport: crate::remote_connection::RemoteTransport::Local {
+                    port: Some(1),
+                    instance_id: None,
+                },
+                auth_username: None,
+                password: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(json["type"], "Unreachable");
+    }
+
+    /// Test Connection makes this machine dial an arbitrary host and accepts a
+    /// plaintext password: from a public address without credentials it is
+    /// refused before any of that happens.
+    #[tokio::test]
+    async fn test_connection_http_requires_auth_from_a_public_address() {
+        let mut target = mockito::Server::new_async().await;
+        let never = target.mock("GET", "/health").expect(0).create_async().await;
+        let resp = test_connection_http(
+            ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000))),
+            None,
+            Json(crate::connection_test::TestConnectionRequest {
+                transport: crate::remote_connection::RemoteTransport::Direct { url: target.url() },
+                auth_username: Some("alice".to_string()),
+                password: Some("hunter2".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        never.assert_async().await;
+    }
+
+    /// The response is the classification only — no echo of the request's
+    /// password or URL.
+    #[tokio::test]
+    async fn test_connection_http_never_echoes_the_password() {
+        let mut target = mockito::Server::new_async().await;
+        let _mock = target
+            .mock("GET", "/health")
+            .with_status(401)
+            .with_body("Invalid credentials")
+            .create_async()
+            .await;
+        let resp = test_connection_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(crate::connection_test::TestConnectionRequest {
+                transport: crate::remote_connection::RemoteTransport::Direct { url: target.url() },
+                auth_username: Some("alice".to_string()),
+                password: Some("PASSWORD_SECRET_1457".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(text, r#"{"type":"AuthFailed"}"#);
     }
 }

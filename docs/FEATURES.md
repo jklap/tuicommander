@@ -2625,6 +2625,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - A `connections.json` written with the older flat SSH fields still loads and is rewritten once at startup, keeping `connections.json.pre-nested-ssh-<UTC>.bak`
 - The Basic Auth **password** goes to the OS credential vault (`Credential::RemoteConnection`), keyed by the connection UUID — never to `connections.json`, never readable back, and deleted with the connection (IPC and HTTP share one delete path that also deletes the pairing token)
 - No username + a stored password fails closed: the empty username is refused by the daemon
+- Test Connection (`test_connection` / `POST /config/remote-connections/test`) checks an unsaved connection without persisting anything: SSH one-shot `true` with the tunnel's options (never over a live multiplexed master), Direct/Local `GET /health` (no redirects), Local `instance_id` resolved from disk; the password is request-only. No UI yet
 - Desktop-managed SSH deployments use a separate vault pairing token. It is the
   daemon session token, never appears in `connections.json`, and survives a
   desktop restart so Connect can rejoin the same daemon

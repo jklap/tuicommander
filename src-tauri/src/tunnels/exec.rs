@@ -7,7 +7,9 @@ use tokio::process::Command;
 
 use super::agent::discover_agent_socket;
 use super::classifier::{ExitReason, classify_exit};
-use super::command::{build_ssh_base_args, build_ssh_env, ensure_ssh_control_dir};
+use super::command::{
+    build_ssh_base_args, build_ssh_env, build_ssh_test_args, ensure_ssh_control_dir,
+};
 use super::profile::TunnelProfile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +44,26 @@ pub(crate) async fn ssh_exec_with_binary(
     run_process(ssh_binary, &args, stdin, timeout).await
 }
 
+/// Test Connection's one-shot SSH check (`command::build_ssh_test_args`):
+/// connect, authenticate, run `true`, exit — through the same runner, agent
+/// socket and exit classification as every other one-shot ssh here.
+pub(crate) async fn ssh_check(
+    ssh: &crate::ssh_connection::SshConnectionParams,
+    timeout: Duration,
+) -> Result<(), ExitReason> {
+    ssh_check_with_binary(ssh, timeout, Path::new("ssh")).await
+}
+
+pub(crate) async fn ssh_check_with_binary(
+    ssh: &crate::ssh_connection::SshConnectionParams,
+    timeout: Duration,
+    ssh_binary: &Path,
+) -> Result<(), ExitReason> {
+    run_process(ssh_binary, &build_ssh_test_args(ssh), None, timeout)
+        .await
+        .map(|_| ())
+}
+
 pub(crate) async fn scp_push(
     profile: &TunnelProfile,
     local: &Path,
@@ -72,7 +94,10 @@ pub(crate) async fn scp_push_with_binaries(
     let mut args = build_ssh_base_args(profile);
     args.push("--".to_string());
     args.push(local.to_string_lossy().into_owned());
-    args.push(format!("{}@{}:{staged}", profile.ssh.user, profile.ssh.host));
+    args.push(format!(
+        "{}@{}:{staged}",
+        profile.ssh.user, profile.ssh.host
+    ));
 
     run_process(scp_binary, &args, None, timeout).await?;
 

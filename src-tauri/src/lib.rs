@@ -30,6 +30,7 @@ pub(crate) mod cli_usage_rpc;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
+pub(crate) mod connection_test;
 pub(crate) mod content_index;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
@@ -2617,6 +2618,7 @@ pub fn run() {
             remote_update::update_and_restart_remote,
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
+            connection_test::test_connection,
             open_secondary_window,
             native_notification::show_native_notification,
             panel_window::open_panel_window,

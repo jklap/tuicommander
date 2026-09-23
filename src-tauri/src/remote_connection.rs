@@ -373,7 +373,6 @@ struct MinimalServerConfigForPort {
 /// in `config.json`) by reading that instance's own config directory off
 /// disk, using the real platform config dir and home dir. Re-read on every
 /// call, never cached — see `RemoteTransport::Local`'s doc comment for why.
-#[allow(dead_code)] // consumed by Test Connection (next commit) and the Local connect flow
 pub(crate) fn resolve_local_instance_port(
     instance_id: &str,
 ) -> Result<u16, LocalInstancePortError> {
