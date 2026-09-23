@@ -41,6 +41,7 @@ describe("RemoteAccessTab — placement regression guard", () => {
 		await flushMicrotasks();
 
 		expect(getByText("HTTP API Server")).toBeTruthy();
+		expect(getByText("File Access")).toBeTruthy();
 		expect(getByText("Remote Access")).toBeTruthy();
 		expect(getByText("Cloud Relay")).toBeTruthy();
 		expect(getByText("Enable remote access")).toBeTruthy();

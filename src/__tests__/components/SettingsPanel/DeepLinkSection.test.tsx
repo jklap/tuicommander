@@ -97,6 +97,6 @@ describe("SettingsPanel — deep link to a section", () => {
 	it("renames the Services nav entry so MCP is findable", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const labels = Array.from(container.querySelectorAll(".navItem")).map((n) => n.textContent);
-		expect(labels).toContain("Services & MCP");
+		expect(labels).toContain("MCP Servers");
 	});
 });

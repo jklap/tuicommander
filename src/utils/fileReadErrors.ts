@@ -14,6 +14,6 @@ export function isAccessDeniedError(msg: string): boolean {
 export function accessDeniedMessage(): string {
 	return t(
 		"markdownTab.accessDenied",
-		"This file is outside your registered repositories and allowed directories, so it can't be read in browser/remote mode. Add its folder under Settings → Services & MCP → File Access → Additional Readable Directories.",
+		"This file is outside your registered repositories and allowed directories, so it can't be read in browser/remote mode. Add its folder under Settings → Remote Access → File Access → Additional Readable Directories.",
 	);
 }
