@@ -1804,6 +1804,15 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/test",
             post(config_routes::test_connection_http),
         )
+        // Direct connection TLS proxy — plan Phase 4
+        .route(
+            "/config/remote-connections/probe-direct-tls",
+            post(config_routes::probe_direct_tls_http),
+        )
+        .route(
+            "/config/remote-connections/{id}/direct-proxy",
+            post(config_routes::start_direct_proxy_http).delete(config_routes::stop_direct_proxy_http),
+        )
         // Remote connection password (keyring-proxied) — plan Phase 3 auth wiring
         .route(
             "/config/remote-connections/{id}/password/exists",

@@ -2454,6 +2454,12 @@ pub struct AppState {
     pub(crate) tunnel_manager: Arc<crate::tunnels::manager::TunnelManager>,
     /// SSH tunnel audit log — persisted event history for all tunnels.
     pub(crate) tunnel_audit: Arc<parking_lot::Mutex<crate::tunnels::audit::AuditLog>>,
+    /// Local loopback reverse proxies for "Direct" remote connections that
+    /// need TLS certificate pinning and/or Basic Auth injection — see
+    /// `direct_proxy.rs`'s module doc comment. `DashMap`-backed like
+    /// `tunnel_manager` above, for the same reason (interior mutability
+    /// across an `.await` point without an outer lock).
+    pub(crate) direct_proxy_manager: Arc<crate::direct_proxy::DirectProxyManager>,
     /// StreamDock M18 macropad supervisor — see `crate::streamdock`.
     /// Desktop-only like `app_handle`: `tuic_streamdock` is a `desktop`-feature
     /// optional dependency, so `tuic-remote` never builds this field at all.
@@ -3654,6 +3660,7 @@ impl AppState {
             tmux_servers: DashMap::new(),
             tunnel_manager,
             tunnel_audit,
+            direct_proxy_manager: Arc::new(crate::direct_proxy::DirectProxyManager::new()),
             #[cfg(feature = "desktop")]
             streamdock: Arc::new(crate::streamdock::StreamDockManager::new()),
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),

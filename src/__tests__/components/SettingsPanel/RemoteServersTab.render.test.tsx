@@ -95,7 +95,7 @@ describe("RemoteServersTab", () => {
 		expect(call).toBeTruthy();
 		expect(call?.[1]?.connection).toMatchObject({
 			name: "staging",
-			transport: { type: "Direct", url: "http://10.0.0.5:9877" },
+			transport: { type: "Direct", url: "http://10.0.0.5:9877", tls_fingerprint: null },
 		});
 	});
 
@@ -103,7 +103,7 @@ describe("RemoteServersTab", () => {
 		await remoteConnectionsStore.addConnection({
 			id: "edit1",
 			name: "old-name",
-			transport: { type: "Direct", url: "http://host:9876" },
+			transport: { type: "Direct", url: "http://host:9876", tls_fingerprint: null },
 			auth_username: "",
 			enabled: true,
 		});
@@ -143,7 +143,7 @@ describe("RemoteServersTab", () => {
 		await remoteConnectionsStore.addConnection({
 			id: "rc1",
 			name: "dev-box",
-			transport: { type: "Direct", url: "http://host:9876" },
+			transport: { type: "Direct", url: "http://host:9876", tls_fingerprint: null },
 			auth_username: "",
 			enabled: true,
 		});
