@@ -52,6 +52,7 @@ function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}
 		onRemoveQueued: vi.fn(),
 		pinned: () => false,
 		onTogglePin: vi.fn(),
+		onDismiss: vi.fn(),
 		focusRequest: () => 0,
 		...overrides,
 	};
@@ -172,6 +173,17 @@ describe("ComposePanel", () => {
 		await waitFor(() => expect(queryByText("run the tests")).toBeNull());
 	});
 
+	it("closes from the close button even when pinned, where Esc only leaves the panel", async () => {
+		const { container, props, getByLabelText } = renderPanel({ pinned: () => true });
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+
+		fireEvent.keyDown(container.querySelector(".cm-content") as HTMLElement, { key: "Escape" });
+		expect(props.onDismiss).not.toHaveBeenCalled();
+
+		fireEvent.click(getByLabelText("Close compose panel"));
+		expect(props.onDismiss).toHaveBeenCalledTimes(1);
+	});
+
 	describe("pinned", () => {
 		it("empties the editor after a send and stays open — it replaces the agent's input box", async () => {
 			const { container, props } = renderPanel({ pinned: () => true });
@@ -268,7 +280,7 @@ describe("ComposePanel", () => {
 			fireEvent.click(button());
 			expect(onTogglePin).toHaveBeenCalledTimes(1);
 			expect(button().getAttribute("aria-pressed")).toBe("true");
-			expect(container.textContent).toContain("Esc to terminal");
+			expect(container.textContent).toContain("esc terminal");
 		});
 
 		it("moves the caret into the editor on a focus request", async () => {
