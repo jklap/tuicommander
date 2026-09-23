@@ -24,7 +24,7 @@
 	"appearance.hint.splitTabMode": "How worktree tabs are arranged in the tab bar",
 	"appearance.hint.tabCyclingAllTypes": "Next/previous tab shortcuts cycle through diff, markdown and editor tabs too — not just terminals",
 	"appearance.hint.tabOrderingMode": "How tabs are ordered: grouped by type, terminals first, or freely interleaved",
-	"appearance.hint.tabTreeEnabled": "Show a branch's open terminals as a collapsible list under its sidebar row — only when the branch has more than one terminal",
+	"appearance.hint.tabTreeEnabled": "Show each branch's open sessions and agent activity in a collapsible card under its sidebar row",
 	"appearance.hint.terminalFont": "Monospace font for terminals",
 	"appearance.hint.terminalTheme": "Color theme for terminal output and app chrome",
 	"appearance.hint.uiLegend": "Visual reference for colors, symbols, and badges used throughout the app",
