@@ -21,6 +21,23 @@ export const RepoScriptsTab: Component<RepoTabProps> = (props) => {
 
 	return (
 		<div class={s.section}>
+			<h3>{t("repoScripts.heading.designMode", "Design Mode")}</h3>
+			<div class={s.group}>
+				<label for="repo-dev-server-url">{t("repoScripts.label.devServerUrl", "Dev Server URL")}</label>
+				<input
+					id="repo-dev-server-url"
+					type="url"
+					value={props.settings.devServerUrl ?? ""}
+					onInput={(e) => props.onUpdate("devServerUrl", e.currentTarget.value || null)}
+					placeholder="http://localhost:5173"
+				/>
+				<p class={s.hint}>
+					{t(
+						"repoScripts.hint.devServerUrl",
+						"Open this URL in Chrome when Design Mode starts. Leave empty to navigate manually.",
+					)}
+				</p>
+			</div>
 			<h3>{t("repoScripts.heading.automationScripts", "Automation Scripts")}</h3>
 
 			<div class={s.group}>

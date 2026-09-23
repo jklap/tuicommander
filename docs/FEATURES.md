@@ -23,6 +23,7 @@
 | Sidebar, repositories, and branches | [Sidebar](user-guide/sidebar.md) · [Branch Management](user-guide/branches.md) |
 | Git worktrees | [Worktrees](user-guide/worktrees.md) |
 | AI agents and agent teams | [AI Agents](user-guide/ai-agents.md) · [Agent Teams](user-guide/agent-teams.md) |
+| Visual element inspection | [Design Mode](user-guide/design-mode.md) |
 | GitHub, PRs, and CI | [GitHub Integration](user-guide/github-integration.md) |
 | Smart Prompts and Prompt Library | [Smart Prompts](user-guide/smart-prompts.md) · [Prompt Library](user-guide/prompt-library.md) |
 | Settings and shortcuts | [Settings](user-guide/settings.md) · [Keyboard Shortcuts](user-guide/keyboard-shortcuts.md) |
@@ -40,6 +41,13 @@ copy and exact-codepoint search, including marks arriving in a later output
 chunk. Search and link positions account for the difference between grid cells
 and Unicode string offsets. The existing bound of nine zero-width characters
 per cell and the configured history limit still apply.
+
+### 1.0 Design Mode for agent terminals
+
+- Start from an agent terminal's tab context menu or the Command Palette. TUICommander opens a separate Chrome window for the repository's configured development-server URL, or `about:blank` when none is configured.
+- Chrome highlights hovered elements. A click collects the selected element's selector, paths, nearby text, HTML snippet, selected styles, rectangle, source location when development metadata permits, and an optional PNG reference.
+- The grab is appended to the bound agent's draft without submitting it; repeated grabs and the user's existing text remain editable. Starting from another agent terminal in the same repository rebinds the Chrome window.
+- The tab indicator follows Design Mode status. Browser/PWA clients can request inspection, but Chrome opens on the host running TUICommander. See the [user guide](user-guide/design-mode.md).
 
 ### 1.1 PTY Sessions
 - Up to 50 concurrent PTY sessions (configurable in Rust `MAX_SESSIONS`)
@@ -1327,7 +1335,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 ### 11.4 Repository Settings (per-repo)
 - Display name
 - Worktree tab: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge action (each overridable from global defaults)
-- Scripts tab: setup script (post-worktree), run script (`Cmd+R`), archive script (pre-archive/delete hook)
+- Scripts tab: setup script (post-worktree), run script (`Cmd+R`), archive script (pre-archive/delete hook), and optional local development-server URL for Design Mode
 - Repo-local config: `.tuic.json` in repo root provides team-shared settings. Three-tier precedence: `.tuic.json` > per-repo app settings > global defaults. **Scripts (setup, run, archive) are intentionally excluded from `.tuic.json` merging** — arbitrary script execution by a checked-in file poses a security risk; scripts are always sourced from the local per-repo app settings only
 
 ### 11.5 Notifications

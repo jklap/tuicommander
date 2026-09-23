@@ -252,6 +252,7 @@
 
 .group select,
 .group input[type="text"],
+.group input[type="url"],
 .group input[type="password"],
 .group textarea {
   width: 100%;
@@ -266,6 +267,7 @@
 
 .group select,
 .group input[type="text"],
+.group input[type="url"],
 .group input[type="password"] {
   height: 32px;
 }

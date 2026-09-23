@@ -38,6 +38,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Design Mode",
+		description:
+			"Right-click an agent terminal tab to inspect an element in Chrome and paste its details into that agent's input.",
+		shortcut: null,
+	},
+	{
 		feature: "Split Panes",
 		description: "Split the current terminal into two side-by-side panes.",
 		shortcut: `${mod}+\\`,

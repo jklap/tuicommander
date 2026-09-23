@@ -179,7 +179,7 @@ Tabbed settings overlay.
 - **Keyboard Shortcuts** — Rebindable shortcuts (auto-populated from `actionRegistry.ts`)
 - **Appearance** — Visual customization
 - **Notifications** — Sound and notification preferences
-- **Repo Scripts** — Setup script, run command per repository
+- **Repo Scripts** — Setup and run scripts, plus the optional per-repository Dev Server URL for Design Mode
 - **Repo Worktree** — Base branch, copy ignored/untracked files
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)

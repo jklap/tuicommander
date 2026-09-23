@@ -120,6 +120,21 @@ uncapping the server.
 | `POST` | `/sessions/:id/resume` | Resume session output |
 | `DELETE` | `/sessions/:id` | Close session |
 
+### Design Mode
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/design-mode/start` | Start or rebind Chrome inspection to an agent session (`{sessionId}`) |
+| `POST` | `/design-mode/stop` | Stop inspection for a repository (`{repoPath}`) |
+| `GET` | `/design-mode` | Read the array of per-repository Design Mode statuses |
+
+The Chrome window opens on the host running TUICommander, including when a
+remote browser initiates the request. `design-mode-changed` is dual-emitted to
+the desktop window and `/events` SSE with `{repo_path, session_id, status}`;
+`status` is `armed` or `stopped`. See the [HTTP API](../api/http-api.md#design-mode-endpoints)
+for the request bodies and the [user guide](../user-guide/design-mode.md) for
+the workflow.
+
 ### Monitoring
 
 | Method | Path | Description |

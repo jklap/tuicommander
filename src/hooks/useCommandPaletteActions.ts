@@ -1,5 +1,7 @@
 import { type Accessor, createMemo } from "solid-js";
 import { type ActionEntry, getActionEntries } from "../actions/actionRegistry";
+import { t } from "../i18n";
+import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { commandPaletteStore } from "../stores/commandPalette";
 import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
@@ -7,7 +9,9 @@ import { pluginStore } from "../stores/pluginStore";
 import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
+import { toastsStore } from "../stores/toasts";
 import { updaterStore } from "../stores/updater";
+import { isTauri } from "../transport";
 import type { useGitOperations } from "./useGitOperations";
 import type { ShortcutHandlers } from "./useKeyboardShortcuts";
 import type { useSplitPanes } from "./useSplitPanes";
@@ -133,6 +137,37 @@ export function useCommandPaletteActions(options: CommandPaletteActionOptions): 
 		}
 
 		const activeTermId = terminalsStore.state.activeId;
+		if (terminalsStore.findTerminalWithSession()?.agentType) {
+			entries.push({
+				id: "start-design-mode",
+				label: t("tabBar.startDesignMode", "Start Design Mode"),
+				category: "Terminal",
+				keybinding: "",
+				execute: () => {
+					const target = terminalsStore.findTerminalWithSession();
+					if (!target?.agentType) return;
+					void invoke("start_design_mode", { sessionId: target.sessionId }).then(
+						() => {
+							if (!isTauri()) {
+								toastsStore.add(
+									t("tabBar.designModeTitle", "Design Mode"),
+									t("tabBar.designModeHostNotice", "Chrome opened on the host machine."),
+									"info",
+								);
+							}
+						},
+						(error) => {
+							appLogger.error("app", "Failed to start Design Mode", error);
+							toastsStore.add(
+								t("tabBar.designModeError", "Design Mode failed"),
+								error instanceof Error ? error.message : String(error),
+								"error",
+							);
+						},
+					);
+				},
+			});
+		}
 		if (activeTermId) {
 			for (const worktree of options.gitOps.getWorktreeTargets(activeTermId)) {
 				entries.push({

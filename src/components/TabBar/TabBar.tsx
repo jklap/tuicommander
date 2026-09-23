@@ -16,6 +16,7 @@ import { openPathsAsTabs } from "../../hooks/useFileDrop";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
+import { invoke, listen } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { diffTabsStore } from "../../stores/diffTabs";
@@ -28,6 +29,8 @@ import { currentBranchKey, repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
+import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { copyPathToClipboard, writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
@@ -65,6 +68,51 @@ export interface TabBarProps {
 }
 
 export const TabBar: Component<TabBarProps> = (props) => {
+	type DesignModeEvent = { repo_path: string; session_id: string; status: "armed" | "stopped" };
+	type DesignModeSnapshot = { repoPath: string; sessionId: string; status: "armed" | "stopped" };
+	const [designModes, setDesignModes] = createSignal<Record<string, DesignModeEvent>>({});
+	onMount(() => {
+		let disposed = false;
+		let unlisten: (() => void) | undefined;
+		void listen<DesignModeEvent>("design-mode-changed", ({ payload }) => {
+			if (!payload || typeof payload.repo_path !== "string" || typeof payload.session_id !== "string") return;
+			if (payload.status !== "armed" && payload.status !== "stopped") return;
+			setDesignModes((current) => ({ ...current, [payload.repo_path]: payload }));
+		})
+			.then((off) => {
+				if (disposed) {
+					off();
+					return;
+				}
+				unlisten = off;
+				void invoke<DesignModeSnapshot[]>("get_design_mode_status")
+					.then((snapshot) => {
+						if (disposed || !Array.isArray(snapshot)) return;
+						setDesignModes((current) => {
+							const next = { ...current };
+							for (const mode of snapshot) {
+								if (!mode || typeof mode.repoPath !== "string" || typeof mode.sessionId !== "string") continue;
+								if (mode.status !== "armed" && mode.status !== "stopped") continue;
+								// A push received while the snapshot was in flight is newer.
+								if (!(mode.repoPath in next)) {
+									next[mode.repoPath] = { repo_path: mode.repoPath, session_id: mode.sessionId, status: mode.status };
+								}
+							}
+							return next;
+						});
+					})
+					.catch((error) => appLogger.error("app", "Failed to read Design Mode status", error));
+			})
+			.catch((error) => appLogger.error("app", "Failed to listen for Design Mode changes", error));
+		onCleanup(() => {
+			disposed = true;
+			unlisten?.();
+		});
+	});
+	const designModeForTab = (id: string) => {
+		const sessionId = terminalsStore.get(id)?.sessionId;
+		return sessionId ? Object.values(designModes()).find((mode) => mode.session_id === sessionId) : undefined;
+	};
 	const [dragOverId, setDragOverId] = createSignal<string | null>(null);
 	const [dragOverSide, setDragOverSide] = createSignal<"left" | "right" | null>(null);
 	const [draggingId, setDraggingId] = createSignal<string | null>(null);
@@ -401,6 +449,41 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		// that misbehaves. Gated on the same debug flag as the rest of the
 		// instrumentation: on in dev, wakeable in a release build.
 		const sessionId = term?.sessionId;
+		if (term?.agentType && sessionId && !exited) {
+			const mode = designModeForTab(id);
+			const isArmed = mode?.status === "armed";
+			items.push(
+				{ label: "", separator: true, action: () => {} },
+				{
+					label: isArmed
+						? t("tabBar.stopDesignMode", "Stop Design Mode")
+						: t("tabBar.startDesignMode", "Start Design Mode"),
+					action: () => {
+						const command = isArmed ? "stop_design_mode" : "start_design_mode";
+						const args = isArmed ? { repoPath: mode.repo_path } : { sessionId };
+						void invoke(command, args).then(
+							() => {
+								if (!isArmed && !isTauri()) {
+									toastsStore.add(
+										t("tabBar.designModeTitle", "Design Mode"),
+										t("tabBar.designModeHostNotice", "Chrome opened on the host machine."),
+										"info",
+									);
+								}
+							},
+							(error) => {
+								appLogger.error("app", `Failed to ${isArmed ? "stop" : "start"} Design Mode`, error);
+								toastsStore.add(
+									t("tabBar.designModeError", "Design Mode failed"),
+									error instanceof Error ? error.message : String(error),
+									"error",
+								);
+							},
+						);
+					},
+				},
+			);
+		}
 		if (isPerfDebug() && sessionId) {
 			const recording = ptyCaptureStore.isRecording(sessionId);
 			items.push(
@@ -860,6 +943,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 									isEditing={editingId() === id}
 									quickSwitcherActive={Boolean(props.quickSwitcherActive)}
 									showWorkspaceMetadata={true}
+									designModeStatus={designModeForTab(id)?.status}
 									onSelect={props.onTabSelect}
 									onClose={props.onTabClose}
 									onFocusDetached={props.onFocusDetachedTab}
@@ -948,6 +1032,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 												isEditing={editingId() === id}
 												quickSwitcherActive={Boolean(props.quickSwitcherActive)}
 												showWorkspaceMetadata={false}
+												designModeStatus={designModeForTab(id)?.status}
 												onSelect={props.onTabSelect}
 												onClose={props.onTabClose}
 												onFocusDetached={props.onFocusDetachedTab}

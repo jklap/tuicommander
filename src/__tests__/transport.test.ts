@@ -236,6 +236,22 @@ describe("transport", () => {
 	});
 
 	describe("mapCommandToHttp()", () => {
+		it("maps every Design Mode command with matching IPC request fields", () => {
+			expect(mapCommandToHttp("start_design_mode", { sessionId: "agent-1" })).toEqual({
+				method: "POST",
+				path: "/design-mode/start",
+				body: { sessionId: "agent-1" },
+			});
+			expect(mapCommandToHttp("stop_design_mode", { repoPath: "/repo" })).toEqual({
+				method: "POST",
+				path: "/design-mode/stop",
+				body: { repoPath: "/repo" },
+			});
+			expect(mapCommandToHttp("get_design_mode_status", {})).toEqual({
+				method: "GET",
+				path: "/design-mode",
+			});
+		});
 		it("maps report_progress_event without reshaping its request", () => {
 			const report = { type: "milestone", summary: "HTTP parity works.", workstream: "Progress" };
 			const result = mapCommandToHttp("report_progress_event", { project: "/repo with space", report });

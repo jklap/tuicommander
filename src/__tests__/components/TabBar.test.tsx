@@ -24,6 +24,11 @@ vi.mock("../../utils/openUrl", () => ({
 vi.mock("@tauri-apps/api/core", () => ({
 	invoke: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../../invoke", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../invoke")>()),
+	invoke: vi.fn().mockResolvedValue(undefined),
+	listen: vi.fn().mockResolvedValue(vi.fn()),
+}));
 vi.mock("@tauri-apps/api/event", () => ({
 	listen: vi.fn().mockResolvedValue(vi.fn()),
 	emit: vi.fn().mockResolvedValue(undefined),
@@ -43,6 +48,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import type { ContextMenuItem } from "../../components/ContextMenu/ContextMenu";
 import { TabBar } from "../../components/TabBar/TabBar";
+import { invoke, listen } from "../../invoke";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
@@ -52,10 +58,14 @@ import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore, type TabOrderingMode } from "../../stores/settings";
 import { tabOrderingStore } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
+import * as transport from "../../transport";
 
 describe("TabBar", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		vi.mocked(invoke).mockReset().mockResolvedValue(undefined);
+		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());
 		localStorage.clear();
 		// Clean up any terminals from previous tests
 		for (const id of terminalsStore.getIds()) {
@@ -1305,6 +1315,141 @@ describe("TabBar", () => {
 			fireEvent.contextMenu(tab);
 			const menu = container.querySelector(".menu");
 			expect(menu).not.toBeNull();
+		});
+	});
+
+	describe("design mode", () => {
+		function agentTab(sessionId: string, agentType: "claude" | null) {
+			const id = addTerminal({ name: sessionId, sessionId });
+			terminalsStore.update(id, { agentType });
+			return id;
+		}
+
+		const renderBar = () =>
+			render(() => (
+				<TabBar
+					onTabSelect={() => {}}
+					onTabClose={() => {}}
+					onCloseOthers={() => {}}
+					onCloseToRight={() => {}}
+					onNewTab={() => {}}
+				/>
+			));
+
+		it("offers design mode only for an agent session and starts the clicked tab", async () => {
+			const first = agentTab("first-session", "claude");
+			const second = agentTab("second-session", "claude");
+			terminalsStore.setActive(first);
+			const { container } = renderBar();
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${second}"]`)!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
+				node.textContent?.includes("Start Design Mode"),
+			);
+			expect(item).toBeDefined();
+			fireEvent.click(item!);
+			await Promise.resolve();
+			expect(invoke).toHaveBeenCalledWith("start_design_mode", { sessionId: "second-session" });
+		});
+
+		it("hides design mode on a shell tab and reflects armed and stopped events on the bound tab", async () => {
+			const shell = agentTab("shell-session", null);
+			const agent = agentTab("agent-session", "claude");
+			const { container } = renderBar();
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${shell}"]`)!);
+			expect(container.textContent).not.toContain("Start Design Mode");
+			await Promise.resolve();
+			const eventHandler = vi.mocked(listen).mock.calls.find(([name]) => name === "design-mode-changed")?.[1];
+			expect(eventHandler).toBeDefined();
+			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "armed" } });
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)).not.toBeNull();
+			expect(container.querySelector(`[data-tab-id="${shell}"] .designModeBadge`)).toBeNull();
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${agent}"]`)!);
+			const stopItem = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
+				node.textContent?.includes("Stop Design Mode"),
+			);
+			expect(stopItem).toBeDefined();
+			fireEvent.click(stopItem!);
+			expect(invoke).toHaveBeenCalledWith("stop_design_mode", { repoPath: "/repo" });
+			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "stopped" } });
+			expect(container.querySelector(`[data-tab-id="${agent}"] .designModeBadge`)?.getAttribute("title")).toBe(
+				"Design Mode stopped",
+			);
+		});
+
+		it("restores design mode status after a webview reload", async () => {
+			const id = agentTab("agent-session", "claude");
+			vi.mocked(invoke).mockImplementation((command) =>
+				Promise.resolve(
+					command === "get_design_mode_status"
+						? [{ repoPath: "/repo", sessionId: "agent-session", status: "armed" }]
+						: undefined,
+				),
+			);
+			const { container } = renderBar();
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(invoke).toHaveBeenCalledWith("get_design_mode_status");
+			expect(container.querySelector(`[data-tab-id="${id}"] .designModeBadge`)?.getAttribute("title")).toBe(
+				"Design Mode armed",
+			);
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${id}"]`)!);
+			expect(container.textContent).toContain("Stop Design Mode");
+		});
+
+		it("keeps a newer design mode event when the mount snapshot arrives late", async () => {
+			const id = agentTab("agent-session", "claude");
+			let resolveSnapshot!: (value: unknown) => void;
+			const snapshot = new Promise<unknown>((resolve) => {
+				resolveSnapshot = resolve;
+			});
+			vi.mocked(invoke).mockImplementation((command) =>
+				command === "get_design_mode_status" ? snapshot : Promise.resolve(undefined),
+			);
+			const { container } = renderBar();
+			await Promise.resolve();
+			expect(invoke).toHaveBeenCalledWith("get_design_mode_status");
+			const eventHandler = vi.mocked(listen).mock.calls.find(([name]) => name === "design-mode-changed")?.[1];
+			eventHandler?.({ payload: { repo_path: "/repo", session_id: "agent-session", status: "stopped" } });
+			resolveSnapshot([{ repoPath: "/repo", sessionId: "agent-session", status: "armed" }]);
+			await Promise.resolve();
+			expect(container.querySelector(`[data-tab-id="${id}"] .designModeBadge`)?.getAttribute("title")).toBe(
+				"Design Mode stopped",
+			);
+		});
+
+		it("shows the backend message when starting design mode fails", async () => {
+			const id = agentTab("agent-session", "claude");
+			vi.mocked(invoke).mockImplementation((command) =>
+				command === "start_design_mode"
+					? Promise.reject(new Error("Chrome is unavailable"))
+					: Promise.resolve(undefined),
+			);
+			const addToast = vi.spyOn(toastsStore, "add");
+			const { container } = renderBar();
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${id}"]`)!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
+				node.textContent?.includes("Start Design Mode"),
+			);
+			fireEvent.click(item!);
+			await Promise.resolve();
+			expect(addToast).toHaveBeenCalledWith(expect.any(String), "Chrome is unavailable", "error");
+			addToast.mockRestore();
+		});
+
+		it("explains that browser design mode opens Chrome on the host", async () => {
+			const tauri = vi.spyOn(transport, "isTauri").mockReturnValue(false);
+			const id = agentTab("agent-session", "claude");
+			const addToast = vi.spyOn(toastsStore, "add");
+			const { container } = renderBar();
+			fireEvent.contextMenu(container.querySelector(`[data-tab-id="${id}"]`)!);
+			const item = Array.from(container.querySelectorAll(".menu .item")).find((node) =>
+				node.textContent?.includes("Start Design Mode"),
+			);
+			fireEvent.click(item!);
+			await Promise.resolve();
+			expect(addToast).toHaveBeenCalledWith("Design Mode", "Chrome opened on the host machine.", "info");
+			addToast.mockRestore();
+			tauri.mockRestore();
 		});
 	});
 

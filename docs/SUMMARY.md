@@ -19,6 +19,7 @@
 - [Command Palette](./user-guide/command-palette.md)
 - [Keyboard Shortcuts](./user-guide/keyboard-shortcuts.md)
 - [Settings](./user-guide/settings.md)
+- [Design Mode](./user-guide/design-mode.md)
 
 ## AI Agents
 

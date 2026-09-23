@@ -389,6 +389,7 @@ describe("repoSettingsStore", () => {
 						path: "/repo",
 						display_name: "my-repo",
 						base_branch: "main",
+						dev_server_url: "http://localhost:5173",
 						prompt_on_create: false,
 						auto_fetch_interval_minutes: 15,
 						copy_ignored_files: null,
@@ -401,6 +402,7 @@ describe("repoSettingsStore", () => {
 				await store.hydrate();
 				expect(store.get("/repo")?.displayName).toBe("my-repo");
 				expect(store.get("/repo")?.baseBranch).toBe("main");
+				expect(store.get("/repo")?.devServerUrl).toBe("http://localhost:5173");
 				expect(store.get("/repo")?.promptOnCreate).toBe(false);
 				expect(store.get("/repo")?.autoFetchIntervalMinutes).toBe(15);
 				expect(store.get("/repo")?.copyIgnoredFiles).toBeNull();
@@ -418,6 +420,7 @@ describe("repoSettingsStore", () => {
 				await store.hydrate();
 				expect(store.get("/repo")?.branchLabels).toEqual({});
 				expect(store.get("/repo")?.mcpUpstreams).toBeNull();
+				expect(store.get("/repo")?.devServerUrl).toBeNull();
 			});
 		});
 
@@ -425,7 +428,12 @@ describe("repoSettingsStore", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
 				mockInvoke.mockClear();
-				store.update("/repo", { promptOnCreate: false, deleteBranchOnRemove: true, autoFetchIntervalMinutes: 5 });
+				store.update("/repo", {
+					promptOnCreate: false,
+					deleteBranchOnRemove: true,
+					autoFetchIntervalMinutes: 5,
+					devServerUrl: "http://localhost:5173",
+				});
 
 				const entry = lastSavedEntry("/repo");
 				expect(entry).toMatchObject({
@@ -434,6 +442,7 @@ describe("repoSettingsStore", () => {
 					prompt_on_create: false,
 					delete_branch_on_remove: true,
 					auto_fetch_interval_minutes: 5,
+					dev_server_url: "http://localhost:5173",
 				});
 				// No camelCase key may survive: serde would drop it without a word.
 				expect(Object.keys(entry).filter((k) => /[A-Z]/.test(k))).toEqual([]);

@@ -1839,6 +1839,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 
 	// --- Tunnels ---
+	start_design_mode: {
+		map: (args) => ({ method: "POST", path: "/design-mode/start", body: { sessionId: args.sessionId } }),
+	},
+	stop_design_mode: {
+		map: (args) => ({ method: "POST", path: "/design-mode/stop", body: { repoPath: args.repoPath } }),
+	},
+	get_design_mode_status: { map: () => ({ method: "GET", path: "/design-mode" }) },
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
 	save_tunnel_profile: { map: (args) => ({ method: "POST", path: "/tunnels/profiles", body: args.profile }) },
 	delete_tunnel_profile: { map: (args) => ({ method: "DELETE", path: `/tunnels/profiles/${args.id}` }) },
