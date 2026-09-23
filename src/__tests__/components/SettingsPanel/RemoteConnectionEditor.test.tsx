@@ -119,6 +119,53 @@ describe("RemoteConnectionEditor", () => {
 		});
 	});
 
+	it("saves the SSH provisioning options only when set, and keeps the shape unchanged otherwise", async () => {
+		const fill = (container: HTMLElement) => {
+			fireEvent.change(field(container, "Kind"), { target: { value: "RemoteSsh" } });
+			fireEvent.input(field(container, "Name"), { target: { value: "Builder" } });
+			fireEvent.input(field(container, "Host"), { target: { value: "builder.local" } });
+			fireEvent.input(field(container, "User"), { target: { value: "dev" } });
+		};
+		const first = render(() => <RemoteConnectionEditor target={{ kind: "new" }} onClose={vi.fn()} />);
+		fill(first.container);
+		expect(first.queryByLabelText("Leave it running on disconnect")).toBeNull();
+		fireEvent.click(first.getByText("Save"));
+		await waitFor(() => expect(actions.addConnection).toHaveBeenCalledTimes(1));
+		const plain = (actions.addConnection.mock.calls[0][0] as { transport: Record<string, unknown> }).transport;
+		expect(Object.keys(plain).sort()).toEqual(["remote_daemon_port", "ssh", "type"]);
+		cleanup();
+
+		const second = render(() => <RemoteConnectionEditor target={{ kind: "new" }} onClose={vi.fn()} />);
+		fill(second.container);
+		fireEvent.input(field(second.container, "Instance ID (optional)"), { target: { value: "dev-box" } });
+		fireEvent.click(second.getByLabelText("Offer to start the remote daemon if it is not running"));
+		fireEvent.click(second.getByLabelText("Leave it running on disconnect"));
+		fireEvent.click(second.getByText("Save"));
+		await waitFor(() => expect(actions.addConnection).toHaveBeenCalledTimes(2));
+		expect(actions.addConnection.mock.calls[1][0]).toMatchObject({
+			transport: {
+				type: "Ssh",
+				start_if_not_running: true,
+				leave_running_on_disconnect: true,
+				instance_id: "dev-box",
+			},
+		});
+	});
+
+	it("refuses an Instance ID tuic-remote would not accept", async () => {
+		const { container, getByText } = render(() => (
+			<RemoteConnectionEditor target={{ kind: "new" }} onClose={vi.fn()} />
+		));
+		fireEvent.change(field(container, "Kind"), { target: { value: "RemoteSsh" } });
+		fireEvent.input(field(container, "Name"), { target: { value: "Builder" } });
+		fireEvent.input(field(container, "Host"), { target: { value: "builder.local" } });
+		fireEvent.input(field(container, "User"), { target: { value: "dev" } });
+		fireEvent.input(field(container, "Instance ID (optional)"), { target: { value: "dev; reboot" } });
+		fireEvent.click(getByText("Save"));
+		await waitFor(() => expect(getByText(/Instance ID must be a lowercase DNS label/)).toBeTruthy());
+		expect(actions.addConnection).not.toHaveBeenCalled();
+	});
+
 	it("editing a live connection disconnects it first and keeps its fields; a saved Yes becomes accept-new", async () => {
 		statuses["machine-1"] = { status: "connected" };
 		const onClose = vi.fn();

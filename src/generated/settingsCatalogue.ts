@@ -5318,7 +5318,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 16,
+      "order": 18,
       "path": "/connections/{id}/auth_username",
       "labelKey": "settings.catalogue.connections.connections.{id}.auth_username.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.auth_username.help",
@@ -5353,7 +5353,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 18,
+      "order": 20,
       "path": "/connections/{id}/auto_update",
       "labelKey": "settings.catalogue.connections.connections.{id}.auto_update.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.auto_update.help",
@@ -5384,7 +5384,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 19,
+      "order": 21,
       "path": "/connections/{id}/deploy",
       "labelKey": "settings.catalogue.connections.connections.{id}.deploy.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.deploy.help",
@@ -5427,7 +5427,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 17,
+      "order": 19,
       "path": "/connections/{id}/enabled",
       "labelKey": "settings.catalogue.connections.connections.{id}.enabled.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.enabled.help",
@@ -5510,7 +5510,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 20,
+      "order": 22,
       "path": "/connections/{id}/survive_secs",
       "labelKey": "settings.catalogue.connections.connections.{id}.survive_secs.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.survive_secs.help",
@@ -5543,7 +5543,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 15,
+      "order": 13,
       "path": "/connections/{id}/transport/instance_id",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.instance_id.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.instance_id.help",
@@ -5570,13 +5570,42 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "connections.connections.{id}.transport.leave_running_on_disconnect": {
+      "id": "connections.connections.{id}.transport.leave_running_on_disconnect",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 12,
+      "path": "/connections/{id}/transport/leave_running_on_disconnect",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.leave_running_on_disconnect.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.leave_running_on_disconnect.help",
+      "label": "leave running on disconnect",
+      "schema": {
+        "description": "Keep a daemon started through that offer running on Disconnect.\nWhen false, Disconnect stops it again — PID-file verified, and only\na daemon this app started in this run.",
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Keeps a daemon this app started running on Disconnect.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "connections.connections.{id}.transport.port": {
       "id": "connections.connections.{id}.transport.port",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 14,
+      "order": 17,
       "path": "/connections/{id}/transport/port",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.port.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.port.help",
@@ -5889,13 +5918,42 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "connections.connections.{id}.transport.start_if_not_running": {
+      "id": "connections.connections.{id}.transport.start_if_not_running",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 11,
+      "path": "/connections/{id}/transport/start_if_not_running",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.start_if_not_running.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.start_if_not_running.help",
+      "label": "start if not running",
+      "schema": {
+        "description": "Offer to start `tuic-remote` on the remote host when a Connect finds\nnothing answering (`DeployMode::Never` only — the other modes deploy\nby themselves). Never acts on its own: the offer is published on the\nconnection's status and runs only after the user accepts the exact\nplan (`ssh_provision`), with `remote_deploy`'s pinned, checksummed\nbinary. Omitted from the file while off (as are the two fields\nbelow while unset), so a connection that never uses provisioning\nkeeps the exact shape older builds wrote.",
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Offers to start the remote daemon when a Connect finds nothing answering; runs only after the user accepts the plan.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "connections.connections.{id}.transport.tls_fingerprint": {
       "id": "connections.connections.{id}.transport.tls_fingerprint",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 13,
+      "order": 16,
       "path": "/connections/{id}/transport/tls_fingerprint",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.tls_fingerprint.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.tls_fingerprint.help",
@@ -5929,7 +5987,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 11,
+      "order": 14,
       "path": "/connections/{id}/transport/type",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.type.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.type.help",
@@ -5969,7 +6027,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 12,
+      "order": 15,
       "path": "/connections/{id}/transport/url",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.url.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.url.help",
@@ -14144,6 +14202,20 @@ export const settingsCatalogue = {
                     "format": "uint16",
                     "minimum": 0,
                     "maximum": 65535
+                  },
+                  "start_if_not_running": {
+                    "description": "Offer to start `tuic-remote` on the remote host when a Connect finds\nnothing answering (`DeployMode::Never` only — the other modes deploy\nby themselves). Never acts on its own: the offer is published on the\nconnection's status and runs only after the user accepts the exact\nplan (`ssh_provision`), with `remote_deploy`'s pinned, checksummed\nbinary. Omitted from the file while off (as are the two fields\nbelow while unset), so a connection that never uses provisioning\nkeeps the exact shape older builds wrote.",
+                    "type": "boolean"
+                  },
+                  "leave_running_on_disconnect": {
+                    "description": "Keep a daemon started through that offer running on Disconnect.\nWhen false, Disconnect stops it again — PID-file verified, and only\na daemon this app started in this run.",
+                    "type": "boolean"
+                  },
+                  "instance_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "type": {
                     "type": "string",

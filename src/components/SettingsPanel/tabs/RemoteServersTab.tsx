@@ -3,6 +3,7 @@ import { t } from "../../../i18n";
 import type { DiscoveredSshHost, RemoteConnection } from "../../../stores/remoteConnections";
 import { type TunnelProfile, tunnelsStore } from "../../../stores/tunnels";
 import { DirectCertConfirmDialog } from "../../shared/DirectCertConfirmDialog";
+import { ProvisionConfirmDialog } from "../../shared/ProvisionConfirmDialog";
 import s from "../Settings.module.css";
 import { SettingPageHeader } from "../SettingsPrimitives";
 import { RemoteMachinesTab } from "./RemoteMachinesTab";
@@ -48,6 +49,8 @@ export const RemoteServersTab: Component = () => {
 		<div class={`${s.section} ${layout.page}`}>
 			{/* Connect asks here before pinning a self-signed Direct certificate. */}
 			<DirectCertConfirmDialog />
+			{/* Shows the exact remote commands before SSH daemon provisioning runs. */}
+			<ProvisionConfirmDialog />
 			<SettingPageHeader
 				title={t("remoteServers.heading", "Remote Servers")}
 				description={t(
