@@ -27,11 +27,28 @@ pub enum TunnelStatus {
     Error { message: String },
 }
 
+/// Bound for `stop_and_wait`/`stop_and_take_task`-based confirmation that a
+/// tunnel's underlying OS process has actually exited. `graceful_kill`'s own
+/// SIGTERM grace period is 5s; this adds a buffer for signal delivery,
+/// task-join scheduling, and (on Windows) the `taskkill /T` tree-kill — a
+/// caller (production app-exit, or a test) can rely on this as an absolute
+/// ceiling and never hang indefinitely on a stuck supervisor.
+pub(crate) const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(7);
+
 pub struct TunnelSupervisor {
     profile: TunnelProfile,
     status: Arc<Mutex<TunnelStatus>>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     ssh_binary: PathBuf,
+    /// The supervision loop's task handle. Resolves once the loop returns,
+    /// which only happens after any live child process has been confirmed
+    /// dead (see `supervision_loop`'s shutdown branches, which `.await`
+    /// `graceful_kill` before returning) — awaiting this is therefore a real
+    /// confirmation that the OS process is gone, not just that in-memory
+    /// status/bookkeeping updated. `None` when nothing was ever spawned
+    /// (validation/port-check failed first) or after a previous
+    /// `stop_and_take_task` call already consumed it.
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl TunnelSupervisor {
@@ -64,6 +81,7 @@ impl TunnelSupervisor {
                 status,
                 shutdown_tx: None,
                 ssh_binary,
+                task: None,
             };
         }
 
@@ -87,6 +105,7 @@ impl TunnelSupervisor {
                         status,
                         shutdown_tx: None,
                         ssh_binary,
+                        task: None,
                     };
                 }
             }
@@ -99,7 +118,7 @@ impl TunnelSupervisor {
         let task_profile = profile.clone();
         let task_binary = ssh_binary.clone();
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             supervision_loop(
                 task_profile,
                 task_binary,
@@ -115,6 +134,7 @@ impl TunnelSupervisor {
             status,
             shutdown_tx: Some(shutdown_tx),
             ssh_binary,
+            task: Some(task),
         }
     }
 
@@ -123,6 +143,39 @@ impl TunnelSupervisor {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
+    }
+
+    /// Request shutdown and return the supervision loop's task handle, if
+    /// one was ever spawned. Awaiting the returned handle confirms the
+    /// underlying OS process is actually gone (see `task`'s doc comment) —
+    /// deliberately non-async and non-blocking itself, so a caller already
+    /// holding a lock on this supervisor (e.g. `TunnelManager`, behind a
+    /// `parking_lot::Mutex` whose guard isn't `Send`) can drop that lock
+    /// before awaiting what's returned here.
+    pub(crate) fn stop_and_take_task(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.stop();
+        self.task.take()
+    }
+
+    /// Convenience wrapper for direct (non-`TunnelManager`) callers — this
+    /// module's own tests — that request shutdown and wait, bounded by
+    /// `GRACEFUL_SHUTDOWN_TIMEOUT`, for confirmation that the underlying OS
+    /// process actually exited. Returns `true` if confirmed within the
+    /// timeout; `false` on timeout, in which case the supervision task keeps
+    /// running in the background regardless (each spawned `Command` also has
+    /// `kill_on_drop(true)` set as a last-resort safety net for whenever that
+    /// task is eventually dropped). Safe to call more than once, and safe to
+    /// call after the tunnel already stopped on its own (a non-retryable
+    /// exit, a spawn failure, etc.) — the stored task handle resolves
+    /// immediately in that case.
+    #[cfg(test)]
+    pub(crate) async fn stop_and_wait(&mut self) -> bool {
+        let Some(task) = self.stop_and_take_task() else {
+            return true;
+        };
+        tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, task)
+            .await
+            .is_ok()
     }
 
     /// Return the current tunnel status.
@@ -158,6 +211,15 @@ async fn supervision_loop(
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        // A fresh process group (id == the child's own PID), so
+        // `graceful_kill` can signal the whole tree via `kill(-pid, ...)`
+        // instead of just this one process — see that function's doc
+        // comment for why a single-PID signal isn't enough (a shell-script
+        // `ssh` stand-in, or a real `ssh` with a `ProxyCommand`, forks a
+        // child that isn't automatically killed when its parent dies from
+        // an unhandled signal).
+        #[cfg(unix)]
+        cmd.process_group(0);
 
         // Retry spawn briefly on transient OS errors (Linux ETXTBSY: race
         // between closing a write fd and execve on the same temp script).
@@ -367,16 +429,35 @@ fn stderr_tail_snapshot(tail: &Option<Arc<Mutex<Vec<u8>>>>) -> String {
 }
 
 /// Send SIGTERM, wait 5s, escalate to SIGKILL.
+///
+/// Signals the whole process **group**, not just the direct child, on Unix
+/// (the child is spawned into its own group via `process_group(0)` above
+/// specifically so this is safe/scoped) — mirroring the `taskkill /T`
+/// tree-kill already done for Windows below. A single-PID signal isn't
+/// enough: found via a real leaked-process bug (a `sleep 3600` fake-ssh test
+/// fixture — a multi-line shell script, not a single exec'd binary — outlived
+/// its own test by a full hour). The script's `/bin/sh` interpreter forked
+/// `sleep` as its own child rather than exec-replacing itself with it; SIGTERM
+/// killed the shell but never reached the orphaned `sleep` underneath it. A
+/// real `ssh` with a `ProxyCommand` has the identical shape.
+///
+/// Confirming the reap (an explicit `child.wait()` after every kill, not just
+/// firing the signal and returning) matters for the same reason on both
+/// platforms: `stop_and_wait`/`stop_and_take_task` treat "this function
+/// returned" as "the OS process is gone," and only awaiting `wait()` actually
+/// establishes that.
 async fn graceful_kill(child: &mut tokio::process::Child) {
     #[cfg(unix)]
     if let Some(id) = child.id() {
         match i32::try_from(id) {
             Ok(pid) => {
-                // SAFETY: `pid` is from `child.id()` which returns the OS PID of
-                // a child process we spawned and have not yet waited on.
-                // SIGTERM has no preconditions beyond a valid PID.
+                // SAFETY: `pid` is from `child.id()` which returns the OS PID
+                // of a child process we spawned (into its own process group,
+                // via `process_group(0)`) and have not yet waited on.
+                // SIGTERM has no preconditions beyond a valid PID/group id.
+                // Negating it targets the whole group instead of just `pid`.
                 unsafe {
-                    libc::kill(pid, libc::SIGTERM);
+                    libc::kill(-pid, libc::SIGTERM);
                 }
             }
             Err(_) => {
@@ -385,7 +466,14 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
                     raw_pid = id,
                     "PID overflows i32, escalating to SIGKILL"
                 );
+                // No usable signed PID to negate for a group-kill here — fall
+                // back to killing just the direct child via tokio's own
+                // PID-agnostic `Child::kill()`. This overflow case is
+                // exceedingly unlikely on any real system (PIDs stay far
+                // below `i32::MAX`), so the (rare, theoretical) grandchild
+                // gap this leaves is accepted rather than engineered around.
                 let _ = child.kill().await;
+                let _ = child.wait().await;
                 return;
             }
         }
@@ -407,14 +495,26 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
                 .await;
         }
         let _ = child.kill().await;
+        let _ = child.wait().await;
+        return;
     }
 
-    // Wait up to 5s for clean exit after SIGTERM, then escalate.
+    // Wait up to 5s for clean exit after SIGTERM, then escalate to SIGKILL.
     #[cfg(unix)]
     tokio::select! {
         _ = child.wait() => {}
         () = tokio::time::sleep(Duration::from_secs(5)) => {
-            let _ = child.kill().await;
+            if let Some(id) = child.id()
+                && let Ok(pid) = i32::try_from(id)
+            {
+                // SAFETY: see above — same PID/group, still not yet waited on.
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+            } else {
+                let _ = child.kill().await;
+            }
+            let _ = child.wait().await;
         }
     }
 }
