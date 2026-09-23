@@ -403,3 +403,51 @@ describe("DictationSettings – Voice Tuning", () => {
 		expect(container.textContent).toContain("run the tests");
 	});
 });
+
+describe("DictationSettings – Spoken replies", () => {
+	const asset = (id: string, language: string | null, state: string) => ({
+		id,
+		display_name: id,
+		kind: language ? "language" : "runtime",
+		language,
+		voices: [],
+		download_bytes: 1_000_000,
+		state,
+	});
+
+	/** The speech rows, which follow the Whisper rows in the same markup. */
+	const speechRows = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll(".modelRow")).slice(mockStore.state.models.length);
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.state.language = "it";
+		mockStore.state.speechDownloads = {};
+		mockStore.state.speechAssets = [
+			asset("runtime", null, "ready"),
+			asset("italian", "it", "ready"),
+			asset("english", "en", "ready"),
+		];
+	});
+
+	it("marks only the language replies are spoken in as active, like the selected Whisper model", () => {
+		const { container } = render(() => <DictationSettings />);
+		const rows = speechRows(container);
+		const active = rows.filter((row) => row.classList.contains("active")).map((row) => row.textContent);
+		expect(active).toHaveLength(1);
+		expect(active[0]).toContain("italian");
+		expect(active[0]).toContain("Active");
+		expect(rows.every((row) => row.textContent?.includes("Downloaded"))).toBe(true);
+	});
+
+	it("cancels a running download from a × control, not a text button", () => {
+		mockStore.state.speechDownloads = { english: 40 };
+		const { container } = render(() => <DictationSettings />);
+		const english = speechRows(container).find((row) => row.textContent?.includes("english"))!;
+		const cancel = english.querySelector('button[title="Cancel"]') as HTMLButtonElement;
+		expect(cancel.textContent).toBe("×");
+		fireEvent.click(cancel);
+		expect(mockStore.cancelSpeechDownload).toHaveBeenCalledWith("english");
+	});
+});
