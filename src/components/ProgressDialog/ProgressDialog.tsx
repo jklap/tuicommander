@@ -1,17 +1,26 @@
 import { type Component, createMemo, For, onMount, Show } from "solid-js";
 import { registerModal } from "../../stores/modalStack";
-import { type ProgressEntry, type ProgressKind, progressStore } from "../../stores/progress";
+import {
+	type ProgressFlow as FlowData,
+	type ProgressEntry,
+	type ProgressKind,
+	progressStore,
+} from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { formatRelativeTime } from "../../utils/time";
 import d from "../shared/dialog.module.css";
 import s from "./ProgressDialog.module.css";
+import { ProgressFlow } from "./ProgressFlow";
 
 const KIND_ICON: Record<ProgressKind, string> = {
 	// A check, a warning triangle and a small arrow. Monochrome paths, never emoji.
 	done: "M20 6 9 17l-5-5",
 	blocked: "M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
 	intent: "M5 12h14m-6-6 6 6-6 6",
+	// A fork into two branches, and a speech bubble.
+	delegated: "M6 3v6a6 6 0 0 0 6 6h6m-4-4 4 4-4 4M6 21V9",
+	message: "M4 5h16v11H8l-4 4z",
 };
 
 const KindIcon: Component<{ kind: ProgressKind }> = (props) => (
@@ -94,9 +103,15 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 		return index <= 0 ? -1 : index;
 	});
 
+	const isFlow = () => progressStore.view() === "flow";
+	const flowState = () => {
+		const path = project();
+		return path ? progressStore.state.flows?.[path] : undefined;
+	};
+
 	const body = (
 		<div
-			class={`${s.dialog}${props.embedded ? ` ${s.embedded}` : ""}`}
+			class={`${s.dialog}${isFlow() ? ` ${s.wide}` : ""}${props.embedded ? ` ${s.embedded}` : ""}`}
 			role={props.embedded ? "region" : "dialog"}
 			aria-label="Progress"
 			onClick={(e) => e.stopPropagation()}
@@ -122,14 +137,24 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 						)}
 					</For>
 				</select>
-				<label class={s.filter}>
-					<input
-						type="checkbox"
-						checked={progressStore.blockedOnly()}
-						onChange={(e) => progressStore.setBlockedOnly(e.currentTarget.checked)}
-					/>
-					Blocked only
-				</label>
+				<div class={s.viewToggle} role="group" aria-label="Progress view">
+					<button type="button" aria-pressed={!isFlow()} onClick={() => progressStore.setView("list")}>
+						List
+					</button>
+					<button type="button" aria-pressed={isFlow()} onClick={() => progressStore.setView("flow")}>
+						Flow
+					</button>
+				</div>
+				<Show when={!isFlow()}>
+					<label class={s.filter}>
+						<input
+							type="checkbox"
+							checked={progressStore.blockedOnly()}
+							onChange={(e) => progressStore.setBlockedOnly(e.currentTarget.checked)}
+						/>
+						Blocked only
+					</label>
+				</Show>
 				<Show when={!props.embedded}>
 					<button type="button" class={s.iconButton} aria-label="Close" onClick={() => void progressStore.close()}>
 						<svg
@@ -154,7 +179,24 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 				<p class={s.error}>{projectState()?.error}</p>
 			</Show>
 
-			<div class={s.list}>
+			<Show when={isFlow()}>
+				<Show
+					when={(flowState()?.data?.participants.length ?? 0) > 0}
+					fallback={
+						<p class={s.empty}>
+							{flowState()?.error
+								? flowState()?.error
+								: flowState()?.loading
+									? "Loading…"
+									: "No hand-offs recorded yet. Spawning an agent or sending it a message draws the first arrow."}
+						</p>
+					}
+				>
+					<ProgressFlow flow={flowState()?.data as FlowData} fetchDetail={progressStore.fetchFlowDetail} />
+				</Show>
+			</Show>
+
+			<div class={s.list} hidden={isFlow()}>
 				<Show
 					when={entries().length > 0}
 					fallback={
@@ -187,6 +229,17 @@ export const ProgressDialog: Component<ProgressDialogProps> = (props) => {
 										<div class={s.meta}>
 											<Show when={entry.type === "intent"}>
 												<span class={s.kindLabel}>set out to</span>
+												<span>·</span>
+											</Show>
+											<Show when={entry.type === "delegated" || entry.type === "message"}>
+												<span class={s.kindLabel}>
+													{entry.type === "delegated" ? "delegated to" : "messaged"}{" "}
+													{entry.targetPtyId
+														? terminalNames().get(entry.targetPtyId) ||
+															entry.targetName ||
+															terminalName(entry.targetPtyId)
+														: entry.targetName}
+												</span>
 												<span>·</span>
 											</Show>
 											<span>{formatRelativeTime(entry.createdAtMs, { showDateFallback: true })}</span>

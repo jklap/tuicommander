@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Progress Flow view** — The Progress dialog has a **List | Flow** toggle. Flow draws the journal as a sequence diagram: one column per terminal and per Claude subagent, delegations and peer messages as arrows, each child's done or blocked as its return arrow, and intents as notes. TUICommander now records `delegated` at `agent action=spawn` and `message` at `agent action=send`, redacted and capped at 500 characters. Click a label to read all of it; a subagent's full prompt or report is fetched on demand. An existing journal is migrated on first open.
 - **Hold `+` to open an agent** — A long press on the tab bar's `+` lists the enabled agents and their run configs; picking one opens a new tab in the active branch with that agent already started. A click still opens a plain terminal.
 - **SSH remote machines deploy and install themselves** — “Deploy on connect” resolves and caches the matching `tuic-remote` release, copies it only when its hash changes, launches it on loopback with a vault-backed pairing token, and reconnects through the SSH tunnel. A configurable idle lifetime preserves sessions across short disconnects. Linux systemd user units and macOS launchd agents can be installed or removed from Remote Machines, while the SSH host picker reports shell, no-shell, authentication-failed and unreachable hosts without duplicates.
 - **Agent activity in the sidebar** — The optional nested-terminal view now expands every occupied branch into one compact card. Agent rows reuse Activity Dashboard state and show the agent icon, current intent/task, last-update age, and attention state; plain terminals remain selectable in the same card, including single-session branches.
@@ -31,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Progress records worktree terminals** — An `intent:` from a terminal running in a managed worktree outside the repository root was dropped because the directory matched no registered repository. It now resolves to its workspace and is recorded against the parent project.
+- **Subagent map joins multi-line teammate prompts** — A teammate subagent was matched to its spawn by comparing the prompt with the raw JSON line, where every newline is escaped, so any multi-line prompt never matched.
 - Dictation auto-send submits long transcriptions to Claude Code again. Claude
   treated a long text as a paste, stripped the Ctrl-U prefix inside it as an
   invisible character and refused the following Enter. Agents now receive

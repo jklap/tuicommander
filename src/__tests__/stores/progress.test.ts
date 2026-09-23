@@ -19,7 +19,7 @@ vi.mock("../../stores/terminals", () => ({
 	},
 }));
 
-type Kind = "done" | "blocked" | "intent";
+type Kind = "done" | "blocked" | "intent" | "delegated" | "message";
 
 function entry(
 	id: number,
@@ -194,6 +194,36 @@ describe("progressStore", () => {
 
 		store.presentLive({ repo_path: "/repo", payload: { entry: entry(2, 200, "intent") } });
 		expect(toastAdd).toHaveBeenCalledTimes(1);
+		// A hand-off is one agent talking to another, not an outcome.
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(3, 300, "delegated") } });
+		store.presentLive({ repo_path: "/repo", payload: { entry: entry(4, 400, "message") } });
+		expect(toastAdd).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads the Flow for the scope on screen and follows a PTY switch", async () => {
+		const flow = { project: "/repo", participants: [], events: [], truncated: false };
+		invokeMock.mockImplementation((command: string) => Promise.resolve(command === "progress_flow" ? flow : list([])));
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open();
+		store.setView("flow");
+		await vi.waitFor(() =>
+			expect(invokeMock).toHaveBeenCalledWith("progress_flow", { project: "/repo", input: { ptyId: "pty-a" } }),
+		);
+		await vi.waitFor(() => expect(store.state.flows["/repo"]?.data).toEqual(flow));
+
+		store.selectPty(null);
+		await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledWith("progress_flow", { project: "/repo", input: {} }));
+	});
+
+	it("does not read the Flow while the List is showing", async () => {
+		invokeMock.mockResolvedValue(list([]));
+		const { createProgressStore } = await import("../../stores/progress");
+		const store = createProgressStore();
+		store.open();
+		store.selectPty("pty-b");
+		await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+		expect(invokeMock.mock.calls.some(([command]) => command === "progress_flow")).toBe(false);
 	});
 
 	it("counts what arrived while the dialog was closed and clears it on open", async () => {

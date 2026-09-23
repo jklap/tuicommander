@@ -442,6 +442,30 @@ async fn post_progress_viewed(
     json_result(crate::progress::progress_mark_viewed(&q.path, q.pty_id.as_deref()))
 }
 
+async fn post_progress_flow(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<crate::progress::ProgressFlowInput>,
+) -> Response {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_flow(&state, &q.path, input))
+}
+async fn post_progress_flow_detail(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Json(input): Json<crate::progress::ProgressFlowDetailInput>,
+) -> Response {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    json_result(crate::progress::progress_flow_detail(&state, input))
+}
+
 /// Serve plugin data files over HTTP.
 /// Reuses the same sandboxed read logic as the Tauri `read_plugin_data` command.
 async fn plugin_data_http(AxumPath((plugin_id, path)): AxumPath<(String, String)>) -> Response {
@@ -734,6 +758,8 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/progress/list", post(post_progress_list))
         .route("/progress/delete", post(post_progress_delete))
         .route("/progress/viewed", post(post_progress_viewed))
+        .route("/progress/flow", post(post_progress_flow))
+        .route("/progress/flow/detail", post(post_progress_flow_detail))
         // Session lifecycle
         .route(
             "/sessions",
@@ -869,6 +895,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/process/monitor", get(session::process_monitor_panel))
         .route("/agents/map", get(session::subagent_map_panel))
         .route("/agents/map/data", get(session::subagent_map_data))
+        .route("/agents/map/prompt", get(session::subagent_map_prompt))
         // Git operations
         .route("/repo/info", get(git_routes::repo_info))
         .route("/repo/remote-url", get(git_routes::remote_url))
@@ -2527,11 +2554,10 @@ mod tests {
         );
     }
 
-    /// `?session=` is a session id looked up in `AppState`, never a path. A
-    /// value shaped like a traversal therefore resolves to nothing at all —
-    /// the same answer as any other unknown id, and never a filesystem read.
+    /// The call map takes no parameter that could steer a read: with no
+    /// terminals it is an empty tree, whatever the query string says.
     #[tokio::test]
-    async fn subagent_map_data_treats_an_unknown_session_as_no_selection() {
+    async fn subagent_map_data_is_an_empty_tree_without_terminals() {
         let app = build_router(test_state(), false, true);
         let resp = app
             .oneshot(
@@ -2541,19 +2567,38 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::OK,
-            "an unknown session is an empty map, not an error"
-        );
+        assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(json["selected"].is_null());
-        assert_eq!(json["lanes"].as_array().map(Vec::len), Some(0));
-        assert_eq!(json["events"].as_array().map(Vec::len), Some(0));
-        assert!(json["sessions"].is_array(), "the picker still gets its list");
+        assert_eq!(json["roots"].as_array().map(Vec::len), Some(0));
+        assert_eq!(json["terminals"], 0);
+        assert_eq!(json["subagents"], 0);
+    }
+
+    /// `session` and `agent` are keys, never path components. Traversal-shaped
+    /// values resolve to nothing — the same 404 as any unknown id, and never a
+    /// filesystem read.
+    #[tokio::test]
+    async fn subagent_map_prompt_treats_a_traversal_as_an_unknown_id() {
+        for query in [
+            "?session=..%2F..%2Fetc&agent=..%2Fpasswd",
+            "?session=nope&agent=x",
+            "?agent=x",
+            "",
+        ] {
+            let app = build_router(test_state(), false, true);
+            let resp = app
+                .oneshot(
+                    Request::get(format!("/agents/map/prompt{query}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND, "query {query:?}");
+        }
     }
 
     /// Every `/progress/*` route, with a body its extractors accept.
@@ -2576,6 +2621,12 @@ mod tests {
             ),
             ("POST", "/progress/delete", serde_json::json!({"ids": []})),
             ("POST", "/progress/viewed", serde_json::Value::Null),
+            ("POST", "/progress/flow", serde_json::json!({})),
+            (
+                "POST",
+                "/progress/flow/detail",
+                serde_json::json!({"ptyId": "p", "agentId": "a", "part": "prompt"}),
+            ),
         ]
     }
 
@@ -2752,6 +2803,7 @@ mod tests {
             "/agents/detect",
             "/agents/map",
             "/agents/map/data",
+            "/agents/map/prompt",
             "/fs/list",
             "/fs/read",
             "/fs/write",
@@ -2784,6 +2836,8 @@ mod tests {
             "/progress/list",
             "/progress/delete",
             "/progress/viewed",
+            "/progress/flow",
+            "/progress/flow/detail",
         ];
         // Desktop-only or router-specific — MUST NOT be in shared_routes():
         // /health (public_routes only), /fs/read-editor (router-specific

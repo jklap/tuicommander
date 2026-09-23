@@ -272,6 +272,20 @@ describe("transport", () => {
 				path: "/progress/report?path=%2Frepo%20a",
 				body: report,
 			});
+			// The Flow view: one read for the whole sequence, one for the full
+			// text behind a subagent arrow. Neither reshapes its input.
+			const flowInput = { ptyId: "pty-a" };
+			expect(mapCommandToHttp("progress_flow", { project: "/repo a", input: flowInput })).toEqual({
+				method: "POST",
+				path: "/progress/flow?path=%2Frepo%20a",
+				body: flowInput,
+			});
+			const detail = { ptyId: "pty-a", agentId: "a1", part: "report" };
+			expect(mapCommandToHttp("progress_flow_detail", { input: detail })).toEqual({
+				method: "POST",
+				path: "/progress/flow/detail",
+				body: detail,
+			});
 			for (const gone of ["progress_status", "progress_pause", "progress_clear", "progress_export"]) {
 				expect(() => mapCommandToHttp(gone, { project: "/repo a" })).toThrow(/No HTTP mapping/);
 			}
@@ -519,23 +533,11 @@ describe("transport", () => {
 					"/dictation/speech/assets/cancel",
 					{ asset: "italian" },
 				],
-				[
-					"delete_speech_asset",
-					{ asset: "italian" },
-					"POST",
-					"/dictation/speech/assets/delete",
-					{ asset: "italian" },
-				],
+				["delete_speech_asset", { asset: "italian" }, "POST", "/dictation/speech/assets/delete", { asset: "italian" }],
 				// `turn` rides in the body rather than being derived: a reply
 				// written for a turn the user has already talked over must be
 				// refusable, and only the caller knows which turn it answered.
-				[
-					"speak_reply",
-					{ text: "Fatto.", turn: 3 },
-					"POST",
-					"/dictation/speech/speak",
-					{ text: "Fatto.", turn: 3 },
-				],
+				["speak_reply", { text: "Fatto.", turn: 3 }, "POST", "/dictation/speech/speak", { text: "Fatto.", turn: 3 }],
 				["set_correction_map", { map: { teh: "the" } }, "PUT", "/dictation/corrections", { map: { teh: "the" } }],
 				["inject_text", { text: "hello" }, "POST", "/dictation/inject", { text: "hello" }],
 				["set_dictation_config", { config: { enabled: true } }, "PUT", "/dictation/config", { enabled: true }],

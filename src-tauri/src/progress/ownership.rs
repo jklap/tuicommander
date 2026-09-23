@@ -78,6 +78,35 @@ pub(crate) fn resolve_owning_project_in(
     canonical_existing_dir(&current)
 }
 
+/// The registered managed workspace (worktree) a path lies in, deepest first.
+///
+/// A worktree usually sits outside its repository's root, so a terminal
+/// running there matches no registered repository by prefix. Its workspace is
+/// the authoritative answer: `resolve_owning_project` then maps it to the
+/// parent project, which is how a worktree and its repository share one journal.
+pub(crate) fn registered_workspace_for_path(path: &Path) -> Option<PathBuf> {
+    registered_workspace_for_path_in(path, &crate::config::load_repositories())
+}
+
+pub(crate) fn registered_workspace_for_path_in(
+    path: &Path,
+    repositories: &serde_json::Value,
+) -> Option<PathBuf> {
+    let path = canonical_if_present(path);
+    repositories
+        .get("repos")?
+        .as_object()?
+        .values()
+        .filter_map(|repo| repo.get("workspaces")?.as_object())
+        .flat_map(|workspaces| workspaces.values())
+        .filter_map(|workspace| workspace.get("worktreePath")?.as_str())
+        .map(|worktree| canonical_if_present(Path::new(worktree)))
+        // `Path::starts_with` compares whole components, so a sibling that
+        // merely shares a prefix is not inside the workspace.
+        .filter(|worktree| path.starts_with(worktree))
+        .max_by_key(|worktree| worktree.components().count())
+}
+
 fn canonical_existing_dir(path: &Path) -> Result<PathBuf, String> {
     let canonical = std::fs::canonicalize(path).map_err(|error| {
         format!(
@@ -102,6 +131,43 @@ fn canonical_if_present(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A worker spawned into a managed worktree runs outside its repository's
+    /// root. Its terminal must still resolve to that workspace — and so to the
+    /// parent project — or its intents and messages never reach the journal.
+    #[test]
+    fn a_path_inside_a_managed_workspace_resolves_to_that_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(worktree.path().join("src")).unwrap();
+        let doc = json!({
+            "repos": {
+                root.path().to_string_lossy(): {
+                    "workspaces": {
+                        "w": { "worktreePath": worktree.path(), "parentRepoPath": root.path() }
+                    }
+                }
+            }
+        });
+        let canonical = std::fs::canonicalize(worktree.path()).unwrap();
+        assert_eq!(
+            registered_workspace_for_path_in(&worktree.path().join("src"), &doc),
+            Some(canonical.clone())
+        );
+        assert_eq!(
+            registered_workspace_for_path_in(worktree.path(), &doc),
+            Some(canonical)
+        );
+        let sibling = format!("{}-other", worktree.path().display());
+        assert_eq!(
+            registered_workspace_for_path_in(Path::new(&sibling), &doc),
+            None
+        );
+        assert_eq!(
+            registered_workspace_for_path_in(Path::new("/tmp"), &json!({})),
+            None
+        );
+    }
 
     #[test]
     fn unbound_callers_fail_explicitly() {

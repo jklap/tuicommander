@@ -5,7 +5,7 @@ import { repositoriesStore } from "./repositories";
 import { terminalsStore } from "./terminals";
 import { toastsStore } from "./toasts";
 
-export type ProgressKind = "done" | "blocked" | "intent";
+export type ProgressKind = "done" | "blocked" | "intent" | "delegated" | "message";
 
 export interface ProgressEntry {
 	id: number;
@@ -16,6 +16,67 @@ export interface ProgressEntry {
 	text: string;
 	step?: string;
 	agentName?: string;
+	/** The terminal a `delegated` or `message` entry points at. */
+	targetPtyId?: string;
+	targetName?: string;
+}
+
+export type FlowState = "busy" | "idle" | "awaiting" | "closed" | "running" | "done";
+
+export interface FlowParticipant {
+	id: string;
+	kind: "terminal" | "subagent";
+	title: string;
+	agentType?: string;
+	state: FlowState;
+	parent?: string;
+	intent?: string;
+	toolCalls: number;
+	ptyId: string;
+	agentId?: string;
+}
+
+export interface FlowDetailRef {
+	ptyId: string;
+	agentId: string;
+	part: "prompt" | "report";
+}
+
+export type FlowEventKind =
+	| "intent"
+	| "done"
+	| "blocked"
+	| "delegated"
+	| "message"
+	| "subagent_spawn"
+	| "subagent_return";
+
+export interface FlowEvent {
+	kind: FlowEventKind;
+	from: string;
+	to?: string;
+	summary: string;
+	/** The whole journal text, when the summary is shorter. */
+	text?: string;
+	/** Where the whole text of a subagent arrow is fetched from. */
+	detail?: FlowDetailRef;
+	step?: string;
+	atMs: number;
+}
+
+export interface ProgressFlow {
+	project: string;
+	participants: FlowParticipant[];
+	events: FlowEvent[];
+	truncated: boolean;
+}
+
+export type ProgressView = "list" | "flow";
+
+export interface ProjectFlowState {
+	data?: ProgressFlow;
+	loading: boolean;
+	error: string | null;
 }
 
 export interface ProgressList {
@@ -45,13 +106,17 @@ const [dialogVisible, setDialogVisible] = createSignal(false);
 const [requestedProject, setRequestedProject] = createSignal<string | null>(null);
 const [selectedPtyId, setSelectedPtyId] = createSignal<string | null>(null);
 const [blockedOnly, setBlockedOnly] = createSignal(false);
+const [view, setView] = createSignal<ProgressView>("list");
 
 function messageOf(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
 export function createProgressStore() {
-	const [state, setState] = createStore<{ projects: Record<string, ProjectProgressState> }>({ projects: {} });
+	const [state, setState] = createStore<{
+		projects: Record<string, ProjectProgressState>;
+		flows: Record<string, ProjectFlowState>;
+	}>({ projects: {}, flows: {} });
 	// Entries that arrived while the dialog was closed. The bell shows this
 	// count. It is deliberately NOT a query across every registered repository:
 	// that fan-out is what made the old panel fire 78 requests on open, and it
@@ -84,6 +149,31 @@ export function createProgressStore() {
 		}
 	}
 
+	/// The Flow view's read. The backend builds the whole sequence — columns,
+	/// order, arrows, redaction — so this only stores what came back.
+	async function refreshFlow(project: string): Promise<void> {
+		const ptyId = selectedPtyId();
+		setState("flows", project, (current) => ({ ...(current ?? {}), loading: true, error: null }));
+		try {
+			const flow = await invoke<ProgressFlow>("progress_flow", {
+				project,
+				input: ptyId ? { ptyId } : {},
+			});
+			if (requestedProject() !== project || selectedPtyId() !== ptyId) return;
+			setState("flows", project, { data: flow, loading: false, error: null });
+		} catch (error) {
+			if (requestedProject() !== project || selectedPtyId() !== ptyId) return;
+			setState("flows", project, { loading: false, error: messageOf(error) });
+		}
+	}
+
+	/// Refresh whichever view is showing. The list stays the source of the
+	/// divider and of deletion, so it is read in both.
+	function refreshVisible(project: string, freezeDivider = true): void {
+		void refreshProject(project, freezeDivider);
+		if (view() === "flow") void refreshFlow(project);
+	}
+
 	function open(project: string | null = null, ptyId?: string | null): void {
 		const target = project ?? repositoriesStore.state.activeRepoPath ?? null;
 		const activeId = terminalsStore.state.activeId;
@@ -102,7 +192,7 @@ export function createProgressStore() {
 				...(current ?? { entries: [], ptyIds: [], loading: false, error: null }),
 			}));
 			setState("projects", target, "entries", []);
-			void refreshProject(target, false);
+			refreshVisible(target, false);
 		}
 	}
 
@@ -113,7 +203,7 @@ export function createProgressStore() {
 		if (project) {
 			setState("projects", project, "entries", []);
 			setState("projects", project, "dividerMs", undefined);
-			void refreshProject(project, false);
+			refreshVisible(project, false);
 		}
 	}
 
@@ -157,13 +247,14 @@ export function createProgressStore() {
 			requestedProject() === payload.repo_path &&
 			(selectedPtyId() === null || selectedPtyId() === entry.ptyId)
 		) {
-			void refreshProject(payload.repo_path);
+			refreshVisible(payload.repo_path);
 		} else {
 			setArrivedSinceOpen((count) => count + 1);
 		}
-		// An `intent:` is what the agent set out to do, not an outcome. It belongs
-		// in the journal and not in the user's face.
-		if (entry.type === "intent") return;
+		// An `intent:` is what the agent set out to do, and a hand-off is one
+		// agent talking to another — neither is an outcome. They belong in the
+		// journal and not in the user's face.
+		if (entry.type !== "done" && entry.type !== "blocked") return;
 		const projectName =
 			repositoriesStore.get(payload.repo_path)?.displayName ??
 			payload.repo_path.split(/[\\/]/).pop() ??
@@ -199,6 +290,15 @@ export function createProgressStore() {
 			const project = requestedProject();
 			if (project) void refreshProject(project);
 		},
+		view,
+		setView: (next: ProgressView) => {
+			setView(next);
+			const project = requestedProject();
+			if (next === "flow" && project) void refreshFlow(project);
+		},
+		refreshFlow,
+		fetchFlowDetail: (detail: FlowDetailRef) =>
+			invoke<{ text: string }>("progress_flow_detail", { input: detail }).then((result) => result.text),
 		open,
 		close,
 		toggle: () => (dialogVisible() ? void close() : open()),
@@ -211,6 +311,8 @@ export function createProgressStore() {
 		resetForTests() {
 			batch(() => {
 				setState("projects", reconcile({}));
+				setState("flows", reconcile({}));
+				setView("list");
 				setDialogVisible(false);
 				setRequestedProject(null);
 				setSelectedPtyId(null);

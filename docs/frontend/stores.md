@@ -561,10 +561,16 @@ The unread count is the number of `progress-recorded` pushes that arrived while
 the dialog was closed, reset on open. It is deliberately not a query: the
 persistent record of where the reader stopped is the divider.
 
+`view` selects List or Flow. The Flow view's data lives in `state.flows`,
+per project, and is read with `progress_flow` for the selected scope whenever
+the Flow view is showing and something changes (open, PTY switch, live entry).
+The list is read in both views because it carries the divider and deletion.
+`fetchFlowDetail` fetches one subagent arrow's full text on demand.
+
 A Progress toast opts out of the generic MESSAGES mirror because the bell has its
 own aggregate row, and it is silent — a blocked entry is not automatically a
-demand for attention. An `intent` entry toasts nothing: it is what an agent set
-out to do, not a result. Failures stay on the affected project as one line
+demand for attention. `intent`, `delegated` and `message` entries toast nothing:
+they are what an agent set out to do or said to another agent, not a result. Failures stay on the affected project as one line
 instead of being rendered as an empty feed.
 
 ### errorLog (`errorLog.ts`)

@@ -760,6 +760,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/progress/viewed?path=${p("project")}${args.ptyId ? `&ptyId=${p("ptyId")}` : ""}`,
 		}),
 	},
+	progress_flow: {
+		map: (args, p) => ({ method: "POST", path: `/progress/flow?path=${p("project")}`, body: args.input }),
+	},
+	progress_flow_detail: {
+		map: (args) => ({ method: "POST", path: "/progress/flow/detail", body: args.input }),
+	},
 
 	// --- Config: prompt library ---
 	load_prompt_library: { map: () => ({ method: "GET", path: "/config/prompt-library" }) },

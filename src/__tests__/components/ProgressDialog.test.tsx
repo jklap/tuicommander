@@ -3,37 +3,41 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProgressDialog } from "../../components/ProgressDialog";
 import { progressStore } from "../../stores/progress";
 
-const { close, deleteEntries, open, selectPty, setBlockedOnly, projectState, defaults } = vi.hoisted(() => {
-	const entry = (id: number, type: string, text: string, createdAtMs: number) => ({
-		id,
-		project: "/repo",
-		createdAtMs,
-		type,
-		text,
-		agentName: "Worker",
+const { close, deleteEntries, open, selectPty, setBlockedOnly, setView, viewState, flowState, projectState, defaults } =
+	vi.hoisted(() => {
+		const entry = (id: number, type: string, text: string, createdAtMs: number) => ({
+			id,
+			project: "/repo",
+			createdAtMs,
+			type,
+			text,
+			agentName: "Worker",
+		});
+		const defaults = () => ({
+			entries: [
+				entry(3, "blocked", "Cannot reach the registry.", 300),
+				entry(2, "intent", "Rewriting the dialog.", 200),
+				entry(1, "done", "Shipped the store.", 100),
+			],
+			ptyIds: ["pty-a", "pty-b"],
+			// Everything at or below this timestamp was on screen last visit.
+			dividerMs: 200,
+			loading: false,
+			error: "one line for the whole failure",
+		});
+		return {
+			close: vi.fn(),
+			deleteEntries: vi.fn(),
+			open: vi.fn(),
+			selectPty: vi.fn(),
+			setBlockedOnly: vi.fn(),
+			setView: vi.fn(),
+			viewState: { current: "list" as "list" | "flow" },
+			flowState: {} as Record<string, unknown>,
+			projectState: defaults() as ReturnType<typeof defaults>,
+			defaults,
+		};
 	});
-	const defaults = () => ({
-		entries: [
-			entry(3, "blocked", "Cannot reach the registry.", 300),
-			entry(2, "intent", "Rewriting the dialog.", 200),
-			entry(1, "done", "Shipped the store.", 100),
-		],
-		ptyIds: ["pty-a", "pty-b"],
-		// Everything at or below this timestamp was on screen last visit.
-		dividerMs: 200,
-		loading: false,
-		error: "one line for the whole failure",
-	});
-	return {
-		close: vi.fn(),
-		deleteEntries: vi.fn(),
-		open: vi.fn(),
-		selectPty: vi.fn(),
-		setBlockedOnly: vi.fn(),
-		projectState: defaults() as ReturnType<typeof defaults>,
-		defaults,
-	};
-});
 
 vi.mock("../../stores/modalStack", () => ({ registerModal: vi.fn() }));
 
@@ -61,12 +65,17 @@ vi.mock("../../stores/progress", () => ({
 		open,
 		close,
 		deleteEntries,
-		state: { projects: { "/repo": projectState } },
+		view: () => viewState.current,
+		setView,
+		fetchFlowDetail: vi.fn(),
+		state: { projects: { "/repo": projectState }, flows: flowState },
 	},
 }));
 
 beforeEach(() => {
 	Object.assign(projectState, defaults());
+	viewState.current = "list";
+	for (const key of Object.keys(flowState)) delete flowState[key];
 	vi.clearAllMocks();
 });
 
@@ -169,5 +178,58 @@ describe("ProgressDialog", () => {
 describe("ProgressDialog wiring", () => {
 	it("uses the store the app exports", () => {
 		expect(progressStore.requestedProject()).toBe("/repo");
+	});
+
+	it("switches between the List and the Flow view", () => {
+		render(() => <ProgressDialog />);
+		fireEvent.click(screen.getByRole("button", { name: "Flow" }));
+		expect(setView).toHaveBeenCalledWith("flow");
+		expect(screen.getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe("true");
+	});
+
+	it("draws the Flow view from the backend's sequence and hides the list filter", () => {
+		viewState.current = "flow";
+		flowState["/repo"] = {
+			loading: false,
+			error: null,
+			data: {
+				project: "/repo",
+				truncated: false,
+				participants: [
+					{ id: "pty-a", kind: "terminal", title: "Lead", state: "busy", toolCalls: 0, ptyId: "pty-a" },
+					{
+						id: "pty-b",
+						kind: "terminal",
+						title: "Worker",
+						state: "closed",
+						parent: "pty-a",
+						toolCalls: 0,
+						ptyId: "pty-b",
+					},
+				],
+				events: [{ kind: "delegated", from: "pty-a", to: "pty-b", summary: "Write the lexer", atMs: 1 }],
+			},
+		};
+		render(() => <ProgressDialog />);
+		expect(screen.queryByText("Blocked only")).toBeNull();
+		expect(screen.getByText("Lead")).toBeTruthy();
+		expect(screen.getByText("Write the lexer")).toBeTruthy();
+	});
+
+	it("names the target of a hand-off in the List view", () => {
+		projectState.entries = [
+			{
+				id: 9,
+				project: "/repo",
+				createdAtMs: 400,
+				type: "delegated",
+				text: "Write the lexer",
+				agentName: "Lead",
+				targetPtyId: "pty-b",
+				targetName: "lexer",
+			},
+		] as unknown as typeof projectState.entries;
+		render(() => <ProgressDialog />);
+		expect(screen.getByText(/delegated to\s+Agent B/)).toBeTruthy();
 	});
 });

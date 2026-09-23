@@ -867,7 +867,7 @@ A `.tuic.json` file in the repository root provides team-shareable settings. It 
 ## Progress Storage (`progress.sqlite3`)
 
 **Module:** `src-tauri/src/progress/` (`store.rs`, `ownership.rs`, `model.rs`,
-`service.rs`)
+`service.rs`, `flow.rs`)
 
 One append-only journal in one database, `<config dir>/progress.sqlite3`, with
 `project` and nullable `pty_id` columns. Existing databases gain `pty_id` on
@@ -881,10 +881,23 @@ PTY and the repository aggregate.
 `repo_watcher.rs` asserts that: it snapshots the repository tree byte-for-byte
 around a record/delete/mark-viewed cycle and requires it unchanged.
 
-Three entry kinds. `done` and `blocked` are reported by agents through the MCP
+Five entry kinds. `done` and `blocked` are reported by agents through the MCP
 `progress` tool, the HTTP routes or the Tauri commands. `intent` is written by
-TUIC from the agent's `intent:` marker and is refused on every reporting path —
-it is observed, not claimed.
+TUIC from the agent's `intent:` marker. `delegated` and `message` are written by
+TUIC at `agent action=spawn` and `agent action=send`, with nullable
+`target_pty_id` and `target_name` columns naming the other terminal. All three
+host-written kinds are refused on every reporting path — they are observed, not
+claimed.
+
+A journal created before the hand-off kinds has a `CHECK` constraint that
+refuses them. SQLite cannot alter a `CHECK`, so opening such a database copies
+`entries` into a new table in one `IMMEDIATE` transaction. Ids are copied as
+they are, and the `sqlite_sequence` high-water mark is carried over so a
+deleted newest id is never issued again.
+
+A terminal's project is its cwd's registered repository or, for a managed
+worktree outside the repository root, its registered workspace, which then
+resolves to the parent project.
 
 Ownership resolution starts from an authoritative registered project and follows
 recorded linked and nested workspace parent records, so a worktree's entries land

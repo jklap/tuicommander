@@ -7,6 +7,8 @@
 | `report_progress_event` | `project, report` | `{id}` | Appends one `done` or `blocked` entry through the same core as MCP and HTTP. |
 | `progress_list` | `project, input.blockedOnly?, input.ptyId?` | `ProgressList` | The selected PTY's or project's newest 500 entries, available PTY IDs, and the stored last-visit mark. |
 | `progress_delete` | `project, input.ids` | `{deleted}` | Deletes entries by id, scoped to the project — one project cannot delete another's. |
+| `progress_flow` | `project, input.ptyId?` | `ProgressFlow` | The journal as a delegation sequence: participants and ordered hand-off events (see `docs/api/http-api.md` → Project Progress). |
+| `progress_flow_detail` | `input.ptyId, input.agentId, input.part` | `{text}` | Full redacted prompt or report of one subagent arrow, fetched on demand. |
 | `progress_mark_viewed` | `project, ptyId?` | `{lastViewedMs}` | Moves the selected PTY's or repository aggregate's last-visit mark to now. Deliberately not an MCP action: it is the reader's, not the agent's. |
 
 The journal is append-only. There is no pause, clear, correction or export

@@ -70,11 +70,13 @@ impl ProgressStore {
                id            INTEGER PRIMARY KEY AUTOINCREMENT,
                project       TEXT NOT NULL,
                created_at_ms INTEGER NOT NULL,
-               kind          TEXT NOT NULL CHECK (kind IN ('done','blocked','intent')),
+               kind          TEXT NOT NULL CHECK (kind IN ('done','blocked','intent','delegated','message')),
                text          TEXT NOT NULL,
                step          TEXT,
                agent_name    TEXT,
-               pty_id        TEXT
+               pty_id        TEXT,
+               target_pty_id TEXT,
+               target_name   TEXT
              );
              CREATE INDEX IF NOT EXISTS entries_by_project ON entries (project, id DESC);
              CREATE TABLE IF NOT EXISTS project_views (
@@ -102,12 +104,88 @@ impl ProgressStore {
             tx.commit()
                 .map_err(db_error("commit the progress schema migration"))?;
         }
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS entries_by_pty ON entries (project, pty_id, id DESC)",
-            [],
+        if !Self::has_hand_off_schema(&conn)? {
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error("begin the hand-off schema migration"))?;
+            if !Self::has_hand_off_schema(&tx)? {
+                Self::rebuild_for_hand_offs(&tx)?;
+            }
+            tx.commit()
+                .map_err(db_error("commit the hand-off schema migration"))?;
+        }
+        // After the migrations: a rebuilt table has lost its indexes.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS entries_by_project ON entries (project, id DESC);
+             CREATE INDEX IF NOT EXISTS entries_by_pty ON entries (project, pty_id, id DESC);",
         )
         .map_err(db_error("index terminal progress"))?;
         Ok(conn)
+    }
+
+    /// Whether `entries` accepts the hand-off kinds and carries their target.
+    /// The CHECK constraint is part of the table's SQL, so the SQL is the only
+    /// place to read it from.
+    fn has_hand_off_schema(conn: &Connection) -> Result<bool, String> {
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'entries'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_error("inspect the progress schema"))?;
+        Ok(sql.contains("'delegated'") && sql.contains("target_pty_id"))
+    }
+
+    /// SQLite cannot alter a CHECK constraint, so a journal from before the
+    /// hand-off kinds is copied into a new table. Ids are copied verbatim and
+    /// the AUTOINCREMENT high-water mark is carried over: a dialog may still
+    /// hold the id of a deleted newest entry, and reissuing it would let that
+    /// dialog delete an entry it never showed.
+    fn rebuild_for_hand_offs(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
+        let high_water: Option<i64> = tx
+            .query_row(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'entries'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error("read the progress id high-water mark"))?;
+        tx.execute_batch(
+            "CREATE TABLE entries_hand_offs (
+               id            INTEGER PRIMARY KEY AUTOINCREMENT,
+               project       TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               kind          TEXT NOT NULL CHECK (kind IN ('done','blocked','intent','delegated','message')),
+               text          TEXT NOT NULL,
+               step          TEXT,
+               agent_name    TEXT,
+               pty_id        TEXT,
+               target_pty_id TEXT,
+               target_name   TEXT
+             );
+             INSERT INTO entries_hand_offs (id, project, created_at_ms, kind, text, step, agent_name, pty_id)
+               SELECT id, project, created_at_ms, kind, text, step, agent_name, pty_id FROM entries;
+             DROP TABLE entries;
+             ALTER TABLE entries_hand_offs RENAME TO entries;",
+        )
+        .map_err(db_error("rebuild the progress table for hand-offs"))?;
+        if let Some(seq) = high_water {
+            let updated = tx
+                .execute(
+                    "UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'entries'",
+                    params![seq],
+                )
+                .map_err(db_error("carry the progress id high-water mark"))?;
+            if updated == 0 {
+                tx.execute(
+                    "INSERT INTO sqlite_sequence (name, seq) VALUES ('entries', ?1)",
+                    params![seq],
+                )
+                .map_err(db_error("carry the progress id high-water mark"))?;
+            }
+        }
+        Ok(())
     }
 
     fn has_pty_column(conn: &Connection) -> Result<bool, String> {
@@ -138,6 +216,19 @@ impl ProgressStore {
         entry: &NewProgressEntry,
         pty_id: Option<&str>,
     ) -> Result<ProgressEntry, String> {
+        self.record_hand_off(project, entry, pty_id, None, None)
+    }
+
+    /// `record_for_pty`, plus the terminal a `delegated` or `message` entry
+    /// points at and that terminal's name at the time.
+    pub(crate) fn record_hand_off(
+        &self,
+        project: &str,
+        entry: &NewProgressEntry,
+        pty_id: Option<&str>,
+        target_pty_id: Option<&str>,
+        target_name: Option<&str>,
+    ) -> Result<ProgressEntry, String> {
         entry.validate()?;
         let mut conn = self.connect()?;
         let tx = conn
@@ -162,8 +253,9 @@ impl ProgressStore {
             return Ok(newest);
         }
         tx.execute(
-            "INSERT INTO entries (project, created_at_ms, kind, text, step, agent_name, pty_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO entries (project, created_at_ms, kind, text, step, agent_name, pty_id,
+                                  target_pty_id, target_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 project,
                 i64_from_u64(created_at_ms),
@@ -172,6 +264,8 @@ impl ProgressStore {
                 &step,
                 &agent_name,
                 pty_id,
+                target_pty_id,
+                target_name,
             ],
         )
         .map_err(db_error("insert progress entry"))?;
@@ -186,6 +280,8 @@ impl ProgressStore {
             text,
             step,
             agent_name,
+            target_pty_id: target_pty_id.map(str::to_string),
+            target_name: target_name.map(str::to_string),
         })
     }
 
@@ -227,6 +323,8 @@ impl ProgressStore {
                 text,
                 step,
                 agent_name,
+                target_pty_id: None,
+                target_name: None,
             })
         })
         .transpose()
@@ -237,7 +335,8 @@ impl ProgressStore {
         let blocked_only = input.blocked_only.unwrap_or(false);
         let mut statement = conn
             .prepare(
-                "SELECT id, created_at_ms, kind, text, step, agent_name, pty_id
+                "SELECT id, created_at_ms, kind, text, step, agent_name, pty_id,
+                        target_pty_id, target_name
                    FROM entries
                   WHERE project = ?1 AND (?2 = 0 OR kind = 'blocked')
                     AND (?3 IS NULL OR pty_id = ?3)
@@ -262,6 +361,8 @@ impl ProgressStore {
                         row.get::<_, Option<String>>(4)?,
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
                     ))
                 },
             )
@@ -270,7 +371,18 @@ impl ProgressStore {
             .map_err(db_error("read a progress entry"))?
             .into_iter()
             .map(
-                |(id, created_at_ms, kind, text, step, agent_name, pty_id)| -> Result<_, String> {
+                |(
+                    id,
+                    created_at_ms,
+                    kind,
+                    text,
+                    step,
+                    agent_name,
+                    pty_id,
+                    target_pty_id,
+                    target_name,
+                )|
+                 -> Result<_, String> {
                     Ok(ProgressEntry {
                         id,
                         project: project.to_string(),
@@ -280,6 +392,8 @@ impl ProgressStore {
                         text,
                         step,
                         agent_name,
+                        target_pty_id,
+                        target_name,
                     })
                 },
             )
@@ -461,6 +575,63 @@ mod tests {
             })
             .unwrap();
         assert_eq!(pty_id, None);
+    }
+
+    /// A journal written before the hand-off kinds has a CHECK constraint that
+    /// refuses them, and SQLite cannot alter a CHECK. Opening it must rebuild
+    /// the table without losing a row, an id, or the id high-water mark — a
+    /// deleted newest id must still never be handed out again.
+    #[test]
+    fn opening_a_pre_hand_off_journal_rebuilds_it_and_keeps_every_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let conn = Connection::open(dir.path().join("progress.sqlite3")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE entries (
+               id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL,
+               created_at_ms INTEGER NOT NULL,
+               kind TEXT NOT NULL CHECK (kind IN ('done','blocked','intent')),
+               text TEXT NOT NULL, step TEXT, agent_name TEXT, pty_id TEXT
+             );
+             INSERT INTO entries (project, created_at_ms, kind, text, pty_id)
+             VALUES ('/repo', 1, 'done', 'kept', 'pty-a'),
+                    ('/repo', 2, 'intent', 'deleted newest', 'pty-a');
+             DELETE FROM entries WHERE id = 2;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = ProgressStore::open().unwrap();
+        let kept = store.list("/repo", &ProgressListInput::default()).unwrap();
+        assert_eq!(kept.entries.len(), 1);
+        assert_eq!(kept.entries[0].id, 1);
+        assert_eq!(kept.entries[0].pty_id.as_deref(), Some("pty-a"));
+
+        let hand_off = store
+            .record_hand_off(
+                "/repo",
+                &entry(ProgressKind::Delegated, "Review the parser"),
+                Some("pty-a"),
+                Some("pty-b"),
+                Some("reviewer"),
+            )
+            .unwrap();
+        assert_eq!(hand_off.id, 3, "id 2 was deleted and must not come back");
+        let listed = store.list("/repo", &ProgressListInput::default()).unwrap();
+        assert_eq!(listed.entries[0].kind, ProgressKind::Delegated);
+        assert_eq!(listed.entries[0].target_pty_id.as_deref(), Some("pty-b"));
+        assert_eq!(listed.entries[0].target_name.as_deref(), Some("reviewer"));
+
+        // Opening again finds the new schema and leaves it alone.
+        let again = ProgressStore::open().unwrap();
+        assert_eq!(
+            again
+                .list("/repo", &ProgressListInput::default())
+                .unwrap()
+                .entries
+                .len(),
+            2
+        );
     }
 
     #[test]
