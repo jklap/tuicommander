@@ -249,7 +249,11 @@ mod tests {
         persist_flag("gemini", true).unwrap();
         assert_eq!(flag(), Some(true));
         persist_flag("gemini", false).unwrap();
-        assert_eq!(flag(), None, "off is the default, so it must be stored as absent");
+        assert_eq!(
+            flag(),
+            None,
+            "off is the default, so it must be stored as absent"
+        );
     }
 
     #[test]
@@ -268,7 +272,11 @@ mod tests {
         assert_eq!(flag(), Some(false));
         assert!(!get_agent_native_status_signals("claude".to_string()));
         set_agent_native_status_signals("claude".to_string(), true).unwrap();
-        assert_eq!(flag(), None, "on is the default, so it must be stored as absent");
+        assert_eq!(
+            flag(),
+            None,
+            "on is the default, so it must be stored as absent"
+        );
         assert!(get_agent_native_status_signals("claude".to_string()));
     }
 
