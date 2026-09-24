@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../utils/envVars";
+import { buildEnvFromEntries, findDuplicateEnvKeys, isValidEnvVarKey } from "../../utils/envVars";
 
 describe("findDuplicateEnvKeys()", () => {
 	it("returns empty array for unique keys", () => {
@@ -108,5 +108,22 @@ describe("buildEnvFromEntries()", () => {
 			{ key: "BAR", value: "4" },
 		];
 		expect(() => buildEnvFromEntries(entries)).toThrow(/FOO.*BAR|BAR.*FOO/);
+	});
+});
+
+describe("isValidEnvVarKey()", () => {
+	it("accepts standard env var names", () => {
+		expect(isValidEnvVarKey("FOO")).toBe(true);
+		expect(isValidEnvVarKey("_FOO")).toBe(true);
+		expect(isValidEnvVarKey("FOO_BAR_2")).toBe(true);
+		expect(isValidEnvVarKey("POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD")).toBe(true);
+	});
+
+	it("rejects malformed names", () => {
+		expect(isValidEnvVarKey("")).toBe(false);
+		expect(isValidEnvVarKey("1FOO")).toBe(false);
+		expect(isValidEnvVarKey("FOO BAR")).toBe(false);
+		expect(isValidEnvVarKey("FOO=")).toBe(false);
+		expect(isValidEnvVarKey("FOO-BAR")).toBe(false);
 	});
 });

@@ -8670,6 +8670,173 @@ fn bind_pty_identity_env_reaches_the_real_child() {
     reap(child);
 }
 
+/// Write a full `config.json` under `dir` — a fresh `AppConfig::default()` with
+/// only `custom_pty_env` overridden. A *partial* JSON object would work too only
+/// if every other field had a serde default; writing the whole struct avoids
+/// relying on that and matches how `config.rs`'s own tests do this.
+fn write_custom_pty_env_config(dir: &std::path::Path, entries: &[(&str, &str)]) {
+    let cfg = crate::config::AppConfig {
+        custom_pty_env: entries
+            .iter()
+            .map(|(k, v)| crate::config::CustomEnvVarEntry {
+                key: k.to_string(),
+                value: v.to_string(),
+            })
+            .collect(),
+        ..crate::config::AppConfig::default()
+    };
+    std::fs::write(
+        dir.join("config.json"),
+        serde_json::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The load-bearing test for the `custom_pty_env` feature: proves an entry set in
+/// `AppConfig` actually reaches a real spawned child's environment through
+/// `spawn_pty_pair_with_retry`'s own injection (`apply_custom_pty_env`), not just
+/// that the config round-trips or that the function compiles against a mock
+/// `CommandBuilder`.
+#[cfg(unix)]
+#[test]
+fn custom_pty_env_reaches_the_real_child() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    write_custom_pty_env_config(tmp.path(), &[("TUIC_PROBE_CUSTOM", "custom-value")]);
+
+    let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg(r#"printf '%s\n' "${TUIC_PROBE_CUSTOM-unset}""#);
+        cmd
+    })
+    .expect("sh must spawn");
+
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    drop(pair.slave);
+    let output = read_pty_output_bounded(reader, 1, std::time::Duration::from_secs(5));
+    assert_eq!(
+        output.lines().next(),
+        Some("custom-value"),
+        "a configured custom_pty_env entry must reach the real child: {output:?}"
+    );
+    reap(child);
+}
+
+/// Proves the full precedence order documented on `spawn_pty_pair_with_retry`:
+/// `custom_pty_env` overrides a caller-set var (the motivating "force this var"
+/// use case), but the internal `TUIC_PTY_TTY` stamp always wins even if the user
+/// names a custom entry after it.
+#[cfg(unix)]
+#[test]
+fn custom_pty_env_overrides_caller_env_but_never_tuic_pty_tty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    write_custom_pty_env_config(
+        tmp.path(),
+        &[
+            ("TUIC_PROBE_OVERRIDE", "custom-wins"),
+            ("TUIC_PTY_TTY", "user-cannot-override-this"),
+        ],
+    );
+
+    let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        // Mirrors a caller (e.g. PtyConfig::env) setting its own value first.
+        cmd.env("TUIC_PROBE_OVERRIDE", "caller-value");
+        cmd.arg("-c");
+        cmd.arg(r#"printf '%s\n%s\n' "$TUIC_PROBE_OVERRIDE" "$TUIC_PTY_TTY""#);
+        cmd
+    })
+    .expect("sh must spawn");
+
+    let expected_tty = pair
+        .master
+        .tty_name()
+        .expect("tty_name() must resolve for a freshly opened pty");
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    drop(pair.slave);
+    let output = read_pty_output_bounded(reader, 2, std::time::Duration::from_secs(5));
+    let mut lines = output.lines();
+    assert_eq!(
+        lines.next(),
+        Some("custom-wins"),
+        "custom_pty_env must override a caller-supplied env var: {output:?}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some(expected_tty.to_string_lossy().as_ref()),
+        "TUIC_PTY_TTY must never be overridable via custom_pty_env: {output:?}"
+    );
+    reap(child);
+}
+
+/// Regression guard for the specific "worst bypass" the plan named:
+/// `POST /agents` (`agent_routes.rs`) builds its `CommandBuilder` with nothing but
+/// `sanitize_pty_parent_env` — no identity, no worktree env, no shell integration.
+/// This mirrors that exact minimal closure to prove `custom_pty_env` still reaches
+/// the child even for the site that injects nothing else, since the injection
+/// lives in the shared `spawn_pty_pair_with_retry` choke point rather than in any
+/// per-site closure.
+#[cfg(unix)]
+#[test]
+fn custom_pty_env_reaches_a_minimal_agent_binary_style_spawn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    write_custom_pty_env_config(tmp.path(), &[("TUIC_PROBE_MINIMAL", "reached")]);
+
+    let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        sanitize_pty_parent_env(&mut cmd); // the entirety of POST /agents's own env work
+        cmd.arg("-c");
+        cmd.arg(r#"printf '%s\n' "${TUIC_PROBE_MINIMAL-unset}""#);
+        cmd
+    })
+    .expect("sh must spawn");
+
+    let reader = pair.master.try_clone_reader().expect("clone reader");
+    drop(pair.slave);
+    let output = read_pty_output_bounded(reader, 1, std::time::Duration::from_secs(5));
+    assert_eq!(
+        output.lines().next(),
+        Some("reached"),
+        "custom_pty_env must reach even the minimal-env agent-binary spawn shape: {output:?}"
+    );
+    reap(child);
+}
+
+#[cfg(unix)]
+#[test]
+fn custom_pty_env_skips_invalid_keys_but_applies_valid_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    write_custom_pty_env_config(
+        tmp.path(),
+        &[
+            ("1BAD_START", "should-be-skipped"),
+            ("BAD KEY", "should-be-skipped"),
+            ("GOOD_KEY", "should-apply"),
+        ],
+    );
+
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    apply_custom_pty_env(&mut cmd);
+    assert!(
+        cmd.get_env("1BAD_START").is_none(),
+        "a key starting with a digit must be rejected"
+    );
+    assert!(
+        cmd.get_env("BAD KEY").is_none(),
+        "a key containing a space must be rejected"
+    );
+    assert_eq!(
+        cmd.get_env("GOOD_KEY")
+            .map(|v| v.to_string_lossy().to_string()),
+        Some("should-apply".to_string()),
+        "a structurally valid key must still be applied"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
     let started = std::time::Instant::now();
@@ -8684,6 +8851,74 @@ async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
         "blocking spawn work occupied the async runtime"
     );
     spawn.await.unwrap().unwrap();
+}
+
+/// Save/restore a real process env var for a test's duration. `resolve_shell`/
+/// `default_shell` read `$SHELL`/`$COMSPEC` directly with no test-only override
+/// hook (unlike `config_dir()`'s `CONFIG_DIR_OVERRIDE`) — same minimal guard
+/// shape as `github_auth.rs`'s private `EnvVar` and `pty.rs`'s own
+/// `inject_unix_terminal_env_tests::TestEnvVar`, duplicated locally rather than
+/// shared, matching how this codebase already keeps this kind of tiny
+/// per-module test helper un-shared elsewhere.
+struct ShellEnvVar(&'static str, Option<String>);
+
+impl ShellEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, value) };
+        Self(key, previous)
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let previous = std::env::var(key).ok();
+        unsafe { std::env::remove_var(key) };
+        Self(key, previous)
+    }
+}
+
+impl Drop for ShellEnvVar {
+    fn drop(&mut self) {
+        match self.1.take() {
+            Some(previous) => unsafe { std::env::set_var(self.0, previous) },
+            None => unsafe { std::env::remove_var(self.0) },
+        }
+    }
+}
+
+#[test]
+fn resolve_shell_prefers_an_explicit_override_over_the_environment() {
+    let _guard = ShellEnvVar::set("SHELL", "/bin/env-shell");
+    assert_eq!(
+        super::resolve_shell(Some("/bin/explicit-shell".to_string())),
+        "/bin/explicit-shell"
+    );
+}
+
+#[test]
+fn resolve_shell_expands_a_tilde_in_an_explicit_override() {
+    let expanded = super::resolve_shell(Some("~/bin/myshell".to_string()));
+    assert!(
+        !expanded.starts_with('~'),
+        "resolve_shell must expand a leading ~ via expand_tilde: {expanded}"
+    );
+    assert!(
+        expanded.ends_with("/bin/myshell"),
+        "expansion must preserve the rest of the path: {expanded}"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn resolve_shell_falls_back_to_the_shell_env_var_when_no_override_is_given() {
+    let _guard = ShellEnvVar::set("SHELL", "/bin/from-env");
+    assert_eq!(super::resolve_shell(None), "/bin/from-env");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn default_shell_falls_back_to_bin_bash_when_shell_is_unset() {
+    let _guard = ShellEnvVar::unset("SHELL");
+    assert_eq!(super::default_shell(), "/bin/bash");
 }
 
 // --- build_shell_command arg splitting tests ---
@@ -8703,6 +8938,32 @@ fn build_shell_command_single_exe() {
     let cmd = super::build_shell_command("/bin/zsh");
     let argv = cmd.as_unix_command_line().unwrap();
     assert!(argv.contains("/bin/zsh"), "Expected /bin/zsh in: {}", argv);
+}
+
+/// Neither existing `build_shell_command` test asserts the `-l` (login shell)
+/// flag or any env var — both would pass unnoticed if `inject_unix_terminal_env`
+/// or the unconditional `-l` append were ever dropped from this function.
+#[cfg(not(windows))]
+#[test]
+fn build_shell_command_appends_login_flag_on_unix() {
+    let cmd = super::build_shell_command("/bin/zsh");
+    let argv = cmd.as_unix_command_line().unwrap();
+    assert!(
+        argv.split_whitespace().any(|token| token == "-l"),
+        "build_shell_command must append -l (login shell) on unix: {argv}"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn build_shell_command_applies_terminal_env() {
+    let cmd = super::build_shell_command("/bin/sh");
+    assert_eq!(
+        cmd.get_env("TERM_PROGRAM")
+            .map(|v| v.to_string_lossy().to_string()),
+        Some("ghostty".to_string()),
+        "build_shell_command must call inject_unix_terminal_env"
+    );
 }
 
 #[test]

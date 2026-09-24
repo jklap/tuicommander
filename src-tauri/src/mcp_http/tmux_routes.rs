@@ -569,7 +569,44 @@ async fn materialize(
     if let Some(color) = pending_accent_color {
         state.set_pty_accent_color(&spawn, Some(color));
     }
+    // Shell-readiness gate: block until the freshly spawned shell reaches a real
+    // prompt (or we give up), so a caller's very next write — `respawn-pane`'s
+    // launch-command write, in the tmux shim's actual usage — cannot arrive
+    // while the shell is still mid-startup. Closes the p10k-wizard-hijack race
+    // (plans/p10k-wizard-hijack-agent-pane-spawn-race.md) at its source: raw
+    // keystrokes landing during `.zshrc` sourcing used to get eaten by
+    // Instant Prompt's own remediation menu instead of reaching the shell.
+    apply_pane_readiness_gate(state, pane_id, &spawn, PANE_READY_TIMEOUT_MS).await;
     Ok(spawn)
+}
+
+/// Bound on the shell-readiness wait in [`materialize`]. Long enough for a
+/// normal `zsh -l`/`bash -l` startup (including Oh My Zsh/Powerlevel10k, which
+/// motivated this gate) under real spawn-burst contention, short enough that a
+/// shell with no detectable prompt signal doesn't stall pane creation for long.
+const PANE_READY_TIMEOUT_MS: u64 = 5_000;
+
+/// Fail-open, not fail-hard: a shell with no detectable prompt marker (no OSC
+/// 133 integration — bash/fish without it sourced) must not hang pane creation
+/// forever, so a timeout only logs rather than erroring — `materialize` always
+/// returns `Ok` regardless of which branch this takes. `wait_for_shell_idle`
+/// unifies both readiness signals already (OSC 133 `'A'` sets `SHELL_IDLE`
+/// immediately; the silence-timer fallback reaches the same state once real
+/// prompt output goes quiet), so this one predicate covers both without new
+/// detection logic. `timeout_ms` is a parameter (not baked into the body) so a
+/// test can exercise the fail-open branch without a multi-second real wait.
+async fn apply_pane_readiness_gate(
+    state: &Arc<AppState>,
+    pane_id: &str,
+    session_id: &str,
+    timeout_ms: u64,
+) {
+    if !crate::mcp_http::mcp_transport::wait_for_shell_idle(state, session_id, timeout_ms).await {
+        tracing::warn!(
+            "materialize: pane {pane_id} (session {session_id}) never reached a ready shell \
+             prompt within {timeout_ms}ms — proceeding anyway rather than hanging pane creation"
+        );
+    }
 }
 
 pub(crate) async fn materialize_pane(
@@ -1127,6 +1164,15 @@ mod tests {
     async fn materialize_falls_back_to_the_panes_own_recorded_cwd_when_the_request_has_none() {
         let state = super::super::tests::test_state();
         let label = "test-materialize-cwd-fallback";
+        // A real, existing directory — the shell-readiness gate now lets the
+        // spawned shell actually run before `materialize` returns, and this
+        // repo's own OSC 7 cwd tracking (`pty.rs`) then overwrites
+        // `PtySession.cwd` with the shell's REAL reported directory. A
+        // fictional path the shell can never actually `cd` into would get
+        // silently replaced by whatever real fallback directory the shell
+        // lands in instead (observed: the test process's own `$HOME`).
+        let real_repo = tempfile::tempdir().unwrap();
+        let real_repo_path = real_repo.path().to_string_lossy().to_string();
 
         let created = create_tmux_session(
             State(state.clone()),
@@ -1134,7 +1180,7 @@ mod tests {
                 label: Some(label.to_string()),
                 name: "s".to_string(),
                 window_name: None,
-                cwd: Some("/the/real/repo".to_string()),
+                cwd: Some(real_repo_path.clone()),
             }),
         )
         .await
@@ -1180,7 +1226,7 @@ mod tests {
             .clone();
         assert_eq!(
             spawned_cwd.as_deref(),
-            Some("/the/real/repo"),
+            Some(real_repo_path.as_str()),
             "the spawned PTY must inherit the pane's own topology-recorded cwd, \
              not silently fall through to the app process's own cwd"
         );
@@ -1198,6 +1244,14 @@ mod tests {
     async fn materialize_falls_back_to_the_windows_own_recorded_cwd_via_new_window() {
         let state = super::super::tests::test_state();
         let label = "test-materialize-cwd-fallback-window";
+        // Only the window's own cwd is ever actually spawned into (the
+        // session's is a topology fallback this test proves is NOT used), so
+        // only it needs to be a real directory — see the sibling test's
+        // comment on why a fictional path can't survive the shell-readiness
+        // gate's OSC-7 cwd tracking. The session's fake path is fine as-is:
+        // nothing ever `cd`s there.
+        let window_repo = tempfile::tempdir().unwrap();
+        let window_repo_path = window_repo.path().to_string_lossy().to_string();
 
         let created_session = create_tmux_session(
             State(state.clone()),
@@ -1222,7 +1276,7 @@ mod tests {
                 label: Some(label.to_string()),
                 session_id,
                 name: None,
-                cwd: Some("/window/repo".to_string()),
+                cwd: Some(window_repo_path.clone()),
             }),
         )
         .await
@@ -1267,7 +1321,7 @@ mod tests {
             .clone();
         assert_eq!(
             spawned_cwd.as_deref(),
-            Some("/window/repo"),
+            Some(window_repo_path.as_str()),
             "a new-window pane must inherit ITS OWN recorded cwd, not the \
              session's, and not fall through to the app process's own cwd"
         );
@@ -1283,6 +1337,13 @@ mod tests {
     async fn materialize_prefers_an_explicit_cwd_over_the_panes_recorded_one() {
         let state = super::super::tests::test_state();
         let label = "test-materialize-explicit-cwd-wins";
+        // Only the explicit cwd is ever actually spawned into (the pane's
+        // topology-recorded one is what this test proves loses), so only it
+        // needs to be a real directory — see
+        // `materialize_falls_back_to_the_panes_own_recorded_cwd_when_the_request_has_none`'s
+        // comment for why.
+        let explicit_repo = tempfile::tempdir().unwrap();
+        let explicit_repo_path = explicit_repo.path().to_string_lossy().to_string();
 
         let created = create_tmux_session(
             State(state.clone()),
@@ -1306,7 +1367,7 @@ mod tests {
             Path(pane_id.clone()),
             label_query(label),
             Json(MaterializePaneRequest {
-                cwd: Some("/explicit/repo".to_string()),
+                cwd: Some(explicit_repo_path.clone()),
             }),
         )
         .await
@@ -1328,7 +1389,7 @@ mod tests {
             .clone();
         assert_eq!(
             spawned_cwd.as_deref(),
-            Some("/explicit/repo"),
+            Some(explicit_repo_path.as_str()),
             "an explicit request cwd must never be silently overridden by a \
              stale topology-recorded value"
         );
@@ -1377,6 +1438,85 @@ mod tests {
                 "no SessionRenamed without a prior select-pane -T, got {event:?}"
             );
         }
+    }
+
+    /// The shell-readiness gate's integration point: a real `materialize()`
+    /// spawn must reach `SHELL_IDLE` before its response is returned. Proves
+    /// `materialize` actually calls the gate (not just that `wait_for_shell_idle`
+    /// works in isolation, which `mcp_transport`'s own tests already cover).
+    #[tokio::test]
+    async fn materialize_shell_readiness_gate_reaches_idle_before_returning() {
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-readiness-gate";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"].as_str().unwrap();
+
+        let shell_state = state
+            .session_maps
+            .shell_states
+            .get(tuic_session_id)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(
+            shell_state,
+            Some(crate::pty::SHELL_IDLE),
+            "materialize must not return until the spawned shell reaches SHELL_IDLE \
+             (or the gate times out, which a real quick shell here should not hit)"
+        );
+    }
+
+    /// Fail-open at the integration point: a session rigged to never reach
+    /// idle must not make `materialize`'s gate call hang — bounded here with a
+    /// short parameterized timeout rather than the real 5s
+    /// `PANE_READY_TIMEOUT_MS`, per this repo's rule against baking a
+    /// load-bearing timing bound into a test's wall-clock budget.
+    #[tokio::test]
+    async fn apply_pane_readiness_gate_does_not_hang_when_shell_never_goes_idle() {
+        use std::sync::atomic::AtomicU8;
+
+        let state = super::super::tests::test_state();
+        state.session_maps.shell_states.insert(
+            "never-idle-pane".to_string(),
+            AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        // Bounded by the test harness itself: if this hangs, the test times out
+        // rather than the suite — proving the gate's own short timeout is what
+        // returns control, not an external bound saving it.
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            apply_pane_readiness_gate(&state, "%0", "never-idle-pane", 50),
+        )
+        .await
+        .expect("apply_pane_readiness_gate must return on its own timeout, not hang");
     }
 
     #[test]

@@ -230,6 +230,96 @@ mod inject_unix_terminal_env_tests {
             "shim dir must be the first PATH entry, got {path}"
         );
     }
+
+    /// None of this module's own tests (or `build_shell_command`'s) assert any
+    /// of the fixed-value vars `inject_unix_terminal_env` exists to set — only
+    /// the `PATH` prepend above, which self-skips in an environment with no
+    /// resolvable sidecar. A regression dropping any of these (e.g. losing the
+    /// `TERM_PROGRAM_VERSION` version-gate value described in this function's
+    /// own doc comment) would pass the suite silently.
+    #[test]
+    fn sets_the_fixed_value_terminal_capability_vars() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        inject_unix_terminal_env(&mut cmd);
+        let get = |k: &str| cmd.get_env(k).map(|v| v.to_string_lossy().to_string());
+        assert_eq!(get("TERM"), Some("xterm-256color".to_string()));
+        assert_eq!(get("COLORTERM"), Some("truecolor".to_string()));
+        assert_eq!(get("KITTY_WINDOW_ID"), Some("1".to_string()));
+        assert_eq!(get("TERM_PROGRAM"), Some("ghostty".to_string()));
+        assert_eq!(get("TERM_FEATURES"), Some("T2PHUBSyMF".to_string()));
+        assert_eq!(get("TERM_PROGRAM_VERSION"), Some("3.0.0".to_string()));
+        assert_eq!(
+            get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"),
+            Some("1".to_string())
+        );
+    }
+
+    #[test]
+    fn removes_claudecode_to_prevent_nested_session_detection() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env("CLAUDECODE", "1"); // simulate TUICommander itself running inside Claude Code
+        inject_unix_terminal_env(&mut cmd);
+        assert!(
+            cmd.get_env("CLAUDECODE").is_none(),
+            "CLAUDECODE must be removed so a nested PTY isn't mistaken for the same session"
+        );
+    }
+
+    #[test]
+    fn lang_preserves_an_existing_value() {
+        let guard = TestEnvVar::set("LANG", "fr_FR.UTF-8");
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        inject_unix_terminal_env(&mut cmd);
+        assert_eq!(
+            cmd.get_env("LANG").map(|v| v.to_string_lossy().to_string()),
+            Some("fr_FR.UTF-8".to_string())
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn lang_falls_back_to_utf8_when_unset() {
+        let guard = TestEnvVar::unset("LANG");
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        inject_unix_terminal_env(&mut cmd);
+        assert_eq!(
+            cmd.get_env("LANG").map(|v| v.to_string_lossy().to_string()),
+            Some("en_US.UTF-8".to_string()),
+            "a completely unset LANG must still fall back to a UTF-8 locale"
+        );
+        drop(guard);
+    }
+
+    /// Save/restore a real process env var for the duration of a test. `LANG`
+    /// (and `SHELL`/`COMSPEC` for `resolve_shell`/`default_shell`'s own tests)
+    /// are read directly from the process environment with no test-only
+    /// override hook, unlike `config_dir()`'s `CONFIG_DIR_OVERRIDE` — this is
+    /// the smallest reasonable substitute, same shape as `github_auth.rs`'s
+    /// own private `EnvVar` test guard.
+    pub(super) struct TestEnvVar(&'static str, Option<String>);
+
+    impl TestEnvVar {
+        pub(super) fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::set_var(key, value) };
+            Self(key, previous)
+        }
+
+        pub(super) fn unset(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe { std::env::remove_var(key) };
+            Self(key, previous)
+        }
+    }
+
+    impl Drop for TestEnvVar {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(previous) => unsafe { std::env::set_var(self.0, previous) },
+                None => unsafe { std::env::remove_var(self.0) },
+            }
+        }
+    }
 }
 
 /// Attempts made before a PTY spawn is reported as failed.
@@ -251,11 +341,14 @@ pub(crate) const PTY_SPAWN_ATTEMPTS: usize = 3;
 /// companion async wrapper so this bounded blocking backoff runs only on Tokio's
 /// blocking pool.
 ///
-/// This is also the one place `TUIC_PTY_TTY` gets stamped onto the child's
+/// This is also the one place the user's `custom_pty_env` setting is applied
+/// (`apply_custom_pty_env`) and where `TUIC_PTY_TTY` gets stamped onto the child's
 /// environment — every production caller opens its pty here, so it's the only
-/// point that has the master handle (and therefore `tty_name()`) available
-/// *and* is guaranteed to run after every caller's own `cmd.env(...)` calls,
-/// which happen inside `build_command()`.
+/// point guaranteed to run after every caller's own `cmd.env(...)` calls (which
+/// happen inside `build_command()`), and, for `TUIC_PTY_TTY` specifically, the
+/// only point that has the master handle (and therefore `tty_name()`) available.
+/// Order is: caller env → `custom_pty_env` (can override anything above) →
+/// `TUIC_PTY_TTY` (always last, never overridable).
 pub(crate) fn spawn_pty_pair_with_retry<F>(
     size: PtySize,
     build_command: F,
@@ -280,6 +373,10 @@ where
     .map_err(|(attempt, error)| format!("Failed to open PTY (attempt {attempt}): {error}"))?;
 
     let mut cmd = build_command();
+    // Global, user-configured — the one universal env-injection point. See
+    // `apply_custom_pty_env`'s doc comment for why this runs here and not inside
+    // `build_shell_command` (which only four of seven spawn sites call).
+    apply_custom_pty_env(&mut cmd);
     // Claude Code (and the other agents this drives) spawns its hook
     // subprocesses detached from any controlling terminal, so a hook cannot
     // discover this tty by walking its own ancestry (see
@@ -305,6 +402,43 @@ where
         .spawn_command(cmd)
         .map_err(|error| format!("Failed to spawn shell: {error}"))?;
     Ok((pair, child))
+}
+
+/// Apply the user's configured `custom_pty_env` (`AppConfig::custom_pty_env`) to a
+/// spawned PTY child — the one true "every PTY" injection point, called from
+/// `spawn_pty_pair_with_retry`/`_async` immediately before the `TUIC_PTY_TTY` stamp
+/// so it reaches all seven production spawn sites, not just the four that go
+/// through `build_shell_command`.
+///
+/// Applied *after* every caller's own env (identity, worktree, terminal env, shell
+/// integration, `PtyConfig::env`) so a custom var is a real override — the
+/// motivating use case is "force this var, period," not a fallback default — but
+/// *before* `TUIC_PTY_TTY`, which stays unconditional: it is internal plumbing the
+/// app needs correct for its own bookkeeping and must never be user-overridable.
+///
+/// Backend re-validation, never trust the file: `config::valid_custom_env_key`/
+/// `valid_custom_env_value` reject only what the OS cannot represent as an env var
+/// (an empty/malformed key, a NUL byte) — no name denylist. See
+/// `AppConfig::custom_pty_env`'s doc comment for why a denylist is deliberately
+/// absent here unlike `copy_paths`/`additional_readable_dirs`.
+pub(crate) fn apply_custom_pty_env(cmd: &mut CommandBuilder) {
+    for entry in crate::config::resolve_custom_pty_env() {
+        if !crate::config::valid_custom_env_key(&entry.key) {
+            tracing::warn!(
+                "Skipping invalid custom_pty_env key {:?}: not a valid env var name",
+                entry.key
+            );
+            continue;
+        }
+        if !crate::config::valid_custom_env_value(&entry.value) {
+            tracing::warn!(
+                "Skipping custom_pty_env entry {:?}: value contains a NUL byte",
+                entry.key
+            );
+            continue;
+        }
+        cmd.env(&entry.key, &entry.value);
+    }
 }
 
 fn retry_transient<T, E, O, C, S>(

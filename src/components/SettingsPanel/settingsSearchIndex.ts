@@ -244,6 +244,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "terminal", section: "Behavior", sectionKey: "terminal.heading.behavior" },
 	{ tab: "terminal", section: "Blocks", sectionKey: "terminal.heading.blocks" },
 	{ tab: "terminal", section: "Shell Integration", sectionKey: "terminal.heading.shellIntegration" },
+	{
+		tab: "terminal",
+		section: "Custom Environment Variables",
+		sectionKey: "terminal.heading.customEnv",
+	},
 	{ tab: "terminal", section: "Session Restore", sectionKey: "terminal.heading.sessionRestore" },
 	{
 		tab: "terminal",
@@ -348,6 +353,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "terminal.toggle.blockFoldingEnabled",
 		hint: "Allow collapsing a command block's output with Cmd+Shift+. or a gutter click.",
 		hintKey: "terminal.hint.blockFoldingEnabled",
+	},
+	{
+		tab: "terminal",
+		section: "Custom Environment Variables",
+		label: "Environment Variables",
+		labelKey: "terminal.label.customEnv",
 	},
 	{
 		tab: "terminal",

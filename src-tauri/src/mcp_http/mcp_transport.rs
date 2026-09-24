@@ -2341,6 +2341,76 @@ fn session_wait_response(
     response
 }
 
+/// Block (event-driven, not polling) until `predicate` returns true or
+/// `timeout_ms` elapses. Extracted from `handle_session_wait`'s own
+/// subscribe/check/re-check/timeout-boundary sequence so a second caller (the
+/// pane-materialize shell-readiness gate, `tmux_routes.rs`) gets the exact same
+/// no-lost-wake guarantee without duplicating the loop: a transition landing
+/// between the fast-path check and the subscription is still visible by
+/// re-reading state right after subscribing, and one landing exactly at the
+/// timeout boundary is caught by the final re-check rather than reported as a
+/// spurious miss.
+///
+/// Does not check whether `session_id` is a real session — callers that need
+/// that guard (to avoid `subscribe_pty_events` minting a channel for a
+/// made-up id) do it themselves before calling this, the way
+/// `handle_session_wait` still does.
+async fn wait_for_session_predicate<F>(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+    mut predicate: F,
+) -> bool
+where
+    F: FnMut(&AppState) -> bool,
+{
+    if predicate(state) {
+        return true;
+    }
+    let mut events = state.subscribe_pty_events(session_id);
+    if predicate(state) {
+        return true;
+    }
+    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+        loop {
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if predicate(state) {
+                        return true;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    woke || predicate(state)
+}
+
+/// Block until `session_id`'s shell reaches `SHELL_IDLE`, or `timeout_ms`
+/// elapses — the same event-driven mechanism `session action=wait until=idle`
+/// uses, shared via `wait_for_session_predicate`. Used by that handler and by
+/// the pane-materialize shell-readiness gate (`tmux_routes.rs::materialize`) so
+/// a freshly spawned pane's first injected keystrokes never arrive before the
+/// shell has actually reached a prompt — see
+/// `plans/p10k-wizard-hijack-agent-pane-spawn-race.md` for the race this closes.
+///
+/// Fail-open by design: returns `false` on timeout rather than erroring. Every
+/// caller must decide for itself what "gave up waiting" means in its own
+/// context — `handle_session_wait` reports `timed_out: true`, while
+/// `materialize` proceeds anyway rather than hanging pane creation forever.
+pub(crate) async fn wait_for_shell_idle(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+) -> bool {
+    wait_for_session_predicate(state, session_id, timeout_ms, |s| {
+        session_wait_met(s, session_id, "idle")
+    })
+    .await
+}
+
 /// `session action=wait` — block (server-side) until the session is idle or has
 /// exited, or the timeout elapses. Replaces an LLM polling loop (each poll is a
 /// full model turn) with one cheap blocking call.
@@ -2374,31 +2444,10 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
             "error": format!("Unknown session \"{session_id}\"")
         });
     }
-    // Subscribe, then re-read state. This closes the lost-wake window without
-    // polling: a transition landing between the fast path above and this
-    // subscription is still visible in state, while any later one is retained by
-    // the per-session event receiver.
-    let mut events = state.subscribe_pty_events(&session_id);
-    if session_wait_met(state, &session_id, until) {
-        return session_wait_response(state, &session_id, until, true);
-    }
-    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
-        loop {
-            match events.recv().await {
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    if session_wait_met(state, &session_id, until) {
-                        return true;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-            }
-        }
+    let met = wait_for_session_predicate(state, &session_id, timeout_ms, |s| {
+        session_wait_met(s, &session_id, until)
     })
-    .await
-    .unwrap_or(false);
-    // Re-check at the timeout boundary so a simultaneous transition wins over
-    // a spurious timed_out response.
-    let met = woke || session_wait_met(state, &session_id, until);
+    .await;
     session_wait_response(state, &session_id, until, met)
 }
 
@@ -11341,6 +11390,71 @@ mod tests {
         let response = waiter.await.unwrap();
         assert_eq!(response["met"], true);
         assert_eq!(response["timed_out"], false);
+    }
+
+    /// `wait_for_shell_idle` is the shared primitive the pane-materialize
+    /// shell-readiness gate (`tmux_routes.rs::materialize`) reuses from
+    /// `session action=wait`. Same event-driven proof as
+    /// `mcp_delivery_regression_session_wait_wakes_from_pty_event_without_polling`
+    /// above, but calling the extracted function directly rather than through
+    /// the MCP handler — the regression this guards is specific to the
+    /// extraction: a future edit could route `handle_session_wait` through it
+    /// while accidentally leaving `materialize`'s call broken (or vice versa).
+    #[tokio::test]
+    async fn wait_for_shell_idle_wakes_on_event_not_polling() {
+        use std::sync::atomic::{AtomicU8, Ordering};
+
+        let state = test_state();
+        insert_managed_test_session(&state, "readiness-probe", "/tmp");
+        state.session_maps.shell_states.insert(
+            "readiness-probe".to_string(),
+            AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let waiting_state = Arc::clone(&state);
+        let waiter = tokio::spawn(async move {
+            wait_for_shell_idle(&waiting_state, "readiness-probe", 1_000).await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        state
+            .session_maps
+            .shell_states
+            .get("readiness-probe")
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, Ordering::Release);
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: "readiness-probe".to_string(),
+            parsed: serde_json::json!({"type": "shell-state", "state": "idle"}).into(),
+        });
+
+        assert!(
+            waiter.await.unwrap(),
+            "wait_for_shell_idle must return true once shell_states flips to idle"
+        );
+    }
+
+    /// The fail-open half: a shell that never reaches idle within the deadline
+    /// must not hang the caller forever — `materialize` relies on this to
+    /// proceed with pane creation rather than blocking it indefinitely. Per
+    /// this repo's "which timing assertions are load-bearing" rule, the bound
+    /// under test IS the behaviour here (not a stand-in for "did setup
+    /// succeed"), so a short literal is passed directly as a parameter rather
+    /// than depending on a `cfg(test)` global — no risk of a loaded machine
+    /// racing an unrelated setup step against it.
+    #[tokio::test]
+    async fn wait_for_shell_idle_fails_open_on_timeout() {
+        use std::sync::atomic::AtomicU8;
+
+        let state = test_state();
+        insert_managed_test_session(&state, "never-idle", "/tmp");
+        state.session_maps.shell_states.insert(
+            "never-idle".to_string(),
+            AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let met = wait_for_shell_idle(&state, "never-idle", 50).await;
+        assert!(
+            !met,
+            "wait_for_shell_idle must return false rather than hang when idle never arrives"
+        );
     }
 
     #[tokio::test]

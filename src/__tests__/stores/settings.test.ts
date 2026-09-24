@@ -1591,4 +1591,63 @@ describe("settingsStore", () => {
 			});
 		});
 	});
+
+	describe("custom PTY env vars", () => {
+		it("defaults to an empty list", () => {
+			testInScope(() => {
+				expect(store.state.customPtyEnv).toEqual([]);
+			});
+		});
+
+		it("round-trips through hydrate + debounced save", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setCustomPtyEnv([{ key: "FOO", value: "bar" }]);
+				expect(store.state.customPtyEnv).toEqual([{ key: "FOO", value: "bar" }]);
+
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+					config: expect.objectContaining({ custom_pty_env: [{ key: "FOO", value: "bar" }] }),
+				});
+			});
+		});
+
+		it("defaults to an empty list when absent from the hydrated config", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				font_family: "JetBrains Mono",
+				font_size: 14,
+				theme: "dark",
+				mcp_server_enabled: false,
+				ide: "vscode",
+			});
+			mockInvoke.mockResolvedValueOnce({ primary_agent: "claude" });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.customPtyEnv).toEqual([]);
+			});
+		});
+
+		it("drops a malformed key and collapses a duplicate key from a hand-edited config.json", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				font_family: "JetBrains Mono",
+				font_size: 14,
+				theme: "dark",
+				mcp_server_enabled: false,
+				ide: "vscode",
+				custom_pty_env: [
+					{ key: "GOOD_KEY", value: "1" },
+					{ key: "1BAD_START", value: "should be dropped" },
+					{ key: "GOOD_KEY", value: "duplicate should be dropped" },
+				],
+			});
+			mockInvoke.mockResolvedValueOnce({ primary_agent: "claude" });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.customPtyEnv).toEqual([{ key: "GOOD_KEY", value: "1" }]);
+			});
+		});
+	});
 });

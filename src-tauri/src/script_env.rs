@@ -498,6 +498,66 @@ mod tests {
         assert!(!map.contains_key("TUIC_BASE_REF"));
     }
 
+    /// `apply_pty`'s whole reason to exist over `apply_std`: a key this
+    /// context does NOT set must be actively cleared, not merely never
+    /// written — otherwise a stale value from the *spawning* process's own
+    /// environment (e.g. a nested-TUIC scenario) survives into the child.
+    #[test]
+    fn apply_pty_clears_a_stale_tuic_var_the_context_does_not_set() {
+        let dir = TempDir::new().expect("temp dir"); // non-repo cwd: pairs() omits TUIC_BRANCH
+        let ctx = ScriptContext::derive(ScriptKind::Run, dir.path());
+
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
+        cmd.env("TUIC_BRANCH", "stale-outer-session-value");
+        ctx.apply_pty(&mut cmd);
+
+        assert!(
+            cmd.get_env("TUIC_BRANCH").is_none(),
+            "apply_pty must clear a TUIC_* var this context doesn't itself set, \
+             not just skip writing it"
+        );
+        assert_eq!(
+            cmd.get_env("TUIC_SCRIPT_KIND")
+                .map(|v| v.to_string_lossy().to_string()),
+            Some("run".to_string()),
+            "apply_pty must still set the vars this context DOES produce"
+        );
+    }
+
+    /// Drift guard for `ALL_KEYS` vs. `pairs()`: `apply_pty`'s clearing logic
+    /// only clears keys named in the hand-maintained `ALL_KEYS` list, so a new
+    /// variable added to `pairs()` and forgotten in `ALL_KEYS` would silently
+    /// never get cleared for a non-producing context — passing every existing
+    /// test (none of which would notice a key `ALL_KEYS` doesn't know about)
+    /// while quietly reopening the stale-value leak the test above exists to
+    /// close. Exercises a fully-populated repo context (worktree, branch,
+    /// base ref, base branch all present) so every `pairs()` push executes,
+    /// then asserts its key set is a subset of `ALL_KEYS`.
+    #[test]
+    fn all_keys_covers_every_key_pairs_can_emit() {
+        let repo = setup_test_repo();
+        crate::worktree::set_branch_base(&repo.path().to_string_lossy(), "main", "origin/develop")
+            .expect("set branch base");
+        let ctx = ScriptContext::derive(ScriptKind::Run, repo.path());
+
+        let produced: std::collections::HashSet<&'static str> =
+            ctx.pairs().into_iter().map(|(k, _)| k).collect();
+        // Sanity: this test is only meaningful if it actually exercised every
+        // optional field, not just the three universal ones.
+        assert!(
+            produced.len() > 3,
+            "test setup did not populate every optional field — got {produced:?}"
+        );
+        let all_keys: std::collections::HashSet<&'static str> =
+            ScriptContext::ALL_KEYS.iter().copied().collect();
+        let missing: Vec<_> = produced.difference(&all_keys).collect();
+        assert!(
+            missing.is_empty(),
+            "pairs() emits key(s) {missing:?} that ALL_KEYS does not know about — \
+             apply_pty would never clear these for a context that doesn't produce them"
+        );
+    }
+
     #[test]
     fn script_kind_is_distinct_for_each_of_the_four_kinds() {
         let repo = setup_test_repo();
