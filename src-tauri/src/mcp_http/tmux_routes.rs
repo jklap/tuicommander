@@ -490,6 +490,23 @@ async fn materialize(
     {
         return Ok(existing);
     }
+    // `respawn-pane` — the only caller that ever materializes `new-session`'s
+    // initial pane (it stays virtual until first use) — structurally never
+    // sends a cwd of its own: real tmux's respawn-pane has no `-c` flag, so
+    // `tuic-cli`'s executor correctly never fakes one. Without this fallback,
+    // that first pane's PTY silently spawned with no cwd at all (inheriting
+    // the TUICommander app process's own cwd) even though the CORRECT cwd
+    // was already sitting right here in topology, recorded back when
+    // `create_tmux_session`/`create_tmux_pane` first allocated this pane.
+    // Found live 2026-09-23 alongside the client-side `resolve_cwd()` fix
+    // (`tuic-cli/src/tmux/exec.rs`) — this is the server-side half of the
+    // same gap.
+    let cwd = cwd.or_else(|| {
+        state
+            .tmux_servers
+            .get(label)
+            .and_then(|t| t.find_pane(pane_id).and_then(|p| p.cwd.clone()))
+    });
     if state.session_maps.sessions.len() >= crate::MAX_CONCURRENT_SESSIONS {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
@@ -1094,6 +1111,247 @@ mod tests {
                 "expected SessionRenamed the moment the previously-virtual pane materialized, got {other:?}"
             ),
         }
+    }
+
+    /// Regression, found live 2026-09-23 alongside the client-side
+    /// `resolve_cwd()` fix (`tuic-cli/src/tmux/exec.rs`): `respawn-pane` —
+    /// the only caller that ever materializes `new-session`'s initial pane —
+    /// structurally never sends a cwd of its own (real tmux's respawn-pane
+    /// has no `-c` flag). Before this fix, `materialize()` passed that
+    /// missing cwd straight through to `spawn_pty_session` as `None`,
+    /// silently discarding the CORRECT cwd already recorded in topology at
+    /// `create_tmux_session` time — the spawned PTY inherited the
+    /// TUICommander app process's own cwd instead of the swarm's real repo.
+    #[tokio::test]
+    async fn materialize_falls_back_to_the_panes_own_recorded_cwd_when_the_request_has_none() {
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-cwd-fallback";
+        // Real directories: `spawn_pty_session` refuses a cwd that does not exist.
+        let dirs = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let real_repo = dirs.path().join("real-repo");
+        std::fs::create_dir_all(&real_repo).unwrap();
+        let real_repo = real_repo.to_string_lossy().into_owned();
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: Some(real_repo.clone()),
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+        {
+            let topology = state.tmux_servers.get(label).unwrap();
+            let pane = topology.find_pane(&pane_id).unwrap();
+            assert!(
+                pane.tuic_session_id.is_none(),
+                "pane must still be virtual at this point"
+            );
+        }
+
+        // Materialize it exactly the way `respawn-pane` does: no cwd of its
+        // own, relying entirely on whatever `materialize()` can recover.
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"].as_str().unwrap();
+
+        let spawned_cwd = state
+            .session_maps
+            .sessions
+            .get(tuic_session_id)
+            .expect("materialized session must exist")
+            .lock()
+            .cwd
+            .clone();
+        assert_eq!(
+            spawned_cwd.as_deref(),
+            Some(real_repo.as_str()),
+            "the spawned PTY must inherit the pane's own topology-recorded cwd, \
+             not silently fall through to the app process's own cwd"
+        );
+    }
+
+    /// Same gap, same fix, different creation path: `new-window`'s initial
+    /// pane (`create_tmux_window`) is virtual until first use exactly like
+    /// `new-session`'s — only `create_tmux_session` had a dedicated
+    /// regression test for the topology-cwd fallback. A window's own `cwd`
+    /// must win, not the session's (they can legitimately differ — a real
+    /// swarm's `new-window` fires only when the `swarm-view` window is
+    /// missing, which can happen well after the session's own cwd was
+    /// recorded).
+    #[tokio::test]
+    async fn materialize_falls_back_to_the_windows_own_recorded_cwd_via_new_window() {
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-cwd-fallback-window";
+        // Real directories: `spawn_pty_session` refuses a cwd that does not exist.
+        let dirs = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let session_repo = dirs.path().join("session-repo");
+        std::fs::create_dir_all(&session_repo).unwrap();
+        let session_repo = session_repo.to_string_lossy().into_owned();
+        let window_repo = dirs.path().join("window-repo");
+        std::fs::create_dir_all(&window_repo).unwrap();
+        let window_repo = window_repo.to_string_lossy().into_owned();
+
+        let created_session = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: Some(session_repo.clone()),
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created_session.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_session: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created_session["session_id"].as_str().unwrap().to_string();
+
+        let created_window = create_tmux_window(
+            State(state.clone()),
+            Json(CreateTmuxWindowRequest {
+                label: Some(label.to_string()),
+                session_id,
+                name: None,
+                cwd: Some(window_repo.clone()),
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created_window.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_window: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created_window["pane_id"].as_str().unwrap().to_string();
+        {
+            let topology = state.tmux_servers.get(label).unwrap();
+            let pane = topology.find_pane(&pane_id).unwrap();
+            assert!(
+                pane.tuic_session_id.is_none(),
+                "new-window's own pane must still be virtual at this point"
+            );
+        }
+
+        // Materialize it exactly the way `respawn-pane` does: no cwd of its own.
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"].as_str().unwrap();
+
+        let spawned_cwd = state
+            .session_maps
+            .sessions
+            .get(tuic_session_id)
+            .expect("materialized session must exist")
+            .lock()
+            .cwd
+            .clone();
+        assert_eq!(
+            spawned_cwd.as_deref(),
+            Some(window_repo.as_str()),
+            "a new-window pane must inherit ITS OWN recorded cwd, not the \
+             session's, and not fall through to the app process's own cwd"
+        );
+    }
+
+    /// Safety property for the topology-cwd fallback above: an explicit cwd
+    /// on the materialize request must always win over whatever is already
+    /// sitting in topology — the fallback exists only to cover the case
+    /// where the request truly has none (`respawn-pane`'s structural gap),
+    /// never to let a stale topology value override a caller who DID supply
+    /// one.
+    #[tokio::test]
+    async fn materialize_prefers_an_explicit_cwd_over_the_panes_recorded_one() {
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-explicit-cwd-wins";
+        // Real directories: `spawn_pty_session` refuses a cwd that does not exist.
+        let dirs = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let topology_repo = dirs.path().join("topology-repo");
+        std::fs::create_dir_all(&topology_repo).unwrap();
+        let topology_repo = topology_repo.to_string_lossy().into_owned();
+        let explicit_repo = dirs.path().join("explicit-repo");
+        std::fs::create_dir_all(&explicit_repo).unwrap();
+        let explicit_repo = explicit_repo.to_string_lossy().into_owned();
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: Some(topology_repo.clone()),
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest {
+                cwd: Some(explicit_repo.clone()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(materialized.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"].as_str().unwrap();
+
+        let spawned_cwd = state
+            .session_maps
+            .sessions
+            .get(tuic_session_id)
+            .expect("materialized session must exist")
+            .lock()
+            .cwd
+            .clone();
+        assert_eq!(
+            spawned_cwd.as_deref(),
+            Some(explicit_repo.as_str()),
+            "an explicit request cwd must never be silently overridden by a \
+             stale topology-recorded value"
+        );
     }
 
     /// A pane materialized with no prior `select-pane -T` call must not emit
