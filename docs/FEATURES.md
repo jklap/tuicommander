@@ -1323,9 +1323,9 @@ The navigation groups the global pages by task. Each group is a static label row
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
 - Updates: auto-check, update channel, check now
-- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
 - TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
 - Default IDE, custom launchers (see **4.5**)
+- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
 
 ### 11.2 Appearance
 - Split tab mode: separate / unified
