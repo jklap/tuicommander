@@ -271,41 +271,20 @@ pub async fn basic_auth_middleware(
         return response;
     }
 
-    // Rate limit check: reject early if this IP has too many recent failures
-    let (rate_max, rate_window_secs) = {
+    let (rate_max, rate_window_secs, username, hash) = {
         let config = state.config.read();
         (
             config.services.auth.auth_rate_limit_max,
             config.services.auth.auth_rate_limit_window_secs,
-        )
-    };
-    let client_ip = addr.ip();
-    if rate_max > 0
-        && let Some(entry) = state.auth_rate_limits.get(&client_ip)
-    {
-        let (count, window_start) = *entry;
-        let window = std::time::Duration::from_secs(rate_window_secs);
-        let elapsed = window_start.elapsed();
-        if elapsed < window && count >= rate_max {
-            let retry_after = window.saturating_sub(elapsed).as_secs() + 1;
-            tracing::warn!(source = "auth", ip = %client_ip, count, "Rate limited — too many failed auth attempts");
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, retry_after.to_string())],
-                "Too many failed authentication attempts",
-            )
-                .into_response();
-        }
-    }
-
-    // Fallback: Basic Auth (if username+password are configured)
-    let (username, hash) = {
-        let config = state.config.read();
-        (
             config.services.auth.username.clone(),
             config.services.auth.password_hash.clone(),
         )
     };
+    let client_ip = addr.ip();
+
+    // Fallback: Basic Auth (if username+password are configured). A correct
+    // credential must be allowed to repair a stale mobile session even after
+    // prior mistakes filled the per-IP failure window.
     let auth_header = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -342,6 +321,23 @@ pub async fn basic_auth_middleware(
         )
             .into_response(),
         AuthResult::Invalid => {
+            if rate_max > 0
+                && let Some(entry) = state.auth_rate_limits.get(&client_ip)
+            {
+                let (count, window_start) = *entry;
+                let window = std::time::Duration::from_secs(rate_window_secs);
+                let elapsed = window_start.elapsed();
+                if elapsed < window && count >= rate_max {
+                    let retry_after = window.saturating_sub(elapsed).as_secs() + 1;
+                    tracing::warn!(source = "auth", ip = %client_ip, count, "Rate limited — too many failed auth attempts");
+                    return (
+                        StatusCode::TOO_MANY_REQUESTS,
+                        [(header::RETRY_AFTER, retry_after.to_string())],
+                        "Too many failed authentication attempts",
+                    )
+                        .into_response();
+                }
+            }
             tracing::warn!(source = "auth", ip = %client_ip, "Failed auth attempt");
             record_auth_failure(&state.auth_rate_limits, client_ip, rate_window_secs);
             (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
@@ -734,6 +730,74 @@ mod tests {
             .unwrap();
         assert!(cookie.contains("tui-session=test-token"), "got {cookie}");
         assert!(cookie.contains("Max-Age=86400"), "got {cookie}");
+    }
+
+    /// A stale mobile cookie causes the browser to ask for Basic credentials
+    /// again. A few mistyped attempts must not make the next, correct reply
+    /// impossible: a reload can still carry the QR token and currently clears
+    /// the limiter, but the Basic Auth retry has no such escape hatch.
+    #[tokio::test]
+    async fn correct_basic_auth_recovers_after_previous_failures() {
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut config = state.config.write();
+            config.services.auth.username = "boss".to_string();
+            config.services.auth.password_hash = bcrypt::hash("correct", 4).unwrap();
+            config.services.auth.auth_rate_limit_max = 2;
+            config.services.auth.auth_rate_limit_window_secs = 300;
+        }
+
+        let app = axum::Router::new()
+            .route("/ping", axum::routing::get(|| async { "pong" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                basic_auth_middleware,
+            ));
+        let remote = ConnectInfo(SocketAddr::from(([203, 0, 113, 5], 51234)));
+
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get("/ping")
+                        .header(header::AUTHORIZATION, basic_header("boss", "wrong"))
+                        .extension(remote)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        let blocked_wrong_password = app
+            .clone()
+            .oneshot(
+                Request::get("/ping")
+                    .header(header::AUTHORIZATION, basic_header("boss", "wrong"))
+                    .extension(remote)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(blocked_wrong_password.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let response = app
+            .oneshot(
+                Request::get("/ping")
+                    .header(header::AUTHORIZATION, basic_header("boss", "correct"))
+                    .extension(remote)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().contains_key(header::SET_COOKIE));
     }
 
     #[test]
