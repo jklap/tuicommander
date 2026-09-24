@@ -816,7 +816,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 **The conversation lives in ego, not in TUICommander.** There is no LLM client
 here: no provider, no API key, no tool loop, no sandbox. TUICommander launches
 one configured ego binary and speaks ACP to it, per
-`plans/archive/ego-integration/plan.md` section 1.
+`plans/ego-integration/archive/plan.md` section 1.
 
 - **Bound to a repository and a session, never to a terminal.** A turn ego runs
   outlives any tab and may touch files no tab is showing. Switching repository
