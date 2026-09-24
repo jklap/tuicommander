@@ -160,6 +160,15 @@ describe("settingsStore", () => {
 				expect(store.state.splitTabMode).toBe("separate");
 			});
 		});
+
+		it("hydrates showLastPrompt to true when config.json predates the field", async () => {
+			// Rust `show_last_prompt` defaults to true; an old config.json omits it,
+			// and the store must agree instead of hiding the last prompt.
+			await hydrateStore();
+			testInScope(() => {
+				expect(store.state.showLastPrompt).toBe(true);
+			});
+		});
 	});
 
 	describe("setIde()", () => {

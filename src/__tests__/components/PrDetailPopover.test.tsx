@@ -816,7 +816,8 @@ describe("PrDetailPopover", () => {
 
 		beforeEach(() => {
 			repoSettingsStore.getOrCreate("/repo", "Repo");
-			repoSettingsStore.update("/repo", { prMergeStrategy: null }); // reset to global default
+			// The fallback chain starts from a preferred "merge"; the global default is squash.
+			repoSettingsStore.update("/repo", { prMergeStrategy: "merge" });
 			mockGetBranchPrData.mockReturnValue(mergeablePr);
 		});
 
@@ -1003,6 +1004,8 @@ describe("PrDetailPopover", () => {
 		});
 
 		it("shows Merge when preferred method is merge and repo allows it", () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { prMergeStrategy: "merge" });
 			mockGetBranchPrData.mockReturnValue(makePr());
 			const { container } = render(() => <PrDetailPopover {...defaultProps} />);
 			const btn = container.querySelector(".mergeBtn");
