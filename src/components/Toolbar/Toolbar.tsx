@@ -136,7 +136,7 @@ export interface ToolbarProps {
 	onBranchClick?: () => void;
 	onRun?: (shiftKey: boolean) => void;
 	onReviewPr?: (repoPath: string, branchName: string, command: string) => void;
-	/** Matches DeepLinkCallbacks.openSettings — `tab` selects which Settings tab opens. */
+	/** Opens Settings on the Smart Prompts tab. */
 	onOpenSettings?: () => void;
 	onShowWhatsNew?: (version: string) => void;
 }

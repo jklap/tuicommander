@@ -51,22 +51,47 @@ export interface SettingsPanelProps {
 	context?: SettingsContext;
 }
 
-const BASE_GLOBAL_TABS: SettingsShellTab[] = [
-	{ key: "general", label: t("settings.general", "General") },
-	{ key: "appearance", label: t("settings.appearance", "Appearance") },
-	{ key: "notifications", label: t("settings.notifications", "Notifications") },
-	{ key: "terminal", label: t("settings.terminal", "Terminal") },
-	{ key: "keyboard-shortcuts", label: t("settings.keyboardShortcuts", "Keyboard Shortcuts") },
-	{ key: "github", label: "Git & GitHub" },
-	{ key: "agents", label: t("settings.agents", "Agents") },
-	{ key: "ai-chat", label: t("settings.aiChat", "AI Chat") },
-	{ key: "dictation", label: t("settings.voice", "Voice") },
-	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
-	{ key: "mcp", label: t("settings.mcp", "MCP") },
-	{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
-	{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
-	{ key: "plugins", label: t("settings.plugins", "Plugins") },
-	{ key: "developer-tools", label: t("settings.developerTools", "Developer Tools") },
+/** Global pages grouped by task; each group renders as a static label row above its pages. */
+const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] }[] = [
+	{
+		key: "application",
+		label: t("settings.group.application", "Application"),
+		tabs: [
+			{ key: "general", label: t("settings.general", "General") },
+			{ key: "appearance", label: t("settings.appearance", "Appearance") },
+			{ key: "notifications", label: t("settings.notifications", "Notifications") },
+		],
+	},
+	{
+		key: "workspace",
+		label: t("settings.group.workspace", "Workspace"),
+		tabs: [
+			{ key: "terminal", label: t("settings.terminal", "Terminal") },
+			{ key: "keyboard-shortcuts", label: t("settings.keyboardShortcuts", "Keyboard Shortcuts") },
+			{ key: "github", label: "Git & GitHub" },
+		],
+	},
+	{
+		key: "ai",
+		label: t("settings.group.ai", "AI"),
+		tabs: [
+			{ key: "agents", label: t("settings.agents", "Agents") },
+			{ key: "ai-chat", label: t("settings.aiChat", "AI Chat") },
+			{ key: "dictation", label: t("settings.voice", "Voice") },
+			{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
+		],
+	},
+	{
+		key: "integrations",
+		label: t("settings.group.integrations", "Integrations"),
+		tabs: [
+			{ key: "mcp", label: t("settings.mcp", "MCP") },
+			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
+			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
+			{ key: "plugins", label: t("settings.plugins", "Plugins") },
+			{ key: "developer-tools", label: t("settings.developerTools", "Developer Tools") },
+		],
+	},
 ];
 
 /** Tabs whose feature is switched off right now, so their nav entry is noise. */
@@ -86,7 +111,7 @@ function hiddenTabs(): Set<string> {
 
 function getGlobalTabs(): SettingsShellTab[] {
 	const hidden = hiddenTabs();
-	return BASE_GLOBAL_TABS.filter((tab) => !hidden.has(tab.key));
+	return GLOBAL_TAB_GROUPS.flatMap((group) => group.tabs.filter((tab) => !hidden.has(tab.key)));
 }
 
 function defaultTab(ctx: SettingsContext): string {
@@ -101,10 +126,13 @@ function buildNavItems(): SettingsShellTab[] {
 	// hide them from the Settings nav. (#64)
 	const repos = repositoriesStore.getAllReposOrdered();
 
-	const items: SettingsShellTab[] = [...getGlobalTabs()];
+	const hidden = hiddenTabs();
+	const items: SettingsShellTab[] = GLOBAL_TAB_GROUPS.flatMap((group) => [
+		{ key: `__label__:${group.key}`, label: group.label },
+		...group.tabs.filter((tab) => !hidden.has(tab.key)),
+	]);
 
 	if (repos.length > 0) {
-		items.push({ key: "__sep__", label: "─" });
 		items.push({ key: "__label__:Repositories", label: t("settings.repositories", "REPOSITORIES") });
 		for (const repo of repos) {
 			const label = repo.displayName || pathBasename(repo.path) || repo.path;
