@@ -80,7 +80,7 @@ describe("settingsStore", () => {
 
 	describe("load-modify-save preserves foreign-owned fields", () => {
 		// Regression: a general-settings save must NOT clobber fields owned by
-		// other surfaces (services.server.enabled → ServicesTab, global_hotkey →
+		// other surfaces (services.server.enabled → RemoteAccessPanel, global_hotkey →
 		// set_global_hotkey command). The old buildConfig() rebuilt the whole
 		// config from a stale hydrate snapshot, wiping the web-server toggle and
 		// global hotkey on the next restart.

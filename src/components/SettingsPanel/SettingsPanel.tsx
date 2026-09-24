@@ -22,13 +22,16 @@ import {
 	AppearanceTab,
 	GeneralTab,
 	GitHubTab,
+	LocalMcpPanel,
 	NotificationsTab,
 	PluginsTab,
 	ProvidersTab,
+	RemoteAccessPanel,
+	RemoteMachinesTab,
 	RepoScriptsTab,
 	RepoWorktreeTab,
-	ServicesTab,
 	SmartPromptsTab,
+	UpstreamMcpPanel,
 } from "./tabs";
 
 /** Context for initial selection when opening the panel */
@@ -49,7 +52,9 @@ const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "notifications", label: t("settings.notifications", "Notifications") },
 	{ key: "dictation", label: t("settings.dictation", "Dictation") },
 	{ key: "github", label: "Git & GitHub" },
-	{ key: "services", label: t("settings.services", "Services & MCP") },
+	{ key: "mcp", label: t("settings.mcp", "MCP") },
+	{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
+	{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
 	{ key: "plugins", label: t("settings.plugins", "Plugins") },
 	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
 	{ key: "agents", label: t("settings.agents", "Agents") },
@@ -271,8 +276,15 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				<Show when={activeTab() === "github"}>
 					<GitHubTab />
 				</Show>
-				<Show when={activeTab() === "services"}>
-					<ServicesTab />
+				<Show when={activeTab() === "mcp"}>
+					<LocalMcpPanel />
+					<UpstreamMcpPanel />
+				</Show>
+				<Show when={activeTab() === "remote-access"}>
+					<RemoteAccessPanel />
+				</Show>
+				<Show when={activeTab() === "remote-machines"}>
+					<RemoteMachinesTab />
 				</Show>
 				<Show when={activeTab() === "plugins"}>
 					<PluginsTab onClose={props.onClose} />

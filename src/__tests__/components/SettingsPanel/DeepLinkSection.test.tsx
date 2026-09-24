@@ -2,13 +2,12 @@ import { render } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
-// Deep-linking to `settings-upstream-mcp` opens the Services tab, and
-// `LocalServicesPanel` fetches `get_local_ips` from a `createResource` on mount.
-// The test disposes before that settles, so nobody ever reads the resource's
-// error and the rejection escapes as an unhandled one — attributed by Vitest to
-// whichever file was running, not to this tab. Stub the transport instead of the
-// resource: the fetch is incidental to what these cases assert (scroll position),
-// and every other member has to keep working for the panel to render at all.
+// Deep-linking to `settings-upstream-mcp` opens the MCP tab, which mounts
+// `LocalMcpPanel` and `UpstreamMcpPanel` — both call several `rpc()` commands
+// on mount, and the test disposes before any of them settle. Stub the whole
+// transport instead of each resource: the fetches are incidental to what
+// these cases assert (scroll position), and every one has to keep working for
+// the panel to render at all.
 vi.mock("../../../transport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../transport")>()),
 	rpc: vi.fn(async () => []),
@@ -63,7 +62,7 @@ describe("SettingsPanel — deep link to a section", () => {
 			<SettingsPanel
 				visible={true}
 				onClose={() => {}}
-				initialTab="services"
+				initialTab="mcp"
 				initialSection={SETTINGS_SECTION_UPSTREAM_MCP}
 			/>
 		));
@@ -76,7 +75,7 @@ describe("SettingsPanel — deep link to a section", () => {
 	});
 
 	it("leaves the tab at the top when no section is requested", async () => {
-		render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="services" />);
+		render(() => <SettingsPanel visible={true} onClose={() => {}} initialTab="mcp" />);
 		await nextFrame();
 		expect(scrolled).toEqual([]);
 	});
@@ -86,7 +85,7 @@ describe("SettingsPanel — deep link to a section", () => {
 			<SettingsPanel
 				visible={false}
 				onClose={() => {}}
-				initialTab="services"
+				initialTab="mcp"
 				initialSection={SETTINGS_SECTION_UPSTREAM_MCP}
 			/>
 		));
@@ -94,9 +93,9 @@ describe("SettingsPanel — deep link to a section", () => {
 		expect(scrolled).toEqual([]);
 	});
 
-	it("renames the Services nav entry so MCP is findable", () => {
+	it("gives MCP its own direct nav entry, findable without going through Services", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const labels = Array.from(container.querySelectorAll(".navItem")).map((n) => n.textContent);
-		expect(labels).toContain("Services & MCP");
+		expect(labels).toContain("MCP");
 	});
 });

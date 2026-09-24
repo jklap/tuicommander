@@ -7,12 +7,12 @@ import { searchSettings } from "../settingsSearchIndex";
 const TABS: SettingsShellTab[] = [
 	{ key: "general", label: "General" },
 	{ key: "appearance", label: "Appearance" },
-	{ key: "services", label: "Services & MCP" },
+	{ key: "remote-access", label: "Remote Access" },
 	{ key: "__sep__", label: "─" },
 	{ key: "repo:/tmp/x", label: "x" },
 ];
 
-const availableTabs = new Set(["general", "appearance", "services"]);
+const availableTabs = new Set(["general", "appearance", "remote-access"]);
 
 describe("SettingsSearchBox", () => {
 	it("reports every keystroke", () => {
@@ -50,7 +50,7 @@ describe("SettingsSearchResults", () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toContain("Relay Server URL");
 		// The trail names the tab and the section, so the row is self-locating
-		expect(rows[0]).toContain("Services & MCP");
+		expect(rows[0]).toContain("Remote Access");
 		expect(rows[0]).toContain("Cloud Relay");
 	});
 
@@ -71,7 +71,7 @@ describe("SettingsSearchResults", () => {
 		));
 		fireEvent.click(container.querySelector("button") as HTMLButtonElement);
 		expect(onSelect).toHaveBeenCalledWith(
-			expect.objectContaining({ tab: "services", section: "Cloud Relay", label: "Relay Server URL" }),
+			expect.objectContaining({ tab: "remote-access", section: "Cloud Relay", label: "Relay Server URL" }),
 		);
 	});
 

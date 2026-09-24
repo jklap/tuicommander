@@ -4,7 +4,7 @@ import {
 	remoteStatusColor,
 	remoteStatusLabel,
 	transportSummary,
-} from "../../../components/SettingsPanel/tabs/ServicesTab";
+} from "../../../components/SettingsPanel/tabs/services/RemoteMachinesPanel";
 
 describe("ServicesTab remote machine presentation", () => {
 	it.each([

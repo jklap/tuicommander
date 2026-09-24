@@ -4,7 +4,7 @@ import {
 	authFromUpstreamForm,
 	shouldShowAuthorize,
 	startAuthorizeFlow,
-} from "../../../components/SettingsPanel/tabs/ServicesTab";
+} from "../../../components/SettingsPanel/tabs/services/UpstreamMcpPanel";
 import { mockInvoke } from "../../mocks/tauri";
 
 describe("startAuthorizeFlow", () => {

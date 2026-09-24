@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_AUTH_USERNAME, normalizeAuthUsername } from "../../../components/SettingsPanel/tabs/ServicesTab";
+import {
+	DEFAULT_AUTH_USERNAME,
+	normalizeAuthUsername,
+} from "../../../components/SettingsPanel/tabs/services/RemoteAccessPanel";
 
 describe("remote access username normalization", () => {
 	it("keeps a real username untouched apart from surrounding blanks", () => {
