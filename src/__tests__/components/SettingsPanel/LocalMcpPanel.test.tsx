@@ -4,10 +4,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../../stores/appLogger", () => ({
 	appLogger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
-vi.mock("../../../transport", () => ({ rpc: vi.fn() }));
+// Only `rpc` is replaced: `invoke` (the config defaults) needs the real
+// `isTauri` and connection resolver to reach the Tauri mock.
+vi.mock("../../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../transport")>()),
+	rpc: vi.fn(),
+}));
+vi.mock("../../../stores/ui", async () => {
+	const { createStore } = await import("solid-js/store");
+	const [state, setState] = createStore({ settingsExpertMode: false });
+	return {
+		uiStore: {
+			state,
+			setSettingsExpertMode: vi.fn((enabled: boolean) => setState("settingsExpertMode", enabled)),
+		},
+	};
+});
 
 import { LocalMcpPanel } from "../../../components/SettingsPanel/tabs/services/LocalMcpPanel";
+import { settingsExpertStore } from "../../../stores/settingsExpert";
+import { uiStore } from "../../../stores/ui";
 import { rpc } from "../../../transport";
+import { mockInvoke } from "../../mocks/tauri";
 
 describe("LocalMcpPanel", () => {
 	beforeEach(() => {
@@ -35,6 +53,8 @@ describe("LocalMcpPanel", () => {
 	});
 
 	afterEach(() => {
+		settingsExpertStore._resetForTests();
+		uiStore.setSettingsExpertMode(false);
 		vi.clearAllTimers();
 		vi.useRealTimers();
 		vi.clearAllMocks();
@@ -75,5 +95,63 @@ describe("LocalMcpPanel", () => {
 		view.unmount();
 		await vi.advanceTimersByTimeAsync(6000);
 		expect(statusCalls()).toBe(2);
+	});
+
+	describe("expert controls", () => {
+		const DEFAULTS = {
+			app: { collapse_tools: false, disabled_native_tools: ["config", "debug"] },
+			notifications: {},
+			agent_settings: {},
+		};
+
+		/** Render the page over a saved config, with the Rust defaults loaded. */
+		async function renderWith(saved: { collapse_tools: boolean; disabled_native_tools: string[] }) {
+			mockInvoke.mockImplementation((cmd: string) =>
+				cmd === "get_config_defaults" ? Promise.resolve(DEFAULTS) : Promise.resolve(undefined),
+			);
+			const base = vi.mocked(rpc).getMockImplementation();
+			vi.mocked(rpc).mockImplementation((command: string, args?: Record<string, unknown>) => {
+				if (command === "load_config") return Promise.resolve(saved);
+				return base?.(command, args) as Promise<never>;
+			});
+			await settingsExpertStore.open();
+			const view = render(() => <LocalMcpPanel />);
+			await vi.advanceTimersByTimeAsync(0);
+			return view;
+		}
+
+		const collapseTools = (view: ReturnType<typeof render>) => view.queryByText(/Collapse tools/);
+		const nativeToolToggles = (view: ReturnType<typeof render>) => view.queryByText("plugin_dev_guide");
+
+		it("hides Collapse tools and the native tool toggles at their defaults", async () => {
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			expect(collapseTools(view)).toBeNull();
+			expect(nativeToolToggles(view)).toBeNull();
+			// The page itself stays: only the tuning knobs hide.
+			expect(view.getByText("TUIC Tools")).toBeDefined();
+			view.unmount();
+		});
+
+		it("shows a control whose saved value differs from its default", async () => {
+			const view = await renderWith({ collapse_tools: true, disabled_native_tools: [] });
+			expect(collapseTools(view)).not.toBeNull();
+			expect(nativeToolToggles(view)).not.toBeNull();
+			view.unmount();
+		});
+
+		it("shows only the modified control, not the one still at its default", async () => {
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config"] });
+			expect(collapseTools(view)).toBeNull();
+			expect(nativeToolToggles(view)).not.toBeNull();
+			view.unmount();
+		});
+
+		it("shows every control at its default in expert mode", async () => {
+			uiStore.setSettingsExpertMode(true);
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			expect(collapseTools(view)).not.toBeNull();
+			expect(nativeToolToggles(view)).not.toBeNull();
+			view.unmount();
+		});
 	});
 });

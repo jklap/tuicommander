@@ -5,6 +5,7 @@ import type { NotificationSound } from "../../../notifications";
 import { appLogger } from "../../../stores/appLogger";
 import { notificationsStore } from "../../../stores/notifications";
 import { isTauri } from "../../../transport";
+import { ExpertSetting } from "../ExpertSetting";
 import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -149,63 +150,68 @@ export const NotificationsTab: Component = () => {
 				/>
 
 				<Show when={isTauri()}>
-					<div class={s.group}>
-						<label>{t("notifications.label.audioDevice", "Audio Output Device")}</label>
-						<p class={s.hint}>
-							{t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")}
-						</p>
-						<Show
-							when={devices() !== null}
-							fallback={
-								<>
-									<p class={s.hint}>
-										{t("notifications.hint.audioDeviceCurrent", "Currently: {device}", {
-											device:
-												notificationsStore.state.config.audio_device ??
-												t("notifications.option.systemDefault", "System Default"),
-										})}
-									</p>
-									<button class={s.testBtn} disabled={loadingDevices()} onClick={loadDevices}>
-										{loadingDevices()
-											? t("notifications.btn.loadingDevices", "Loading…")
-											: t("notifications.btn.chooseDevice", "Choose output device…")}
-									</button>
-									<p class={s.hint} style={{ "margin-top": "6px" }}>
-										{t(
-											"notifications.hint.deviceMicPrompt",
-											"macOS may ask for microphone access — the audio system requires it to enumerate output devices. Notifications never record audio.",
+					<ExpertSetting
+						configKey="notifications.audio_device"
+						value={notificationsStore.state.config.audio_device ?? null}
+					>
+						<div class={s.group}>
+							<label>{t("notifications.label.audioDevice", "Audio Output Device")}</label>
+							<p class={s.hint}>
+								{t("notifications.hint.audioDevice", "Choose which speaker or output to use for notification sounds")}
+							</p>
+							<Show
+								when={devices() !== null}
+								fallback={
+									<>
+										<p class={s.hint}>
+											{t("notifications.hint.audioDeviceCurrent", "Currently: {device}", {
+												device:
+													notificationsStore.state.config.audio_device ??
+													t("notifications.option.systemDefault", "System Default"),
+											})}
+										</p>
+										<button class={s.testBtn} disabled={loadingDevices()} onClick={loadDevices}>
+											{loadingDevices()
+												? t("notifications.btn.loadingDevices", "Loading…")
+												: t("notifications.btn.chooseDevice", "Choose output device…")}
+										</button>
+										<p class={s.hint} style={{ "margin-top": "6px" }}>
+											{t(
+												"notifications.hint.deviceMicPrompt",
+												"macOS may ask for microphone access — the audio system requires it to enumerate output devices. Notifications never record audio.",
+											)}
+										</p>
+									</>
+								}
+							>
+								<select
+									value={notificationsStore.state.config.audio_device ?? ""}
+									onChange={(e) => {
+										const val = e.currentTarget.value;
+										notificationsStore.setAudioDevice(val || null);
+									}}
+								>
+									<option value="">{t("notifications.option.systemDefault", "System Default")}</option>
+									<For each={devices()}>
+										{(device) => (
+											<option value={device.name}>
+												{device.name}
+												{device.is_default ? ` (${t("notifications.option.currentDefault", "current default")})` : ""}
+											</option>
 										)}
-									</p>
-								</>
-							}
-						>
-							<select
-								value={notificationsStore.state.config.audio_device ?? ""}
-								onChange={(e) => {
-									const val = e.currentTarget.value;
-									notificationsStore.setAudioDevice(val || null);
-								}}
-							>
-								<option value="">{t("notifications.option.systemDefault", "System Default")}</option>
-								<For each={devices()}>
-									{(device) => (
-										<option value={device.name}>
-											{device.name}
-											{device.is_default ? ` (${t("notifications.option.currentDefault", "current default")})` : ""}
-										</option>
-									)}
-								</For>
-							</select>
-							<button
-								class={s.testBtn}
-								style={{ "margin-top": "6px" }}
-								disabled={loadingDevices()}
-								onClick={loadDevices}
-							>
-								{t("notifications.btn.refreshDevices", "Refresh")}
-							</button>
-						</Show>
-					</div>
+									</For>
+								</select>
+								<button
+									class={s.testBtn}
+									style={{ "margin-top": "6px" }}
+									disabled={loadingDevices()}
+									onClick={loadDevices}
+								>
+									{t("notifications.btn.refreshDevices", "Refresh")}
+								</button>
+							</Show>
+						</div>
+					</ExpertSetting>
 				</Show>
 
 				<div class={s.group}>
@@ -233,23 +239,28 @@ export const NotificationsTab: Component = () => {
 					</For>
 				</div>
 
-				<div class={s.group}>
-					<label>{t("notifications.label.orchestration", "Orchestration")}</label>
-					<div class={s.toggle}>
-						<input
-							type="checkbox"
-							checked={notificationsStore.state.config.silence_remote_completions}
-							onChange={(e) => notificationsStore.setSilenceRemoteCompletions(e.currentTarget.checked)}
-						/>
-						<span>{t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}</span>
+				<ExpertSetting
+					configKey="notifications.silence_remote_completions"
+					value={notificationsStore.state.config.silence_remote_completions}
+				>
+					<div class={s.group}>
+						<label>{t("notifications.label.orchestration", "Orchestration")}</label>
+						<div class={s.toggle}>
+							<input
+								type="checkbox"
+								checked={notificationsStore.state.config.silence_remote_completions}
+								onChange={(e) => notificationsStore.setSilenceRemoteCompletions(e.currentTarget.checked)}
+							/>
+							<span>{t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}</span>
+						</div>
+						<p class={s.hint} style={{ "margin-top": "6px" }}>
+							{t(
+								"notifications.hint.silenceRemoteCompletions",
+								"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
+							)}
+						</p>
 					</div>
-					<p class={s.hint} style={{ "margin-top": "6px" }}>
-						{t(
-							"notifications.hint.silenceRemoteCompletions",
-							"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
-						)}
-					</p>
-				</div>
+				</ExpertSetting>
 
 				<div class={s.actions}>
 					<button onClick={() => notificationsStore.reset()}>
@@ -260,23 +271,25 @@ export const NotificationsTab: Component = () => {
 
 			{/* Outside the audio Show on purpose — the bell is visual, so the setting
 			    must stay reachable on a machine with no audio output. */}
-			<div class={s.group}>
-				<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
-				<div class={s.toggle}>
-					<input
-						type="checkbox"
-						checked={notificationsStore.state.config.toasts_in_bell}
-						onChange={(e) => notificationsStore.setToastsInBell(e.currentTarget.checked)}
-					/>
-					<span>{t("notifications.toggle.toastsInBell", "Keep toasts in the bell")}</span>
+			<ExpertSetting configKey="notifications.toasts_in_bell" value={notificationsStore.state.config.toasts_in_bell}>
+				<div class={s.group}>
+					<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
+					<div class={s.toggle}>
+						<input
+							type="checkbox"
+							checked={notificationsStore.state.config.toasts_in_bell}
+							onChange={(e) => notificationsStore.setToastsInBell(e.currentTarget.checked)}
+						/>
+						<span>{t("notifications.toggle.toastsInBell", "Keep toasts in the bell")}</span>
+					</div>
+					<p class={s.hint} style={{ "margin-top": "6px" }}>
+						{t(
+							"notifications.hint.toastsInBell",
+							"Toasts fade on their own, often while you look at another window. Mirroring them into the bell keeps them readable afterwards. Turn this off to leave toasts transient.",
+						)}
+					</p>
 				</div>
-				<p class={s.hint} style={{ "margin-top": "6px" }}>
-					{t(
-						"notifications.hint.toastsInBell",
-						"Toasts fade on their own, often while you look at another window. Mirroring them into the bell keeps them readable afterwards. Turn this off to leave toasts transient.",
-					)}
-				</p>
-			</div>
+			</ExpertSetting>
 		</div>
 	);
 };

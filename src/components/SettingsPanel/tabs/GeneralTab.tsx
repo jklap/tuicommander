@@ -4,6 +4,7 @@ import { appLogger } from "../../../stores/appLogger";
 import type { UpdateChannel } from "../../../stores/settings";
 import { settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
+import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -62,31 +63,35 @@ export const GeneralTab: Component = () => {
 				hint={t("general.hint.preventSleepWhenBusy", "Keep the system awake while scripts are running")}
 			/>
 
-			<SettingSlider
-				label="Auto-Standby Timeout"
-				value={settingsStore.state.standbyTimeoutMinutes}
-				onChange={(v) => settingsStore.setStandbyTimeoutMinutes(v)}
-				min={0}
-				max={60}
-				step={1}
-				formatValue={(v) => (v === 0 ? "Off" : `${v} min`)}
-				hint="Pause idle background sessions after this duration to save resources. 0 = disabled."
-			/>
+			<ExpertSetting configKey="app.standby_timeout_minutes" value={settingsStore.state.standbyTimeoutMinutes}>
+				<SettingSlider
+					label="Auto-Standby Timeout"
+					value={settingsStore.state.standbyTimeoutMinutes}
+					onChange={(v) => settingsStore.setStandbyTimeoutMinutes(v)}
+					min={0}
+					max={60}
+					step={1}
+					formatValue={(v) => (v === 0 ? "Off" : `${v} min`)}
+					hint="Pause idle background sessions after this duration to save resources. 0 = disabled."
+				/>
+			</ExpertSetting>
 
-			<SettingSelect
-				label="Content Indexing"
-				value={settingsStore.state.indexStrategy}
-				onChange={(v) =>
-					settingsStore.setIndexStrategy(v as "active_only" | "active_and_switch" | "all_sequential" | "disabled")
-				}
-				options={[
-					{ value: "disabled", label: "Disabled" },
-					{ value: "active_only", label: "Active repo only" },
-					{ value: "active_and_switch", label: "Active + on switch" },
-					{ value: "all_sequential", label: "All repos at boot" },
-				]}
-				hint="When to build search indexes. Set to Disabled to turn off background indexing entirely."
-			/>
+			<ExpertSetting configKey="app.index_strategy" value={settingsStore.state.indexStrategy}>
+				<SettingSelect
+					label="Content Indexing"
+					value={settingsStore.state.indexStrategy}
+					onChange={(v) =>
+						settingsStore.setIndexStrategy(v as "active_only" | "active_and_switch" | "all_sequential" | "disabled")
+					}
+					options={[
+						{ value: "disabled", label: "Disabled" },
+						{ value: "active_only", label: "Active repo only" },
+						{ value: "active_and_switch", label: "Active + on switch" },
+						{ value: "all_sequential", label: "All repos at boot" },
+					]}
+					hint="When to build search indexes. Set to Disabled to turn off background indexing entirely."
+				/>
+			</ExpertSetting>
 
 			<h3>{t("general.heading.updates", "Updates")}</h3>
 
@@ -97,18 +102,20 @@ export const GeneralTab: Component = () => {
 				hint={t("general.hint.autoUpdateEnabled", "Download and install updates in the background")}
 			/>
 
-			<SettingSelect
-				label={t("general.label.updateChannel", "Update Channel")}
-				value={settingsStore.state.updateChannel}
-				onChange={(v) => settingsStore.setUpdateChannel(v as UpdateChannel)}
-				options={updateChannelOptions}
-				hint={
-					settingsStore.state.updateChannel !== "stable"
-						? t("general.hint.updateChannelWarning", "Nightly builds may be unstable")
-						: t("general.hint.updateChannel", "Choose which release channel to receive updates from")
-				}
-				hintStyle={settingsStore.state.updateChannel !== "stable" ? { color: "var(--warning, #e5c07b)" } : undefined}
-			/>
+			<ExpertSetting configKey="app.update_channel" value={settingsStore.state.updateChannel}>
+				<SettingSelect
+					label={t("general.label.updateChannel", "Update Channel")}
+					value={settingsStore.state.updateChannel}
+					onChange={(v) => settingsStore.setUpdateChannel(v as UpdateChannel)}
+					options={updateChannelOptions}
+					hint={
+						settingsStore.state.updateChannel !== "stable"
+							? t("general.hint.updateChannelWarning", "Nightly builds may be unstable")
+							: t("general.hint.updateChannel", "Choose which release channel to receive updates from")
+					}
+					hintStyle={settingsStore.state.updateChannel !== "stable" ? { color: "var(--warning, #e5c07b)" } : undefined}
+				/>
+			</ExpertSetting>
 
 			<div class={s.group}>
 				<button
