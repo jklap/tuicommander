@@ -230,11 +230,16 @@ It arrives from two places, and the second one matters legally:
 | Part | Published by | Fetched from |
 |---|---|---|
 | Per-language ONNX graphs, SentencePiece tokenizer | Kevin Hill (`KevinAHM`), as ONNX exports of Kyutai's weights | `huggingface.co/KevinAHM/pocket-tts-onnx`, pinned to one commit |
-| Speaker embeddings (the voices) | Kyutai | `huggingface.co/kyutai/pocket-tts-without-voice-cloning`, pinned to one commit |
+| Speaker embeddings (the voices) | Kyutai | `huggingface.co/kyutai/pocket-tts-without-voice-cloning`, pinned to commit `8843db76457a91db32077edf8dfcd1c0e3e755fd`; French voices (`french_24l`) to commit `00eac05ed3d16bdc3f6b5d598874019c34a89214` |
 
 The voices come from Kyutai's ungated repository without the voice-cloning
 weights, not from the gated `kyutai/pocket-tts`. The speaker embeddings in the
 two are identical; TUICommander uses only these preset voices.
+
+Each language offers all 26 of Kyutai's preset voices. One is part of the
+language download; the user downloads each of the other 25 separately. The
+French voices stay at the older commit because the voices at the newer one do
+not work with the pinned ONNX export.
 
 Every file of both parts is pinned by sha256 in
 `src-tauri/src/dictation/speech/assets.rs` and verified before it is installed.
