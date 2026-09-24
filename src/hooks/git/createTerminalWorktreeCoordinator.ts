@@ -1,4 +1,4 @@
-import { batch, type Setter } from "solid-js";
+import { batch } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
@@ -6,7 +6,6 @@ import { pathStartsWith } from "../../utils/pathUtils";
 
 interface TerminalWorktreeCoordinatorDeps {
 	refreshBranches: () => Promise<void>;
-	setCurrentBranch: Setter<string | null>;
 	writePty: (sessionId: string, data: string) => Promise<void>;
 }
 
@@ -66,11 +65,6 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 
 			if (terminalsStore.state.activeId === terminalId) {
 				repositoriesStore.setActiveWorkspace(target.repoPath, target.workspaceId);
-				// `currentBranch` is displayed and fed to git, so it is the BRANCH the
-				// target workspace has checked out, rather than inferring it from its id.
-				const targetBranch =
-					repositoriesStore.get(target.repoPath)?.workspaces[target.workspaceId]?.branchName ?? target.workspaceId;
-				deps.setCurrentBranch(targetBranch);
 				if (target.repoPath !== currentRepoPath) {
 					repositoriesStore.setActive(target.repoPath);
 				}

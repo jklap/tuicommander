@@ -121,7 +121,6 @@ export interface AppInitDeps {
 	};
 	setQuitDialogVisible: (visible: boolean) => void;
 	setStatusInfo: (msg: string) => void;
-	setCurrentBranch: (branch: string | null) => void;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
 	refreshAllBranchStats: (scopeRepoPath?: string) => Promise<void> | void;
 	getDefaultFontSize: () => number;
@@ -657,9 +656,7 @@ export async function initApp(deps: AppInitDeps) {
 				// its tab is filtered out by the current repo. Keep background opens in
 				// their repo, but move focused opens to their owning repo first.
 				if (focus !== false && repoPath && repoPath !== activeRepoPath) {
-					const repo = repositoriesStore.get(repoPath);
 					repositoriesStore.setActive(repoPath);
-					deps.setCurrentBranch(repo?.activeWorkspaceId ?? null);
 				}
 
 				// A background open must also stay in the background. Activating it
@@ -915,7 +912,6 @@ export async function initApp(deps: AppInitDeps) {
 		const firstRepo = repositoriesStore.get(firstPath);
 		repositoriesStore.setActive(firstPath);
 		if (firstRepo?.activeWorkspaceId) {
-			deps.setCurrentBranch(firstRepo.activeWorkspaceId);
 			if (survivingSessions.length > 0) {
 				const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
 				const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];

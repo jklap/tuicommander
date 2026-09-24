@@ -30,7 +30,6 @@ describe("createBranchSelectionCoordinator", () => {
 			pty: { canSpawn: async () => true },
 			setStatusInfo: () => {},
 			getDefaultFontSize: () => 14,
-			setCurrentBranch: (() => {}) as never,
 		});
 
 	// `TerminalData.repoPath` is the owning repo of record — the field
@@ -175,7 +174,6 @@ describe("createBranchSelectionCoordinator", () => {
 				pty: { canSpawn: async () => false },
 				setStatusInfo: (message) => messages.push(message),
 				getDefaultFontSize: () => 14,
-				setCurrentBranch: (() => {}) as never,
 			});
 
 			expect(await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main")).toBeUndefined();
