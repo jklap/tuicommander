@@ -4,6 +4,7 @@ import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import type { ModelInfo, SpeechAsset } from "../../stores/dictation";
 import { dictationStore, WHISPER_LANGUAGES } from "../../stores/dictation";
+import { settingsExpertStore } from "../../stores/settingsExpert";
 import { terminalsStore } from "../../stores/terminals";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
@@ -919,7 +920,11 @@ const HandsFreeControls: Component = () => {
 						<div class={d.controlRow}>
 							<button
 								class={s.testBtn}
-								onClick={() => dictationStore.resetHandsFreeStartNotice()}
+								onClick={() => {
+									// A click is not an input/change event: pin here so the reset does not hide the control.
+									settingsExpertStore.pin("dictation.hands_free_start_notice");
+									dictationStore.resetHandsFreeStartNotice();
+								}}
 								disabled={!dictationStore.state.handsFreeStartNotice}
 							>
 								{t("dictation.startNoticeReset", "Reset to default")}

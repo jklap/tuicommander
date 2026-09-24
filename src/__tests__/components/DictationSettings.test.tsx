@@ -744,6 +744,14 @@ describe("DictationSettings – expert controls", () => {
 		expect(hasLabel(container, label)).toBe(true);
 	});
 
+	it("keeps Start notice visible after Reset to default puts it back at the default", () => {
+		mockStore.state.handsFreeStartNotice = "Speak Italian.";
+		const { getByText } = render(() => <DictationSettings />);
+		fireEvent.click(getByText("Reset to default"));
+		// A click is not an input/change event, so the button must pin the control itself.
+		expect(settingsExpertStore.isVisible("dictation.hands_free_start_notice", "")).toBe(true);
+	});
+
 	it("shows every expert control at its default in expert mode", async () => {
 		uiStore.setSettingsExpertMode(true);
 		const { container } = render(() => <DictationSettings />);
