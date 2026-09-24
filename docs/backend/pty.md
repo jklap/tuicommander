@@ -647,6 +647,27 @@ Additionally, `CLAUDECODE` is removed from the environment (`env_remove`) to pre
 
 The same PTY command sanitizer removes Cargo package and executable metadata (`CARGO`, `CARGO_MANIFEST_*`, `CARGO_PKG_*`, `CARGO_BIN_NAME`, `CARGO_BIN_EXE_*`, `CARGO_CRATE_NAME`, `CARGO_PRIMARY_PACKAGE`, `CARGO_FEATURE_*`, `CARGO_CFG_*`), build paths and jobserver state (`CARGO_TARGET_DIR`, `CARGO_TARGET_TMPDIR`, `OUT_DIR`, `CARGO_MAKEFLAGS`), build settings (`CARGO_INCREMENTAL`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTFLAGS`, `RUSTC`, `RUSTC_LINKER`, `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER`, `RUSTDOC`, `HOST_CC`, `HOST_CXX`, `HOST`, `TARGET`, `PROFILE`, `NUM_JOBS`, `OPT_LEVEL`, `DEBUG`), build-script dependency metadata (`DEP_*`), and all `MBX_*` keys inherited from TUICommander's Cargo/mbx development launch. Those values describe the TUIC build, not the repository opened in the PTY. User preferences such as `CARGO_HOME` and `CARGO_TERM_COLOR` remain inherited; explicit per-agent or run-config environment values applied after sanitization can restore any removed key when requested.
 
+### Custom PTY environment variables
+
+`AppConfig::custom_pty_env` (Settings) lets the user configure arbitrary `KEY=value` pairs applied to **every** spawned PTY — every production spawn site (`pty/commands.rs` ×2, `mcp_http/session.rs`, the MCP agent spawn in `mcp_http/mcp_transport.rs`, `agent.rs`, `mcp_http/agent_routes.rs`), not just the three that go through `build_shell_command()` above. Applied by `pty::apply_custom_pty_env`, called from `spawn_pty_pair_with_retry`/`_async` (the one function every spawn site funnels through to actually open its PTY) immediately before the `TUIC_PTY_TTY` stamp.
+
+Full env-injection precedence, consolidated (three previously-undocumented overlapping channels):
+
+1. Per-site injections: identity (`bind_pty_identity`), worktree context (`inject_worktree_env`), terminal env (`inject_unix_terminal_env`), shell integration (`shell_integration::inject`) — varies by spawn site (read each site's spawn closure for which it calls).
+2. Caller-supplied `PtyConfig::env` (e.g. `AgentRunConfig::env`, edited per run-config in Settings → Agents) and `AgentSettings::env_flags` (currently hardcoded to the `"claude"` agent, injected by `Terminal.tsx` on every session).
+3. **`custom_pty_env`** (this setting) — global, user-configured, applied last among the above, so it is a real override rather than a fallback default.
+4. `TUIC_PTY_TTY` — always last, unconditional, never overridable by any of the above. Internal plumbing (`tuic-hook` uses it to find its controlling terminal without walking process ancestry).
+
+**Global only, deliberately** — no `.tuic.json`/per-repo tier, the same structural opt-out `copy_paths` uses (see `src-tauri/AGENTS.md`'s Worktree File Sync section), because a committed repo file must never be able to inject shell environment for anyone who opens that repo. Validation is structural only (`config::valid_custom_env_key`/`valid_custom_env_value`: a legal env var name, no NUL byte in the value) — no name denylist, unlike `additional_readable_dirs`, since `config.json` is a local per-machine file with no sync or repo-influence path.
+
+Motivating case: `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true`, set by a user whose `~/.p10k.zsh` has `instant_prompt=verbose` — see the shell-readiness gate below for the actual race this pairs with.
+
+## Pane Shell-Readiness Gate (tmux shim)
+
+`mcp_http/tmux_routes.rs::materialize` (backing `POST /tmux/panes/{id}/materialize`, the tmux compatibility shim's pane-creation path Claude Code's agent-teams feature uses via `respawn-pane`) blocks — after spawning the PTY, before returning — until the shell reaches `SHELL_IDLE`, via `apply_pane_readiness_gate` → `mcp_transport::wait_for_shell_idle` (the same event-driven, non-polling primitive `session action=wait until=idle` uses, extracted into a shared `wait_for_session_predicate`). Bounded at `PANE_READY_TIMEOUT_MS` (5s), fail-open: a shell with no detectable idle signal within the bound logs a warning and pane creation proceeds anyway rather than hanging.
+
+This closes a real race (`plans/p10k-wizard-hijack-agent-pane-spawn-race.md`): the tmux shim's `respawn-pane` used to write the launch command one HTTP round-trip after `materialize` returned, with no gate at all — a shell still sourcing `.zshrc`/Oh My Zsh/Powerlevel10k could have the raw keystrokes land mid-startup and get consumed by an interactive remediation prompt (p10k's instant-prompt config wizard, in the reported incident) instead of reaching the shell. `SHELL_IDLE` already unifies both readiness signals that exist elsewhere in this file: OSC 133 `'A'` (see "OSC 133 Semantic Prompts" above) sets it immediately for shell-integrated shells (zsh, via TUICommander's own injected integration — reliably present); the silence-timer fallback (see "Shell State (Busy/Idle) Detection") reaches the same state once real prompt output goes quiet, covering bash/fish without shell integration.
+
 ## Child Process Priority
 
 Each spawned shell is given a lower scheduling priority right after spawn
