@@ -17,6 +17,8 @@ pub(crate) enum TokenSource {
     None,
 }
 
+const MAX_FAILED_ACTIONS: usize = 5;
+
 fn vcs_slug(segment: &str) -> Option<&'static str> {
     match segment {
         "gh" | "github" => Some("gh"),
@@ -96,6 +98,114 @@ fn resolve_token_from_sources(
     }
 
     (None, TokenSource::None)
+}
+
+/// Return a bounded list of failed CircleCI action logs. CircleCI occasionally
+/// reports a failed job without marking an action failed, so retain the last
+/// fetchable action as a best-effort fallback for that case.
+pub(crate) fn failed_actions(detail: &serde_json::Value) -> Vec<(String, String)> {
+    let actions: Vec<(bool, String, String)> = detail
+        .get("steps")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|step| {
+            let step_name = step
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("failed step")
+                .to_string();
+            step.get("actions")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(move |action| {
+                    let output_url = action.get("output_url")?.as_str()?.trim();
+                    (!output_url.is_empty()).then(|| {
+                        (
+                            action.get("failed").and_then(serde_json::Value::as_bool) == Some(true),
+                            step_name.clone(),
+                            output_url.to_string(),
+                        )
+                    })
+                })
+        })
+        .collect();
+
+    let failed: Vec<_> = actions
+        .iter()
+        .filter(|(failed, _, _)| *failed)
+        .take(MAX_FAILED_ACTIONS)
+        .map(|(_, step, output_url)| (step.clone(), output_url.clone()))
+        .collect();
+    if !failed.is_empty() {
+        return failed;
+    }
+
+    (detail.get("status").and_then(serde_json::Value::as_str) == Some("failed"))
+        .then(|| actions.last())
+        .flatten()
+        .map(|(_, step, output_url)| vec![(step.clone(), output_url.clone())])
+        .unwrap_or_default()
+}
+
+/// Fetches a CircleCI v1.1 job and the pre-signed S3 logs for its failed
+/// actions. CircleCI v2 does not expose step output, so keep this v1.1 detail
+/// contained here for a future adapter replacement.
+pub(crate) async fn fetch_job_log(
+    client: &reqwest::Client,
+    job: &CircleCiJob,
+    token: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "https://circleci.com/api/v1.1/project/{}/{}/{}/{}",
+        job.vcs, job.org, job.repo, job.build_num
+    );
+    let detail: serde_json::Value = client
+        .get(url)
+        .header("Circle-Token", token)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| format!("CircleCI request failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("CircleCI API error: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("Failed to parse CircleCI job: {error}"))?;
+
+    let actions = failed_actions(&detail);
+    if actions.is_empty() {
+        return Err("CircleCI job contains no failed action logs".to_string());
+    }
+
+    let mut output = String::new();
+    for (step, output_url) in actions {
+        // output_url is a pre-signed S3 bearer URL: never attach Circle-Token
+        // and never log it.
+        let chunks: Vec<serde_json::Value> = client
+            .get(&output_url)
+            .send()
+            .await
+            .map_err(|error| format!("CircleCI log fetch failed for {step}: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("CircleCI log API error for {step}: {error}"))?
+            .json()
+            .await
+            .map_err(|error| format!("Failed to parse CircleCI log for {step}: {error}"))?;
+        output.push_str(&format!("===== FAILED STEP: {step} =====\n"));
+        for chunk in chunks {
+            output.push_str(
+                chunk
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            );
+        }
+        output.push('\n');
+    }
+
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -185,6 +295,42 @@ mod tests {
         assert_eq!(
             super::resolve_token_from_sources(None, None, None),
             (None, super::TokenSource::None)
+        );
+    }
+
+    #[test]
+    fn selects_failed_actions_and_caps_the_s3_fan_out() {
+        let detail: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/circleci/job.json")).unwrap();
+
+        assert_eq!(
+            super::failed_actions(&detail),
+            vec![
+                ("unit".into(), "https://logs.example/unit".into()),
+                ("lint".into(), "https://logs.example/lint".into()),
+                (
+                    "integration".into(),
+                    "https://logs.example/integration".into()
+                ),
+                ("e2e".into(), "https://logs.example/e2e".into()),
+                ("package".into(), "https://logs.example/package".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_last_action_for_a_failed_job_without_flagged_actions() {
+        let detail = serde_json::json!({
+            "status": "failed",
+            "steps": [
+                { "name": "first", "actions": [{ "failed": false, "output_url": "https://logs.example/first" }] },
+                { "name": "last", "actions": [{ "failed": false, "output_url": "https://logs.example/last" }] }
+            ]
+        });
+
+        assert_eq!(
+            super::failed_actions(&detail),
+            vec![("last".into(), "https://logs.example/last".into())]
         );
     }
 }
