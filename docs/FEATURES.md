@@ -595,7 +595,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Categories: Code Editors, JetBrains, Terminals, Git Tools, System
 - JetBrains family: IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet — launched via their CLI launcher (`idea`, `pycharm`, …) with `--line`/`--column` goto, falling back to `open -a` on macOS when the Toolbox shell scripts aren't on PATH
 - File-capable editors (including JetBrains IDEs) open the focused file (from editor or MD tab); others open the repo
-- Custom launchers (#71): user-defined entries configured at Settings → Developer Tools → Custom Launchers (name, executable on `PATH` or absolute, args, per-OS platform, enable toggle), shown under a "Custom" section in the dropdown. Args support placeholder tokens resolved at launch: `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (focused file's directory, else repo), `{cwd}` (focused terminal cwd, else repo), `{home}`, and `{line}`/`{column}` (editor cursor, default 1)
+- Custom launchers (#71): user-defined entries configured at Settings → General → Custom Launchers (name, executable on `PATH` or absolute, args, per-OS platform, enable toggle), shown under a "Custom" section in the dropdown. Args support placeholder tokens resolved at launch: `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (focused file's directory, else repo), `{cwd}` (focused terminal cwd, else repo), `{home}`, and `{line}`/`{column}` (editor cursor, default 1)
 - Run command button: `Cmd+R` (run), `Cmd+Shift+R` (edit & run)
 
 ---
@@ -1306,7 +1306,7 @@ The navigation groups the global pages by task. Each group is a static label row
 | Application | General (**11.1**), Appearance (**11.2**), Notifications (**11.5**) |
 | Workspace | Terminal (**11.9**), Keyboard Shortcuts (**11.6**), Git & GitHub (**11.10**) |
 | AI | Agents (**11.7**), AI Chat (**11.8**), Voice (section 9), Smart Prompts (**10.5**) |
-| Integrations | MCP (**11.3**), Remote Access (**11.3**), Remote Machines (**11.3**), Plugins (**17.2**), Developer Tools (**11.11**) |
+| Integrations | MCP (**11.3**), Remote Access (**11.3**), Remote Machines (**11.3**), Plugins (**17.2**) |
 | Repositories | One page per configured repository (**11.4**) |
 
 ### 11.0 Search
@@ -1314,7 +1314,7 @@ The navigation groups the global pages by task. Each group is a static label row
 - Each result shows the setting name and its `Page › Section` trail; selecting one opens that page and scrolls to the field
 - Repository pages are not indexed — a global box cannot know which repository a query means
 - Settings the current build does not render (the AI Chat page while Experimental Features is off, for example) report no match instead of opening an absent page
-- A result inside an expert setting shows an **Expert** badge; opening it reveals that setting (see **11.12**)
+- A result inside an expert setting shows an **Expert** badge; opening it reveals that setting (see **11.11**)
 - The index is committed, not scanned from the DOM: only one page mounts at a time, and mounting the rest would fire CLI status, mdkb status, GitHub and audio probes on every keystroke. A drift test re-derives it from the sources, so a setting added without indexing fails CI
 
 ### 11.1 General
@@ -1324,6 +1324,8 @@ The navigation groups the global pages by task. Each group is a static label row
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
 - Updates: auto-check, update channel, check now
 - Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
+- TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
+- Default IDE, custom launchers (see **4.5**)
 
 ### 11.2 Appearance
 - Split tab mode: separate / unified
@@ -1397,11 +1399,7 @@ The `ego_executable` path (the AI Chat section), then ego's own configuration. S
 - Repository defaults: base branch, copy ignored files, copy untracked files (two separate toggles), setup/run/archive scripts
 - Worktree defaults: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, auto-fetch interval
 
-### 11.11 Developer Tools
-- TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
-- Default IDE, custom launchers (see **4.5**)
-
-### 11.12 Expert Mode
+### 11.11 Expert Mode
 - **Expert** switch in the Settings header; persisted as the UI pref `settings_expert_mode` (default off)
 - An expert setting is hidden in basic mode only while its value equals the config default. A modified value always stays visible, so an override is never hidden
 - A setting shown because its value is modified stays shown until Settings is opened again, also when it is set back to the default in the same open
@@ -1494,7 +1492,7 @@ All data persisted to platform config directory via Rust:
 - Go-to-definition: Cmd+Click on symbols in the editor navigates to the definition via `mdkb_goto_definition`. Holding Cmd (macOS) / Ctrl underlines the symbol under the cursor (`cm-hover-link`) as a click affordance; the underline clears on release or when the pointer leaves the editor, and its position is remapped through edits so it never goes stale
 - Find references: Shift+F12 finds all callers of a symbol via `mdkb_references` (uses code_graph callers query)
 - Symbol outline: file-level symbol tree via `mdkb_outline` (functions, types, structs)
-- Install/uninstall managed from Settings → Developer Tools → Code Intelligence
+- Install/uninstall managed from Settings → General → Code Intelligence
 - `is_available()` checks binary existence on disk (not cached path) — survives external uninstalls
 - The daemon ping version must match the installed binary; an older detached daemon is restarted automatically after upgrades
 - Homebrew-managed installs show `brew uninstall mdkb` guidance instead of silent failure
@@ -2097,7 +2095,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 21.6 Installation
 - First-run prompt on app launch (one-time, dismissible)
-- Settings > Developer Tools > TUIC CLI (install/uninstall button with status)
+- Settings > General > TUIC CLI (install/uninstall button with status)
 - Auto-update on app startup (silent, no elevation prompt)
 - Paths: `/usr/local/bin/tuic` (macOS/Linux), `%LOCALAPPDATA%\Microsoft\WindowsApps\tuic.exe` (Windows)
 - `tuic install-cli` / `tuic alias` for self-service
