@@ -30,29 +30,14 @@ from pathlib import Path
 
 from huggingface_hub import HfApi
 
-REPO = "kyutai/pocket-tts-without-voice-cloning"
-
-# Keep in step with `verify_voices.py` and with `voice_revision!` in
-# `assets.rs`. French stays at the older revision: its voices at 8843db76 are
-# for a newer model than the pinned ONNX export and render 0.72 s.
-REVISIONS = {
-    "italian": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "english_2026-04": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "french_24l": "00eac05ed3d16bdc3f6b5d598874019c34a89214",
-    "german": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "portuguese": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "spanish": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-}
-
-# The name the app installs a language under, where it differs from the name
-# Hugging Face files it under (`Kind::Language.language` in `assets.rs`).
-INSTALLED_AS = {"english_2026-04": "english", "french_24l": "french"}
+from pins import INSTALLED_AS, VOICES_PER_LANGUAGE
+from pins import VOICES_REPO as REPO
+from pins import VOICES_REVISIONS as REVISIONS
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "src-tauri/src/dictation/speech/assets.rs"
 OUTPUT = ROOT / "src-tauri/src/dictation/speech/assets_voices.rs"
 
-VOICES_PER_LANGUAGE = 26
 
 
 def pinned_defaults() -> dict[str, tuple[str, str, int]]:
