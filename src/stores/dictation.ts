@@ -153,11 +153,7 @@ export const browserAudioOwner = `browser-${Math.random().toString(36).slice(2, 
  * holding the conversation must not make the desktop beep, nor the reverse.
  * No baseline, no sound: the first status a client reads is not news.
  */
-export function turnEarcon(
-	previous: HandsFreeStatus | null,
-	next: HandsFreeStatus,
-	owner: string,
-): Earcon | null {
+export function turnEarcon(previous: HandsFreeStatus | null, next: HandsFreeStatus, owner: string): Earcon | null {
 	if (!previous || !next.armed || next.owner !== owner) return null;
 	if (next.deliveredTurns > previous.deliveredTurns) return "delivered";
 	if (next.droppedTurns > previous.droppedTurns) return "dropped";

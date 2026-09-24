@@ -417,7 +417,8 @@ export const RemoteMachinesPanel: Component = () => {
 			<div class={s.group}>
 				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
 					<p class={s.hint} style={{ margin: 0 }}>
-						Connect to TUIC instances running on other machines. SSH connections create an encrypted tunnel automatically.
+						Connect to TUIC instances running on other machines. SSH connections create an encrypted tunnel
+						automatically.
 					</p>
 					<button
 						class={s.copyBtn}

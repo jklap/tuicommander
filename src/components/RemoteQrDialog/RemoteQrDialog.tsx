@@ -93,7 +93,9 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 				</div>
 				<div class={d.body}>
 					<Show when={serverEnabled() === false}>
-						<p class={s.warning}>Remote Access is off — enable it in Settings → Remote Access so the phone can connect.</p>
+						<p class={s.warning}>
+							Remote Access is off — enable it in Settings → Remote Access so the phone can connect.
+						</p>
 					</Show>
 
 					<div class={s.qrCard}>

@@ -571,7 +571,10 @@ export const GitHubTab: Component = () => {
 					hint="Exclude pull requests with failing CI checks from the Pull Requests list"
 				/>
 
-				<ExpertSetting configKey="repo_defaults.auto_delete_on_pr_close" value={repoDefaultsStore.state.autoDeleteOnPrClose}>
+				<ExpertSetting
+					configKey="repo_defaults.auto_delete_on_pr_close"
+					value={repoDefaultsStore.state.autoDeleteOnPrClose}
+				>
 					<SettingSelect
 						label="Auto-Delete on PR Close"
 						value={repoDefaultsStore.state.autoDeleteOnPrClose}
@@ -638,7 +641,10 @@ export const GitHubTab: Component = () => {
 					/>
 				</ExpertSetting>
 
-				<ExpertSetting configKey="repo_defaults.copy_untracked_files" value={repoDefaultsStore.state.copyUntrackedFiles}>
+				<ExpertSetting
+					configKey="repo_defaults.copy_untracked_files"
+					value={repoDefaultsStore.state.copyUntrackedFiles}
+				>
 					<SettingToggle
 						checked={repoDefaultsStore.state.copyUntrackedFiles}
 						onChange={(v) => repoDefaultsStore.setCopyUntrackedFiles(v)}
@@ -761,7 +767,10 @@ export const GitHubTab: Component = () => {
 					/>
 				</ExpertSetting>
 
-				<ExpertSetting configKey="repo_defaults.auto_fetch_interval_minutes" value={repoDefaultsStore.state.autoFetchIntervalMinutes}>
+				<ExpertSetting
+					configKey="repo_defaults.auto_fetch_interval_minutes"
+					value={repoDefaultsStore.state.autoFetchIntervalMinutes}
+				>
 					<SettingSelect
 						label="Auto-Fetch Interval"
 						value={String(repoDefaultsStore.state.autoFetchIntervalMinutes)}
