@@ -121,7 +121,6 @@ export interface AppInitDeps {
 	};
 	setQuitDialogVisible: (visible: boolean) => void;
 	setStatusInfo: (msg: string) => void;
-	setCurrentRepoPath: (path: string | undefined) => void;
 	setCurrentBranch: (branch: string | null) => void;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
 	refreshAllBranchStats: (scopeRepoPath?: string) => Promise<void> | void;
@@ -653,7 +652,6 @@ export async function initApp(deps: AppInitDeps) {
 				if (focus !== false && repoPath && repoPath !== activeRepoPath) {
 					const repo = repositoriesStore.get(repoPath);
 					repositoriesStore.setActive(repoPath);
-					deps.setCurrentRepoPath(repoPath);
 					deps.setCurrentBranch(repo?.activeWorkspaceId ?? null);
 				}
 
@@ -909,7 +907,6 @@ export async function initApp(deps: AppInitDeps) {
 		const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
 		const firstRepo = repositoriesStore.get(firstPath);
 		repositoriesStore.setActive(firstPath);
-		deps.setCurrentRepoPath(firstPath);
 		if (firstRepo?.activeWorkspaceId) {
 			deps.setCurrentBranch(firstRepo.activeWorkspaceId);
 			if (survivingSessions.length > 0) {

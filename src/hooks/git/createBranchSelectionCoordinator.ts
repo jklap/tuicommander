@@ -20,7 +20,6 @@ interface BranchSelectionCoordinatorDeps {
 	};
 	setStatusInfo: (message: string) => void;
 	getDefaultFontSize: () => number;
-	setCurrentRepoPath: Setter<string | undefined>;
 	setCurrentBranch: Setter<string | null>;
 }
 
@@ -79,7 +78,6 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			if (needsSwitch) {
 				repositoriesStore.setActive(repoPath);
 				repositoriesStore.setActiveWorkspace(repoPath, workspaceId);
-				deps.setCurrentRepoPath(repoPath);
 				deps.setCurrentBranch(branchName);
 			}
 			// The owner of record, not just the display index. This path is handed the
@@ -158,7 +156,6 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			// see a consistent snapshot — prevents stale intermediate states where
 			// repoPath updated but fsRoot still points to the old worktree.
 			batch(() => {
-				deps.setCurrentRepoPath(repoPath);
 				repositoriesStore.setActive(repoPath);
 				repositoriesStore.setActiveWorkspace(repoPath, workspaceId);
 				// Displayed and fed to git, so it is the branch this workspace has

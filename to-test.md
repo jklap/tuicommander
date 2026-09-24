@@ -12,6 +12,10 @@
 
 - [ ] [VISUAL] On a phone-width PWA session with Claude output produced in a wider desktop terminal, read a long paragraph: words flow across the phone width without a short orphan line at the desktop row boundary. Lists and box-drawing tables keep their own rows and alignment.
 
+## Side panels follow an agent click to another repo (2026-09-24) — frontend, HMR
+
+- [ ] Open the Notes, Git and Files panels on repo A. In the sidebar, click an agent row under repo B. All three panels now show repo B, as they do after a click on B's branch row.
+
 ## No duplicated agent rows after a WebView reload (2026-09-24) — frontend via HMR
 
 - [ ] Open an agent tab that shows the Context bar. Reload the WebView (`POST localhost:9876/debug/reload_webview`). Scroll up: the last reply must appear once. Before the fix, each reload added 1–2 copies of its top rows.

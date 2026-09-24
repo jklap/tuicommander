@@ -220,6 +220,22 @@ describe("useGitOperations", () => {
 			expect(gitOps.currentBranch()).toBe("main");
 		});
 
+		it("follows a repo switch made outside handleBranchSelect", async () => {
+			// Clicking an agent row in the sidebar goes through navigateToTerminal,
+			// which only calls repositoriesStore.setActive. The side panels read
+			// currentRepoPath, so it must follow the store, or Notes, Git and Files
+			// keep showing the previous repo.
+			repositoriesStore.add({ path: "/a", displayName: "A" });
+			repositoriesStore.setWorkspace("/a", "main", { worktreePath: "/a" });
+			repositoriesStore.add({ path: "/b", displayName: "B" });
+			repositoriesStore.setWorkspace("/b", "main", { worktreePath: "/b" });
+			await gitOps.handleBranchSelect("/a", "main");
+
+			repositoriesStore.setActive("/b");
+
+			expect(gitOps.currentRepoPath()).toBe("/b");
+		});
+
 		it("serializes 3+ concurrent selects (no overlapping inner runs)", async () => {
 			// Regression: the old single-in-flight-promise guard let 3+ concurrent
 			// callers all wake from the SAME promise and run handleBranchSelectInner
@@ -644,7 +660,6 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/repo", displayName: "My Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setActive("/repo");
-			gitOps.setCurrentRepoPath("/repo");
 
 			await gitOps.handleRemoveRepo("/repo");
 
@@ -2038,7 +2053,6 @@ describe("useGitOperations", () => {
 			const id2 = terminalsStore.add(makeTerminal({ name: "T2" }));
 			repositoriesStore.addTerminalToWorkspace("/repo", "main", id1);
 			repositoriesStore.addTerminalToWorkspace("/repo", "main", id2);
-			gitOps.setCurrentRepoPath("/repo");
 
 			await gitOps.handleRemoveRepo("/repo");
 
@@ -2560,7 +2574,6 @@ describe("useGitOperations", () => {
 
 			gitOps.handleRepoSettings("/repo", openSettingsPanel);
 
-			expect(gitOps.currentRepoPath()).toBe("/repo");
 			expect(openSettingsPanel).toHaveBeenCalledWith({
 				kind: "repo",
 				repoPath: "/repo",

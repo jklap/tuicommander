@@ -38,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Side panels follow an agent click to another repository** — A click on an agent row under another repository in the sidebar now moves the Notes, Git and Files panels to that repository, as a click on its branch row does.
 - **No duplicated agent rows after a WebView reload** — A surviving agent tab is re-adopted with the intent and prompt the backend holds, so its Context bar is there before the terminal measures. Before, the bar appeared later, the pane shrank, and Claude's repaint for the transient taller height was pushed into scrollback a second time.
 - Mobile terminal output rejoins agent prose wrapped at the desktop PTY width before wrapping it for the phone, while preserving lists and tables.
 - **Progress records worktree terminals** — An `intent:` from a terminal running in a managed worktree outside the repository root was dropped because the directory matched no registered repository. It now resolves to its workspace and is recorded against the parent project.

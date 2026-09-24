@@ -166,7 +166,9 @@ export type { AgentSeed } from "./git/agentSeed";
 export { buildAgentSeed, resolveAutofixAgent } from "./git/agentSeed";
 /** Git and repository operations extracted from App.tsx */
 export function useGitOperations(deps: GitOperationsDeps) {
-	const [currentRepoPath, setCurrentRepoPath] = createSignal<string | undefined>(undefined);
+	// Derived, never stored: a second copy of the active repo drifts whenever a
+	// caller switches repos through repositoriesStore alone (navigateToTerminal).
+	const currentRepoPath = () => repositoriesStore.state.activeRepoPath ?? undefined;
 	const [currentBranch, setCurrentBranch] = createSignal<string | null>(null);
 	const [repoStatus, setRepoStatus] = createSignal<"clean" | "dirty" | "conflict" | "merge" | "unknown">("unknown");
 	const [branchToRename, setBranchToRename] = createSignal<{ repoPath: string; branchName: string } | null>(null);
@@ -214,7 +216,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			pty: deps.pty,
 			setStatusInfo: deps.setStatusInfo,
 			getDefaultFontSize: deps.getDefaultFontSize,
-			setCurrentRepoPath,
 			setCurrentBranch,
 		});
 
@@ -252,13 +253,11 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			appLogger.warn("app", `RepoWatcher failed to stop for ${repoPath}`, err),
 		);
 
+		const wasActive = currentRepoPath() === repoPath;
 		repositoriesStore.remove(repoPath);
 		repoSettingsStore.remove(repoPath);
 
-		if (currentRepoPath() === repoPath) {
-			setCurrentRepoPath(undefined);
-			setCurrentBranch(null);
-		}
+		if (wasActive) setCurrentBranch(null);
 
 		deps.setStatusInfo(`Removed ${repoState.displayName}`);
 
@@ -376,7 +375,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			}
 
 			repositoriesStore.setActive(info.path);
-			setCurrentRepoPath(info.path);
 			setCurrentBranch(info.branch || (!info.is_git_repo ? "shell" : ""));
 			setRepoStatus(info.status === "not-git" ? "unknown" : info.status);
 
@@ -617,7 +615,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		repoPath: string,
 		openSettingsPanel: (context: { kind: "repo"; repoPath: string }) => void,
 	) => {
-		setCurrentRepoPath(repoPath);
 		openSettingsPanel({ kind: "repo", repoPath });
 	};
 
@@ -764,13 +761,11 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		createTerminalWorktreeCoordinator({
 			refreshBranches: refreshAllBranchStats,
 			setCurrentBranch,
-			setCurrentRepoPath,
 			writePty: deps.pty.write,
 		});
 
 	return {
 		currentRepoPath,
-		setCurrentRepoPath,
 		currentBranch,
 		setCurrentBranch,
 		repoStatus,
