@@ -191,7 +191,7 @@ describe("SettingsPanel", () => {
 	it("switching nav items shows correct content", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 
-		// Default is General (Terminal/Power Management moved to the Terminal tab)
+		// Default is General (terminal fields moved to the Terminal tab)
 		const headings = container.querySelectorAll(".section h3");
 		expect(headings.length).toBeGreaterThanOrEqual(3);
 		// Use childNodes[0] to get heading text without tooltip content

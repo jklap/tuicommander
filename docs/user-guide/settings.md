@@ -60,6 +60,9 @@ command), all expert settings stay visible.
 | **Show agent context bar** | Show the model's current intent, its orchestrator-assigned task, and the last prompt sent to an agent. |
 | **Confirm before quitting** | Show dialog when closing app with active terminals |
 | **Confirm before closing a tab** | Ask before closing terminal tab |
+| **Prevent sleep when busy** | Keep the machine awake while agents are working (**Power Management** section) |
+| **Auto-Standby Timeout** | Pause idle background sessions after this duration to save resources. Default 5 min; `0` disables it. |
+| **Content Indexing** | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
 | **Automatically check for updates** | Check for new versions on startup |
 | **Update Channel** | Choose which release channel to receive updates from |
 | **Experimental Features** | One toggle, no sub-toggles. It opts in to the **AI Chat** panel (ego over ACP, #785-58ca) and **SSH Tunnels**. It also shows the **AI Chat** settings page. The AI Chat, AI Triage and AI Watchers sub-toggles went with the embedded AI engine (#784-0aec). |
@@ -127,9 +130,6 @@ playback also uses the selected output device.
 | **Block folding** | On | Let the Toggle Block Fold shortcut (Cmd/Ctrl+Shift+.) and its command-palette entry collapse a command block's output. Blocks already folded stay collapsed when this is off. |
 | **Show scrollbar marks** | On | Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began. Covers the **history** markers only — the blue/red block ticks and the green user-prompt ticks. Orange search-match ticks are not affected: they are the result of a search you just ran, not a display preference. |
 | **Reflow scrollback on resize** | On | Re-wrap scrollback history when the terminal changes width, so output written at the old width stays readable after a side panel opens or closes. Turn it off to leave history lines as they were written and truncate them to the new width instead. The visible screen is never reflowed either way — cursor-addressed TUIs redraw themselves. A change applies to sessions already open. |
-| **Prevent sleep when busy** | — | Keep machine awake while agents are working (**Power Management** section) |
-| **Auto-Standby Timeout** | 5 min | Pause idle background sessions after this duration to save resources. `0` disables it. |
-| **Content Indexing** | — | When to build search indexes: Disabled, Active repo only, Active + on switch, or All repos at boot |
 
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control in
 Settings. Set `bell_style` in `config.json` (see [Terminal Bell](terminals.md#terminal-bell)).

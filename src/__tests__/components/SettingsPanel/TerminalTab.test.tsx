@@ -59,7 +59,7 @@ describe("TerminalTab placement", () => {
 		vi.useRealTimers();
 	});
 
-	it("renders Shell, the terminal theme/font/cursor fields and the Power Management section", async () => {
+	it("renders Shell and the terminal theme/font/cursor fields, not Power Management", async () => {
 		await settingsStore.hydrate();
 		const { container } = render(() => <TerminalTab />);
 
@@ -67,16 +67,16 @@ describe("TerminalTab placement", () => {
 		expect(labelExists(container, "Terminal Theme")).toBe(true);
 		expect(labelExists(container, "Terminal Font")).toBe(true);
 		expect(labelExists(container, "Cursor Style")).toBe(true);
-		expect(headingExists(container, "Power Management")).toBe(true);
+		expect(headingExists(container, "Power Management")).toBe(false);
 	});
 
-	it("does not render Shell or the Power Management section on GeneralTab", async () => {
+	it("renders Power Management but not Shell on GeneralTab", async () => {
 		await settingsStore.hydrate();
 		const { container } = render(() => <GeneralTab />);
 
 		expect(labelExists(container, "Shell")).toBe(false);
 		expect(headingExists(container, "Terminal")).toBe(false);
-		expect(headingExists(container, "Power Management")).toBe(false);
+		expect(headingExists(container, "Power Management")).toBe(true);
 	});
 
 	it("does not render the terminal theme/font/cursor fields on AppearanceTab", async () => {
