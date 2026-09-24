@@ -21,6 +21,8 @@ vi.mock("../../../stores/ui", async () => {
 	};
 });
 
+import { scrollToSetting } from "../../../components/SettingsPanel/SettingsSearch";
+import { SETTINGS_SEARCH_INDEX } from "../../../components/SettingsPanel/settingsSearchIndex";
 import { LocalMcpPanel } from "../../../components/SettingsPanel/tabs/services/LocalMcpPanel";
 import { settingsExpertStore } from "../../../stores/settingsExpert";
 import { uiStore } from "../../../stores/ui";
@@ -151,6 +153,24 @@ describe("LocalMcpPanel", () => {
 			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
 			expect(collapseTools(view)).not.toBeNull();
 			expect(nativeToolToggles(view)).not.toBeNull();
+			view.unmount();
+		});
+
+		// A search result for either control must land on the control itself,
+		// not fall back to the section heading.
+		it("scrolls to each indexed MCP expert control, not just its section", async () => {
+			uiStore.setSettingsExpertMode(true);
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			const entries = SETTINGS_SEARCH_INDEX.filter((entry) => entry.tab === "mcp" && entry.expert);
+			expect(entries.map((entry) => entry.configKey)).toEqual(["app.collapse_tools", "app.disabled_native_tools"]);
+			for (const entry of entries) {
+				const scrolled: Element[] = [];
+				for (const el of view.container.querySelectorAll("h3, label, span")) {
+					(el as HTMLElement).scrollIntoView = () => scrolled.push(el);
+				}
+				expect(scrollToSetting(view.container, entry.section, entry.label)).toBe(true);
+				expect(scrolled.map((el) => el.textContent?.trim())).toEqual([entry.label]);
+			}
 			view.unmount();
 		});
 	});
