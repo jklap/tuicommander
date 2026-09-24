@@ -502,6 +502,22 @@ describe("Sidebar", () => {
 				expect(onAddTerminal).not.toHaveBeenCalled();
 			});
 
+			it("a right click during a pending left press still opens the branch row menu", () => {
+				// A mouse right click is button 2; a touch long press's contextmenu is not (#882-e5a7).
+				const onAddTerminal = vi.fn();
+				const { container } = render(() => (
+					<Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems: agentItems(() => {}) })} />
+				));
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0 });
+				vi.advanceTimersByTime(200);
+				fireEvent.contextMenu(addBtn, { button: 2 });
+				vi.advanceTimersByTime(1000);
+
+				expect(menuLabels(container)).toContain("Add Terminal");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+			});
+
 			it("a touch long press whose native contextmenu beats the timer opens the agent list", () => {
 				const onAddTerminal = vi.fn();
 				const { container } = render(() => (
