@@ -227,7 +227,9 @@ export function OutputView(props: OutputViewProps) {
 		containerEl?.removeEventListener("touchend", handleTouchEnd);
 	});
 
-	const allLines = createMemo(() => [...logLines(), ...screenRows()]);
+	// Reflow before filtering: it joins rows by their adjacency on the source
+	// terminal, which a search filter no longer preserves.
+	const allLines = createMemo(() => reflowDisplayLines([...logLines(), ...screenRows()]));
 
 	const displayedLines = createMemo(() => {
 		const q = props.searchQuery;
@@ -236,7 +238,7 @@ export function OutputView(props: OutputViewProps) {
 		return allLines().filter((line) => lineMatchesNeedle(line, needle));
 	});
 
-	const lineBlocks = createMemo(() => groupLineBlocks(reflowDisplayLines(displayedLines())));
+	const lineBlocks = createMemo(() => groupLineBlocks(displayedLines()));
 
 	return (
 		<div ref={containerEl} class={styles.output}>
