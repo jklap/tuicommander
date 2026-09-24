@@ -2,7 +2,7 @@
 
 > **Historical.** This measurement was taken against the first Progress design —
 > four event kinds, workstreams, pause/resume and `repo`'s nine `progress_*`
-> actions. The 2026-09-14 revision of `plans/project-progress.md` replaced all of
+> actions. The 2026-09-14 revision of `plans/archive/project-progress.md` replaced all of
 > that with one append-only journal, so the conditions below no longer describe
 > any shipped surface. The finding that survived the rewrite and shaped it is the
 > one about *where* the instruction lives: a tool description says what a tool
