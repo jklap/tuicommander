@@ -451,25 +451,23 @@ export const RemoteAccessPanel: Component = () => {
 						<>
 							<h3>Tailscale HTTPS</h3>
 							<div class={s.group}>
-								<div class={s.row}>
-									<span class={s.label}>{t("services.label.tailscaleStatus", "Status")}</span>
-									<span class={s.value}>
-										{statusText}
-										<button
-											class={s.inlineBtn}
-											onClick={async () => {
-												try {
-													const updated = await rpc<TailscaleStatus>("recheck_tailscale_status");
-													setTailscaleState(updated);
-												} catch (e) {
-													appLogger.error("tailscale", "Recheck failed", e);
-												}
-											}}
-											title={t("services.action.recheckTailscale", "Recheck Tailscale status")}
-										>
-											{t("services.action.recheck", "Recheck")}
-										</button>
-									</span>
+								<label>{t("services.label.tailscaleStatus", "Status")}</label>
+								<div class={s.mcpStatusRow}>
+									<span class={s.mcpStatusText}>{statusText}</span>
+									<button
+										class={s.testBtn}
+										onClick={async () => {
+											try {
+												const updated = await rpc<TailscaleStatus>("recheck_tailscale_status");
+												setTailscaleState(updated);
+											} catch (e) {
+												appLogger.error("tailscale", "Recheck failed", e);
+											}
+										}}
+										title={t("services.action.recheckTailscale", "Recheck Tailscale status")}
+									>
+										{t("services.action.recheck", "Recheck")}
+									</button>
 								</div>
 								<Show when={showHint}>
 									<p class={s.hint}>
