@@ -1,8 +1,9 @@
-import { type Component, Show } from "solid-js";
+import { type Component, lazy, Show } from "solid-js";
 import { diffTabsStore } from "../stores/diffTabs";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
+import { storiesUi } from "../stores/storiesUi";
 import { uiStore } from "../stores/ui";
 import {
 	canQueueToActiveTerminal,
@@ -17,6 +18,8 @@ import { MarkdownPanel } from "./MarkdownPanel";
 import { OutlinePanel } from "./OutlinePanel";
 import { ProgressDialog } from "./ProgressDialog";
 import { ReferencesPanel } from "./ReferencesPanel";
+
+const StoriesDialog = lazy(() => import("./StoriesDialog/StoriesDialog").then((module) => ({ default: module.StoriesDialog })));
 
 export interface PanelOrchestratorProps {
 	repoPath: string | null;
@@ -87,6 +90,11 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 
 			<Show when={progressStore.dialogVisible()}>
 				<ProgressDialog />
+			</Show>
+			<Show when={storiesUi.visible()}>
+				<Show when={storiesUi.project()} keyed>
+					{(project) => <StoriesDialog project={project} onClose={() => storiesUi.close()} />}
+				</Show>
 			</Show>
 		</>
 	);

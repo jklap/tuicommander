@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Plans and Stories",
+		description: "Open Plans and Stories from the project toolbar to create plans, track criteria, and review work.",
+		shortcut: null,
+	},
+	{
 		feature: "Command Palette",
 		description: "Search and run any action by name — shortcuts, settings, panels, everything.",
 		shortcut: `${mod}+P`,

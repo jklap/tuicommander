@@ -33,8 +33,9 @@
 | Project history | [Project Progress](user-guide/project-progress.md) |
 | Native plans and stories | [Native plans and stories](user-guide/native-stories.md) |
 
-Native plans and stories are available through `tuic story`, the `story` MCP tool, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. The visual workflow mode is under development; story and workflow import/export are outside this release.
+ Native plans and stories are available through `tuic story`, the `story` MCP tool, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. Story import/export is outside this release.
 
+ The Plans and Stories dialog provides a manual project view on desktop and in the browser: create plans and stories, inspect criteria and dependencies, start work without a terminal, check criteria, submit reviews, and approve or block outcomes.
 ---
 
 ## 1. Terminal Management

@@ -11,6 +11,7 @@ import { pluginStore } from "../../stores/pluginStore";
 import type { PrNotification } from "../../stores/prNotifications";
 import { type PrNotificationType, prNotificationsStore } from "../../stores/prNotifications";
 import { progressStore } from "../../stores/progress";
+import { storiesUi } from "../../stores/storiesUi";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
@@ -445,6 +446,13 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 			</div>
 
 			<div class={s.right}>
+				<Show when={props.repoPath}>
+					<button type="button" class={s.bell} title="Plans and Stories" aria-label="Plans and Stories" onClick={() => storiesUi.open(props.repoPath)}>
+						<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true">
+							<path d="M2 2h9a2 2 0 0 1 2 2v10H4a2 2 0 0 1-2-2V2Zm2 2v8h7V4H4Zm1 2h5v1H5V6Zm0 3h5v1H5V9Zm8-5h1v10h-1V4Z" />
+						</svg>
+					</button>
+				</Show>
 				{/* Notification group: smart prompts + last-item pill + bell.
 				    The pill is a preview of the bell's newest notification, so the two
 				    stay adjacent. */}

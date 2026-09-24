@@ -90,6 +90,7 @@ pub struct Story {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
+    StartManual,
     CheckCriterion(usize),
     UncheckCriterion(usize),
     SubmitReview,
