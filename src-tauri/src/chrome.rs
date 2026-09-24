@@ -364,7 +364,18 @@ pub fn find_empty_input_box_cutoff(rows: &[&str]) -> Option<usize> {
         .iter()
         .rposition(|r| !r.trim().is_empty())
         .map_or(0, |i| i + 1);
-    lowest_input_box_row(rows, content_end).map(|anchor| extend_cutoff_upward(rows, anchor))
+    // An empty prompt counts only inside the input box frame: the nearest
+    // non-blank row above it is a separator. A blockquote's blank line is a
+    // bare `>` too, and anchoring on it cut a draft or dialog below (#867-c877).
+    let anchor = (0..content_end).rev().find(|&i| {
+        is_agent_prompt_row(rows[i])
+            && rows[..i]
+                .iter()
+                .rev()
+                .find(|r| !r.trim().is_empty())
+                .is_some_and(|r| is_separator_line(r.trim()))
+    })?;
+    Some(extend_cutoff_upward(rows, anchor))
 }
 
 /// Find the row index where agent chrome starts in a batch of lines that
@@ -506,6 +517,30 @@ mod tests {
         let mut rows = screen_with_status_line(4);
         let prompt = rows.iter().position(|r| r == "❯ ").unwrap();
         rows[prompt] = "❯ fix the rename test".to_string();
+        assert_eq!(empty_box_cutoff_of(&rows), None);
+    }
+
+    /// A blank line inside a markdown blockquote renders as a bare `>`. Above a
+    /// draft it must not become the anchor, or the draft is cut (#867-c877).
+    #[test]
+    fn empty_input_box_cutoff_ignores_a_blockquote_blank_line_above_a_draft() {
+        let mut rows = screen_with_status_line(4);
+        let prompt = rows.iter().position(|r| r == "❯ ").unwrap();
+        rows[prompt] = "❯ fix the rename test".to_string();
+        rows.splice(0..0, ["  > quoted line".to_string(), "  >".to_string(), "  > more".to_string()]);
+        assert_eq!(empty_box_cutoff_of(&rows), None);
+    }
+
+    /// The same bare `>` above an open dialog must not cut the dialog (#867-c877).
+    #[test]
+    fn empty_input_box_cutoff_ignores_a_blockquote_blank_line_above_a_dialog() {
+        let rows: Vec<String> = [
+            "  > quoted line", "  >", "  > more", "─".repeat(120).as_str(), " Bash command",
+            " Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel · Tab to amend",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         assert_eq!(empty_box_cutoff_of(&rows), None);
     }
 
