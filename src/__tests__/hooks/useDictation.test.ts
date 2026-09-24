@@ -153,7 +153,7 @@ describe("useDictation", () => {
 
 			await dictation.handleDictationStart();
 
-			expect(mockSetStatusInfo).toHaveBeenCalledWith("Dictation: model not downloaded — open Settings > Dictation");
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Dictation: model not downloaded — open Settings > Voice");
 			expect(mockOpenSettings).toHaveBeenCalledWith("dictation");
 			expect(mockDictationStore.startRecording).not.toHaveBeenCalled();
 		});

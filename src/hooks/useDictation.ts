@@ -86,7 +86,7 @@ export function useDictation(deps: DictationDeps) {
 			}
 
 			if (deps.dictation.state.modelStatus === "not_downloaded") {
-				deps.setStatusInfo("Dictation: model not downloaded — open Settings > Dictation");
+				deps.setStatusInfo("Dictation: model not downloaded — open Settings > Voice");
 				deps.openSettings("dictation");
 				return false;
 			}

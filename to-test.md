@@ -3623,3 +3623,12 @@ or credential is touched.
       yet) and confirm `settings_expert_mode` round-trips through
       `~/Library/Application Support/tuicommander/config.json` (or platform
       equivalent) and survives a full `make dev` restart.
+
+## Error messages name the reorganized Settings pages (story `861-977b`, 2026-09-24) — **Rust, needs a `make dev` restart**
+
+- [ ] With a configured microphone unplugged, starting dictation reports
+      "check Settings > Voice > Input device" (was "Settings > Dictation >
+      Microphone"; neither the page nor the label exists any more).
+- [ ] With progress collection off for an agent, the `progress` MCP tool
+      answers `progress_tracking_disabled … (Settings → Agents)`. The toggle
+      lives on the Agents page; "Settings → Progress" never existed.

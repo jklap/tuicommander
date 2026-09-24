@@ -338,7 +338,7 @@ interface DictationStoreState {
 	 *
 	 * Tuning the two thresholds is guesswork without it: a gate that rejects
 	 * speech and a microphone that captured nothing look identical from the
-	 * outside. Settings > Dictation renders this verbatim.
+	 * outside. Settings > Voice renders this verbatim.
 	 */
 	lastSkipReason: string | null;
 }

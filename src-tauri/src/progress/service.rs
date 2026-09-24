@@ -35,7 +35,7 @@ pub(crate) fn progress_tracking_enabled_in(
 /// The error a caller gets when it reports while collection is off. It names
 /// the setting, because the agent cannot change it and the user can.
 pub(crate) const TRACKING_DISABLED: &str =
-    "progress_tracking_disabled: Progress collection is off for this agent (Settings → Progress)";
+    "progress_tracking_disabled: Progress collection is off for this agent (Settings → Agents)";
 
 /// The one write path. Both halves of the journal — what an agent reports and
 /// what TUIC observes — pass the same gate, the same validation and the same
