@@ -29,6 +29,7 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { timeSync } from "../../utils/perfTrace";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
+import { createAgentLaunchMenu } from "../ContextMenu/createAgentLaunchMenu";
 import { remoteUrlToGitHub } from "../GitPanel/BranchesTab";
 import { PromptDialog } from "../PromptDialog";
 import b from "../shared/branch.module.css";
@@ -325,6 +326,8 @@ export const BranchItem: Component<{
 	 *  directory leaf — the one thing that differs. */
 }> = (props) => {
 	const ctxMenu = createContextMenu();
+	// Shell rows have no agents: the list stays empty, so right click falls through to the row menu.
+	const agentLaunchMenu = createAgentLaunchMenu(() => (props.branch.isShell ? [] : (props.agentMenuItems?.() ?? [])));
 
 	const branchLabel = createMemo(
 		() => repoSettingsStore.getEffectiveField(props.repoPath, "branchLabels")?.[props.branch.branchName],
@@ -710,8 +713,10 @@ export const BranchItem: Component<{
 						class={s.branchAddBtn}
 						onClick={(e) => {
 							e.stopPropagation();
+							if (agentLaunchMenu.consumeClick()) return;
 							props.onAddTerminal();
 						}}
+						{...agentLaunchMenu.buttonHandlers}
 						title={t("sidebar.addTerminal", "Add terminal")}
 					>
 						+
@@ -755,6 +760,13 @@ export const BranchItem: Component<{
 					y={ctxMenu.position().y}
 					visible={ctxMenu.visible()}
 					onClose={ctxMenu.close}
+				/>
+				<ContextMenu
+					items={agentLaunchMenu.items()}
+					x={agentLaunchMenu.position().x}
+					y={agentLaunchMenu.position().y}
+					visible={agentLaunchMenu.visible()}
+					onClose={agentLaunchMenu.close}
 				/>
 			</div>
 		</Show>

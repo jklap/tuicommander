@@ -215,24 +215,61 @@ describe("TabBar", () => {
 			expect(onNewTab).toHaveBeenCalledTimes(1);
 		});
 
-		it("the native contextmenu of a touch long press does not also open the split menu", () => {
-			const { container } = renderWithAgents(
-				() => {},
-				() => [{ label: "Claude Code", action: () => {} }],
-			);
+		it("the native contextmenu of a touch long press does not open the list a second time", () => {
+			const getItems = vi.fn(() => [{ label: "Claude Code", action: () => {} }]);
+			const { container } = renderWithAgents(() => {}, getItems);
 			const btn = container.querySelector(".newBtn")!;
 			// Before the agent list opens: the press is still pending.
 			fireEvent.pointerDown(btn, { button: 0 });
 			const early = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
 			btn.dispatchEvent(early);
 			expect(early.defaultPrevented).toBe(true);
-			expect(menuLabels(container)).not.toContain("Split Vertically");
+			expect(getItems).not.toHaveBeenCalled();
 
 			// After it opened.
 			vi.advanceTimersByTime(500);
 			fireEvent.contextMenu(btn);
+			expect(getItems).toHaveBeenCalledTimes(1);
 			expect(menuLabels(container)).toContain("Claude Code");
-			expect(menuLabels(container)).not.toContain("Split Vertically");
+		});
+
+		it("a right click opens the agent list without opening a tab", () => {
+			const onNewTab = vi.fn();
+			const launchCodex = vi.fn();
+			const { container } = renderWithAgents(onNewTab, () => [
+				{ label: "Claude Code", action: () => {} },
+				{ label: "Codex", action: launchCodex },
+			]);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 2 });
+			const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+			btn.dispatchEvent(ev);
+			expect(ev.defaultPrevented).toBe(true);
+			vi.advanceTimersByTime(1000);
+
+			expect(onNewTab).not.toHaveBeenCalled();
+			const codex = Array.from(container.querySelectorAll(".menu .label")).find((l) => l.textContent === "Codex")!;
+			fireEvent.click(codex.closest(".item") ?? codex);
+			expect(launchCodex).toHaveBeenCalledTimes(1);
+		});
+
+		it("unwraps the single Add Agent submenu so the agents are the list", () => {
+			const { container } = renderWithAgents(
+				() => {},
+				() => [
+					{
+						label: "Add Agent",
+						action: () => {},
+						children: [
+							{ label: "Claude Code", action: () => {} },
+							{ label: "Codex", action: () => {} },
+						],
+					},
+				],
+			);
+			fireEvent.contextMenu(container.querySelector(".newBtn")!);
+			expect(menuLabels(container)).toEqual(expect.arrayContaining(["Claude Code", "Codex"]));
+			expect(menuLabels(container)).not.toContain("Add Agent");
 		});
 
 		it("with no agents available a long press falls back to opening a plain tab", () => {
@@ -246,38 +283,6 @@ describe("TabBar", () => {
 
 			expect(onNewTab).toHaveBeenCalledTimes(1);
 		});
-	});
-
-	it("right-clicking new tab button opens split context menu", () => {
-		const { container } = render(() => (
-			<TabBar
-				onTabSelect={() => {}}
-				onTabClose={() => {}}
-				onCloseOthers={() => {}}
-				onCloseToRight={() => {}}
-				onNewTab={() => {}}
-			/>
-		));
-		const btn = container.querySelector(".newBtn")!;
-		vi.spyOn(btn, "getBoundingClientRect").mockReturnValue({
-			left: 100,
-			bottom: 50,
-			top: 20,
-			right: 150,
-			width: 50,
-			height: 30,
-			x: 100,
-			y: 20,
-			toJSON: () => {},
-		} as DOMRect);
-		fireEvent.contextMenu(btn);
-		const menus = container.querySelectorAll(".menu");
-		expect(menus.length).toBeGreaterThan(0);
-		const labels = Array.from(menus[menus.length - 1].querySelectorAll(".label"));
-		const labelTexts = labels.map((l) => l.textContent);
-		expect(labelTexts).toContain("New Tab");
-		expect(labelTexts).toContain("Split Vertically");
-		expect(labelTexts).toContain("Split Horizontally");
 	});
 
 	it("new tab button has correct title", () => {
@@ -1486,84 +1491,6 @@ describe("TabBar", () => {
 			expect(addToast).toHaveBeenCalledWith("Design Mode", "Chrome opened on the host machine.", "info");
 			addToast.mockRestore();
 			tauri.mockRestore();
-		});
-	});
-
-	describe("new tab menu", () => {
-		it("disables split when no active terminal", () => {
-			// Clear all terminals so there's no activeId
-			for (const id of terminalsStore.getIds()) {
-				terminalsStore.remove(id);
-			}
-
-			const { container } = render(() => (
-				<TabBar
-					onTabSelect={() => {}}
-					onTabClose={() => {}}
-					onCloseOthers={() => {}}
-					onCloseToRight={() => {}}
-					onNewTab={() => {}}
-				/>
-			));
-			const btn = container.querySelector(".newBtn")!;
-			vi.spyOn(btn, "getBoundingClientRect").mockReturnValue({
-				left: 100,
-				bottom: 50,
-				top: 20,
-				right: 150,
-				width: 50,
-				height: 30,
-				x: 100,
-				y: 20,
-				toJSON: () => {},
-			} as DOMRect);
-			fireEvent.contextMenu(btn);
-			const menus = container.querySelectorAll(".menu");
-			const menu = menus[menus.length - 1];
-			const items = Array.from(menu.querySelectorAll(".item"));
-			const splitV = items.find((i) => i.textContent?.includes("Split Vertically"));
-			const splitH = items.find((i) => i.textContent?.includes("Split Horizontally"));
-			expect(splitV).toBeDefined();
-			expect(splitH).toBeDefined();
-			expect(splitV!.classList.contains("disabled")).toBe(true);
-			expect(splitH!.classList.contains("disabled")).toBe(true);
-		});
-
-		it("calls onSplitVertical when Split Vertically is clicked", () => {
-			const handleSplit = vi.fn();
-			const id = addTerminal({ name: "T1" });
-			terminalsStore.setActive(id);
-
-			const { container } = render(() => (
-				<TabBar
-					onTabSelect={() => {}}
-					onTabClose={() => {}}
-					onCloseOthers={() => {}}
-					onCloseToRight={() => {}}
-					onNewTab={() => {}}
-					onSplitVertical={handleSplit}
-				/>
-			));
-			const btn = container.querySelector(".newBtn")!;
-			vi.spyOn(btn, "getBoundingClientRect").mockReturnValue({
-				left: 100,
-				bottom: 50,
-				top: 20,
-				right: 150,
-				width: 50,
-				height: 30,
-				x: 100,
-				y: 20,
-				toJSON: () => {},
-			} as DOMRect);
-			fireEvent.contextMenu(btn);
-			const menus = container.querySelectorAll(".menu");
-			const menu = menus[menus.length - 1];
-			const splitBtn = Array.from(menu.querySelectorAll(".item")).find((i) =>
-				i.textContent?.includes("Split Vertically"),
-			);
-			fireEvent.click(splitBtn!);
-			expect(handleSplit).toHaveBeenCalledOnce();
 		});
 	});
 
