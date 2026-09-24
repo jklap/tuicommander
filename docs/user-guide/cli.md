@@ -100,7 +100,9 @@ tuic pause <id-or-name>
 tuic resume <id-or-name>
 ```
 
-Session targets accept full UUIDs, ID prefixes (the short ID `tuic ls` prints), exact names, or a name prefix — case-insensitive. An ambiguous target is rejected rather than guessed.
+Session targets are resolved by the server. Use the PTY ID, its stable
+`tuic_session`, or the terminal alias (for example `tu-33`); an ambiguous
+target is rejected rather than guessed.
 
 ### Sending keys
 
@@ -114,6 +116,8 @@ Key names: `Enter`, `Space`, `Tab`, `Escape`, `BSpace`, `Up`, `Down`, `Left`, `R
 # Spawn an AI agent (the prompt is required — the agent starts on it)
 tuic agent spawn claude "review the failing tests"
 tuic agent spawn codex "add a changelog entry" --repo /path/to/repo
+tuic agent spawn codex "review" --name reviewer --model gpt-5 --args exec --args --full-auto \
+  --cwd /path/to/repo --rows 40 --cols 120 --json
 
 # List running agents
 tuic agent ls
@@ -123,7 +127,29 @@ tuic agent send <peer-uuid> "fix the tests"
 
 # Type a prompt into an agent's TERMINAL and submit it (no peer routing)
 tuic agent type <id-or-name> "fix the tests"
+
+# Wait for mail or inspect peers without polling
+tuic agent wait --timeout-ms 60000 --json
+tuic agent inbox --json
+tuic agent list-peers --json
+tuic agent stats --json
+
+# Server-owned session state and output
+tuic session status <id-or-alias> --json
+tuic session wait <id-or-alias> --until idle --timeout-ms 60000 --json
+tuic session output <id-or-alias> --limit 50 --json
+
+# Server-owned worktree lifecycle
+tuic repo worktree-list /path/to/repo --json
+tuic repo worktree-create /path/to/repo --branch feature/task --spawn-session --json
+tuic repo worktree-remove /path/to/repo <workspace-id> --json
 ```
+
+The orchestration commands above call the same MCP tools as an agent. They use
+the local `mcp.sock` transport and send `$TUIC_SESSION` as `x-tuic-session`, so
+a child spawned from a managed terminal records that terminal as its parent.
+Use `--json` for the unmodified server payload. A server error is printed to
+stderr and makes `tuic` exit non-zero.
 
 ### Two delivery channels, chosen explicitly
 
