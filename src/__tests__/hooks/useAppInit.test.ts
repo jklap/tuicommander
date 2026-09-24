@@ -321,6 +321,36 @@ describe("initApp", () => {
 		expect(bySession("sess-plain")?.alias).toBeNull();
 	});
 
+	// The Context bar above an agent tab renders only once intent or prompt is
+	// known. Left to the later lifecycle sync, it appears after the terminal has
+	// measured, so the pane shrinks and the PTY sees a transient taller height:
+	// Claude repaints for it, and the shrink back pushes those rows into history
+	// a second time — duplicated scrollback after every WebView reload.
+	it("re-adopts a surviving session with the intent and prompt the backend holds", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{
+						session_id: "sess-context",
+						cwd: "/repo",
+						state: { agent_type: "claude", agent_intent: "Answering a question", last_prompt: "what is the role" },
+					},
+					{ session_id: "sess-bare", cwd: "/repo", state: { agent_type: "claude" } },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const bySession = (sid: string) => terminalsStore.get(terminalsStore.getTerminalForSession(sid)!);
+		expect(bySession("sess-context")).toMatchObject({
+			agentIntent: "Answering a question",
+			lastPrompt: "what is the role",
+		});
+		expect(bySession("sess-bare")).toMatchObject({ agentIntent: null, lastPrompt: null });
+	});
+
 	it("re-adopts a remote spawn name as an intent-replaceable base title", async () => {
 		let activeSessions = [
 			{

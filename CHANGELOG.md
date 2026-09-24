@@ -38,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **No duplicated agent rows after a WebView reload** — A surviving agent tab is re-adopted with the intent and prompt the backend holds, so its Context bar is there before the terminal measures. Before, the bar appeared later, the pane shrank, and Claude's repaint for the transient taller height was pushed into scrollback a second time.
 - Mobile terminal output rejoins agent prose wrapped at the desktop PTY width before wrapping it for the phone, while preserving lists and tables.
 - **Progress records worktree terminals** — An `intent:` from a terminal running in a managed worktree outside the repository root was dropped because the directory matched no registered repository. It now resolves to its workspace and is recorded against the parent project.
 - **Multi-line teammate prompts join their spawn** — A teammate subagent was matched to its spawn by comparing the prompt with the raw JSON line, where every newline is escaped, so any multi-line prompt never matched.

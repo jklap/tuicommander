@@ -111,6 +111,8 @@ export interface AppInitDeps {
 					awaiting_input?: boolean;
 					question_confident?: boolean;
 					agent_type?: string | null;
+					agent_intent?: string | null;
+					last_prompt?: string | null;
 					background_work?: boolean;
 				} | null;
 			}>
@@ -838,6 +840,11 @@ export async function initApp(deps: AppInitDeps) {
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
+				// The Context bar mounts once intent or prompt is known. Waiting for the
+				// lifecycle sync shows it after the terminal has measured, and the
+				// transient taller PTY height duplicates the agent's rows in history.
+				...(session.state?.agent_intent ? { agentIntent: session.state.agent_intent } : {}),
+				...(session.state?.last_prompt ? { lastPrompt: session.state.last_prompt } : {}),
 				ptyDescription: session.pty_description ?? null,
 				...(session.alias ? { alias: session.alias } : {}),
 				agentState: session.state?.agent_state ?? null,
