@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# install-hooks.sh — symlink the tracked hooks in scripts/hooks/ into .git/hooks/.
-# Idempotent; safe to run repeatedly (e.g. from `make dev`). Never clobbers a
-# real (non-symlink) hook — those belong to other tooling (e.g. the HUD plugin's
-# post-commit) and are left untouched with a warning.
+# install-hooks.sh — install dispatchers in the shared Git hooks directory.
+# Each dispatcher runs the hook from the checkout invoking Git. A linked
+# worktree must not redirect hooks for every other worktree during `make dev`.
+# Preserve real hooks owned by other tooling (e.g. HUD's post-commit).
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -13,18 +13,30 @@ mkdir -p "$git_hooks"
 
 for src in "$src_dir"/*; do
   name="$(basename "$src")"
-  [ "$name" = "install-hooks.sh" ] && continue
+  case "$name" in install-hooks.sh | test-*) continue ;; esac
   [ -f "$src" ] || continue
 
   dest="$git_hooks/$name"
 
-  if [ -L "$dest" ]; then
-    ln -sf "$src" "$dest"
-    echo "hooks: linked $name"
-  elif [ -e "$dest" ]; then
+  if [ -e "$dest" ] && [ ! -L "$dest" ] &&
+     ! head -n 2 "$dest" | grep -Fqx '# tuic-managed-hook'; then
     echo "hooks: SKIP $name — real file already at $dest (remove it to enable)" >&2
-  else
-    ln -s "$src" "$dest"
-    echo "hooks: linked $name"
+    continue
   fi
+
+  temp="$(mktemp "$git_hooks/.${name}.XXXXXX")"
+  cat > "$temp" <<'HOOK'
+#!/bin/sh
+# tuic-managed-hook
+repo_root="$(git rev-parse --show-toplevel)" || exit 1
+hook="$repo_root/scripts/hooks/$(basename "$0")"
+if [ ! -x "$hook" ]; then
+  echo "hooks: missing executable $hook" >&2
+  exit 1
+fi
+exec "$hook" "$@"
+HOOK
+  chmod +x "$temp"
+  mv -f "$temp" "$dest"
+  echo "hooks: installed $name"
 done
