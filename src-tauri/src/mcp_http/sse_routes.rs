@@ -290,6 +290,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
+        AppEvent::SessionRenamed { .. } => "session-renamed",
         AppEvent::TermAliasAssigned { .. } => "term-alias-assigned",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
@@ -402,6 +403,13 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             description,
         } => {
             serde_json::json!({ "session_id": session_id, "description": description })
+        }
+        AppEvent::SessionRenamed {
+            session_id,
+            name,
+            is_custom,
+        } => {
+            serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom })
         }
         AppEvent::TermAliasAssigned { session_id, alias } => {
             serde_json::json!({ "session_id": session_id, "alias": alias })

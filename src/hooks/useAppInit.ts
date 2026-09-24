@@ -594,6 +594,13 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.setPtyDescription(termId, event.payload.description ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register pty-description listener", err));
 
+	// An MCP rename starts in the backend; the IPC echo that update() sends
+	// back does not emit, so this cannot loop.
+	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
+		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
+		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
+	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
+
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
 		// A mirrored alias names a session on another machine: no tab here ever
 		// binds it, so retaining it would only grow the pending-alias map.

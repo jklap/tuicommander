@@ -839,6 +839,24 @@ describe("initApp", () => {
 			return () => cb;
 		}
 
+		// An MCP rename starts in the backend, so only this push can tell the tab
+		// bar and sidebar about it (#869-e5da).
+		it("applies a session-renamed event to the bound terminal", async () => {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; name: string; is_custom: boolean } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-renamed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			await initApp(createMockDeps());
+			const id = terminalsStore.add(makeTerminal({ name: "Old name" }));
+			terminalsStore.setSessionId(id, "sess-renamed");
+
+			cb!({ payload: { session_id: "sess-renamed", name: "Foo", is_custom: true } });
+
+			expect(terminalsStore.get(id)).toMatchObject({ name: "Foo", nameIsCustom: true });
+		});
+
 		it("retains an alias event that arrives before the session is bound to a terminal", async () => {
 			const getCb = captureAliasAssigned();
 			const deps = createMockDeps();
