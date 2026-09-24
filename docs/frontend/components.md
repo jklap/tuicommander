@@ -51,7 +51,7 @@ App.tsx (central orchestrator)
 ├── SettingsPanel/            # Settings overlay; nav grouped by task (GLOBAL_TAB_GROUPS)
 │   ├── ExpertSetting         # ExpertSetting / ExpertSection / ExpertModeSwitch
 │   ├── DictationSettings     # Voice page
-│   ├── tabs/GeneralTab       # Language, context bar, confirmations, power management, updates, experimental
+│   ├── tabs/GeneralTab       # Language, context bar, confirmations, power management, updates, experimental, TUIC CLI, Code Intelligence, IDE, custom launchers
 │   ├── tabs/AppearanceTab    # Tabs, repository groups, layout, UI legend
 │   ├── tabs/NotificationsTab # Sound and notification prefs
 │   ├── tabs/TerminalTab      # Theme, shell, font, cursor, clipboard, blocks
@@ -62,7 +62,6 @@ App.tsx (central orchestrator)
 │   ├── tabs/SmartPromptsTab  # Smart Prompts library
 │   ├── tabs/RemoteMachinesTab # Remote Machines page (wraps services/RemoteMachinesPanel)
 │   ├── tabs/PluginsTab       # Plugin management, logs
-│   ├── tabs/DeveloperToolsTab # TUIC CLI, Code Intelligence, IDE, custom launchers
 │   ├── tabs/services/        # LocalMcpPanel + UpstreamMcpPanel (MCP page), RemoteAccessPanel, RemoteMachinesPanel
 │   ├── tabs/RepoScriptsTab   # Per-repo scripts
 │   └── tabs/RepoWorktreeTab  # Per-repo worktree options
@@ -181,7 +180,7 @@ label row above its pages, and the configured repositories follow under
 
 **Pages:**
 - **Application**
-  - **General** (`GeneralTab`) — Language, agent context bar, confirmations, power management, updates, Experimental Features
+  - **General** (`GeneralTab`) — Language, agent context bar, confirmations, power management, updates, Experimental Features, TUIC CLI, Code Intelligence, default IDE, custom launchers
   - **Appearance** (`AppearanceTab`) — Tabs, repository groups, layout reset, UI legend
   - **Notifications** (`NotificationsTab`) — Sound and notification preferences
 - **Workspace**
@@ -198,7 +197,6 @@ label row above its pages, and the configured repositories follow under
   - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
   - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
-  - **Developer Tools** (`DeveloperToolsTab`) — TUIC CLI, Code Intelligence, default IDE, custom launchers
 - **Repositories**
   - **Repo Scripts** — Setup and run scripts, plus the optional per-repository Dev Server URL for Design Mode
   - **Repo Worktree** — Base branch, copy ignored/untracked files

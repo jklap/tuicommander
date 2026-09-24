@@ -459,7 +459,7 @@ noncollapsible rows; every page stays one click away and search stays global.
 | Application | General, Appearance, Notifications |
 | Workspace | Terminal, Keyboard Shortcuts, Git & GitHub |
 | AI | Agents, AI Chat, Voice, Smart Prompts |
-| Integrations | MCP, Remote Access, Remote Machines, Plugins, Developer Tools |
+| Integrations | MCP, Remote Access, Remote Machines, Plugins |
 | Repositories | One direct entry per configured repository |
 
 - `MCP` owns HTTP/MCP server status, bridge configuration, native tool
@@ -467,6 +467,9 @@ noncollapsible rows; every page stays one click away and search stays global.
   authentication, network settings, Tailscale, the QR/connect URL, and the
   relay. `Remote Machines` owns connections to other TUIC hosts. These three
   pages replace the former "Services & MCP" tab.
+- `General` also holds the TUIC CLI, Code Intelligence (MDKB), the default
+  IDE and custom launchers. These are general configuration, so they have no
+  separate page.
 - `AI Chat` holds the ego executable and ego's providers and default model. It
   replaces the former "AI Providers" tab and is hidden while Experimental
   Features is off. `Voice` is the former "Dictation" page.
