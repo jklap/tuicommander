@@ -49,14 +49,59 @@ use serde_json::Value;
 /// closely — real `split-window`/`new-window` without `-c` default to the
 /// pane/session being split from, not to the invoking client. `new-session`
 /// has nothing to inherit from (it's the first pane), so its call site
-/// passes `inherited = None` and this is just `cwd.or_else(current_dir)`,
-/// unchanged from before.
+/// passes `inherited = None`.
+///
+/// `env_repo_cwd()` — the lead agent's own stable `TUIC_WORKTREE_PATH`/
+/// `TUIC_MAIN_REPO_PATH` env var (see its own doc comment) — now sits ahead
+/// of BOTH `inherited` and `current_dir()`. Found live 2026-09-23: a
+/// 6-teammate swarm spawned from `ssh-connections` (repo: `tuicommander`)
+/// put 4 teammates in an unrelated directory (`~/bin`) — the calling
+/// agent's shell had transiently `cd`'d there to run a one-off script at
+/// the exact moment Claude Code's agent-teams internals fired
+/// `tmux new-session`, so `current_dir()`'s snapshot was wrong for the
+/// *entire* swarm, and every `split-window` teammate faithfully inherited
+/// that one bad reading via `inherited` — topology-inheritance guarantees
+/// pane-to-pane *consistency*, not correctness. Checking the env var first
+/// closes this off two ways: it directly fixes `new-session`'s own
+/// resolution (a `cd` never touches an already-set env var, only the live
+/// process cwd), and — since every `resolve_cwd()` call site independently
+/// re-reads it — it also self-heals any pane whose `inherited` value was
+/// ALREADY wrong from an earlier bad reading, rather than faithfully
+/// propagating it forward. This can only ever narrow (not change) behavior
+/// for a caller with no TUIC_* env at all (a plain `tuic alias`
+/// general-purpose user, or any process not spawned through TUICommander):
+/// `env_repo_cwd()` returns `None` and this is exactly the prior
+/// `inherited.or_else(current_dir)` chain, unchanged.
 fn resolve_cwd(cwd: Option<String>, inherited: Option<&str>) -> Option<String> {
-    cwd.or_else(|| inherited.map(String::from)).or_else(|| {
-        std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-    })
+    cwd.or_else(env_repo_cwd)
+        .or_else(|| inherited.map(String::from))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+}
+
+/// The calling process's own stable worktree/repo-root env var, injected
+/// once at PTY spawn time (`pty.rs::inject_worktree_env`) and never touched
+/// again for that PTY's whole life — unlike `std::env::current_dir()`,
+/// which tracks the shell's LIVE working directory and silently drifts the
+/// moment it `cd`s anywhere else. `tuic-cli`, exec'd as the `tmux` alias by
+/// Claude Code's agent-teams feature, is a child process of that same
+/// lead-agent shell and inherits this exact environment untouched.
+///
+/// Prefers `TUIC_WORKTREE_PATH` (a linked worktree's own root) over
+/// `TUIC_MAIN_REPO_PATH` (which for a worktree session deliberately points
+/// at the *main* checkout instead, not itself — see `script_env.rs`), so a
+/// swarm spawned from inside a worktree lands its teammates in that
+/// worktree, not the main checkout. Returns `None` (never an empty string)
+/// when neither var is set — any process not spawned through TUICommander
+/// at all, e.g. a `tuic alias` general-purpose user working outside the app.
+fn env_repo_cwd() -> Option<String> {
+    std::env::var("TUIC_WORKTREE_PATH")
+        .or_else(|_| std::env::var("TUIC_MAIN_REPO_PATH"))
+        .ok()
+        .filter(|v| !v.is_empty())
 }
 
 /// The first pane's `cwd` found anywhere under the given session, or `None`
@@ -322,7 +367,8 @@ impl TuicBackend for IpcBackend {
         let body = serde_json::json!({ "cwd": cwd });
         let resp = crate::ipc::post(
             &format!(
-                "/tmux/panes/{pane_id}/materialize?label={}",
+                "/tmux/panes/{}/materialize?label={}",
+                crate::urlencod(pane_id),
                 crate::urlencod(label)
             ),
             &body.to_string(),
@@ -341,7 +387,11 @@ impl TuicBackend for IpcBackend {
     fn rename_pane(&self, label: &str, pane_id: &str, title: Option<&str>) -> Result<(), String> {
         let body = serde_json::json!({ "title": title });
         let resp = crate::ipc::put(
-            &format!("/tmux/panes/{pane_id}?label={}", crate::urlencod(label)),
+            &format!(
+                "/tmux/panes/{}?label={}",
+                crate::urlencod(pane_id),
+                crate::urlencod(label)
+            ),
             &body.to_string(),
         )
         .map_err(|e| e.to_string())?;
@@ -353,7 +403,8 @@ impl TuicBackend for IpcBackend {
 
     fn kill_pane(&self, label: &str, pane_id: &str) -> Result<(), String> {
         let resp = crate::ipc::delete(&format!(
-            "/tmux/panes/{pane_id}?label={}",
+            "/tmux/panes/{}?label={}",
+            crate::urlencod(pane_id),
             crate::urlencod(label)
         ))
         .map_err(|e| e.to_string())?;
@@ -367,7 +418,8 @@ impl TuicBackend for IpcBackend {
         let body = serde_json::json!({ "value": value });
         let resp = crate::ipc::put(
             &format!(
-                "/tmux/panes/{pane_id}/accent-color?label={}",
+                "/tmux/panes/{}/accent-color?label={}",
+                crate::urlencod(pane_id),
                 crate::urlencod(label)
             ),
             &body.to_string(),
@@ -976,8 +1028,51 @@ mod resolve_cwd_tests {
     use super::{resolve_cwd, topology_cwd_for_session, topology_cwd_for_window};
     use serde_json::json;
 
+    const ENV_VARS: [&str; 2] = ["TUIC_WORKTREE_PATH", "TUIC_MAIN_REPO_PATH"];
+
+    /// Ensures `TUIC_WORKTREE_PATH`/`TUIC_MAIN_REPO_PATH` are absent for the
+    /// duration of a test and restored afterward. This repo's own dev/agent
+    /// shells are routinely launched FROM a real TUIC-spawned terminal,
+    /// which sets these exact vars ambiently (see this codebase's own agent
+    /// memory on ambient TUIC_* env leaking into tests) — without this
+    /// guard, `resolve_cwd`'s new env-preferring behavior would make these
+    /// tests non-deterministic depending on whatever shell `cargo test`/
+    /// `cargo nextest run` happens to be invoked from. Also serializes
+    /// mutation of this process-global state across tests, matching this
+    /// file's existing `$TUIC_SOCKET` precedent (see
+    /// `ipc_backend_pane_id_url_encoding_tests`).
+    struct EnvVarGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvVarGuard {
+        fn scrub() -> Self {
+            let saved = ENV_VARS
+                .iter()
+                .map(|&k| (k, std::env::var(k).ok()))
+                .collect();
+            for &k in &ENV_VARS {
+                unsafe { std::env::remove_var(k) };
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(val) => unsafe { std::env::set_var(k, val) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
+            }
+        }
+    }
+
     #[test]
+    #[serial_test::serial]
     fn explicit_cwd_wins_over_the_fallback() {
+        let _guard = EnvVarGuard::scrub();
         assert_eq!(
             resolve_cwd(Some("/explicit/path".to_string()), Some("/inherited/path")),
             Some("/explicit/path".to_string())
@@ -985,12 +1080,16 @@ mod resolve_cwd_tests {
     }
 
     #[test]
-    fn inherited_cwd_wins_over_current_dir_when_no_explicit_value() {
+    #[serial_test::serial]
+    fn inherited_cwd_wins_over_current_dir_when_no_explicit_value_and_no_env() {
         // Each `tmux` subcommand is its own OS subprocess, so a second
         // std::env::current_dir() read for split-window/new-window is a
         // genuinely independent read from the one new-session made earlier
         // — inheriting from topology instead guarantees every pane in one
         // swarm shares the exact cwd the first pane resolved, regardless.
+        // No TUIC_* env is set here, so this exercises the same fallback
+        // chain that existed before the env-var fix.
+        let _guard = EnvVarGuard::scrub();
         assert_eq!(
             resolve_cwd(None, Some("/inherited/path")),
             Some("/inherited/path".to_string())
@@ -998,6 +1097,7 @@ mod resolve_cwd_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn absent_cwd_falls_back_to_the_calling_processs_own_current_dir() {
         // Real tmux defaults new-session/split-window/new-window's cwd to
         // the calling client's own directory when -c is absent — never a
@@ -1008,12 +1108,85 @@ mod resolve_cwd_tests {
         // which is how a live 2026-09-04 swarm spawned from a
         // `commerce-journal` session landed all 4 teammate panes under an
         // unrelated repo (`databricks-sql-cli`, whichever was active in the
-        // sidebar at that moment).
+        // sidebar at that moment). No TUIC_* env is set here (the final
+        // fallback rung, reached only when neither an explicit cwd, an env
+        // var, nor an inherited topology cwd exists).
+        let _guard = EnvVarGuard::scrub();
         let expected = std::env::current_dir()
             .expect("current_dir must resolve in a test process")
             .to_string_lossy()
             .into_owned();
         assert_eq!(resolve_cwd(None, None), Some(expected));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_repo_path_wins_over_inherited_and_current_dir() {
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "/from/env") };
+        assert_eq!(
+            resolve_cwd(None, Some("/inherited/path")),
+            Some("/from/env".to_string())
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_worktree_path_wins_over_env_main_repo_path() {
+        // A linked worktree's own TUIC_MAIN_REPO_PATH deliberately points at
+        // the main checkout, not itself (script_env.rs) — TUIC_WORKTREE_PATH
+        // is the one that names where this session actually lives.
+        let _guard = EnvVarGuard::scrub();
+        unsafe {
+            std::env::set_var("TUIC_MAIN_REPO_PATH", "/main/checkout");
+            std::env::set_var("TUIC_WORKTREE_PATH", "/worktree/root");
+        }
+        assert_eq!(resolve_cwd(None, None), Some("/worktree/root".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn explicit_cwd_still_wins_over_env_repo_path() {
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "/from/env") };
+        assert_eq!(
+            resolve_cwd(Some("/explicit/path".to_string()), None),
+            Some("/explicit/path".to_string())
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_transient_cd_does_not_affect_the_env_derived_cwd() {
+        // Regression test for the live 2026-09-23 bug: the calling agent's
+        // shell had `cd`'d to an unrelated directory (running a one-off
+        // script) at the exact moment Claude Code's agent-teams internals
+        // fired `tmux new-session` — current_dir() faithfully reported that
+        // unrelated directory, corrupting the whole swarm. The stable env
+        // var must win regardless of where the live process cwd has
+        // wandered off to.
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "/the/real/repo") };
+        let live_cwd = std::env::current_dir()
+            .expect("current_dir must resolve in a test process")
+            .to_string_lossy()
+            .into_owned();
+        assert_ne!(
+            live_cwd, "/the/real/repo",
+            "test process cwd must not coincidentally match, or this test proves nothing"
+        );
+        assert_eq!(resolve_cwd(None, None), Some("/the/real/repo".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_env_var_is_treated_as_absent() {
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "") };
+        assert_eq!(
+            resolve_cwd(None, Some("/inherited/path")),
+            Some("/inherited/path".to_string())
+        );
     }
 
     #[test]
@@ -1046,5 +1219,121 @@ mod resolve_cwd_tests {
         });
         assert_eq!(topology_cwd_for_window(&topology, "@0"), Some("/repo/path"));
         assert_eq!(topology_cwd_for_window(&topology, "@nonexistent"), None);
+    }
+}
+
+/// Regression coverage for the missing-`urlencod(pane_id)` bug (fixed
+/// alongside these tests): every `IpcBackend` method that puts a tmux pane
+/// id (always `"%<number>"`) into a URL *path* segment must percent-encode
+/// it first, or a two-digit id round-trips through axum's path decoder as a
+/// single mangled byte and every one of these calls 404s with "pane not
+/// found" — which is exactly what made `respawn-pane -k` (the call that
+/// actually launches a swarm teammate's real `claude` process) silently
+/// never start a single teammate past the 10th pane allocated in a label's
+/// lifetime. `tmux::mod`'s `FakeBackend`-driven integration suite cannot
+/// catch this class of bug at all: it never builds a URL, so it exercised
+/// only `TuicBackend`'s pure dispatch logic, never `IpcBackend`'s actual HTTP
+/// wire format. These tests are the only place that does.
+///
+/// Mirrors `ipc.rs`'s own `round_trip` test helper exactly — same
+/// join-the-client-thread-don't-detach-the-server reasoning (see that
+/// module's doc comment), same reason every test here needs
+/// `#[serial_test::serial]`: `$TUIC_SOCKET` is a process-global env var.
+#[cfg(all(test, unix))]
+mod ipc_backend_pane_id_url_encoding_tests {
+    use super::{IpcBackend, TuicBackend};
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+
+    /// Runs `call` against a real `IpcBackend`, capturing the raw HTTP
+    /// request it actually sends over the wire, and answers it with a fixed
+    /// 200 response whose body is valid enough for every caller in this
+    /// module (`{"ok":true,"tuic_session_id":"s1"}` covers both the
+    /// `Result<(), _>` callers, which ignore the body, and
+    /// `materialize_pane`, which needs `tuic_session_id`).
+    fn capture_request<T: Send + 'static>(
+        call: impl FnOnce() -> T + Send + 'static,
+    ) -> (String, T) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("mcp.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        unsafe {
+            std::env::set_var("TUIC_SOCKET", &sock_path);
+        }
+        let client = std::thread::spawn(call);
+
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+
+        let body = r#"{"ok":true,"tuic_session_id":"s1"}"#;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        stream.flush().unwrap();
+        drop(stream);
+
+        (request, client.join().unwrap())
+    }
+
+    /// The request line only — enough to assert method + exact path, without
+    /// coupling the test to header ordering/casing.
+    fn request_line(raw: &str) -> &str {
+        raw.lines().next().unwrap_or_default()
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn materialize_pane_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) =
+            capture_request(|| IpcBackend.materialize_pane("claude-swarm-1", "%13", None));
+        assert_eq!(
+            request_line(&raw),
+            "POST /tmux/panes/%2513/materialize?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok("s1".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rename_pane_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) =
+            capture_request(|| IpcBackend.rename_pane("claude-swarm-1", "%14", Some("title")));
+        assert_eq!(
+            request_line(&raw),
+            "PUT /tmux/panes/%2514?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn kill_pane_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) = capture_request(|| IpcBackend.kill_pane("claude-swarm-1", "%15"));
+        assert_eq!(
+            request_line(&raw),
+            "DELETE /tmux/panes/%2515?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn set_pane_accent_color_percent_encodes_a_two_digit_pane_id() {
+        let (raw, result) = capture_request(|| {
+            IpcBackend.set_pane_accent_color("claude-swarm-1", "%16", "fg=yellow")
+        });
+        assert_eq!(
+            request_line(&raw),
+            "PUT /tmux/panes/%2516/accent-color?label=claude-swarm-1 HTTP/1.1"
+        );
+        assert_eq!(result, Ok(()));
     }
 }
