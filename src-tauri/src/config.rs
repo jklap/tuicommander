@@ -3617,6 +3617,10 @@ pub(crate) struct ConfigDefaults {
     /// `AgentsConfig`-level fields such as `headless_agent`. `None` fields are
     /// omitted by `skip_serializing_if`; a missing key means `null`.
     pub(crate) agents: AgentsConfig,
+    /// Additional GitHub accounts (`github_accounts.json`); the default is no
+    /// account. Settings hides the "Add another GitHub account" entry point
+    /// while the registry is at this default.
+    pub(crate) github_accounts: crate::github_account::GitHubAccountRegistry,
     /// Absent (not merely empty) outside desktop builds: `mod dictation` does
     /// not exist under `--no-default-features` (e.g. `tuic-remote`), and this
     /// route is never registered there either (see `build_remote_router`).
@@ -3632,6 +3636,7 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         agent_settings: AgentSettings::default(),
         repo_defaults: RepoDefaultsConfig::default(),
         agents: AgentsConfig::default(),
+        github_accounts: crate::github_account::GitHubAccountRegistry::default(),
         #[cfg(feature = "desktop")]
         dictation: crate::dictation::commands::DictationConfig::default(),
     }
@@ -8020,10 +8025,27 @@ mod tests {
             serde_json::to_value(&defaults.agents).unwrap(),
             serde_json::to_value(AgentsConfig::default()).unwrap()
         );
+        assert_eq!(
+            serde_json::to_value(&defaults.github_accounts).unwrap(),
+            serde_json::to_value(crate::github_account::GitHubAccountRegistry::default()).unwrap()
+        );
         #[cfg(feature = "desktop")]
         assert_eq!(
             serde_json::to_value(&defaults.dictation).unwrap(),
             serde_json::to_value(crate::dictation::commands::DictationConfig::default()).unwrap()
+        );
+    }
+
+    /// Settings hides the "Add another GitHub account" entry point while
+    /// `github_accounts.accounts` equals its default. The key must be in the
+    /// payload, empty, and spelled as the registry file spells it; a missing
+    /// key would keep the entry point visible for everyone.
+    #[test]
+    fn get_config_defaults_carries_no_additional_github_accounts() {
+        let payload = serde_json::to_value(get_config_defaults()).unwrap();
+        assert_eq!(
+            payload["github_accounts"]["accounts"],
+            serde_json::json!([])
         );
     }
 
@@ -8070,6 +8092,11 @@ mod tests {
             serde_json::to_value(&defaults.agents).unwrap(),
             serde_json::to_value(load_agents_config()).unwrap(),
             "must match what a fresh agents.json-less install loads"
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.github_accounts).unwrap(),
+            serde_json::to_value(crate::github_account::GitHubAccountRegistry::load()).unwrap(),
+            "must match what a fresh github_accounts.json-less install loads"
         );
         #[cfg(feature = "desktop")]
         assert_eq!(
