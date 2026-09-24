@@ -219,18 +219,46 @@ describe("TabBar", () => {
 			const getItems = vi.fn(() => [{ label: "Claude Code", action: () => {} }]);
 			const { container } = renderWithAgents(() => {}, getItems);
 			const btn = container.querySelector(".newBtn")!;
-			// Before the agent list opens: the press is still pending.
+			// The press timer fires first and opens the list; the native event follows.
 			fireEvent.pointerDown(btn, { button: 0 });
-			const early = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-			btn.dispatchEvent(early);
-			expect(early.defaultPrevented).toBe(true);
-			expect(getItems).not.toHaveBeenCalled();
-
-			// After it opened.
 			vi.advanceTimersByTime(500);
 			fireEvent.contextMenu(btn);
 			expect(getItems).toHaveBeenCalledTimes(1);
 			expect(menuLabels(container)).toContain("Claude Code");
+		});
+
+		it("a touch long press whose native contextmenu beats the timer still opens the list", () => {
+			// The browser's gesture recognizer and the 500 ms timer race. If the
+			// contextmenu wins, the pointerup that follows must not cancel the list
+			// and let the click open a plain tab instead.
+			const onNewTab = vi.fn();
+			const getItems = vi.fn(() => [{ label: "Claude Code", action: () => {} }]);
+			const { container } = renderWithAgents(onNewTab, getItems);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 0 });
+			vi.advanceTimersByTime(450);
+			const early = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+			btn.dispatchEvent(early);
+			fireEvent.pointerUp(btn);
+			fireEvent.click(btn);
+			vi.advanceTimersByTime(1000);
+
+			expect(early.defaultPrevented).toBe(true);
+			expect(menuLabels(container)).toContain("Claude Code");
+			expect(getItems).toHaveBeenCalledTimes(1);
+			expect(onNewTab).not.toHaveBeenCalled();
+		});
+
+		it("a cancelled pointer gesture cancels the press", () => {
+			// A touch that turns into a scroll ends in pointercancel, not pointerup.
+			const getItems = vi.fn(() => [{ label: "Claude Code", action: () => {} }]);
+			const { container } = renderWithAgents(() => {}, getItems);
+			const btn = container.querySelector(".newBtn")!;
+			fireEvent.pointerDown(btn, { button: 0 });
+			fireEvent.pointerCancel(btn);
+			vi.advanceTimersByTime(1000);
+
+			expect(getItems).not.toHaveBeenCalled();
 		});
 
 		it("a right click opens the agent list without opening a tab", () => {

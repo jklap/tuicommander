@@ -46,12 +46,19 @@ export function createAgentLaunchMenu(getItems: () => ContextMenuItem[]) {
 
 	const onContextMenu = (e: MouseEvent) => {
 		e.preventDefault();
-		// A touch long press also fires the native contextmenu. A right click
-		// never starts the timer (button 0 only), so a pending or fired press
-		// means the long press already owns this event.
-		if (pressTimer !== undefined || pressFired || openBelow(e.currentTarget as HTMLElement)) {
-			e.stopPropagation();
+		const btn = e.currentTarget as HTMLElement;
+		let opened: boolean;
+		if (pressTimer !== undefined) {
+			// A touch long press also fires the native contextmenu, and it can beat
+			// the timer. Open now: the pointerup that follows would cancel the timer.
+			cancelPress();
+			opened = pressFired = openBelow(btn);
+		} else {
+			// A right click never starts the timer (button 0 only); a fired press
+			// means the long press already opened the list.
+			opened = pressFired || openBelow(btn);
 		}
+		if (opened) e.stopPropagation();
 	};
 
 	/** True when the click ends a press that opened the menu and must be swallowed. */
@@ -80,6 +87,7 @@ export function createAgentLaunchMenu(getItems: () => ContextMenuItem[]) {
 			onPointerDown,
 			onPointerUp: cancelPress,
 			onPointerLeave: cancelPress,
+			onPointerCancel: cancelPress,
 			onContextMenu,
 		},
 	};
