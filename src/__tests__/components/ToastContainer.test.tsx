@@ -157,6 +157,41 @@ describe("ToastContainer", () => {
 		expect(screen.queryByRole("button", { name: "Go to repo" })).toBeNull();
 	});
 
+	it("keeps the toast when its repo disappears before the repo action runs", () => {
+		repositoriesStore.add({ path: "/toast-present-click", displayName: "Present" });
+		repositoriesStore.add({ path: "/toast-removed-click", displayName: "Removed" });
+		repositoriesStore.setActive("/toast-present-click");
+		toastsStore.add("stale repo", "gone", "warn", false, undefined, undefined, "/toast-removed-click");
+
+		const originalGet = repositoriesStore.get;
+		let repoVanished = false;
+		vi.spyOn(repositoriesStore, "get").mockImplementation((path) =>
+			path === "/toast-removed-click" && repoVanished ? undefined : originalGet(path),
+		);
+		render(() => <ToastContainer />);
+		const repoAction = screen.getByRole("button", { name: "Go to repo" });
+		repoVanished = true;
+		fireEvent.click(repoAction);
+
+		expect(toastsStore.toasts).toHaveLength(1);
+	});
+
+	it("keeps the repo action node while unrelated repository state changes", () => {
+		repositoriesStore.add({ path: "/toast-current-stable", displayName: "Current" });
+		repositoriesStore.add({ path: "/toast-other-stable", displayName: "Other" });
+		repositoriesStore.add({ path: "/toast-origin-stable", displayName: "Origin" });
+		repositoriesStore.setActive("/toast-current-stable");
+		toastsStore.add("ready", "review it", "info", false, undefined, undefined, "/toast-origin-stable");
+
+		render(() => <ToastContainer />);
+		const repoAction = screen.getByRole("button", { name: "Go to repo" });
+		repoAction.focus();
+		repositoriesStore.setActive("/toast-other-stable");
+
+		expect(screen.getByRole("button", { name: "Go to repo" })).toBe(repoAction);
+		expect(document.activeElement).toBe(repoAction);
+	});
+
 	it("names the repo the toast came from", () => {
 		repositoriesStore.add({ path: "/Gits/personal/ego", displayName: "Ego" });
 
