@@ -1710,6 +1710,8 @@ describe("Sidebar", () => {
 			expect(rows[0].querySelector(".branchSubAgentTag")).toBeNull();
 			expect(rows[1].querySelector(".branchSubAgentTag")?.getAttribute("title")).toBe("Spawned by Orchestrator");
 			expect(rows[1].querySelector(".branchSubAgentTag svg")).not.toBeNull();
+			// The name is on the tag itself, so a screen reader announces it.
+			expect(rows[1].querySelector(".branchSubAgentTag")?.getAttribute("aria-label")).toBe("Spawned by Orchestrator");
 		});
 
 		it("renders the activity card for a single terminal", () => {

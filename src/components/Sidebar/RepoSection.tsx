@@ -267,7 +267,12 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 									<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
 									<Show when={terminalsStore.getSubAgentTag(id)}>
 										{(parent) => (
-											<span class={s.branchSubAgentTag} title={`Spawned by ${parent()}`}>
+											<span
+												class={s.branchSubAgentTag}
+												role="img"
+												aria-label={`Spawned by ${parent()}`}
+												title={`Spawned by ${parent()}`}
+											>
 												<svg
 													class={s.branchSubAgentIcon}
 													viewBox="0 0 16 16"
