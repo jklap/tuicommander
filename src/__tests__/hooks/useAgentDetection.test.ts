@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { AGENT_TYPES } from "../../agents";
 import { useAgentDetection } from "../../hooks/useAgentDetection";
+// Side-effect only: detect_all_agent_binaries is a desktop-only entry (transportExtended.ts).
+import "../../transportExtended";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
