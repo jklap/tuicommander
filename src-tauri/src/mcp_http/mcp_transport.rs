@@ -4764,7 +4764,7 @@ fn handle_messaging(
                 }
             });
             let notification = serde_json::to_string(&notification).unwrap_or_default();
-            let (delivery_assignment, pushed) = state.assign_agent_delivery_with_terminal_attempt(
+            let (delivery_assignment, pushed) = state.assign_agent_delivery_with_channel_attempt(
                 to,
                 &msg_id,
                 managed_recipient,
@@ -12117,6 +12117,88 @@ mod tests {
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
         assert_eq!(snapshot.turn_epoch, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_wait_returns_sse_mail_before_advancing_its_implicit_cursor() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp.sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                requires_meta_tools: false,
+                has_sse_stream: true,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+        let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .session_maps
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let _submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
+        state
+            .session_maps
+            .session_states
+            .get_mut(TEST_UUID_B)
+            .unwrap()
+            .suggested_actions = None;
+        state
+            .session_maps
+            .silence_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .reset_suggest_memory();
+        state
+            .session_maps
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "SSE result",
+            }),
+            Some("mcp-sender"),
+        );
+        assert_eq!(sent["delivery_path"], "sse_channel_and_inbox");
+        assert!(receiver.try_recv().is_ok());
+
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "tuic-auto-lifecycle".into(),
+                from_tuic_session: "child".into(),
+                from_name: "tuic".into(),
+                content: r#"{\"type\":\"state_change\",\"state\":\"idle\"}"#.into(),
+                timestamp: u64::MAX - 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        let waited = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            Some("mcp-recipient"),
+        )
+        .await;
+
+        assert_eq!(waited["met"], true);
+        assert_eq!(waited["new_messages"], 2);
+        assert_eq!(waited["messages"][0]["content"], "SSE result");
+        assert_eq!(waited["messages"][1]["id"], "tuic-auto-lifecycle");
+        assert_eq!(waited["next_since"], u64::MAX - 1);
     }
 
     #[test]
