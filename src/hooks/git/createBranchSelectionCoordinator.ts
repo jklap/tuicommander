@@ -1,4 +1,4 @@
-import { batch, type Setter } from "solid-js";
+import { batch } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { paneLayoutStore } from "../../stores/paneLayout";
@@ -20,7 +20,6 @@ interface BranchSelectionCoordinatorDeps {
 	};
 	setStatusInfo: (message: string) => void;
 	getDefaultFontSize: () => number;
-	setCurrentBranch: Setter<string | null>;
 }
 
 /** Owns terminal creation and serialized branch activation. */
@@ -78,7 +77,6 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			if (needsSwitch) {
 				repositoriesStore.setActive(repoPath);
 				repositoriesStore.setActiveWorkspace(repoPath, workspaceId);
-				deps.setCurrentBranch(branchName);
 			}
 			// The owner of record, not just the display index. This path is handed the
 			// repo, so leaving the field null would file a deliberate placement as the
@@ -158,9 +156,6 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			batch(() => {
 				repositoriesStore.setActive(repoPath);
 				repositoriesStore.setActiveWorkspace(repoPath, workspaceId);
-				// Displayed and fed to git, so it is the branch this workspace has
-				// checked out — resolved from the record, never the id.
-				deps.setCurrentBranch(repositoriesStore.branchNameFor(repoPath, workspaceId));
 			});
 
 			// Fire-and-forget: diff stats are cosmetic, don't block branch switch

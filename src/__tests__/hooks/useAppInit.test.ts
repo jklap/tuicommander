@@ -47,7 +47,6 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 		},
 		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
-		setCurrentBranch: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
 		getDefaultFontSize: () => 14,
@@ -131,7 +130,6 @@ describe("initApp", () => {
 		});
 
 		expect(repositoriesStore.state.activeRepoPath).toBe(targetRepo);
-		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
 		const activeTab = mdTabsStore.getActive();
 		expect(activeTab).toMatchObject({ repoPath: targetRepo, filePath: "reports/comparison.md" });
 		expect(mdTabsStore.getVisibleIds(`${targetRepo}|main`)).toContain(activeTab!.id);
@@ -240,9 +238,32 @@ describe("initApp", () => {
 		const deps = createMockDeps({
 			pty: {
 				listActiveSessions: vi.fn().mockResolvedValue([
-					{ session_id: "spawned", cwd: "/repo", display_name: "call-map", display_name_is_custom: false, display_name_from_spawn: true, is_remote: true, state: { agent_type: "claude" } },
-					{ session_id: "osc-synced", cwd: "/repo", display_name: "main-wise-beacon", display_name_is_custom: false, display_name_from_spawn: false, is_remote: true, state: { agent_type: "claude" } },
-					{ session_id: "renamed", cwd: "/repo", display_name: "mine", display_name_is_custom: true, is_remote: true, state: { agent_type: "claude" } },
+					{
+						session_id: "spawned",
+						cwd: "/repo",
+						display_name: "call-map",
+						display_name_is_custom: false,
+						display_name_from_spawn: true,
+						is_remote: true,
+						state: { agent_type: "claude" },
+					},
+					{
+						session_id: "osc-synced",
+						cwd: "/repo",
+						display_name: "main-wise-beacon",
+						display_name_is_custom: false,
+						display_name_from_spawn: false,
+						is_remote: true,
+						state: { agent_type: "claude" },
+					},
+					{
+						session_id: "renamed",
+						cwd: "/repo",
+						display_name: "mine",
+						display_name_is_custom: true,
+						is_remote: true,
+						state: { agent_type: "claude" },
+					},
 					{ session_id: "unnamed", cwd: "/repo", is_remote: true, state: { agent_type: "claude" } },
 				]),
 				close: vi.fn().mockResolvedValue(undefined),
@@ -780,7 +801,6 @@ describe("initApp", () => {
 		await initApp(deps);
 
 		expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
-		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
 		// Eagerly restore terminals so pane layout IDs match
 		expect(deps.handleBranchSelect).toHaveBeenCalledWith("/repo", "main");
 	});
@@ -893,7 +913,9 @@ describe("initApp", () => {
 			const getCb = captureAliasAssigned();
 			await initApp(createMockDeps());
 
-			getCb()!({ payload: { session_id: "sess-mirrored", alias: "tc-11", __tuic_origin: { connection: "mac-mint" } } as never });
+			getCb()!({
+				payload: { session_id: "sess-mirrored", alias: "tc-11", __tuic_origin: { connection: "mac-mint" } } as never,
+			});
 			const id = terminalsStore.add(makeTerminal({ name: "Local tab" }));
 			terminalsStore.setSessionId(id, "sess-mirrored");
 			expect(terminalsStore.get(id)?.alias).toBeNull();
@@ -958,7 +980,6 @@ describe("initApp", () => {
 		await initApp(deps);
 
 		expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
-		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
 		// Should activate an existing terminal, not call handleBranchSelect
 		const ids = terminalsStore.getIds();
 		expect(ids.length).toBe(1);
@@ -1827,7 +1848,8 @@ describe("initApp", () => {
 
 			getCreated()!({ payload: { session_id: "child", cwd: null, agent_type: "claude", parent_session: "tuic-lead" } });
 			getCreated()!({ payload: { session_id: "plain", cwd: null, agent_type: "claude" } });
-			const byPty = (sid: string) => terminalsStore.get(terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === sid)!);
+			const byPty = (sid: string) =>
+				terminalsStore.get(terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === sid)!);
 
 			// The sidebar and Activity Dashboard tag a tab only from this field.
 			expect(byPty("child")?.parentSession).toBe("tuic-lead");

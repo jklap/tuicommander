@@ -442,7 +442,6 @@ const App: Component = () => {
 		pty,
 		setQuitDialogVisible,
 		setStatusInfo,
-		setCurrentBranch: gitOps.setCurrentBranch,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
 		getDefaultFontSize,
@@ -977,9 +976,6 @@ const App: Component = () => {
 							const repoPath = gitOps.currentRepoPath();
 							if (repoPath) {
 								repositoriesStore.renameBranch(repoPath, oldName, newName);
-							}
-							if (gitOps.currentBranch() === oldName) {
-								gitOps.setCurrentBranch(newName);
 							}
 							setStatusInfo(`Renamed branch ${oldName} to ${newName}`);
 						}}

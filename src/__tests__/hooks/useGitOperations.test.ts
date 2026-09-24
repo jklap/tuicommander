@@ -221,7 +221,7 @@ describe("useGitOperations", () => {
 			expect(gitOps.currentBranch()).toBe("main");
 		});
 
-		it("follows a repo switch made outside handleBranchSelect", async () => {
+		it("derives the branch after an agent-row navigation switches repositories", async () => {
 			// Clicking an agent row in the sidebar goes through navigateToTerminal,
 			// which only calls repositoriesStore.setActive. The side panels read
 			// currentRepoPath, so it must follow the store, or Notes, Git and Files
@@ -229,7 +229,7 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/a", displayName: "A" });
 			repositoriesStore.setWorkspace("/a", "main", { worktreePath: "/a" });
 			repositoriesStore.add({ path: "/b", displayName: "B" });
-			repositoriesStore.setWorkspace("/b", "main", { worktreePath: "/b" });
+			repositoriesStore.setWorkspace("/b", "feature/b", { worktreePath: "/b" });
 			await gitOps.handleBranchSelect("/a", "main");
 			const agentTab = terminalsStore.add({
 				sessionId: "sess-b",
@@ -238,11 +238,42 @@ describe("useGitOperations", () => {
 				cwd: "/b",
 				awaitingInput: null,
 			});
-			repositoriesStore.addTerminalToWorkspace("/b", "main", agentTab);
+			repositoriesStore.addTerminalToWorkspace("/b", "feature/b", agentTab);
 
 			navigateToTerminal(agentTab);
 
 			expect(gitOps.currentRepoPath()).toBe("/b");
+			expect(gitOps.currentBranch()).toBe("feature/b");
+		});
+
+		it("derives the branch after navigation to a linked-worktree terminal", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature/worktree", { worktreePath: "/repo/.worktrees/feature" });
+			const worktreeTerminal = terminalsStore.add({
+				sessionId: "worktree-session",
+				fontSize: 14,
+				name: "Worktree terminal",
+				cwd: "/repo/.worktrees/feature",
+				awaitingInput: null,
+			});
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature/worktree", worktreeTerminal);
+
+			navigateToTerminal(worktreeTerminal);
+
+			expect(gitOps.currentBranch()).toBe("feature/worktree");
+		});
+
+		it("does not retain a deleted active branch", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setWorkspace("/repo", "feature/deleted", { worktreePath: "/repo/.worktrees/deleted" });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "feature/deleted");
+
+			repositoriesStore.removeWorkspace("/repo", "feature/deleted");
+
+			expect(gitOps.currentBranch()).toBe("main");
 		});
 
 		it("serializes 3+ concurrent selects (no overlapping inner runs)", async () => {
@@ -838,8 +869,9 @@ describe("useGitOperations", () => {
 		it("renames branch in backend and store", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "old-name", { worktreePath: "/repo" });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "old-name");
 			gitOps.setBranchToRename({ repoPath: "/repo", branchName: "old-name" });
-			gitOps.setCurrentBranch("old-name");
 
 			await gitOps.handleRenameBranch("old-name", "new-name");
 
@@ -863,9 +895,12 @@ describe("useGitOperations", () => {
 		});
 
 		it("does not switch the current branch when checkout is false", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
 			gitOps.setBranchToCreate({ repoPath: "/repo2", startPoint: null });
-			gitOps.setCurrentBranch("main");
 
 			await gitOps.handleCreateBranch("feat/x", false);
 
@@ -2611,9 +2646,11 @@ describe("useGitOperations", () => {
 
 		it("does not update currentBranch if renaming non-active branch", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			gitOps.setBranchToRename({ repoPath: "/repo", branchName: "feature" });
-			gitOps.setCurrentBranch("main");
 
 			await gitOps.handleRenameBranch("feature", "feature-v2");
 
