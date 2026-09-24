@@ -39,24 +39,36 @@ function toastRepoName(toast: Toast): string | null {
 	return repoPath ? pathBasename(repoPath) : null;
 }
 
-function toastRepoAction(toast: Toast): { label: string; onClick: () => void } | null {
+type ToastAction = { label: string; onClick: () => unknown };
+
+const repoActions = new WeakMap<Toast, ToastAction>();
+
+function toastRepoAction(toast: Toast): ToastAction | null {
 	const repoPath = toast.repoPath;
 	if (!repoPath || repoPath === repositoriesStore.state.activeRepoPath || !repositoriesStore.get(repoPath)) {
 		return null;
 	}
 
-	return {
-		label: "Go to repo",
-		onClick: () => {
-			// The repository can disappear while the toast is visible. Re-check at
-			// activation time so the button never selects a stale path.
-			if (!repositoriesStore.get(repoPath)) return;
-			repositoriesStore.setActive(repoPath);
-			if (!toast.sessionId) return;
-			const terminalId = terminalsStore.findBySessionId(toast.sessionId);
-			if (terminalId) navigateToTerminal(terminalId);
-		},
-	};
+	let action = repoActions.get(toast);
+	if (!action) {
+		action = {
+			label: "Go to repo",
+			onClick: () => {
+				// The repository can disappear while the toast is visible. Re-check at
+				// activation time so the button never selects a stale path. Returning
+				// false keeps the toast visible so the failed navigation is not silent.
+				if (!repositoriesStore.get(repoPath)) return false;
+				repositoriesStore.setActive(repoPath);
+				if (!toast.sessionId) return true;
+				const terminalId = terminalsStore.findBySessionId(toast.sessionId);
+				if (terminalId) navigateToTerminal(terminalId);
+				return true;
+			},
+		};
+		repoActions.set(toast, action);
+	}
+
+	return action;
 }
 
 export const ToastContainer: Component = () => {
