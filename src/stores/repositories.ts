@@ -1948,12 +1948,13 @@ export function locateFile(absolutePath: string): FileLocation {
  * at the repo ROOT names none — what is checked out there moves under the user's
  * feet — so it resolves late, here:
  *
- *  1. `activeWorkspaceId`, the workspace the repo is on right now;
- *  2. failing that, whichever workspace records the repo root as its worktree.
+ *  1. whichever workspace records the repo root as its worktree;
+ *  2. failing that, `activeWorkspaceId`.
  *
- * Step 2 is not redundant. A repo discovered before its workspaces were scanned has
- * `activeWorkspaceId: null` while already knowing its root checkout, and stopping at
- * step 1 left every session in it unplaced — invisible tabs, not misfiled ones.
+ * The root workspace is an exact path match. `activeWorkspaceId` is only a fallback
+ * for repositories discovered before their workspaces were scanned: using it first
+ * files every root session under whichever linked worktree happened to be selected
+ * when the frontend rehydrated.
  * It returns that workspace's KEY, not its `branchName`: the caller feeds the
  * answer straight into `addTerminalToWorkspace`.
  */
@@ -1961,9 +1962,8 @@ export function placementWorkspaceFor(owner: RepoOwner): string | null {
 	if (owner.workspaceId) return owner.workspaceId;
 	const repo = repositoriesStore.state.repositories[owner.repoPath];
 	if (!repo) return null;
-	if (repo.activeWorkspaceId) return repo.activeWorkspaceId;
 	const atRoot = Object.entries(repo.workspaces).find(([, ws]) => ws.worktreePath === owner.repoPath);
-	return atRoot?.[0] ?? null;
+	return atRoot?.[0] ?? repo.activeWorkspaceId ?? null;
 }
 
 /** True while at least one registered repository lives on another machine. */

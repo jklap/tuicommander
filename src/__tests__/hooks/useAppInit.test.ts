@@ -16,6 +16,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { makeTerminal } from "../helpers/store";
@@ -413,6 +414,86 @@ describe("initApp", () => {
 		const branch = repositoriesStore.get("/repo")?.workspaces["main"];
 		expect(branch?.terminals).toHaveLength(1);
 		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-nested");
+	});
+
+	it("re-adopts repo-root sessions under main when the active workspace is a linked worktree", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setWorkspace("/repo", "feature-one", { worktreePath: "/repo__wt/feature-one" });
+		repositoriesStore.setWorkspace("/repo", "feature-two", { worktreePath: "/repo__wt/feature-two" });
+		repositoriesStore.setWorkspace("/repo", "feature-three", { worktreePath: "/repo__wt/feature-three" });
+		repositoriesStore.setActiveWorkspace("/repo", "feature-three");
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{ session_id: "root-one", cwd: "/repo" },
+					{ session_id: "root-two", cwd: "/repo/src" },
+					{ session_id: "worktree-one", cwd: "/repo__wt/feature-one" },
+					{ session_id: "worktree-two", cwd: "/repo__wt/feature-two/src" },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const repo = repositoriesStore.get("/repo")!;
+		expect(repo.workspaces.main.terminals.map((id) => terminalsStore.get(id)?.sessionId)).toEqual([
+			"root-one",
+			"root-two",
+		]);
+		expect(repo.workspaces["feature-one"].terminals.map((id) => terminalsStore.get(id)?.sessionId)).toEqual([
+			"worktree-one",
+		]);
+		expect(repo.workspaces["feature-two"].terminals.map((id) => terminalsStore.get(id)?.sessionId)).toEqual([
+			"worktree-two",
+		]);
+		expect(repo.workspaces["feature-three"].terminals).toEqual([]);
+	});
+
+	it("keeps an already-adopted repo-root session under main when a new worktree is added", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "root", cwd: "/repo/src" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+
+		repositoriesStore.setWorkspace("/repo", "new-worktree", { worktreePath: "/repo__wt/new-worktree" });
+		repositoriesStore.setActiveWorkspace("/repo", "new-worktree");
+		reconcileTerminalOwnership();
+
+		const repo = repositoriesStore.get("/repo")!;
+		expect(repo.workspaces.main.terminals).toHaveLength(1);
+		expect(repo.workspaces["new-worktree"].terminals).toEqual([]);
+	});
+
+	it("parks a surviving session whose sibling worktree no longer exists", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
+		repositoriesStore.setWorkspace("/repo", "current", { worktreePath: "/repo__wt/current" });
+		repositoriesStore.setActiveWorkspace("/repo", "current");
+
+		await initApp(
+			createMockDeps({
+				pty: {
+					listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "removed", cwd: "/repo__wt/removed/src" }]),
+					close: vi.fn().mockResolvedValue(undefined),
+				},
+			}),
+		);
+
+		const id = terminalsStore.getIds()[0]!;
+		expect(terminalsStore.get(id)?.repoPath).toBeNull();
+		expect(repositoriesStore.get("/repo")?.workspaces.main.terminals).toEqual([]);
+		expect(repositoriesStore.get("/repo")?.workspaces.current.terminals).toEqual([]);
 	});
 
 	it("assigns a surviving session to the most-specific nested repo", async () => {
