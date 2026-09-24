@@ -94,7 +94,7 @@ describe("resolveOwningConnection", () => {
 		expect(resolveOwningConnection({ pty_config: { sessionId: SESSION } })).toBe(TYCHO);
 	});
 
-	it.each(["repoPath", "repo_path", "path", "cwd", "worktreePath", "base_repo"])(
+	it.each(["repoPath", "repo_path", "path", "cwd", "worktreePath", "base_repo", "project"])(
 		"reads a repository from the top-level %s",
 		(key) => {
 			expect(resolveOwningConnection({ [key]: `${REPO}/src/main.rs` })).toBe(CERES);

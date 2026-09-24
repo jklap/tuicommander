@@ -2,6 +2,10 @@
 
 The transport layer provides a unified IPC abstraction so the same frontend code works in both Tauri (native desktop) and browser (HTTP) modes.
 
+Repository-owned calls resolve their machine from path arguments, including
+`project` on the Project Progress commands. The remote backend owns the
+journal; the local transport routes reads and writes to it.
+
 ## Files
 
 | File | Purpose |

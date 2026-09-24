@@ -143,7 +143,11 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 2] = ["session-state-changed", "session-closed"];
+const WINDOW_MIRRORABLE_EVENTS: [&str; 3] = [
+    "session-state-changed",
+    "session-closed",
+    "progress-recorded",
+];
 
 /// Whether a mirrored event may be repeated on the desktop window.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
@@ -745,12 +749,12 @@ mod tests {
     /// The window emit runs the local handlers. `session-created` there builds
     /// a tab on the local transport for a session this machine does not run;
     /// `repo-changed` and the worktree pair spawn git work for a path that does
-    /// not exist here. Only the badge pair is safe, and the bus still carries
-    /// everything.
+    /// not exist here. The badge pair and Progress receipt are safe, and the
+    /// bus still carries everything.
     #[test]
-    fn only_the_session_scoped_badge_events_reach_the_desktop_window() {
-        for event in ["session-state-changed", "session-closed"] {
-            assert!(window_may_hear(event), "{event} feeds the badge");
+    fn only_safe_mirrored_events_reach_the_desktop_window() {
+        for event in ["session-state-changed", "session-closed", "progress-recorded"] {
+            assert!(window_may_hear(event), "{event} has a safe window consumer");
         }
         for event in [
             "session-created",

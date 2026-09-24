@@ -45,6 +45,10 @@ The MCP `progress` tool takes three fields.
 TUICommander adds the project, the time, the agent's name and the source PTY
 when it can identify one. The agent does not supply them.
 
+For a repository on a connected remote machine, Progress commands run on that
+machine. Its new entries appear in the local desktop and browser views through
+the mirrored `progress-recorded` event.
+
 The receipt is `{"id": <n>}` and nothing more. Each call appends one entry: the
 journal does not deduplicate agent reports, because an agent that reported the
 same step twice did the work twice, and only you can decide what that means.
