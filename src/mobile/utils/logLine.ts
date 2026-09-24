@@ -274,6 +274,8 @@ function joinedLineFor(rows: LogLine[]): LogLine {
 	return line;
 }
 
+const codePoints = (text: string): number => [...text].length;
+
 export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 	const result: LogLine[] = [];
 	const listMarker = /^(?:[-*+•·] |\d+[.)] )/;
@@ -308,7 +310,9 @@ export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 			end++;
 		}
 		const run = lines.slice(i, end);
-		const width = Math.max(...run.map((line) => [...lineText(line)].length));
+		// Every length in the join test counts code points, so a surrogate pair
+		// never weighs 2 against a width that counted it as 1.
+		const width = Math.max(...run.map((line) => codePoints(lineText(line))));
 		// Claude often wraps prose near 80 even when the PTY is 200+ columns.
 		// The widest row in this run is the useful wrap width; cols only gates
 		// short deliberate lines from being treated as a wrapped paragraph.
@@ -322,11 +326,12 @@ export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
 			const prevIndent = prevText.length - prevText.trimStart().length;
 			const nextIndent = nextText.length - nextText.trimStart().length;
 			const nextWord = nextText.trimStart().split(/\s/, 1)[0];
+			const prevLength = codePoints(prevText);
 			const joins =
 				width >= evidenceThreshold &&
-				prevText.length >= width - 24 &&
+				prevLength >= width - 24 &&
 				nextIndent <= prevIndent &&
-				prevText.length + 1 + nextWord.length > width;
+				prevLength + 1 + codePoints(nextWord) > width;
 			if (joins) {
 				group.push(next);
 			} else {

@@ -298,6 +298,16 @@ describe("mobile prose reflow", () => {
 		]);
 	});
 
+	it("measures rows in code points, so emoji do not force a join", () => {
+		const wide = `  ${"word ".repeat(15)}abc`; // 80 code points: the run's wrap width
+		// 72 code points but 76 UTF-16 units: "hello" (5) would have fit after it
+		// (72 + 1 + 5 <= 80), so the agent ended this row on purpose.
+		const withEmoji = `  🚀🚀🚀🚀 ${"ab ".repeat(21)}xy`;
+		expect([...withEmoji].length).toBe(72);
+		const lines = [row(wide), row(withEmoji), row("  hello there")];
+		expect(reflowDisplayLines(lines).map(lineText)).toEqual([`${wide} ${withEmoji.trimStart()}`, "  hello there"]);
+	});
+
 	it("rejoins Claude's 80-column prose inside a 220-column PTY", () => {
 		const lines = [
 			row("  Ho recuperato il piano originale e l'analisi completa su Orca, che erano andati", 220),
