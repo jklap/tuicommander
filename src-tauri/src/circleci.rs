@@ -6,6 +6,17 @@ pub(crate) struct CircleCiJob {
     pub(crate) build_num: u64,
 }
 
+/// Where the active CircleCI token was found. The token itself never crosses a
+/// transport boundary.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum TokenSource {
+    Vault,
+    Env,
+    CliConfig,
+    None,
+}
+
 fn vcs_slug(segment: &str) -> Option<&'static str> {
     match segment {
         "gh" | "github" => Some("gh"),
@@ -44,6 +55,47 @@ pub(crate) fn parse_check_url(value: &str) -> Option<CircleCiJob> {
         repo: repo.to_string(),
         build_num: build_num.parse().ok()?,
     })
+}
+
+fn token_from_cli_config(config: &str) -> Option<String> {
+    config.lines().find_map(|line| {
+        let line = line.trim();
+        let value = line.strip_prefix("token:")?.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn token_from_cli_config_file() -> Option<String> {
+    let path = dirs::home_dir()?.join(".circleci").join("cli.yml");
+    token_from_cli_config(&std::fs::read_to_string(path).ok()?)
+}
+
+pub(crate) fn resolve_token() -> (Option<String>, TokenSource) {
+    let vault = crate::credentials::get(crate::credentials::Credential::CircleCiToken)
+        .ok()
+        .flatten();
+    let env = std::env::var("CIRCLE_TOKEN").ok();
+    resolve_token_from_sources(vault, env, token_from_cli_config_file())
+}
+
+fn resolve_token_from_sources(
+    vault: Option<String>,
+    env: Option<String>,
+    cli_config: Option<String>,
+) -> (Option<String>, TokenSource) {
+    for (token, source) in [
+        (vault, TokenSource::Vault),
+        (env, TokenSource::Env),
+        (cli_config, TokenSource::CliConfig),
+    ] {
+        if let Some(token) = token.map(|value| value.trim().to_string())
+            && !token.is_empty()
+        {
+            return (Some(token), source);
+        }
+    }
+
+    (None, TokenSource::None)
 }
 
 #[cfg(test)]
@@ -96,5 +148,43 @@ mod tests {
         ] {
             assert_eq!(parse_check_url(url), None, "{url}");
         }
+    }
+
+    #[test]
+    fn reads_only_the_token_key_from_circleci_cli_config() {
+        let config = "# CircleCI CLI config\napi: https://circleci.com\ntoken:  cli-read-only-token  \nother_token: ignored\n";
+
+        assert_eq!(
+            super::token_from_cli_config(config),
+            Some("cli-read-only-token".into())
+        );
+    }
+
+    #[test]
+    fn resolves_tokens_in_vault_env_cli_config_order() {
+        assert_eq!(
+            super::resolve_token_from_sources(
+                Some("vault-token".into()),
+                Some("env-token".into()),
+                Some("cli-token".into()),
+            ),
+            (Some("vault-token".into()), super::TokenSource::Vault)
+        );
+        assert_eq!(
+            super::resolve_token_from_sources(
+                None,
+                Some("env-token".into()),
+                Some("cli-token".into()),
+            ),
+            (Some("env-token".into()), super::TokenSource::Env)
+        );
+        assert_eq!(
+            super::resolve_token_from_sources(None, None, Some("cli-token".into())),
+            (Some("cli-token".into()), super::TokenSource::CliConfig)
+        );
+        assert_eq!(
+            super::resolve_token_from_sources(None, None, None),
+            (None, super::TokenSource::None)
+        );
     }
 }
