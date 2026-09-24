@@ -7,7 +7,6 @@ import { uiStore } from "../../../stores/ui";
 import { UiLegend } from "../../HelpPanel/UiLegend";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { DEFAULT_COLOR_PRESETS } from "../../shared/colorPresets";
-import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -96,51 +95,45 @@ export const AppearanceTab: Component = () => {
 		<div class={s.section}>
 			<h3>{t("appearance.heading.tabs", "Tabs")}</h3>
 
-			<ExpertSetting configKey="app.split_tab_mode" value={settingsStore.state.splitTabMode}>
-				<SettingSelect
-					label={t("appearance.label.splitTabMode", "Split Tab Mode")}
-					value={settingsStore.state.splitTabMode}
-					onChange={(v) => {
-						if (v === "separate" || v === "unified") settingsStore.setSplitTabMode(v);
-					}}
-					options={[
-						{ value: "separate", label: t("appearance.splitTabMode.separate", "Separate") },
-						{ value: "unified", label: t("appearance.splitTabMode.unified", "Unified") },
-					]}
-					hint={t("appearance.hint.splitTabMode", "How worktree tabs are arranged in the tab bar")}
-				/>
-			</ExpertSetting>
+			<SettingSelect
+				label={t("appearance.label.splitTabMode", "Split Tab Mode")}
+				value={settingsStore.state.splitTabMode}
+				onChange={(v) => {
+					if (v === "separate" || v === "unified") settingsStore.setSplitTabMode(v);
+				}}
+				options={[
+					{ value: "separate", label: t("appearance.splitTabMode.separate", "Separate") },
+					{ value: "unified", label: t("appearance.splitTabMode.unified", "Unified") },
+				]}
+				hint={t("appearance.hint.splitTabMode", "How worktree tabs are arranged in the tab bar")}
+			/>
 
-			<ExpertSetting configKey="app.tab_ordering_mode" value={settingsStore.state.tabOrderingMode}>
-				<SettingSelect
-					label={t("appearance.label.tabOrderingMode", "Tab Ordering")}
-					value={settingsStore.state.tabOrderingMode}
-					onChange={(v) => {
-						if (v === "grouped-by-type" || v === "terminals-first" || v === "free") settingsStore.setTabOrderingMode(v);
-					}}
-					options={[
-						{ value: "grouped-by-type", label: t("appearance.tabOrderingMode.grouped", "Grouped by Type") },
-						{ value: "terminals-first", label: t("appearance.tabOrderingMode.terminalsFirst", "Terminals First") },
-						{ value: "free", label: t("appearance.tabOrderingMode.free", "Free") },
-					]}
-					hint={t(
-						"appearance.hint.tabOrderingMode",
-						"How tabs are ordered: grouped by type, terminals first, or freely interleaved",
-					)}
-				/>
-			</ExpertSetting>
+			<SettingSelect
+				label={t("appearance.label.tabOrderingMode", "Tab Ordering")}
+				value={settingsStore.state.tabOrderingMode}
+				onChange={(v) => {
+					if (v === "grouped-by-type" || v === "terminals-first" || v === "free") settingsStore.setTabOrderingMode(v);
+				}}
+				options={[
+					{ value: "grouped-by-type", label: t("appearance.tabOrderingMode.grouped", "Grouped by Type") },
+					{ value: "terminals-first", label: t("appearance.tabOrderingMode.terminalsFirst", "Terminals First") },
+					{ value: "free", label: t("appearance.tabOrderingMode.free", "Free") },
+				]}
+				hint={t(
+					"appearance.hint.tabOrderingMode",
+					"How tabs are ordered: grouped by type, terminals first, or freely interleaved",
+				)}
+			/>
 
-			<ExpertSetting configKey="app.tab_cycling_all_types" value={settingsStore.state.tabCyclingAllTypes}>
-				<SettingToggle
-					checked={settingsStore.state.tabCyclingAllTypes}
-					onChange={(v) => settingsStore.setTabCyclingAllTypes(v)}
-					label={t("appearance.label.tabCyclingAllTypes", "Cycle All Tab Types")}
-					hint={t(
-						"appearance.hint.tabCyclingAllTypes",
-						"Next/previous tab shortcuts cycle through diff, markdown and editor tabs too — not just terminals",
-					)}
-				/>
-			</ExpertSetting>
+			<SettingToggle
+				checked={settingsStore.state.tabCyclingAllTypes}
+				onChange={(v) => settingsStore.setTabCyclingAllTypes(v)}
+				label={t("appearance.label.tabCyclingAllTypes", "Cycle All Tab Types")}
+				hint={t(
+					"appearance.hint.tabCyclingAllTypes",
+					"Next/previous tab shortcuts cycle through diff, markdown and editor tabs too — not just terminals",
+				)}
+			/>
 
 			<SettingToggle
 				checked={settingsStore.state.tabTreeEnabled}
@@ -152,16 +145,14 @@ export const AppearanceTab: Component = () => {
 				)}
 			/>
 
-			<ExpertSetting configKey="app.max_tab_name_length" value={settingsStore.state.maxTabNameLength}>
-				<SettingSlider
-					label={t("appearance.label.maxTabNameLength", "Max Tab Name Length")}
-					value={settingsStore.state.maxTabNameLength}
-					onChange={(v) => settingsStore.setMaxTabNameLength(v)}
-					min={10}
-					max={60}
-					hint={t("appearance.hint.maxTabNameLength", "Maximum characters shown in tab names before truncating")}
-				/>
-			</ExpertSetting>
+			<SettingSlider
+				label={t("appearance.label.maxTabNameLength", "Max Tab Name Length")}
+				value={settingsStore.state.maxTabNameLength}
+				onChange={(v) => settingsStore.setMaxTabNameLength(v)}
+				min={10}
+				max={60}
+				hint={t("appearance.hint.maxTabNameLength", "Maximum characters shown in tab names before truncating")}
+			/>
 
 			<h3>{t("appearance.heading.groups", "Repository Groups")}</h3>
 			<p class={s.hint}>

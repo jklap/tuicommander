@@ -125,44 +125,62 @@ describe("LocalMcpPanel", () => {
 		const collapseTools = (view: ReturnType<typeof render>) => view.queryByText(/Collapse tools/);
 		const nativeToolToggles = (view: ReturnType<typeof render>) => view.queryByText("plugin_dev_guide");
 
-		it("hides Collapse tools and the native tool toggles at their defaults", async () => {
+		it("hides Collapse tools at its default, but keeps the basic native tool toggles", async () => {
 			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
 			expect(collapseTools(view)).toBeNull();
+			expect(nativeToolToggles(view)).not.toBeNull();
+			expect(view.getByText("Native tools")).toBeDefined();
+			view.unmount();
+		});
+
+		it("shows Collapse tools once its saved value differs from the default", async () => {
+			const view = await renderWith({ collapse_tools: true, disabled_native_tools: ["config", "debug"] });
+			expect(collapseTools(view)).not.toBeNull();
+			view.unmount();
+		});
+
+		it("shows Collapse tools at its default in expert mode", async () => {
+			uiStore.setSettingsExpertMode(true);
+			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			expect(collapseTools(view)).not.toBeNull();
+			view.unmount();
+		});
+
+		// The toggles render the saved list, so they must not show the `[]`
+		// placeholder (every tool on) before `load_config` answers.
+		it("renders the native tool toggles only once the saved list has loaded", async () => {
+			let answer: (config: unknown) => void = () => {};
+			const base = vi.mocked(rpc).getMockImplementation();
+			vi.mocked(rpc).mockImplementation((command: string, args?: Record<string, unknown>) =>
+				command === "load_config"
+					? new Promise((resolve) => {
+							answer = resolve;
+						})
+					: (base?.(command, args) as Promise<never>),
+			);
+			const view = render(() => <LocalMcpPanel />);
+			await vi.advanceTimersByTimeAsync(0);
 			expect(nativeToolToggles(view)).toBeNull();
-			// The page itself stays: only the tuning knobs hide.
-			expect(view.getByText("TUIC Tools")).toBeDefined();
+
+			answer({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
+			await vi.advanceTimersByTimeAsync(0);
+			const configToggle = view.getByText("config").closest("div")?.parentElement?.querySelector("input");
+			expect(configToggle?.checked).toBe(false);
 			view.unmount();
 		});
 
-		it("shows a control whose saved value differs from its default", async () => {
-			const view = await renderWith({ collapse_tools: true, disabled_native_tools: [] });
-			expect(collapseTools(view)).not.toBeNull();
-			expect(nativeToolToggles(view)).not.toBeNull();
-			view.unmount();
-		});
-
-		it("shows only the modified control, not the one still at its default", async () => {
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config"] });
-			expect(collapseTools(view)).toBeNull();
-			expect(nativeToolToggles(view)).not.toBeNull();
-			view.unmount();
-		});
-
-		it("shows every control at its default in expert mode", async () => {
-			uiStore.setSettingsExpertMode(true);
-			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
-			expect(collapseTools(view)).not.toBeNull();
-			expect(nativeToolToggles(view)).not.toBeNull();
-			view.unmount();
-		});
-
-		// A search result for either control must land on the control itself,
+		// A search result for either TUIC Tools control must land on the control itself,
 		// not fall back to the section heading.
-		it("scrolls to each indexed MCP expert control, not just its section", async () => {
+		it("scrolls to each indexed TUIC Tools control, not just its section", async () => {
 			uiStore.setSettingsExpertMode(true);
 			const view = await renderWith({ collapse_tools: false, disabled_native_tools: ["config", "debug"] });
-			const entries = SETTINGS_SEARCH_INDEX.filter((entry) => entry.tab === "mcp" && entry.expert);
-			expect(entries.map((entry) => entry.configKey)).toEqual(["app.collapse_tools", "app.disabled_native_tools"]);
+			const entries = SETTINGS_SEARCH_INDEX.filter(
+				(entry) => entry.tab === "mcp" && entry.section === "TUIC Tools" && entry.label,
+			);
+			expect(entries.map((entry) => entry.label)).toEqual([
+				"Collapse tools — Speakeasy MCP (reduces AI context ~98%)",
+				"Native tools",
+			]);
 			for (const entry of entries) {
 				const scrolled: Element[] = [];
 				for (const el of view.container.querySelectorAll("h3, label, span")) {

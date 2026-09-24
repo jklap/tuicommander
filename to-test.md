@@ -8,6 +8,14 @@
 
 # To Test
 
+## Voice auto-send is on by default (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, with an instance whose `dictation-config.json` has no `auto_send` key (use `TUIC_APP_INSTANCE=<id>`, fresh config), Settings → Voice shows Auto-send on and a dictated phrase is sent with Enter. In basic mode the Auto-send row is hidden; switching it off makes it visible and the stored `false` survives an app restart.
+
+## "Add another GitHub account" is an expert entry point (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, `curl localhost:9876/config/defaults` has `"github_accounts":{"accounts":[]}`. In Settings → Git & GitHub with no additional account, basic mode does not show the "Add another GitHub account" button, and Expert mode shows it. With one additional account configured (or a repository that needs an account), the "Additional GitHub Accounts" block with "Add another github.com account" and "Add Enterprise account" shows in basic mode. Before the restart the old backend has no `github_accounts` domain, so the button stays visible in basic mode.
+
 ## Agent hook toggles store the default as absent (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, in Settings → Agents, turn Claude's "Native status signals" off and on again, and Gemini's "Install hooks globally" on and off again. `agents.json` then has no `native_status_signals` / `hook_instrumentation` key for them. After a Settings reopen in basic mode, both rows are hidden. Signals and hooks still behave as enabled/disabled respectively. (Existing `agents.json` files that already hold `true`/`false` keep them until the toggle is used again.)

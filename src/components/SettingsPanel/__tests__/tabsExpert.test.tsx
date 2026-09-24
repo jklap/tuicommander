@@ -56,6 +56,7 @@ const APP_DEFAULTS = {
 	tab_ordering_mode: "grouped-by-type",
 	tab_cycling_all_types: false,
 	max_tab_name_length: 25,
+	shell: null,
 	font_weight: 400,
 	osc52_clipboard: true,
 	block_folding_enabled: true,
@@ -106,38 +107,7 @@ const CASES: Case[] = [
 		field: "update_channel",
 		modified: "nightly",
 	},
-	{
-		page: "Appearance",
-		tab: AppearanceTab,
-		label: "Split Tab Mode",
-		domain: "app",
-		field: "split_tab_mode",
-		modified: "unified",
-	},
-	{
-		page: "Appearance",
-		tab: AppearanceTab,
-		label: "Tab Ordering",
-		domain: "app",
-		field: "tab_ordering_mode",
-		modified: "free",
-	},
-	{
-		page: "Appearance",
-		tab: AppearanceTab,
-		label: "Cycle All Tab Types",
-		domain: "app",
-		field: "tab_cycling_all_types",
-		modified: true,
-	},
-	{
-		page: "Appearance",
-		tab: AppearanceTab,
-		label: "Max Tab Name Length",
-		domain: "app",
-		field: "max_tab_name_length",
-		modified: 40,
-	},
+	{ page: "Terminal", tab: TerminalTab, label: "Shell", domain: "app", field: "shell", modified: "/bin/zsh" },
 	{ page: "Terminal", tab: TerminalTab, label: "Font Weight", domain: "app", field: "font_weight", modified: 300 },
 	{
 		page: "Terminal",
@@ -182,19 +152,21 @@ const CASES: Case[] = [
 	{
 		page: "Notifications",
 		tab: NotificationsTab,
-		label: "Silence completions from MCP sessions",
+		label: "Master Volume",
 		domain: "notifications",
-		field: "silence_remote_completions",
-		modified: false,
+		field: "volume",
+		modified: 0.8,
 	},
-	{
-		page: "Notifications",
-		tab: NotificationsTab,
-		label: "Keep toasts in the bell",
-		domain: "notifications",
-		field: "toasts_in_bell",
-		modified: false,
-	},
+];
+
+/** Basic controls on the same pages: visible in basic mode at their default. */
+const BASIC_AT_DEFAULT: { page: string; tab: Component; label: string }[] = [
+	{ page: "Notifications", tab: NotificationsTab, label: "Silence completions from MCP sessions" },
+	{ page: "Notifications", tab: NotificationsTab, label: "Keep toasts in the bell" },
+	{ page: "Appearance", tab: AppearanceTab, label: "Split Tab Mode" },
+	{ page: "Appearance", tab: AppearanceTab, label: "Tab Ordering" },
+	{ page: "Appearance", tab: AppearanceTab, label: "Cycle All Tab Types" },
+	{ page: "Appearance", tab: AppearanceTab, label: "Max Tab Name Length" },
 ];
 
 /** Hydrate the real stores from these saved configs and load the defaults. */
@@ -247,5 +219,12 @@ describe("expert controls on General, Appearance, Notifications and Terminal", (
 			const { container } = render(() => <Tab />);
 			expect(hasText(container, label)).toBe(true);
 		});
+	});
+
+	it.each(BASIC_AT_DEFAULT)("$page — $label is shown in basic mode at its default", async ({ tab: Tab, label }) => {
+		await setup({}, {});
+		const { container } = render(() => <Tab />);
+		await waitFor(() => expect(container.querySelector("h3")).not.toBeNull());
+		expect(hasText(container, label)).toBe(true);
 	});
 });

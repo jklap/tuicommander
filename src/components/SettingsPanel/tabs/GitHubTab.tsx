@@ -819,11 +819,15 @@ export const GitHubTab: Component = () => {
 				<Show
 					when={!isSingleAccountSetup() || showAddPanel()}
 					fallback={
-						<div class={g.actions} style={{ "margin-top": "16px" }}>
-							<button class={cx(g.btn)} onClick={() => setShowAddPanel(true)}>
-								Add another GitHub account
-							</button>
-						</div>
+						// Only the entry point is expert. The manager above renders once an
+						// account exists or a repo needs one, and it stays visible then.
+						<ExpertSetting configKey="github_accounts.accounts" value={accounts()}>
+							<div class={g.actions} style={{ "margin-top": "16px" }}>
+								<button class={cx(g.btn)} onClick={() => setShowAddPanel(true)}>
+									Add another GitHub account
+								</button>
+							</div>
+						</ExpertSetting>
 					}
 				>
 					<h3>Additional GitHub Accounts</h3>

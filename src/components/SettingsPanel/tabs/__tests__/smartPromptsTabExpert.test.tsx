@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../../__tests__/mocks/tauri";
 
@@ -42,7 +42,7 @@ async function setup(agent?: string, agents: Record<string, unknown> = {}) {
 const hasHeadlessAgent = (container: HTMLElement) =>
 	[...container.querySelectorAll("label")].some((el) => el.textContent === "Headless Agent");
 
-describe("SmartPromptsTab expert controls", () => {
+describe("SmartPromptsTab Headless Agent", () => {
 	beforeEach(() => {
 		uiStore.setSettingsExpertMode(false);
 		mockInvoke.mockImplementation((cmd: string) => {
@@ -57,24 +57,13 @@ describe("SmartPromptsTab expert controls", () => {
 		uiStore.setSettingsExpertMode(false);
 	});
 
-	it("hides Headless Agent in basic mode while none is configured", async () => {
+	// Headless Agent is a basic setting: the typical user picks one, so basic
+	// mode shows it even while none is configured (the default).
+	it("shows Headless Agent in basic mode while none is configured", async () => {
 		await setup();
 		const { container, getByText } = render(() => <SmartPromptsTab />);
 		expect(getByText("Smart Prompts")).toBeDefined();
-		expect(hasHeadlessAgent(container)).toBe(false);
-	});
-
-	it("shows Headless Agent in basic mode once one is configured", async () => {
-		await setup("claude");
-		const { container } = render(() => <SmartPromptsTab />);
 		expect(hasHeadlessAgent(container)).toBe(true);
-	});
-
-	it("shows Headless Agent in expert mode while none is configured", async () => {
-		await setup();
-		uiStore.setSettingsExpertMode(true);
-		const { container } = render(() => <SmartPromptsTab />);
-		await waitFor(() => expect(hasHeadlessAgent(container)).toBe(true));
 	});
 
 	describe("Headless Agent picker", () => {
@@ -87,8 +76,6 @@ describe("SmartPromptsTab expert controls", () => {
 			[...container.querySelectorAll("select")].find((el) =>
 				[...el.options].some((o) => o.textContent === "— Not configured —"),
 			) as HTMLSelectElement;
-
-		beforeEach(() => uiStore.setSettingsExpertMode(true));
 
 		it("saves a run config choice as <agent>:<config>, the form executeHeadless parses", async () => {
 			await setup(undefined, RUN_CONFIGS);
