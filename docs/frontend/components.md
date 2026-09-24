@@ -51,10 +51,10 @@ App.tsx (central orchestrator)
 ├── SettingsPanel/            # Settings overlay; nav grouped by task (GLOBAL_TAB_GROUPS)
 │   ├── ExpertSetting         # ExpertSetting / ExpertSection / ExpertModeSwitch
 │   ├── DictationSettings     # Voice page
-│   ├── tabs/GeneralTab       # Language, context bar, confirmations, updates, experimental
+│   ├── tabs/GeneralTab       # Language, context bar, confirmations, power management, updates, experimental
 │   ├── tabs/AppearanceTab    # Tabs, repository groups, layout, UI legend
 │   ├── tabs/NotificationsTab # Sound and notification prefs
-│   ├── tabs/TerminalTab      # Theme, shell, font, cursor, clipboard, blocks, power management
+│   ├── tabs/TerminalTab      # Theme, shell, font, cursor, clipboard, blocks
 │   ├── tabs/KeyboardShortcutsTab # Rebindable keyboard shortcuts, global hotkey
 │   ├── tabs/GitHubTab        # Git & GitHub: OAuth login, PR/issue display, repo + worktree defaults
 │   ├── tabs/AgentsTab        # Agent detection, run configs, Claude Usage toggle
@@ -181,11 +181,11 @@ label row above its pages, and the configured repositories follow under
 
 **Pages:**
 - **Application**
-  - **General** (`GeneralTab`) — Language, agent context bar, confirmations, updates, Experimental Features
+  - **General** (`GeneralTab`) — Language, agent context bar, confirmations, power management, updates, Experimental Features
   - **Appearance** (`AppearanceTab`) — Tabs, repository groups, layout reset, UI legend
   - **Notifications** (`NotificationsTab`) — Sound and notification preferences
 - **Workspace**
-  - **Terminal** (`TerminalTab`) — Theme, shell, font, font size and weight, cursor style, clipboard, command blocks, scrollback reflow, power management
+  - **Terminal** (`TerminalTab`) — Theme, shell, font, font size and weight, cursor style, clipboard, command blocks, scrollback reflow
   - **Keyboard Shortcuts** (`KeyboardShortcutsTab`) — Rebindable shortcuts (auto-populated from `actionRegistry.ts`) and the global hotkey. The Help panel reuses the same editor
   - **Git & GitHub** (`GitHubTab`) — GitHub OAuth login (Device Flow), token management, diagnostics, PR and issue display, repository and worktree defaults, additional accounts, repository bindings
 - **AI**

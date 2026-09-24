@@ -181,7 +181,7 @@ describe("searchSettings", () => {
 		const hits = searchSettings("power management", ALL_TABS, "desktop");
 		// The section entry first, then every setting it contains — searching a
 		// heading is how you browse a section you cannot name a field in.
-		expect(hits[0]).toEqual(expect.objectContaining({ tab: "terminal", section: "Power Management" }));
+		expect(hits[0]).toEqual(expect.objectContaining({ tab: "general", section: "Power Management" }));
 		expect(hits[0].label).toBeUndefined();
 		expect(hits.map((e) => e.label)).toEqual([
 			undefined,

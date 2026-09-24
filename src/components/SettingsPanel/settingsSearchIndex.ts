@@ -78,6 +78,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
+	{ tab: "general", section: "Power Management", sectionKey: "general.heading.powerManagement" },
 	{ tab: "general", section: "Updates", sectionKey: "general.heading.updates" },
 	{ tab: "general", section: "Experimental Features", sectionKey: "general.heading.experimental" },
 	{ tab: "general", section: "General", label: "Language", labelKey: "general.label.language" },
@@ -96,6 +97,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	},
 	{
 		tab: "general",
+		section: "Power Management",
+		label: "Prevent sleep when busy",
+		labelKey: "general.toggle.preventSleepWhenBusy",
+	},
+	{ tab: "general", section: "Power Management", label: "Auto-Standby Timeout" },
+	{ tab: "general", section: "Power Management", label: "Content Indexing" },
+	{
+		tab: "general",
 		section: "Updates",
 		label: "Automatically check for updates",
 		labelKey: "general.toggle.autoUpdateEnabled",
@@ -104,7 +113,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
-	{ tab: "terminal", section: "Power Management", sectionKey: "general.heading.powerManagement" },
 	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
 	{ tab: "terminal", section: "Terminal", label: "Shell", labelKey: "general.label.shell" },
 	{ tab: "terminal", section: "Terminal", label: "Terminal Font", labelKey: "appearance.label.terminalFont" },
@@ -137,14 +145,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Reflow scrollback on resize",
 		labelKey: "general.toggle.scrollbackReflow",
 	},
-	{
-		tab: "terminal",
-		section: "Power Management",
-		label: "Prevent sleep when busy",
-		labelKey: "general.toggle.preventSleepWhenBusy",
-	},
-	{ tab: "terminal", section: "Power Management", label: "Auto-Standby Timeout" },
-	{ tab: "terminal", section: "Power Management", label: "Content Indexing" },
 	// tabs/DeveloperToolsTab.tsx
 	{ tab: "developer-tools", section: "TUIC CLI", sectionKey: "general.heading.cli", platform: "desktop" },
 	{

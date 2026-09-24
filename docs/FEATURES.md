@@ -239,7 +239,7 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
 - **Event** — `session-standby` (`{ session_id, standby }`) emitted on stop/wake
-- **Settings** — Settings > Terminal > Power Management > Auto-Standby Timeout (default 5 min; `0` disables)
+- **Settings** — Settings > General > Power Management > Auto-Standby Timeout (default 5 min; `0` disables)
 
 ---
 
@@ -1328,6 +1328,7 @@ The navigation groups the global pages by task. Each group is a static label row
 - Language: the locales that ship a message catalog, each named in its own language. The pick persists to `config.json` and re-renders every translated string without a reload. Locales with no catalog are not listed — they would render English while claiming to be translated — so the list holds only English until more catalogs land
 - Show agent context bar
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
+- Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
 - Updates: auto-check, update channel, check now
 - Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
 
@@ -1395,7 +1396,6 @@ The `ego_executable` path (the AI Chat section), then ego's own configuration. S
 - Shell
 - Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)
 - Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry), scrollbar marks, scrollback reflow on resize
-- Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
 
 ### 11.10 Git & GitHub
 - GitHub authentication (see **8.13**), additional accounts and repository bindings (see **8.14**)

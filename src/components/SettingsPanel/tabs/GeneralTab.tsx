@@ -4,7 +4,7 @@ import { appLogger } from "../../../stores/appLogger";
 import type { UpdateChannel } from "../../../stores/settings";
 import { settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
-import { SettingSelect, SettingToggle } from "../SettingFields";
+import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
 export const GeneralTab: Component = () => {
@@ -51,6 +51,41 @@ export const GeneralTab: Component = () => {
 				onChange={(v) => settingsStore.setConfirmBeforeClosingTab(v)}
 				label={t("general.toggle.confirmBeforeClosingTab", "Confirm before closing a tab")}
 				hint={t("general.hint.confirmBeforeClosingTab", "Show a confirmation dialog when closing a terminal tab")}
+			/>
+
+			<h3>{t("general.heading.powerManagement", "Power Management")}</h3>
+
+			<SettingToggle
+				checked={settingsStore.state.preventSleepWhenBusy}
+				onChange={(v) => settingsStore.setPreventSleepWhenBusy(v)}
+				label={t("general.toggle.preventSleepWhenBusy", "Prevent sleep when busy")}
+				hint={t("general.hint.preventSleepWhenBusy", "Keep the system awake while scripts are running")}
+			/>
+
+			<SettingSlider
+				label="Auto-Standby Timeout"
+				value={settingsStore.state.standbyTimeoutMinutes}
+				onChange={(v) => settingsStore.setStandbyTimeoutMinutes(v)}
+				min={0}
+				max={60}
+				step={1}
+				formatValue={(v) => (v === 0 ? "Off" : `${v} min`)}
+				hint="Pause idle background sessions after this duration to save resources. 0 = disabled."
+			/>
+
+			<SettingSelect
+				label="Content Indexing"
+				value={settingsStore.state.indexStrategy}
+				onChange={(v) =>
+					settingsStore.setIndexStrategy(v as "active_only" | "active_and_switch" | "all_sequential" | "disabled")
+				}
+				options={[
+					{ value: "disabled", label: "Disabled" },
+					{ value: "active_only", label: "Active repo only" },
+					{ value: "active_and_switch", label: "Active + on switch" },
+					{ value: "all_sequential", label: "All repos at boot" },
+				]}
+				hint="When to build search indexes. Set to Disabled to turn off background indexing entirely."
 			/>
 
 			<h3>{t("general.heading.updates", "Updates")}</h3>
