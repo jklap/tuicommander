@@ -135,19 +135,21 @@ export const NotificationsTab: Component = () => {
 					label={t("notifications.toggle.enableAudio", "Enable audio notifications")}
 				/>
 
-				<SettingSlider
-					label={t("notifications.label.masterVolume", "Master Volume")}
-					value={Math.round(notificationsStore.state.config.volume * 100)}
-					onChange={(v) => notificationsStore.setVolume(v / 100)}
-					onCommit={() => notificationsStore.testSound("info")}
-					min={0}
-					max={100}
-					suffix="%"
-					hint={t(
-						"notifications.hint.masterVolume",
-						"Overall volume for all notification sounds — release the slider to hear a preview",
-					)}
-				/>
+				<ExpertSetting configKey="notifications.volume" value={notificationsStore.state.config.volume}>
+					<SettingSlider
+						label={t("notifications.label.masterVolume", "Master Volume")}
+						value={Math.round(notificationsStore.state.config.volume * 100)}
+						onChange={(v) => notificationsStore.setVolume(v / 100)}
+						onCommit={() => notificationsStore.testSound("info")}
+						min={0}
+						max={100}
+						suffix="%"
+						hint={t(
+							"notifications.hint.masterVolume",
+							"Overall volume for all notification sounds — release the slider to hear a preview",
+						)}
+					/>
+				</ExpertSetting>
 
 				<Show when={isTauri()}>
 					<ExpertSetting
@@ -239,28 +241,23 @@ export const NotificationsTab: Component = () => {
 					</For>
 				</div>
 
-				<ExpertSetting
-					configKey="notifications.silence_remote_completions"
-					value={notificationsStore.state.config.silence_remote_completions}
-				>
-					<div class={s.group}>
-						<label>{t("notifications.label.orchestration", "Orchestration")}</label>
-						<div class={s.toggle}>
-							<input
-								type="checkbox"
-								checked={notificationsStore.state.config.silence_remote_completions}
-								onChange={(e) => notificationsStore.setSilenceRemoteCompletions(e.currentTarget.checked)}
-							/>
-							<span>{t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}</span>
-						</div>
-						<p class={s.hint} style={{ "margin-top": "6px" }}>
-							{t(
-								"notifications.hint.silenceRemoteCompletions",
-								"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
-							)}
-						</p>
+				<div class={s.group}>
+					<label>{t("notifications.label.orchestration", "Orchestration")}</label>
+					<div class={s.toggle}>
+						<input
+							type="checkbox"
+							checked={notificationsStore.state.config.silence_remote_completions}
+							onChange={(e) => notificationsStore.setSilenceRemoteCompletions(e.currentTarget.checked)}
+						/>
+						<span>{t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}</span>
 					</div>
-				</ExpertSetting>
+					<p class={s.hint} style={{ "margin-top": "6px" }}>
+						{t(
+							"notifications.hint.silenceRemoteCompletions",
+							"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
+						)}
+					</p>
+				</div>
 
 				<div class={s.actions}>
 					<button onClick={() => notificationsStore.reset()}>
@@ -271,25 +268,23 @@ export const NotificationsTab: Component = () => {
 
 			{/* Outside the audio Show on purpose — the bell is visual, so the setting
 			    must stay reachable on a machine with no audio output. */}
-			<ExpertSetting configKey="notifications.toasts_in_bell" value={notificationsStore.state.config.toasts_in_bell}>
-				<div class={s.group}>
-					<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
-					<div class={s.toggle}>
-						<input
-							type="checkbox"
-							checked={notificationsStore.state.config.toasts_in_bell}
-							onChange={(e) => notificationsStore.setToastsInBell(e.currentTarget.checked)}
-						/>
-						<span>{t("notifications.toggle.toastsInBell", "Keep toasts in the bell")}</span>
-					</div>
-					<p class={s.hint} style={{ "margin-top": "6px" }}>
-						{t(
-							"notifications.hint.toastsInBell",
-							"Toasts fade on their own, often while you look at another window. Mirroring them into the bell keeps them readable afterwards. Turn this off to leave toasts transient.",
-						)}
-					</p>
+			<div class={s.group}>
+				<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
+				<div class={s.toggle}>
+					<input
+						type="checkbox"
+						checked={notificationsStore.state.config.toasts_in_bell}
+						onChange={(e) => notificationsStore.setToastsInBell(e.currentTarget.checked)}
+					/>
+					<span>{t("notifications.toggle.toastsInBell", "Keep toasts in the bell")}</span>
 				</div>
-			</ExpertSetting>
+				<p class={s.hint} style={{ "margin-top": "6px" }}>
+					{t(
+						"notifications.hint.toastsInBell",
+						"Toasts fade on their own, often while you look at another window. Mirroring them into the bell keeps them readable afterwards. Turn this off to leave toasts transient.",
+					)}
+				</p>
+			</div>
 		</div>
 	);
 };

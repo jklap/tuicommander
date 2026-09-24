@@ -29,7 +29,7 @@ const mockStore = vi.hoisted(() => ({
 		corrections: {},
 		devices: [] as { name: string; is_default: boolean }[],
 		longPressMs: 400,
-		autoSend: false,
+		autoSend: true,
 		rmsThreshold: 0.001,
 		noSpeechThreshold: 0.6,
 		audioLevel: 0,
@@ -682,6 +682,7 @@ describe("DictationSettings – expert controls", () => {
 		agent_settings: {},
 		dictation: {
 			long_press_ms: 400,
+			auto_send: true,
 			device: null,
 			rms_threshold: 0.001,
 			no_speech_threshold: 0.6,
@@ -695,6 +696,7 @@ describe("DictationSettings – expert controls", () => {
 	/** label → the store field that holds its value and a non-default value for it */
 	const EXPERT: Array<[string, keyof State, unknown]> = [
 		["Long-press threshold", "longPressMs", 600],
+		["Auto-send", "autoSend", false],
 		["Input device", "selectedDevice", "USB Mic"],
 		["Level gate", "rmsThreshold", 0.01],
 		["Speech confidence gate", "noSpeechThreshold", 0.8],
@@ -702,15 +704,7 @@ describe("DictationSettings – expert controls", () => {
 		["Notify model when hands-free changes", "notifyModelOnHandsFree", false],
 		["Start notice", "handsFreeStartNotice", "Speak Italian."],
 	];
-	const BASIC = [
-		"Enable Dictation",
-		"Hotkey",
-		"Auto-send",
-		"Whisper Model",
-		"Language",
-		"Activation phrase",
-		"Earcons",
-	];
+	const BASIC = ["Enable Dictation", "Hotkey", "Whisper Model", "Language", "Activation phrase", "Earcons"];
 
 	const hasLabel = (container: HTMLElement, text: string) =>
 		[...container.querySelectorAll("label")].some((el) => el.textContent === text);

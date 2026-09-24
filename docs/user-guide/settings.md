@@ -44,9 +44,9 @@ Some settings have a default that is correct for almost everyone. These are
 The switch position is kept between restarts (UI preference
 `settings_expert_mode`, see [UI Preferences](../backend/config.md#ui-preferences-ui-prefsjson)).
 
-A setting that is shown because its value is modified stays shown until you
-open Settings again. If you set it back to the default, it does not disappear
-under the cursor. The next time you open Settings, it is hidden again.
+A setting that you change stays shown until you open Settings again. If you
+set it back to the default, it does not disappear under the cursor. The next
+time you open Settings, it is hidden again if it has its default value.
 
 When you select a search result with the **Expert** badge in basic mode,
 Settings opens the page, shows that setting and scrolls to it. The setting stays
@@ -55,19 +55,18 @@ shown until you open Settings again. The switch does not change.
 If TUICommander cannot read the default values (the `get_config_defaults`
 command), all expert settings stay visible.
 
-These settings are expert. All other settings are always shown.
+These settings are expert. All other settings are always shown. A page is
+never all expert: in basic mode it would show an empty page.
 
 | Page | Expert settings |
 |------|-----------------|
 | General | Auto-Standby Timeout, Content Indexing, Update Channel |
-| Appearance | Split Tab Mode, Tab Ordering, Cycle All Tab Types, Max Tab Name Length |
-| Notifications | Audio Output Device, Silence completions from MCP sessions (**Orchestration**), Keep toasts in the bell (**Toolbar Bell**) |
-| Terminal | Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
-| Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup, After Merge Behavior, Auto-Fetch Interval |
+| Notifications | Master Volume, Audio Output Device |
+| Terminal | Shell, Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
+| Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup, After Merge Behavior, Auto-Fetch Interval, the **Add another GitHub account** button (shown while no additional account exists) |
 | Agents | Collect project progress (global); per agent: Auto-retry on server errors, Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
-| Voice | Long-press threshold, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
-| Smart Prompts | Headless Agent |
-| MCP | Collapse tools, the native tool toggles (**TUIC Tools**) |
+| Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
+| MCP | Collapse tools |
 | Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack), Allow LAN access without authentication |
 
 ## Application

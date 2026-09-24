@@ -485,8 +485,11 @@ unknown. Hiding a user's override is the one failure this rule must never
 produce. The switch persists as the UI pref `settings_expert_mode`; the
 defaults come from the read-only `get_config_defaults` command. Expert mode is
 not Experimental Features: that flag gates unstable *features*, expert mode
-gates the *visibility of stable settings*. Which controls are expert is not yet
-decided.
+gates the *visibility of stable settings*. Which controls are expert is Boss's
+classification of 2026-09-24 (the Step 6 table of
+`plans/settings-navigation-reorganization.md`, listed per page in
+`docs/user-guide/settings.md` → Expert Mode). A page is never all expert: in
+basic mode it would render an empty page.
 
 ## Persistence
 

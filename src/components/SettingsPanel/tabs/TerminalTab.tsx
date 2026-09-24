@@ -298,13 +298,15 @@ export const TerminalTab: Component = () => {
 
 			<h3>{t("general.heading.terminal", "Terminal")}</h3>
 
-			<SettingInput
-				label={t("general.label.shell", "Shell")}
-				value={settingsStore.state.shell ?? ""}
-				onInput={(v) => settingsStore.setShell(v)}
-				placeholder={t("general.placeholder.shell", "Default shell")}
-				hint={t("general.hint.shell", "Shell used in terminals (leave blank for system default)")}
-			/>
+			<ExpertSetting configKey="app.shell" value={settingsStore.state.shell}>
+				<SettingInput
+					label={t("general.label.shell", "Shell")}
+					value={settingsStore.state.shell ?? ""}
+					onInput={(v) => settingsStore.setShell(v)}
+					placeholder={t("general.placeholder.shell", "Default shell")}
+					hint={t("general.hint.shell", "Shell used in terminals (leave blank for system default)")}
+				/>
+			</ExpertSetting>
 
 			<div class={s.terminalSplit}>
 				<div class={s.terminalControls}>
