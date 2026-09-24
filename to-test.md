@@ -24,6 +24,14 @@
 
 - [ ] Open the Notes, Git and Files panels on repo A. In the sidebar, click an agent row under repo B. All three panels now show repo B, as they do after a click on B's branch row.
 
+## MCP `session action=rename` and leaner output/spawn responses (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] After a restart, call `session action=rename session_id=<id> name="Foo"` via MCP: the tab's display name in the sidebar/tab bar changes to "Foo" immediately.
+- [ ] Rename again with `is_custom=false`: an agent's own OSC/intent title can then overwrite it, unlike a default (sticky) rename.
+- [ ] `session action=rename` with no `name` or a blank one returns `{"error": ...}` and leaves the existing tab name untouched.
+- [ ] `session action=output` on an idle Claude tab: the data ends at the agent's last output line, with no `❯`, separators or status-line/HUD rows. On a tab showing a permission dialog, the dialog and all its options are still there.
+- [ ] `agent action=spawn` returns no `*_with` fields; a registered orchestrator still gets `parent_session_id`.
+
 ## No duplicated agent rows after a WebView reload (2026-09-24) — frontend via HMR
 
 - [ ] Open an agent tab that shows the Context bar. Reload the WebView (`POST localhost:9876/debug/reload_webview`). Scroll up: the last reply must appear once. Before the fix, each reload added 1–2 copies of its top rows.
