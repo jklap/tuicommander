@@ -32,6 +32,8 @@
 
 ## Workflow definitions (2026-09-25) — Rust, needs `make dev` restart
 
+- [ ] After a restart in an isolated instance, start a run for a published `Resolve plan` definition through the workflow run API, page events from sequence zero, pause and resume, and confirm the run survives another restart. The runtime currently requires explicit commands; the scheduler is not yet connected.
+
 - [ ] In an isolated instance after restart, list workflow definitions for a project, edit a draft, publish revision 2, and confirm a run or reader pinned to revision 1 still sees revision 1. Confirm a malformed graph reports a validation error.
 
 ## Native story API (2026-09-24) — Rust, needs `make dev` restart

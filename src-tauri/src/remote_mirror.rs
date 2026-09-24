@@ -143,10 +143,11 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 3] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 4] = [
     "session-state-changed",
     "session-closed",
     "progress-recorded",
+    "workflow-run-changed",
 ];
 
 /// Whether a mirrored event may be repeated on the desktop window.
@@ -753,7 +754,7 @@ mod tests {
     /// bus still carries everything.
     #[test]
     fn only_safe_mirrored_events_reach_the_desktop_window() {
-        for event in ["session-state-changed", "session-closed", "progress-recorded"] {
+        for event in ["session-state-changed", "session-closed", "progress-recorded", "workflow-run-changed"] {
             assert!(window_may_hear(event), "{event} has a safe window consumer");
         }
         for event in [

@@ -332,6 +332,8 @@ When sessions are created or closed (via HTTP, MCP, or PTY exit), the server bro
 
 These events are available on the SSE `/events` stream used by the mobile PWA and any connected WebSocket clients.
 
+`workflow-run-changed` is a low-frequency wake hint `{repo_path,payload:{runId,sequence}}` emitted on desktop and `/events` after a workflow run mutation. Consumers page `/workflows/run/action` with `events` from their last durable sequence, including after reconnect or an SSE lag notification. The hint does not carry the full run state.
+
 ### ACP stream (`/acp/connections/:id/stream`)
 
 The browser half of the desktop `acp_subscribe` Channel, carrying identical

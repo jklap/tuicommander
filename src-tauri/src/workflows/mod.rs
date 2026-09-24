@@ -1,9 +1,11 @@
 mod api;
 mod definition;
+mod run;
 mod store;
 
 pub use api::*;
 pub use definition::*;
+pub use run::*;
 pub use store::*;
 
 #[cfg(test)]

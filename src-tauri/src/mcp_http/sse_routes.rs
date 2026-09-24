@@ -312,6 +312,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::CloseHtmlTabs { .. } => "close-html-tabs",
         AppEvent::ConflictAssistStatus { .. } => "conflict-assist-status",
         AppEvent::ProgressRecorded { .. } => "progress-recorded",
+        AppEvent::WorkflowRunChanged { .. } => "workflow-run-changed",
         AppEvent::ReviewProgress { .. } => "review-progress",
         AppEvent::ProposalsReady { .. } => "proposals-ready",
         AppEvent::SessionStateChanged { .. } => "session-state-changed",
@@ -518,6 +519,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::ConflictAssistStatus { repo_path, payload }
         | AppEvent::ProgressRecorded { repo_path, payload }
+        | AppEvent::WorkflowRunChanged { repo_path, payload }
         | AppEvent::ReviewProgress { repo_path, payload }
         | AppEvent::ProposalsReady { repo_path, payload } => {
             serde_json::json!({ "repo_path": repo_path, "payload": payload })
@@ -852,6 +854,18 @@ mod tests {
             event_payload(&event),
             serde_json::json!({"repo_path":"/repo", "payload":payload})
         );
+    }
+
+    #[test]
+    fn workflow_run_changed_is_a_cursor_wake_hint() {
+        let payload = serde_json::json!({ "runId": "run-1", "sequence": 7 });
+        let event = AppEvent::WorkflowRunChanged {
+            repo_path: "/repo".into(), payload: payload.clone(),
+        };
+        assert_eq!(event_type_name(&event), "workflow-run-changed");
+        assert_eq!(event_payload(&event), serde_json::json!({
+            "repo_path": "/repo", "payload": payload,
+        }));
     }
 
     /// A browser learns a session's lifecycle from this arm; the desktop learns
