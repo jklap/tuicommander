@@ -3566,8 +3566,24 @@ mod tests {
     fn finalize_deletes_once_the_user_confirms() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
         let wt = dirty_worktree_with(repo.path(), "feat-finalize-forced", true);
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        // Finalize always follows the "ask" merge, as in the dialog flow. Without
+        // it the branch keeps unmerged commits, and removal rightly refuses to
+        // strand them before the confirmation is ever consulted.
+        let pending = merge_and_archive_worktree_impl(
+            &state,
+            repo.path().to_string_lossy().to_string(),
+            "feat-finalize-forced".to_string(),
+            "feat-finalize-forced".to_string(),
+            base,
+            "ask".to_string(),
+            false,
+        )
+        .expect("merge");
+        assert_eq!(pending.action, "pending");
 
         let res = finalize_merged_worktree_impl(
             &state,
