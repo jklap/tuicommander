@@ -88,6 +88,23 @@ vi.mock("../../stores/repoSettings", () => ({
 }));
 
 import { SettingsPanel } from "../../components/SettingsPanel/SettingsPanel";
+import { settingsStore } from "../../stores/settings";
+
+/** Nav items keyed by the group label row above them, in rendered order. */
+function navGroups(container: HTMLElement): Record<string, string[]> {
+	const groups: Record<string, string[]> = {};
+	let current = "";
+	for (const el of container.querySelectorAll(".navLabel, .navItem")) {
+		const text = el.textContent ?? "";
+		if (el.classList.contains("navLabel")) {
+			current = text;
+			groups[current] = [];
+		} else {
+			(groups[current] ??= []).push(text);
+		}
+	}
+	return groups;
+}
 
 describe("SettingsPanel", () => {
 	beforeEach(() => {
@@ -201,9 +218,36 @@ describe("SettingsPanel", () => {
 
 	it("shows REPOSITORIES section label above repo items", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
-		const label = container.querySelector(".navLabel");
-		expect(label).not.toBeNull();
-		expect(label!.textContent).toBe("REPOSITORIES");
+		expect(navGroups(container).REPOSITORIES).toEqual(["Alpha", "Beta"]);
+	});
+
+	it("puts every global page under its task group, one direct item each", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		expect(navGroups(container)).toEqual({
+			Application: ["General", "Appearance", "Notifications"],
+			Workspace: ["Terminal", "Keyboard Shortcuts", "Git & GitHub"],
+			AI: ["Agents", "Voice", "Smart Prompts"],
+			Integrations: ["MCP", "Remote Access", "Remote Machines", "Plugins", "Developer Tools"],
+			REPOSITORIES: ["Alpha", "Beta"],
+		});
+	});
+
+	it("lists AI Chat under AI when the feature flag is on", () => {
+		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+		try {
+			const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+			expect(navGroups(container).AI).toEqual(["Agents", "AI Chat", "Voice", "Smart Prompts"]);
+		} finally {
+			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(false);
+		}
+	});
+
+	it("opens a repository's settings from its grouped nav entry", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const beta = Array.from(container.querySelectorAll(".navItemRepo")).find((n) => n.textContent === "Beta")!;
+		fireEvent.click(beta);
+		expect(container.querySelector(".navItem.active")!.textContent).toBe("Beta");
+		expect(container.querySelector(".section h3")!.textContent).toBe("Repository");
 	});
 
 	it("opens on General when no context given", () => {

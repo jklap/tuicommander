@@ -21,7 +21,7 @@ const CATEGORY_ORDER: Record<string, { label: string; order: number }> = {
 
 export interface SmartPromptsDropdownProps {
 	repoPath?: string;
-	/** Matches DeepLinkCallbacks.openSettings — `tab` selects which Settings tab opens. */
+	/** Opens Settings on the Smart Prompts tab. */
 	onOpenSettings?: () => void;
 }
 

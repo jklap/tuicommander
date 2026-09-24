@@ -1,11 +1,8 @@
 /**
- * Story 706-8d98 — the missing-provider reason in the Smart Prompts dropdown
- * must be visible (not just a hover title=) and its "Settings → Providers"
- * portion must be a clickable route to openSettings("providers").
- *
- * Reasons without a settingsTab (busy agent, no terminal, etc.) keep the
- * plain title= tooltip behavior — only a provider-routed reason gets the
- * inline clickable hint.
+ * Story 706-8d98 — a Smart Prompt that cannot run explains why. The clickable
+ * route to a Settings tab went away with the Providers tab (#784-0aec); the
+ * reason now lives in the hover title= only, and the footer keeps its
+ * "Manage Smart Prompts..." link.
  */
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,4 +1,5 @@
-import { render } from "@solidjs/testing-library";
+import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
@@ -91,6 +92,30 @@ describe("SettingsPanel — deep link to a section", () => {
 		));
 		await nextFrame();
 		expect(scrolled).toEqual([]);
+	});
+
+	it("reopens on the requested tab and section after the user moved elsewhere", async () => {
+		const [visible, setVisible] = createSignal(true);
+		const { container } = render(() => (
+			<SettingsPanel
+				visible={visible()}
+				onClose={() => {}}
+				initialTab="mcp"
+				initialSection={SETTINGS_SECTION_UPSTREAM_MCP}
+			/>
+		));
+		await nextFrame();
+		const general = Array.from(container.querySelectorAll(".navItem")).find((n) => n.textContent === "General")!;
+		fireEvent.click(general);
+		expect(container.querySelector(".navItem.active")!.textContent).toBe("General");
+
+		setVisible(false);
+		scrolled = [];
+		setVisible(true);
+		await nextFrame();
+
+		expect(container.querySelector(".navItem.active")!.textContent).toBe("MCP");
+		expect(scrolled).toEqual([container.querySelector(`#${SETTINGS_SECTION_UPSTREAM_MCP}`)]);
 	});
 
 	it("gives MCP its own direct nav entry, findable without going through Services", () => {

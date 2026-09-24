@@ -832,9 +832,8 @@ const App: Component = () => {
 				}}
 				onRun={(shiftKey) => gitOps.handleRunCommand(shiftKey, () => setRunCommandDialogVisible(true))}
 				onReviewPr={gitOps.handleReviewPr}
-				// Toolbar forwards this straight to SmartPromptsDropdown; `tab` lets a
-				// specific route (e.g. "providers" from a missing-provider hint) override
-				// the default "smart-prompts" tab used by its "Manage Smart Prompts..." link.
+				// Toolbar forwards this straight to SmartPromptsDropdown's
+				// "Manage Smart Prompts..." link.
 				onOpenSettings={() => openSettings("smart-prompts")}
 				onShowWhatsNew={(v) => setWhatsNewVersion(v)}
 			/>
