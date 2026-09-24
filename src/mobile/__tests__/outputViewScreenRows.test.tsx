@@ -125,4 +125,23 @@ describe("OutputView screen-row reconciliation", () => {
 		expectSameNodes(rowNodes(container), before);
 		unmount();
 	});
+
+	it("renders source-width prose as one mobile-wrappable paragraph", async () => {
+		const { container, unmount } = await mountView();
+		captured?.onScreenRows?.([
+			{ spans: [{ text: "  Il mio giudizio ragionato richiede ancora una misura prima di" }], cols: 80 },
+			{ spans: [{ text: "  trasformarlo in un dato." }], cols: 80 },
+		]);
+		const before = rowNodes(container);
+		expect(before).toHaveLength(1);
+		expect(before[0].textContent).toBe(
+			"  Il mio giudizio ragionato richiede ancora una misura prima di trasformarlo in un dato.",
+		);
+		captured?.onScreenRows?.([
+			{ spans: [{ text: "  Il mio giudizio ragionato richiede ancora una misura prima di" }], cols: 80 },
+			{ spans: [{ text: "  trasformarlo in un dato." }], cols: 80 },
+		]);
+		expectSameNodes(rowNodes(container), before);
+		unmount();
+	});
 });

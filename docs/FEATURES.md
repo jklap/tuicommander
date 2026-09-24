@@ -1799,6 +1799,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 
 ### 18.3 Session Detail Screen
 - Live output via WebSocket with `format=log` (VT100-extracted clean lines, auto-scrolling, 500-line buffer)
+- Source-width prose rows are rejoined before the phone wraps them; short lines, lists, and box-drawing blocks retain their layout
 - Semantic colorization: log lines are color-coded by type (info, warning, error, diff +/-, file paths) via `classifyLine()` utility
 - Search/filter in output: text search bar filters visible log lines in real time
 - Rich header: agent intent line (italic), current task line, progress bar, usage percentage (red above 80%)

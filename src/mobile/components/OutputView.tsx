@@ -6,6 +6,7 @@ import {
 	type LogLine,
 	lineMatchesNeedle,
 	normalizeLogLine,
+	reflowDisplayLines,
 	sameLine,
 	spanStyle,
 } from "../utils/logLine";
@@ -235,7 +236,7 @@ export function OutputView(props: OutputViewProps) {
 		return allLines().filter((line) => lineMatchesNeedle(line, needle));
 	});
 
-	const lineBlocks = createMemo(() => groupLineBlocks(displayedLines()));
+	const lineBlocks = createMemo(() => groupLineBlocks(reflowDisplayLines(displayedLines())));
 
 	return (
 		<div ref={containerEl} class={styles.output}>

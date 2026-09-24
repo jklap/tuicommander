@@ -8,6 +8,7 @@ import {
 	lineText,
 	logColorToCss,
 	normalizeLogLine,
+	reflowDisplayLines,
 	spanStyle,
 } from "../utils/logLine";
 
@@ -282,6 +283,56 @@ describe("groupLineBlocks", () => {
 // rebuilt per frame. These tests pin the identity contract that makes reuse
 // possible, and the "reads" counters prove the text is derived once per line
 // rather than once per call.
+
+describe("mobile prose reflow", () => {
+	const row = (value: string, cols = 80): LogLine => ({ spans: [{ text: value }], cols });
+
+	it("rejoins source-width prose so the mobile viewport wraps it once", () => {
+		const lines = [
+			row("  Il mio giudizio ragionato richiede ancora una misura prima di"),
+			row("  trasformarlo in un dato."),
+		];
+		const result = reflowDisplayLines(lines);
+		expect(result.map(lineText)).toEqual([
+			"  Il mio giudizio ragionato richiede ancora una misura prima di trasformarlo in un dato.",
+		]);
+	});
+
+	it("rejoins Claude's 80-column prose inside a 220-column PTY", () => {
+		const lines = [
+			row("  Ho recuperato il piano originale e l'analisi completa su Orca, che erano andati", 220),
+			row("  persi perché plans/ è in .gitignore.", 220),
+		];
+		expect(reflowDisplayLines(lines).map(lineText)).toEqual([
+			"  Ho recuperato il piano originale e l'analisi completa su Orca, che erano andati persi perché plans/ è in .gitignore.",
+		]);
+	});
+
+	it("keeps deliberate short lines and blank paragraph breaks", () => {
+		const lines = [row("First short line"), row("Second short line"), row(""), row("Third line")];
+		expect(reflowDisplayLines(lines).map(lineText)).toEqual(lines.map(lineText));
+	});
+
+	it("keeps list items and box drawing separate from prose", () => {
+		const lines = [
+			row("  A long paragraph near the terminal edge with enough words to fill"),
+			row("  - a list item"),
+			row("┌────┐"),
+			row("│ x  │"),
+		];
+		expect(reflowDisplayLines(lines).map(lineText)).toEqual(lines.map(lineText));
+	});
+
+	it("reuses an unchanged joined line and keeps continuation styling", () => {
+		const lines = [
+			row("  Il mio giudizio ragionato richiede ancora una misura prima di"),
+			{ spans: [{ text: "  trasformarlo", bold: true }], cols: 80 },
+		];
+		const first = reflowDisplayLines(lines);
+		expect(reflowDisplayLines(lines)[0]).toBe(first[0]);
+		expect(first[0].spans.at(-1)).toEqual({ text: "trasformarlo", bold: true });
+	});
+});
 
 describe("line derivation cache", () => {
 	/** A LogLine whose span text counts how often it is read. */
