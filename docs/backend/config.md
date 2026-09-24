@@ -854,6 +854,7 @@ config.json written before the field existed — see
 | `agent_settings` | `AgentSettings` | Default for one entry of `AgentsConfig.agents` — there is no single default for the map itself |
 | `repo_defaults` | `RepoDefaultsConfig` | `RepoDefaultsConfig::default()` — what a `repo-defaults.json`-less install loads |
 | `agents` | `AgentsConfig` | `AgentsConfig::default()` — `AgentsConfig`-level fields such as `headless_agent` |
+| `github_accounts` | `GitHubAccountRegistry` | `GitHubAccountRegistry::default()` — `{ "accounts": [] }`, the same shape as `github_accounts.json`; Settings shows the "Add another GitHub account" entry point in basic mode only when accounts exist |
 | `dictation` | `DictationConfig` | Desktop builds only — absent under `--no-default-features` (`tuic-remote`), where `mod dictation` does not compile and the route is not registered |
 
 Fields marked `skip_serializing_if = "Option::is_none"` are omitted when
