@@ -48,10 +48,13 @@ export function createAgentLaunchMenu(getItems: () => ContextMenuItem[], options
 	const onContextMenu = (e: MouseEvent) => {
 		// Without the right-click list, a plain right click belongs to the caller's
 		// own menu: only a pending or fired long press claims the event.
-		if (!rightClick && e.button === 2) {
-			// A mouse right click (button 2), even while the left button is held,
-			// is not a long press: it cancels the press and leaves the caller's menu.
+		if (!rightClick && (e.button === 2 || e.ctrlKey)) {
+			// A mouse right click (button 2) or a macOS Ctrl+click (WebKit reports it
+			// as button 0, on mousedown) is not a long press, even while the timer is
+			// pending: it cancels the press, closes an open list and leaves the event
+			// to the caller's menu.
 			cancelPress();
+			if (pressFired) close();
 			return;
 		}
 		if (!rightClick && pressTimer === undefined && !pressFired) return;

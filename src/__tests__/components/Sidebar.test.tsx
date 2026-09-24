@@ -518,6 +518,23 @@ describe("Sidebar", () => {
 				expect(menuLabels(container)).not.toContain("Claude Code");
 			});
 
+			it("a macOS Ctrl+click opens the branch row menu, not the agent list", () => {
+				// WebKit reports Ctrl+click's contextmenu as button 0, on mousedown,
+				// while the press timer is pending: ctrlKey is what marks it (#882-e5a7).
+				const onAddTerminal = vi.fn();
+				const { container } = render(() => (
+					<Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems: agentItems(() => {}) })} />
+				));
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0, ctrlKey: true });
+				fireEvent.contextMenu(addBtn, { button: 0, ctrlKey: true });
+				vi.advanceTimersByTime(1000);
+
+				expect(menuLabels(container)).toContain("Add Terminal");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+				expect(onAddTerminal).not.toHaveBeenCalled();
+			});
+
 			it("a touch long press whose native contextmenu beats the timer opens the agent list", () => {
 				const onAddTerminal = vi.fn();
 				const { container } = render(() => (
