@@ -191,6 +191,43 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::HashMap;
 
+    const CWD_ENV_VARS: [&str; 2] = ["TUIC_WORKTREE_PATH", "TUIC_MAIN_REPO_PATH"];
+
+    /// `resolve_cwd()` (exec.rs) now prefers `TUIC_WORKTREE_PATH`/
+    /// `TUIC_MAIN_REPO_PATH` over `std::env::current_dir()` — this repo's own
+    /// dev/agent shells are routinely launched FROM a real TUIC-spawned
+    /// terminal that sets these exact vars ambiently, which would otherwise
+    /// make any test asserting a bare `current_dir()` fallback
+    /// non-deterministic depending on what shell invoked `cargo test`/
+    /// `cargo nextest run`. Scrub for the test's duration, restore after.
+    struct EnvVarGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvVarGuard {
+        fn scrub() -> Self {
+            let saved = CWD_ENV_VARS
+                .iter()
+                .map(|&k| (k, std::env::var(k).ok()))
+                .collect();
+            for &k in &CWD_ENV_VARS {
+                unsafe { std::env::remove_var(k) };
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(val) => unsafe { std::env::set_var(k, val) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
+            }
+        }
+    }
+
     /// In-memory backend recording every call, for full parse→execute
     /// pipeline tests with no socket.
     #[derive(Default)]
@@ -1390,7 +1427,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn new_session_without_dash_c_falls_back_to_the_real_cwd_not_none() {
+        let _guard = EnvVarGuard::scrub();
         // Claude Code's swarm path never passes -c on new-session (confirmed
         // empirically — see resolve_cwd's doc comment in exec.rs). Without
         // the fallback this landed on the wrong repo entirely: a live
@@ -1432,7 +1471,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn split_window_without_dash_c_falls_back_to_the_real_cwd_not_none() {
+        let _guard = EnvVarGuard::scrub();
         const LABEL: &str = "claude-swarm-cwd-2";
         let backend = FakeBackend::default();
         run(
@@ -1513,7 +1554,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn new_window_without_dash_c_falls_back_to_the_real_cwd_not_none() {
+        let _guard = EnvVarGuard::scrub();
         // new-window is a rarer edge of the real swarm flow (only reached
         // when the swarm-view window is missing — see tmux-shim.html's
         // "conditions" section) but goes through the same resolve_cwd()
@@ -1561,5 +1604,81 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert_eq!(cwd, expected);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_mid_session_cd_before_swarm_creation_does_not_corrupt_the_whole_swarm() {
+        // Regression test for the live 2026-09-23 bug: `ssh-connections`
+        // (repo: tuicommander) spawned a 6-teammate swarm; the calling
+        // agent's shell had transiently `cd`'d to an unrelated directory
+        // (running a one-off script) at the exact moment Claude Code's
+        // agent-teams internals fired `tmux new-session`, so
+        // `std::env::current_dir()`'s snapshot was wrong for the entire
+        // swarm — every `split-window` teammate faithfully inherited that
+        // one bad reading via topology inheritance. `resolve_cwd()` now
+        // prefers the lead agent's own stable `TUIC_MAIN_REPO_PATH`/
+        // `TUIC_WORKTREE_PATH` env var over both the topology-inherited
+        // value and `current_dir()`, so this must resolve correctly
+        // regardless of where the test process's own live cwd happens to
+        // be sitting.
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "/the/real/repo") };
+        let live_cwd = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_ne!(
+            live_cwd, "/the/real/repo",
+            "test process cwd must not coincidentally match, or this test proves nothing"
+        );
+
+        const LABEL: &str = "claude-swarm-cwd-5";
+        let backend = FakeBackend::default();
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "new-session",
+                    "-d",
+                    "-s",
+                    "claude-swarm",
+                    "-n",
+                    "swarm-view",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        run(
+            &under_label(
+                LABEL,
+                &[
+                    "split-window",
+                    "-d",
+                    "-t",
+                    "%0",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "--",
+                    "cat",
+                ],
+            ),
+            &backend,
+        );
+        let topology = backend.get_topology(LABEL).expect("topology must exist");
+        let first_pane_cwd = topology["sessions"][0]["windows"][0]["panes"][0]["cwd"]
+            .as_str()
+            .expect("cwd must be populated, not null");
+        let second_pane_cwd = topology["sessions"][0]["windows"][0]["panes"][1]["cwd"]
+            .as_str()
+            .expect("cwd must be populated, not null");
+        assert_eq!(first_pane_cwd, "/the/real/repo");
+        assert_eq!(second_pane_cwd, "/the/real/repo");
     }
 }
