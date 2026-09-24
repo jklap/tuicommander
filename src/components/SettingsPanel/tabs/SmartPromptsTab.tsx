@@ -1,5 +1,5 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
-import { AGENT_TYPES, AGENTS, type AgentType } from "../../../agents";
+import { AGENT_TYPES, AGENTS, type AgentType, toHeadlessAgentChoice } from "../../../agents";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
 import { useAgentDetection } from "../../../hooks/useAgentDetection";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
@@ -702,12 +702,7 @@ export const SmartPromptsTab: Component = () => {
 					<label>Headless Agent</label>
 					<select
 						value={agentConfigsStore.getHeadlessAgent() ?? ""}
-						onChange={(e) => {
-							const val = e.currentTarget.value;
-							agentConfigsStore.setHeadlessAgent(
-								val && AGENT_TYPES.includes(val as AgentType) ? (val as AgentType) : null,
-							);
-						}}
+						onChange={(e) => agentConfigsStore.setHeadlessAgent(toHeadlessAgentChoice(e.currentTarget.value))}
 					>
 						<option value="">— Not configured —</option>
 						<For each={headlessAgents()}>

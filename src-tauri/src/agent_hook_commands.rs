@@ -132,13 +132,14 @@ pub(crate) fn state_at(agent_type: &str, settings_path: &Path) -> InstallState {
     }
 }
 
-/// Persist `hook_instrumentation` for an agent into `AgentsConfig`.
+/// Persist `hook_instrumentation` for an agent into `AgentsConfig`. Off is the
+/// default every reader falls back to, so it is stored as absent.
 fn persist_flag(agent_type: &str, enabled: bool) -> Result<(), String> {
     let mut cfg = crate::config::load_agents_config();
     cfg.agents
         .entry(agent_type.to_string())
         .or_default()
-        .hook_instrumentation = Some(enabled);
+        .hook_instrumentation = enabled.then_some(true);
     crate::config::save_agents_config(cfg)
 }
 
@@ -182,12 +183,13 @@ pub(crate) fn set_agent_native_status_signals(
             "native status signals are unsupported for '{agent_type}'"
         ));
     }
+    // On is the default every reader falls back to, so it is stored as absent.
     let mut config = crate::config::load_agents_config();
     config
         .agents
         .entry(agent_type)
         .or_default()
-        .native_status_signals = Some(enabled);
+        .native_status_signals = (!enabled).then_some(false);
     crate::config::save_agents_config(config)
 }
 
@@ -226,6 +228,48 @@ mod tests {
         assert_eq!(state_at("gemini", &path), InstallState::Installed);
         // Same file judged against Claude's map: different command multiset → outdated.
         assert_eq!(state_at("claude", &path), InstallState::Outdated);
+    }
+
+    /// Every reader resolves an absent flag to the same value as the default
+    /// (`hook_instrumented_for`, `agent_hook_launch::enabled`), so writing the
+    /// default back as `None` keeps one spelling per meaning. An explicit
+    /// default would read as a user override in Settings forever.
+    #[test]
+    #[serial_test::serial]
+    fn hook_flag_stores_the_default_as_absent() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let flag = || {
+            crate::config::load_agents_config()
+                .agents
+                .get("gemini")
+                .and_then(|s| s.hook_instrumentation)
+        };
+
+        persist_flag("gemini", true).unwrap();
+        assert_eq!(flag(), Some(true));
+        persist_flag("gemini", false).unwrap();
+        assert_eq!(flag(), None, "off is the default, so it must be stored as absent");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn native_status_signals_store_the_default_as_absent() {
+        let dir = TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let flag = || {
+            crate::config::load_agents_config()
+                .agents
+                .get("claude")
+                .and_then(|s| s.native_status_signals)
+        };
+
+        set_agent_native_status_signals("claude".to_string(), false).unwrap();
+        assert_eq!(flag(), Some(false));
+        assert!(!get_agent_native_status_signals("claude".to_string()));
+        set_agent_native_status_signals("claude".to_string(), true).unwrap();
+        assert_eq!(flag(), None, "on is the default, so it must be stored as absent");
+        assert!(get_agent_native_status_signals("claude".to_string()));
     }
 
     #[test]
