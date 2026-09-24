@@ -30,7 +30,6 @@ describe("createBranchSelectionCoordinator", () => {
 			pty: { canSpawn: async () => true },
 			setStatusInfo: () => {},
 			getDefaultFontSize: () => 14,
-			setCurrentRepoPath: (() => {}) as never,
 			setCurrentBranch: (() => {}) as never,
 		});
 
@@ -176,7 +175,6 @@ describe("createBranchSelectionCoordinator", () => {
 				pty: { canSpawn: async () => false },
 				setStatusInfo: (message) => messages.push(message),
 				getDefaultFontSize: () => 14,
-				setCurrentRepoPath: (() => {}) as never,
 				setCurrentBranch: (() => {}) as never,
 			});
 

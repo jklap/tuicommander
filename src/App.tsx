@@ -442,7 +442,6 @@ const App: Component = () => {
 		pty,
 		setQuitDialogVisible,
 		setStatusInfo,
-		setCurrentRepoPath: gitOps.setCurrentRepoPath,
 		setCurrentBranch: gitOps.setCurrentBranch,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,

@@ -59,7 +59,6 @@ function makeOptions(overrides: Partial<AppBootstrapOptions> = {}): AppBootstrap
 		pty: { listActiveSessions: vi.fn().mockResolvedValue([]), close: vi.fn().mockResolvedValue(undefined) },
 		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
-		setCurrentRepoPath: vi.fn(),
 		setCurrentBranch: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),

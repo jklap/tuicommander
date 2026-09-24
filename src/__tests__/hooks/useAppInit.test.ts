@@ -47,7 +47,6 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 		},
 		setQuitDialogVisible: vi.fn(),
 		setStatusInfo: vi.fn(),
-		setCurrentRepoPath: vi.fn(),
 		setCurrentBranch: vi.fn(),
 		handleBranchSelect: vi.fn().mockResolvedValue(undefined),
 		refreshAllBranchStats: vi.fn(),
@@ -132,7 +131,6 @@ describe("initApp", () => {
 		});
 
 		expect(repositoriesStore.state.activeRepoPath).toBe(targetRepo);
-		expect(deps.setCurrentRepoPath).toHaveBeenCalledWith(targetRepo);
 		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
 		const activeTab = mdTabsStore.getActive();
 		expect(activeTab).toMatchObject({ repoPath: targetRepo, filePath: "reports/comparison.md" });
@@ -781,7 +779,7 @@ describe("initApp", () => {
 		const deps = createMockDeps();
 		await initApp(deps);
 
-		expect(deps.setCurrentRepoPath).toHaveBeenCalledWith("/repo");
+		expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
 		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
 		// Eagerly restore terminals so pane layout IDs match
 		expect(deps.handleBranchSelect).toHaveBeenCalledWith("/repo", "main");
@@ -941,7 +939,7 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		expect(deps.setCurrentRepoPath).toHaveBeenCalledWith("/repo");
+		expect(repositoriesStore.state.activeRepoPath).toBe("/repo");
 		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
 		// Should activate an existing terminal, not call handleBranchSelect
 		const ids = terminalsStore.getIds();
