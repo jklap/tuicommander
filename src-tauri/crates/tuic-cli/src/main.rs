@@ -125,6 +125,17 @@ enum Command {
         #[command(subcommand)]
         action: RepoAction,
     },
+    /// Call the native story service with a typed JSON action
+    Story {
+        /// JSON object tagged with action (for example '{"action":"list_plans"}')
+        action: String,
+        /// Owning project (defaults to the current directory)
+        #[arg(long)]
+        project: Option<String>,
+        /// Live PTY session for a manual claim
+        #[arg(long)]
+        session_id: Option<String>,
+    },
     /// Show TUICommander status
     Status,
     /// Install the tuic CLI to system PATH
@@ -367,6 +378,11 @@ fn dispatch(cmd: Command) -> Result<(), String> {
         Command::Agent { action } => cmd_agent(action),
         Command::Session { action } => cmd_mcp_session(action),
         Command::Repo { action } => cmd_repo(action),
+        Command::Story {
+            action,
+            project,
+            session_id,
+        } => cmd_story(&action, project.as_deref(), session_id.as_deref()),
         Command::Status => cmd_status(),
         Command::InstallCli { path } => cmd_install_cli(path.as_deref()),
         Command::Alias { remove } => cmd_alias(remove),
@@ -378,6 +394,36 @@ fn dispatch(cmd: Command) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
+
+fn cmd_story(action: &str, project: Option<&str>, session_id: Option<&str>) -> Result<(), String> {
+    let action: serde_json::Value = serde_json::from_str(action)
+        .map_err(|e| format!("Story action must be a JSON object: {e}"))?;
+    if !action.is_object() || action["action"].as_str().is_none() {
+        return Err("Story action must be a JSON object with an action field".into());
+    }
+    let project = match project {
+        Some(path) => resolve_path(path),
+        None => std::env::current_dir()
+            .map_err(|e| format!("Cannot get current directory: {e}"))?
+            .to_string_lossy()
+            .to_string(),
+    };
+    let body = serde_json::json!({"action": action, "sessionId": session_id});
+    let response = ipc::request(
+        "POST",
+        &format!("/stories/action?path={}", urlencod(&project)),
+        Some(&body.to_string()),
+    )
+    .map_err(|e| format!("Story request failed: {e}"))?;
+    if !response.is_success() {
+        return Err(format!(
+            "Story request failed (HTTP {}): {}",
+            response.status, response.body
+        ));
+    }
+    println!("{}", response.body);
+    Ok(())
+}
 
 fn cmd_open(path: Option<String>, _wait: bool, goto: Option<String>) -> Result<(), String> {
     ipc::ensure_running().map_err(|e| e.to_string())?;
@@ -1592,10 +1638,11 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Path, PathBuf, agent_send_parts, capture_payload, disposable_roots, is_disposable_root,
-        resolve_path, session_status, short_id, short_repo, strip_verbatim, translate_keys,
-        truncate, without_flag,
+        Cli, Command, Path, PathBuf, agent_send_parts, capture_payload, disposable_roots,
+        is_disposable_root, resolve_path, session_status, short_id, short_repo, strip_verbatim,
+        translate_keys, truncate, without_flag,
     };
+    use clap::Parser;
 
     #[test]
     fn agent_spawn_payload_preserves_every_mcp_spawn_field() {
@@ -1633,6 +1680,23 @@ mod tests {
         }
     }
     use serde_json::json;
+
+    #[test]
+    fn story_cli_accepts_a_typed_action_and_project() {
+        let cli = Cli::try_parse_from([
+            "tuic",
+            "story",
+            "{\"action\":\"list_plans\"}",
+            "--project",
+            "/repo",
+        ])
+        .expect("parse story command");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Story { action, project: Some(project), session_id: None })
+                if action == "{\"action\":\"list_plans\"}" && project == "/repo"
+        ));
+    }
 
     fn tokens(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()

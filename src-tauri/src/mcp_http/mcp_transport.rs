@@ -1186,6 +1186,13 @@ fn native_tool_definitions() -> serde_json::Value {
             }, "required": ["action"] }
         },
         {
+            "name": "story",
+            "description": "Read and update native plans and stories in the calling managed session's project. Actions are typed; every mutation is checked by the Rust story service. A claim binds to the calling live PTY.",
+            "inputSchema": { "type": "object", "properties": {
+                "input": { "type": "object", "description": "StoryAction object, tagged by action. Examples: {action:'list_plans'}, {action:'get_story',story_id:'...'}, {action:'claim',story_id:'...',expected_revision:1}." }
+            }, "required": ["input"] }
+        },
+        {
             "name": "progress",
             // Claude Code defers MCP tools behind ToolSearch unless told not to;
             // a deferred `progress` is a tool Claude agents never call.
@@ -1920,6 +1927,12 @@ async fn handle_mcp_tool_call_with_context(
             run_blocking_handler(move || handle_task(&state, addr, &args, sid.as_deref())).await
         }
         "repo" => handle_repo(state, args, is_claude_code).await,
+        "story" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
+        }
         "progress" => handle_progress(state, args, mcp_session_id).await,
         "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
         "plugin_dev_guide" => {
@@ -5512,6 +5525,29 @@ fn handle_voice(
         "available": false,
         "unavailable_reason": "This TUICommander build has no audio support",
     })
+}
+
+fn handle_story(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+        return serde_json::json!({"error": "story requires a bound live managed session"});
+    };
+    let Some(project) = crate::progress::project_for_session(state, &pty) else {
+        return serde_json::json!({"error": "calling session has no registered project"});
+    };
+    let action: crate::stories::StoryAction = match serde_json::from_value(args["input"].clone()) {
+        Ok(value) => value,
+        Err(error) => return serde_json::json!({"error": format!("invalid story action: {error}")}),
+    };
+    to_json_or_error(crate::stories::story_action_for_session(
+        state,
+        &project,
+        action,
+        Some(&pty),
+    ))
 }
 
 async fn handle_progress(
@@ -12973,6 +13009,7 @@ mod tests {
                 "agent",
                 "task",
                 "repo",
+                "story",
                 "progress",
                 "ui",
                 "plugin_dev_guide",
@@ -12981,6 +13018,20 @@ mod tests {
                 "voice",
             ],
             "native_tool_definitions must return exactly the one family, in order"
+        );
+    }
+
+    #[test]
+    fn story_tool_refuses_an_unbound_caller() {
+        let state = test_state();
+        let result = handle_story(
+            &state,
+            &serde_json::json!({"input": {"action": "list_plans"}}),
+            None,
+        );
+        assert_eq!(
+            result["error"],
+            "story requires a bound live managed session"
         );
     }
 

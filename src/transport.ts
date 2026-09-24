@@ -784,6 +784,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	progress_list: {
 		map: (args, p) => ({ method: "POST", path: `/progress/list?path=${p("project")}`, body: args.input }),
 	},
+	story_action_command: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/stories/action?path=${p("project")}`,
+			body: { action: args.action, sessionId: args.sessionId },
+		}),
+	},
 	progress_delete: {
 		map: (args, p) => ({ method: "POST", path: `/progress/delete?path=${p("project")}`, body: args.input }),
 	},

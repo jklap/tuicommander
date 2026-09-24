@@ -95,7 +95,6 @@ pub(crate) mod pr_review;
 mod press_and_hold;
 pub(crate) mod process_env;
 pub(crate) mod progress;
-pub(crate) mod stories;
 pub(crate) mod prompt;
 pub(crate) mod pty;
 pub(crate) mod pty_capture;
@@ -116,6 +115,7 @@ mod shell_integration;
 pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
 pub(crate) mod state;
+pub(crate) mod stories;
 pub(crate) mod subagent_map;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
@@ -436,6 +436,22 @@ fn progress_mark_viewed(
     pty_id: Option<String>,
 ) -> Result<progress::ProgressViewedReceipt, String> {
     progress::progress_mark_viewed(&project, pty_id.as_deref())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn story_action_command(
+    state: State<'_, Arc<AppState>>,
+    project: String,
+    action: stories::StoryAction,
+    session_id: Option<String>,
+) -> Result<stories::StoryReply, String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        stories::story_action_for_session(&state, &project, action, session_id.as_deref())
+    })
+    .await
+    .map_err(|error| format!("story task failed: {error}"))?
 }
 
 /// Receive a screenshot response from the frontend (captured iframe content).
@@ -1944,6 +1960,7 @@ pub fn run() {
             progress_mark_viewed,
             progress_flow,
             progress_flow_detail,
+            story_action_command,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

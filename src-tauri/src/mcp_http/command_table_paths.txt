@@ -297,6 +297,7 @@
 /sessions/x/write
 /sessions/x/write-parts
 /stats
+/stories/action
 /system/check-update
 /system/local-ip
 /system/local-ips

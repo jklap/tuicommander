@@ -34,7 +34,7 @@ pub enum StoryOrigin {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NewStory {
     pub plan_id: String,
     pub title: String,
@@ -68,19 +68,6 @@ impl StoryStatus {
             Self::WontFix => "wontfix",
         }
     }
-
-    pub(super) fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "backlog" => Ok(Self::Backlog),
-            "ready" => Ok(Self::Ready),
-            "in_progress" => Ok(Self::InProgress),
-            "review" => Ok(Self::Review),
-            "done" => Ok(Self::Done),
-            "blocked" => Ok(Self::Blocked),
-            "wontfix" => Ok(Self::WontFix),
-            _ => Err(format!("unknown story status: {value}")),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -100,7 +87,8 @@ pub struct Story {
     pub claim_session: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
     CheckCriterion(usize),
     UncheckCriterion(usize),

@@ -388,6 +388,8 @@ confirmation cannot authorize changed state.
 
 ## Project Progress
 
+Native plan and story records now have a separate config-directory SQLite authority (`stories.sqlite3`). Progress remains a human-readable journal and does not determine story status. Manual story actions use the shared Rust service across IPC, HTTP, MCP, and CLI. The optional workflow engine described in `plans/native-story-workflows.md` remains in development; import/export is excluded.
+
 Progress is one append-only journal per project, read from a dialog. The dialog
 opens on the active PTY and can switch to another PTY or the repository aggregate.
 It answers "what happened while I was not watching?" and nothing else.

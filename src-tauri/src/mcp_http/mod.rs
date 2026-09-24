@@ -420,6 +420,36 @@ async fn post_progress_list(
     }
     json_result(crate::progress::progress_list(&q.path, input))
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoryActionRequest {
+    action: crate::stories::StoryAction,
+    session_id: Option<String>,
+}
+
+async fn post_story_action(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(input): Json<StoryActionRequest>,
+) -> Response {
+    if let Some(r) = progress_auth(&addr, auth.is_some()) {
+        return r;
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        crate::stories::story_action_for_session(
+            &state,
+            &q.path,
+            input.action,
+            input.session_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("story task failed: {error}"))
+    .and_then(|result| result);
+    json_result(result)
+}
 async fn post_progress_delete(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
@@ -772,6 +802,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/progress/viewed", post(post_progress_viewed))
         .route("/progress/flow", post(post_progress_flow))
         .route("/progress/flow/detail", post(post_progress_flow_detail))
+        .route("/stories/action", post(post_story_action))
         // Session lifecycle
         .route(
             "/sessions",

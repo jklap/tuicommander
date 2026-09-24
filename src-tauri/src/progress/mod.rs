@@ -6,6 +6,7 @@ mod store;
 
 pub use flow::*;
 pub use model::*;
+pub(crate) use ownership::resolve_owning_project;
 pub use service::*;
 #[allow(unused_imports)]
 pub use store::ProgressStore;

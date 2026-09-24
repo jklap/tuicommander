@@ -47,10 +47,36 @@ impl StoryStore {
         expected_revision: i64,
         command: StoryCommand,
     ) -> Result<Story, String> {
+        self.transition_for_actor(story_id, expected_revision, command, None)
+    }
+
+    pub fn transition_for_actor(
+        &self,
+        story_id: &str,
+        expected_revision: i64,
+        command: StoryCommand,
+        actor_session: Option<&str>,
+    ) -> Result<Story, String> {
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
+        if let Some(actor) = actor_session {
+            match command {
+                StoryCommand::CheckCriterion(_)
+                | StoryCommand::UncheckCriterion(_)
+                | StoryCommand::SubmitReview => {
+                    if story.claim_session.as_deref() != Some(actor) {
+                        return Err("story is not claimed by calling session".into());
+                    }
+                }
+                _ => {
+                    return Err(
+                        "review and administrative transitions require a user action".into(),
+                    );
+                }
+            }
+        }
         match command {
             StoryCommand::CheckCriterion(index) | StoryCommand::UncheckCriterion(index) => {
                 if story.status != StoryStatus::InProgress {
