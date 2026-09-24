@@ -47,11 +47,35 @@ import { uiStore } from "../../../../stores/ui";
 import { AgentsTab } from "../AgentsTab";
 
 // The serialized `AppConfig`/`AgentSettings` defaults these controls compare against.
+// The optional overrides are written as explicit nulls: the Rust side omits them
+// (`skip_serializing_if`), and a missing key inside a present domain resolves to
+// null — the same comparison either way.
 const DEFAULTS = {
 	app: { progress_tracking: true },
 	notifications: {},
-	agent_settings: { run_configs: [], auto_retry_on_error: false, headless_template: null },
+	agent_settings: {
+		run_configs: [],
+		auto_retry_on_error: false,
+		headless_template: null,
+		native_status_signals: null,
+		hook_instrumentation: null,
+		intent_tab_title: null,
+		progress_tracking: null,
+		suggest_followups: null,
+		env_flags: null,
+	},
+	agents: { headless_agent: null },
 };
+
+/** Per-agent override rows: label, the agent whose row carries it, a stored override. */
+const OVERRIDES: Array<[string, "claude" | "gemini", Record<string, unknown>]> = [
+	["Native status signals", "claude", { native_status_signals: false }],
+	["Install hooks globally", "gemini", { hook_instrumentation: true }],
+	["Track agent intent", "claude", { intent_tab_title: false }],
+	["Collect progress", "claude", { progress_tracking: false }],
+	["Show suggested follow-ups", "claude", { suggest_followups: false }],
+	["Environment Flags", "claude", { env_flags: { CLAUDE_CODE_SIMPLE: "1" } }],
+];
 
 let agentsConfig: Record<string, unknown> = {};
 
@@ -61,11 +85,11 @@ async function setup(agents: Record<string, unknown> = {}) {
 	await settingsExpertStore.open();
 }
 
-/** Render the tab and expand Claude's row, where the per-agent controls live. */
-function renderExpanded() {
+/** Render the tab and expand one agent's row, where the per-agent controls live. */
+function renderExpanded(agent: "claude" | "gemini" = "claude") {
 	const result = render(() => <AgentsTab />);
 	const header = [...result.container.querySelectorAll("[role='button']")].find((el) =>
-		el.textContent?.includes(AGENTS.claude.name),
+		el.textContent?.includes(AGENTS[agent].name),
 	) as HTMLElement;
 	fireEvent.click(header);
 	return result;
@@ -81,6 +105,9 @@ describe("AgentsTab expert controls", () => {
 		mockInvoke.mockImplementation((cmd: string) => {
 			if (cmd === "get_config_defaults") return Promise.resolve(DEFAULTS);
 			if (cmd === "load_agents_config") return Promise.resolve({ agents: agentsConfig });
+			// The intent/progress/follow-up overrides render only with the bridge installed.
+			if (cmd === "get_agent_mcp_status")
+				return Promise.resolve({ supported: true, installed: true, config_path: null, shared_settings_file: false });
 			return Promise.resolve(undefined);
 		});
 	});
@@ -127,6 +154,30 @@ describe("AgentsTab expert controls", () => {
 		await setup({ claude: { run_configs: [] } });
 		const { container } = renderExpanded();
 		expect(has(container, "Headless Command Template")).toBe(false);
+	});
+
+	it.each(OVERRIDES)("hides %s in basic mode while the agent has no override", async (label, agent) => {
+		await setup();
+		const { container } = renderExpanded(agent);
+		// Wait for the bridge status, so the gated rows would be rendered if visible.
+		await waitFor(() => expect(has(container, "MCP bridge installed")).toBe(true));
+		expect(has(container, label)).toBe(false);
+	});
+
+	it.each(OVERRIDES)("shows %s in basic mode once the agent stores an override", async (label, agent, override) => {
+		await setup({ [agent]: { run_configs: [], ...override } });
+		const { container } = renderExpanded(agent);
+		await waitFor(() => expect(has(container, label)).toBe(true));
+	});
+
+	it("shows every per-agent override at its default in expert mode", async () => {
+		await setup();
+		uiStore.setSettingsExpertMode(true);
+		for (const [label, agent] of OVERRIDES) {
+			const { container, unmount } = renderExpanded(agent);
+			await waitFor(() => expect(has(container, label), label).toBe(true));
+			unmount();
+		}
 	});
 
 	it("shows every expert control at its default in expert mode", async () => {

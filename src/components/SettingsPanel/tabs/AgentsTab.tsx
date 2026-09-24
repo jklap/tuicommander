@@ -731,6 +731,11 @@ const AgentRow: Component<{
 	};
 
 	const isEnabled = () => settingsStore.isAgentEnabled(props.agentType);
+	/** The stored env flags in the serialized shape: an empty map is not written. */
+	const envFlagsOverride = () => {
+		const flags = configStore.getEnvFlags(props.agentType);
+		return Object.keys(flags).length > 0 ? flags : null;
+	};
 
 	return (
 		<div class={a.agentRow}>
@@ -820,99 +825,124 @@ const AgentRow: Component<{
 					</ExpertSetting>
 
 					<Show when={supportsLaunchSignals()}>
-						<div class={a.expandedSection}>
-							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-								<input
-									type="checkbox"
-									checked={configStore.getNativeStatusSignals(props.agentType)}
-									disabled={hookLoading()}
-									onChange={handleNativeStatusToggle}
-								/>
-								<span>Native status signals</span>
-								<span class={a.badge} data-type="mcp">
-									Signals: at launch
-								</span>
-							</label>
-							<p class={s.hint}>
-								Adds process-scoped status integration only to agents launched inside TUIC. Applies on next launch.
-							</p>
-						</div>
+						<ExpertSetting
+							configKey="agent_settings.native_status_signals"
+							value={configStore.state.agents[props.agentType]?.native_status_signals ?? null}
+						>
+							<div class={a.expandedSection}>
+								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										checked={configStore.getNativeStatusSignals(props.agentType)}
+										disabled={hookLoading()}
+										onChange={handleNativeStatusToggle}
+									/>
+									<span>Native status signals</span>
+									<span class={a.badge} data-type="mcp">
+										Signals: at launch
+									</span>
+								</label>
+								<p class={s.hint}>
+									Adds process-scoped status integration only to agents launched inside TUIC. Applies on next launch.
+								</p>
+							</div>
+						</ExpertSetting>
 					</Show>
 
 					{/* Explicit global installation remains available only where launch-scoped integration is unavailable. */}
 					<Show when={supportsHooks() && supportsGlobalHooks()}>
-						<div class={a.expandedSection}>
-							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-								<input
-									type="checkbox"
-									checked={configStore.getHookInstrumentation(props.agentType) ?? false}
-									disabled={hookLoading()}
-									onChange={handleHookToggle}
-								/>
-								<span>Install hooks globally</span>
-								<Show when={hookState() === "installed" || hookState() === "outdated"}>
-									<span class={a.badge} data-type={hookState() === "outdated" ? "notfound" : "mcp"}>
-										{hookState() === "outdated" ? "Hooks: re-enable" : "Hooks installed"}
-									</span>
-								</Show>
-							</label>
-							<p class={s.hint}>
-								Drive busy/idle/waiting from {agent().name}'s own hooks instead of output heuristics. TUIC installs and
-								removes the hooks cleanly and never touches your own. Applies on next launch.
-							</p>
-						</div>
+						<ExpertSetting
+							configKey="agent_settings.hook_instrumentation"
+							value={configStore.state.agents[props.agentType]?.hook_instrumentation ?? null}
+						>
+							<div class={a.expandedSection}>
+								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										checked={configStore.getHookInstrumentation(props.agentType) ?? false}
+										disabled={hookLoading()}
+										onChange={handleHookToggle}
+									/>
+									<span>Install hooks globally</span>
+									<Show when={hookState() === "installed" || hookState() === "outdated"}>
+										<span class={a.badge} data-type={hookState() === "outdated" ? "notfound" : "mcp"}>
+											{hookState() === "outdated" ? "Hooks: re-enable" : "Hooks installed"}
+										</span>
+									</Show>
+								</label>
+								<p class={s.hint}>
+									Drive busy/idle/waiting from {agent().name}'s own hooks instead of output heuristics. TUIC installs
+									and removes the hooks cleanly and never touches your own. Applies on next launch.
+								</p>
+							</div>
+						</ExpertSetting>
 					</Show>
 
 					{/* Per-agent TUIC protocol markers — visible when MCP bridge is installed */}
 					<Show when={mcpStatus()?.installed}>
-						<div class={a.expandedSection}>
-							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-								<input
-									type="checkbox"
-									checked={configStore.getIntentTabTitle(props.agentType) ?? true}
-									onChange={(e) => configStore.setIntentTabTitle(props.agentType, e.currentTarget.checked)}
-								/>
-								<span>Track agent intent</span>
-							</label>
-							<p class={s.hint}>
-								Ask the model to emit <code>intent:</code> markers at task start and phase changes. The current intent
-								appears in the terminal Context bar and may update the tab name. Turn off if parsing misbehaves on this
-								agent.
-							</p>
-						</div>
+						<ExpertSetting
+							configKey="agent_settings.intent_tab_title"
+							value={configStore.state.agents[props.agentType]?.intent_tab_title ?? null}
+						>
+							<div class={a.expandedSection}>
+								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										checked={configStore.getIntentTabTitle(props.agentType) ?? true}
+										onChange={(e) => configStore.setIntentTabTitle(props.agentType, e.currentTarget.checked)}
+									/>
+									<span>Track agent intent</span>
+								</label>
+								<p class={s.hint}>
+									Ask the model to emit <code>intent:</code> markers at task start and phase changes. The current intent
+									appears in the terminal Context bar and may update the tab name. Turn off if parsing misbehaves on
+									this agent.
+								</p>
+							</div>
+						</ExpertSetting>
 
-						<div class={a.expandedSection}>
-							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-								<input
-									type="checkbox"
-									disabled={!settingsStore.state.progressTracking}
-									checked={
-										settingsStore.state.progressTracking && (configStore.getProgressTracking(props.agentType) ?? true)
-									}
-									onChange={(e) => configStore.setProgressTracking(props.agentType, e.currentTarget.checked)}
-								/>
-								<span>Collect progress</span>
-							</label>
-							<p class={s.hint}>
-								Let {agent().name} report <code>done</code> and <code>blocked</code> entries into the project journal,
-								and record its <code>intent:</code> markers there. Off here keeps the journal clear of this agent even
-								while collection is on everywhere else; off globally wins over both.
-							</p>
-						</div>
+						<ExpertSetting
+							configKey="agent_settings.progress_tracking"
+							value={configStore.state.agents[props.agentType]?.progress_tracking ?? null}
+						>
+							<div class={a.expandedSection}>
+								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										disabled={!settingsStore.state.progressTracking}
+										checked={
+											settingsStore.state.progressTracking && (configStore.getProgressTracking(props.agentType) ?? true)
+										}
+										onChange={(e) => configStore.setProgressTracking(props.agentType, e.currentTarget.checked)}
+									/>
+									<span>Collect progress</span>
+								</label>
+								<p class={s.hint}>
+									Let {agent().name} report <code>done</code> and <code>blocked</code> entries into the project journal,
+									and record its <code>intent:</code> markers there. Off here keeps the journal clear of this agent even
+									while collection is on everywhere else; off globally wins over both.
+								</p>
+							</div>
+						</ExpertSetting>
 
-						<div class={a.expandedSection}>
-							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-								<input
-									type="checkbox"
-									checked={configStore.getSuggestFollowups(props.agentType) ?? settingsStore.state.suggestFollowups}
-									onChange={(e) => configStore.setSuggestFollowups(props.agentType, e.currentTarget.checked)}
-								/>
-								<span>Show suggested follow-ups</span>
-							</label>
-							<p class={s.hint}>
-								Emit <code>suggest:</code> markers for clickable follow-up actions
-							</p>
-						</div>
+						<ExpertSetting
+							configKey="agent_settings.suggest_followups"
+							value={configStore.state.agents[props.agentType]?.suggest_followups ?? null}
+						>
+							<div class={a.expandedSection}>
+								<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										checked={configStore.getSuggestFollowups(props.agentType) ?? settingsStore.state.suggestFollowups}
+										onChange={(e) => configStore.setSuggestFollowups(props.agentType, e.currentTarget.checked)}
+									/>
+									<span>Show suggested follow-ups</span>
+								</label>
+								<p class={s.hint}>
+									Emit <code>suggest:</code> markers for clickable follow-up actions
+								</p>
+							</div>
+						</ExpertSetting>
 					</Show>
 
 					{/* Headless Command Template — compared by the stored override, not
@@ -1000,7 +1030,9 @@ const AgentRow: Component<{
 
 					{/* Claude-specific: Env flags and Usage Dashboard */}
 					<Show when={props.agentType === "claude"}>
-						<EnvFlagsSection agentType={props.agentType} />
+						<ExpertSetting configKey="agent_settings.env_flags" value={envFlagsOverride()}>
+							<EnvFlagsSection agentType={props.agentType} />
+						</ExpertSetting>
 						<ClaudeUsageToggle />
 					</Show>
 				</div>
