@@ -527,7 +527,14 @@ mod tests {
         let mut rows = screen_with_status_line(4);
         let prompt = rows.iter().position(|r| r == "❯ ").unwrap();
         rows[prompt] = "❯ fix the rename test".to_string();
-        rows.splice(0..0, ["  > quoted line".to_string(), "  >".to_string(), "  > more".to_string()]);
+        rows.splice(
+            0..0,
+            [
+                "  > quoted line".to_string(),
+                "  >".to_string(),
+                "  > more".to_string(),
+            ],
+        );
         assert_eq!(empty_box_cutoff_of(&rows), None);
     }
 
@@ -535,8 +542,15 @@ mod tests {
     #[test]
     fn empty_input_box_cutoff_ignores_a_blockquote_blank_line_above_a_dialog() {
         let rows: Vec<String> = [
-            "  > quoted line", "  >", "  > more", "─".repeat(120).as_str(), " Bash command",
-            " Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel · Tab to amend",
+            "  > quoted line",
+            "  >",
+            "  > more",
+            "─".repeat(120).as_str(),
+            " Bash command",
+            " Do you want to proceed?",
+            " ❯ 1. Yes",
+            "   2. No",
+            " Esc to cancel · Tab to amend",
         ]
         .iter()
         .map(|s| s.to_string())

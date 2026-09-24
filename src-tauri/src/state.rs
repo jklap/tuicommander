@@ -234,6 +234,14 @@ pub enum AppEvent {
         session_id: String,
         lines: Vec<crate::output_watchers::WatcherLine>,
     },
+    /// A tab's display name changed from the backend (MCP `session action=rename`).
+    /// IPC/HTTP renames start in the frontend and do not emit it.
+    #[serde(rename = "session-renamed")]
+    SessionRenamed {
+        session_id: String,
+        name: String,
+        is_custom: bool,
+    },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
     #[serde(rename = "pty-description-changed")]
     PtyDescriptionChanged {
@@ -507,6 +515,7 @@ impl AppEvent {
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
+            | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -2178,6 +2187,36 @@ impl AppState {
             let _ = tx.send(event.clone());
         }
         let _ = self.event_bus.send(event);
+    }
+
+    /// Rename a tab from the backend and tell every UI. Only for renames that
+    /// start here (MCP `session action=rename`): IPC/HTTP renames come from the
+    /// frontend, and emitting for them would echo every OSC title back. Returns
+    /// false when the session does not exist.
+    pub(crate) fn rename_session_from_backend(
+        &self,
+        session_id: &str,
+        name: String,
+        is_custom: bool,
+    ) -> bool {
+        let Some(entry) = self.session_maps.sessions.get(session_id) else {
+            return false;
+        };
+        entry.lock().set_display_name(Some(name.clone()), is_custom);
+        drop(entry);
+        self.emit_pty_event(AppEvent::SessionRenamed {
+            session_id: session_id.to_string(),
+            name: name.clone(),
+            is_custom,
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "session-renamed",
+                serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom }),
+            );
+        }
+        true
     }
 
     /// Set or clear the orchestrator-owned description shown above a PTY.
@@ -3934,6 +3973,7 @@ impl AppState {
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
+            AppEvent::SessionRenamed { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.

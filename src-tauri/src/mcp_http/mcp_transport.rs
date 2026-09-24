@@ -3031,12 +3031,13 @@ fn handle_session(
                     return serde_json::json!({"error": "name (non-empty string) is required for action=rename"});
                 }
             };
+            if name.chars().count() > 256 || name.chars().any(char::is_control) {
+                return serde_json::json!({"error": "name must be one line of at most 256 characters without control characters"});
+            }
             let is_custom = args["is_custom"].as_bool().unwrap_or(true);
-            let entry = match state.session_maps.sessions.get(session_id) {
-                Some(e) => e,
-                None => return serde_json::json!({"error": "Session not found"}),
-            };
-            entry.lock().set_display_name(Some(name), is_custom);
+            if !state.rename_session_from_backend(session_id, name, is_custom) {
+                return serde_json::json!({"error": "Session not found"});
+            }
             serde_json::json!({"ok": true})
         }
         "close" => {
@@ -8177,6 +8178,7 @@ mod tests {
             return;
         }
         let sid = created["session_id"].as_str().unwrap();
+        let mut events = state.event_bus.subscribe();
 
         let result = handle_session(
             &state,
@@ -8193,6 +8195,19 @@ mod tests {
             .find(|entry| entry["session_id"] == sid)
             .unwrap();
         assert_eq!(entry["display_name"], "Story 857");
+        // The rename starts in the backend: only this push tells the UI (#869-e5da).
+        let renamed = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+            crate::state::AppEvent::SessionRenamed {
+                session_id,
+                name,
+                is_custom,
+            } => Some((session_id, name, is_custom)),
+            _ => None,
+        });
+        assert_eq!(
+            renamed,
+            Some((sid.to_string(), "Story 857".to_string(), true))
+        );
         assert!(
             state
                 .session_maps
@@ -8246,6 +8261,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_rename_reports_an_unknown_session() {
+        let state = test_state();
+        let result = handle_session(
+            &state,
+            &serde_json::json!({"action": "rename", "session_id": "no-such-session", "name": "Foo"}),
+            None,
+        );
+        assert!(
+            result.get("error").is_some(),
+            "unknown session must error, got: {result}"
+        );
+    }
+
+    #[tokio::test]
     async fn session_rename_rejects_blank_or_missing_name() {
         let state = test_state();
         let created = handle_session(&state, &serde_json::json!({"action": "create"}), None);
@@ -8258,6 +8287,11 @@ mod tests {
         for args in [
             serde_json::json!({"action": "rename", "session_id": sid}),
             serde_json::json!({"action": "rename", "session_id": sid, "name": "   "}),
+            // A tab title is one line of text: an escape sequence or a newline
+            // would reach every UI and every peer that lists sessions.
+            serde_json::json!({"action": "rename", "session_id": sid, "name": "evil\u{1b}]0;x\u{7}"}),
+            serde_json::json!({"action": "rename", "session_id": sid, "name": "two\nlines"}),
+            serde_json::json!({"action": "rename", "session_id": sid, "name": "x".repeat(257)}),
         ] {
             let result = handle_session(&state, &args, None);
             assert!(
