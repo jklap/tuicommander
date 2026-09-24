@@ -6,6 +6,7 @@ pub mod corrections;
 pub mod echo;
 pub mod fn_key_monitor;
 pub mod language;
+pub mod loudness;
 pub mod model;
 pub mod permission;
 pub mod speaker;
