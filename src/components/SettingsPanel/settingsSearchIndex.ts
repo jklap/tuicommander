@@ -371,6 +371,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Allow LAN access without authentication",
 		labelKey: "services.toggle.lanAuthBypass",
 	},
+	{ tab: "remote-access", section: "Tailscale HTTPS", label: "Status", labelKey: "services.label.tailscaleStatus" },
 	{
 		tab: "remote-access",
 		section: "Cloud Relay",
