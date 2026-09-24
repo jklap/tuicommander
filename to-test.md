@@ -797,9 +797,7 @@ live agent-frame check cannot be replayed.
 **Rust change — needs `make dev` restart** (adds `AppState.pty_accent_colors`, two `AppEvent`
 variants, new `TmuxOp` variants in `tuic-cli`, and two new HTTP routes — none of this exists in a
 running `make dev` instance until restarted, which tears down every live PTY session; coordinate
-before running it). After `make dev`, check `git status` for the tracked
-`src-tauri/binaries/tuic-<target>` sidecar diff (expected — `pnpm build:sidecar` reran) and revert
-if the rebuild wasn't the point of this check.
+before running it).
 
 Turns `tmux-swarm-shim.md`'s two remaining cosmetic categories into real TUIC behavior: per-teammate
 `--agent-color` (via `set-option ... *-border-style`) as a real accent color, and `select-layout
