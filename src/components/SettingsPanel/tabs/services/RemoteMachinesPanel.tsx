@@ -413,10 +413,12 @@ export const RemoteMachinesPanel: Component = () => {
 	}
 
 	return (
-		<div style={{ "margin-top": "24px", "border-top": "1px solid var(--border)", "padding-top": "16px" }}>
+		<div>
 			<div class={s.group}>
-				<label style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
-					<span>Remote Machines</span>
+				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
+					<p class={s.hint} style={{ margin: 0 }}>
+						Connect to TUIC instances running on other machines. SSH connections create an encrypted tunnel automatically.
+					</p>
 					<button
 						class={s.copyBtn}
 						onClick={() => {
@@ -428,10 +430,7 @@ export const RemoteMachinesPanel: Component = () => {
 					>
 						{showAdd() ? "−" : "+"}
 					</button>
-				</label>
-				<p class={s.hint}>
-					Connect to TUIC instances running on other machines. SSH connections create an encrypted tunnel automatically.
-				</p>
+				</div>
 			</div>
 
 			{/* Add form */}

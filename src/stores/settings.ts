@@ -388,13 +388,13 @@ function createSettingsStore() {
 
 	/** Overwrite the settings-store-owned fields on a freshly-loaded config.
 	 *  Fields owned by OTHER surfaces are deliberately left as loaded:
-	 *   - `services.*`        — ServicesTab (its own load-modify-save)
-	 *   - `mcp_server_enabled` — ServicesTab
+	 *   - `services.*`        — RemoteAccessPanel (its own load-modify-save)
+	 *   - `mcp_server_enabled` — services panels (config type only)
 	 *   - `global_hotkey`      — the `set_global_hotkey` command
 	 *  This store must never write them from its own (possibly stale) snapshot,
 	 *  or a general-settings save clobbers a concurrent writer's change — the
 	 *  "web server disabled / hotkey lost on restart" bug. Mirrors the
-	 *  load-modify-save pattern ServicesTab already uses. */
+	 *  load-modify-save pattern the services panels already use. */
 	function applyOwnedFields(config: RustAppConfig): RustAppConfig {
 		config.shell = state.shell;
 		config.font_family = state.font;

@@ -11,7 +11,9 @@ const TAB_SOURCES: Record<string, string> = {
 	notifications: "tabs/NotificationsTab.tsx",
 	dictation: "DictationSettings.tsx",
 	github: "tabs/GitHubTab.tsx",
-	services: "tabs/ServicesTab.tsx",
+	mcp: "tabs/services/LocalMcpPanel.tsx",
+	"remote-access": "tabs/services/RemoteAccessPanel.tsx",
+	"remote-machines": "tabs/RemoteMachinesTab.tsx",
 	plugins: "tabs/PluginsTab.tsx",
 	"smart-prompts": "tabs/SmartPromptsTab.tsx",
 	agents: "tabs/AgentsTab.tsx",
@@ -31,7 +33,12 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	notifications: { dynamic: 0, orphans: 0 },
 	dictation: { dynamic: 0, orphans: 0 },
 	github: { dynamic: 0, orphans: 0 },
-	services: { dynamic: 0, orphans: 0 },
+	mcp: { dynamic: 0, orphans: 0 },
+	"remote-access": { dynamic: 0, orphans: 0 },
+	// RemoteMachinesTab is a thin wrapper (heading + <RemoteMachinesPanel/>);
+	// the panel's own internal labels are not inlined here, so nothing to
+	// index or count. Full indexing of the panel's own content is story 860.
+	"remote-machines": { dynamic: 0, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
 	"smart-prompts": { dynamic: 4, orphans: 11 },
 	// 8th: the per-agent "Native status signals" toggle, which sits in the same
@@ -103,7 +110,7 @@ describe("searchSettings", () => {
 	it("finds a setting in a tab that is not mounted", () => {
 		const hits = searchSettings("relay server url", ALL_TABS);
 		expect(hits).toEqual([
-			expect.objectContaining({ tab: "services", section: "Cloud Relay", label: "Relay Server URL" }),
+			expect.objectContaining({ tab: "remote-access", section: "Cloud Relay", label: "Relay Server URL" }),
 		]);
 	});
 
