@@ -223,6 +223,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `save_notification_config` | `config` | `()` | Save notifications |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
 | `save_ui_prefs` | `config` | `()` | Save UI preferences |
+| `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
 | `load_repo_settings` | -- | `RepoSettingsMap` | Load per-repo settings |
 | `save_repo_settings` | `config` | `()` | Save per-repo settings |
 | `check_has_custom_settings` | `path` | `bool` | Has non-default settings |

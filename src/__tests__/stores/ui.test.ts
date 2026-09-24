@@ -427,6 +427,46 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("settings expert mode", () => {
+		it("defaults to off", () => {
+			testInScope(() => {
+				expect(store.state.settingsExpertMode).toBe(false);
+			});
+		});
+
+		it("setSettingsExpertMode updates state and persists", () => {
+			testInScope(() => {
+				store.setSettingsExpertMode(true);
+				expect(store.state.settingsExpertMode).toBe(true);
+				flushPersist();
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					config: expect.objectContaining({ settings_expert_mode: true }),
+				});
+			});
+		});
+
+		it("hydrate loads expert mode from backend", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				sidebar_visible: true,
+				settings_expert_mode: true,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.settingsExpertMode).toBe(true);
+			});
+		});
+
+		it("hydrate keeps the off default when not in loaded data", async () => {
+			mockInvoke.mockResolvedValueOnce({ sidebar_visible: true });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.state.settingsExpertMode).toBe(false);
+			});
+		});
+	});
+
 	describe("AI Chat panel", () => {
 		it("defaults to hidden", () => {
 			testInScope(() => {

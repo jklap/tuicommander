@@ -3608,3 +3608,18 @@ or credential is touched.
       host picker and monochrome icons were rendered in an isolated browser on
       port 9877. _(verified 2026-09-22 from the worktree build; proof in
       `.tmp/visual-proof/remote-machines-fields.png`)_
+
+## Config defaults and expert-mode UI pref (story `863-03c1`, 2026-09-24) — **Rust, needs a `make dev` restart**
+
+- [ ] After restarting the desktop dev build, `GET http://127.0.0.1:9876/config/defaults`
+      (or `:9877` for a worktree build) returns `{ app, notifications,
+      agent_settings, dictation }` — each nested object matching the shape of
+      its own `load_config`/`load_notification_config`/`load_agents_config`/
+      `get_dictation_config` response, and every field holding that domain's
+      documented default value (see `docs/backend/config.md` → "Config
+      Defaults"). Confirm `dictation` is present on the desktop build.
+- [ ] Toggle `settingsExpertMode` (via `ui.ts`'s `setSettingsExpertMode`, once a
+      caller wires it in — this story only persists the pref, no UI control
+      yet) and confirm `settings_expert_mode` round-trips through
+      `~/Library/Application Support/tuicommander/config.json` (or platform
+      equivalent) and survives a full `make dev` restart.

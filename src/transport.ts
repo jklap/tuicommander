@@ -703,6 +703,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "PUT", path: "/config/ui-prefs", body: args.config }),
 	},
 
+	// --- Config: defaults (Settings "expert mode") ---
+	get_config_defaults: { map: () => ({ method: "GET", path: "/config/defaults" }) },
+
 	// --- Config: repo settings ---
 	load_repo_settings: { map: () => ({ method: "GET", path: "/config/repo-settings" }) },
 	save_repo_settings: {

@@ -63,6 +63,10 @@ interface UIStoreState {
 	// store state — only the sidebar and the settings nav are tracked here.
 	settingsNavWidth: number;
 
+	// Settings "expert mode" (persisted). Off = an unmodified expert control is
+	// hidden; on = every control is shown regardless of its default/modified state.
+	settingsExpertMode: boolean;
+
 	// Diff viewer mode (persisted)
 	diffViewMode: DiffViewMode;
 
@@ -108,6 +112,7 @@ function createUIStore() {
 		githubSectionCollapsed: {} as Record<string, boolean>,
 		gitPanelRequestedTab: null,
 		settingsNavWidth: SETTINGS_NAV_DEFAULT_WIDTH,
+		settingsExpertMode: false,
 		diffViewMode: "split" as DiffViewMode,
 		fileBrowserViewMode: "flat" as "flat" | "tree",
 		fileBrowserExternalRoot: null,
@@ -162,6 +167,7 @@ function createUIStore() {
 				sidebar_width: state.sidebarWidth,
 				...panelVisibility,
 				settings_nav_width: state.settingsNavWidth,
+				settings_expert_mode: state.settingsExpertMode,
 				diff_view_mode: state.diffViewMode,
 				file_browser_view_mode: state.fileBrowserViewMode,
 				detached_panels: state.detachedPanels,
@@ -206,6 +212,7 @@ function createUIStore() {
 						sidebar_visible?: boolean;
 						sidebar_width?: number;
 						settings_nav_width?: number;
+						settings_expert_mode?: boolean;
 						diff_view_mode?: string;
 						file_browser_view_mode?: string;
 						detached_panels?: Record<string, string>;
@@ -227,6 +234,9 @@ function createUIStore() {
 					}
 					if (loaded.settings_nav_width !== undefined) {
 						setState("settingsNavWidth", loaded.settings_nav_width);
+					}
+					if (loaded.settings_expert_mode !== undefined) {
+						setState("settingsExpertMode", loaded.settings_expert_mode);
 					}
 					if (
 						loaded.diff_view_mode === "split" ||
@@ -428,6 +438,11 @@ function createUIStore() {
 
 		setSettingsNavWidth(width: number): void {
 			setState("settingsNavWidth", width);
+		},
+
+		setSettingsExpertMode(enabled: boolean): void {
+			setState("settingsExpertMode", enabled);
+			saveUIPrefs();
 		},
 
 		/** Persist current UI prefs to disk. Call after drag-end, not during drag. */

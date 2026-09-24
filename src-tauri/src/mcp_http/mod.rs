@@ -1430,6 +1430,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(config_routes::get_ui_prefs).put(config_routes::put_ui_prefs),
         )
         .route(
+            "/config/defaults",
+            get(config_routes::get_config_defaults_http),
+        )
+        .route(
             "/config/repo-settings",
             get(config_routes::get_repo_settings).put(config_routes::put_repo_settings),
         )

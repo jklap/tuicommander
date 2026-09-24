@@ -1126,6 +1126,11 @@ pub(crate) struct UIPrefsConfig {
     pub(crate) git_panel_width: u32,
     #[serde(default = "default_settings_nav_width")]
     pub(crate) settings_nav_width: u32,
+    /// Settings "expert mode": when on, every control is visible regardless of
+    /// its default/modified state. Off by default — a control at its default
+    /// value stays hidden until switched on or until the value changes.
+    #[serde(default)]
+    pub(crate) settings_expert_mode: bool,
     /// Diff viewer mode: "split" (side-by-side) or "unified" (inline).
     #[serde(default = "default_diff_view_mode")]
     pub(crate) diff_view_mode: String,
@@ -1166,6 +1171,7 @@ impl Default for UIPrefsConfig {
             plan_panel_width: default_plan_panel_width(),
             git_panel_width: default_git_panel_width(),
             settings_nav_width: default_settings_nav_width(),
+            settings_expert_mode: false,
             diff_view_mode: default_diff_view_mode(),
             detached_panels: std::collections::HashMap::new(),
             github_section_collapsed: std::collections::HashMap::new(),
@@ -3585,6 +3591,41 @@ pub(crate) fn save_agents_config(config: AgentsConfig) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Config defaults — read-only, cross-domain, for Settings "expert mode"
+// ---------------------------------------------------------------------------
+
+/// The default value of every config domain a Settings page edits. An expert
+/// control compares its live value against the matching field here to decide
+/// whether it is "at default" (hidden in basic mode) or "modified" (always
+/// shown). Every field comes from that domain's own `Default` impl — the same
+/// value deserialization falls back to when a config file is missing or a
+/// field is absent (see `load_json_config`) — never a hand-copied literal.
+#[derive(Serialize)]
+pub(crate) struct ConfigDefaults {
+    pub(crate) app: AppConfig,
+    pub(crate) notifications: NotificationConfig,
+    /// Default for one entry of `AgentsConfig::agents` — there is no single
+    /// "default" for the map itself, only for an unconfigured agent's settings.
+    pub(crate) agent_settings: AgentSettings,
+    /// Absent (not merely empty) outside desktop builds: `mod dictation` does
+    /// not exist under `--no-default-features` (e.g. `tuic-remote`), and this
+    /// route is never registered there either (see `build_remote_router`).
+    #[cfg(feature = "desktop")]
+    pub(crate) dictation: crate::dictation::commands::DictationConfig,
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn get_config_defaults() -> ConfigDefaults {
+    ConfigDefaults {
+        app: AppConfig::default(),
+        notifications: NotificationConfig::default(),
+        agent_settings: AgentSettings::default(),
+        #[cfg(feature = "desktop")]
+        dictation: crate::dictation::commands::DictationConfig::default(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Note images — save/delete/get for Ideas panel image attachments
 // ---------------------------------------------------------------------------
 
@@ -4655,6 +4696,7 @@ mod tests {
             plan_panel_width: 350,
             git_panel_width: 380,
             settings_nav_width: 200,
+            settings_expert_mode: true,
             diff_view_mode: "split".to_string(),
             detached_panels: std::collections::HashMap::from([(
                 "activity".to_string(),
@@ -4676,6 +4718,7 @@ mod tests {
         );
         assert_eq!(loaded.notes_panel_width, 320);
         assert_eq!(loaded.settings_nav_width, 200);
+        assert!(loaded.settings_expert_mode);
         assert_eq!(loaded.diff_view_mode, "split");
         assert_eq!(loaded.github_section_collapsed.get("issues"), Some(&true));
         assert_eq!(loaded.github_section_collapsed.get("prs"), Some(&false));
@@ -4691,6 +4734,14 @@ mod tests {
     fn ui_prefs_without_github_section_collapsed_defaults_to_empty() {
         let loaded: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
         assert!(loaded.github_section_collapsed.is_empty());
+    }
+
+    /// A prefs file written before expert mode existed must default it to off,
+    /// matching `settings_expert_mode`'s `#[serde(default)]`.
+    #[test]
+    fn ui_prefs_without_settings_expert_mode_defaults_to_off() {
+        let loaded: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
+        assert!(!loaded.settings_expert_mode);
     }
 
     /// Every key the frontend puts in the `save_ui_prefs` payload must come
@@ -7812,5 +7863,132 @@ mod tests {
 
         drop(held);
         handle.join().unwrap();
+    }
+
+    // -----------------------------------------------------------------
+    // Config defaults (Settings "expert mode") — story 863-03c1
+    // -----------------------------------------------------------------
+
+    /// Removing any one field that carries a serde default from a struct's own
+    /// full JSON, then re-deserializing, must reproduce that exact default
+    /// again. Catches drift between a `#[serde(default = ...)]` attribute and
+    /// a hand-written `Default` impl going out of sync — e.g. a field default
+    /// function changing without the `impl Default` literal following it, or
+    /// vice versa. Fields with no serde default at all (required fields) fail
+    /// to parse when removed, which is expected and treated as nothing to
+    /// check for that field.
+    fn assert_no_field_default_drift<T>(default: &T)
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        assert_no_field_default_drift_except(default, &[]);
+    }
+
+    /// `allowed_exceptions` lists fields that are *deliberately* asymmetric: a
+    /// brand-new config (no file at all) gets the struct's `Default`, while an
+    /// existing config file that predates the field gets its `#[serde(default
+    /// = ...)]` instead — e.g. `mcp_server_enabled`, where an upgrade must not
+    /// silently switch on a network-facing server for a user who never opted
+    /// in (see `app_config_serde_default_for_new_fields`). Everything else is
+    /// held to the stricter rule: no exception without a name and a reason.
+    fn assert_no_field_default_drift_except<T>(default: &T, allowed_exceptions: &[&str])
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let full = serde_json::to_value(default).expect("struct must serialize");
+        let obj = full
+            .as_object()
+            .expect("struct must serialize to a JSON object")
+            .clone();
+        let mut drifted = Vec::new();
+        for key in obj.keys() {
+            let mut partial = obj.clone();
+            partial.remove(key);
+            if let Ok(parsed) = serde_json::from_value::<T>(serde_json::Value::Object(partial))
+                && serde_json::to_value(&parsed).unwrap() != full
+            {
+                drifted.push(key.clone());
+            }
+        }
+        let unexpected: Vec<&String> = drifted
+            .iter()
+            .filter(|key| !allowed_exceptions.contains(&key.as_str()))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "field(s) {unexpected:?}'s serde default drifted from the struct's Default impl \
+             (unexpectedly — add to allowed_exceptions only with a documented reason)"
+        );
+        let unused_exceptions: Vec<&&str> = allowed_exceptions
+            .iter()
+            .filter(|allowed| !drifted.contains(&(**allowed).to_string()))
+            .collect();
+        assert!(
+            unused_exceptions.is_empty(),
+            "allowed_exceptions {unused_exceptions:?} no longer drift — remove the stale exception"
+        );
+    }
+
+    #[test]
+    fn app_config_field_defaults_match_default_impl() {
+        assert_no_field_default_drift_except(
+            &AppConfig::default(),
+            &[
+                // Deliberately asymmetric — see the doc comment on
+                // `assert_no_field_default_drift_except` and
+                // `app_config_serde_default_for_new_fields`.
+                "mcp_server_enabled",
+                // DEFERRED (2026-09-24) — discovered by this test, not yet reviewed for intent: an
+                // upgrading config.json written before this field existed
+                // deserializes it to an empty list (no native tools disabled),
+                // while `AppConfig::default()` disables `config`/`debug` for a
+                // brand-new install. No existing test documents this as
+                // deliberate the way `mcp_server_enabled` is documented.
+                // Changing which native MCP tools an existing install exposes
+                // needs its own decision, so it is not changed here.
+                "disabled_native_tools",
+            ],
+        );
+    }
+
+    #[test]
+    fn notification_config_field_defaults_match_default_impl() {
+        assert_no_field_default_drift(&NotificationConfig::default());
+    }
+
+    #[test]
+    fn agent_settings_field_defaults_match_default_impl() {
+        assert_no_field_default_drift(&AgentSettings::default());
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn dictation_config_field_defaults_match_default_impl() {
+        assert_no_field_default_drift(&crate::dictation::commands::DictationConfig::default());
+    }
+
+    /// The command must hand back each domain's own `Default::default()` —
+    /// never a second, hand-copied list of literal values that could drift
+    /// out of sync with it silently.
+    #[test]
+    fn get_config_defaults_returns_each_domains_own_default() {
+        let defaults = get_config_defaults();
+        assert_eq!(
+            serde_json::to_value(&defaults.app).unwrap(),
+            serde_json::to_value(AppConfig::default()).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.notifications).unwrap(),
+            serde_json::to_value(NotificationConfig::default()).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.agent_settings).unwrap(),
+            serde_json::to_value(AgentSettings::default()).unwrap()
+        );
+        #[cfg(feature = "desktop")]
+        assert_eq!(
+            serde_json::to_value(&defaults.dictation).unwrap(),
+            serde_json::to_value(crate::dictation::commands::DictationConfig::default()).unwrap()
+        );
     }
 }
