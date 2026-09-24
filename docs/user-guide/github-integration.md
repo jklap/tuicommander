@@ -8,7 +8,7 @@ TUICommander needs a GitHub token to access PRs and CI status. You have two opti
 
 ### Option 1: OAuth Login (Recommended)
 
-1. Open **Settings > GitHub**
+1. Open **Settings > Git & GitHub**
 2. Click **"Login with GitHub"**
 3. A code appears — it's auto-copied to your clipboard
 4. Your browser opens GitHub's authorization page
@@ -36,7 +36,7 @@ TUICommander is account-centric: you can monitor repos across **several GitHub a
 
 ### Adding accounts
 
-Open **Settings > GitHub > Additional GitHub Accounts**. The account you logged in with above is your default.
+Open **Settings > Git & GitHub > Additional GitHub Accounts**. The account you logged in with above is your default.
 
 - **Another github.com account** — click **"Add another github.com account"** and complete the device flow (same as the primary login).
 - **GitHub Enterprise Server** — under **"Add Enterprise account"**, enter the host (e.g. `github.mycompany.com`) and a **Personal Access Token** with `repo` scope, then click **Add account**. The PAT is validated against your GHE server and stored in the OS keyring. (GHE uses a PAT because there is no per-host OAuth App.)
@@ -45,7 +45,7 @@ Each account shows its login, avatar, and a source badge. Remove an account to d
 
 ### Binding repos to accounts
 
-Open **Settings > GitHub > Repository Bindings**. Each workspace repo shows how it resolves:
+Open **Settings > Git & GitHub > Repository Bindings**. Each workspace repo shows how it resolves:
 
 - **Bound** — the repo is monitored by the shown account. Click **Unbind** to detach it.
 - **Needs binding** — the repo matches more than one account or GitHub remote. TUICommander does **not** guess `origin`; pick the right account/remote from the chooser to bind it.
@@ -173,7 +173,7 @@ Enable **Auto-heal** in a blocked PR's detail popover to send failed GitHub Acti
 
 ## Auto-Delete Branch on PR Close
 
-When a PR is merged or closed on GitHub, TUICommander can automatically clean up the corresponding local branch. Configure per-repo in **Settings > Repository Settings** or set a global default in **Settings > General > Repository Defaults**.
+When a PR is merged or closed on GitHub, TUICommander can automatically clean up the corresponding local branch. Configure per-repo in **Settings > Repository Settings** or set a global default in **Settings > Git & GitHub > Pull Requests > Auto-Delete on PR Close**.
 
 | Mode | Behavior |
 |------|----------|
@@ -225,7 +225,7 @@ The GitHub panel shows issues alongside PRs in a unified view.
 
 ### Issue Filter
 
-Control which issues appear using the filter dropdown in **Settings > GitHub** or directly in the panel:
+Control which issues appear using the filter dropdown in **Settings > Git & GitHub** or directly in the panel:
 
 | Filter | Shows |
 |--------|-------|

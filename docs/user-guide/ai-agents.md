@@ -238,7 +238,7 @@ it describes PTY agents (Claude Code, Codex, Gemini, …), which are unchanged.
 
 When agents are actively working, TUICommander can keep your machine awake:
 
-- Enable in **Settings** → **General** → **Prevent sleep when busy**
+- Enable in **Settings** → **Terminal** → **Power Management** → **Prevent sleep when busy**
 - Uses the `keepawake` system integration
 - Automatically releases when all agents are idle
 

@@ -247,7 +247,7 @@ needs an app restart is what that costs.
 | `font_size` | `u16` | `14` | Terminal font size |
 | `theme` | `String` | `"commander"` | Terminal theme. An empty or unknown key falls back to `commander` (`DEFAULT_THEME`, `src/stores/settings.ts`) |
 | `ide` | `String` | `""` | IDE for "Open in..." |
-| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General > AI Chat` and written through `save_config` like any other field |
+| `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > AI Chat` and written through `save_config` like any other field |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
@@ -287,7 +287,7 @@ cleartext copy does not survive on disk.
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 | `show_block_timestamps` | `bool` | `true` | Label each command block with its elapsed time while Ctrl+Cmd is held. Frontend-gated (painted by the renderer); stored here for persistence |
-| `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > General > Terminal |
+| `show_scrollbar_marks` | `bool` | `true` | Draw command-block marks on the terminal scrollbar. Frontend-gated, toggled from Settings > Terminal |
 | `block_folding_enabled` | `bool` | `true` | Let the `block-fold-toggle` shortcut collapse a command block's output. Frontend-gated. Blocks already folded stay folded when this is off |
 | `scrollback_reflow` | `bool` | `true` | Re-wrap scrollback history on a column resize instead of truncating it. Backend-gated: `AppState::new_vt_log_buffer` applies it to a new grid and `commit_config_change` pushes a change to grids already open. Defaults `true` — including for a config.json written before the key existed — because the grid reflowed unconditionally before the flag had a consumer |
 | `index_strategy` | `String` | `"active_and_switch"` | Which repos get a BM25 content index: `"active_and_switch"` (the boot repo plus every repo switched to), `"active_only"` (boot repo only), `"all_sequential"`, `"disabled"`. Read from the in-memory config on every switch and every `RepoChanged` — never `load_app_config()`, which takes a cross-process file lock |

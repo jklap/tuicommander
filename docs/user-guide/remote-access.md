@@ -4,7 +4,7 @@ Access TUICommander from a browser on another device on your network.
 
 ## Setup
 
-1. Open **Settings** (`Cmd+,`) → **Services** → **Remote Access**
+1. Open **Settings** (`Cmd+,`) → **Remote Access**
 2. Configure:
    - **Port** — Default `9876` (range 1024–65535)
    - **Username** — Basic Auth username
@@ -68,8 +68,8 @@ Separate from remote access, TUICommander runs an **HTTP API server** for AI too
 - The server always listens on an IPC listener: Unix domain socket at `<config_dir>/mcp.sock` on macOS/Linux, or named pipe `\\.\pipe\tuicommander-mcp` on Windows
 - AI agents connect via the `tuic-bridge` sidecar binary, which translates MCP stdio transport to the IPC listener
 - Bridge configs are auto-installed on first launch for supported agents (Claude Code, Cursor, Windsurf, VS Code, Zed, Amp, Gemini, Codex, Grok, opencode, Droid, goose, pi) — and only for the ones present on the machine, so TUICommander never creates a config directory for a tool you do not have. On every subsequent launch, the bridge path is verified and updated if stale (from reinstalls, updates, or moves)
-- The `mcp_server_enabled` toggle in **Settings** → **Services** controls whether MCP protocol tools are exposed, not the server itself
-- Shows server status and active session count in settings
+- The `mcp_server_enabled` config key controls whether MCP protocol tools are exposed, not the server itself
+- **Settings** → **MCP** → **HTTP API Server** shows server status and active session count
 - Local MCP callers submit one managed-agent command with `session action=submit`; the same response reports child terminal movement or a precise timeout, so callers must not split text/Enter or poll afterward. Raw `session action=input` remains write-only. Mutating session actions, including `submit`, are not exposed to non-loopback MCP clients
 
 The Unix socket is accessible only to the current user (filesystem permissions) and requires no authentication — it's designed for local tool integration, not remote access.
@@ -113,8 +113,8 @@ TUICommander can manage persistent SSH tunnels with automatic reconnection, port
 
 ### Creating a Tunnel Profile
 
-1. Open **Settings** (`Cmd+,`) → **Services** → **SSH Tunnels**
-2. Click **Add Tunnel** to open the editor
+1. Turn on **Experimental Features** in **Settings** → **General**, then open the **SSH Tunnels** panel (command palette → "SSH Tunnels")
+2. Click **+ New Tunnel** to open the editor
 3. Configure:
    - **Name** — A descriptive label (e.g., "prod-db-tunnel")
    - **Host** — Remote SSH host
@@ -150,7 +150,7 @@ Click the shield to open the Tunnels Panel.
 
 ### Command Palette
 
-Open the command palette (`Cmd+P` / `Ctrl+P`) and type "tunnels" to toggle the Tunnels Panel without navigating to Settings.
+Open the command palette (`Cmd+P` / `Ctrl+P`) and type "tunnels" to toggle the Tunnels Panel.
 
 ### Starting and Stopping Tunnels
 
@@ -210,7 +210,7 @@ Remote connections let you manage `tuic-remote` daemons running on other machine
 
 ### Adding an SSH Connection
 
-1. Open **Settings** → **Services & MCP** → **Remote Machines** and click **+**
+1. Open **Settings** → **Remote Machines** and click **+**
 2. Select **SSH** transport
 3. Type a host or choose **Probe SSH hosts** to see the hosts from your SSH
    config and whether each accepts a shell login
@@ -223,7 +223,7 @@ Remote connections let you manage `tuic-remote` daemons running on other machine
 
 ### Adding a Direct Connection
 
-1. Open **Settings** → **Connections** → **Add Connection**
+1. Open **Settings** → **Remote Machines** and click **+**
 2. Select **Direct** transport
 3. Enter the URL of the remote daemon (e.g., `http://10.0.0.5:9877`)
 4. Set the auth username and password

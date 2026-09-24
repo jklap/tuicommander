@@ -108,9 +108,9 @@ per cell and the configured history limit still apply.
 - Paste to terminal: `Cmd+V`
 - **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces from terminal rows
 - **Claude gutter normalization** — Multi-line terminal selections remove Claude's repeated non-breaking-space plus `▎` visual margin while preserving isolated block characters and the content's indentation
-- **Copy on Select** — When enabled (Settings > General > Terminal or Settings > Appearance), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
+- **Copy on Select** — When enabled (Settings > Terminal > Copy on select), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
-- **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice, and the behavior can be disabled entirely via Settings > General > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
+- **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice, and the behavior can be disabled entirely via Settings > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
 
 ### 1.6 Clear Terminal
 - `Cmd+L` — clears display, running processes unaffected
@@ -183,7 +183,7 @@ per cell and the configured history limit still apply.
 - Action name: `refresh-terminal`
 
 ### 1.16 Terminal Bell
-- **Terminal Bell** — Configurable bell behavior when the terminal receives a BEL character (`\x07`). Four modes: `none` (silent), `visual` (screen flash animation), `sound` (plays the Info notification sound), `both` (flash + sound). Configure in Settings > Appearance.
+- **Terminal Bell** — Configurable bell behavior when the terminal receives a BEL character (`\x07`). Four modes: `none` (silent), `visual` (screen flash animation), `sound` (plays the Info notification sound), `both` (flash + sound). Set `bell_style` in `config.json`; Settings has no control for it.
 
 ### 1.17 Alternate-Screen Scrollback
 - Fullscreen apps (`gh run watch`, `less`, `man`, TUIs) run on the terminal's alternate screen, which per XTerm semantics has no scrollback — output past the bottom of the window is normally lost and no scrollbar is shown
@@ -208,7 +208,7 @@ per cell and the configured history limit still apply.
 
 Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks are detected via OSC 133 shell integration markers (A/C/D sequences) or OSC 7770;block= agent-emitted markers. For Claude Code, heuristic detection synthesizes blocks from tool call headers (`⏺ ToolName(args)`).
 
-- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance. Toggled by **Show scrollbar marks** in Settings > General > Terminal (`show_scrollbar_marks`, on by default). The flag covers the history markers — these ticks and the user-prompt ticks below — and deliberately **not** the search-match ticks, which stay visible so a search never silently draws nothing
+- **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance. Toggled by **Show scrollbar marks** in Settings > Terminal (`show_scrollbar_marks`, on by default). The flag covers the history markers — these ticks and the user-prompt ticks below — and deliberately **not** the search-match ticks, which stay visible so a search never silently draws nothing
 - **User-prompt scrollbar markers** — A distinct green tick on the scrollbar marks each line where the user submitted a prompt to the agent (recorded from the OSC 7770 `state=busy` transition via `userPromptLines`). These are separate from command-block boundary marks and help you quickly locate your own prompts in long sessions
 - **Timestamp overlay** — Hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
 - **Gutter click** — Click the gutter area to select the entire block output for easy copying
@@ -216,7 +216,7 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 - **Block-scoped search** — Toggle with `Cmd+Shift+B` to restrict terminal search to the current block only
 - **Block navigation** — `Cmd+Shift+Up/Down` jumps between block boundaries
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
-- **Settings** — Configure block features at Settings > Terminal > Blocks: show/hide timestamps, enable/disable folding
+- **Settings** — Configure block features at Settings > Terminal > Terminal: show/hide timestamps, enable/disable folding
 
 ### 1.20 Compose Panel (`Cmd+I`)
 
@@ -239,7 +239,7 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
 - **Event** — `session-standby` (`{ session_id, standby }`) emitted on stop/wake
-- **Settings** — Settings > General > Auto-Standby Timeout (default 5 min; `0` disables)
+- **Settings** — Settings > Terminal > Power Management > Auto-Standby Timeout (default 5 min; `0` disables)
 
 ---
 
@@ -418,7 +418,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 
 ### 3.7 Help Panel (`Cmd+?`)
 - Shows app info and links (About, GitHub, docs)
-- Keyboard shortcuts are now in Settings > Keyboard Shortcuts tab (auto-generated from `actionRegistry.ts`)
+- Keyboard shortcuts are now in the Settings > Keyboard Shortcuts page (auto-generated from `actionRegistry.ts`)
 
 ### 3.8 Git Panel (`Cmd+Shift+D`)
 Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the former Git Operations Panel floating overlay and the standalone Diff Panel.
@@ -496,7 +496,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **Search modes**: type `!` to search files by name, `?` to search file contents, `~` to search across all open terminal buffers. File/content results open in editor tab (content matches jump to the matched line). Terminal results navigate to the terminal tab/pane and scroll to the matched line. Leading spaces after prefix are ignored
 - Browser filename and content searches use the existing HTTP routes. Content results are correlated with a per-search random ID and republished only inside the requesting page, preventing results from leaking across windows or panels
 - **Discoverable search commands**: "Search Terminals", "Search Files", "Search in File Contents" appear as regular palette commands and pre-fill the corresponding prefix
-- **QR for Remote Mobile Connection**: opens a large black-on-white QR (in a dialog) that a phone can scan to launch the mobile companion PWA. Reuses the Settings → Services & MCP connect flow (`get_connect_url` — token stays server-side); shows a hint when Remote Access is disabled and a network picker for multi-IP machines
+- **QR for Remote Mobile Connection**: opens a large black-on-white QR (in a dialog) that a phone can scan to launch the mobile companion PWA. Reuses the Settings → Remote Access connect flow (`get_connect_url` — token stays server-side); shows a hint when Remote Access is disabled and a network picker for multi-IP machines
 - Powered by `actionRegistry.ts` (`ACTION_META` map)
 
 ### 3.12 Activity Dashboard (`Cmd+Shift+A`)
@@ -602,7 +602,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Categories: Code Editors, JetBrains, Terminals, Git Tools, System
 - JetBrains family: IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet — launched via their CLI launcher (`idea`, `pycharm`, …) with `--line`/`--column` goto, falling back to `open -a` on macOS when the Toolbox shell scripts aren't on PATH
 - File-capable editors (including JetBrains IDEs) open the focused file (from editor or MD tab); others open the repo
-- Custom launchers (#71): user-defined entries configured at Settings → General → Custom Launchers (name, executable on `PATH` or absolute, args, per-OS platform, enable toggle), shown under a "Custom" section in the dropdown. Args support placeholder tokens resolved at launch: `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (focused file's directory, else repo), `{cwd}` (focused terminal cwd, else repo), `{home}`, and `{line}`/`{column}` (editor cursor, default 1)
+- Custom launchers (#71): user-defined entries configured at Settings → Developer Tools → Custom Launchers (name, executable on `PATH` or absolute, args, per-OS platform, enable toggle), shown under a "Custom" section in the dropdown. Args support placeholder tokens resolved at launch: `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (focused file's directory, else repo), `{cwd}` (focused terminal cwd, else repo), `{home}`, and `{line}`/`{column}` (editor cursor, default 1)
 - Run command button: `Cmd+R` (run), `Cmd+Shift+R` (edit & run)
 
 ---
@@ -948,7 +948,7 @@ re-derived later.
 - Merge state: Ready to merge, Checks failing, Has conflicts, Behind base, Blocked, Draft
 - Review state: Approved, Changes requested, Review required
 - PR lifecycle rules: CLOSED PRs hidden from sidebar and status bar; MERGED PRs shown for 5 minutes of accumulated user activity then hidden
-- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > General)
+- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > Git & GitHub > Pull Requests)
 
 ### 8.2 CI Checks
 - Ring indicator with proportional segments
@@ -971,7 +971,7 @@ re-derived later.
 - Triggered from: sidebar PR badge, status bar PR badge, status bar CI badge, toolbar notification bell
 
 ### 8.4 PR Visibility Filters
-- Global settings (Settings > GitHub): hide draft PRs, hide conflicting PRs, hide CI-failing PRs
+- Global settings (Settings > Git & GitHub > Pull Requests): hide draft PRs, hide conflicting PRs, hide CI-failing PRs
 - Per-repo overrides (Settings > [Repo] > PR Visibility): tri-state toggle per filter (Show / Default / Hide)
 - Default = inherit from global setting, shown in parentheses (e.g. "Draft PRs (Show)")
 - Resolution chain: per-repo override → global setting
@@ -1022,7 +1022,7 @@ re-derived later.
 ### 8.9 GitHub Issues Panel
 - Issues displayed in a collapsible section within the GitHub panel alongside PRs
 - Filter modes: Assigned (default), Created, Mentioned, All, Disabled
-- Filter persisted in app config (`issue_filter` field) and configurable in Settings > GitHub
+- Filter persisted in app config (`issue_filter` field) and configurable in Settings > Git & GitHub > Issues
 - Each issue shows: number, title, state (OPEN/CLOSED), author, labels, assignees, milestone, comment count, timestamps
 - Labels rendered with GitHub-matching colors (background opacity 0.7, contrast-aware text color)
 - Issue actions: Open in GitHub, Close/Reopen, Copy issue number
@@ -1055,7 +1055,7 @@ re-derived later.
 - Fallback to `gh auth token` CLI
 
 ### 8.13 OAuth Device Flow Login
-- One-click GitHub authentication from Settings > GitHub tab
+- One-click GitHub authentication from the Settings > Git & GitHub page
 - Uses GitHub OAuth App Device Flow (no client secret, works on desktop)
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 - Requested scope: `repo`
@@ -1068,10 +1068,10 @@ GitHub integration is **account-centric**: TUICommander can manage N accounts an
 
 **Account kinds**
 - **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`gh` CLI). Behaves exactly as before; a github.com-only user sees zero change.
-- **Additional github.com accounts** — extra named github.com logins added via the device flow (Settings → GitHub → *Additional GitHub Accounts* → "Add another github.com account").
+- **Additional github.com accounts** — extra named github.com logins added via the device flow (Settings → Git & GitHub → *Additional GitHub Accounts* → "Add another github.com account").
 - **GitHub Enterprise Server (GHE)** — added by host + a pasted **Personal Access Token** (no per-host OAuth App). Validated against `https://{host}/api/v3/user`; PAT stored in the OS keyring under `github/account/{id}/token`.
 
-**Repository bindings** (Settings → GitHub → *Repository Bindings*)
+**Repository bindings** (Settings → Git & GitHub → *Repository Bindings*)
 - Each workspace repo resolves to one of: **Bound** (shows the account + *Unbind*), **NeedsBind** (a candidate chooser — no silent `origin` pick when multiple GitHub remotes/accounts match), **NeedsAccount** (a github.com repo with no account yet → points to setup), or **Unmonitored**.
 - A single matching account auto-confirms; ambiguity always asks. Worktrees of a repo share the main checkout's binding.
 
@@ -1127,7 +1127,7 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Enable/disable, hotkey, language (auto-detect or explicit), model download
 - Audio device selection
 - Text correction dictionary (e.g., "new line" → `\n`)
-- **Auto-send** — Enable in Settings > Dictation to automatically submit (press Enter) after transcription completes.
+- **Auto-send** — Enable in Settings > Voice to automatically submit (press Enter) after transcription completes.
 - Spoken-reply voice, hands-free activation phrase and hold-back delay — see 9.11.
 
 ### 9.7 Speech Assets
@@ -1164,7 +1164,7 @@ Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resol
 - Turning the option off silences both notices and **nothing else**: disarming still stops the voice, drops queued audio and refuses late replies.
 - **Push-to-talk is untouched.** Holding the hotkey never starts continuous listening, never uses the activation phrase, never makes speech available and never notifies anyone.
 
-### 9.11 Driving it from Settings > Dictation
+### 9.11 Driving it from Settings > Voice
 - **One titled section per job, speech-to-text and text-to-speech kept apart:** Dictation (enable, hotkey, auto-send), Speech recognition (input device, Whisper model, language, voice tuning), Auto-Corrections, Hands-free conversation, Spoken replies. Each section holds its own advanced settings; there is no shared "Advanced" section.
 - **Spoken replies** lists the speech languages and the ONNX runtime with their state, size and Download / Repair / Cancel / delete, plus the voice to speak with. There is **no** speech-language control — the language is the Whisper one, and a second control would be a second source that disagrees with it.
 - **Hands-free conversation** picks the terminal to talk to, starts and stops the mode, and shows the live phase (waiting, capturing, transcribing, holding back, delivered), the turn being held back, what is being spoken and any error. It also holds the activation phrase and the hold-back delay.
@@ -1217,7 +1217,7 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 - **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: the **Compose box** (default) or editable text in the **Terminal**
 - **Auto-execute**: when enabled, a prompt submits exactly once through agent-aware `sendCommand`, regardless of its review target. When disabled, it remains editable. Explicit **Insert** and **Insert & Run** actions override the saved setting.
 - **API execution mode runs one unattended ego turn (#787-ee50)**: it used to call LLM providers directly over HTTP from TUICommander; that client, its provider registry and its keyring entry were deleted with the embedded AI engine (#784-0aec). It now goes through `acp_one_shot_prompt` — launch the configured ego, one `session/new` with **no MCP server**, one prompt, shut down — and the turn's final text goes to the prompt's `outputTarget`. Nothing streams: a Smart Prompt runs with no panel open. A `headless` prompt whose resolved agent is `api` takes the same one path. Every permission request and elicitation is declined the instant it arrives, because a seat nobody takes is a turn that never ends; the count comes back as `declined` so an empty answer caused by a refused tool is reported as that rather than as an empty answer. The turn is abandoned after 300s
-- **No LLM API config**: there is no global provider/model/API key in `Settings > Agents` any more, and TUICommander stores no API key. The model an `api` prompt runs on is ego's default, set in `Settings > AI Providers` (786-4a6d). With no ego binary named, the mode refuses and points at `Settings > General` first
+- **No LLM API config**: there is no global provider/model/API key in `Settings > Agents` any more, and TUICommander stores no API key. The model an `api` prompt runs on is ego's default, set in `Settings > AI Chat` (786-4a6d). With no ego binary named, the mode refuses and points at `Settings > General` first
 
 ### 10.6 Built-in Prompts by Category
 
@@ -1306,43 +1306,50 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 
 ## 11. Settings
 
+The navigation groups the global pages by task. Each group is a static label row above its pages:
+
+| Group | Pages |
+|-------|-------|
+| Application | General (**11.1**), Appearance (**11.2**), Notifications (**11.5**) |
+| Workspace | Terminal (**11.9**), Keyboard Shortcuts (**11.6**), Git & GitHub (**11.10**) |
+| AI | Agents (**11.7**), AI Chat (**11.8**), Voice (section 9), Smart Prompts (**10.5**) |
+| Integrations | MCP (**11.3**), Remote Access (**11.3**), Remote Machines (**11.3**), Plugins (**17.2**), Developer Tools (**11.11**) |
+| Repositories | One page per configured repository (**11.4**) |
+
 ### 11.0 Search
-- Search box at the top of the tab list; filters every setting across every tab at once
-- Each result shows the setting name and its `Tab › Section` trail; selecting one opens that tab and scrolls to the field
-- Repository tabs are not indexed — a global box cannot know which repository a query means
-- Settings the current build does not render (Dictation in browser mode, for example) report no match instead of opening an empty tab
-- The index is committed, not scanned from the DOM: only one tab mounts at a time, and mounting the rest would fire CLI status, mdkb status, GitHub and audio probes on every keystroke. A drift test re-derives it from the sources, so a setting added without indexing fails CI
+- Search box at the top of the page list; filters every setting across every page at once
+- Each result shows the setting name and its `Page › Section` trail; selecting one opens that page and scrolls to the field
+- Repository pages are not indexed — a global box cannot know which repository a query means
+- Settings the current build does not render (the AI Chat page while Experimental Features is off, for example) report no match instead of opening an absent page
+- A result inside an expert setting shows an **Expert** badge; opening it reveals that setting (see **11.12**)
+- The index is committed, not scanned from the DOM: only one page mounts at a time, and mounting the rest would fire CLI status, mdkb status, GitHub and audio probes on every keystroke. A drift test re-derives it from the sources, so a setting added without indexing fails CI
 
 ### 11.1 General
 - Language: the locales that ship a message catalog, each named in its own language. The pick persists to `config.json` and re-renders every translated string without a reload. Locales with no catalog are not listed — they would render English while claiming to be translated — so the list holds only English until more catalogs land
-- Default IDE, Shell
+- Show agent context bar
 - Confirmations: quit, close tab (only when a process is running — agents or busy shell; idle shells close immediately)
-- Power management: prevent sleep when busy
-- Updates: auto-check, check now
-- Git integration: auto-show PR popover
-- Terminal: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, agent context bar, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry)
-- AI Chat: the `ego_executable` path, shown only while Experimental Features is on. Empty means ACP is not configured — every connect is refused and the panel says so
-- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Providers** settings tab (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
-- Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
+- Updates: auto-check, update channel, check now
+- Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
 
 ### 11.2 Appearance
-- Terminal theme: multiple themes, color swatches. Bundled themes include **Commander** (default and fallback for an unknown key), **Paper** (key `vscode-light`, the light theme), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Ink** (key `clean`; Orca-style neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette, neutral tab-type tints keyed on `html[data-theme]`). The UI uses `antialiased` font smoothing with 0.01em tracking on every theme
-- Terminal font: 11 bundled monospace fonts (JetBrains Mono default)
-- Default font size: 8-32px slider
 - Split tab mode: separate / unified
 - Tab ordering mode: grouped-by-type (default, tabs grouped by kind), terminals-first (terminals left, others freely interleaved), free (any tab anywhere)
+- Cycle all tab types, nested terminal tabs
 - Max tab name length: 10-60 slider
 - Repository groups: create, rename, delete, color-coded
-- Reset panel sizes: restore sidebar and panel widths to defaults
+- Layout: reset panel sizes (restore sidebar and panel widths to defaults)
+- UI legend: reference for colors, symbols and badges
 
-### 11.3 Services
-- HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
-- MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
-- TUIC native tool toggles: enable/disable individual MCP tools (`session`, `agent`, `task`, `repo`, `ui`, `plugin_dev_guide`, `config`, `debug`) to restrict what AI agents can access
-- MCP Upstreams: add/edit/remove upstream MCP servers (HTTP or stdio with optional `cwd`), per-upstream enable/disable, reconnect, credential storage via OS keyring, live status dots, tool count and metrics. Saved upstreams auto-connect on boot
+### 11.3 MCP, Remote Access and Remote Machines
+Three pages under **Integrations**. They were one "Services & MCP" tab; each page now mounts only its own content, and the MCP and Remote Access pages share one status poll.
+- **MCP** — HTTP API server: always active on IPC listener (Unix domain socket on macOS/Linux, named pipe `\\.\pipe\tuicommander-mcp` on Windows). TCP port only for remote access
+- **MCP** — MCP connection info: bridge sidecar auto-installs configs for supported agents (Claude Code, Cursor, etc.)
+- **MCP** — TUIC native tool toggles: enable/disable individual MCP tools (`session`, `agent`, `task`, `repo`, `ui`, `plugin_dev_guide`, `config`, `debug`) to restrict what AI agents can access
+- **MCP** — Upstream MCP Servers: add/edit/remove upstream MCP servers (HTTP or stdio with optional `cwd`), per-upstream enable/disable, reconnect, credential storage via OS keyring, live status dots, tool count and metrics. Saved upstreams auto-connect on boot. The MCP popup's "Manage in Settings" opens this page at this section
 - MCP Per-Repo Scoping: each repo can define which upstream MCP servers are relevant via an allowlist in repo settings (3-layer: per-repo > `.tuic.json` > defaults). Null/empty allowlist = all servers. Quick toggle via **Cmd+Shift+M** popup
-- Remote access: port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, LAN auth bypass
-- Voice dictation: full setup (see section 9)
+- **Remote Access** — port, username, password (bcrypt hash), URL display, QR code, token duration, IPv6 dual-stack, LAN auth bypass, Tailscale HTTPS, cloud relay
+- **Remote Machines** — `tuic-remote` connections over SSH or a direct URL
+- Voice dictation has its own **Voice** page (section 9)
 
 ### 11.4 Repository Settings (per-repo)
 - Display name
@@ -1358,7 +1365,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - **Keep toasts in the bell** — mirrors toasts into the bell's Messages section (see **4.4**). Outside the audio block, because the bell is visual and must stay configurable without an audio device
 
 ### 11.6 Keyboard Shortcuts
-- Settings > Keyboard Shortcuts tab (`Cmd+,` to open Settings), also accessible from Help > Keyboard Shortcuts
+- Settings > Keyboard Shortcuts page (`Cmd+,` to open Settings), also accessible from Help > Keyboard Shortcuts (same editor)
 - All app actions listed with their current keybinding
 - Click the pencil icon to rebind — inline key recorder with pulsing accent border
 - Conflict detection: warns when the new combo is already bound to another action, with option to replace
@@ -1366,22 +1373,47 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - "Reset all to defaults" button at the bottom
 - Custom bindings stored in `keybindings.json` in the platform config directory
 - Auto-populated from `actionRegistry.ts` (`ACTION_META` map) — new actions appear automatically
-- **Global Hotkey:** configurable OS-level shortcut to toggle window visibility from any application. Set in the "Global Hotkey" section at the top of the Keyboard Shortcuts tab. No default — user must configure. Toggle: hidden/minimized → show+focus, visible but unfocused → focus, focused → instant hide (no dock animation). Cmd and Ctrl are distinct modifiers. Uses `tauri-plugin-global-shortcut` (no Accessibility permission required on macOS). Hidden in browser/PWA mode.
+- **Global Hotkey:** configurable OS-level shortcut to toggle window visibility from any application. Set in the "Global Hotkey" section at the top of the Keyboard Shortcuts page. No default — user must configure. Toggle: hidden/minimized → show+focus, visible but unfocused → focus, focused → instant hide (no dock animation). Cmd and Ctrl are distinct modifiers. Uses `tauri-plugin-global-shortcut` (no Accessibility permission required on macOS). Hidden in browser/PWA mode.
 
 ### 11.7 Agents
 - See **6.9 Agent Configuration** for full details
 - Claude Usage Dashboard enable/disable toggle (under Claude agent section)
 
-### 11.8 AI Providers
-Shown only while Experimental Features is on, because that flag is what offers the AI Chat panel — the one place `ego` is reachable from.
-- Reads and writes **ego's** configuration by running ego: `config ls --json`, `models --json`, `doctor --json`, and `config set model="<slug>"`. All three reads must succeed, so the tab is never a partial picture
+### 11.8 AI Chat
+The `ego_executable` path (the AI Chat section), then ego's own configuration. Shown only while Experimental Features is on, because that flag is what offers the AI Chat panel — the one place `ego` is reachable from.
+- Reads and writes **ego's** configuration by running ego: `config ls --json`, `models --json`, `doctor --json`, and `config set model="<slug>"`. All three reads must succeed, so the page is never a partial picture
 - Default model: a picker over every model ego knows, grouped by provider, with unavailable models disabled. A write is followed by a fresh read, so what is shown is what ego persisted. It survives a restart because ego holds it, not TUICommander
-- Refresh from providers: `ego models --refresh`, the only action in TUICommander that reaches a provider over the network — and it is ego that reaches it. Opt-in; opening the tab does not
+- Refresh from providers: `ego models --refresh`, the only action in TUICommander that reaches a provider over the network — and it is ego that reaches it. Opt-in; opening the page does not
 - Per-provider rows: how many models are usable, and ego's own words for why the rest are not (once per distinct reason)
 - Credential state from `ego doctor`: stored, expired (ego renews it on its next run), missing, or "could not read the store" — which is deliberately not the same as an empty store
 - **No API key enters TUICommander**: none is stored, none reaches the OS keyring, and no provider HTTP call is made from this process. `ego auth login <provider>` is named, not run — the flow is interactive and would mean handling a secret on the way past
 - `model` is the only writable key, exposed as its own operation rather than a key/value pair, so no caller over IPC or HTTP can reach `sandbox` or `permissions.judge`
 - Four failure states, each distinct: ego not configured (names the field to fill), a configured path that will not start, an ego command that failed (shown with the command, exit code and its verbatim output), and a transport fault that is not attributed to ego
+
+### 11.9 Terminal
+- Theme: terminal and app color theme, color swatches. Bundled themes include **Commander** (default and fallback for an unknown key), **Paper** (key `vscode-light`, the light theme), **Minimal Kiwi** (dark green-tinted background with muted warm accents) and **Ink** (key `clean`; Orca-style neutral dark: `#0a0a0a` canvas, `#171717` surfaces, white accent, Ghostty ANSI palette, neutral tab-type tints keyed on `html[data-theme]`). The UI uses `antialiased` font smoothing with 0.01em tracking on every theme
+- Shell
+- Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)
+- Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, block timestamps (elapsed-time label per command block while Ctrl+Cmd is held), block folding (gates the Toggle Block Fold shortcut and its palette entry), scrollbar marks, scrollback reflow on resize
+- Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
+
+### 11.10 Git & GitHub
+- GitHub authentication (see **8.13**), additional accounts and repository bindings (see **8.14**)
+- Pull requests: auto-show PR popover, hide draft / conflicting / CI-failing PRs, auto-delete on PR close
+- Issues: show issues, issue filter
+- Repository defaults: base branch, file handling, setup/run/archive scripts
+- Worktree defaults: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, auto-fetch interval
+
+### 11.11 Developer Tools
+- TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
+- Default IDE, custom launchers (see **4.5**)
+
+### 11.12 Expert Mode
+- **Expert** switch in the Settings header; persisted as the UI pref `settings_expert_mode` (default off)
+- An expert setting is hidden in basic mode only while its value equals the config default. A modified value always stays visible, so an override is never hidden
+- Defaults come from the read-only `get_config_defaults` command (`GET /config/defaults`). While they are unknown, or a lookup fails, the setting stays visible
+- A search result for an expert setting carries an **Expert** badge; opening it reveals the setting until Settings is opened again, without changing the switch
+- A section made only of expert settings hides with its heading when all of them are hidden
 
 ---
 
@@ -1467,7 +1499,7 @@ All data persisted to platform config directory via Rust:
 - Go-to-definition: Cmd+Click on symbols in the editor navigates to the definition via `mdkb_goto_definition`. Holding Cmd (macOS) / Ctrl underlines the symbol under the cursor (`cm-hover-link`) as a click affordance; the underline clears on release or when the pointer leaves the editor, and its position is remapped through edits so it never goes stale
 - Find references: Shift+F12 finds all callers of a symbol via `mdkb_references` (uses code_graph callers query)
 - Symbol outline: file-level symbol tree via `mdkb_outline` (functions, types, structs)
-- Install/uninstall managed from Settings → General → Code Intelligence
+- Install/uninstall managed from Settings → Developer Tools → Code Intelligence
 - `is_available()` checks binary existence on disk (not cached path) — survives external uninstalls
 - The daemon ping version must match the installed binary; an older detached daemon is restarted automatically after upgrades
 - Homebrew-managed installs show `brew uninstall mdkb` guidance instead of silent failure
@@ -1891,7 +1923,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Tool routing: names containing `__` are routed to the upstream registry; all others handled natively
 
 ### 19.1.1 Lazy Tool Discovery (`collapse_tools`)
-- When `collapse_tools: true` (Settings > Services & MCP > TUIC Tools > "Collapse tools"), the full tool list is replaced with 3 meta-tools: `search_tools`, `get_tool_schema`, `call_tool`
+- When `collapse_tools: true` (Settings > MCP > TUIC Tools > "Collapse tools"), the full tool list is replaced with 3 meta-tools: `search_tools`, `get_tool_schema`, `call_tool`
 - Grok sessions (`clientInfo.name` matching `grok-shell-*`) receive the same 3 meta-tools automatically because Grok rejects nested qualified names such as `tuicommander__upstream__tool`; this per-session compatibility mode leaves the global setting and other clients unchanged, and the bridge restores it after TUIC reconnects
 - Cuts MCP context from ~35k tokens to ~500 tokens per agent turn; agent fetches schemas on demand via BM25-ranked search
 - BM25 index backed by `AppState::tool_search_index` (rebuilds automatically when the tool set changes)
@@ -1945,7 +1977,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - `UpstreamAuth::OAuth2 { client_id, scopes, authorization_endpoint?, token_endpoint? }` joins `Bearer` as a credential type; endpoints auto-discovered from the resource server's `WWW-Authenticate` challenge when omitted
 - Completion via native deep link `tuic://oauth-callback?code=…&state=…` — callbacks never touch the WebView console
 - `TokenManager` shared across every `HttpMcpClient` refresh path with a per-upstream semaphore that defeats thundering-herd refresh. 60 s expiry margin; `None expires_at` treated as valid
-- `UpstreamError::NeedsOAuth { www_authenticate }` transitions the registry to `needs_auth`; Services tab shows an *Authorize* button
+- `UpstreamError::NeedsOAuth { www_authenticate }` transitions the registry to `needs_auth`; the Settings MCP page shows an *Authorize* button
 - Auto-triggered OAuth is gated behind explicit user consent; a blocking in-app confirm dialog surfaces the Authorization Server origin and prevents the pending flow from being cancelled behind the prompt
 - Status values extended: `authenticating` ("Awaiting authorization…") + `needs_auth`
 - Tauri commands: `start_mcp_upstream_oauth`, `mcp_oauth_callback`, `cancel_mcp_upstream_oauth`
@@ -2070,7 +2102,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 21.6 Installation
 - First-run prompt on app launch (one-time, dismissible)
-- Settings > General > Command Line Interface (install/uninstall button with status)
+- Settings > Developer Tools > TUIC CLI (install/uninstall button with status)
 - Auto-update on app startup (silent, no elevation prompt)
 - Paths: `/usr/local/bin/tuic` (macOS/Linux), `%LOCALAPPDATA%\Microsoft\WindowsApps\tuic.exe` (Windows)
 - `tuic install-cli` / `tuic alias` for self-service

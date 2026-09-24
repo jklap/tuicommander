@@ -4,7 +4,7 @@ TUICommander includes local voice-to-text using Whisper AI. All processing happe
 
 ## Setup
 
-1. Open **Settings → Dictation**
+1. Open **Settings → Voice**
 2. Enable dictation
 3. Download a Whisper model under **Speech recognition** (recommended: `large-v3-turbo`, ~1.6 GB)
 4. Wait for download to complete (progress shown in UI)
@@ -44,7 +44,7 @@ run **Start hands-free conversation**. While it runs, the same entry reads
 tabs and the conversation stays with the terminal you started it on. The
 action has no default shortcut; bind `toggle-hands-free` in Settings →
 Keyboard Shortcuts if you want one. You can also choose a terminal in
-**Settings → Dictation → Hands-free conversation** and select **Start
+**Settings → Voice → Hands-free conversation** and select **Start
 conversation**.
 
 While it runs, the panel shows the state, the bound terminal, where the audio
@@ -79,7 +79,7 @@ following turns need no phrase.
 
 ## Spoken Replies
 
-The agent can answer out loud. **Settings → Dictation → Spoken replies** lists
+The agent can answer out loud. **Settings → Voice → Spoken replies** lists
 the downloads this needs: one shared runtime library, plus one bundle for each
 language, each with its own voices. English, French, German, Italian,
 Portuguese and Spanish are available.
@@ -125,15 +125,15 @@ Configure word replacements applied after transcription:
 | "tab" | `\t` |
 | "period" | `.` |
 
-Add custom corrections in Settings → Dictation → Auto-Corrections.
+Add custom corrections in Settings → Voice → Auto-Corrections.
 
 ## Audio Device
 
-Select which microphone to use from **Input device** in Settings → Dictation → Speech recognition. Lists all available input devices.
+Select which microphone to use from **Input device** in Settings → Voice → Speech recognition. Lists all available input devices.
 
 ## Voice Tuning
 
-Settings > Dictation > Speech recognition → Voice tuning records a test phrase and shows the result in
+Settings > Voice > Speech recognition → Voice tuning records a test phrase and shows the result in
 the panel — nothing is sent to a terminal. Use it to set two gates that decide
 whether captured audio counts as speech.
 
@@ -173,10 +173,10 @@ nothing look identical.
 
 ## Hotkey Configuration
 
-Change the push-to-talk hotkey in Settings → Dictation. The hotkey is registered globally via Tauri's global-shortcut plugin.
+Change the push-to-talk hotkey in Settings → Voice. The hotkey is registered globally via Tauri's global-shortcut plugin.
 
 Default: `F5`
 
 ### Auto-Send
 
-Enable 'Auto-send' in Settings > Dictation to automatically press Enter after the transcribed text is inserted into the terminal. Useful when dictating commands.
+Enable 'Auto-send' in Settings > Voice to automatically press Enter after the transcribed text is inserted into the terminal. Useful when dictating commands.

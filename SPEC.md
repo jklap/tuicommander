@@ -449,6 +449,41 @@ Markdown import stay outside this version by decision, not by omission. The
 delegation structure the Flow view draws is observed from spawns and sends; it
 is not inferred, and nothing groups entries into workstreams.
 
+## Settings navigation
+
+The Settings panel groups its global pages by task. Group labels are static,
+noncollapsible rows; every page stays one click away and search stays global.
+
+| Group | Pages |
+|---|---|
+| Application | General, Appearance, Notifications |
+| Workspace | Terminal, Keyboard Shortcuts, Git & GitHub |
+| AI | Agents, AI Chat, Voice, Smart Prompts |
+| Integrations | MCP, Remote Access, Remote Machines, Plugins, Developer Tools |
+| Repositories | One direct entry per configured repository |
+
+- `MCP` owns HTTP/MCP server status, bridge configuration, native tool
+  controls, and upstream servers. `Remote Access` owns enablement,
+  authentication, network settings, Tailscale, the QR/connect URL, and the
+  relay. `Remote Machines` owns connections to other TUIC hosts. These three
+  pages replace the former "Services & MCP" tab.
+- `AI Chat` holds the ego executable and ego's providers and default model. It
+  replaces the former "AI Providers" tab and is hidden while Experimental
+  Features is off. `Voice` is the former "Dictation" page.
+- The reorganization moves controls only. Persisted config keys and Tauri/HTTP
+  contracts are unchanged.
+
+**Expert mode.** An expert setting is a stable setting whose default is correct
+for almost everyone. In basic mode it is hidden while its value equals the
+config default; it is shown in expert mode, when modified, when a search result
+revealed it during the current Settings open, and whenever the default is
+unknown. Hiding a user's override is the one failure this rule must never
+produce. The switch persists as the UI pref `settings_expert_mode`; the
+defaults come from the read-only `get_config_defaults` command. Expert mode is
+not Experimental Features: that flag gates unstable *features*, expert mode
+gates the *visibility of stable settings*. Which controls are expert is not yet
+decided.
+
 ## Persistence
 
 Repository state is persisted by the Rust backend in `repositories.json`, in
@@ -575,7 +610,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Push-to-talk mic button in StatusBar (blue pulsing animation)
 - [x] Configurable push-to-talk hotkey (keydown/keyup)
 - [x] Transcribed text injection into active terminal via PTY
-- [x] Settings > Dictation tab (model, hotkey, language, corrections)
+- [x] Settings > Voice page, formerly the Dictation tab (model, hotkey, language, corrections)
 - [x] Shell integration inject_text stub (prepared for external triggers)
 - [x] Streaming transcription with adaptive sliding windows (1.5s→3s)
 - [x] Streaming preserves speech before trailing silence; shared RMS and speech-confidence gates reject no-speech audio

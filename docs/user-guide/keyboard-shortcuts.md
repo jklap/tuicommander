@@ -6,7 +6,7 @@ All shortcuts use `Cmd` on macOS and `Ctrl` on Windows/Linux unless noted.
 
 ### From the UI
 
-Open **Help > Keyboard Shortcuts** (or `Cmd+?` → Keyboard Shortcuts). Click the pencil icon next to any shortcut to enter recording mode, then press your new key combination. The app warns you if the combo is already used by another action. Overridden shortcuts are highlighted in accent color with a reset icon to revert individually. A "Reset all to defaults" button is at the bottom.
+Open **Settings > Keyboard Shortcuts**, or **Help > Keyboard Shortcuts** (or `Cmd+?` → Keyboard Shortcuts) — both show the same editor. Click the pencil icon next to any shortcut to enter recording mode, then press your new key combination. The app warns you if the combo is already used by another action. Overridden shortcuts are highlighted in accent color with a reset icon to revert individually. A "Reset all to defaults" button is at the bottom.
 
 **Extended function keys (macOS).** `F13`–`F20` are recordable, both here and for the Global Hotkey. macOS never forwards them to the app's WebView, so TUICommander captures them natively and feeds them into the recorder; if one of them still appears dead, macOS itself consumed the key first (`F14`/`F15` drive keyboard illumination on many Macs — remap or disable that in System Settings > Keyboard). `F21`–`F24` are accepted in `keybindings.json` but have no macOS key code, so no Mac keyboard can produce them.
 
