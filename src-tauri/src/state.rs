@@ -2432,12 +2432,12 @@ impl AppState {
         }
     }
 
-    pub(crate) fn assign_agent_delivery_with_terminal_attempt<F>(
+    pub(crate) fn assign_agent_delivery_with_channel_attempt<F>(
         &self,
         tuic_session: &str,
         message_id: &str,
         terminal_fallback_available: bool,
-        attempt_terminal_delivery: F,
+        attempt_channel_delivery: F,
     ) -> (AgentDeliveryAssignment, bool)
     where
         F: FnOnce() -> bool,
@@ -2461,11 +2461,12 @@ impl AppState {
                 .insert(message_id.to_string(), AgentDeliveryOwner::Waiter);
             return (AgentDeliveryAssignment::Waiter, false);
         }
-        if attempt_terminal_delivery() {
-            gate.owners.insert(
-                message_id.to_string(),
-                AgentDeliveryOwner::TerminalDispatched,
-            );
+        if attempt_channel_delivery() {
+            // An SSE channel push is a best-effort notification, not an inbox
+            // observation. Leave the retained message unowned so a later wait
+            // can claim and return it. Treating the push as terminal delivery
+            // hid it from wait and let an unrelated lifecycle message advance
+            // the implicit cursor past the unread mail.
             return (AgentDeliveryAssignment::Terminal, true);
         }
         if terminal_fallback_available {
@@ -6116,11 +6117,11 @@ mod tests {
     }
 
     #[test]
-    fn terminal_attempt_assigns_exact_owner_for_success_failure_and_waiter() {
+    fn channel_attempt_keeps_mail_available_for_wait_after_a_successful_push() {
         let state = tests_support::make_test_app_state();
         state.push_agent_inbox("failed-peer", make_msg("failed-sse"));
         assert_eq!(
-            state.assign_agent_delivery_with_terminal_attempt(
+            state.assign_agent_delivery_with_channel_attempt(
                 "failed-peer",
                 "failed-sse",
                 false,
@@ -6140,7 +6141,7 @@ mod tests {
 
         state.push_agent_inbox("live-peer", make_msg("live-sse"));
         assert_eq!(
-            state.assign_agent_delivery_with_terminal_attempt(
+            state.assign_agent_delivery_with_channel_attempt(
                 "live-peer",
                 "live-sse",
                 false,
@@ -6150,14 +6151,15 @@ mod tests {
         );
         assert_eq!(
             state.agent_delivery_owner("live-peer", "live-sse"),
-            Some(AgentDeliveryOwner::TerminalDispatched)
+            None,
+            "an SSE push is not an inbox read and must remain visible to wait"
         );
 
         let waiter = state.begin_agent_wait("waiting-peer");
         state.push_agent_inbox("waiting-peer", make_msg("waiter-owned"));
         let terminal_attempted = std::cell::Cell::new(false);
         assert_eq!(
-            state.assign_agent_delivery_with_terminal_attempt(
+            state.assign_agent_delivery_with_channel_attempt(
                 "waiting-peer",
                 "waiter-owned",
                 true,
