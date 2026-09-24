@@ -3506,6 +3506,7 @@ fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)> {
 /// check's detail link, which for GHA points at `/actions/runs/…`.
 struct FailingCheck {
     name: String,
+    link: String,
     is_github_actions: bool,
 }
 
@@ -3514,6 +3515,31 @@ struct FailingCheck {
 /// separates checks whose logs auto-heal can fetch from those it can't.
 fn is_github_actions_link(link: &str) -> bool {
     link.contains("/actions/runs/")
+}
+
+fn failing_checks_from_json(json: &serde_json::Value) -> Vec<FailingCheck> {
+    json.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|check| check.get("bucket").and_then(serde_json::Value::as_str) == Some("fail"))
+        .map(|check| {
+            let name = check
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("failed check")
+                .to_string();
+            let link = check
+                .get("link")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            FailingCheck {
+                name,
+                is_github_actions: is_github_actions_link(&link),
+                link,
+            }
+        })
+        .collect()
 }
 
 /// List the PR's failing checks via `gh pr checks`. Unlike `gh run list` (which
@@ -3542,26 +3568,7 @@ fn list_failing_checks_cli(gh: &str, repo_slug: &str, branch: &str) -> Vec<Faili
         Ok(j) => j,
         Err(_) => return Vec::new(),
     };
-    json.as_array()
-        .into_iter()
-        .flatten()
-        .filter(|c| c.get("bucket").and_then(serde_json::Value::as_str) == Some("fail"))
-        .map(|c| {
-            let name = c
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("failed check")
-                .to_string();
-            let link = c
-                .get("link")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            FailingCheck {
-                name,
-                is_github_actions: is_github_actions_link(link),
-            }
-        })
-        .collect()
+    failing_checks_from_json(&json)
 }
 
 /// Find failed jobs for the branch's latest head commit and fetch their logs.
@@ -3795,6 +3802,20 @@ mod tests {
             "https://app.codacy.com/gh/sstraus/tuicommander/pull-requests/38"
         ));
         assert!(!is_github_actions_link(""));
+    }
+
+    #[test]
+    fn failing_external_checks_keep_their_detail_links() {
+        let checks = serde_json::json!([
+            {"name": "ci/circleci: test", "bucket": "fail", "link": "https://circleci.com/gh/acme/widget/42"},
+            {"name": "lint", "bucket": "pass", "link": "https://example.test/lint"}
+        ]);
+
+        let failing = failing_checks_from_json(&checks);
+        assert_eq!(failing.len(), 1);
+        assert_eq!(failing[0].name, "ci/circleci: test");
+        assert_eq!(failing[0].link, "https://circleci.com/gh/acme/widget/42");
+        assert!(!failing[0].is_github_actions);
     }
 
     // --- hex_to_rgba tests ---
