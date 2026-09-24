@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
+import { appLogger } from "../../stores/appLogger";
 
 vi.mock("../../stores/ui", async () => {
 	const { createStore } = await import("solid-js/store");
@@ -75,5 +76,55 @@ describe("settingsExpertStore visibility within one Settings open", () => {
 		await settingsExpertStore.open();
 		expect(settingsExpertStore.isVisible(KEY, true)).toBe(false);
 		expect(settingsExpertStore.isVisible(KEY, true)).toBe(false);
+	});
+});
+
+describe("settingsExpertStore default lookup", () => {
+	/** The payload shape `get_config_defaults` returns: `None` fields are omitted. */
+	const PAYLOAD = {
+		app: { osc52_clipboard: true, services: { auth: { session_token_duration_secs: 3600 } } },
+		notifications: { volume: 0.5 },
+		agent_settings: { run_configs: [] },
+		repo_defaults: { after_merge: "archive", pr_merge_strategy: "squash" },
+		agents: { agents: {} },
+	};
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		settingsExpertStore._resetForTests();
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "get_config_defaults" ? Promise.resolve(PAYLOAD) : Promise.resolve(undefined),
+		);
+		await settingsExpertStore.open();
+	});
+
+	it("resolves the repo_defaults domain", () => {
+		expect(settingsExpertStore.isAtDefault("repo_defaults.after_merge", "archive")).toBe(true);
+		expect(settingsExpertStore.isAtDefault("repo_defaults.after_merge", "delete")).toBe(false);
+	});
+
+	it("treats a key serde omitted from a present domain as a null default", () => {
+		// `audio_device: None` is skipped on serialize, so it never reaches the payload.
+		const warn = vi.spyOn(appLogger, "warn");
+		expect(settingsExpertStore.isAtDefault("notifications.audio_device", null)).toBe(true);
+		expect(settingsExpertStore.isAtDefault("notifications.audio_device", "Speakers")).toBe(false);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
+	it("treats an omitted agent_settings key as a null default", () => {
+		// hook_instrumentation, native_status_signals, env_flags … are skip_serializing_if.
+		expect(settingsExpertStore.isAtDefault("agent_settings.hook_instrumentation", null)).toBe(true);
+		expect(settingsExpertStore.isAtDefault("agent_settings.hook_instrumentation", true)).toBe(false);
+	});
+
+	it("resolves agents.headless_agent, omitted while None, as null", () => {
+		expect(settingsExpertStore.isAtDefault("agents.headless_agent", null)).toBe(true);
+		expect(settingsExpertStore.isAtDefault("agents.headless_agent", "claude")).toBe(false);
+	});
+
+	it("still counts an absent domain and a missing parent object as not at default", () => {
+		// Only a leaf inside a present object can be an omitted None.
+		expect(settingsExpertStore.isAtDefault("dictation.enabled", null)).toBe(false);
+		expect(settingsExpertStore.isAtDefault("app.services.missing.port", null)).toBe(false);
 	});
 });

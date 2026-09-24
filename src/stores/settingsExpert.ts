@@ -9,6 +9,8 @@ export interface ConfigDefaults {
 	app: Record<string, unknown>;
 	notifications: Record<string, unknown>;
 	agent_settings: Record<string, unknown>;
+	repo_defaults: Record<string, unknown>;
+	agents: Record<string, unknown>;
 	dictation?: Record<string, unknown>;
 }
 
@@ -18,10 +20,17 @@ export interface ConfigDefaults {
  * ## configKey convention
  *
  * `<domain>.<field>[.<field>…]` — the domain is a top-level key of
- * `ConfigDefaults` (`app`, `notifications`, `agent_settings`, `dictation`), the
- * rest is the serialized snake_case path inside it, exactly as the Rust config
- * file spells it: `app.osc52_clipboard`, `app.services.auth.session_token_duration_secs`.
- * The value compared against it must use the same serialized shape.
+ * `ConfigDefaults` (`app`, `notifications`, `agent_settings`, `repo_defaults`,
+ * `agents`, `dictation`), the rest is the serialized snake_case path inside it,
+ * exactly as the Rust config file spells it: `app.osc52_clipboard`,
+ * `app.services.auth.session_token_duration_secs`, `repo_defaults.after_merge`,
+ * `agents.headless_agent`. The value compared against it must use the same
+ * serialized shape.
+ *
+ * A leaf missing from an object that is present has the default `null`: serde
+ * omits `None` fields marked `skip_serializing_if = "Option::is_none"`
+ * (`notifications.audio_device`, `agents.headless_agent`, several
+ * `agent_settings` fields), so their absence is the default, not a typo.
  *
  * Every lookup that cannot answer — defaults still loading, the call failed,
  * the domain is absent on this host, the path does not exist — counts as
@@ -41,8 +50,19 @@ function createSettingsExpertStore() {
 
 	function lookup(configKey: string): { found: boolean; value?: unknown } {
 		let node: unknown = defaults();
-		for (const part of configKey.split(".")) {
-			if (node === null || typeof node !== "object" || !(part in node)) return { found: false };
+		const parts = configKey.split(".");
+		for (const [index, part] of parts.entries()) {
+			if (node === null || typeof node !== "object") return { found: false };
+			if (!(part in node)) {
+				// A missing leaf under a present domain object is an omitted `None`.
+				// A missing domain or intermediate object stays "not found".
+				// DEFERRED (2026-09-24) — serde also omits empty strings, `false`
+				// and empty maps (`agent_settings.env_flags`); their default is not
+				// `null`, so such a control reads as modified and stays visible.
+				// Safe (never hides an override) but not exact; exact needs the
+				// payload to carry skipped fields, which config.json must not.
+				return index === parts.length - 1 && index > 0 ? { found: true, value: null } : { found: false };
+			}
 			node = (node as Record<string, unknown>)[part];
 		}
 		return { found: true, value: node };

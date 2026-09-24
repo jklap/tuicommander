@@ -852,7 +852,15 @@ config.json written before the field existed — see
 | `app` | `AppConfig` | `AppConfig::default()` |
 | `notifications` | `NotificationConfig` | `NotificationConfig::default()` |
 | `agent_settings` | `AgentSettings` | Default for one entry of `AgentsConfig.agents` — there is no single default for the map itself |
+| `repo_defaults` | `RepoDefaultsConfig` | `RepoDefaultsConfig::default()` — what a `repo-defaults.json`-less install loads |
+| `agents` | `AgentsConfig` | `AgentsConfig::default()` — `AgentsConfig`-level fields such as `headless_agent` |
 | `dictation` | `DictationConfig` | Desktop builds only — absent under `--no-default-features` (`tuic-remote`), where `mod dictation` does not compile and the route is not registered |
+
+Fields marked `skip_serializing_if = "Option::is_none"` are omitted when
+`None` (`notifications.audio_device`, `agents.headless_agent`, several
+`agent_settings` fields). The payload keeps that attribute because it shapes
+the config files; `settingsExpert.ts` reads a leaf missing from a present
+object as the default `null`.
 
 **Command:** `get_config_defaults()`. HTTP: `GET /config/defaults` (see `docs/api/http-api.md`).
 
