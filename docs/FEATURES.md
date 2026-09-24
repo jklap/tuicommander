@@ -194,15 +194,8 @@ per cell and the configured history limit still apply.
 - Apps with mouse reporting (`vim`, `htop`, `lazygit`, `grok --no-alt-screen`) still receive the wheel themselves — `Shift+wheel` or a scrollbar drag scrolls TUICommander's history
 - An inline TUI that enables mouse reporting *without* `1049h` (`grok --no-alt-screen`) is classified as FullscreenTui and excluded from the durable log the same way alt-screen is. Grid history stays so the scrollbar works.
 
-### 1.18 Scrollback History Overlay (Experimental)
-- Read-only overlay for viewing full terminal scrollback beyond the visible buffer
-- Gated behind `scrollHistoryEnabled` settings flag (Settings > General > Experimental Features)
-- Content reconstructed from `VtLogBuffer` via LogSpan ANSI reconstruction — preserves colors, bold, underline, and other SGR attributes
-- Built as a read-only terminal overlay using ANSI reconstruction from VtLogBuffer
-- **Selection & copy**: select text in the overlay; auto-copies to clipboard with `::selection` highlight
-- **Search** (`Cmd+F`): incremental search with match highlighting via SearchAddon, "N of M" counter, Enter/Shift+Enter navigation
-- Theme-synced: ANSI CSS variables follow the active terminal theme
-- Grid-aligned positioning matches the underlying terminal metrics
+### 1.18 Scrollback History Overlay — removed
+The experimental read-only scrollback overlay (`AltScreenHistory`) and its `scrollHistoryEnabled` flag were removed in `86471444`. The terminal's own scrollback and search replace it.
 
 ### 1.19 Command Blocks
 
