@@ -3613,6 +3613,10 @@ pub(crate) struct ConfigDefaults {
     /// Default for one entry of `AgentsConfig::agents` — there is no single
     /// "default" for the map itself, only for an unconfigured agent's settings.
     pub(crate) agent_settings: AgentSettings,
+    pub(crate) repo_defaults: RepoDefaultsConfig,
+    /// `AgentsConfig`-level fields such as `headless_agent`. `None` fields are
+    /// omitted by `skip_serializing_if`; a missing key means `null`.
+    pub(crate) agents: AgentsConfig,
     /// Absent (not merely empty) outside desktop builds: `mod dictation` does
     /// not exist under `--no-default-features` (e.g. `tuic-remote`), and this
     /// route is never registered there either (see `build_remote_router`).
@@ -3626,6 +3630,8 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         app: AppConfig::default(),
         notifications: NotificationConfig::default(),
         agent_settings: AgentSettings::default(),
+        repo_defaults: RepoDefaultsConfig::default(),
+        agents: AgentsConfig::default(),
         #[cfg(feature = "desktop")]
         dictation: crate::dictation::commands::DictationConfig::default(),
     }
@@ -7972,6 +7978,16 @@ mod tests {
         assert_no_field_default_drift(&AgentSettings::default());
     }
 
+    #[test]
+    fn repo_defaults_config_field_defaults_match_default_impl() {
+        assert_no_field_default_drift(&RepoDefaultsConfig::default());
+    }
+
+    #[test]
+    fn agents_config_field_defaults_match_default_impl() {
+        assert_no_field_default_drift(&AgentsConfig::default());
+    }
+
     #[cfg(feature = "desktop")]
     #[test]
     fn dictation_config_field_defaults_match_default_impl() {
@@ -7995,6 +8011,14 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&defaults.agent_settings).unwrap(),
             serde_json::to_value(AgentSettings::default()).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.repo_defaults).unwrap(),
+            serde_json::to_value(RepoDefaultsConfig::default()).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.agents).unwrap(),
+            serde_json::to_value(AgentsConfig::default()).unwrap()
         );
         #[cfg(feature = "desktop")]
         assert_eq!(
@@ -8036,6 +8060,16 @@ mod tests {
             serde_json::to_value(&defaults.notifications).unwrap(),
             serde_json::to_value(load_notification_config()).unwrap(),
             "must match what a fresh notifications.json-less install loads"
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.repo_defaults).unwrap(),
+            serde_json::to_value(load_repo_defaults()).unwrap(),
+            "must match what a fresh repo-defaults.json-less install loads"
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.agents).unwrap(),
+            serde_json::to_value(load_agents_config()).unwrap(),
+            "must match what a fresh agents.json-less install loads"
         );
         #[cfg(feature = "desktop")]
         assert_eq!(

@@ -3627,6 +3627,12 @@ or credential is touched.
       yet) and confirm `settings_expert_mode` round-trips through
       `~/Library/Application Support/tuicommander/config.json` (or platform
       equivalent) and survives a full `make dev` restart.
+- [ ] After the restart, `GET /config/defaults` also returns `repo_defaults`
+      and `agents` (story `864-a5c9`). In Settings with Expert off, Git &
+      GitHub hides the eight repository-default rows while they hold their
+      defaults, and Smart Prompts hides "Headless Agent" while it is not
+      configured. The app log shows no `settingsExpert` "unknown configKey"
+      warning for `repo_defaults.*` or `agents.*`.
 
 ## Error messages name the reorganized Settings pages (story `861-977b`, 2026-09-24) — **Rust, needs a `make dev` restart**
 
