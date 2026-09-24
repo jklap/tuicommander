@@ -209,11 +209,31 @@ carries `ExpertModeSwitch`, which flips the persisted UI pref
 basic mode while `value` equals the default at `configKey`, as returned by
 `get_config_defaults`. It shows them in expert mode, when the value is
 modified, when a search result revealed that `configKey` during the current
-Settings open, or while the defaults are unknown. `<ExpertSection>` hides a
-section, heading included, when all of its `ExpertSetting`s are hidden. The
-search index marks labels inside an `ExpertSetting` with `expert: true` and the
-`configKey`, so a result shows an **Expert** badge and reveals the control on
-open.
+Settings open, or while the defaults are unknown. All of this is one rule,
+`settingsExpertStore.isVisible`.
+
+The rule is sticky for a modified value: when a control is shown because its
+value is known to differ from the default, `isVisible` records its `configKey`
+for the current open. The control stays shown when the user sets it back to the
+default, so it does not disappear under the cursor. `settingsExpertStore.open()`,
+which `SettingsPanel` calls each time Settings opens, clears that record and the
+search reveals. Only a known difference pins a control: a lookup that fails
+while the defaults load does not.
+
+`<ExpertSection>` hides a section, heading included, when all of its
+`ExpertSetting`s are hidden. No page uses it today, because every section keeps
+at least one basic control.
+
+The search index marks labels inside an `ExpertSetting` with `expert: true` and
+the `configKey`. `SettingsSearch` shows an **Expert** badge on such a result
+(`data-expert-badge`). Selecting it calls `settingsExpertStore.reveal(configKey)`
+before `SettingsPanel` scrolls to the label, because a hidden control has
+nothing to scroll to.
+
+One index entry carries one `configKey`, so one label must not cover two expert
+controls. On **Git & GitHub**, **Copy ignored files** and **Copy untracked files**
+are therefore two `SettingToggle` rows, each in its own `ExpertSetting`, and not
+one group under a shared label.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 

@@ -1394,7 +1394,7 @@ The `ego_executable` path (the AI Chat section), then ego's own configuration. S
 - GitHub authentication (see **8.13**), additional accounts and repository bindings (see **8.14**)
 - Pull requests: auto-show PR popover, hide draft / conflicting / CI-failing PRs, auto-delete on PR close
 - Issues: show issues, issue filter
-- Repository defaults: base branch, file handling, setup/run/archive scripts
+- Repository defaults: base branch, copy ignored files, copy untracked files (two separate toggles), setup/run/archive scripts
 - Worktree defaults: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, auto-fetch interval
 
 ### 11.11 Developer Tools
@@ -1404,9 +1404,11 @@ The `ego_executable` path (the AI Chat section), then ego's own configuration. S
 ### 11.12 Expert Mode
 - **Expert** switch in the Settings header; persisted as the UI pref `settings_expert_mode` (default off)
 - An expert setting is hidden in basic mode only while its value equals the config default. A modified value always stays visible, so an override is never hidden
+- A setting shown because its value is modified stays shown until Settings is opened again, also when it is set back to the default in the same open
 - Defaults come from the read-only `get_config_defaults` command (`GET /config/defaults`). While they are unknown, or a lookup fails, the setting stays visible
-- A search result for an expert setting carries an **Expert** badge; opening it reveals the setting until Settings is opened again, without changing the switch
-- A section made only of expert settings hides with its heading when all of them are hidden
+- A search result for an expert setting carries an **Expert** badge; opening it opens the page, reveals the setting and scrolls to it. The reveal lasts until Settings is opened again and does not change the switch
+- Expert settings per page: General (auto-standby timeout, content indexing, update channel); Appearance (split tab mode, tab ordering, cycle all tab types, max tab name length); Notifications (audio output device, silence MCP-session completions, keep toasts in the bell); Terminal (font weight, OSC 52 clipboard, block folding, scrollbar marks, scrollback reflow); Git & GitHub (auto-delete on PR close, copy ignored files, copy untracked files, storage strategy, auto-archive merged, orphan cleanup, after-merge behavior, auto-fetch interval); Agents (collect project progress, and per agent auto-retry, native status signals, install hooks globally, track intent, collect progress, suggested follow-ups, headless command template, Claude environment flags); Voice (long-press threshold, input device, level gate, speech confidence gate, hold-back, notify model on hands-free, start notice); Smart Prompts (headless agent); MCP (collapse tools, native tool toggles); Remote Access (port, session token duration, IPv6, LAN auth bypass). Full table: [Settings → Expert Mode](user-guide/settings.md#expert-mode)
+- Every section keeps at least one basic setting, so no heading and no page hides in basic mode
 
 ---
 

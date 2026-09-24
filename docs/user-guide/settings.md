@@ -37,18 +37,38 @@ Some settings have a default that is correct for almost everyone. These are
 *expert* settings. The **Expert** switch in the Settings header controls them:
 
 - **Expert off** (basic mode) — an expert setting is hidden while it has its
-  default value. When you change it, it stays visible, so an override is never
-  hidden from you.
+  default value. When its value is different from the default, it is shown, so
+  an override is never hidden from you.
 - **Expert on** — all expert settings are shown.
 
 The switch position is kept between restarts (UI preference
 `settings_expert_mode`, see [UI Preferences](../backend/config.md#ui-preferences-ui-prefsjson)).
 
-When you select a search result with the **Expert** badge in basic mode, that
-setting is shown until you open Settings again. The switch does not change.
+A setting that is shown because its value is modified stays shown until you
+open Settings again. If you set it back to the default, it does not disappear
+under the cursor. The next time you open Settings, it is hidden again.
+
+When you select a search result with the **Expert** badge in basic mode,
+Settings opens the page, shows that setting and scrolls to it. The setting stays
+shown until you open Settings again. The switch does not change.
 
 If TUICommander cannot read the default values (the `get_config_defaults`
 command), all expert settings stay visible.
+
+These settings are expert. All other settings are always shown.
+
+| Page | Expert settings |
+|------|-----------------|
+| General | Auto-Standby Timeout, Content Indexing, Update Channel |
+| Appearance | Split Tab Mode, Tab Ordering, Cycle All Tab Types, Max Tab Name Length |
+| Notifications | Audio Output Device, Silence completions from MCP sessions (**Orchestration**), Keep toasts in the bell (**Toolbar Bell**) |
+| Terminal | Font Weight, Allow OSC 52 clipboard writes, Block folding, Show scrollbar marks, Reflow scrollback on resize |
+| Git & GitHub | Auto-Delete on PR Close, Copy ignored files, Copy untracked files, Storage Strategy, Auto-archive merged worktrees, Orphan Worktree Cleanup, After Merge Behavior, Auto-Fetch Interval |
+| Agents | Collect project progress (global); per agent: Auto-retry on server errors, Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
+| Voice | Long-press threshold, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
+| Smart Prompts | Headless Agent |
+| MCP | Collapse tools, the native tool toggles (**TUIC Tools**) |
+| Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack), Allow LAN access without authentication |
 
 ## Application
 
@@ -164,7 +184,7 @@ repository and worktree defaults.
 | **Hide Draft PRs / Hide Conflicting PRs / Hide CI Failing PRs** | Filter the pull requests the app shows |
 | **Auto-Delete on PR Close** | Off (default), Ask, or Auto — controls branch cleanup when a PR is merged/closed |
 | **Show issues / Issue Filter** | Which issues to show in the GitHub panel: Assigned (default), Created, Mentioned, All, or Disabled (**Issues** section) |
-| **Repository Defaults** | Base branch, file handling, setup/run/archive scripts applied to new repos |
+| **Repository Defaults** | Base branch, **Copy ignored files** and **Copy untracked files** (two separate toggles), setup/run/archive scripts applied to new repos |
 | **Worktree Defaults** | Storage strategy, branch-name prompt, branch deletion, auto-archive, orphan cleanup, merge strategy, after-merge behavior, auto-fetch interval. See [Worktrees](worktrees.md). |
 | **Additional GitHub Accounts** | Extra github.com or Enterprise logins. See [GitHub Integration](github-integration.md). |
 | **Repository Bindings** | Which account each workspace repo resolves to |
