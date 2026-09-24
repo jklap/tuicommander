@@ -2972,7 +2972,31 @@ impl AppState {
         if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
             let mut gate = gate.lock();
             if gate.owners.get(message_id) == Some(&AgentDeliveryOwner::TerminalPending) {
+                // The cursor may already have advanced past this message because a
+                // newer waiter-owned message returned first. Put the same durable
+                // mail at the end of the logical stream before releasing terminal
+                // ownership, so an omitted-since wait can recover this failed PTY
+                // delivery. The id stays stable for recipient-side deduplication.
+                let requeued = self
+                    .agent_inbox
+                    .get_mut(tuic_session)
+                    .and_then(|mut inbox| {
+                        let index = inbox.iter().position(|message| message.id == message_id)?;
+                        let mut message = inbox.remove(index)?;
+                        message.timestamp = inbox
+                            .back()
+                            .map(|message| message.timestamp.saturating_add(1))
+                            .unwrap_or(message.timestamp);
+                        inbox.push_back(message);
+                        Some(())
+                    })
+                    .is_some();
                 gate.owners.remove(message_id);
+                if requeued {
+                    gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
+                    let revision = gate.inbox_revision;
+                    gate.inbox_events.send_replace(revision);
+                }
             }
         }
     }
