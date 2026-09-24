@@ -32,6 +32,10 @@ function createSettingsExpertStore() {
 	const [defaults, setDefaults] = createSignal<ConfigDefaults | null>(null);
 	/** configKeys a search result opened during the current Settings open */
 	const [revealed, setRevealed] = createSignal<ReadonlySet<string>>(new Set());
+	/** configKeys shown with a known non-default value during the current open.
+	 * Plain Set, not a signal: a key only joins while it is already visible, so
+	 * membership never has to trigger a re-render on its own. */
+	const modifiedThisOpen = new Set<string>();
 	let loadSeq = 0;
 	const warnedKeys = new Set<string>();
 
@@ -68,6 +72,7 @@ function createSettingsExpertStore() {
 		 * values, and clearing them would flash every expert control on open. */
 		async open(): Promise<void> {
 			setRevealed(new Set<string>());
+			modifiedThisOpen.clear();
 			const seq = ++loadSeq;
 			try {
 				const loaded = await invoke<ConfigDefaults>("get_config_defaults");
@@ -85,9 +90,17 @@ function createSettingsExpertStore() {
 
 		isAtDefault,
 
-		/** The single visibility rule for an expert control. */
+		/** The single visibility rule for an expert control. A control shown
+		 * because its value was modified stays shown until the next open(), so
+		 * resetting it to the default does not remove it under the cursor. */
 		isVisible(configKey: string, value: unknown): boolean {
-			return uiStore.state.settingsExpertMode || revealed().has(configKey) || !isAtDefault(configKey, value);
+			if (uiStore.state.settingsExpertMode || revealed().has(configKey)) return true;
+			if (modifiedThisOpen.has(configKey)) return true;
+			if (isAtDefault(configKey, value)) return false;
+			// Only a known difference pins: "defaults still loading" must not
+			// keep every expert control on screen for the whole open.
+			if (defaults() && lookup(configKey).found) modifiedThisOpen.add(configKey);
+			return true;
 		},
 
 		/** Exposed for tests only — do not use in production code. */
@@ -95,6 +108,7 @@ function createSettingsExpertStore() {
 			loadSeq++;
 			setDefaults(null);
 			setRevealed(new Set<string>());
+			modifiedThisOpen.clear();
 			warnedKeys.clear();
 		},
 	};
