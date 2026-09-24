@@ -49,6 +49,10 @@ const NATIVE_TOOLS: { name: string; description: string; actions: string }[] = [
 export const LocalMcpPanel: Component = () => {
 	const { status } = useMcpStatusPoll();
 	const [disabledNativeTools, setDisabledNativeTools] = createSignal<string[]>([]);
+	// The toggles wait for the saved list: an expert control seen with a
+	// non-default value stays shown for the whole open, so the `[]` placeholder
+	// would pin them on screen before `load_config` answers.
+	const [nativeToolsLoaded, setNativeToolsLoaded] = createSignal(false);
 	const [collapseTools, setCollapseTools] = createSignal<boolean>(false);
 	const [bridgeInfo, setBridgeInfo] = createSignal<{ bridge_path: string; config_snippet: string } | null>(null);
 	const [bridgeInfoOpen, setBridgeInfoOpen] = createSignal(false);
@@ -61,6 +65,8 @@ export const LocalMcpPanel: Component = () => {
 			setCollapseTools(config.collapse_tools ?? false);
 		} catch (e) {
 			appLogger.warn("config", "Failed to load native tool config, using defaults", e);
+		} finally {
+			setNativeToolsLoaded(true);
 		}
 	});
 
@@ -169,9 +175,11 @@ export const LocalMcpPanel: Component = () => {
 						/>
 					</div>
 					<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-						<span style={{ "font-weight": 500, "font-size": "13px" }}>
+						{/* A label element, not a span: search indexes and scrolls to labels. The
+						    inline color and margin undo the stacked `.group label` look. */}
+						<label style={{ "font-weight": 500, "font-size": "13px", color: "inherit", margin: 0 }}>
 							Collapse tools — Speakeasy MCP (reduces AI context ~98%)
-						</span>
+						</label>
 						<span class={s.infoBadge}>
 							?
 							<span class={s.infoBadgeTip}>
@@ -184,44 +192,50 @@ export const LocalMcpPanel: Component = () => {
 				</div>
 			</ExpertSetting>
 			{/* One control: the whole toggle group edits the single `disabled_native_tools` list. */}
-			<ExpertSetting configKey="app.disabled_native_tools" value={disabledNativeTools()}>
-				<For each={NATIVE_TOOLS}>
-					{(tool) => {
-						const disabled = () => disabledNativeTools().includes(tool.name);
-						return (
-							<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
-								<div class={s.toggle} style={{ "margin-right": "4px" }}>
-									<input
-										type="checkbox"
-										checked={!disabled()}
-										onChange={(e) => {
-											const enabled = e.currentTarget.checked;
-											const updated = enabled
-												? disabledNativeTools().filter((n) => n !== tool.name)
-												: [...disabledNativeTools(), tool.name];
-											setDisabledNativeTools(updated);
-											saveConfigField((c) => {
-												c.disabled_native_tools = updated;
-											});
-										}}
-									/>
+			<Show when={nativeToolsLoaded()}>
+				<ExpertSetting configKey="app.disabled_native_tools" value={disabledNativeTools()}>
+					{/* Static, unlike the per-tool names: the one label search can index for this group. */}
+					<div class={s.group}>
+						<label>Native tools</label>
+					</div>
+					<For each={NATIVE_TOOLS}>
+						{(tool) => {
+							const disabled = () => disabledNativeTools().includes(tool.name);
+							return (
+								<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
+									<div class={s.toggle} style={{ "margin-right": "4px" }}>
+										<input
+											type="checkbox"
+											checked={!disabled()}
+											onChange={(e) => {
+												const enabled = e.currentTarget.checked;
+												const updated = enabled
+													? disabledNativeTools().filter((n) => n !== tool.name)
+													: [...disabledNativeTools(), tool.name];
+												setDisabledNativeTools(updated);
+												saveConfigField((c) => {
+													c.disabled_native_tools = updated;
+												});
+											}}
+										/>
+									</div>
+									<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+										<span style={{ "font-weight": 500, "font-size": "13px", "font-family": "monospace" }}>
+											{tool.name}
+										</span>
+										<span class={s.hint} style={{ margin: 0 }}>
+											{tool.description}
+										</span>
+										<span class={s.infoBadge}>
+											?<span class={s.infoBadgeTip}>{tool.actions}</span>
+										</span>
+									</div>
 								</div>
-								<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-									<span style={{ "font-weight": 500, "font-size": "13px", "font-family": "monospace" }}>
-										{tool.name}
-									</span>
-									<span class={s.hint} style={{ margin: 0 }}>
-										{tool.description}
-									</span>
-									<span class={s.infoBadge}>
-										?<span class={s.infoBadgeTip}>{tool.actions}</span>
-									</span>
-								</div>
-							</div>
-						);
-					}}
-				</For>
-			</ExpertSetting>
+							);
+						}}
+					</For>
+				</ExpertSetting>
+			</Show>
 
 			<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
 				{t("services.hint.autoSave", "Settings are saved automatically when changed")}

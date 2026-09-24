@@ -139,6 +139,14 @@ describe("SettingsPanel expert mode", () => {
 		expect(uiStore.setSettingsExpertMode).not.toHaveBeenCalled();
 	});
 
+	it("finds an expert setting with its badge in expert mode too", () => {
+		uiStore.setSettingsExpertMode(true);
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		fireEvent.input(searchInput(container), { target: { value: "test expert" } });
+		const row = container.querySelector("button[class*='searchResult']") as HTMLElement | null;
+		expect(row?.querySelector("[data-expert-badge]")?.textContent).toBe("Expert");
+	});
+
 	it("forgets a search reveal when Settings is reopened", async () => {
 		const [visible, setVisible] = createSignal(true);
 		const { container } = render(() => <SettingsPanel visible={visible()} onClose={() => {}} />);
