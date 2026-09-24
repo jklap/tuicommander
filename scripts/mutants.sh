@@ -78,8 +78,9 @@ git -C "$SRC" checkout --quiet --detach "$(git -C "$ROOT" rev-parse HEAD)"
 # generate_context! embeds ../dist; tauri-build checks the gitignored sidecar.
 mkdir -p "$SRC/dist" "$SRC/src-tauri/binaries"
 cp -R "$ROOT/dist/." "$SRC/dist/"
-# The clone already contains tracked sidecars. Never overwrite that inode:
-# code-signature caches and concurrent readers must keep the old bytes.
+# Sidecars are gitignored (none are tracked), so copy the built ones in. A
+# clone of an older commit may still contain a tracked one: never overwrite
+# that inode — code-signature caches and concurrent readers must keep the old bytes.
 for source in "$ROOT"/src-tauri/binaries/*; do
   [[ -f "$source" ]] || continue
   name="${source##*/}"
