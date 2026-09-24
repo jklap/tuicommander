@@ -189,10 +189,9 @@ describe("SettingsPanel search", () => {
 			expect(ownText(target)).toBe("Remote Machines");
 		});
 
-		it("the ego executable opens AI Chat at that control", async () => {
-			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+		it("the ego executable opens General at that control", async () => {
 			const { container } = open();
-			const target = await openResult(container, "ego executable", "AI Chat", "ego executable");
+			const target = await openResult(container, "ego executable", "General", "ego executable");
 			expect(target.tagName).toBe("LABEL");
 			expect(ownText(target)).toBe("ego executable");
 		});
@@ -213,12 +212,19 @@ describe("SettingsPanel search", () => {
 	describe("offers only what the current client can open", () => {
 		it("offers nothing on AI Chat while the experimental feature is off", () => {
 			const { container } = open();
-			fireEvent.input(searchInput(container), { target: { value: "ego executable" } });
+			fireEvent.input(searchInput(container), { target: { value: "providers" } });
 			expect(resultRows(container)).toHaveLength(0);
 		});
 
 		it("offers AI Chat once the feature is on", () => {
 			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+			const { container } = open();
+			fireEvent.input(searchInput(container), { target: { value: "providers" } });
+			expect(resultRows(container)).toHaveLength(1);
+		});
+
+		it("offers the ego executable while the experimental feature is off", () => {
+			// It lives on General, like MDKB, not behind the AI Chat flag.
 			const { container } = open();
 			fireEvent.input(searchInput(container), { target: { value: "ego executable" } });
 			expect(resultRows(container)).toHaveLength(1);

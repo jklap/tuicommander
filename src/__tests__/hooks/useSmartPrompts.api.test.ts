@@ -102,11 +102,12 @@ describe("Smart Prompts api mode", () => {
 		const check = useSmartPrompts().canExecute(prompt());
 
 		expect(check.ok).toBe(false);
-		// The mode is not what failed, so the reason names where the fix is: the
-		// binary and the model both live on the AI Chat page.
-		expect(check.reason).toMatch(/Settings → AI Chat/);
-		// Neither former home exists any more; naming one sends the user nowhere.
-		expect(check.reason).not.toMatch(/Settings → (General|AI Providers)/);
+		// The mode is not what failed, so the reason names where each fix is: the
+		// binary is on General, the model on the AI Chat page.
+		expect(check.reason).toMatch(/binary in Settings → General/);
+		expect(check.reason).toMatch(/model in Settings → AI Chat/);
+		// The deleted provider registry page sends the user nowhere.
+		expect(check.reason).not.toMatch(/Settings → AI Providers/);
 	});
 
 	it("refuses when there is no directory for the turn to run in", () => {
@@ -204,7 +205,8 @@ describe("Smart Prompts api mode", () => {
 		const check = useSmartPrompts().canExecute(prompt({ executionMode: "headless", preferredAgent: "api" }));
 
 		expect(check.ok).toBe(false);
-		expect(check.reason).toMatch(/Settings → AI Chat/);
-		expect(check.reason).not.toMatch(/Settings → (General|AI Providers)/);
+		expect(check.reason).toMatch(/binary in Settings → General/);
+		expect(check.reason).toMatch(/model in Settings → AI Chat/);
+		expect(check.reason).not.toMatch(/Settings → AI Providers/);
 	});
 });

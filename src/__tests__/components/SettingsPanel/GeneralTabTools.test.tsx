@@ -4,7 +4,8 @@ import "../../mocks/tauri";
 
 // Story 865: the Developer Tools page folded back into General. TUIC CLI,
 // Code Intelligence (MDKB), Default IDE and Custom Launchers render on
-// GeneralTab again, with the same desktop/browser gating they had.
+// GeneralTab again, with the same desktop/browser gating they had. The ego
+// executable moved here from AI Chat too (Boss decision 2026-09-24).
 
 const { mockInvoke, mockIsTauri } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockIsTauri: vi.fn(() => true) }));
 
@@ -66,13 +67,34 @@ describe("GeneralTab developer tools sections", () => {
 		expect(hasLabel(container, "Default IDE")).toBe(true);
 	});
 
-	it("keeps only the IDE picker in a browser", async () => {
+	it("renders the ego section directly after Code Intelligence, with the desktop picker", async () => {
+		const { container, findByText } = render(() => <GeneralTab />);
+
+		await findByText("Installed at /usr/local/bin/tuic");
+		const headings = headingTexts(container);
+		expect(headings[headings.indexOf("Code Intelligence") + 1]).toBe("ego");
+		expect(hasLabel(container, "ego executable")).toBe(true);
+		expect(container.querySelector("input[placeholder='/usr/local/bin/ego']")).toBeNull();
+		expect(Array.from(container.querySelectorAll("button")).some((b) => b.textContent === "Select…")).toBe(true);
+	});
+
+	it("shows the ego section with experimental features off", () => {
+		// ego is general configuration like MDKB: the section does not wait for
+		// the experimental toggle that gates the AI Chat panel.
+		const { container } = render(() => <GeneralTab />);
+		expect(headingTexts(container)).toContain("ego");
+	});
+
+	it("keeps the IDE picker and the ego path field in a browser", async () => {
 		mockIsTauri.mockReturnValue(false);
 		const { container } = render(() => <GeneralTab />);
 
 		const headings = headingTexts(container);
 		expect(headings).toContain("IDE");
 		expect(hasLabel(container, "Default IDE")).toBe(true);
+		// A browser names the ego path by hand: no native file picker exists.
+		expect(headings).toContain("ego");
+		expect(container.querySelector("input[placeholder='/usr/local/bin/ego']")).not.toBeNull();
 		expect(headings).not.toContain("TUIC CLI");
 		expect(headings).not.toContain("Code Intelligence");
 		expect(headings).not.toContain("Custom Launchers");

@@ -16,6 +16,7 @@ vi.mock("../../stores/settings", () => ({
 		setConfirmBeforeQuit: vi.fn(),
 		setConfirmBeforeClosingTab: vi.fn(),
 		isAiChatEnabled: vi.fn().mockReturnValue(false),
+		isAcpConfigured: vi.fn().mockReturnValue(false),
 	},
 	IDE_NAMES: { vscode: "VS Code", cursor: "Cursor" },
 	FONT_FAMILIES: { "JetBrains Mono": "JetBrains Mono", "Fira Code": "Fira Code" },

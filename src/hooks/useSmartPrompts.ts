@@ -100,13 +100,13 @@ interface ResolvedAgent {
  * mean running ego to find out whether ego can be run.
  *
  * The refusal names both steps in order. The binary is a TUICommander setting
- * and the model is ego's, but both are set on the AI Chat page, which replaced
+ * on General; the model is ego's and is set on the AI Chat page, which replaced
  * the deleted provider registry. */
 function canExecuteApi(): CanExecuteResult {
 	if (!settingsStore.isAcpConfigured()) {
 		return {
 			ok: false,
-			reason: "ego is not configured — name the binary in Settings → AI Chat, then pick a model on the same page",
+			reason: "ego is not configured — name the binary in Settings → General, then pick a model in Settings → AI Chat",
 		};
 	}
 	// ACP gives a session one working directory and it must be a real one. An
@@ -169,7 +169,8 @@ export function useSmartPrompts() {
 			// "api" is a headless agent the same way it is a mode: the work is one
 			// ego turn either way, so it answers to the same check.
 			if (resolved.agent === "api") return canExecuteApi();
-			if (!resolved.agent) return { ok: false, reason: "No headless agent configured — set one in Settings → Smart Prompts" };
+			if (!resolved.agent)
+				return { ok: false, reason: "No headless agent configured — set one in Settings → Smart Prompts" };
 			return { ok: true };
 		}
 

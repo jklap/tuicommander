@@ -212,8 +212,8 @@ describe("searchSettings", () => {
 		// the path. Both are the "ego executable" control, rendered differently.
 		const desktop = searchSettings("ego executable", ALL_TABS, "desktop");
 		const browser = searchSettings("ego executable", ALL_TABS, "browser");
-		expect(desktop).toEqual([expect.objectContaining({ tab: "ai-chat", platform: "desktop" })]);
-		expect(browser).toEqual([expect.objectContaining({ tab: "ai-chat", platform: "browser" })]);
+		expect(desktop).toEqual([expect.objectContaining({ tab: "general", platform: "desktop" })]);
+		expect(browser).toEqual([expect.objectContaining({ tab: "general", platform: "browser" })]);
 	});
 
 	it("does not offer a section a browser never renders", () => {

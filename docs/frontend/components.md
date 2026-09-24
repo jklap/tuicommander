@@ -51,14 +51,14 @@ App.tsx (central orchestrator)
 ├── SettingsPanel/            # Settings overlay; nav grouped by task (GLOBAL_TAB_GROUPS)
 │   ├── ExpertSetting         # ExpertSetting / ExpertSection / ExpertModeSwitch
 │   ├── DictationSettings     # Voice page
-│   ├── tabs/GeneralTab       # Language, context bar, confirmations, power management, updates, experimental, TUIC CLI, Code Intelligence, IDE, custom launchers
+│   ├── tabs/GeneralTab       # Language, context bar, confirmations, power management, updates, experimental, TUIC CLI, Code Intelligence, ego executable, IDE, custom launchers
 │   ├── tabs/AppearanceTab    # Tabs, repository groups, layout, UI legend
 │   ├── tabs/NotificationsTab # Sound and notification prefs
 │   ├── tabs/TerminalTab      # Theme, shell, font, cursor, clipboard, blocks
 │   ├── tabs/KeyboardShortcutsTab # Rebindable keyboard shortcuts, global hotkey
 │   ├── tabs/GitHubTab        # Git & GitHub: OAuth login, PR/issue display, repo + worktree defaults
 │   ├── tabs/AgentsTab        # Agent detection, run configs, Claude Usage toggle
-│   ├── tabs/AiChatTab        # ego executable, default model, providers
+│   ├── tabs/AiChatTab        # default model, providers
 │   ├── tabs/SmartPromptsTab  # Smart Prompts library
 │   ├── tabs/RemoteMachinesTab # Remote Machines page (wraps services/RemoteMachinesPanel)
 │   ├── tabs/PluginsTab       # Plugin management, logs
@@ -180,7 +180,7 @@ label row above its pages, and the configured repositories follow under
 
 **Pages:**
 - **Application**
-  - **General** (`GeneralTab`) — Language, agent context bar, confirmations, power management, updates, Experimental Features, TUIC CLI, Code Intelligence, default IDE, custom launchers
+  - **General** (`GeneralTab`) — Language, agent context bar, confirmations, power management, updates, Experimental Features, TUIC CLI, Code Intelligence, ego executable (always shown), default IDE, custom launchers
   - **Appearance** (`AppearanceTab`) — Tabs, repository groups, layout reset, UI legend
   - **Notifications** (`NotificationsTab`) — Sound and notification preferences
 - **Workspace**
@@ -189,7 +189,7 @@ label row above its pages, and the configured repositories follow under
   - **Git & GitHub** (`GitHubTab`) — GitHub OAuth login (Device Flow), token management, diagnostics, PR and issue display, repository and worktree defaults, additional accounts, repository bindings
 - **AI**
   - **Agents** (`AgentsTab`) — Agent detection, run configurations, Claude Usage toggle
-  - **AI Chat** (`AiChatTab`) — ego executable, default model, provider list. Hidden while `isAiChatEnabled()` is false
+  - **AI Chat** (`AiChatTab`) — default model, provider list. Hidden while `isAiChatEnabled()` is false. The ego executable is on General
   - **Voice** (`DictationSettings`) — see below
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
