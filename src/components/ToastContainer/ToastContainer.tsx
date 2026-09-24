@@ -1,10 +1,11 @@
 import type { Component } from "solid-js";
+import { appLogger } from "../../stores/appLogger";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { type Toast, toastsStore } from "../../stores/toasts";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { pathBasename } from "../../utils/pathUtils";
-import { ToastList } from "./ToastList";
+import { type RepoAction, ToastList } from "./ToastList";
 
 /**
  * Dismiss, and take the user to the terminal that raised the toast when there
@@ -39,11 +40,9 @@ function toastRepoName(toast: Toast): string | null {
 	return repoPath ? pathBasename(repoPath) : null;
 }
 
-type ToastAction = { label: string; onClick: () => unknown };
+const repoActions = new WeakMap<Toast, RepoAction>();
 
-const repoActions = new WeakMap<Toast, ToastAction>();
-
-function toastRepoAction(toast: Toast): ToastAction | null {
+function toastRepoAction(toast: Toast): RepoAction | null {
 	const repoPath = toast.repoPath;
 	if (!repoPath || repoPath === repositoriesStore.state.activeRepoPath || !repositoriesStore.get(repoPath)) {
 		return null;
@@ -57,7 +56,10 @@ function toastRepoAction(toast: Toast): ToastAction | null {
 				// The repository can disappear while the toast is visible. Re-check at
 				// activation time so the button never selects a stale path. Returning
 				// false keeps the toast visible so the failed navigation is not silent.
-				if (!repositoriesStore.get(repoPath)) return false;
+				if (!repositoriesStore.get(repoPath)) {
+					appLogger.warn("app", "Go to repo: the repository is no longer registered", { repoPath });
+					return false;
+				}
 				repositoriesStore.setActive(repoPath);
 				if (!toast.sessionId) return true;
 				const terminalId = terminalsStore.findBySessionId(toast.sessionId);

@@ -3,12 +3,14 @@ import { type Toast, toastsStore } from "../../stores/toasts";
 import { onClickKeyDown } from "../../utils/a11y";
 import styles from "./ToastContainer.module.css";
 
-type ToastAction = { label: string; onClick: () => unknown };
+/** "Go to repo": `onClick` returns false when it could not navigate, and the toast stays. */
+export type RepoAction = { label: string; onClick: () => boolean };
+type ToastAction = RepoAction | NonNullable<Toast["action"]>;
 
 interface ToastListProps {
 	onDismiss: (toast: Toast) => void;
 	repoName: (toast: Toast) => string | null;
-	repoAction?: (toast: Toast) => ToastAction | null;
+	repoAction?: (toast: Toast) => RepoAction | null;
 }
 
 /** Shared toast presentation. Navigation stays in the shell-specific wrapper. */
@@ -45,7 +47,9 @@ export const ToastList: Component<ToastListProps> = (props) => {
 										class={action === toast.action ? styles.action : `${styles.action} ${styles.repoAction}`}
 										onClick={(event) => {
 											event.stopPropagation();
-											if (action.onClick() !== false) toastsStore.remove(toast.id);
+											// A toast's own action always dismisses it; only the repo action reports failure.
+											const navigated = action.onClick();
+											if (action === toast.action || navigated !== false) toastsStore.remove(toast.id);
 										}}
 									>
 										{action.label}

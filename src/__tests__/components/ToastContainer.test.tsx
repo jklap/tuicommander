@@ -176,6 +176,19 @@ describe("ToastContainer", () => {
 		expect(toastsStore.toasts).toHaveLength(1);
 	});
 
+	it("dismisses the toast after its own action even when that action returns false", () => {
+		// Only the repo action reports a failed navigation. A toast's own action is
+		// typed () => void, so whatever it happens to return must not keep the toast.
+		const returnsFalse = vi.fn(() => false);
+		toastsStore.add("done", "open it", "info", false, { label: "Open", onClick: returnsFalse });
+
+		render(() => <ToastContainer />);
+		fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+		expect(returnsFalse).toHaveBeenCalledOnce();
+		expect(toastsStore.toasts).toHaveLength(0);
+	});
+
 	it("keeps the repo action node while unrelated repository state changes", () => {
 		repositoriesStore.add({ path: "/toast-current-stable", displayName: "Current" });
 		repositoriesStore.add({ path: "/toast-other-stable", displayName: "Other" });
