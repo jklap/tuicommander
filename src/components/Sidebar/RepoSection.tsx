@@ -326,8 +326,12 @@ export const BranchItem: Component<{
 	 *  directory leaf — the one thing that differs. */
 }> = (props) => {
 	const ctxMenu = createContextMenu();
-	// Shell rows have no agents: the list stays empty, so right click falls through to the row menu.
-	const agentLaunchMenu = createAgentLaunchMenu(() => (props.branch.isShell ? [] : (props.agentMenuItems?.() ?? [])));
+	// Long press only. The agent list on right click waits for Boss's approval of a
+	// change to a sidebar click (AGENTS.md "Sidebar clicks"), so right click keeps
+	// opening the row menu. Shell rows have no agents, so a long press does nothing.
+	const agentLaunchMenu = createAgentLaunchMenu(() => (props.branch.isShell ? [] : (props.agentMenuItems?.() ?? [])), {
+		rightClick: false,
+	});
 
 	const branchLabel = createMemo(
 		() => repoSettingsStore.getEffectiveField(props.repoPath, "branchLabels")?.[props.branch.branchName],

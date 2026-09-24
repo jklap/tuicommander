@@ -14,7 +14,8 @@ function flattenAgentItems(items: ContextMenuItem[]): ContextMenuItem[] {
  * terminal can open straight into one instead of a shell. A plain click keeps
  * opening a plain terminal; a press that opened the menu must not also do that.
  */
-export function createAgentLaunchMenu(getItems: () => ContextMenuItem[]) {
+export function createAgentLaunchMenu(getItems: () => ContextMenuItem[], options: { rightClick?: boolean } = {}) {
+	const rightClick = options.rightClick ?? true;
 	const menu = createContextMenu();
 	const [items, setItems] = createSignal<ContextMenuItem[]>([]);
 	let pressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -45,6 +46,9 @@ export function createAgentLaunchMenu(getItems: () => ContextMenuItem[]) {
 	};
 
 	const onContextMenu = (e: MouseEvent) => {
+		// Without the right-click list, a plain right click belongs to the caller's
+		// own menu: only a pending or fired long press claims the event.
+		if (!rightClick && pressTimer === undefined && !pressFired) return;
 		e.preventDefault();
 		const btn = e.currentTarget as HTMLElement;
 		let opened: boolean;

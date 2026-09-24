@@ -489,15 +489,33 @@ describe("Sidebar", () => {
 				expect(launch).toHaveBeenCalledTimes(1);
 			});
 
-			it("a right click lists the agents instead of the branch menu", () => {
+			it("a right click still opens the branch row menu", () => {
+				// The agent list on right click is withheld until Boss approves a change
+				// to a sidebar click (AGENTS.md "Sidebar clicks"). Only the long press has it.
+				const onAddTerminal = vi.fn();
+				const buildAgentMenuItems = vi.fn(agentItems(() => {}));
+				const { container } = render(() => <Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems })} />);
+				fireEvent.contextMenu(container.querySelector(".branchAddBtn")!);
+
+				expect(menuLabels(container)).toContain("Add Terminal");
+				expect(menuLabels(container)).not.toContain("Claude Code");
+				expect(onAddTerminal).not.toHaveBeenCalled();
+			});
+
+			it("a touch long press whose native contextmenu beats the timer opens the agent list", () => {
 				const onAddTerminal = vi.fn();
 				const { container } = render(() => (
 					<Sidebar {...defaultProps({ onAddTerminal, buildAgentMenuItems: agentItems(() => {}) })} />
 				));
-				fireEvent.contextMenu(container.querySelector(".branchAddBtn")!);
+				const addBtn = container.querySelector(".branchAddBtn")!;
+				fireEvent.pointerDown(addBtn, { button: 0 });
+				vi.advanceTimersByTime(450);
+				fireEvent.contextMenu(addBtn);
+				fireEvent.pointerUp(addBtn);
+				fireEvent.click(addBtn);
+				vi.advanceTimersByTime(1000);
 
 				expect(menuLabels(container)).toContain("Claude Code");
-				// The row's own menu would offer "Add Terminal"; it must not open as well.
 				expect(menuLabels(container)).not.toContain("Add Terminal");
 				expect(onAddTerminal).not.toHaveBeenCalled();
 			});

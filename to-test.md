@@ -8,6 +8,10 @@
 
 # To Test
 
+## Agent list on the `+` buttons (2026-09-25) — frontend, HMR
+
+- [ ] [HUMAN] Decide in the morning whether the sidebar `+` right-click should also open the agent list (withheld pending approval, AGENTS.md "Sidebar clicks"). Today: tab bar `+` right-click and long press open the agent list; sidebar branch `+` long press opens it; sidebar `+` right-click opens the branch menu.
+
 ## Sub-agent tag icon in the sidebar (2026-09-25) — frontend, HMR
 
 - [ ] [VISUAL] Spawn a sub-agent from an agent tab. Its sidebar row shows a small monochrome agent icon, aligned with the row text, instead of "↳ Parent". Hovering the icon shows "Spawned by <parent>". Take a screenshot (MCP maccontrol has no Screen Recording permission on 2026-09-25).
