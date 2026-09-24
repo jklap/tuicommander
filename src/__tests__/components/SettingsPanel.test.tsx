@@ -141,12 +141,12 @@ describe("SettingsPanel", () => {
 		expect(labels).not.toContain("Groups");
 	});
 
-	it("shows the new Terminal, Developer Tools and Keyboard Shortcuts nav items, and the Voice label", () => {
+	it("shows the Terminal and Keyboard Shortcuts nav items and the Voice label, and no Developer Tools page", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 		const navItems = container.querySelectorAll(".navItem");
 		const labels = Array.from(navItems).map((n) => n.textContent);
 		expect(labels).toContain("Terminal");
-		expect(labels).toContain("Developer Tools");
+		expect(labels).not.toContain("Developer Tools");
 		expect(labels).toContain("Keyboard Shortcuts");
 		expect(labels).toContain("Voice");
 		expect(labels).not.toContain("Dictation");
@@ -227,9 +227,23 @@ describe("SettingsPanel", () => {
 			Application: ["General", "Appearance", "Notifications"],
 			Workspace: ["Terminal", "Keyboard Shortcuts", "Git & GitHub"],
 			AI: ["Agents", "Voice", "Smart Prompts"],
-			Integrations: ["MCP", "Remote Access", "Remote Machines", "Plugins", "Developer Tools"],
+			Integrations: ["MCP", "Remote Access", "Remote Machines", "Plugins"],
 			REPOSITORIES: ["Alpha", "Beta"],
 		});
+	});
+
+	it("opens General for the retired developer-tools key, so an old deep link still lands on a page", () => {
+		// tuic://settings?tab=developer-tools and any caller written before the
+		// page folded into General must not open a blank content area.
+		const { container } = render(() => (
+			<SettingsPanel visible={true} onClose={() => {}} initialTab="developer-tools" />
+		));
+		expect(container.querySelector(".navItem.active")!.textContent).toBe("General");
+		const headingTexts = Array.from(container.querySelectorAll(".section h3")).map(
+			(h) => h.childNodes[0]?.textContent?.trim() ?? "",
+		);
+		expect(headingTexts).toContain("General");
+		expect(headingTexts).toContain("IDE");
 	});
 
 	it("lists AI Chat under AI when the feature flag is on", () => {

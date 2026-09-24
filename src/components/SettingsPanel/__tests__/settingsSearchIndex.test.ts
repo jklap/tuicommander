@@ -25,7 +25,6 @@ const TAB_SOURCES: Record<string, string[]> = {
 	"smart-prompts": ["tabs/SmartPromptsTab.tsx"],
 	agents: ["tabs/AgentsTab.tsx"],
 	"ai-chat": ["tabs/AiChatTab.tsx"],
-	"developer-tools": ["tabs/DeveloperToolsTab.tsx"],
 };
 
 /** Occurrences the extraction rule cannot index, pinned so a new one is loud.
@@ -66,7 +65,6 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
-	"developer-tools": { dynamic: 0, orphans: 0 },
 };
 
 const readTab = (file: string) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");

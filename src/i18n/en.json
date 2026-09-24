@@ -768,7 +768,6 @@
 	"settings.copyToProject.failed": "Failed to write .tuic.json",
 	"settings.copyToProject.heading": "Share with Team",
 	"settings.copyToProject.hint": "Write this repo's worktree/branch settings to a .tuic.json in the project root. Commit it so teammates inherit the same defaults. Scripts are never exported.",
-	"settings.developerTools": "Developer Tools",
 	"settings.done": "Done",
 	"settings.expert.badge": "Expert",
 	"settings.expert.switch": "Expert",

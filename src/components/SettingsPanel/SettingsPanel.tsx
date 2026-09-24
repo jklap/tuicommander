@@ -23,7 +23,6 @@ import {
 	AgentsTab,
 	AiChatTab,
 	AppearanceTab,
-	DeveloperToolsTab,
 	GeneralTab,
 	GitHubTab,
 	KeyboardShortcutsTab,
@@ -89,7 +88,6 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
 			{ key: "plugins", label: t("settings.plugins", "Plugins") },
-			{ key: "developer-tools", label: t("settings.developerTools", "Developer Tools") },
 		],
 	},
 ];
@@ -119,6 +117,19 @@ function defaultTab(ctx: SettingsContext): string {
 	return "general";
 }
 
+/** Nav keys of pages that were folded into another page. A deep link
+ * (`tuic://settings?tab=…`) or a caller written before the move still names
+ * them, and an unknown key renders no page at all. */
+const RETIRED_TABS: Record<string, string> = {
+	"developer-tools": "general",
+};
+
+/** The page to open for a requested tab key. */
+function initialTabFor(requested: string | undefined, ctx: SettingsContext): string {
+	if (requested === undefined) return defaultTab(ctx);
+	return RETIRED_TABS[requested] ?? requested;
+}
+
 /** Build the full nav from global sections + configured repos */
 function buildNavItems(): SettingsShellTab[] {
 	// All repos, including those nested in groups — grouped repos live in
@@ -146,14 +157,14 @@ function buildNavItems(): SettingsShellTab[] {
 
 export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const ctx = () => props.context ?? { kind: "global" as const };
-	const [activeTab, setActiveTab] = createSignal(props.initialTab ?? defaultTab(ctx()));
+	const [activeTab, setActiveTab] = createSignal(initialTabFor(props.initialTab, ctx()));
 
 	const [query, setQuery] = createSignal("");
 
 	// Reset active tab when context changes or panel opens
 	createEffect(() => {
 		if (props.visible) {
-			setActiveTab(props.initialTab ?? defaultTab(ctx()));
+			setActiveTab(initialTabFor(props.initialTab, ctx()));
 			// A stale query would hide the tab the caller asked for behind results
 			setQuery("");
 			void settingsExpertStore.open();
@@ -345,9 +356,6 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</Show>
 				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
 					<AiChatTab />
-				</Show>
-				<Show when={activeTab() === "developer-tools"}>
-					<DeveloperToolsTab />
 				</Show>
 			</Show>
 		</SettingsShell>
