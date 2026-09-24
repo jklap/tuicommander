@@ -212,13 +212,19 @@ modified, when a search result revealed that `configKey` during the current
 Settings open, or while the defaults are unknown. All of this is one rule,
 `settingsExpertStore.isVisible`.
 
-The rule is sticky for a modified value: when a control is shown because its
-value is known to differ from the default, `isVisible` records its `configKey`
-for the current open. The control stays shown when the user sets it back to the
-default, so it does not disappear under the cursor. `settingsExpertStore.open()`,
-which `SettingsPanel` calls each time Settings opens, clears that record and the
-search reveals. Only a known difference pins a control: a lookup that fails
-while the defaults load does not.
+The rule is sticky for an edited control: a native `input` or `change` event
+from any child of an `ExpertSetting` calls `settingsExpertStore.pin(configKey)`,
+and a pinned control stays shown for the current open, so setting it back to
+the default does not make it disappear under the cursor.
+`settingsExpertStore.open()`, which `SettingsPanel` calls each time Settings
+opens, clears the pins and the search reveals. Pinning happens on the edit, not
+when `isVisible` sees a non-default value: a tab's pre-load placeholder (a value
+that differs from the default until its config loads) is not an edit and must
+still hide. The listeners sit in the capture phase on the resolved top-level
+child elements — no wrapper element, which would break the `.group + .group`
+and `:last-child` rules — so the pin lands before the control's own handler
+changes the value. A control that changes its value without `input`/`change`
+(a button) does not pin.
 
 `<ExpertSection>` hides a section, heading included, when all of its
 `ExpertSetting`s are hidden. No page uses it today, because every section keeps

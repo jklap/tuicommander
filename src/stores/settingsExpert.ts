@@ -41,10 +41,8 @@ function createSettingsExpertStore() {
 	const [defaults, setDefaults] = createSignal<ConfigDefaults | null>(null);
 	/** configKeys a search result opened during the current Settings open */
 	const [revealed, setRevealed] = createSignal<ReadonlySet<string>>(new Set());
-	/** configKeys shown with a known non-default value during the current open.
-	 * Plain Set, not a signal: a key only joins while it is already visible, so
-	 * membership never has to trigger a re-render on its own. */
-	const modifiedThisOpen = new Set<string>();
+	/** configKeys the user edited during the current Settings open */
+	const [pinned, setPinned] = createSignal<ReadonlySet<string>>(new Set());
 	let loadSeq = 0;
 	const warnedKeys = new Set<string>();
 
@@ -92,7 +90,7 @@ function createSettingsExpertStore() {
 		 * values, and clearing them would flash every expert control on open. */
 		async open(): Promise<void> {
 			setRevealed(new Set<string>());
-			modifiedThisOpen.clear();
+			setPinned(new Set<string>());
 			const seq = ++loadSeq;
 			try {
 				const loaded = await invoke<ConfigDefaults>("get_config_defaults");
@@ -108,19 +106,24 @@ function createSettingsExpertStore() {
 			setRevealed((prev) => new Set(prev).add(configKey));
 		},
 
+		/** Keep an expert control visible for the rest of this Settings open
+		 * because the user edited it, so editing it back to the default does not
+		 * remove it under the cursor. Called on the edit, never on a render: a
+		 * tab's pre-load placeholder value is not an edit. */
+		pin(configKey: string): void {
+			if (!pinned().has(configKey)) setPinned((prev) => new Set(prev).add(configKey));
+		},
+
 		isAtDefault,
 
-		/** The single visibility rule for an expert control. A control shown
-		 * because its value was modified stays shown until the next open(), so
-		 * resetting it to the default does not remove it under the cursor. */
+		/** The single visibility rule for an expert control. */
 		isVisible(configKey: string, value: unknown): boolean {
-			if (uiStore.state.settingsExpertMode || revealed().has(configKey)) return true;
-			if (modifiedThisOpen.has(configKey)) return true;
-			if (isAtDefault(configKey, value)) return false;
-			// Only a known difference pins: "defaults still loading" must not
-			// keep every expert control on screen for the whole open.
-			if (defaults() && lookup(configKey).found) modifiedThisOpen.add(configKey);
-			return true;
+			return (
+				uiStore.state.settingsExpertMode ||
+				revealed().has(configKey) ||
+				pinned().has(configKey) ||
+				!isAtDefault(configKey, value)
+			);
 		},
 
 		/** Exposed for tests only — do not use in production code. */
@@ -128,7 +131,7 @@ function createSettingsExpertStore() {
 			loadSeq++;
 			setDefaults(null);
 			setRevealed(new Set<string>());
-			modifiedThisOpen.clear();
+			setPinned(new Set<string>());
 			warnedKeys.clear();
 		},
 	};

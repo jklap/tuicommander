@@ -33,14 +33,23 @@ describe("settingsExpertStore visibility within one Settings open", () => {
 		serveDefaults();
 	});
 
-	it("keeps a control visible after its value returns to the default, until the next open()", async () => {
+	it("keeps an edited control visible after its value returns to the default, until the next open()", async () => {
 		// Resetting an override must not make the control vanish under the user's cursor.
 		await settingsExpertStore.open();
 		expect(settingsExpertStore.isVisible(KEY, false)).toBe(true);
 
+		settingsExpertStore.pin(KEY);
 		expect(settingsExpertStore.isVisible(KEY, true)).toBe(true);
 
 		await settingsExpertStore.open();
+		expect(settingsExpertStore.isVisible(KEY, true)).toBe(false);
+	});
+
+	it("hides a placeholder non-default value that resolves to the default without a user edit", async () => {
+		// A tab's pre-load placeholder (e.g. [] before load_config) is not an override.
+		await settingsExpertStore.open();
+		expect(settingsExpertStore.isVisible(KEY, false)).toBe(true);
+
 		expect(settingsExpertStore.isVisible(KEY, true)).toBe(false);
 	});
 

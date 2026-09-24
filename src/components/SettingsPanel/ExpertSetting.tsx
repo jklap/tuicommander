@@ -1,7 +1,9 @@
 import {
 	type Accessor,
 	type Component,
+	children,
 	createContext,
+	createEffect,
 	createSignal,
 	type JSX,
 	onCleanup,
@@ -28,11 +30,41 @@ const SectionContext = createContext<ExpertSectionContext>();
  * a string literal: the search-index drift test reads it from the source to
  * mark the wrapped labels as expert. `value` is the control's live value in
  * the serialized config shape (snake_case domain, Rust types).
+ *
+ * A user edit — a native `input` or `change` event from any child control —
+ * pins the setting for the rest of the Settings open, so editing it back to
+ * the default does not hide it mid-edit.
  */
 export const ExpertSetting: Component<{ configKey: string; value: unknown; children: JSX.Element }> = (props) => {
 	const visible = () => settingsExpertStore.isVisible(props.configKey, props.value);
 	useContext(SectionContext)?.register(visible);
-	return <Show when={visible()}>{props.children}</Show>;
+	return (
+		<Show when={visible()}>
+			<PinOnEdit configKey={props.configKey}>{props.children}</PinOnEdit>
+		</Show>
+	);
+};
+
+const EDIT_EVENTS = ["input", "change"] as const;
+
+/**
+ * Pins `configKey` on an edit inside its children. No wrapper element: one
+ * would break the `.group + .group` and `:last-child` rules of the Settings
+ * CSS. The listeners sit on the resolved top-level elements in the capture
+ * phase, so the pin lands before the control's own handler moves the value to
+ * the default — the control is never unmounted and keeps focus.
+ */
+const PinOnEdit: Component<{ configKey: string; children: JSX.Element }> = (props) => {
+	const resolved = children(() => props.children);
+	const pin = () => settingsExpertStore.pin(props.configKey);
+	createEffect(() => {
+		const elements = resolved.toArray().filter((node): node is Element => node instanceof Element);
+		for (const element of elements) for (const type of EDIT_EVENTS) element.addEventListener(type, pin, true);
+		onCleanup(() => {
+			for (const element of elements) for (const type of EDIT_EVENTS) element.removeEventListener(type, pin, true);
+		});
+	});
+	return <>{resolved()}</>;
 };
 
 /**
