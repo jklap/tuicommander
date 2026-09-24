@@ -58,6 +58,7 @@ scripts/*
 !scripts/mutants.sh
 !scripts/install-launch-shells.sh
 !scripts/hooks/
+!scripts/speech-assets/
 !scripts/perf/
 scripts/perf/results/
 competitor-analysis
