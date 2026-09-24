@@ -8,6 +8,11 @@
 
 # To Test
 
+## tmux-shim swarm cwd resolution fix (2026-09-23) — **Rust, needs a `make dev` restart**
+
+- [ ] [HUMAN] From a TUICommander-managed Claude Code agent shell, run a one-off command in an unrelated directory (e.g. `cd ~/bin && ls`), then — WITHOUT `cd`ing back — trigger Claude Code's Agent Teams feature to spawn 2+ teammates in one swarm. Confirm every teammate pane lands in the agent's real repo (not the transient directory), including the very first pane (materialized via `respawn-pane` off `new-session`'s initial pane, not `split-window`). This exercises `resolve_cwd()`'s new env-var-over-`current_dir()` preference and `materialize()`'s topology-cwd fallback — neither can be driven by a unit test since both need a real Claude Code agent-teams spawn sequence through the live `tmux` shim.
+- [ ] [HUMAN] Confirm a plain `tuic alias` general-purpose `tmux` user (not agent-teams, no TUIC_* env present — e.g. a shell not spawned by TUICommander) still resolves `new-session -c <path>`/`split-window` cwd correctly via the `current_dir()` fallback, unaffected by this change.
+
 ## Tunnel process-group kill + wait-based shutdown on real app exit (2026-09-23) — **Rust, needs a `make dev` restart**
 
 - [ ] [HUMAN] After restarting `make dev`, connect a real (or throwaway VM) SSH tunnel or "Remote Server — SSH" connection so it's actively `Connected`, then quit the app (not just close the window — a real process exit via Cmd+Q or the menu). Confirm via `ps aux | grep ssh` on the host that the `ssh` process (and, if the remote command was a shell script rather than a single binary, any child it forked) is actually gone within a couple seconds of the app closing — not just that the app's own window disappeared. This exercises `RunEvent::Exit`'s new `shutdown_all_and_wait()` call, which cannot be verified by any unit test (there is no way to drive a real Tauri process-exit event from `cargo test`).

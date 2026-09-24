@@ -16376,6 +16376,124 @@ mod tests {
         );
     }
 
+    /// `resolve_effective_spawn_cwd`'s priority chain, tested directly rather
+    /// than through a full spawn e2e (the existing test above already proves
+    /// the e2e wiring works — this covers branches that test never reaches).
+    #[cfg(unix)]
+    #[test]
+    fn resolve_effective_spawn_cwd_priority_chain() {
+        let state = test_state();
+
+        // An explicit cwd wins even when every other argument would ALSO
+        // resolve to something (and to a DIFFERENT value each, so a
+        // priority-order bug can't hide behind two branches agreeing).
+        insert_managed_test_session(&state, TEST_UUID_A, "/caller/tuic/cwd");
+        state.mcp.sessions.insert(
+            "mcp-explicit-wins".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                sse_generation: 0,
+                repo_path: Some("/repo/path/fallback".to_string()),
+                agent_type: None,
+            },
+        );
+        assert_eq!(
+            resolve_effective_spawn_cwd(
+                &state,
+                Some("/explicit/cwd"),
+                Some("/managed/parent/cwd"),
+                Some(TEST_UUID_A),
+                Some("mcp-explicit-wins"),
+            )
+            .as_deref(),
+            Some("/explicit/cwd"),
+            "an explicit cwd must win over caller_tuic, managed_parent_cwd, and repo_path all at once"
+        );
+
+        // caller_tuic's own bound session cwd wins over managed_parent_cwd
+        // when both resolve to a real (and different) value — the existing
+        // test above only proves caller_tuic wins over a REJECTED/mismatched
+        // header, not over a legitimate lower-priority one.
+        assert_eq!(
+            resolve_effective_spawn_cwd(
+                &state,
+                None,
+                Some("/managed/parent/cwd"),
+                Some(TEST_UUID_A),
+                Some("mcp-explicit-wins"),
+            )
+            .as_deref(),
+            Some("/caller/tuic/cwd"),
+            "a legitimate caller_tuic binding must win over managed_parent_cwd, not just over a rejected one"
+        );
+
+        // The final fallback: no explicit cwd, no caller_tuic (a headerless/
+        // unbound caller), no managed_parent_cwd hint — only the MCP
+        // session's own repo_path (resolved from `initialize`'s roots) is
+        // left. This is the last-resort branch a spawn with no caller
+        // identity at all falls back to, and had zero direct coverage
+        // before this test.
+        assert_eq!(
+            resolve_effective_spawn_cwd(&state, None, None, None, Some("mcp-explicit-wins"))
+                .as_deref(),
+            Some("/repo/path/fallback"),
+            "with no explicit/caller/managed cwd, the MCP session's own repo_path must be used"
+        );
+
+        // A caller_tuic pointing at a session with no recorded cwd (`cwd:
+        // None` on the PtySession itself) must fall through past it to
+        // managed_parent_cwd, not resolve to a stale/wrong value or panic.
+        insert_managed_test_session(&state, TEST_UUID_B, "");
+        state
+            .session_maps
+            .sessions
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .cwd = None;
+        assert_eq!(
+            resolve_effective_spawn_cwd(
+                &state,
+                None,
+                Some("/managed/parent/cwd"),
+                Some(TEST_UUID_B),
+                Some("mcp-explicit-wins"),
+            )
+            .as_deref(),
+            Some("/managed/parent/cwd"),
+            "a caller_tuic session with no recorded cwd must fall through to managed_parent_cwd"
+        );
+
+        // Total exhaustion: every argument is None, and the referenced MCP
+        // session (if any) carries no repo_path either — must return None,
+        // not panic or fall back to some other implicit value.
+        state.mcp.sessions.insert(
+            "mcp-nothing-resolves".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                sse_generation: 0,
+                repo_path: None,
+                agent_type: None,
+            },
+        );
+        assert_eq!(
+            resolve_effective_spawn_cwd(&state, None, None, None, Some("mcp-nothing-resolves")),
+            None,
+            "when nothing resolves anywhere in the chain, the result must be None"
+        );
+        assert_eq!(
+            resolve_effective_spawn_cwd(&state, None, None, None, None),
+            None,
+            "an absent mcp_session_id must not panic and must also resolve to None"
+        );
+    }
+
     // --- ui(action=confirm): answerable from any client, not just the desktop ---
 
     /// Story 760: `REQUEST_TIMEOUT` (`mcp_http/mod.rs`) wraps the whole router,

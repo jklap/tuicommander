@@ -49,14 +49,59 @@ use serde_json::Value;
 /// closely — real `split-window`/`new-window` without `-c` default to the
 /// pane/session being split from, not to the invoking client. `new-session`
 /// has nothing to inherit from (it's the first pane), so its call site
-/// passes `inherited = None` and this is just `cwd.or_else(current_dir)`,
-/// unchanged from before.
+/// passes `inherited = None`.
+///
+/// `env_repo_cwd()` — the lead agent's own stable `TUIC_WORKTREE_PATH`/
+/// `TUIC_MAIN_REPO_PATH` env var (see its own doc comment) — now sits ahead
+/// of BOTH `inherited` and `current_dir()`. Found live 2026-09-23: a
+/// 6-teammate swarm spawned from `ssh-connections` (repo: `tuicommander`)
+/// put 4 teammates in an unrelated directory (`~/bin`) — the calling
+/// agent's shell had transiently `cd`'d there to run a one-off script at
+/// the exact moment Claude Code's agent-teams internals fired
+/// `tmux new-session`, so `current_dir()`'s snapshot was wrong for the
+/// *entire* swarm, and every `split-window` teammate faithfully inherited
+/// that one bad reading via `inherited` — topology-inheritance guarantees
+/// pane-to-pane *consistency*, not correctness. Checking the env var first
+/// closes this off two ways: it directly fixes `new-session`'s own
+/// resolution (a `cd` never touches an already-set env var, only the live
+/// process cwd), and — since every `resolve_cwd()` call site independently
+/// re-reads it — it also self-heals any pane whose `inherited` value was
+/// ALREADY wrong from an earlier bad reading, rather than faithfully
+/// propagating it forward. This can only ever narrow (not change) behavior
+/// for a caller with no TUIC_* env at all (a plain `tuic alias`
+/// general-purpose user, or any process not spawned through TUICommander):
+/// `env_repo_cwd()` returns `None` and this is exactly the prior
+/// `inherited.or_else(current_dir)` chain, unchanged.
 fn resolve_cwd(cwd: Option<String>, inherited: Option<&str>) -> Option<String> {
-    cwd.or_else(|| inherited.map(String::from)).or_else(|| {
-        std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned())
-    })
+    cwd.or_else(env_repo_cwd)
+        .or_else(|| inherited.map(String::from))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+}
+
+/// The calling process's own stable worktree/repo-root env var, injected
+/// once at PTY spawn time (`pty.rs::inject_worktree_env`) and never touched
+/// again for that PTY's whole life — unlike `std::env::current_dir()`,
+/// which tracks the shell's LIVE working directory and silently drifts the
+/// moment it `cd`s anywhere else. `tuic-cli`, exec'd as the `tmux` alias by
+/// Claude Code's agent-teams feature, is a child process of that same
+/// lead-agent shell and inherits this exact environment untouched.
+///
+/// Prefers `TUIC_WORKTREE_PATH` (a linked worktree's own root) over
+/// `TUIC_MAIN_REPO_PATH` (which for a worktree session deliberately points
+/// at the *main* checkout instead, not itself — see `script_env.rs`), so a
+/// swarm spawned from inside a worktree lands its teammates in that
+/// worktree, not the main checkout. Returns `None` (never an empty string)
+/// when neither var is set — any process not spawned through TUICommander
+/// at all, e.g. a `tuic alias` general-purpose user working outside the app.
+fn env_repo_cwd() -> Option<String> {
+    std::env::var("TUIC_WORKTREE_PATH")
+        .or_else(|_| std::env::var("TUIC_MAIN_REPO_PATH"))
+        .ok()
+        .filter(|v| !v.is_empty())
 }
 
 /// The first pane's `cwd` found anywhere under the given session, or `None`
@@ -983,8 +1028,51 @@ mod resolve_cwd_tests {
     use super::{resolve_cwd, topology_cwd_for_session, topology_cwd_for_window};
     use serde_json::json;
 
+    const ENV_VARS: [&str; 2] = ["TUIC_WORKTREE_PATH", "TUIC_MAIN_REPO_PATH"];
+
+    /// Ensures `TUIC_WORKTREE_PATH`/`TUIC_MAIN_REPO_PATH` are absent for the
+    /// duration of a test and restored afterward. This repo's own dev/agent
+    /// shells are routinely launched FROM a real TUIC-spawned terminal,
+    /// which sets these exact vars ambiently (see this codebase's own agent
+    /// memory on ambient TUIC_* env leaking into tests) — without this
+    /// guard, `resolve_cwd`'s new env-preferring behavior would make these
+    /// tests non-deterministic depending on whatever shell `cargo test`/
+    /// `cargo nextest run` happens to be invoked from. Also serializes
+    /// mutation of this process-global state across tests, matching this
+    /// file's existing `$TUIC_SOCKET` precedent (see
+    /// `ipc_backend_pane_id_url_encoding_tests`).
+    struct EnvVarGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvVarGuard {
+        fn scrub() -> Self {
+            let saved = ENV_VARS
+                .iter()
+                .map(|&k| (k, std::env::var(k).ok()))
+                .collect();
+            for &k in &ENV_VARS {
+                unsafe { std::env::remove_var(k) };
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(val) => unsafe { std::env::set_var(k, val) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
+            }
+        }
+    }
+
     #[test]
+    #[serial_test::serial]
     fn explicit_cwd_wins_over_the_fallback() {
+        let _guard = EnvVarGuard::scrub();
         assert_eq!(
             resolve_cwd(Some("/explicit/path".to_string()), Some("/inherited/path")),
             Some("/explicit/path".to_string())
@@ -992,12 +1080,16 @@ mod resolve_cwd_tests {
     }
 
     #[test]
-    fn inherited_cwd_wins_over_current_dir_when_no_explicit_value() {
+    #[serial_test::serial]
+    fn inherited_cwd_wins_over_current_dir_when_no_explicit_value_and_no_env() {
         // Each `tmux` subcommand is its own OS subprocess, so a second
         // std::env::current_dir() read for split-window/new-window is a
         // genuinely independent read from the one new-session made earlier
         // — inheriting from topology instead guarantees every pane in one
         // swarm shares the exact cwd the first pane resolved, regardless.
+        // No TUIC_* env is set here, so this exercises the same fallback
+        // chain that existed before the env-var fix.
+        let _guard = EnvVarGuard::scrub();
         assert_eq!(
             resolve_cwd(None, Some("/inherited/path")),
             Some("/inherited/path".to_string())
@@ -1005,6 +1097,7 @@ mod resolve_cwd_tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn absent_cwd_falls_back_to_the_calling_processs_own_current_dir() {
         // Real tmux defaults new-session/split-window/new-window's cwd to
         // the calling client's own directory when -c is absent — never a
@@ -1015,12 +1108,85 @@ mod resolve_cwd_tests {
         // which is how a live 2026-09-04 swarm spawned from a
         // `commerce-journal` session landed all 4 teammate panes under an
         // unrelated repo (`databricks-sql-cli`, whichever was active in the
-        // sidebar at that moment).
+        // sidebar at that moment). No TUIC_* env is set here (the final
+        // fallback rung, reached only when neither an explicit cwd, an env
+        // var, nor an inherited topology cwd exists).
+        let _guard = EnvVarGuard::scrub();
         let expected = std::env::current_dir()
             .expect("current_dir must resolve in a test process")
             .to_string_lossy()
             .into_owned();
         assert_eq!(resolve_cwd(None, None), Some(expected));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_repo_path_wins_over_inherited_and_current_dir() {
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "/from/env") };
+        assert_eq!(
+            resolve_cwd(None, Some("/inherited/path")),
+            Some("/from/env".to_string())
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn env_worktree_path_wins_over_env_main_repo_path() {
+        // A linked worktree's own TUIC_MAIN_REPO_PATH deliberately points at
+        // the main checkout, not itself (script_env.rs) — TUIC_WORKTREE_PATH
+        // is the one that names where this session actually lives.
+        let _guard = EnvVarGuard::scrub();
+        unsafe {
+            std::env::set_var("TUIC_MAIN_REPO_PATH", "/main/checkout");
+            std::env::set_var("TUIC_WORKTREE_PATH", "/worktree/root");
+        }
+        assert_eq!(resolve_cwd(None, None), Some("/worktree/root".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn explicit_cwd_still_wins_over_env_repo_path() {
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "/from/env") };
+        assert_eq!(
+            resolve_cwd(Some("/explicit/path".to_string()), None),
+            Some("/explicit/path".to_string())
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_transient_cd_does_not_affect_the_env_derived_cwd() {
+        // Regression test for the live 2026-09-23 bug: the calling agent's
+        // shell had `cd`'d to an unrelated directory (running a one-off
+        // script) at the exact moment Claude Code's agent-teams internals
+        // fired `tmux new-session` — current_dir() faithfully reported that
+        // unrelated directory, corrupting the whole swarm. The stable env
+        // var must win regardless of where the live process cwd has
+        // wandered off to.
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "/the/real/repo") };
+        let live_cwd = std::env::current_dir()
+            .expect("current_dir must resolve in a test process")
+            .to_string_lossy()
+            .into_owned();
+        assert_ne!(
+            live_cwd, "/the/real/repo",
+            "test process cwd must not coincidentally match, or this test proves nothing"
+        );
+        assert_eq!(resolve_cwd(None, None), Some("/the/real/repo".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn empty_env_var_is_treated_as_absent() {
+        let _guard = EnvVarGuard::scrub();
+        unsafe { std::env::set_var("TUIC_MAIN_REPO_PATH", "") };
+        assert_eq!(
+            resolve_cwd(None, Some("/inherited/path")),
+            Some("/inherited/path".to_string())
+        );
     }
 
     #[test]
