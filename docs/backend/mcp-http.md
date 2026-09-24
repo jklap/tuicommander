@@ -854,7 +854,7 @@ equivalent, so a model that saw both had to guess, and paid for both catalogues
 on every turn. Six of the 13 needed a per-session filesystem sandbox only the
 embedded agent loop creates, so they refused every external caller before
 dispatch. Deleted in story 789-f6ed; the tool-by-tool comparison behind it is
-`plans/archive/ego-integration/tool-family-comparison.md`. The embedded agent loop that
+`plans/ego-integration/archive/tool-family-comparison.md`. The embedded agent loop that
 created those sandboxes is itself gone (#784-0aec).
 
 **The surviving tool names are a public contract.** They appear in users' ego

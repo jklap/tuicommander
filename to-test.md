@@ -2515,7 +2515,7 @@ behaviour until restart.
 ## Progress rewritten to one journal, one database and a dialog — needs a `make dev` restart
 
 The whole Progress feature was re-implemented against the 2026-09-14 revision of
-`plans/archive/project-progress.md`: one append-only journal in a single database at
+`plans/project-progress.md`: one append-only journal in a single database at
 `<config dir>/progress.sqlite3`, two reportable kinds plus a host-written
 `intent`, a dialog replacing the sidebar panel, eight `repo progress_*` actions
 cut, and no Markdown export. Rust and frontend both changed, so the running
