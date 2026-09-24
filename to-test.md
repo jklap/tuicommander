@@ -8,6 +8,10 @@
 
 # To Test
 
+## Sub-agent tag icon in the sidebar (2026-09-25) — frontend, HMR
+
+- [ ] [VISUAL] Spawn a sub-agent from an agent tab. Its sidebar row shows a small monochrome agent icon, aligned with the row text, instead of "↳ Parent". Hovering the icon shows "Spawned by <parent>". Take a screenshot (MCP maccontrol has no Screen Recording permission on 2026-09-25).
+
 ## Mobile terminal prose reflow (2026-09-24) — frontend, refresh PWA
 
 - [ ] [VISUAL] On a phone-width PWA session with Claude output produced in a wider desktop terminal, read a long paragraph: words flow across the phone width without a short orphan line at the desktop row boundary. Lists and box-drawing tables keep their own rows and alignment.
