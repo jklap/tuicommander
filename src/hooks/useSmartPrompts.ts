@@ -99,15 +99,15 @@ interface ResolvedAgent {
  * itself is named. Which model it will use is ego's own state, and asking would
  * mean running ego to find out whether ego can be run.
  *
- * The refusal names both steps in order, because they live in different places:
- * the binary is a TUICommander setting, the sign-in is ego's, and the tab that
- * shows ego's side is the one that replaced the deleted provider registry. */
+ * The refusal names both steps in order. The binary is a TUICommander setting
+ * and the model is ego's, but both are set on the AI Chat page, which replaced
+ * the deleted provider registry. */
 function canExecuteApi(): CanExecuteResult {
 	if (!settingsStore.isAcpConfigured()) {
 		return {
 			ok: false,
 			reason:
-				"ego is not configured — name the binary in Settings → General, then pick a model in Settings → AI Providers",
+				"ego is not configured — name the binary in Settings → AI Chat, then pick a model on the same page",
 		};
 	}
 	// ACP gives a session one working directory and it must be a real one. An

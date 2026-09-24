@@ -401,7 +401,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "tuic CLI",
 		description:
-			"Control TUICommander from the terminal. Open files, manage sessions, spawn agents, and use it as a tmux replacement. Install from Settings > General.",
+			"Control TUICommander from the terminal. Open files, manage sessions, spawn agents, and use it as a tmux replacement. Install from Settings > Developer Tools.",
 		shortcut: null,
 	},
 	{
