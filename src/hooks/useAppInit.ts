@@ -843,8 +843,9 @@ export async function initApp(deps: AppInitDeps) {
 				// The Context bar mounts once intent or prompt is known. Waiting for the
 				// lifecycle sync shows it after the terminal has measured, and the
 				// transient taller PTY height duplicates the agent's rows in history.
-				...(session.state?.agent_intent ? { agentIntent: session.state.agent_intent } : {}),
-				...(session.state?.last_prompt ? { lastPrompt: session.state.last_prompt } : {}),
+				// The snapshot is complete, as in useAgentPolling: absence retracts.
+				agentIntent: session.state?.agent_intent ?? null,
+				lastPrompt: session.state?.last_prompt ?? null,
 				ptyDescription: session.pty_description ?? null,
 				...(session.alias ? { alias: session.alias } : {}),
 				agentState: session.state?.agent_state ?? null,
