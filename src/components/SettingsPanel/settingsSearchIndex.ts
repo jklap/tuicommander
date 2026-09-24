@@ -87,6 +87,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		sectionKey: "general.heading.codeIntelligence",
 		platform: "desktop",
 	},
+	{ tab: "general", section: "ego", sectionKey: "general.heading.ego" },
 	{ tab: "general", section: "IDE", sectionKey: "developerTools.heading.ide" },
 	{
 		tab: "general",
@@ -142,6 +143,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "general.label.updateChannel",
 		expert: true,
 		configKey: "app.update_channel",
+	},
+	{
+		tab: "general",
+		section: "ego",
+		label: "ego executable",
+		labelKey: "general.label.egoExecutable",
+		platform: "browser",
+	},
+	{
+		tab: "general",
+		section: "ego",
+		label: "ego executable",
+		labelKey: "general.label.egoExecutable",
+		platform: "desktop",
 	},
 	{ tab: "general", section: "IDE", label: "Default IDE", labelKey: "general.label.defaultIde" },
 	// tabs/TerminalTab.tsx
@@ -570,25 +585,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.progress_tracking",
 	},
-	// tabs/AiChatTab.tsx — the ego section (moved from GeneralTab) plus the
-	// inlined former ProvidersTab content, in file order.
-	{ tab: "ai-chat", section: "AI Chat", sectionKey: "general.heading.aiChat" },
+	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.
 	{ tab: "ai-chat", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
 	{ tab: "ai-chat", section: "Providers", sectionKey: "providers.heading.providers" },
-	{
-		tab: "ai-chat",
-		section: "AI Chat",
-		label: "ego executable",
-		labelKey: "general.label.egoExecutable",
-		platform: "browser",
-	},
-	{
-		tab: "ai-chat",
-		section: "AI Chat",
-		label: "ego executable",
-		labelKey: "general.label.egoExecutable",
-		platform: "desktop",
-	},
 	{ tab: "ai-chat", section: "Default Model", label: "Default model", labelKey: "providers.label.defaultModel" },
 ];
 

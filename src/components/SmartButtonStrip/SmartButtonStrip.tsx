@@ -140,7 +140,7 @@ export const SmartButtonStrip: Component<SmartButtonStripProps> = (props) => {
 									const check = () => canExecute(prompt);
 									const isActive = () => prompt.id === activePrompt()?.id;
 									// DEFERRED (2026-09-06) — this hint stays a `title=` tooltip, so its
-									// "Settings → AI Chat" text is not clickable here. Making it clickable
+									// "Settings → …" text is not clickable here. Making it clickable
 									// needs an onOpenSettings prop threaded through all six mount points
 									// (GitHubPanel, PrSection, PrDetailPopover, ChangesTab, BranchesTab, and
 									// each of their parents), because `openSettings` is local App.tsx state

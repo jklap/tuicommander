@@ -6,8 +6,9 @@ import type { CustomLauncher, IdeType, UpdateChannel } from "../../../stores/set
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
+import { openDialog } from "../../../utils/nativeDialog";
 import { ExpertSetting } from "../ExpertSetting";
-import { SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
+import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface CliStatus {
@@ -99,6 +100,18 @@ export const GeneralTab: Component = () => {
 			const msg = typeof err === "string" ? err : String(err);
 			setMdkbError(msg);
 			appLogger.error("app", "Failed to uninstall mdkb", err);
+		}
+	};
+
+	const handleSelectEgo = async () => {
+		try {
+			const picked = await openDialog({
+				title: t("general.dialog.selectEgo", "Select the ego executable"),
+				defaultPath: settingsStore.state.egoExecutable || undefined,
+			});
+			if (picked) settingsStore.setEgoExecutable(picked);
+		} catch (err) {
+			appLogger.error("app", "Failed to pick the ego executable", err);
 		}
 	};
 
@@ -391,6 +404,64 @@ export const GeneralTab: Component = () => {
 							</p>
 						</Show>
 					</Show>
+				</div>
+			</Show>
+
+			<h3>
+				{t("general.heading.ego", "ego")}
+				<span class={s.infoBadge}>
+					?
+					<span class={s.infoBadgeTip}>
+						{t(
+							"general.hint.aiChatInfo",
+							"The AI Chat panel talks to the ego binary over ACP. Select the ego executable to enable it.",
+						)}
+					</span>
+				</span>
+			</h3>
+
+			{/* The native picker exists only on desktop; a browser client names the path by hand. */}
+			<Show
+				when={isTauri()}
+				fallback={
+					<SettingInput
+						label={t("general.label.egoExecutable", "ego executable")}
+						value={settingsStore.state.egoExecutable}
+						onInput={(v) => settingsStore.setEgoExecutable(v)}
+						placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
+						hint={t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")}
+					/>
+				}
+			>
+				<div class={s.group}>
+					<label>{t("general.label.egoExecutable", "ego executable")}</label>
+					<Show
+						when={settingsStore.isAcpConfigured()}
+						fallback={
+							<p class={s.hint}>
+								{t(
+									"general.hint.egoExecutableEmpty",
+									"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
+								)}
+							</p>
+						}
+					>
+						<p class={s.hint} style={{ color: "var(--success)" }}>
+							{t("general.hint.egoConfigured", "Configured at {path}", {
+								path: settingsStore.state.egoExecutable,
+							})}
+						</p>
+					</Show>
+					<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
+						<button class={s.testBtn} onClick={handleSelectEgo}>
+							{t("general.btn.selectEgo", "Select…")}
+						</button>
+						<Show when={settingsStore.isAcpConfigured()}>
+							<button class={s.testBtn} onClick={() => settingsStore.setEgoExecutable("")}>
+								{t("general.btn.clearEgo", "Clear")}
+							</button>
+						</Show>
+					</div>
 				</div>
 			</Show>
 

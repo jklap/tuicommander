@@ -87,6 +87,7 @@ These settings are expert. All other settings are always shown.
 | **Update Channel** | Choose which release channel to receive updates from |
 | **TUIC CLI** | Install or uninstall the `tuic` command-line tool, with its status. Desktop app only. See [CLI](cli.md). |
 | **Code Intelligence** | Install and manage MDKB, which gives the editor go-to-definition, find references, and symbol outline, and serves as a memory manager for AI agents. Desktop app only. |
+| **ego executable** | Path to the ego binary the **AI Chat** panel talks to over ACP (**ego** section, directly after Code Intelligence). Always shown, also while Experimental Features is off. On the desktop it is laid out like the TUIC CLI section: a status line ("Configured at …") with **Select…** (native file picker) and **Clear**. A browser client, which has no native picker, gets a text field. While it is empty, ACP is not configured: every connect is refused in Rust and the panel says so rather than launching nothing. Read at each connect, so a correction takes effect without a restart. |
 | **Default IDE** | IDE for "Open in..." actions (**IDE** section). Only installed apps are offered, grouped by category: Code Editors (VS Code, Cursor, Zed, Windsurf, Neovim, Xcode, `$EDITOR`), JetBrains (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet), Terminals (Ghostty, WezTerm, Alacritty, Kitty, Warp, iTerm2), Git Tools (Sourcetree, GitHub Desktop, Fork, GitKraken, Sublime Merge, Tower), System (Terminal, Finder) |
 | **Custom Launchers** | Define your own tools for the "Open in" menu. Each launcher has a name, an executable (bare name resolved on `PATH`, or absolute path), and arguments (one per line). Arguments may use placeholders, expanded at launch: `{path}`/`{file}` (focused file, else repo root), `{fileDir}` (directory of the focused file), `{repo}` (repo/worktree root), `{cwd}` (focused terminal's working directory), `{home}` (your home directory), `{line}`/`{column}` (1-based editor cursor position). Args are passed verbatim (no shell parsing), so paths with spaces are safe. |
 | **Experimental Features** | One toggle, no sub-toggles. It opts in to the **AI Chat** panel (ego over ACP, #785-58ca) and **SSH Tunnels**. It also shows the **AI Chat** settings page. The AI Chat, AI Triage and AI Watchers sub-toggles went with the embedded AI engine (#784-0aec). |
@@ -218,20 +219,15 @@ See [AI Agents](ai-agents.md) for details on agent detection, rate limits, and t
 
 ### AI Chat
 
-Configures `ego`, the engine behind the AI Chat panel. Offered only while
-**Experimental Features** (General page) is on, because that is what offers
-the AI Chat panel — the one place ego is reachable from.
+Shows the configuration of `ego`, the engine behind the AI Chat panel. Offered
+only while **Experimental Features** (General page) is on, because that is what
+offers the AI Chat panel — the one place ego is reachable from.
 
-**ego executable** (**AI Chat** section) — path to the ego binary the **AI Chat**
-panel talks to over ACP. On the desktop it is laid out like the TUIC CLI section:
-a status line ("Configured at …") with **Select…** (native file picker) and
-**Clear**; a browser client, which has no native picker, gets a text field
-instead. While it is empty, ACP is not configured: every connect is refused in
-Rust and the panel says so rather than launching nothing. Read at each connect,
-so a correction takes effect without a restart.
+The ego binary itself is a TUICommander setting and is on the
+[General](#general) page (**ego executable**), like MDKB.
 
-The rest of the page shows which providers and models `ego` can use, and which
-model it starts from. Everything here is ego's, read and written by running ego:
+The page shows which providers and models `ego` can use, and which model it
+starts from. Everything here is ego's, read and written by running ego:
 
 - **Default model** — a picker over every model ego knows, grouped by provider.
   Choosing one runs `ego config set model="<slug>"` and then re-reads, so what
@@ -255,8 +251,9 @@ the command rather than running it, because that flow is interactive and would
 mean handling a secret on the way past.
 
 When ego is not configured the page says so and points to the *ego executable*
-field above instead of rendering an empty list. A path that is set but cannot be
-started is reported as its own thing. When an ego command fails, what ego
+field in Settings → General instead of rendering an empty list. A path that is
+set but cannot be started is reported as its own thing, and also points to
+Settings → General. When an ego command fails, what ego
 printed is shown verbatim — the command, its exit code, and its output.
 
 The in-chat model switch is a different control: that one is a session option

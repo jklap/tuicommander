@@ -186,7 +186,7 @@ describe("AiChatTab", () => {
 
 		render(() => <AiChatTab client={client} />);
 
-		expect(await screen.findByText(/Name the ego binary above/)).toBeTruthy();
+		expect(await screen.findByText(/Name the ego binary in Settings → General/)).toBeTruthy();
 		expect(screen.queryByRole("combobox")).toBeNull();
 	});
 
@@ -199,9 +199,9 @@ describe("AiChatTab", () => {
 
 		render(() => <AiChatTab client={client} />);
 
-		expect(await screen.findByText(/could not be started/)).toBeTruthy();
+		expect(await screen.findByText(/could not be started\. Check the path in Settings → General/)).toBeTruthy();
 		expect(screen.getByText(/os error 2/)).toBeTruthy();
-		expect(screen.queryByText(/Name the ego binary above/)).toBeNull();
+		expect(screen.queryByText(/Name the ego binary/)).toBeNull();
 	});
 
 	it("reports a failure with what ego printed", async () => {
@@ -276,30 +276,22 @@ describe("AiChatTab", () => {
 		render(() => <AiChatTab client={client} />);
 
 		expect(await screen.findByText(/the window has gone away/)).toBeTruthy();
-		expect(screen.queryByText(/Name the ego binary above/)).toBeNull();
+		expect(screen.queryByText(/Name the ego binary/)).toBeNull();
 	});
 });
 
-// Story 858: the ego executable field (formerly on GeneralTab, under a
-// "General → AI Chat" heading) moved onto this tab alongside the provider
-// picker it was cross-referenced from. GeneralTab must no longer own it.
-describe("AiChatTab — ego executable placement", () => {
-	it("renders the AI Chat heading and the ego executable control", async () => {
+// Boss decision 2026-09-24: ego is configured like MDKB, on General. The AI
+// Chat page keeps only what ego itself stores: the default model and the
+// providers. GeneralTabTools.test.tsx proves the picker's new home.
+describe("AiChatTab — no ego executable control", () => {
+	it("renders no AI Chat heading and no ego executable control", async () => {
 		const client = fakeClient();
 		const { container } = render(() => <AiChatTab client={client} />);
 
 		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.childNodes[0]?.textContent?.trim());
-		expect(headings).toContain("AI Chat");
-		// Desktop (isTauri() true in tests): rendered as a button, not a text input.
-		expect(screen.getByRole("button", { name: "Select…" })).toBeTruthy();
-	});
-
-	it("does not render an ego executable control on GeneralTab", async () => {
-		const { GeneralTab } = await import("../../../components/SettingsPanel/tabs/GeneralTab");
-		const { container } = render(() => <GeneralTab />);
-
-		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.childNodes[0]?.textContent?.trim());
+		expect(headings).toContain("Default Model");
 		expect(headings).not.toContain("AI Chat");
 		expect(screen.queryByRole("button", { name: "Select…" })).toBeNull();
+		expect(screen.queryByText("ego executable")).toBeNull();
 	});
 });

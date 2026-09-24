@@ -467,10 +467,11 @@ noncollapsible rows; every page stays one click away and search stays global.
   authentication, network settings, Tailscale, the QR/connect URL, and the
   relay. `Remote Machines` owns connections to other TUIC hosts. These three
   pages replace the former "Services & MCP" tab.
-- `General` also holds the TUIC CLI, Code Intelligence (MDKB), the default
-  IDE and custom launchers. These are general configuration, so they have no
-  separate page.
-- `AI Chat` holds the ego executable and ego's providers and default model. It
+- `General` also holds the TUIC CLI, Code Intelligence (MDKB), the ego
+  executable, the default IDE and custom launchers. These are general
+  configuration, so they have no separate page. The ego executable is shown
+  also while Experimental Features is off.
+- `AI Chat` holds ego's providers and default model. It
   replaces the former "AI Providers" tab and is hidden while Experimental
   Features is off. `Voice` is the former "Dictation" page.
 - The reorganization moves controls only. Persisted config keys and Tauri/HTTP

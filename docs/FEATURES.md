@@ -1210,7 +1210,7 @@ AI automation layer with 29 built-in context-aware prompts. Each prompt includes
 - **Inject target**: when a prompt is not submitted immediately, the target selects the review surface: the **Compose box** (default) or editable text in the **Terminal**
 - **Auto-execute**: when enabled, a prompt submits exactly once through agent-aware `sendCommand`, regardless of its review target. When disabled, it remains editable. Explicit **Insert** and **Insert & Run** actions override the saved setting.
 - **API execution mode runs one unattended ego turn (#787-ee50)**: it used to call LLM providers directly over HTTP from TUICommander; that client, its provider registry and its keyring entry were deleted with the embedded AI engine (#784-0aec). It now goes through `acp_one_shot_prompt` — launch the configured ego, one `session/new` with **no MCP server**, one prompt, shut down — and the turn's final text goes to the prompt's `outputTarget`. Nothing streams: a Smart Prompt runs with no panel open. A `headless` prompt whose resolved agent is `api` takes the same one path. Every permission request and elicitation is declined the instant it arrives, because a seat nobody takes is a turn that never ends; the count comes back as `declined` so an empty answer caused by a refused tool is reported as that rather than as an empty answer. The turn is abandoned after 300s
-- **No LLM API config**: there is no global provider/model/API key in `Settings > Agents` any more, and TUICommander stores no API key. The model an `api` prompt runs on is ego's default, set in `Settings > AI Chat` (786-4a6d). With no ego binary named, the mode refuses and points at `Settings > AI Chat`
+- **No LLM API config**: there is no global provider/model/API key in `Settings > Agents` any more, and TUICommander stores no API key. The model an `api` prompt runs on is ego's default, set in `Settings > AI Chat` (786-4a6d). With no ego binary named, the mode refuses and names `Settings > General` for the binary and `Settings > AI Chat` for the model
 
 ### 10.6 Built-in Prompts by Category
 
@@ -1324,6 +1324,7 @@ The navigation groups the global pages by task. Each group is a static label row
 - Power management: prevent sleep when busy, auto-standby timeout, content indexing strategy
 - Updates: auto-check, update channel, check now
 - TUIC CLI install/uninstall (see **21**), Code Intelligence (MDKB, see **14.8**)
+- ego executable (**ego** section, after Code Intelligence): the ego binary the AI Chat panel talks to over ACP. Desktop: status line with Select…/Clear; browser: a text field. Always shown, also while Experimental Features is off
 - Default IDE, custom launchers (see **4.5**)
 - Experimental Features: one master toggle, no sub-flags. It opts in to the AI Chat panel, the **AI Chat** settings page (**11.8**) and SSH Tunnels. The three AI sub-flags went with the embedded engine (#784-0aec)
 
@@ -1376,7 +1377,7 @@ Three pages under **Integrations**. They were one "Services & MCP" tab; each pag
 - Claude Usage Dashboard enable/disable toggle (under Claude agent section)
 
 ### 11.8 AI Chat
-The `ego_executable` path (the AI Chat section), then ego's own configuration. Shown only while Experimental Features is on, because that flag is what offers the AI Chat panel — the one place `ego` is reachable from.
+ego's own configuration; the `ego_executable` path is on General (**11.1**). Shown only while Experimental Features is on, because that flag is what offers the AI Chat panel — the one place `ego` is reachable from.
 - Reads and writes **ego's** configuration by running ego: `config ls --json`, `models --json`, `doctor --json`, and `config set model="<slug>"`. All three reads must succeed, so the page is never a partial picture
 - Default model: a picker over every model ego knows, grouped by provider, with unavailable models disabled. A write is followed by a fresh read, so what is shown is what ego persisted. It survives a restart because ego holds it, not TUICommander
 - Refresh from providers: `ego models --refresh`, the only action in TUICommander that reaches a provider over the network — and it is ego that reaches it. Opt-in; opening the page does not

@@ -3646,3 +3646,9 @@ or credential is touched.
 - [ ] With progress collection off for an agent, the `progress` MCP tool
       answers `progress_tracking_disabled … (Settings → Agents)`. The toggle
       lives on the Agents page; "Settings → Progress" never existed.
+- [ ] [VISUAL] Settings → General with Experimental Features **off**: an **ego**
+      section sits directly after Code Intelligence, with a `?` tooltip, the
+      "Configured at …" / "Not configured" line, **Select…** and **Clear**.
+      Settings → AI Chat (Experimental Features on) shows only Default Model
+      and Providers. With the ego path empty, AI Chat says to name the binary
+      in Settings → General.

@@ -265,7 +265,8 @@ Refresh.
 | `src/transport.ts`, `src/__tests__/transport.test.ts` | The `ego_providers` / `ego_set_default_model` mappings and the generated path snapshot |
 | `src/types/ego.ts` | The TS mirror of the Rust projection. A mirror, not a second opinion — nothing reshapes it |
 | `src/services/egoCli.ts` | The two calls the tab makes |
-| `src/components/SettingsPanel/tabs/AiChatTab.tsx` | What the page draws: the ego executable field, the default-model picker, the per-provider credential badge, and each of the four failure states |
+| `src/components/SettingsPanel/tabs/AiChatTab.tsx` | What the page draws: the default-model picker, the per-provider credential badge, and each of the four failure states |
+| `src/components/SettingsPanel/tabs/GeneralTab.tsx` | The **ego** section: the ego executable field, shown also while Experimental Features is off |
 | `src/components/SettingsPanel/SettingsPanel.tsx` | The nav entry (hidden while `isAiChatEnabled()` is false) and the tab body |
 | `src/components/SettingsPanel/settingsSearchIndex.ts` | Its rows in the settings search index — the drift test re-derives them from the JSX |
 | `docs/user-guide/settings.md` | The AI Chat page section |
