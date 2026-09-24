@@ -1,4 +1,10 @@
 /* @refresh reload */
+// Side-effect only: registers the desktop/Settings-only COMMAND_TABLE entries
+// that mobile.html's bundle deliberately excludes — see transportExtended.ts's
+// module doc. Imported first so registration completes before anything can
+// invoke one of those commands. Mobile's entry (src/mobile/index.tsx) must
+// never import this.
+import "./transportExtended";
 import { lazy } from "solid-js";
 import { ErrorBoundary, render } from "solid-js/web";
 import App from "./App";
