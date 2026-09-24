@@ -30,10 +30,8 @@ for src in "$src_dir"/*; do
 # tuic-managed-hook
 repo_root="$(git rev-parse --show-toplevel)" || exit 1
 hook="$repo_root/scripts/hooks/$(basename "$0")"
-if [ ! -x "$hook" ]; then
-  echo "hooks: missing executable $hook" >&2
-  exit 1
-fi
+# A checkout without this hook (an older branch) runs none, as Git does.
+[ -x "$hook" ] || exit 0
 exec "$hook" "$@"
 HOOK
   chmod +x "$temp"
