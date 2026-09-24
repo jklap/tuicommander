@@ -140,7 +140,8 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "Kitty Keyboard Protocol",
-		description: "Enable in Settings → Agents for full Shift+Enter, Ctrl+Alt, and other modifier combos.",
+		description:
+			"Always on: agents that request it, such as Claude Code, get full Shift+Enter, Ctrl+Backspace, and other modifier combos. There is nothing to enable.",
 		shortcut: null,
 	},
 	{
