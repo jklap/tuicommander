@@ -1432,8 +1432,11 @@ Low-risk response compaction also omits an absent peer `project` from `list_peer
 `parent_session_id` from standalone spawn responses. Proxied upstream tool payloads are unchanged.
 
 Blocking waits and terminal wake-up use a per-recipient delivery lease. Each
-message is atomically assigned to exactly one wake-up owner: an active waiter,
-or SSE/PTY delivery. The deadline path performs its final inbox check while
+message is atomically assigned to at most one wake-up owner: an active waiter,
+or PTY delivery. A channel push does not take the lease: it is a best-effort
+notification into a running turn, so the message stays available and a later
+`agent action=wait` or `inbox` returns it once more. Dedupe on
+`meta.message_id`. The deadline path performs its final inbox check while
 releasing the lease, and cancellation hands unobserved waiter-owned messages
 back to terminal delivery. This removes both duplicate inbox+terminal turns and
 the missed-wake race at the wait timeout boundary; inbox visibility itself is
@@ -1454,7 +1457,7 @@ is reserved for diagnosing the anomaly where that result message never arrived.
 
 When an already working ordinary Claude Code worker has an active SSE stream (`GET /mcp`), messages are pushed into that turn as `notifications/claude/channel` JSON-RPC notifications. Idle or completed ordinary managed recipients use PTY submission instead. Registered orchestrators never use this payload-bearing route:
 
-A channel notification is transport delivery into an existing turn, not proof that the recipient submitted a new one. It does not mutate the recipient's task epoch or lifecycle. Managed Codex and other non-Claude agents never receive this extension; an idle or completed Claude composer also takes the PTY split-write payload plus Enter path so delivery owns a real submitted turn.
+A channel notification is transport delivery into an existing turn, not proof that the recipient submitted a new one, nor that the recipient read it. The message therefore stays unowned in the delivery lease, and the recipient's next `agent action=wait` still returns it. It does not mutate the recipient's task epoch or lifecycle. Managed Codex and other non-Claude agents never receive this extension; an idle or completed Claude composer also takes the PTY split-write payload plus Enter path so delivery owns a real submitted turn.
 
 ```json
 {
