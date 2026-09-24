@@ -38,6 +38,8 @@
 The Plans and Stories dialog provides a manual project view on desktop and in the browser: create plans and stories, inspect criteria and dependency status, identify transitively abandoned prerequisites, remove a direct cancelled prerequisite, start work without a terminal, check criteria, submit reviews, and approve or block outcomes. It renders the service's cancellation count and all-cancelled flag.
 
 Versioned workflow definitions are available through IPC and HTTP. Drafts can be edited; published revisions are immutable and validated before use. The two built-in templates are `Story delivery` and `Resolve plan`; executing and editing them visually is still under development.
+
+Durable workflow run storage now records event history, pinned graph revisions, node attempts, and external effect intents. Desktop and HTTP clients can start and inspect a run, replay events, and send explicit run commands. Automatic scheduling, agent execution, evaluation, and visual editing remain under development.
 ---
 
 ## 1. Terminal Management

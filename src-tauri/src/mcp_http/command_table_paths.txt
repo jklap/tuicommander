@@ -320,6 +320,7 @@
 /watchers/hot-repos
 /watchers/repo
 /workflows/definition/action
+/workflows/run/action
 /worktrees
 /worktrees/dir
 /worktrees/finalize

@@ -397,6 +397,11 @@ pub enum AppEvent {
         repo_path: String,
         payload: serde_json::Value,
     },
+    #[serde(rename = "workflow-run-changed")]
+    WorkflowRunChanged {
+        repo_path: String,
+        payload: serde_json::Value,
+    },
     /// An ego PR review started or finished.
     ///
     /// Two events per review and not one per file: the review is a single
@@ -4505,6 +4510,7 @@ impl AppState {
             | AppEvent::DesignModeChanged { .. }
             | AppEvent::ConflictAssistStatus { .. }
             | AppEvent::ProgressRecorded { .. }
+            | AppEvent::WorkflowRunChanged { .. }
             | AppEvent::ReviewProgress { .. }
             | AppEvent::ProposalsReady { .. }
             // This accumulator's own output. Feeding it back in would make the
