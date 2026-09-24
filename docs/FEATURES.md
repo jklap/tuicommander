@@ -62,7 +62,7 @@ per cell and the configured history limit still apply.
 - Pause/resume PTY output (`pause_pty` / `resume_pty` Tauri commands) — suspends reader thread without killing the session
 
 ### 1.2 Tab Bar
-- Create: `Cmd+T`, `+` button (click = new tab, right-click = split options)
+- Create: `Cmd+T`, `+` button (click = new tab, right-click or long press = agent list)
 - Close: `Cmd+W`, middle-click, context menu
 - Reopen last closed: `Cmd+Shift+T` (remembers last 10 closed tabs)
 - Switch: `Cmd+1` through `Cmd+9`, `Ctrl+Tab` / `Ctrl+Shift+Tab`
@@ -81,7 +81,7 @@ per cell and the configured history limit still apply.
   - Closing the floating window automatically returns the tab to the main window
   - Requires an active PTY session (disabled for tabs without a session)
 - Overflow menu on scroll arrows (right-click) shows clipped tabs; the `+` button always stays visible regardless of scroll position
-- `+` button: click opens a terminal in the active branch; right-click offers New Tab / Split; long press (500 ms) lists the enabled agents (with a submenu per run config) and opens a new tab running the chosen one
+- `+` button: click opens a terminal in the active branch; right-click or long press (500 ms) lists the enabled agents (with a submenu per run config) and opens a new tab running the chosen one
 - Tab pinning: pinned tabs are visible across all branches (not scoped to branch key)
 
 ### 1.3 Split Panes
@@ -269,6 +269,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Click: switch to branch (shows its terminals, creates worktree if needed)
 - Double-click branch name: rename branch
 - Right-click context menu: Copy Path, Add Terminal, Create Worktree, Merge & Archive, Delete Worktree, Open in IDE, Rename Branch
+- `+` button: click opens a terminal in that branch; right-click or long press (500 ms) lists the enabled agents and opens a tab running the chosen one (shell rows have no agents, so right-click opens the row menu)
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
 - PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
 - Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there)

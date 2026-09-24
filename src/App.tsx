@@ -910,12 +910,8 @@ const App: Component = () => {
 							getNewAgentMenuItems={() => {
 								const target = gitOps.resolveNewTabTarget();
 								if (!target) return [];
-								// The sidebar nests every agent under one "Add Agent" entry; under + the list is the menu.
-								const items = terminalContextMenus.buildSidebarAgentMenuItems(target.repoPath, target.branchName);
-								return items.length === 1 && items[0].children ? items[0].children : items;
+								return terminalContextMenus.buildSidebarAgentMenuItems(target.repoPath, target.branchName);
 							}}
-							onSplitVertical={() => splitPanes.handleSplit("vertical")}
-							onSplitHorizontal={() => splitPanes.handleSplit("horizontal")}
 							onReorder={(from, to) => {
 								const activeRepo = repositoriesStore.getActive();
 								if (activeRepo?.activeWorkspaceId) {

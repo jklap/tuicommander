@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Agent list on the `+` buttons** — Right-click or long press on the tab bar `+` and on a sidebar branch `+` lists the enabled agents and opens a tab running the chosen one. Before, the sidebar `+` had no long press, and right-click on the tab bar `+` opened New Tab / Split, which stay on `Cmd+T`, `Cmd+\`, the terminal context menu and the Command Palette.
 - **Sub-agent rows in the sidebar show an icon** — A nested sidebar row of an agent spawned by another one shows a small agent icon instead of `↳ <parent>`, which took up to 40% of the row. The parent's name is in the icon's tooltip.
 - **Voices download straight from Kyutai** — Speaker embeddings now come from Kyutai's ungated `pocket-tts-without-voice-cloning` repository, pinned to one commit, instead of a copy on a TUICommander release. The files are byte-identical; nothing has to be re-hosted to offer another language.
 - **Spoken replies in five more languages** — English, French, German, Portuguese and Spanish join Italian, each with the voice Kyutai lists as native to it. Every file is pinned to one upstream commit and a sha256, like Italian. French ships only as the larger 24-layer model (about 390 MB).
