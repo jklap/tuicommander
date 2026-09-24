@@ -197,6 +197,10 @@ that checkout merely to run this check.
       or shadcn app), select a themed button. The grab carries a `tokens:` line
       with only the `--…` variables that button's rules reference, resolved to
       their values, and not the whole theme.
+- [ ] On a page built from web components (open shadow roots with their own
+      `<style>` or `adoptedStyleSheets`), select a button inside a component.
+      The `tokens:` line lists the component's own `--…` variables. jsdom has no
+      `ShadowRoot.styleSheets`, so no unit test covers this.
 - [ ] Start Design Mode from another agent terminal in the same repository.
       Confirm the existing Chrome window is reused and subsequent grabs go to
       the newly bound terminal. Close that terminal, then Chrome: the status
