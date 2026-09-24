@@ -321,6 +321,10 @@ The remote sessions are listed beside the local ones, each tagged with the
 connection that owns it. Losing the connection announces them closed and drops
 them, so a badge cannot freeze on the last state the machine was in.
 
+Project Progress for a remote repository is stored on its owning machine.
+New entries also reach the connected desktop window, so its Progress bell and
+dialog update without moving the journal to the local machine.
+
 ### Remote Repositories and Terminals
 
 Once a remote connection is configured:

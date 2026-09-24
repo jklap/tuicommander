@@ -90,7 +90,7 @@ export function withRemoteToken(url: string, connectionId?: string): string {
 const SESSION_ARG_KEYS = ["sessionId", "session_id", "id"] as const;
 
 /** Argument keys that name a path inside a repository. */
-const PATH_ARG_KEYS = ["repoPath", "repo_path", "path", "cwd", "worktreePath", "base_repo"] as const;
+const PATH_ARG_KEYS = ["repoPath", "repo_path", "path", "cwd", "worktreePath", "base_repo", "project"] as const;
 
 /**
  * Argument keys holding a nested bag, and the keys read inside one.

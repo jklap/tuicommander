@@ -14,6 +14,10 @@
 - [ ] Orchestrator inbox under load: while children finish, a parent that does not read its inbox keeps every peer RESULT. When the inbox holds 100 peer messages, `agent send` returns `inbox is full`, and lifecycle notices appear as `missed_count` instead of pushing peer mail out.
 - [ ] Put a malformed value in one field of `dictation-config.json` (for example `"speech_volume_db": "loud"`) in a `TUIC_APP_INSTANCE=<id>` instance: Settings → Voice keeps the other values, and a "Dictation settings recovered" warn toast appears once.
 
+## Remote Project Progress event (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] With a connected remote repository after restart, report a new Progress entry on the remote agent. The local desktop Progress bell and dialog update, and `progress_list` reads that repository's journal from its owning machine.
+
 ## Voice auto-send is on by default (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, with an instance whose `dictation-config.json` has no `auto_send` key (use `TUIC_APP_INSTANCE=<id>`, fresh config), Settings → Voice shows Auto-send on and a dictated phrase is sent with Enter. In basic mode the Auto-send row is hidden; switching it off makes it visible and the stored `false` survives an app restart.
