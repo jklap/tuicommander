@@ -10,7 +10,9 @@
  *   - every `label=` prop and every `<label>` element is a setting inside the
  *     section opened by the nearest preceding `<h3>`,
  *   - text is read from `t("key", "Default")`, from a `{"literal"}` or from a
- *     leading plain-text run; anything else is dynamic and is only counted.
+ *     leading plain-text run; anything else is dynamic and is only counted,
+ *   - a setting between `<ExpertSetting configKey="…">` and its closing tag
+ *     carries that configKey (the index marks it `expert`).
  */
 
 export interface ExtractedText {
@@ -22,8 +24,9 @@ export interface ExtractedText {
 
 export interface ExtractedTab {
 	sections: ExtractedText[];
-	/** Settings, each tagged with the section heading text it sits under */
-	settings: (ExtractedText & { section: string })[];
+	/** Settings, each tagged with the section heading text it sits under, and
+	 * with the configKey of the `ExpertSetting` wrapping it, if any */
+	settings: (ExtractedText & { section: string; configKey?: string })[];
 	/** Occurrences whose text is computed at runtime and cannot be indexed */
 	dynamic: number;
 }
@@ -81,7 +84,9 @@ function unescapeJsx(s: string): string {
 }
 
 /** Element occurrences (`<h3>`, `<label>`) and `label=` props, in source order. */
-function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean }> {
+function* occurrences(
+	src: string,
+): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number }> {
 	const re = /<(h3|label)\b|\blabel=/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src)) !== null) {
@@ -90,16 +95,34 @@ function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: str
 			if (open < 0) continue;
 			const close = src.indexOf(`</${m[1]}>`, open);
 			if (close < 0) continue;
-			yield { kind: m[1] as "h3" | "label", inner: src.slice(open + 1, close), isProp: false };
+			yield { kind: m[1] as "h3" | "label", inner: src.slice(open + 1, close), isProp: false, at: m.index };
 			re.lastIndex = open + 1;
 		} else {
-			yield { kind: "label", inner: src.slice(m.index + "label=".length), isProp: true };
+			yield { kind: "label", inner: src.slice(m.index + "label=".length), isProp: true, at: m.index };
 		}
 	}
 }
 
+/** Source spans of `<ExpertSetting …>…</ExpertSetting>`, with their configKey.
+ *
+ * The key must be a string literal — the index is static, so a computed key
+ * could not be copied into it. Throwing makes that mistake loud. */
+function expertSpans(src: string): { start: number; end: number; configKey: string }[] {
+	const spans: { start: number; end: number; configKey: string }[] = [];
+	for (const m of src.matchAll(/<ExpertSetting\b/g)) {
+		const open = endOfOpenTag(src, m.index);
+		const key = open < 0 ? null : src.slice(m.index, open).match(/\bconfigKey="([^"]+)"/);
+		if (!key) throw new Error(`ExpertSetting at offset ${m.index} needs a string-literal configKey`);
+		const close = src.indexOf("</ExpertSetting>", open);
+		spans.push({ start: open, end: close < 0 ? src.length : close, configKey: key[1] });
+	}
+	return spans;
+}
+
 export function extractTab(src: string): ExtractedTab {
 	const out: ExtractedTab = { sections: [], settings: [], dynamic: 0 };
+	const spans = expertSpans(src);
+	const expertKeyAt = (at: number) => spans.find((span) => at > span.start && at < span.end)?.configKey;
 	let section = "";
 	for (const occ of occurrences(src)) {
 		const text = staticText(occ.inner, !occ.isProp);
@@ -111,7 +134,8 @@ export function extractTab(src: string): ExtractedTab {
 			section = text.text;
 			out.sections.push(text);
 		} else {
-			out.settings.push({ ...text, section });
+			const configKey = expertKeyAt(occ.at);
+			out.settings.push({ ...text, section, ...(configKey ? { configKey } : {}) });
 		}
 	}
 	return out;

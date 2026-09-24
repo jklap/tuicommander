@@ -21,6 +21,8 @@ export interface SettingsShellProps {
 	tabs: SettingsShellTab[];
 	activeTab: string;
 	onTabChange: (key: string) => void;
+	/** Rendered in the header, left of the close button — the Expert switch lives here */
+	headerActions?: JSX.Element;
 	/** Rendered above the nav items — the Settings search box lives here */
 	navHeader?: JSX.Element;
 	/** Width of the nav sidebar in px (persisted externally) */
@@ -82,9 +84,12 @@ export const SettingsShell: Component<SettingsShellProps> = (props) => {
 								</div>
 							</div>
 						</Show>
-						<button class={s.close} onClick={props.onClose}>
-							&times;
-						</button>
+						<div class={s.headerActions}>
+							{props.headerActions}
+							<button class={s.close} onClick={props.onClose}>
+								&times;
+							</button>
+						</div>
 					</div>
 
 					{/* Body: nav sidebar + scrollable content */}

@@ -38,6 +38,9 @@ import { t } from "../../i18n";
  * - **orphan** — a label with no `<h3>` above it, i.e. a modal form field (the
  *   Smart Prompts editor); it is not a setting and has no scroll target.
  *
+ * A label inside `<ExpertSetting configKey="…">` also carries `expert: true`
+ * and that `configKey`, so search can badge it and reveal it on open.
+ *
  * Repo-scoped tabs (`repo:<path>`) are not indexed: their nav key depends on
  * which repository the user means, and a global search box cannot know.
  *
@@ -59,6 +62,10 @@ export interface SettingsSearchEntry {
 	/** Setting label; absent when the entry is the section heading itself */
 	label?: string;
 	labelKey?: string;
+	/** The setting sits inside an `ExpertSetting`: results mark it "Expert" */
+	expert?: boolean;
+	/** That `ExpertSetting`'s configKey — opening the result reveals it */
+	configKey?: string;
 }
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [

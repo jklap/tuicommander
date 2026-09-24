@@ -77,6 +77,7 @@ function derive(tab: string): SettingsSearchEntry[] {
 			section: setting.section,
 			label: setting.text,
 			...(setting.key ? { labelKey: setting.key } : {}),
+			...(setting.configKey ? { expert: true, configKey: setting.configKey } : {}),
 		});
 	}
 	return entries;

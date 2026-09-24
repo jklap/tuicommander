@@ -6,12 +6,14 @@ import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { type RepoSettings, repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
+import { settingsExpertStore } from "../../stores/settingsExpert";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
 import { DictationSettings } from "./DictationSettings";
+import { ExpertModeSwitch } from "./ExpertSetting";
 import s from "./Settings.module.css";
 import { SettingsSearchBox, SettingsSearchResults, scrollToSetting } from "./SettingsSearch";
 import type { SettingsShellTab } from "./SettingsShell";
@@ -126,6 +128,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			setActiveTab(props.initialTab ?? defaultTab(ctx()));
 			// A stale query would hide the tab the caller asked for behind results
 			setQuery("");
+			void settingsExpertStore.open();
 		}
 	});
 
@@ -157,6 +160,8 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 	const openResult = (entry: SettingsSearchEntry) => {
 		setQuery("");
 		setActiveTab(entry.tab);
+		// A hidden expert control has nothing to scroll to until it is revealed
+		if (entry.configKey) settingsExpertStore.reveal(entry.configKey);
 		setPendingTarget({ section: entrySection(entry), label: entryLabel(entry) });
 	};
 
@@ -229,6 +234,7 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			navWidth={uiStore.state.settingsNavWidth}
 			onNavWidthChange={uiStore.setSettingsNavWidth}
 			onNavWidthPersist={uiStore.persistUIPrefs}
+			headerActions={<ExpertModeSwitch />}
 			navHeader={<SettingsSearchBox value={query()} onInput={setQuery} />}
 			footer={footer()}
 		>
