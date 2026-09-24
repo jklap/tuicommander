@@ -23,6 +23,7 @@ import { settingNumberDefault } from "../services/settingsCatalogue";
 import { settingsRefresh } from "../services/settingsRefresh";
 import type { IssueFilterMode } from "../types";
 import { isAcpConfigured } from "../utils/acpAvailability";
+import { isValidEnvVarKey } from "../utils/envVars";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
@@ -45,6 +46,30 @@ export interface CustomLauncher {
 	enabled: boolean;
 	/** Optional platform filter: "macos" | "windows" | "linux". undefined = all. */
 	platform?: "macos" | "windows" | "linux";
+}
+
+/** One user-authored `KEY=value` pair for `customPtyEnv` — mirrors Rust's
+ *  `CustomEnvVarEntry` (`src-tauri/src/config.rs`) exactly; same shape as
+ *  `src/utils/envVars.ts`'s `EnvVarEntry`, so that module's validation helpers
+ *  apply directly with no adaptation. */
+export interface CustomEnvVarEntry {
+	key: string;
+	value: string;
+}
+
+/** Drop malformed keys and collapse duplicate keys (first occurrence wins) from
+ *  a hand-edited `config.json`'s `custom_pty_env` — same "revalidate on
+ *  hydrate, not just on write" precedent as `sanitizeIndicatorOverrides`, since
+ *  this is untrusted input reaching real process environment variables. */
+function sanitizeCustomPtyEnv(entries: CustomEnvVarEntry[]): CustomEnvVarEntry[] {
+	const seen = new Set<string>();
+	const out: CustomEnvVarEntry[] = [];
+	for (const entry of entries) {
+		if (!isValidEnvVarKey(entry.key) || seen.has(entry.key)) continue;
+		seen.add(entry.key);
+		out.push({ key: entry.key, value: entry.value });
+	}
+	return out;
 }
 
 export type TrayIconPreference = "always" | "background_only" | "never";
@@ -121,6 +146,7 @@ interface RustAppConfig {
 	standby_timeout_minutes?: number;
 	custom_launchers?: CustomLauncher[];
 	additional_readable_dirs?: string[];
+	custom_pty_env?: CustomEnvVarEntry[];
 	inline_blame_enabled?: boolean;
 	/** The one binary the host may launch for ACP. Empty means ACP is unconfigured. */
 	ego_executable?: string;
@@ -392,6 +418,7 @@ interface SettingsStoreState {
 	webviewUnloadMinutes: number;
 	customLaunchers: CustomLauncher[];
 	additionalReadableDirs: string[];
+	customPtyEnv: CustomEnvVarEntry[];
 	inlineBlameEnabled: boolean;
 	/**
 	 * Path to the ego binary the AI Chat panel talks ACP to.
@@ -478,6 +505,7 @@ function createSettingsStore() {
 		webviewUnloadMinutes: settingNumberDefault("app.background.webview_unload_minutes"),
 		customLaunchers: [],
 		additionalReadableDirs: ["~/.claude/plans"],
+		customPtyEnv: [],
 		inlineBlameEnabled: true,
 		egoExecutable: "",
 		egoProfile: "",
@@ -575,6 +603,9 @@ function createSettingsStore() {
 			config.background?.webview_unload_minutes ?? settingNumberDefault("app.background.webview_unload_minutes");
 		values.customLaunchers = config.custom_launchers ?? [];
 		values.additionalReadableDirs = config.additional_readable_dirs ?? ["~/.claude/plans"];
+		// Revalidated here, not just on write — a hand-edited config.json is
+		// untrusted input reaching real process environment variables.
+		values.customPtyEnv = sanitizeCustomPtyEnv(config.custom_pty_env ?? []);
 		values.inlineBlameEnabled = config.inline_blame_enabled ?? true;
 		values.egoExecutable = config.ego_executable ?? "";
 		values.egoProfile = config.ego_profile ?? "";
@@ -660,6 +691,7 @@ function createSettingsStore() {
 			standby_timeout_minutes: values.standbyTimeoutMinutes,
 			custom_launchers: [...values.customLaunchers],
 			additional_readable_dirs: [...values.additionalReadableDirs],
+			custom_pty_env: values.customPtyEnv.map((e) => ({ ...e })),
 			inline_blame_enabled: values.inlineBlameEnabled,
 			ego_executable: values.egoExecutable,
 			ego_profile: values.egoProfile,
@@ -1053,6 +1085,12 @@ function createSettingsStore() {
 		/** Replace the full list of additional HTTP-readable directories (add/remove go through here) */
 		setAdditionalReadableDirs(dirs: string[]): void {
 			setState("additionalReadableDirs", dirs);
+			save();
+		},
+
+		/** Replace the full list of custom PTY env vars (add/edit/remove all go through here) */
+		setCustomPtyEnv(entries: CustomEnvVarEntry[]): void {
+			setState("customPtyEnv", entries);
 			save();
 		},
 

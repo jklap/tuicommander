@@ -2050,6 +2050,54 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "app.custom_pty_env": {
+      "id": "app.custom_pty_env",
+      "store": "app",
+      "owner": "machine",
+      "area": "app",
+      "group": "custom_pty_env",
+      "order": 124,
+      "path": "/custom_pty_env",
+      "labelKey": "settings.catalogue.app.custom_pty_env.label",
+      "helpKey": "settings.catalogue.app.custom_pty_env.help",
+      "label": "custom pty env",
+      "schema": {
+        "description": "User-defined environment variables injected into every spawned PTY, across\nall six production spawn sites (shell and agent-binary alike) — see\n`pty.rs::apply_custom_pty_env`, the single choke point that applies this list.\nGlobal only, deliberately: no `RepoLocalConfig`/`RepoSettingsEntry`/\n`RepoDefaultsConfig` field exists for this setting, the same structural\nopt-out `copy_paths` and the script settings use, because a committed\n`.tuic.json` must never be able to inject shell environment for anyone who\nopens that repo. Ships empty — no default entries.",
+        "type": "array",
+        "items": {
+          "description": "One user-authored `KEY=value` pair for `AppConfig::custom_pty_env`. A `Vec`,\nnot a `HashMap`, so the Settings UI can preserve the user's authored order —\nmatches `copy_paths`'s shape rather than `AgentRunConfig::env`'s.",
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "value"
+          ]
+        },
+        "default": []
+      },
+      "nullable": false,
+      "default": [],
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Sets environment variables in every newly spawned terminal and agent process.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
+    },
     "app.default_font_size": {
       "id": "app.default_font_size",
       "store": "app",

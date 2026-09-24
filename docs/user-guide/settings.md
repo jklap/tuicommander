@@ -266,6 +266,12 @@ snippets (zsh needs no setup) — see [Shell Integration](terminals.md#shell-int
 The terminal bell mode (`none`, `visual`, `sound`, `both`) has no control on
 the dedicated Terminal page: it is **Bell Style** on the Appearance page (**Bell** section) (see [Terminal Bell](terminals.md#terminal-bell)).
 
+### Custom Environment Variables
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Environment Variables** | list of `KEY = value` | (empty) | Applied to every spawned terminal — shell tabs and agent tabs alike — overriding anything else that sets the same variable. A key must be a legal environment variable name (starts with a letter or underscore, then letters/numbers/underscores only); duplicate keys are rejected. Useful for forcing a shell customization's behavior regardless of timing, e.g. `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true` for Powerlevel10k. See [`pty.md`](../backend/pty.md#custom-pty-environment-variables) for the full precedence order against other env sources (per-agent run-config env, per-agent env flags). |
+
 ### Smart Selection
 
 Controls double/quad-click word and smart selection in the terminal — see [Smart Selection](../frontend/terminal-features.md#smart-selection) for the underlying model (precision scoring, the built-in rule set, action dispatch).

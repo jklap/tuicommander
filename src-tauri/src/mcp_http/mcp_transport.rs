@@ -218,6 +218,7 @@ use super::mcp_transport_session_agent::suspend_refusal;
 use super::mcp_transport_session_agent::translate_special_key;
 #[cfg(test)]
 use super::mcp_transport_session_agent::uses_agent_command_injection;
+pub(crate) use super::mcp_transport_session_agent::wait_for_shell_idle;
 
 /// Serialize a value to JSON, returning a structured error on failure instead of silent null.
 pub(super) fn to_json_or_error<T: serde::Serialize>(value: T) -> serde_json::Value {

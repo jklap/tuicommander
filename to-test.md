@@ -5749,3 +5749,23 @@ copies up to four ignored directories at once, reports progress, and gives
 ## Nested SSH model migration (wip afc10a2c9 replay) — Rust restart required
 
 - [ ] On Boss's next planned backend restart, check `<config_dir>/connections.json` and `<config_dir>/tunnels/*.toml`: each SSH entry now has a nested `ssh` block, and a `*.pre-nested-ssh-<timestamp>.bak` beside each rewritten file holds the original bytes. Then Connect an existing SSH remote machine and start an existing tunnel — both must behave exactly as before (same host, port, identity, compression). A second restart must create no new `.bak`. Rust does not hot-reload; this lane did not restart the live app.
+
+## Custom PTY env vars + tmux pane shell-readiness gate (2026-09-24, **Rust change — needs `make dev` restart**)
+- Fixes the p10k-wizard-hijack pane-spawn race (`plans/p10k-wizard-hijack-agent-pane-spawn-race.md`):
+  `tmux_routes.rs::materialize` now blocks until the freshly spawned shell reaches `SHELL_IDLE`
+  (5s bound, fail-open) before returning — a `respawn-pane`-delivered launch command can no
+  longer arrive while the shell is still sourcing `.zshrc`. See `docs/backend/pty.md`'s "Pane
+  Shell-Readiness Gate" section.
+- New global setting `AppConfig::custom_pty_env` — user-authored `KEY=value` pairs injected into
+  every spawned PTY (`pty::apply_custom_pty_env`, applied last, overrides everything except the
+  internal `TUIC_PTY_TTY`). Settings UI: Settings → Terminal → "Custom Environment Variables"
+  (`TerminalTab.tsx`, add/remove `KEY = value` rows, key-format + duplicate-key validation).
+  See `docs/backend/pty.md`'s "Custom PTY environment variables" section for the full
+  precedence order.
+- **Verify after rebuild (Rust) + reload (frontend):** open Settings → Terminal → "Custom
+  Environment Variables", add `TUIC_MANUAL_TEST` = `hello`, open a new terminal tab, run
+  `echo $TUIC_MANUAL_TEST` — expect `hello`. Then add
+  `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD` = `true` on a machine with Powerlevel10k's
+  instant-prompt in verbose mode and confirm a burst of several simultaneous agent-teams pane
+  spawns no longer triggers the config wizard. Also confirm the setting is findable via the
+  Settings search box (typing "Environment Variables" should scroll to it).
