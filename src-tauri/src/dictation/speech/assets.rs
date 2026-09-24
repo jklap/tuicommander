@@ -13,8 +13,13 @@
 //!   onnxruntime/libonnxruntime.dylib
 //!   italian/
 //!     bundle.json  tokenizer.model  *.onnx
-//!     voices/giovanni.safetensors
+//!     voices/giovanni.safetensors  the voice the language ships with
+//!   voices/italian/jean.safetensors  a voice downloaded on its own
 //! ```
+//!
+//! A downloaded voice lives outside its language directory on purpose:
+//! [`promote`] replaces a language directory whole, and a voice kept inside it
+//! would be deleted by every update of the language.
 //!
 //! # Two upstreams
 //!
@@ -55,6 +60,11 @@ pub const RUNTIME_SUBDIR: &str = "onnxruntime";
 /// Where a language keeps its voices, relative to the language directory.
 /// Shared with `pocket::voice_path` for the same reason.
 pub const VOICES_SUBDIR: &str = "voices";
+
+/// Where voices downloaded on their own are installed, one directory per
+/// language, under the speech models directory. Shared with
+/// `pocket::voice_path`, which looks there after the language's own voices.
+pub const DOWNLOADED_VOICES_SUBDIR: &str = "voices";
 
 /// Half-installed assets live here, beside the finished ones but out of the
 /// way: the engine resolves a language by name, and a name starting with a dot
@@ -105,6 +115,13 @@ pub enum Kind {
     },
     /// The onnxruntime shared library for the platform this binary runs on.
     Runtime,
+    /// One more voice for a language, downloaded on its own. Installed at
+    /// `<speech>/voices/<language>/<voice>.safetensors`, outside the language
+    /// directory, so an update of the language cannot delete it.
+    Voice {
+        language: &'static str,
+        voice: &'static str,
+    },
 }
 
 pub struct Asset {
@@ -141,6 +158,9 @@ impl Asset {
         match self.kind {
             Kind::Language { language, .. } => bundles_dir().join(language),
             Kind::Runtime => bundles_dir().join(RUNTIME_SUBDIR),
+            Kind::Voice { language, .. } => {
+                bundles_dir().join(DOWNLOADED_VOICES_SUBDIR).join(language)
+            }
         }
     }
 
@@ -175,14 +195,14 @@ impl Asset {
     pub fn voices(&self) -> &'static [&'static str] {
         match self.kind {
             Kind::Language { voices, .. } => voices,
-            Kind::Runtime => &[],
+            Kind::Runtime | Kind::Voice { .. } => &[],
         }
     }
 
     pub fn language(&self) -> Option<&'static str> {
         match self.kind {
             Kind::Language { language, .. } => Some(language),
-            Kind::Runtime => None,
+            Kind::Runtime | Kind::Voice { .. } => None,
         }
     }
 
@@ -190,7 +210,7 @@ impl Asset {
     pub fn code(&self) -> Option<&'static str> {
         match self.kind {
             Kind::Language { code, .. } => Some(code),
-            Kind::Runtime => None,
+            Kind::Runtime | Kind::Voice { .. } => None,
         }
     }
 }
@@ -249,6 +269,18 @@ pub fn status(asset: &Asset) -> Status {
 /// for the same reason [`promote`] does not do it either.
 pub fn remove(asset: &Asset) -> Result<(), InstallError> {
     let dir = asset.install_dir();
+    if let Kind::Voice { .. } = asset.kind {
+        // The directory is shared with the language's other downloads.
+        for file in asset.installed_files() {
+            let path = dir.join(file.name);
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(InstallError::Disk(format!("{}: {e}", path.display()))),
+            }
+        }
+        return Ok(());
+    }
     if !dir.exists() {
         return Ok(());
     }
@@ -341,6 +373,9 @@ pub fn discard(staging: &Path) {
 /// can fix by downloading again. The other order can leave a directory that
 /// half belongs to each version and passes every existence check.
 pub fn promote(asset: &Asset, staging: &Path) -> Result<PathBuf, InstallError> {
+    if let Kind::Voice { voice, .. } = asset.kind {
+        return promote_voice(asset, voice, staging);
+    }
     let dir = asset.install_dir();
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)
@@ -352,6 +387,24 @@ pub fn promote(asset: &Asset, staging: &Path) -> Result<PathBuf, InstallError> {
     }
     std::fs::rename(staging, &dir)
         .map_err(|e| InstallError::Disk(format!("installing {}: {e}", dir.display())))?;
+    Ok(dir)
+}
+
+/// Move one staged voice file into the language's download directory.
+///
+/// A file, not a directory: the directory holds the language's other
+/// downloaded voices, and renaming a directory over it would delete them.
+fn promote_voice(asset: &Asset, voice: &str, staging: &Path) -> Result<PathBuf, InstallError> {
+    let dir = asset.install_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| InstallError::Disk(format!("{}: {e}", dir.display())))?;
+    let name = format!("{voice}.safetensors");
+    let dest = dir.join(&name);
+    // `rename` replaces an existing file (a re-download of the same voice)
+    // rather than failing on it, on unix and on Windows alike.
+    std::fs::rename(staging.join(&name), &dest)
+        .map_err(|e| InstallError::Disk(format!("installing {}: {e}", dest.display())))?;
+    discard(staging);
     Ok(dir)
 }
 
@@ -667,7 +720,15 @@ const POCKET_ONNX_REVISION: &str = "58a6d00cf13d239b6748cb0769f35c580a8f606c";
 /// pinned to. A commit, for the same reason as the revision above.
 /// `cfg(test)` for the same reason as the revision above.
 #[cfg(test)]
-const KYUTAI_VOICES_REVISION: &str = "00eac05ed3d16bdc3f6b5d598874019c34a89214";
+const KYUTAI_VOICES_REVISION: &str = "8843db76457a91db32077edf8dfcd1c0e3e755fd";
+
+/// French voices stay at an older revision. The `french_24l` voices at
+/// `KYUTAI_VOICES_REVISION` carry a `self_attn/pad` tensor per layer and a KV
+/// cache for a newer model than the ONNX export we pin, and every one of them
+/// renders 0.72 s: end of speech on the first frame, in this engine and in the
+/// reference runtime (plan `pocket-voices-and-loudness.md`, Step 1).
+#[cfg(test)]
+const KYUTAI_FRENCH_VOICES_REVISION: &str = "00eac05ed3d16bdc3f6b5d598874019c34a89214";
 
 macro_rules! pocket_onnx_url {
     ($language:literal, $file:literal) => {
@@ -682,11 +743,24 @@ macro_rules! pocket_onnx_url {
     };
 }
 
+/// The voice revision of a language: see `KYUTAI_FRENCH_VOICES_REVISION`.
+macro_rules! voice_revision {
+    ("french_24l") => {
+        "00eac05ed3d16bdc3f6b5d598874019c34a89214"
+    };
+    ($language:literal) => {
+        "8843db76457a91db32077edf8dfcd1c0e3e755fd"
+    };
+}
+
+// `tt`, not `literal`: a fragment captured as `literal` is opaque, so
+// `voice_revision!` could never match it against `"french_24l"` and French
+// would silently get the other revision.
 macro_rules! voice_url {
-    ($language:literal, $voice:literal) => {
+    ($language:tt, $voice:tt) => {
         concat!(
             "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/resolve/",
-            "00eac05ed3d16bdc3f6b5d598874019c34a89214",
+            voice_revision!($language),
             "/languages/",
             $language,
             "/embeddings/",
@@ -1100,6 +1174,34 @@ static SPANISH: Asset = Asset {
     payload: Payload::Files(SPANISH_FILES),
 };
 
+/// One downloadable voice. The entries are generated into `assets_voices.rs`
+/// by `scripts/speech-assets/gen_voice_catalogue.py`, which reads the sha256
+/// and the size from Hugging Face at the pinned revision.
+///
+/// Two names for the language: `$language` is the one the app installs it
+/// under (`english`), `$upstream` the one Hugging Face files it under
+/// (`english_2026-04`).
+macro_rules! voice {
+    ($language:tt, $upstream:tt, $voice:tt, $sha256:tt, $size:tt) => {
+        Asset {
+            id: concat!("voice-", $language, "-", $voice),
+            display_name: $voice,
+            kind: Kind::Voice {
+                language: $language,
+                voice: $voice,
+            },
+            payload: Payload::Files(&[Fetch {
+                name: concat!($voice, ".safetensors"),
+                url: voice_url!($upstream, $voice),
+                sha256: $sha256,
+                size_bytes: $size,
+            }]),
+        }
+    };
+}
+
+include!("assets_voices.rs");
+
 /// Everything a user may install, and nothing else. A download request names
 /// an entry here; an id that is not in this list is refused rather than
 /// resolved, which is what makes this an allowlist instead of a hint.
@@ -1113,9 +1215,16 @@ pub static CATALOGUE: &[&Asset] = &[
     &SPANISH,
 ];
 
-/// Look an asset up by id.
+/// Look an asset up by id: the catalogue, then the downloadable voices.
+///
+/// The voices are not in [`CATALOGUE`] because they are not offered as rows of
+/// their own: a voice is chosen within its language.
 pub fn find(id: &str) -> Option<&'static Asset> {
-    CATALOGUE.iter().copied().find(|asset| asset.id == id)
+    CATALOGUE
+        .iter()
+        .copied()
+        .chain(VOICES.iter())
+        .find(|asset| asset.id == id)
 }
 
 /// The language assets, for a caller offering a choice of voice.
@@ -1150,7 +1259,7 @@ mod tests {
         // A `main` or a `latest` here would silently un-pin the asset: the
         // sha256 would then reject the new file rather than the manifest
         // selecting the old one, and the user would see corruption.
-        for asset in CATALOGUE {
+        for asset in every_asset() {
             let urls: Vec<&str> = match &asset.payload {
                 Payload::Files(files) => files.iter().map(|f| f.url).collect(),
                 Payload::Library(fetch) => vec![fetch.url],
@@ -1160,6 +1269,7 @@ mod tests {
                 assert!(
                     url.contains(POCKET_ONNX_REVISION)
                         || url.contains(KYUTAI_VOICES_REVISION)
+                        || url.contains(KYUTAI_FRENCH_VOICES_REVISION)
                         || url.contains("/releases/download/v1.23.0/"),
                     "{url} is not pinned to a revision this file declares"
                 );
@@ -1169,7 +1279,7 @@ mod tests {
 
     #[test]
     fn every_pinned_hash_is_a_sha256_and_every_size_is_real() {
-        for asset in CATALOGUE {
+        for asset in every_asset() {
             let fetches: Vec<&Fetch> = match &asset.payload {
                 Payload::Files(files) => files.iter().collect(),
                 Payload::Library(fetch) => vec![fetch],
@@ -1194,7 +1304,7 @@ mod tests {
         // The names are catalogue data rather than input, so this is a guard on
         // us: a `../` here would let an install overwrite another language, or
         // the whisper models beside it.
-        for asset in CATALOGUE {
+        for asset in every_asset() {
             if let Payload::Files(files) = &asset.payload {
                 for file in *files {
                     let path = Path::new(file.name);
@@ -1507,6 +1617,245 @@ mod tests {
         let staging = staging_dir("italian");
         assert_ne!(staging, ITALIAN.install_dir());
         assert!(staging.starts_with(bundles_dir().join(STAGING_SUBDIR)));
+    }
+
+    // -----------------------------------------------------------------
+    // Voices as assets
+    // -----------------------------------------------------------------
+
+    /// Every asset a download request may name: the catalogue and the voices.
+    fn every_asset() -> impl Iterator<Item = &'static Asset> {
+        CATALOGUE.iter().copied().chain(VOICES.iter())
+    }
+
+    /// The downloadable voices of one language.
+    fn voice_assets(language: &str) -> Vec<&'static Asset> {
+        VOICES
+            .iter()
+            .filter(|asset| matches!(asset.kind, Kind::Voice { language: l, .. } if l == language))
+            .collect()
+    }
+
+    /// The Kyutai revision a language's voices are pinned to, by the name
+    /// the app installs the language under.
+    fn voices_revision_for(language: &str) -> &'static str {
+        if language == "french" {
+            KYUTAI_FRENCH_VOICES_REVISION
+        } else {
+            KYUTAI_VOICES_REVISION
+        }
+    }
+
+    #[test]
+    fn every_voice_url_carries_its_languages_revision() {
+        // French is pinned to the older revision on purpose: its voices at
+        // 8843db76 are for a newer model than the ONNX export and render
+        // 0.72 s. A French voice at the new revision would install cleanly
+        // and then say almost nothing.
+        for asset in languages() {
+            let language = asset.language().unwrap();
+            let Payload::Files(files) = &asset.payload else {
+                panic!("{} is a language with no files", asset.id);
+            };
+            for file in files.iter().filter(|f| f.name.starts_with(VOICES_SUBDIR)) {
+                assert!(
+                    file.url.contains(voices_revision_for(language)),
+                    "{} default voice {} is not at {}",
+                    asset.id,
+                    file.url,
+                    voices_revision_for(language)
+                );
+            }
+        }
+        for asset in VOICES {
+            let Kind::Voice { language, .. } = asset.kind else {
+                panic!("{} is in VOICES but is not a voice", asset.id);
+            };
+            let Payload::Files(files) = &asset.payload else {
+                panic!("{} is a voice with no file", asset.id);
+            };
+            for file in *files {
+                assert!(
+                    file.url.contains(voices_revision_for(language)),
+                    "{} is not at {}",
+                    file.url,
+                    voices_revision_for(language)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_language_resolves_exactly_twenty_six_voices() {
+        // One ships with the language; the other 25 are downloads of their own.
+        for asset in languages() {
+            let language = asset.language().unwrap();
+            let mut names: Vec<&str> = asset.voices().to_vec();
+            assert_eq!(names.len(), 1, "{} ships one default voice", asset.id);
+            let downloads = voice_assets(language);
+            assert_eq!(downloads.len(), 25, "{} downloadable voices", asset.id);
+            names.extend(downloads.iter().map(|voice| match voice.kind {
+                Kind::Voice { voice, .. } => voice,
+                _ => unreachable!(),
+            }));
+            names.sort_unstable();
+            names.dedup();
+            assert_eq!(names.len(), 26, "{} offers a voice twice", asset.id);
+        }
+        assert_eq!(VOICES.len(), 150);
+    }
+
+    #[test]
+    fn voice_asset_ids_are_unique_and_never_shadow_a_catalogue_id() {
+        // `find` looks in the catalogue first, so a voice sharing an id with a
+        // language would be unreachable, and a language sharing one with a
+        // voice would be downloaded in its place.
+        let mut ids: Vec<&str> = every_asset().map(|asset| asset.id).collect();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "duplicate asset id");
+        for asset in VOICES {
+            assert!(
+                std::ptr::eq(find(asset.id).unwrap(), asset),
+                "{} does not resolve to itself",
+                asset.id
+            );
+        }
+    }
+
+    #[test]
+    fn a_voice_asset_is_one_file_named_after_its_voice() {
+        // `promote_voice` names the installed file from `Kind::Voice.voice`
+        // and `stage` writes the `Fetch` name: they have to be the same file.
+        for asset in VOICES {
+            let Kind::Voice { voice, .. } = asset.kind else {
+                panic!("{} is not a voice", asset.id);
+            };
+            let Payload::Files(files) = &asset.payload else {
+                panic!("{} is a voice with no file", asset.id);
+            };
+            assert_eq!(files.len(), 1, "{}", asset.id);
+            assert_eq!(
+                files[0].name,
+                format!("{voice}.safetensors"),
+                "{}",
+                asset.id
+            );
+        }
+    }
+
+    /// Stage a voice by hand, as `stage` would leave it: `body`, padded
+    /// (sparse) to the size the catalogue pins, which is what [`status`] reads.
+    fn staged_voice(asset: &Asset, body: &[u8]) -> PathBuf {
+        let staging = staging_dir(asset.id);
+        std::fs::create_dir_all(&staging).unwrap();
+        let Payload::Files(files) = &asset.payload else {
+            unreachable!()
+        };
+        let path = staging.join(files[0].name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(files[0].size_bytes)
+            .unwrap();
+        staging
+    }
+
+    /// The leading bytes of an installed voice file.
+    fn head(path: &Path, len: usize) -> Vec<u8> {
+        let mut bytes = std::fs::read(path).unwrap();
+        bytes.truncate(len);
+        bytes
+    }
+
+    #[test]
+    fn a_voice_promotes_one_file_beside_the_others_and_never_touches_the_language() {
+        // A voice's staging directory is its own, and promoting it moves one
+        // file: renaming the directory would replace every other downloaded
+        // voice of the language, and staging into the language directory
+        // would let `promote` of the language delete it.
+        let (_root, _guard) = installed(&ITALIAN);
+        let italian = voice_assets("italian");
+        let (first, second) = (italian[0], italian[1]);
+
+        let staging = staged_voice(first, b"first voice");
+        assert_ne!(staging, ITALIAN.install_dir());
+        assert!(!staging.starts_with(ITALIAN.install_dir()));
+        promote(first, &staging).unwrap();
+        promote(second, &staged_voice(second, b"second voice")).unwrap();
+
+        assert_eq!(status(first), Status::Ready);
+        assert!(!staging.exists(), "the staging directory was left behind");
+        assert_eq!(
+            status(&ITALIAN),
+            Status::Ready,
+            "the language was disturbed"
+        );
+        let dir = first.install_dir();
+        assert!(!dir.starts_with(ITALIAN.install_dir()));
+        assert_eq!(
+            head(&dir.join(format!("{}.safetensors", name_of(first))), 11),
+            b"first voice"
+        );
+        assert_eq!(
+            head(&dir.join(format!("{}.safetensors", name_of(second))), 12),
+            b"second voice"
+        );
+    }
+
+    fn name_of(asset: &Asset) -> &'static str {
+        match asset.kind {
+            Kind::Voice { voice, .. } => voice,
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn reinstalling_a_language_keeps_its_downloaded_voices() {
+        // Updating a language replaces its directory whole, on purpose (see
+        // `promoting_replaces_the_old_directory_whole_rather_than_merging_into_it`).
+        // Downloaded voices live outside it, so they are not collateral.
+        let (_root, _guard) = installed(&ITALIAN);
+        let jean = voice_assets("italian")[0];
+        promote(jean, &staged_voice(jean, b"a downloaded voice")).unwrap();
+        let file = jean
+            .install_dir()
+            .join(format!("{}.safetensors", name_of(jean)));
+
+        let staging = staging_dir(ITALIAN.id);
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("bundle.json"), b"{}").unwrap();
+        promote(&ITALIAN, &staging).unwrap();
+
+        assert_eq!(head(&file, 18), b"a downloaded voice");
+        remove(&ITALIAN).unwrap();
+        assert!(
+            file.exists(),
+            "deleting the language deleted a downloaded voice"
+        );
+    }
+
+    #[test]
+    fn removing_a_voice_leaves_the_other_voices() {
+        let root = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(root.path().to_path_buf());
+        let italian = voice_assets("italian");
+        let (first, second) = (italian[0], italian[1]);
+        promote(first, &staged_voice(first, b"1")).unwrap();
+        promote(second, &staged_voice(second, b"2")).unwrap();
+
+        remove(first).unwrap();
+        assert_eq!(status(first), Status::Absent);
+        assert_eq!(remove(first), Ok(()), "removing it twice is still success");
+        assert!(
+            second
+                .install_dir()
+                .join(format!("{}.safetensors", name_of(second)))
+                .exists()
+        );
     }
 
     // -----------------------------------------------------------------
