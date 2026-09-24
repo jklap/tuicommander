@@ -1133,7 +1133,7 @@ GET /config/defaults
 
 Read-only. Returns `ConfigDefaults` — see `docs/backend/config.md` → "Config
 Defaults" — for Settings "expert mode": `{ app, notifications, agent_settings,
-repo_defaults, agents, dictation? }`. `dictation` is present only on desktop
+repo_defaults, agents, github_accounts, dictation? }`. `dictation` is present only on desktop
 builds. `None` fields are omitted (`skip_serializing_if`); a missing key inside
 a present object means `null`.
 
