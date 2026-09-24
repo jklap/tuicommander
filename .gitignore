@@ -39,6 +39,8 @@ lcov.info
 plans
 # mdkb:index
 stories
+!src-tauri/src/stories/
+!src-tauri/src/stories/**
 # mdkb:index
 reviews
 ideas
