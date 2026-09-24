@@ -132,11 +132,11 @@ previously-built worktree but fail in a fresh one:
    echo '<html></html>' > dist/index.html` (from the repo root).
 2. **Sidecar binary placeholders** — `tauri.conf.json`'s `externalBin` lists `binaries/tuic-bridge`,
    `binaries/tuic`, `binaries/tuic-hook`; the build script checks these paths exist for the host
-   target triple. Empty files satisfy the resource-existence check: `target=$(rustc --print
-   host-tuple); mkdir -p src-tauri/binaries; touch src-tauri/binaries/tuic-bridge-$target
-   src-tauri/binaries/tuic-hook-$target; chmod +x src-tauri/binaries/tuic-bridge-$target
-   src-tauri/binaries/tuic-hook-$target` (the plain `tuic-$target` one needs to be a real binary
-   to actually run the app, but an empty file is enough for `cargo test`).
+   target triple. None of them are tracked in git (`src-tauri/binaries/*` is gitignored). Empty
+   files satisfy the resource-existence check: `target=$(rustc --print host-tuple); mkdir -p
+   src-tauri/binaries; for b in tuic-bridge tuic tuic-hook; do touch
+   src-tauri/binaries/$b-$target; chmod +x src-tauri/binaries/$b-$target; done`. That's enough
+   for `cargo test`; to actually run the app, build real ones with `pnpm build:sidecar --force`.
 3. **A real `tuic-hook` build** — unlike the other two, this can't be a stub.
    `src-tauri/src/agent_hook.rs`'s `golden_wire_output` tests execute the compiled `tuic-hook`
    binary and assert on its real output; a 0-byte placeholder fails every one of those tests with
