@@ -12,6 +12,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import type { BranchPrStatus } from "../../types";
 import { openDialog as open } from "../../utils/nativeDialog";
+import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -230,8 +231,16 @@ describe("useGitOperations", () => {
 			repositoriesStore.add({ path: "/b", displayName: "B" });
 			repositoriesStore.setWorkspace("/b", "main", { worktreePath: "/b" });
 			await gitOps.handleBranchSelect("/a", "main");
+			const agentTab = terminalsStore.add({
+				sessionId: "sess-b",
+				fontSize: 14,
+				name: "Agent in B",
+				cwd: "/b",
+				awaitingInput: null,
+			});
+			repositoriesStore.addTerminalToWorkspace("/b", "main", agentTab);
 
-			repositoriesStore.setActive("/b");
+			navigateToTerminal(agentTab);
 
 			expect(gitOps.currentRepoPath()).toBe("/b");
 		});
@@ -2578,6 +2587,18 @@ describe("useGitOperations", () => {
 				kind: "repo",
 				repoPath: "/repo",
 			});
+		});
+
+		it("leaves the side panels on the active repo", () => {
+			// Settings for another repo open in the settings panel only. Moving the
+			// Notes, Git and Files panels there too was the drift this derivation removes.
+			repositoriesStore.add({ path: "/active", displayName: "Active" });
+			repositoriesStore.add({ path: "/other", displayName: "Other" });
+			repositoriesStore.setActive("/active");
+
+			gitOps.handleRepoSettings("/other", vi.fn());
+
+			expect(gitOps.currentRepoPath()).toBe("/active");
 		});
 	});
 
