@@ -16,6 +16,9 @@ export const SettingsSearchBox: Component<{ value: string; onInput: (value: stri
 			placeholder={t("settings.search.placeholder", "Search settings")}
 			aria-label={t("settings.search.placeholder", "Search settings")}
 			onInput={(e) => props.onInput(e.currentTarget.value)}
+			autocomplete="off"
+			autocorrect="off"
+			spellcheck={false}
 		/>
 		<Show when={props.value}>
 			<button

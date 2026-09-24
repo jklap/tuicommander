@@ -114,6 +114,15 @@ describe("SettingsPanel search", () => {
 		expect(container.textContent).toContain("Confirmations");
 	});
 
+	it("turns off text correction on the search box", () => {
+		// macOS draws an autocorrect bubble over the results while it is on,
+		// and a query is a setting name, not prose.
+		const input = searchInput(open().container);
+		expect(input.getAttribute("autocomplete")).toBe("off");
+		expect(input.getAttribute("autocorrect")).toBe("off");
+		expect(input.getAttribute("spellcheck")).toBe("false");
+	});
+
 	it("finds a setting that lives in a tab which was never opened", () => {
 		const { container } = open();
 		fireEvent.input(searchInput(container), { target: { value: "master volume" } });
