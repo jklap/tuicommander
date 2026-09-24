@@ -193,6 +193,10 @@ that checkout merely to run this check.
       submitting. Check selector, path, style subset, rectangle, HTML snippet,
       nearby text, source location when the dev build supplies one, and a valid
       `[image: …]` PNG path.
+- [ ] On a page whose CSS uses custom properties (for example a Tailwind v4
+      or shadcn app), select a themed button. The grab carries a `tokens:` line
+      with only the `--…` variables that button's rules reference, resolved to
+      their values, and not the whole theme.
 - [ ] Start Design Mode from another agent terminal in the same repository.
       Confirm the existing Chrome window is reused and subsequent grabs go to
       the newly bound terminal. Close that terminal, then Chrome: the status

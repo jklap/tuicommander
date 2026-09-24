@@ -12,6 +12,7 @@ type Extracted = {
 	attributes: Record<string, string>;
 	htmlSnippet: string;
 	styles: Record<string, string>;
+	tokens: Record<string, string>;
 	rect: Record<string, number>;
 	source: {
 		reactStack?: string;
@@ -90,6 +91,49 @@ describe("design mode extraction", () => {
 		// the CDP box model (manager.rs). Drop the field from extract.js (a backend asset)
 		// together with this assertion; it only proves jsdom returns zeros.
 		expect(result.rect).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+	});
+
+	it("resolves only the design tokens the element's own rules reference", () => {
+		// A theme declares hundreds of tokens; the agent needs the few this element
+		// uses, with their live values, to stay inside the design system.
+		const html = `<style>
+			:root { --brand: #0af; --space-2: 8px; --unused: 1px; --fallback: 2px; }
+			.btn { color: var(--brand); padding: var(--space-2); }
+			.other { margin: var(--unused); }
+			@media (min-width: 1px) { .btn { gap: var(--missing, var(--fallback)); } }
+		</style><button class="btn">Pick</button><p class="other">x</p>`;
+		const result = extract(html, "button");
+		expect(result.tokens).toEqual({ "--brand": "#0af", "--space-2": "8px", "--fallback": "2px" });
+	});
+
+	it("reads tokens referenced by the inline style and skips unreadable sheets", () => {
+		const html = `<style>:root { --accent: red; }</style><button style="color: var(--accent)">Pick</button>`;
+		const result = extract(html, "button", (node) => {
+			const doc = node.ownerDocument;
+			// A cross-origin sheet throws on cssRules access; extraction must go on.
+			Object.defineProperty(doc, "styleSheets", {
+				value: [
+					{
+						get cssRules() {
+							throw new Error("SecurityError");
+						},
+					},
+					...Array.from(doc.styleSheets),
+				],
+			});
+		});
+		expect(result.tokens).toEqual({ "--accent": "red" });
+	});
+
+	it("bounds the number of tokens and the length of each value", () => {
+		const declarations = Array.from({ length: 60 }, (_, index) => `--t${index}: ${"v".repeat(300)};`).join(" ");
+		const uses = Array.from({ length: 60 }, (_, index) => `--u${index}: var(--t${index});`).join(" ");
+		const result = extract(
+			`<style>:root { ${declarations} } button { ${uses} }</style><button>Pick</button>`,
+			"button",
+		);
+		expect(Object.keys(result.tokens)).toHaveLength(32);
+		expect(Object.values(result.tokens).every((value) => value.length <= 128)).toBe(true);
 	});
 
 	it("limits attributes before sending the node over CDP", () => {
