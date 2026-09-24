@@ -20,11 +20,16 @@ for checkout in "$repo" "$scratch/other"; do
 done
 
 printf '#!/bin/sh\n# external hook\n' > "$repo/.git/hooks/pre-push"
+# An install made by the old installer: a symlink into one checkout.
+ln -s "$repo/scripts/hooks/pre-commit" "$repo/.git/hooks/pre-commit"
 cp "$repo/scripts/hooks/pre-commit" "$repo/scripts/hooks/pre-push"
 
 (cd "$repo" && bash scripts/hooks/install-hooks.sh)
 (cd "$scratch/other" && bash scripts/hooks/install-hooks.sh)
 grep -Fqx '# external hook' "$repo/.git/hooks/pre-push"
+# The old symlink is replaced by a dispatcher.
+[ ! -L "$repo/.git/hooks/pre-commit" ]
+head -n 2 "$repo/.git/hooks/pre-commit" | grep -Fqx '# tuic-managed-hook'
 # This test lives beside the hooks but is not one.
 [ ! -e "$repo/.git/hooks/test-install-hooks.sh" ]
 
@@ -40,3 +45,9 @@ diff -u "$scratch/expected" "$scratch/results"
 HOOK_RESULTS="$scratch/results" git -C "$scratch/other" -c user.name=Test -c user.email=test@example.com commit -q --allow-empty -m again
 git -C "$scratch/other" rev-parse --show-toplevel > "$scratch/expected"
 diff -u "$scratch/expected" "$scratch/results"
+
+# A checkout without the hook (an older branch) commits as if no hook existed.
+rm "$scratch/other/scripts/hooks/pre-commit"
+: > "$scratch/results"
+HOOK_RESULTS="$scratch/results" git -C "$scratch/other" -c user.name=Test -c user.email=test@example.com commit -q --allow-empty -m no-hook
+[ ! -s "$scratch/results" ]
