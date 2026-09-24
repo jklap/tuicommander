@@ -11,6 +11,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn operator_can_work_a_story_without_a_terminal_claim() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Manual plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Manual work".into(),
+                criteria: vec!["Verified".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        assert!(
+            store
+                .transition_for_actor(
+                    &story.id,
+                    story.revision,
+                    StoryCommand::StartManual,
+                    Some("agent")
+                )
+                .is_err()
+        );
+        let started = store
+            .transition(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("start");
+        assert_eq!(started.status, StoryStatus::InProgress);
+        assert_eq!(started.claim_session, None);
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .expect("check");
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .expect("review");
+        let done = store
+            .transition(&story.id, review.revision, StoryCommand::Approve)
+            .expect("approve");
+        assert_eq!(done.status, StoryStatus::Done);
+    }
+
+    #[test]
     fn plan_and_story_survive_reopen_and_plan_state_is_derived() {
         let dir = tempfile::tempdir().expect("temporary config");
         let db = dir.path().join("stories.sqlite3");

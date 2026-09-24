@@ -78,6 +78,12 @@ impl StoryStore {
             }
         }
         match command {
+            StoryCommand::StartManual => {
+                if story.status != StoryStatus::Ready {
+                    return Err("story must be ready for manual work".into());
+                }
+                story.status = StoryStatus::InProgress;
+            }
             StoryCommand::CheckCriterion(index) | StoryCommand::UncheckCriterion(index) => {
                 if story.status != StoryStatus::InProgress {
                     return Err("criteria can change only during work".into());
