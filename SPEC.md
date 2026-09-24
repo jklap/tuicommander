@@ -439,7 +439,7 @@ journaled rather than read from `session_parent` or the agent inbox, because
 both are in memory and lost when the child closes or the app restarts. The toolbar bell carries one aggregate entry
 that opens it.
 
-The implementation contract is maintained in `plans/project-progress.md`. The
+The implementation contract is maintained in `plans/archive/project-progress.md`. The
 reporting-quality evaluation of the short default against the optional prompt is
 recorded in [Progress reporting evaluation](docs/evaluations/progress-reporting.md).
 

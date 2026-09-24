@@ -295,7 +295,7 @@ the replacement lives in ego and will have a different file list.
 | Removed area | Went with it | Comes back as |
 |------|----------------|----------------|
 | AI Prompts (diff-triage prompt) | `AiPromptsConfig`, `diff_triage.rs`, `aiPrompts.ts`, the `list/load/save_ai_prompt` MCP config actions | nothing. #795-320b restored the review itself but not the editable prompt: an unattended turn sends one prompt this side owns, so there is nothing for a user to tune |
-| AI Agent ReAct loop | `ai_agent/{engine,tools,safety,sandbox,context,commands,triggers,scheduler}.rs`, `SessionKnowledgeBar.tsx` | nothing. ego runs its own tool loop; TUIC is the environment it drives, per `plans/ego-integration/plan.md` §1 |
+| AI Agent ReAct loop | `ai_agent/{engine,tools,safety,sandbox,context,commands,triggers,scheduler}.rs`, `SessionKnowledgeBar.tsx` | nothing. ego runs its own tool loop; TUIC is the environment it drives, per `plans/archive/ego-integration/plan.md` §1 |
 | Terminal Watcher | `ai_agent/watcher.rs`, the WatcherEngine spawn, the `watcher_*` commands, `WatcherManager/`, `ai-watchers.json` | not scheduled |
 | PR review, changelog, improvement scan | `diff_triage.rs`, `improvement_scan.rs`, `changelog.rs`, `aiTriageStore.ts`, `prReview.ts`, `AiTriagePanel/`, `ChangelogModal/` | **landed as 795-320b** — see "PR review, changelog and improvement scan" above. `diff_triage.rs` came back as `pr_review.rs`, because it no longer triages a diff; `aiTriageStore.ts` and `AiTriagePanel/` did not come back at all |
 | Smart Prompts `api` execution mode | `llm_api.rs`, `execute_api_prompt` | **landed as 787-ee50** — see "Smart Prompts `api` mode" above. The provider registry did not come back; the mode is one unattended ego turn |
