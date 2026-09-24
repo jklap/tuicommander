@@ -6,7 +6,7 @@ import { setRepoConnectionLookup } from "../transportRuntime";
 import type { SavedTerminal } from "../types";
 import { pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { markPerf } from "../utils/perfTrace";
-import { type RepoOwner, resolveRepoOwnerIn } from "../utils/repoOwnership";
+import { type RepoOwner, resolveRepoOwnerIn, sameDir } from "../utils/repoOwnership";
 import { appLogger } from "./appLogger";
 import { makeBranchKey } from "./tabManager";
 import {
@@ -1962,7 +1962,9 @@ export function placementWorkspaceFor(owner: RepoOwner): string | null {
 	if (owner.workspaceId) return owner.workspaceId;
 	const repo = repositoriesStore.state.repositories[owner.repoPath];
 	if (!repo) return null;
-	const atRoot = Object.entries(repo.workspaces).find(([, ws]) => ws.worktreePath === owner.repoPath);
+	const atRoot = Object.entries(repo.workspaces).find(
+		([, ws]) => !!ws.worktreePath && sameDir(ws.worktreePath, owner.repoPath),
+	);
 	return atRoot?.[0] ?? repo.activeWorkspaceId ?? null;
 }
 
