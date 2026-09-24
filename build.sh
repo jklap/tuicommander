@@ -150,10 +150,6 @@ diff_check "src-tauri/Cargo.lock"
 diff_check "src-tauri/Cargo.toml"
 diff_check "src-tauri/tauri.conf.json"
 
-git restore \
-    src-tauri/binaries/tuic-aarch64-apple-darwin \
-    src-tauri/binaries/tuic-hook-aarch64-apple-darwin
-
 echo -e "${GREEN}Updating plugins${OFF}"
 rsync -aPvF \
     --delete \
