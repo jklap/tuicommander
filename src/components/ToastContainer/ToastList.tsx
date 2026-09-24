@@ -31,10 +31,10 @@ export const ToastList: Component<ToastListProps> = (props) => (
 						{toast.message && <span class={styles.message}>{toast.message}</span>}
 					</span>
 					<span class={styles.actions}>
-						<Show when={toast.action} keyed>
+						<Show when={props.repoAction?.(toast)} keyed>
 							{(action) => (
 								<button
-									class={styles.action}
+									class={`${styles.action} ${styles.repoAction}`}
 									onClick={(event) => {
 										event.stopPropagation();
 										action.onClick();
@@ -45,10 +45,10 @@ export const ToastList: Component<ToastListProps> = (props) => (
 								</button>
 							)}
 						</Show>
-						<Show when={props.repoAction?.(toast)} keyed>
+						<Show when={toast.action} keyed>
 							{(action) => (
 								<button
-									class={`${styles.action} ${styles.repoAction}`}
+									class={styles.action}
 									onClick={(event) => {
 										event.stopPropagation();
 										action.onClick();
