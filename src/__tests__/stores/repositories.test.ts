@@ -1947,4 +1947,59 @@ describe("repositoriesStore", () => {
 			});
 		});
 	});
+
+	describe("placementWorkspaceFor()", () => {
+		const rootOwner = { repoPath: "/repo", workspaceId: null };
+
+		it("places a root session in the root workspace even while a linked worktree is active", async () => {
+			const { placementWorkspaceFor } = await import("../../stores/repositories");
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+				store.setActiveWorkspace("/repo", "feature");
+				expect(placementWorkspaceFor(rootOwner)).toBe("main");
+			});
+		});
+
+		it("matches the root workspace across a trailing slash and Windows separators", async () => {
+			const { placementWorkspaceFor } = await import("../../stores/repositories");
+			testInScope(() => {
+				store.add({ path: "C:\\repo", displayName: "test" });
+				store.setWorkspace("C:\\repo", "main", { worktreePath: "C:/repo/" });
+				store.setWorkspace("C:\\repo", "feature", { worktreePath: "C:/repo__wt/feature" });
+				store.setActiveWorkspace("C:\\repo", "feature");
+				expect(placementWorkspaceFor({ repoPath: "C:\\repo", workspaceId: null })).toBe("main");
+			});
+		});
+
+		it("falls back to the active workspace when no workspace records the root", async () => {
+			const { placementWorkspaceFor } = await import("../../stores/repositories");
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+				store.setActiveWorkspace("/repo", "feature");
+				expect(placementWorkspaceFor(rootOwner)).toBe("feature");
+			});
+		});
+
+		it("returns null when neither a root workspace nor an active one exists", async () => {
+			const { placementWorkspaceFor } = await import("../../stores/repositories");
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+				store.setActiveWorkspace("/repo", null);
+				expect(placementWorkspaceFor(rootOwner)).toBeNull();
+			});
+		});
+
+		it("keeps an owner that already names its workspace", async () => {
+			const { placementWorkspaceFor } = await import("../../stores/repositories");
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+				expect(placementWorkspaceFor({ repoPath: "/repo", workspaceId: "feature" })).toBe("feature");
+			});
+		});
+	});
 });
