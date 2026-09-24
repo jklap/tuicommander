@@ -16,6 +16,7 @@ import type { IssueFilterMode } from "../../../types";
 import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
+import { ExpertSetting } from "../ExpertSetting";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 import g from "./GitHubTab.module.css";
@@ -570,17 +571,19 @@ export const GitHubTab: Component = () => {
 					hint="Exclude pull requests with failing CI checks from the Pull Requests list"
 				/>
 
-				<SettingSelect
-					label="Auto-Delete on PR Close"
-					value={repoDefaultsStore.state.autoDeleteOnPrClose}
-					onChange={(v) => repoDefaultsStore.setAutoDeleteOnPrClose(v as AutoDeleteOnPrClose)}
-					options={[
-						{ value: "off", label: "Off" },
-						{ value: "ask", label: "Ask before deleting" },
-						{ value: "auto", label: "Auto-delete silently" },
-					]}
-					hint="Delete local branch when its PR is merged or closed on GitHub"
-				/>
+				<ExpertSetting configKey="repo_defaults.auto_delete_on_pr_close" value={repoDefaultsStore.state.autoDeleteOnPrClose}>
+					<SettingSelect
+						label="Auto-Delete on PR Close"
+						value={repoDefaultsStore.state.autoDeleteOnPrClose}
+						onChange={(v) => repoDefaultsStore.setAutoDeleteOnPrClose(v as AutoDeleteOnPrClose)}
+						options={[
+							{ value: "off", label: "Off" },
+							{ value: "ask", label: "Ask before deleting" },
+							{ value: "auto", label: "Auto-delete silently" },
+						]}
+						hint="Delete local branch when its PR is merged or closed on GitHub"
+					/>
+				</ExpertSetting>
 
 				<h3>Issues</h3>
 
@@ -627,25 +630,21 @@ export const GitHubTab: Component = () => {
 					hint="Default base branch for new worktrees"
 				/>
 
-				<div class={s.group}>
-					<label>File Handling Defaults</label>
-					<div class={s.toggle}>
-						<input
-							type="checkbox"
-							checked={repoDefaultsStore.state.copyIgnoredFiles}
-							onChange={(e) => repoDefaultsStore.setCopyIgnoredFiles(e.currentTarget.checked)}
-						/>
-						<span>Copy ignored files</span>
-					</div>
-					<div class={s.toggle}>
-						<input
-							type="checkbox"
-							checked={repoDefaultsStore.state.copyUntrackedFiles}
-							onChange={(e) => repoDefaultsStore.setCopyUntrackedFiles(e.currentTarget.checked)}
-						/>
-						<span>Copy untracked files</span>
-					</div>
-				</div>
+				<ExpertSetting configKey="repo_defaults.copy_ignored_files" value={repoDefaultsStore.state.copyIgnoredFiles}>
+					<SettingToggle
+						checked={repoDefaultsStore.state.copyIgnoredFiles}
+						onChange={(v) => repoDefaultsStore.setCopyIgnoredFiles(v)}
+						label="Copy ignored files"
+					/>
+				</ExpertSetting>
+
+				<ExpertSetting configKey="repo_defaults.copy_untracked_files" value={repoDefaultsStore.state.copyUntrackedFiles}>
+					<SettingToggle
+						checked={repoDefaultsStore.state.copyUntrackedFiles}
+						onChange={(v) => repoDefaultsStore.setCopyUntrackedFiles(v)}
+						label="Copy untracked files"
+					/>
+				</ExpertSetting>
 
 				<div class={s.group}>
 					<label>Default Setup Script</label>
@@ -685,18 +684,20 @@ export const GitHubTab: Component = () => {
 					Default worktree behavior for all repositories
 				</p>
 
-				<SettingSelect
-					label="Storage Strategy"
-					value={repoDefaultsStore.state.worktreeStorage}
-					onChange={(v) => repoDefaultsStore.setWorktreeStorage(v as WorktreeStorage)}
-					options={[
-						{ value: "sibling", label: "Sibling directory (__wt)" },
-						{ value: "app-dir", label: "App config directory" },
-						{ value: "inside-repo", label: "Inside repository (.worktrees)" },
-						{ value: "claude-code-default", label: "Claude Code default (.claude/worktrees)" },
-					]}
-					hint="Where to create worktree directories"
-				/>
+				<ExpertSetting configKey="repo_defaults.worktree_storage" value={repoDefaultsStore.state.worktreeStorage}>
+					<SettingSelect
+						label="Storage Strategy"
+						value={repoDefaultsStore.state.worktreeStorage}
+						onChange={(v) => repoDefaultsStore.setWorktreeStorage(v as WorktreeStorage)}
+						options={[
+							{ value: "sibling", label: "Sibling directory (__wt)" },
+							{ value: "app-dir", label: "App config directory" },
+							{ value: "inside-repo", label: "Inside repository (.worktrees)" },
+							{ value: "claude-code-default", label: "Claude Code default (.claude/worktrees)" },
+						]}
+						hint="Where to create worktree directories"
+					/>
+				</ExpertSetting>
 
 				<SettingToggle
 					checked={repoDefaultsStore.state.promptOnCreate}
@@ -711,24 +712,28 @@ export const GitHubTab: Component = () => {
 					label="Delete local branch when removing worktree"
 				/>
 
-				<SettingToggle
-					checked={repoDefaultsStore.state.autoArchiveMerged}
-					onChange={(v) => repoDefaultsStore.setAutoArchiveMerged(v)}
-					label="Auto-archive merged worktrees"
-					hint="Move worktree to archive directory when its PR is merged"
-				/>
+				<ExpertSetting configKey="repo_defaults.auto_archive_merged" value={repoDefaultsStore.state.autoArchiveMerged}>
+					<SettingToggle
+						checked={repoDefaultsStore.state.autoArchiveMerged}
+						onChange={(v) => repoDefaultsStore.setAutoArchiveMerged(v)}
+						label="Auto-archive merged worktrees"
+						hint="Move worktree to archive directory when its PR is merged"
+					/>
+				</ExpertSetting>
 
-				<SettingSelect
-					label="Orphan Worktree Cleanup"
-					value={repoDefaultsStore.state.orphanCleanup}
-					onChange={(v) => repoDefaultsStore.setOrphanCleanup(v as OrphanCleanup)}
-					options={[
-						{ value: "ask", label: "Ask before removing" },
-						{ value: "on", label: "Auto-remove" },
-						{ value: "off", label: "Keep (mark as detached)" },
-					]}
-					hint="Handle worktrees whose branch was deleted"
-				/>
+				<ExpertSetting configKey="repo_defaults.orphan_cleanup" value={repoDefaultsStore.state.orphanCleanup}>
+					<SettingSelect
+						label="Orphan Worktree Cleanup"
+						value={repoDefaultsStore.state.orphanCleanup}
+						onChange={(v) => repoDefaultsStore.setOrphanCleanup(v as OrphanCleanup)}
+						options={[
+							{ value: "ask", label: "Ask before removing" },
+							{ value: "on", label: "Auto-remove" },
+							{ value: "off", label: "Keep (mark as detached)" },
+						]}
+						hint="Handle worktrees whose branch was deleted"
+					/>
+				</ExpertSetting>
 
 				<SettingSelect
 					label="PR Merge Strategy"
@@ -742,31 +747,35 @@ export const GitHubTab: Component = () => {
 					hint="Default merge strategy for worktree branches"
 				/>
 
-				<SettingSelect
-					label="After Merge Behavior"
-					value={repoDefaultsStore.state.afterMerge}
-					onChange={(v) => repoDefaultsStore.setAfterMerge(v as WorktreeAfterMerge)}
-					options={[
-						{ value: "archive", label: "Archive worktree" },
-						{ value: "delete", label: "Delete worktree" },
-						{ value: "ask", label: "Ask each time" },
-					]}
-					hint="What to do with the worktree after merging its branch"
-				/>
+				<ExpertSetting configKey="repo_defaults.after_merge" value={repoDefaultsStore.state.afterMerge}>
+					<SettingSelect
+						label="After Merge Behavior"
+						value={repoDefaultsStore.state.afterMerge}
+						onChange={(v) => repoDefaultsStore.setAfterMerge(v as WorktreeAfterMerge)}
+						options={[
+							{ value: "archive", label: "Archive worktree" },
+							{ value: "delete", label: "Delete worktree" },
+							{ value: "ask", label: "Ask each time" },
+						]}
+						hint="What to do with the worktree after merging its branch"
+					/>
+				</ExpertSetting>
 
-				<SettingSelect
-					label="Auto-Fetch Interval"
-					value={String(repoDefaultsStore.state.autoFetchIntervalMinutes)}
-					onChange={(v) => repoDefaultsStore.setAutoFetchIntervalMinutes(Number(v))}
-					options={[
-						{ value: "0", label: "Disabled" },
-						{ value: "5", label: "5 minutes" },
-						{ value: "15", label: "15 minutes" },
-						{ value: "30", label: "30 minutes" },
-						{ value: "60", label: "60 minutes" },
-					]}
-					hint="Periodically fetch from remote to detect upstream changes"
-				/>
+				<ExpertSetting configKey="repo_defaults.auto_fetch_interval_minutes" value={repoDefaultsStore.state.autoFetchIntervalMinutes}>
+					<SettingSelect
+						label="Auto-Fetch Interval"
+						value={String(repoDefaultsStore.state.autoFetchIntervalMinutes)}
+						onChange={(v) => repoDefaultsStore.setAutoFetchIntervalMinutes(Number(v))}
+						options={[
+							{ value: "0", label: "Disabled" },
+							{ value: "5", label: "5 minutes" },
+							{ value: "15", label: "15 minutes" },
+							{ value: "30", label: "30 minutes" },
+							{ value: "60", label: "60 minutes" },
+						]}
+						hint="Periodically fetch from remote to detect upstream changes"
+					/>
+				</ExpertSetting>
 			</Show>
 
 			{/* Not authenticated / disconnected state */}
