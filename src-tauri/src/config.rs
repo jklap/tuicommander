@@ -763,7 +763,7 @@ pub(crate) struct AppConfig {
     #[serde(default)]
     pub(crate) disabled_mcp_agents: Vec<String>,
     /// Native MCP tool names disabled by the user (excluded from tools/list response)
-    #[serde(default)]
+    #[serde(default = "default_disabled_native_tools")]
     pub(crate) disabled_native_tools: Vec<String>,
     /// Collapse all MCP tools into 3 meta-tools (search_tools, get_tool_schema, call_tool).
     /// Reduces AI context from ~35k to ~500 tokens. Default: false (individual tools exposed).
@@ -886,6 +886,12 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// `config` and `debug` stay off until the user enables them — for a fresh
+/// install and for a config.json written before the field existed.
+fn default_disabled_native_tools() -> Vec<String> {
+    vec!["config".to_string(), "debug".to_string()]
+}
+
 fn default_update_channel() -> String {
     "stable".to_string()
 }
@@ -978,7 +984,7 @@ impl Default for AppConfig {
             update_channel: default_update_channel(),
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
-            disabled_native_tools: vec!["config".to_string(), "debug".to_string()],
+            disabled_native_tools: default_disabled_native_tools(),
             intent_tab_title: true,
             suggest_followups: true,
             progress_tracking: true,
@@ -4272,6 +4278,20 @@ mod tests {
         assert!(!loaded.show_block_timestamps);
         assert!(!loaded.show_scrollbar_marks);
         assert!(!loaded.block_folding_enabled);
+    }
+
+    #[test]
+    fn old_config_without_disabled_native_tools_keeps_config_and_debug_disabled() {
+        // A config.json written before the field existed must not expose the
+        // `config` and `debug` MCP tools that a fresh install keeps disabled.
+        let loaded: AppConfig = serde_json::from_str(
+            r#"{"shell":null,"font_family":"JetBrains Mono","font_size":14,"theme":"tokyo-night","worktree_dir":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            loaded.disabled_native_tools,
+            vec!["config".to_string(), "debug".to_string()]
+        );
     }
 
     #[test]
@@ -7938,15 +7958,6 @@ mod tests {
                 // `assert_no_field_default_drift_except` and
                 // `app_config_serde_default_for_new_fields`.
                 "mcp_server_enabled",
-                // DEFERRED (2026-09-24) — discovered by this test, not yet reviewed for intent: an
-                // upgrading config.json written before this field existed
-                // deserializes it to an empty list (no native tools disabled),
-                // while `AppConfig::default()` disables `config`/`debug` for a
-                // brand-new install. No existing test documents this as
-                // deliberate the way `mcp_server_enabled` is documented.
-                // Changing which native MCP tools an existing install exposes
-                // needs its own decision, so it is not changed here.
-                "disabled_native_tools",
             ],
         );
     }

@@ -54,6 +54,17 @@ describe("repoDefaultsStore", () => {
 			});
 		});
 
+		it("falls back to squash when repo defaults predate pr_merge_strategy", async () => {
+			// Rust `MergeStrategy` defaults to Squash; a payload without the field
+			// must resolve to the same strategy, not a plain merge.
+			mockInvoke.mockResolvedValueOnce({ base_branch: "main" });
+			await store.hydrate();
+
+			testInScope(() => {
+				expect(store.state.prMergeStrategy).toBe("squash");
+			});
+		});
+
 		it("keeps defaults when backend returns null", async () => {
 			mockInvoke.mockResolvedValueOnce(null);
 			await store.hydrate();
@@ -151,7 +162,7 @@ describe("repoDefaultsStore", () => {
 						delete_branch_on_remove: true,
 						auto_archive_merged: false,
 						orphan_cleanup: "ask",
-						pr_merge_strategy: "merge",
+						pr_merge_strategy: "squash",
 						after_merge: "archive",
 						auto_fetch_interval_minutes: 0,
 						auto_delete_on_pr_close: "off",

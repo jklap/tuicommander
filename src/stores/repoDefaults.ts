@@ -48,7 +48,7 @@ const INITIAL_DEFAULTS: RepoDefaults = {
 	deleteBranchOnRemove: true,
 	autoArchiveMerged: false,
 	orphanCleanup: "ask",
-	prMergeStrategy: "merge",
+	prMergeStrategy: "squash",
 	afterMerge: "archive",
 	autoFetchIntervalMinutes: 0,
 	autoDeleteOnPrClose: "off",

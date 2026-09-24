@@ -523,7 +523,7 @@ function createSettingsStore() {
 				setState("progressTracking", config.progress_tracking ?? true);
 				setState("copyOnSelect", config.copy_on_select ?? true);
 				setState("osc52Clipboard", config.osc52_clipboard ?? true);
-				setState("showLastPrompt", config.show_last_prompt ?? false);
+				setState("showLastPrompt", config.show_last_prompt ?? true);
 				setState("bellStyle", (config.bell_style || "visual") as SettingsStoreState["bellStyle"]);
 				setState("suggestFollowups", config.suggest_followups ?? true);
 				setState("globalHotkey", config.global_hotkey ?? null);
