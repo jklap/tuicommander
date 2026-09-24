@@ -970,6 +970,26 @@ also removes the `progress` tool from every agent's tool list; a per-agent off
 answers `progress_tracking_disabled` instead, because the tool index is built
 once and has no session context.
 
+## Native Story Storage (`stories.sqlite3`)
+
+**Module:** `src-tauri/src/stories/` (`model.rs`, `store.rs`, `store/records.rs`,
+`store/transitions.rs`)
+
+Native plans and stories use `<config dir>/stories.sqlite3` on the machine that
+owns the project. The plan row links a project path to a source document; its
+prose remains in that document. Story rows contain criteria, checked state,
+dependencies, priority, origin, declared file scope, status, revision and an
+optional manual session claim. No story database files are written to a
+repository, and there is no import or export path.
+
+Each operation opens a SQLite connection in WAL mode with a five-second busy
+timeout. Mutations use an immediate transaction and an expected story revision.
+Dependency cycles, cross-plan dependencies and concurrent claims are rejected.
+A story becomes ready when all dependencies are done. Plan state is derived from
+its stories rather than stored separately. A manual claim is released when
+its terminal closes; a workflow reservation will have a separate durable
+lifecycle.
+
 ## Additional Commands
 
 | Command | Module | Description |
