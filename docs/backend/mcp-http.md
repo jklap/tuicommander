@@ -651,7 +651,7 @@ say what was measured, not what the list costs today.
 
 | Tool | Actions | Default |
 |------|---------|---------|
-| `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
+| `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list | Enabled |

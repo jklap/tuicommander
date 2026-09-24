@@ -351,6 +351,22 @@ pub fn find_input_box_prompt_row(rows: &[&str]) -> Option<usize> {
     }
 }
 
+/// Cutoff at an agent's *empty* input box, for trimming a screen handed to a
+/// reader rather than a parser.
+///
+/// Anchors only on [`is_agent_prompt_row`], never on a loose prompt: a dialog's
+/// `❯ 1. Yes` carries text, so an open permission or choice dialog — the reason
+/// an orchestrator reads a stuck child's screen — is never cut, and neither is
+/// a draft in the input box. Everything from the input box down is the user's
+/// status line and agent chrome.
+pub fn find_empty_input_box_cutoff(rows: &[&str]) -> Option<usize> {
+    let content_end = rows
+        .iter()
+        .rposition(|r| !r.trim().is_empty())
+        .map_or(0, |i| i + 1);
+    lowest_input_box_row(rows, content_end).map(|anchor| extend_cutoff_upward(rows, anchor))
+}
+
 /// Find the row index where agent chrome starts in a batch of lines that
 /// scrolled off into **history**.
 ///
@@ -443,6 +459,54 @@ mod tests {
     fn cutoff_of(rows: &[String]) -> Option<usize> {
         let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
         find_chrome_cutoff(&refs)
+    }
+
+    fn empty_box_cutoff_of(rows: &[String]) -> Option<usize> {
+        let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
+        find_empty_input_box_cutoff(&refs)
+    }
+
+    /// A reader of the screen gets the agent's output and its spinner, not the
+    /// empty input box or the status line under it, whatever that line's height.
+    #[test]
+    fn empty_input_box_cutoff_drops_the_box_and_everything_below() {
+        for hud_lines in [0, 4, 30] {
+            let rows = screen_with_status_line(hud_lines);
+            let cutoff = empty_box_cutoff_of(&rows).expect("empty input box must anchor");
+            assert_eq!(
+                rows[..cutoff].last().map(String::as_str),
+                Some("✻ Simmering… (5m 48s · ↓ 20.7k tokens)"),
+                "hud_lines={hud_lines}"
+            );
+        }
+    }
+
+    /// An open dialog is what an orchestrator reads a stuck child's screen for.
+    /// `❯ 1. Yes` carries text, so it is not an input box and nothing is cut.
+    #[test]
+    fn empty_input_box_cutoff_never_cuts_an_open_dialog() {
+        let mut rows = vec![
+            "  Some output.".to_string(),
+            "─".repeat(120),
+            " Bash command".to_string(),
+            "   rm -rf target".to_string(),
+            " Do you want to proceed?".to_string(),
+            " ❯ 1. Yes".to_string(),
+            "   2. No".to_string(),
+            " Esc to cancel · Tab to amend".to_string(),
+        ];
+        rows.push("  [Opus 5 (1M) | Team] ██░░ 22%".to_string());
+        assert_eq!(empty_box_cutoff_of(&rows), None);
+    }
+
+    /// A draft in the input box is state the reader may need; with no empty
+    /// prompt there is no anchor and the screen is returned whole.
+    #[test]
+    fn empty_input_box_cutoff_keeps_a_draft() {
+        let mut rows = screen_with_status_line(4);
+        let prompt = rows.iter().position(|r| r == "❯ ").unwrap();
+        rows[prompt] = "❯ fix the rename test".to_string();
+        assert_eq!(empty_box_cutoff_of(&rows), None);
     }
 
     /// A status line taller than the scan window used to leave the cutoff
