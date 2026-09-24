@@ -64,6 +64,31 @@ function tuicExtract() {
   const computed = doc.defaultView?.getComputedStyle(el);
   const styleNames = ["color", "backgroundColor", "fontFamily", "fontSize", "fontWeight", "display", "position", "margin", "padding", "border", "width", "height"];
   const styles = Object.fromEntries(styleNames.map((name) => [name, computed?.[name] ?? ""]));
+  // Design tokens: the custom properties this element's own rules reference,
+  // resolved on the element. A theme declares hundreds; only these matter here.
+  const tokens = {};
+  const referenced = (style) => {
+    for (let index = 0; index < style.length; index += 1) {
+      for (const [, name] of style.getPropertyValue(style[index]).matchAll(/var\(\s*(--[\w-]+)/g)) {
+        if (Object.keys(tokens).length >= 32) return;
+        const resolved = computed?.getPropertyValue(name).trim() ?? "";
+        if (resolved && !(name in tokens)) tokens[name] = resolved.slice(0, 128);
+      }
+    }
+  };
+  const visit = (rules) => {
+    for (const rule of rules) {
+      if (rule.cssRules) visit(rule.cssRules);
+      if (!rule.style || !rule.selectorText) continue;
+      try { if (el.matches(rule.selectorText)) referenced(rule.style); }
+      catch { /* selector the element cannot be tested against, e.g. a pseudo-element */ }
+    }
+  };
+  for (const sheet of doc.styleSheets) {
+    try { visit(sheet.cssRules); }
+    catch { /* cross-origin sheet */ }
+  }
+  if (el.style) referenced(el.style);
   const box = el.getBoundingClientRect();
   if (fiber?._debugStack?.stack) source.reactStack = fiber._debugStack.stack;
   if (fiber?._debugSource) source.reactSource = fiber._debugSource;
@@ -80,6 +105,7 @@ function tuicExtract() {
     htmlSnippet: el.outerHTML.slice(0, 2048),
     textContent: (el.textContent ?? "").slice(0, 2048),
     styles,
+    tokens,
     rect: { x: box.x, y: box.y, width: box.width, height: box.height },
     source,
   };
