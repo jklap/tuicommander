@@ -1,5 +1,5 @@
 import { createStore, produce } from "solid-js/store";
-import { AGENTS, type AgentRunConfig, type AgentsConfig, type AgentType } from "../agents";
+import { AGENTS, type AgentRunConfig, type AgentsConfig, type AgentType, type HeadlessAgentChoice } from "../agents";
 import { invoke } from "../invoke";
 import { rpc } from "../transport";
 import { getRepoConnection } from "../transportRuntime";
@@ -45,7 +45,7 @@ interface AgentConfigsState {
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
-	headless_agent: AgentType | null;
+	headless_agent: HeadlessAgentChoice | null;
 	loaded: boolean;
 }
 
@@ -212,12 +212,12 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		},
 
 		/** Get the globally configured headless agent */
-		getHeadlessAgent(): AgentType | null {
+		getHeadlessAgent(): HeadlessAgentChoice | null {
 			return state.headless_agent;
 		},
 
 		/** Set the globally configured headless agent */
-		async setHeadlessAgent(type: AgentType | null): Promise<void> {
+		async setHeadlessAgent(type: HeadlessAgentChoice | null): Promise<void> {
 			setState("headless_agent", type);
 			try {
 				await saveToDisk();
@@ -337,6 +337,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 		 * Mirror the hook_instrumentation flag in memory after the
 		 * `set_agent_hook_instrumentation` command has persisted it (and installed/
 		 * removed the hooks). Does NOT save to disk — the command owns persistence.
+		 * Off is the default and the command stores it as absent, so it is
+		 * mirrored as absent: a later whole-file save must not write it back.
 		 */
 		syncHookInstrumentation(type: AgentType, value: boolean): void {
 			setState(
@@ -344,7 +346,8 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 					if (!s.agents[type]) {
 						s.agents[type] = { run_configs: [] };
 					}
-					s.agents[type].hook_instrumentation = value;
+					if (value) s.agents[type].hook_instrumentation = true;
+					else delete s.agents[type].hook_instrumentation;
 				}),
 			);
 		},
@@ -354,11 +357,14 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 			return state.agents[type]?.native_status_signals ?? true;
 		},
 
+		/** Mirror of `set_agent_native_status_signals`: on is the default and is
+		 * stored as absent, so a later whole-file save does not write it back. */
 		syncNativeStatusSignals(type: AgentType, value: boolean): void {
 			setState(
 				produce((s) => {
 					if (!s.agents[type]) s.agents[type] = { run_configs: [] };
-					s.agents[type].native_status_signals = value;
+					if (value) delete s.agents[type].native_status_signals;
+					else s.agents[type].native_status_signals = false;
 				}),
 			);
 		},

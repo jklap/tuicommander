@@ -8,6 +8,10 @@
 
 # To Test
 
+## Agent hook toggles store the default as absent (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, in Settings → Agents, turn Claude's "Native status signals" off and on again, and Gemini's "Install hooks globally" on and off again. `agents.json` then has no `native_status_signals` / `hook_instrumentation` key for them. After a Settings reopen in basic mode, both rows are hidden. Signals and hooks still behave as enabled/disabled respectively. (Existing `agents.json` files that already hold `true`/`false` keep them until the toggle is used again.)
+
 ## Old config.json keeps `config`/`debug` MCP tools disabled (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, with a `config.json` that has no `disabled_native_tools` key (use `TUIC_APP_INSTANCE=<id>` and remove the key from that instance's config), the `config` and `debug` MCP tools are absent from `tools/list` and show as disabled in Settings.

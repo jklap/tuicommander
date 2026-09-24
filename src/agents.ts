@@ -384,7 +384,21 @@ export type AgentHookState = "installed" | "outdated" | "notInstalled" | "unsupp
 export interface AgentsConfig {
 	agents: Record<string, AgentSettingsConfig>;
 	/** Which agent CLI to use for headless prompt execution when no agent is in the active terminal */
-	headless_agent?: AgentType;
+	headless_agent?: HeadlessAgentChoice;
+}
+
+/** A headless agent: a plain agent type, or `<agent>:<run config name>`
+ * (parsed by `useSmartPrompts.executeHeadless`). Rust stores it as a string. */
+export type HeadlessAgentChoice = AgentType | `${AgentType}:${string}`;
+
+/** The picker value as a headless agent choice, or null for "not configured"
+ * and for anything that does not name a known agent. */
+export function toHeadlessAgentChoice(value: string): HeadlessAgentChoice | null {
+	const sep = value.indexOf(":");
+	const agent = sep < 0 ? value : value.slice(0, sep);
+	if (!AGENT_TYPES.includes(agent as AgentType)) return null;
+	if (sep >= 0 && sep === value.length - 1) return null;
+	return value as HeadlessAgentChoice;
 }
 
 /** Which agents support MCP configuration */
