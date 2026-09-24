@@ -269,7 +269,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Click: switch to branch (shows its terminals, creates worktree if needed)
 - Double-click branch name: rename branch
 - Right-click context menu: Copy Path, Add Terminal, Create Worktree, Merge & Archive, Delete Worktree, Open in IDE, Rename Branch
-- `+` button: click opens a terminal in that branch; right-click or long press (500 ms) lists the enabled agents and opens a tab running the chosen one (shell rows have no agents, so right-click opens the row menu)
+- `+` button: click opens a terminal in that branch; long press (500 ms) lists the enabled agents and opens a tab running the chosen one; right-click opens the row menu (shell rows have no agents, so a long press does nothing)
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
 - PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
 - Diff stats: `+N / -N` additions/deletions. Clicking the stats chip or the `N dirty` chip selects that workspace and opens the Git panel on the Changes tab (it stays open if already there)
