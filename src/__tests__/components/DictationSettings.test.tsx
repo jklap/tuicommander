@@ -1,5 +1,5 @@
-import { fireEvent, render } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 
 const mockStore = vi.hoisted(() => ({
@@ -92,12 +92,25 @@ const mockStore = vi.hoisted(() => ({
 	getDefaultHandsFreeStartNotice: vi.fn(() => Promise.resolve("")),
 }));
 
+vi.mock("../../stores/ui", async () => {
+	const { createStore } = await import("solid-js/store");
+	const [state, setState] = createStore({ settingsExpertMode: false });
+	return {
+		uiStore: {
+			state,
+			setSettingsExpertMode: (enabled: boolean) => setState("settingsExpertMode", enabled),
+		},
+	};
+});
+
 vi.mock("../../stores/dictation", () => ({
 	dictationStore: mockStore,
 	WHISPER_LANGUAGES: { auto: "Auto-detect", en: "English", it: "Italian", ja: "Japanese" },
 }));
 
 import { DictationSettings } from "../../components/SettingsPanel/DictationSettings";
+import { settingsExpertStore } from "../../stores/settingsExpert";
+import { uiStore } from "../../stores/ui";
 
 describe("DictationSettings – Model Selector", () => {
 	beforeEach(() => {
@@ -657,6 +670,85 @@ describe("DictationSettings – layout", () => {
 			await Promise.resolve();
 			await Promise.resolve();
 			expect(noticeField(container)?.placeholder).toBe("");
+		});
+	});
+});
+
+describe("DictationSettings – expert controls", () => {
+	// The serialized `DictationConfig::default()` values these controls compare against.
+	const DEFAULTS = {
+		app: {},
+		notifications: {},
+		agent_settings: {},
+		dictation: {
+			long_press_ms: 400,
+			device: null,
+			rms_threshold: 0.001,
+			no_speech_threshold: 0.6,
+			hands_free_hold_back_ms: 1500,
+			hands_free_notify_model: true,
+			hands_free_start_notice: "",
+		},
+	};
+
+	type State = typeof mockStore.state;
+	/** label → the store field that holds its value and a non-default value for it */
+	const EXPERT: Array<[string, keyof State, unknown]> = [
+		["Long-press threshold", "longPressMs", 600],
+		["Input device", "selectedDevice", "USB Mic"],
+		["Level gate", "rmsThreshold", 0.01],
+		["Speech confidence gate", "noSpeechThreshold", 0.8],
+		["Hold-back before sending", "handsFreeHoldBackMs", 0],
+		["Notify model when hands-free changes", "notifyModelOnHandsFree", false],
+		["Start notice", "handsFreeStartNotice", "Speak Italian."],
+	];
+	const BASIC = [
+		"Enable Dictation",
+		"Hotkey",
+		"Auto-send",
+		"Whisper Model",
+		"Language",
+		"Activation phrase",
+		"Earcons",
+	];
+
+	const hasLabel = (container: HTMLElement, text: string) =>
+		[...container.querySelectorAll("label")].some((el) => el.textContent === text);
+	let saved: State;
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		saved = { ...mockStore.state };
+		uiStore.setSettingsExpertMode(false);
+		mockInvoke.mockImplementation((cmd: string) =>
+			Promise.resolve(cmd === "get_config_defaults" ? DEFAULTS : "not_determined"),
+		);
+		await settingsExpertStore.open();
+	});
+
+	afterEach(() => {
+		Object.assign(mockStore.state, saved);
+		settingsExpertStore._resetForTests();
+		uiStore.setSettingsExpertMode(false);
+	});
+
+	it("hides every expert control at its default in basic mode and keeps the basic ones", () => {
+		const { container } = render(() => <DictationSettings />);
+		for (const [label] of EXPERT) expect(hasLabel(container, label), label).toBe(false);
+		for (const label of BASIC) expect(hasLabel(container, label), label).toBe(true);
+	});
+
+	it.each(EXPERT)("shows %s in basic mode once it differs from the default", (label, field, modified) => {
+		(mockStore.state as Record<string, unknown>)[field] = modified;
+		const { container } = render(() => <DictationSettings />);
+		expect(hasLabel(container, label)).toBe(true);
+	});
+
+	it("shows every expert control at its default in expert mode", async () => {
+		uiStore.setSettingsExpertMode(true);
+		const { container } = render(() => <DictationSettings />);
+		await waitFor(() => {
+			for (const [label] of EXPERT) expect(hasLabel(container, label), label).toBe(true);
 		});
 	});
 });

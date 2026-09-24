@@ -4,6 +4,7 @@ import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
+import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
 import { type AppConfig, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 
@@ -152,68 +153,75 @@ export const LocalMcpPanel: Component = () => {
 				</Show>
 			</div>
 
-			<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
-				<div class={s.toggle} style={{ "margin-right": "4px" }}>
-					<input
-						type="checkbox"
-						checked={collapseTools()}
-						onChange={(e) => {
-							const enabled = e.currentTarget.checked;
-							setCollapseTools(enabled);
-							saveConfigField((c) => {
-								c.collapse_tools = enabled;
-							});
-						}}
-					/>
-				</div>
-				<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-					<span style={{ "font-weight": 500, "font-size": "13px" }}>
-						Collapse tools — Speakeasy MCP (reduces AI context ~98%)
-					</span>
-					<span class={s.infoBadge}>
-						?
-						<span class={s.infoBadgeTip}>
-							When enabled, MCP clients only see three meta-tools (search_tools, get_tool_schema, call_tool) and
-							discover the full tool set on demand. Drastically reduces token usage for clients that don't need every
-							tool upfront.
+			<ExpertSetting configKey="app.collapse_tools" value={collapseTools()}>
+				<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
+					<div class={s.toggle} style={{ "margin-right": "4px" }}>
+						<input
+							type="checkbox"
+							checked={collapseTools()}
+							onChange={(e) => {
+								const enabled = e.currentTarget.checked;
+								setCollapseTools(enabled);
+								saveConfigField((c) => {
+									c.collapse_tools = enabled;
+								});
+							}}
+						/>
+					</div>
+					<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+						<span style={{ "font-weight": 500, "font-size": "13px" }}>
+							Collapse tools — Speakeasy MCP (reduces AI context ~98%)
 						</span>
-					</span>
+						<span class={s.infoBadge}>
+							?
+							<span class={s.infoBadgeTip}>
+								When enabled, MCP clients only see three meta-tools (search_tools, get_tool_schema, call_tool) and
+								discover the full tool set on demand. Drastically reduces token usage for clients that don't need every
+								tool upfront.
+							</span>
+						</span>
+					</div>
 				</div>
-			</div>
-			<For each={NATIVE_TOOLS}>
-				{(tool) => {
-					const disabled = () => disabledNativeTools().includes(tool.name);
-					return (
-						<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
-							<div class={s.toggle} style={{ "margin-right": "4px" }}>
-								<input
-									type="checkbox"
-									checked={!disabled()}
-									onChange={(e) => {
-										const enabled = e.currentTarget.checked;
-										const updated = enabled
-											? disabledNativeTools().filter((n) => n !== tool.name)
-											: [...disabledNativeTools(), tool.name];
-										setDisabledNativeTools(updated);
-										saveConfigField((c) => {
-											c.disabled_native_tools = updated;
-										});
-									}}
-								/>
+			</ExpertSetting>
+			{/* One control: the whole toggle group edits the single `disabled_native_tools` list. */}
+			<ExpertSetting configKey="app.disabled_native_tools" value={disabledNativeTools()}>
+				<For each={NATIVE_TOOLS}>
+					{(tool) => {
+						const disabled = () => disabledNativeTools().includes(tool.name);
+						return (
+							<div class={s.group} style={{ display: "flex", "align-items": "center", gap: "8px", padding: "4px 0" }}>
+								<div class={s.toggle} style={{ "margin-right": "4px" }}>
+									<input
+										type="checkbox"
+										checked={!disabled()}
+										onChange={(e) => {
+											const enabled = e.currentTarget.checked;
+											const updated = enabled
+												? disabledNativeTools().filter((n) => n !== tool.name)
+												: [...disabledNativeTools(), tool.name];
+											setDisabledNativeTools(updated);
+											saveConfigField((c) => {
+												c.disabled_native_tools = updated;
+											});
+										}}
+									/>
+								</div>
+								<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+									<span style={{ "font-weight": 500, "font-size": "13px", "font-family": "monospace" }}>
+										{tool.name}
+									</span>
+									<span class={s.hint} style={{ margin: 0 }}>
+										{tool.description}
+									</span>
+									<span class={s.infoBadge}>
+										?<span class={s.infoBadgeTip}>{tool.actions}</span>
+									</span>
+								</div>
 							</div>
-							<div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-								<span style={{ "font-weight": 500, "font-size": "13px", "font-family": "monospace" }}>{tool.name}</span>
-								<span class={s.hint} style={{ margin: 0 }}>
-									{tool.description}
-								</span>
-								<span class={s.infoBadge}>
-									?<span class={s.infoBadgeTip}>{tool.actions}</span>
-								</span>
-							</div>
-						</div>
-					);
-				}}
-			</For>
+						);
+					}}
+				</For>
+			</ExpertSetting>
 
 			<p class={s.hint} style={{ "margin-top": "16px", color: "var(--text-dimmed)" }}>
 				{t("services.hint.autoSave", "Settings are saved automatically when changed")}

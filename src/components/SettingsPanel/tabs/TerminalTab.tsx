@@ -3,6 +3,7 @@ import { t } from "../../../i18n";
 import type { FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { getTerminalTheme, getThemeNames } from "../../../themes";
+import { ExpertSetting } from "../ExpertSetting";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -325,15 +326,20 @@ export const TerminalTab: Component = () => {
 						hint={t("appearance.hint.defaultFontSize", "Default font size for new terminals")}
 					/>
 
-					<SettingSlider
-						label={t("appearance.label.fontWeight", "Font Weight")}
-						value={settingsStore.state.fontWeight}
-						onChange={(v) => settingsStore.setFontWeight(v)}
-						min={100}
-						max={900}
-						step={100}
-						hint={t("appearance.hint.fontWeight", "Terminal font weight (200 = ExtraLight, 400 = Regular, 700 = Bold)")}
-					/>
+					<ExpertSetting configKey="app.font_weight" value={settingsStore.state.fontWeight}>
+						<SettingSlider
+							label={t("appearance.label.fontWeight", "Font Weight")}
+							value={settingsStore.state.fontWeight}
+							onChange={(v) => settingsStore.setFontWeight(v)}
+							min={100}
+							max={900}
+							step={100}
+							hint={t(
+								"appearance.hint.fontWeight",
+								"Terminal font weight (200 = ExtraLight, 400 = Regular, 700 = Bold)",
+							)}
+						/>
+					</ExpertSetting>
 
 					<SettingSelect
 						label={t("appearance.label.cursorStyle", "Cursor Style")}
@@ -361,15 +367,17 @@ export const TerminalTab: Component = () => {
 				hint={t("general.hint.copyOnSelect", "Automatically copy selected text to clipboard")}
 			/>
 
-			<SettingToggle
-				checked={settingsStore.state.osc52Clipboard}
-				onChange={(v) => settingsStore.setOsc52Clipboard(v)}
-				label={t("general.toggle.osc52Clipboard", "Allow OSC 52 clipboard writes")}
-				hint={t(
-					"general.hint.osc52Clipboard",
-					"Let terminal programs set the system clipboard (OSC 52). A notice appears on each write. Disable to ignore clipboard writes from terminal output.",
-				)}
-			/>
+			<ExpertSetting configKey="app.osc52_clipboard" value={settingsStore.state.osc52Clipboard}>
+				<SettingToggle
+					checked={settingsStore.state.osc52Clipboard}
+					onChange={(v) => settingsStore.setOsc52Clipboard(v)}
+					label={t("general.toggle.osc52Clipboard", "Allow OSC 52 clipboard writes")}
+					hint={t(
+						"general.hint.osc52Clipboard",
+						"Let terminal programs set the system clipboard (OSC 52). A notice appears on each write. Disable to ignore clipboard writes from terminal output.",
+					)}
+				/>
+			</ExpertSetting>
 
 			<SettingToggle
 				checked={settingsStore.state.showBlockTimestamps}
@@ -381,35 +389,41 @@ export const TerminalTab: Component = () => {
 				)}
 			/>
 
-			<SettingToggle
-				checked={settingsStore.state.blockFoldingEnabled}
-				onChange={(v) => settingsStore.setBlockFoldingEnabled(v)}
-				label={t("general.toggle.blockFolding", "Block folding")}
-				hint={t(
-					"general.hint.blockFolding",
-					"Let the Toggle Block Fold shortcut collapse a command block's output. Already-folded blocks stay collapsed when this is off.",
-				)}
-			/>
+			<ExpertSetting configKey="app.block_folding_enabled" value={settingsStore.state.blockFoldingEnabled}>
+				<SettingToggle
+					checked={settingsStore.state.blockFoldingEnabled}
+					onChange={(v) => settingsStore.setBlockFoldingEnabled(v)}
+					label={t("general.toggle.blockFolding", "Block folding")}
+					hint={t(
+						"general.hint.blockFolding",
+						"Let the Toggle Block Fold shortcut collapse a command block's output. Already-folded blocks stay collapsed when this is off.",
+					)}
+				/>
+			</ExpertSetting>
 
-			<SettingToggle
-				checked={settingsStore.state.showScrollbarMarks}
-				onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
-				label={t("general.toggle.showScrollbarMarks", "Show scrollbar marks")}
-				hint={t(
-					"general.hint.showScrollbarMarks",
-					"Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began",
-				)}
-			/>
+			<ExpertSetting configKey="app.show_scrollbar_marks" value={settingsStore.state.showScrollbarMarks}>
+				<SettingToggle
+					checked={settingsStore.state.showScrollbarMarks}
+					onChange={(v) => settingsStore.setShowScrollbarMarks(v)}
+					label={t("general.toggle.showScrollbarMarks", "Show scrollbar marks")}
+					hint={t(
+						"general.hint.showScrollbarMarks",
+						"Mark each command's position on the terminal scrollbar, so a long scrollback shows where output began",
+					)}
+				/>
+			</ExpertSetting>
 
-			<SettingToggle
-				checked={settingsStore.state.scrollbackReflow}
-				onChange={(v) => settingsStore.setScrollbackReflow(v)}
-				label={t("general.toggle.scrollbackReflow", "Reflow scrollback on resize")}
-				hint={t(
-					"general.hint.scrollbackReflow",
-					"Re-wrap scrollback history when the terminal changes width, so old output stays readable after a side panel opens. Turn it off to leave history lines as they were written and truncate them instead. The visible screen is never reflowed either way.",
-				)}
-			/>
+			<ExpertSetting configKey="app.scrollback_reflow" value={settingsStore.state.scrollbackReflow}>
+				<SettingToggle
+					checked={settingsStore.state.scrollbackReflow}
+					onChange={(v) => settingsStore.setScrollbackReflow(v)}
+					label={t("general.toggle.scrollbackReflow", "Reflow scrollback on resize")}
+					hint={t(
+						"general.hint.scrollbackReflow",
+						"Re-wrap scrollback history when the terminal changes width, so old output stays readable after a side panel opens. Turn it off to leave history lines as they were written and truncate them instead. The visible screen is never reflowed either way.",
+					)}
+				/>
+			</ExpertSetting>
 		</div>
 	);
 };

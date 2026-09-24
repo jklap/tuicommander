@@ -5,6 +5,7 @@ import { appLogger } from "../../../../stores/appLogger";
 import { rpc } from "../../../../transport";
 import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
+import { ExpertSetting } from "../../ExpertSetting";
 import { SettingInput, SettingSelect, SettingToggle } from "../../SettingFields";
 import s from "../../Settings.module.css";
 import type { AppConfig } from "./servicesShared";
@@ -218,23 +219,25 @@ export const RemoteAccessPanel: Component = () => {
 			<Show when={raEnabled()}>
 				<div class={s.raBody}>
 					<div class={s.raFields}>
-						<div class={s.group}>
-							<label>{t("services.label.port", "Port")}</label>
-							<input
-								type="number"
-								class={s.input}
-								value={raPort()}
-								min={1024}
-								max={65535}
-								onInput={(e) => setRaPort(parseInt(e.currentTarget.value, 10) || 9876)}
-								onChange={() =>
-									saveConfigField((c) => {
-										c.services.server.port = raPort();
-									})
-								}
-							/>
-							<p class={s.hint}>{t("services.hint.port", "TCP port for the remote access web server")}</p>
-						</div>
+						<ExpertSetting configKey="app.services.server.port" value={raPort()}>
+							<div class={s.group}>
+								<label>{t("services.label.port", "Port")}</label>
+								<input
+									type="number"
+									class={s.input}
+									value={raPort()}
+									min={1024}
+									max={65535}
+									onInput={(e) => setRaPort(parseInt(e.currentTarget.value, 10) || 9876)}
+									onChange={() =>
+										saveConfigField((c) => {
+											c.services.server.port = raPort();
+										})
+									}
+								/>
+								<p class={s.hint}>{t("services.hint.port", "TCP port for the remote access web server")}</p>
+							</div>
+						</ExpertSetting>
 
 						{/* Username + Password side by side */}
 						<div class={s.credentialsRow}>
@@ -330,22 +333,24 @@ export const RemoteAccessPanel: Component = () => {
 							</div>
 						</Show>
 
-						<SettingSelect
-							label={t("services.label.tokenDuration", "Session Token Duration")}
-							value={String(tokenDuration())}
-							onChange={(v) => {
-								const val = parseInt(v, 10);
-								setTokenDuration(val);
-								saveConfigField((c) => {
-									c.services.auth.session_token_duration_secs = val;
-								});
-							}}
-							options={TOKEN_DURATIONS.map((o) => ({ value: String(o.value), label: o.label }))}
-							hint={t(
-								"services.hint.tokenDuration",
-								"How long remote sessions stay authenticated. Token always resets on app restart.",
-							)}
-						/>
+						<ExpertSetting configKey="app.services.auth.session_token_duration_secs" value={tokenDuration()}>
+							<SettingSelect
+								label={t("services.label.tokenDuration", "Session Token Duration")}
+								value={String(tokenDuration())}
+								onChange={(v) => {
+									const val = parseInt(v, 10);
+									setTokenDuration(val);
+									saveConfigField((c) => {
+										c.services.auth.session_token_duration_secs = val;
+									});
+								}}
+								options={TOKEN_DURATIONS.map((o) => ({ value: String(o.value), label: o.label }))}
+								hint={t(
+									"services.hint.tokenDuration",
+									"How long remote sessions stay authenticated. Token always resets on app restart.",
+								)}
+							/>
+						</ExpertSetting>
 
 						<div class={s.group}>
 							<button class={s.testBtn} disabled={regenerating()} onClick={regenerateToken}>
@@ -395,43 +400,47 @@ export const RemoteAccessPanel: Component = () => {
 					</Show>
 				</div>
 
-				<SettingToggle
-					checked={ipv6Enabled()}
-					onChange={(val) => {
-						setIpv6Enabled(val);
-						saveConfigField((c) => {
-							c.services.server.ipv6_enabled = val;
-						});
-					}}
-					label={t("services.toggle.enableIpv6", "Enable IPv6 (dual-stack)")}
-					hint={t(
-						"services.hint.ipv6Description",
-						"Binds the server to both IPv4 and IPv6 addresses. Requires save + server restart.",
-					)}
-				/>
+				<ExpertSetting configKey="app.services.server.ipv6_enabled" value={ipv6Enabled()}>
+					<SettingToggle
+						checked={ipv6Enabled()}
+						onChange={(val) => {
+							setIpv6Enabled(val);
+							saveConfigField((c) => {
+								c.services.server.ipv6_enabled = val;
+							});
+						}}
+						label={t("services.toggle.enableIpv6", "Enable IPv6 (dual-stack)")}
+						hint={t(
+							"services.hint.ipv6Description",
+							"Binds the server to both IPv4 and IPv6 addresses. Requires save + server restart.",
+						)}
+					/>
+				</ExpertSetting>
 
-				<SettingToggle
-					checked={lanAuthBypass()}
-					onChange={(val) => {
-						setLanAuthBypass(val);
-						saveConfigField((c) => {
-							c.services.auth.lan_auth_bypass = val;
-						});
-					}}
-					label={t("services.toggle.lanAuthBypass", "Allow LAN access without authentication")}
-					hint={
-						lanAuthBypass()
-							? t(
-									"services.hint.lanAuthBypassWarning",
-									"Devices on your local network can access without a password. Only use on trusted networks.",
-								)
-							: t(
-									"services.hint.lanAuthBypassDescription",
-									"Skips authentication for private/LAN IP addresses (RFC1918, Tailscale, IPv6 ULA)",
-								)
-					}
-					hintStyle={lanAuthBypass() ? { color: "var(--warning, #e5c07b)" } : undefined}
-				/>
+				<ExpertSetting configKey="app.services.auth.lan_auth_bypass" value={lanAuthBypass()}>
+					<SettingToggle
+						checked={lanAuthBypass()}
+						onChange={(val) => {
+							setLanAuthBypass(val);
+							saveConfigField((c) => {
+								c.services.auth.lan_auth_bypass = val;
+							});
+						}}
+						label={t("services.toggle.lanAuthBypass", "Allow LAN access without authentication")}
+						hint={
+							lanAuthBypass()
+								? t(
+										"services.hint.lanAuthBypassWarning",
+										"Devices on your local network can access without a password. Only use on trusted networks.",
+									)
+								: t(
+										"services.hint.lanAuthBypassDescription",
+										"Skips authentication for private/LAN IP addresses (RFC1918, Tailscale, IPv6 ULA)",
+									)
+						}
+						hintStyle={lanAuthBypass() ? { color: "var(--warning, #e5c07b)" } : undefined}
+					/>
+				</ExpertSetting>
 			</Show>
 
 			{/* ── Tailscale TLS ── */}
@@ -510,6 +519,38 @@ export const RemoteAccessPanel: Component = () => {
 				)}
 			/>
 
+			{/* URL and token render with the relay off: it starts only once enabled
+			    AND both are set (relay_client.rs), so they are configured first. */}
+			<SettingInput
+				label={t("services.label.relayUrl", "Relay Server URL")}
+				value={relayUrl()}
+				onInput={(v) => {
+					setRelayUrl(v);
+					saveConfigField((c) => {
+						c.services.relay.url = v;
+					});
+				}}
+				placeholder="wss://relay.tuicommander.com"
+			/>
+
+			<SettingInput
+				label={t("services.label.relayToken", "Bearer Token")}
+				value={relayToken()}
+				onInput={(v) => {
+					setRelayToken(v);
+					saveConfigField((c) => {
+						c.services.relay.token = v;
+						c.services.relay.token_exists = v.length > 0;
+					});
+				}}
+				type="password"
+				placeholder={t("services.placeholder.relayToken", "Paste token from relay server registration")}
+				hint={t(
+					"services.hint.relayToken",
+					"Obtained from the relay server's /register endpoint. Used for both authentication and encryption key derivation — because the relay receives this token, it can derive the key, so traffic is not end-to-end encrypted.",
+				)}
+			/>
+
 			<Show when={relayEnabled()}>
 				<div class={s.group}>
 					<div class={s.mcpStatusRow}>
@@ -524,36 +565,6 @@ export const RemoteAccessPanel: Component = () => {
 						{t("services.hint.relayRestart", "Changes require an app restart to take effect.")}
 					</p>
 				</div>
-
-				<SettingInput
-					label={t("services.label.relayUrl", "Relay Server URL")}
-					value={relayUrl()}
-					onInput={(v) => {
-						setRelayUrl(v);
-						saveConfigField((c) => {
-							c.services.relay.url = v;
-						});
-					}}
-					placeholder="wss://relay.tuicommander.com"
-				/>
-
-				<SettingInput
-					label={t("services.label.relayToken", "Bearer Token")}
-					value={relayToken()}
-					onInput={(v) => {
-						setRelayToken(v);
-						saveConfigField((c) => {
-							c.services.relay.token = v;
-							c.services.relay.token_exists = v.length > 0;
-						});
-					}}
-					type="password"
-					placeholder={t("services.placeholder.relayToken", "Paste token from relay server registration")}
-					hint={t(
-						"services.hint.relayToken",
-						"Obtained from the relay server's /register endpoint. Used for both authentication and encryption key derivation — because the relay receives this token, it can derive the key, so traffic is not end-to-end encrypted.",
-					)}
-				/>
 
 				<div class={s.group}>
 					<label>{t("services.label.relaySessionId", "Session ID")}</label>

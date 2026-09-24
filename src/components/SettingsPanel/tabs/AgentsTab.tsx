@@ -30,6 +30,7 @@ import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
 import { AgentIcon } from "../../ui/AgentIcon";
+import { ExpertSetting } from "../ExpertSetting";
 import { MachineSelector } from "../MachineSelector";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -799,19 +800,24 @@ const AgentRow: Component<{
 					</div>
 
 					{/* Auto-retry on server errors */}
-					<div class={a.expandedSection}>
-						<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
-							<input
-								type="checkbox"
-								checked={configStore.isAutoRetryEnabled(props.agentType)}
-								onChange={() =>
-									configStore.setAutoRetry(props.agentType, !configStore.isAutoRetryEnabled(props.agentType))
-								}
-							/>
-							<span>Auto-retry on server errors</span>
-						</label>
-						<p class={s.hint}>Inject "continue" on 5xx errors with backoff (5s, 15s, 30s)</p>
-					</div>
+					<ExpertSetting
+						configKey="agent_settings.auto_retry_on_error"
+						value={configStore.isAutoRetryEnabled(props.agentType)}
+					>
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<input
+									type="checkbox"
+									checked={configStore.isAutoRetryEnabled(props.agentType)}
+									onChange={() =>
+										configStore.setAutoRetry(props.agentType, !configStore.isAutoRetryEnabled(props.agentType))
+									}
+								/>
+								<span>Auto-retry on server errors</span>
+							</label>
+							<p class={s.hint}>Inject "continue" on 5xx errors with backoff (5s, 15s, 30s)</p>
+						</div>
+					</ExpertSetting>
 
 					<Show when={supportsLaunchSignals()}>
 						<div class={a.expandedSection}>
@@ -909,20 +915,26 @@ const AgentRow: Component<{
 						</div>
 					</Show>
 
-					{/* Headless Command Template */}
-					<div class={a.expandedSection}>
-						<div class={a.expandedLabel}>Headless Command Template</div>
-						<input
-							class={`${a.formInput} ${a.mono}`}
-							placeholder={`${AGENTS[props.agentType].binary} -p "{prompt}" --no-input`}
-							value={configStore.getHeadlessTemplate(props.agentType) ?? ""}
-							onInput={(e) => configStore.setHeadlessTemplate(props.agentType, e.currentTarget.value)}
-							onClick={(e) => e.stopPropagation()}
-						/>
-						<p class={s.hint}>
-							Command template for one-shot execution. Use {"{prompt}"} as placeholder for the prompt text.
-						</p>
-					</div>
+					{/* Headless Command Template — compared by the stored override, not
+					    the built-in template the input falls back to. */}
+					<ExpertSetting
+						configKey="agent_settings.headless_template"
+						value={configStore.state.agents[props.agentType]?.headless_template ?? null}
+					>
+						<div class={a.expandedSection}>
+							<div class={a.expandedLabel}>Headless Command Template</div>
+							<input
+								class={`${a.formInput} ${a.mono}`}
+								placeholder={`${AGENTS[props.agentType].binary} -p "{prompt}" --no-input`}
+								value={configStore.getHeadlessTemplate(props.agentType) ?? ""}
+								onInput={(e) => configStore.setHeadlessTemplate(props.agentType, e.currentTarget.value)}
+								onClick={(e) => e.stopPropagation()}
+							/>
+							<p class={s.hint}>
+								Command template for one-shot execution. Use {"{prompt}"} as placeholder for the prompt text.
+							</p>
+						</div>
+					</ExpertSetting>
 
 					{/* Run Configurations */}
 					<div class={a.expandedSection}>
@@ -1162,12 +1174,14 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 						hint="Display actionable suggestions from agents after completing a task"
 					/>
 
-					<SettingToggle
-						checked={settingsStore.state.progressTracking}
-						onChange={(v) => settingsStore.setProgressTracking(v)}
-						label="Collect project progress"
-						hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
-					/>
+					<ExpertSetting configKey="app.progress_tracking" value={settingsStore.state.progressTracking}>
+						<SettingToggle
+							checked={settingsStore.state.progressTracking}
+							onChange={(v) => settingsStore.setProgressTracking(v)}
+							label="Collect project progress"
+							hint="Keep a per-project journal of what agents finished, what blocked them, and what they set out to do. Off removes the progress tool from every agent."
+						/>
+					</ExpertSetting>
 
 					<div class={a.agentList}>
 						<For each={sortedAgents()}>
