@@ -17,12 +17,47 @@ BOLD_YELLOW='\033[1;33m'
 BOLD_UNDERLINED='\033[1;4m'
 BOLD='\033[1m'
 
-# NOTE: the below logic was stolen from the "nightly.yml" GHA
+if ! [ -x "$(command -v sccache)" ]; then
+    echo -e "${BOLD_RED}Missing sccache${OFF}"
+    exit 1
+fi
 
+if [ -n "$RUN_ALL" ]; then
+    # Typecheck
+    pnpm exec tsc --noEmit
+
+    # Tests + coverage
+    # Runs the same suite as `pnpm exec vitest run` plus coverage collection, enforcing
+    # the floor thresholds in vitest.config.ts (see that file's comment) — one pass
+    # instead of running the whole suite twice.
+    pnpm exec vitest run --coverage --reporter=verbose
+
+    # Plugin tests
+    # Self-test first: it always passes today (exercises its own fixtures),
+    # so it can't mask a self-test regression behind the real check's
+    # expected failure below (the plugins submodule currently has zero
+    # tests, so `test:plugins` failing here is the known, tracked state).
+    pnpm test:plugins:test && pnpm test:plugins
+
+    # Architecture cycles
+    pnpm architecture:cycles && pnpm architecture:cycles:test
+
+    # No literal NUL bytes in source
+    pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
+fi
+
+HASH=$(git rev-parse --short HEAD)
+DIRTY=""
+if [ -n "$(git status --porcelain --untracked-files=no --ignore-submodules)" ]; then
+    DIRTY="-dirty"
+fi
+
+# NOTE: the below logic was stolen from the "nightly.yml" GHA
 # Append nightly timestamp to current version (strip any existing -nightly suffix first)
 RAW_VERSION=$(jq -r '.version' "src-tauri/tauri.conf.json")
 VERSION="${RAW_VERSION%%-nightly*}"
-NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).t$(date -u +%H%M)c"
+#NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).t$(date -u +%H%M)c"
+NIGHTLY="${VERSION}-nightly.$(date -u +%Y%m%d).${HASH}${DIRTY}"
 echo -e "${GREEN}Nightly version: ${NIGHTLY} (from ${RAW_VERSION})${OFF}"
 
 # Patch tauri.conf.json: version + add nightly updater endpoint
@@ -39,15 +74,14 @@ print('Patched tauri.conf.json')
 "
 
 # Patch Cargo.toml version
-sed "s/^version = \"${VERSION}\"/version = \"${NIGHTLY}\"/" "src-tauri/Cargo.toml" > "tmp.toml"
-mv "tmp.toml" "src-tauri/Cargo.toml"
+sed -I '' "s/^version = \"${VERSION}\"/version = \"${NIGHTLY}\"/" "src-tauri/Cargo.toml"
 
 export RUSTC_WRAPPER="sccache"
 export CMAKE_C_COMPILER_LAUNCHER="sccache"
 export CMAKE_CXX_COMPILER_LAUNCHER="sccache"
 
 # do a local signing of the app (and the sidecars)
-export APPLE_SIGNING_IDENTITY="-"
+export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 
 make build
 if [ $? -ne 0 ]; then
@@ -65,7 +99,11 @@ echo -e "${GREEN}codesign: ${BOLD_GREEN}TUICommander.app${OFF}"
 # sign post changes to Info.plist
 codesign \
     --force \
-    --sign - \
+    --deep \
+    --sign $APPLE_SIGNING_IDENTITY \
+	--identifier "com.tuic.commander" \
+	--entitlements src-tauri/Entitlements.plist \
+	--options runtime \
     src-tauri/target/release/bundle/macos/TUICommander.app
 if [ $? -ne 0 ]; then
     echo -e "  ${BOLD_RED}codesign failed${OFF}"
@@ -139,10 +177,10 @@ diff_check() {
     git diff --quiet \
         -I '(^version =|"version": |download/nightly)' \
         --ignore-cr-at-eol \
+        -- \
         "$FILE"
     if [ $? -eq 0 ]; then
-        echo "No substantial changes to ${FILE}"
-        git restore "$FILE"
+        git restore -- "$FILE"
     fi
 }
 
@@ -173,19 +211,6 @@ rsync -aPvF \
 exit 0
 
 
-
-esbuild src/main.ts --bundle --format=esm --outfile=main.js --external:nothing
-
-
-
-
-codesign --force --deep --sign "$$SIGN_ID" \
-	--entitlements src-tauri/Entitlements.plist \
-	--identifier "$(BUNDLE_ID)" \
-	--options runtime \
-	"$(APP_BUNDLE)";
-
-
 # Import macOS signing certificate
 DEVELOPER_ID_CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
 DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
@@ -213,7 +238,6 @@ IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Dev
 echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-
 # Write Apple API key file for notarization
 NOTARIZE_KEY_BASE64: ${{ secrets.NOTARIZE_KEY_BASE64 }}
 NOTARIZE_KEY_ID: ${{ secrets.NOTARIZE_KEY_ID }}
@@ -221,7 +245,6 @@ NOTARIZE_KEY_ID: ${{ secrets.NOTARIZE_KEY_ID }}
 KEY_PATH="$RUNNER_TEMP/AuthKey_${NOTARIZE_KEY_ID}.p8"
 echo "$NOTARIZE_KEY_BASE64" | base64 --decode > "$KEY_PATH"
 echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
-
 
 APPLE_CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
 APPLE_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
@@ -240,29 +263,4 @@ TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWO
 security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
 rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
 
-
-# Typecheck
-pnpm exec tsc --noEmit
-
-# Tests + coverage
-# Runs the same suite as `pnpm exec vitest run` plus coverage collection, enforcing
-# the floor thresholds in vitest.config.ts (see that file's comment) — one pass
-# instead of running the whole suite twice.
-pnpm exec vitest run --coverage --reporter=verbose
-
-
-# Plugin tests
-# Self-test first: it always passes today (exercises its own fixtures),
-# so it can't mask a self-test regression behind the real check's
-# expected failure below (the plugins submodule currently has zero
-# tests, so `test:plugins` failing here is the known, tracked state).
-pnpm test:plugins:test && pnpm test:plugins
-
-# Architecture cycles
-pnpm architecture:cycles && pnpm architecture:cycles:test
-
-# No literal NUL bytes in source
-pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
-
-exit $?
-# test-edit-probe
+exit 0
