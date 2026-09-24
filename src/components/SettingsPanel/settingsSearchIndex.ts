@@ -248,6 +248,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
 	{ tab: "terminal", section: "Shell Integration", sectionKey: "terminal.heading.shellIntegration" },
+	{
+		tab: "terminal",
+		section: "Custom Environment Variables",
+		sectionKey: "terminal.heading.customEnv",
+	},
 	{ tab: "terminal", section: "Session Restore", sectionKey: "terminal.heading.sessionRestore" },
 	{
 		tab: "terminal",
@@ -382,6 +387,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "app.scrollback_reflow",
 		hint: "Re-wrap scrollback history when the terminal changes width, so old output stays readable after a side panel opens. Turn it off to leave history lines as they were written and truncate them instead. The visible screen is never reflowed either way.",
 		hintKey: "general.hint.scrollbackReflow",
+	},
+	{
+		tab: "terminal",
+		section: "Custom Environment Variables",
+		label: "Environment Variables",
+		labelKey: "terminal.label.customEnv",
 	},
 	{
 		tab: "terminal",

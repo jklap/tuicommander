@@ -1614,6 +1614,7 @@ ego's own configuration; the `ego_executable` path and the `ai_chat_workspace` f
 - Terminal font: bundled monospace fonts (JetBrains Mono default), default font size (8-32px slider), font weight, cursor style (bar / block / underline)
 - Copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, OSC 1337 focus/attention requests (StealFocus/RequestAttention), block timestamp mode (elapsed-time label per command block: off / while Ctrl+Cmd is held / always), block folding (gates the Toggle Block Fold shortcut, its palette entry and the gutter fold chevron), scrollbar marks, scrollback reflow on resize
 - Shell Integration: copyable bash/fish startup-file snippets for OSC 133 command-block markers (zsh is automatic, no setup)
+- Custom Environment Variables: user-authored `KEY=value` pairs applied to every spawned terminal (shell and agent tabs alike), overriding any other source of the same variable. Default: empty. Global only — no per-repo/`.tuic.json` tier, same as Additional Readable Directories (**11.3**)
 - Terminal session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 
 ### 11.10 Git & GitHub
