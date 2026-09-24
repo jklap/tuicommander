@@ -51,3 +51,22 @@ rm "$scratch/other/scripts/hooks/pre-commit"
 : > "$scratch/results"
 HOOK_RESULTS="$scratch/results" git -C "$scratch/other" -c user.name=Test -c user.email=test@example.com commit -q --allow-empty -m no-hook
 [ ! -s "$scratch/results" ]
+
+# A failed dispatcher write must not leave its mktemp file in Git's hooks dir.
+cleanup_repo="$scratch/cleanup"
+git -C "$scratch" init -q cleanup
+mkdir -p "$cleanup_repo/scripts/hooks" "$cleanup_repo/fake-bin"
+cp "$project_root/scripts/hooks/install-hooks.sh" "$cleanup_repo/scripts/hooks/install-hooks.sh"
+printf '#!/bin/sh\nexit 0\n' > "$cleanup_repo/scripts/hooks/pre-commit"
+printf '#!/bin/sh\nexit 1\n' > "$cleanup_repo/fake-bin/cat"
+chmod +x "$cleanup_repo/fake-bin/cat"
+
+if (cd "$cleanup_repo" && PATH="$cleanup_repo/fake-bin:$PATH" bash scripts/hooks/install-hooks.sh); then
+  echo "expected dispatcher write to fail" >&2
+  exit 1
+fi
+
+if find "$cleanup_repo/.git/hooks" -name '.pre-commit.*' -print -quit | grep -q .; then
+  echo "installer left a temporary hook file after failure" >&2
+  exit 1
+fi

@@ -11,6 +11,12 @@ src_dir="$repo_root/scripts/hooks"
 git_hooks="$(git rev-parse --git-path hooks)"
 mkdir -p "$git_hooks"
 
+temp=""
+cleanup_temp() {
+  [ -z "$temp" ] || rm -f "$temp" || true
+}
+trap cleanup_temp EXIT
+
 for src in "$src_dir"/*; do
   name="$(basename "$src")"
   case "$name" in install-hooks.sh | test-*) continue ;; esac
@@ -36,5 +42,6 @@ exec "$hook" "$@"
 HOOK
   chmod +x "$temp"
   mv -f "$temp" "$dest"
+  temp=""
   echo "hooks: installed $name"
 done

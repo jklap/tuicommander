@@ -57,6 +57,7 @@ scripts/*
 !scripts/check-make-instance-scope.sh
 !scripts/mutants.sh
 !scripts/install-launch-shells.sh
+!scripts/test-shell-entrypoint.sh
 !scripts/hooks/
 !scripts/speech-assets/
 !scripts/perf/

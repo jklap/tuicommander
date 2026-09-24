@@ -34,11 +34,19 @@ export MACOSX_DEPLOYMENT_TARGET ?= 10.15
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test build build-dmg check cov crap fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test test-shell build build-dmg check cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
 all: build sign
+
+# Directory searched by test-shell. Override for the runner's isolated fixture.
+SHELL_TEST_DIR ?= scripts
+
+# Run every repository shell test. New scripts named test-*.sh below scripts/
+# join this target automatically.
+test-shell:
+	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" bash -c 'set -euo pipefail; found=0; while IFS= read -r script; do found=1; echo "shell test: $$script"; bash "$$script"; done < <(find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort); [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
 
 # Install tracked git hooks. Idempotent.
 #   pre-commit — Makefile TUIC_APP_INSTANCE scope (bypass: --no-verify) +
@@ -109,7 +117,7 @@ fmt:
 	@cd src-tauri && cargo fmt
 
 # Type-check, lint, format, and test (no Tauri build)
-check:
+check: test-shell
 	@echo "Running checks..."
 	@$(RTK) pnpm exec tsc --noEmit && echo "  tsc ✓"
 	@$(RTK) pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
