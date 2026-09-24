@@ -319,6 +319,7 @@
 /watchers/dir
 /watchers/hot-repos
 /watchers/repo
+/workflows/definition/action
 /worktrees
 /worktrees/dir
 /worktrees/finalize

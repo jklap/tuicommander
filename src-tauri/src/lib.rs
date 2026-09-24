@@ -133,6 +133,7 @@ pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod updater;
 pub(crate) mod webview_recovery;
+pub(crate) mod workflows;
 pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -468,6 +469,17 @@ async fn story_action_command_for_state(
     })
     .await
     .map_err(|error| format!("story task failed: {error}"))?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn workflow_definition_action(
+    project: String,
+    action: workflows::WorkflowAction,
+) -> Result<workflows::WorkflowReply, String> {
+    tokio::task::spawn_blocking(move || workflows::definition_action(&project, action))
+        .await
+        .map_err(|error| format!("workflow definition task failed: {error}"))?
 }
 
 /// Receive a screenshot response from the frontend (captured iframe content).
@@ -1981,6 +1993,7 @@ pub fn run() {
             progress_flow_detail,
             story_action_command,
             story_capabilities,
+            workflow_definition_action,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

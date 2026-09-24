@@ -454,6 +454,23 @@ async fn post_story_action(
 async fn get_story_capabilities() -> Json<bool> {
     Json(true)
 }
+
+async fn post_workflow_definition_action(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+    Query(q): Query<types::PathQuery>,
+    Json(action): Json<crate::workflows::WorkflowAction>,
+) -> Response {
+    if let Some(response) = progress_auth(&addr, auth.is_some()) {
+        return response;
+    }
+    let result =
+        tokio::task::spawn_blocking(move || crate::workflows::definition_action(&q.path, action))
+            .await
+            .map_err(|error| format!("workflow definition task failed: {error}"))
+            .and_then(|result| result);
+    json_result(result)
+}
 async fn post_progress_delete(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
@@ -810,6 +827,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/progress/flow/detail", post(post_progress_flow_detail))
         .route("/stories/action", post(post_story_action))
         .route("/stories/capabilities", get(get_story_capabilities))
+        .route(
+            "/workflows/definition/action",
+            post(post_workflow_definition_action),
+        )
         // Session lifecycle
         .route(
             "/sessions",

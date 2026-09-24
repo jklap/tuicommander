@@ -15,6 +15,8 @@ The `story` MCP tool accepts `{ input: StoryAction }`. It resolves the owning pr
 
 `GET /stories/capabilities` mirrors the desktop `story_capabilities` probe. It returns JSON `true` without opening the story database; the dialog uses it to distinguish an outdated backend from an action error.
 
+Workflow definitions use the shared `/workflows/definition/action` HTTP route and `workflow_definition_action` desktop command. They are project-scoped and published by immutable revision; execution has its own API.
+
 ## Project Progress reporting
 
 The compact `progress` native tool is available directly in classic and
