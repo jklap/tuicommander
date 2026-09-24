@@ -545,7 +545,13 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "plugins", section: "Plugins", label: "Check for plugin updates" },
 	// tabs/SmartPromptsTab.tsx
 	{ tab: "smart-prompts", section: "Smart Prompts" },
-	{ tab: "smart-prompts", section: "Smart Prompts", label: "Headless Agent" },
+	{
+		tab: "smart-prompts",
+		section: "Smart Prompts",
+		label: "Headless Agent",
+		expert: true,
+		configKey: "agents.headless_agent",
+	},
 	// tabs/AgentsTab.tsx
 	{ tab: "agents", section: "Agents" },
 	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
