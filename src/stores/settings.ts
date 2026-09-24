@@ -18,6 +18,7 @@ import {
 } from "../indicators/validate";
 import { invoke } from "../invoke";
 import type { IssueFilterMode } from "../types";
+import { isValidEnvVarKey } from "../utils/envVars";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
@@ -40,6 +41,30 @@ export interface CustomLauncher {
 	enabled: boolean;
 	/** Optional platform filter: "macos" | "windows" | "linux". undefined = all. */
 	platform?: "macos" | "windows" | "linux";
+}
+
+/** One user-authored `KEY=value` pair for `customPtyEnv` — mirrors Rust's
+ *  `CustomEnvVarEntry` (`src-tauri/src/config.rs`) exactly; same shape as
+ *  `src/utils/envVars.ts`'s `EnvVarEntry`, so that module's validation helpers
+ *  apply directly with no adaptation. */
+export interface CustomEnvVarEntry {
+	key: string;
+	value: string;
+}
+
+/** Drop malformed keys and collapse duplicate keys (first occurrence wins) from
+ *  a hand-edited `config.json`'s `custom_pty_env` — same "revalidate on
+ *  hydrate, not just on write" precedent as `sanitizeIndicatorOverrides`, since
+ *  this is untrusted input reaching real process environment variables. */
+function sanitizeCustomPtyEnv(entries: CustomEnvVarEntry[]): CustomEnvVarEntry[] {
+	const seen = new Set<string>();
+	const out: CustomEnvVarEntry[] = [];
+	for (const entry of entries) {
+		if (!isValidEnvVarKey(entry.key) || seen.has(entry.key)) continue;
+		seen.add(entry.key);
+		out.push({ key: entry.key, value: entry.value });
+	}
+	return out;
 }
 
 interface RustAppConfig {
@@ -109,6 +134,7 @@ interface RustAppConfig {
 	custom_launchers?: CustomLauncher[];
 	additional_readable_dirs?: string[];
 	inline_blame_enabled?: boolean;
+	custom_pty_env?: CustomEnvVarEntry[];
 	indicator_overrides?: IndicatorOverride[];
 	show_diff_stats?: boolean;
 	show_pr_badges?: boolean;
@@ -416,6 +442,7 @@ interface SettingsStoreState {
 	standbyTimeoutMinutes: number;
 	customLaunchers: CustomLauncher[];
 	additionalReadableDirs: string[];
+	customPtyEnv: CustomEnvVarEntry[];
 	inlineBlameEnabled: boolean;
 	indicatorOverrides: IndicatorOverride[];
 	showDiffStats: boolean;
@@ -486,6 +513,7 @@ function createSettingsStore() {
 		standbyTimeoutMinutes: 5,
 		customLaunchers: [],
 		additionalReadableDirs: ["~/.claude/plans"],
+		customPtyEnv: [],
 		inlineBlameEnabled: true,
 		indicatorOverrides: [],
 		showDiffStats: true,
@@ -573,6 +601,7 @@ function createSettingsStore() {
 		config.custom_launchers = [...state.customLaunchers];
 		config.additional_readable_dirs = [...state.additionalReadableDirs];
 		config.inline_blame_enabled = state.inlineBlameEnabled;
+		config.custom_pty_env = state.customPtyEnv.map((e) => ({ ...e }));
 		config.indicator_overrides = state.indicatorOverrides.map((o) => ({ ...o }));
 		config.show_diff_stats = state.showDiffStats;
 		config.show_pr_badges = state.showPrBadges;
@@ -714,6 +743,7 @@ function createSettingsStore() {
 				setState("customLaunchers", config.custom_launchers ?? []);
 				setState("additionalReadableDirs", config.additional_readable_dirs ?? ["~/.claude/plans"]);
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
+				setState("customPtyEnv", sanitizeCustomPtyEnv(config.custom_pty_env ?? []));
 				// Revalidated here, not just on write — a hand-edited config.json is
 				// untrusted input reaching document.documentElement.style (apply.ts).
 				setState("indicatorOverrides", sanitizeIndicatorOverrides(config.indicator_overrides ?? []));
@@ -902,6 +932,12 @@ function createSettingsStore() {
 		/** Replace the full list of additional HTTP-readable directories (add/remove go through here) */
 		setAdditionalReadableDirs(dirs: string[]): void {
 			setState("additionalReadableDirs", dirs);
+			save();
+		},
+
+		/** Replace the full list of custom PTY env vars (add/edit/remove all go through here) */
+		setCustomPtyEnv(entries: CustomEnvVarEntry[]): void {
+			setState("customPtyEnv", entries);
 			save();
 		},
 

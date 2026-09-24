@@ -411,6 +411,40 @@
   border-color: var(--accent);
 }
 
+/* KEY = value row (Custom Environment Variables, TerminalTab). Ported from
+   AgentsTab.module.css's per-agent-run-config env editor — same shape, kept
+   as its own copy here rather than a shared cross-tab class, matching how
+   every other per-setting resolver/editor in this codebase is its own
+   hand-written copy (see src-tauri/AGENTS.md's Worktree Warming section for
+   the same precedent on the Rust side). */
+.envVarRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.envVarKey {
+  flex: 0 0 35%;
+  min-width: 0;
+}
+
+.envVarEquals {
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  flex-shrink: 0;
+}
+
+.envVarValue {
+  flex: 1;
+  min-width: 0;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
 .info {
   color: var(--fg-muted);
   font-size: var(--font-sm);

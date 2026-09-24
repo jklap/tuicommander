@@ -1323,6 +1323,7 @@ main checkout (falls back to the active repo when the cwd belongs to no register
 - Behavior: copy-on-select toggle (auto-copy selection to clipboard), OSC 52 clipboard writes, OSC 1337 focus/attention requests (StealFocus/RequestAttention), agent context bar, link activation mode (click/modifier/never)
 - Blocks: block timestamp mode (off/hold Ctrl+Cmd/always), block boundary marks, prompt marks, block folding
 - Shell Integration: copyable bash/fish startup-file snippets for OSC 133 command-block markers (zsh is automatic, no setup)
+- Custom Environment Variables: user-authored `KEY=value` pairs applied to every spawned terminal (shell and agent tabs alike), overriding any other source of the same variable. Default: empty. Global only — no per-repo/`.tuic.json` tier, same as Additional Readable Directories (**11.4**)
 - Session restore: restore open terminals on launch (default on), save terminal scrollback (default off, plaintext on disk), scrollback line cap, clear saved scrollback
 
 ### 11.3 Appearance

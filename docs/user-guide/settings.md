@@ -136,6 +136,12 @@ snippets (zsh needs no setup) — see [Shell Integration](terminals.md#shell-int
 
 See [Command Blocks](terminals.md#command-blocks) for what each of these controls.
 
+### Custom Environment Variables
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| **Environment Variables** | list of `KEY = value` | (empty) | Applied to every spawned terminal — shell tabs and agent tabs alike — overriding anything else that sets the same variable. A key must be a legal environment variable name (starts with a letter or underscore, then letters/numbers/underscores only); duplicate keys are rejected. Useful for forcing a shell customization's behavior regardless of timing, e.g. `POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true` for Powerlevel10k. See [`pty.md`](../backend/pty.md#custom-pty-environment-variables) for the full precedence order against other env sources (per-agent run-config env, per-agent env flags). |
+
 ### Session Restore
 
 | Setting | Type | Default | Description |

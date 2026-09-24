@@ -179,7 +179,15 @@ describe("SettingsPanel", () => {
 		fireEvent.click(terminalItem);
 
 		const headings = Array.from(container.querySelectorAll(".section h3")).map((h) => h.textContent);
-		expect(headings).toEqual(["Shell", "Rendering", "Behavior", "Blocks", "Shell Integration", "Session Restore"]);
+		expect(headings).toEqual([
+			"Shell",
+			"Rendering",
+			"Behavior",
+			"Blocks",
+			"Shell Integration",
+			"Custom Environment Variables",
+			"Session Restore",
+		]);
 
 		const toggleLabels = Array.from(container.querySelectorAll(".toggle span")).map((n) => n.textContent);
 		expect(toggleLabels).toContain("Copy on select");
