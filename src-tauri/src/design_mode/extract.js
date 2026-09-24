@@ -78,13 +78,22 @@ function tuicExtract() {
   };
   const visit = (rules) => {
     for (const rule of rules) {
-      if (rule.cssRules) visit(rule.cssRules);
-      if (!rule.style || !rule.selectorText) continue;
-      try { if (el.matches(rule.selectorText)) referenced(rule.style); }
-      catch { /* selector the element cannot be tested against, e.g. a pseudo-element */ }
+      // One rule that cannot be read or tested (a pseudo-element selector, an
+      // inaccessible nested sheet) must not hide the rules after it.
+      try {
+        if (rule.cssRules) visit(rule.cssRules);
+        if (rule.style && rule.selectorText && el.matches(rule.selectorText)) referenced(rule.style);
+      } catch { /* skip this rule only */ }
     }
   };
-  for (const sheet of doc.styleSheets) {
+  // Component-scoped styles live in each enclosing shadow root, and constructed
+  // sheets in adoptedStyleSheets; document.styleSheets holds neither.
+  const sheets = [];
+  for (let root = scope(el); root; root = root.host ? scope(root.host) : null) {
+    sheets.push(...(root.styleSheets ?? []), ...(root.adoptedStyleSheets ?? []));
+    if (!root.host) break;
+  }
+  for (const sheet of sheets) {
     try { visit(sheet.cssRules); }
     catch { /* cross-origin sheet */ }
   }
