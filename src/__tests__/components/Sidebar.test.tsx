@@ -1708,7 +1708,8 @@ describe("Sidebar", () => {
 
 			// Only the spawned worker says who launched it; the orchestrator row stays plain.
 			expect(rows[0].querySelector(".branchSubAgentTag")).toBeNull();
-			expect(rows[1].querySelector(".branchSubAgentTag")?.textContent).toBe("↳ Orchestrator");
+			expect(rows[1].querySelector(".branchSubAgentTag")?.getAttribute("title")).toBe("Spawned by Orchestrator");
+			expect(rows[1].querySelector(".branchSubAgentTag svg")).not.toBeNull();
 		});
 
 		it("renders the activity card for a single terminal", () => {
