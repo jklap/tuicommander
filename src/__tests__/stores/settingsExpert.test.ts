@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mockInvoke } from "../mocks/tauri";
 import { appLogger } from "../../stores/appLogger";
+import { mockInvoke } from "../mocks/tauri";
 
 vi.mock("../../stores/ui", async () => {
 	const { createStore } = await import("solid-js/store");

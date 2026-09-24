@@ -106,8 +106,7 @@ function canExecuteApi(): CanExecuteResult {
 	if (!settingsStore.isAcpConfigured()) {
 		return {
 			ok: false,
-			reason:
-				"ego is not configured — name the binary in Settings → AI Chat, then pick a model on the same page",
+			reason: "ego is not configured — name the binary in Settings → AI Chat, then pick a model on the same page",
 		};
 	}
 	// ACP gives a session one working directory and it must be a real one. An
