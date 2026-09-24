@@ -54,36 +54,14 @@ from pathlib import Path
 import numpy as np
 from huggingface_hub import hf_hub_download, snapshot_download
 
-# The ONNX export, pinned like `POCKET_ONNX_REVISION` in `speech/assets.rs`.
-ONNX_REPO = "KevinAHM/pocket-tts-onnx"
-ONNX_REVISION = "58a6d00cf13d239b6748cb0769f35c580a8f606c"
-
-# The voice revision each language is pinned to. French stays at the older
-# revision: the `french_24l` voices at 8843db76 add a `self_attn/pad` tensor per
-# layer and carry a KV cache for a newer model than the ONNX export above, and
-# every one of them renders 0.72 s (EOS on the first frame) — in this runtime
-# and in the app's engine alike. The ones at 00eac05e render normally.
-VOICES_REPO = "kyutai/pocket-tts-without-voice-cloning"
-VOICES_REVISIONS = {
-    "italian": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "english_2026-04": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "french_24l": "00eac05ed3d16bdc3f6b5d598874019c34a89214",
-    "german": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "portuguese": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-    "spanish": "8843db76457a91db32077edf8dfcd1c0e3e755fd",
-}
-
-# The six languages of the catalogue, with the voice each ships by default.
-LANGUAGES = {
-    "italian": "giovanni",
-    "english_2026-04": "alba",
-    "french_24l": "estelle",
-    "german": "juergen",
-    "portuguese": "rafael",
-    "spanish": "lola",
-}
-
-VOICES_PER_LANGUAGE = 26
+from pins import (
+    DEFAULT_VOICES as LANGUAGES,
+    ONNX_REPO,
+    ONNX_REVISION,
+    VOICES_PER_LANGUAGE,
+    VOICES_REPO,
+    VOICES_REVISIONS,
+)
 
 # The files the reference runtime opens. The int8 graphs are the ones the app
 # downloads. `mimi_encoder.onnx` is not in the app: the reference runtime opens
