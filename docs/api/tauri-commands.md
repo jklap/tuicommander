@@ -1,5 +1,11 @@
 # Tauri Commands Reference
 
+## Native stories
+
+| Command | Parameters | Result | Description |
+|---|---|---|---|
+| `story_action_command` | `project, action, sessionId?` | tagged `StoryReply` | Creates, reads, claims, or transitions native plans and stories. The backend checks project ownership and claim session identity. See [HTTP API](http-api.md#native-stories). |
+
 ## Project Progress
 
 | Command | Parameters | Result | Description |

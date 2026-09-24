@@ -31,6 +31,9 @@
 | Remote, mobile, and browser modes | [TUICommander Modes](user-guide/modes.md) · [Remote Access](user-guide/remote-access.md) |
 | Setup and recovery | [Getting Started](user-guide/getting-started.md) · [Troubleshooting](user-guide/troubleshooting.md) |
 | Project history | [Project Progress](user-guide/project-progress.md) |
+| Native plans and stories | [Native plans and stories](user-guide/native-stories.md) |
+
+Native plans and stories are available through `tuic story`, the `story` MCP tool, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. The visual workflow mode is under development; story and workflow import/export are outside this release.
 
 ---
 

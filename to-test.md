@@ -14,6 +14,10 @@
 - [ ] Orchestrator inbox under load: while children finish, a parent that does not read its inbox keeps every peer RESULT. When the inbox holds 100 peer messages, `agent send` returns `inbox is full`, and lifecycle notices appear as `missed_count` instead of pushing peer mail out.
 - [ ] Put a malformed value in one field of `dictation-config.json` (for example `"speech_volume_db": "loud"`) in a `TUIC_APP_INSTANCE=<id>` instance: Settings → Voice keeps the other values, and a "Dictation settings recovered" warn toast appears once.
 
+## Native story API (2026-09-24) — Rust, needs `make dev` restart
+
+- [ ] After rebuilding an isolated instance, create a plan and story using `tuic story`, read them from the browser `/stories/action` route, and confirm another project's path cannot read their IDs. Claim from a live tab and verify stale revisions are rejected.
+
 ## Remote Project Progress event (2026-09-24) — Rust, needs `make dev` restart
 
 - [ ] With a connected remote repository after restart, report a new Progress entry on the remote agent. The local desktop Progress bell and dialog update, and `progress_list` reads that repository's journal from its owning machine.

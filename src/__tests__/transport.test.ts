@@ -262,6 +262,15 @@ describe("transport", () => {
 			});
 		});
 
+		it("routes native story actions to the owning project", () => {
+			const action = { action: "get_story", story_id: "story-1" };
+			expect(mapCommandToHttp("story_action_command", { project: "/repo a", action })).toEqual({
+				method: "POST",
+				path: "/stories/action?path=%2Frepo%20a",
+				body: { action },
+			});
+		});
+
 		it("maps typed project progress controls", () => {
 			// The whole Progress surface: record, list, delete, and the divider.
 			// Every control the rejected design added — status, pause, resume,

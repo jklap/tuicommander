@@ -1,6 +1,8 @@
+mod api;
 mod model;
 mod store;
 
+pub use api::*;
 pub use model::*;
 pub use store::StoryStore;
 
@@ -140,6 +142,20 @@ mod tests {
         let claimed = store
             .claim(&story.id, "tab-one", story.revision)
             .expect("claim");
+        assert!(
+            store
+                .transition_for_actor(
+                    &story.id,
+                    claimed.revision,
+                    StoryCommand::CheckCriterion(0),
+                    Some("tab-two"),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.get_story(&story.id).expect("story").revision,
+            claimed.revision
+        );
         assert!(store.claim(&story.id, "tab-two", claimed.revision).is_err());
         assert_eq!(store.release_session_claims("tab-one").expect("release"), 1);
         let released = store.get_story(&story.id).expect("story");

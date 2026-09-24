@@ -1,5 +1,11 @@
 # HTTP API Reference
 
+## Native stories
+
+`POST /stories/action?path=<absolute-project>` accepts `{ "action": StoryAction, "sessionId"?: string }` and returns a tagged `StoryReply` (`{type, value}`). `StoryAction` uses a snake-case `action` discriminator: `create_plan`, `list_plans`, `get_plan`, `plan_state`, `create_story`, `list_stories`, `get_story`, `add_dependency`, `claim`, or `transition`. Create-story input uses the shared camel-case `NewStory` fields. `create_plan` takes `title` and `source`; `get_plan`, `plan_state`, and `list_stories` take `plan_id`; `get_story` takes `story_id`; `claim` takes `story_id` and `expected_revision`; `transition` also takes a `command`; `add_dependency` takes both story IDs and `expected_revision`.
+
+The project path is resolved to its canonical owner, so a managed worktree shares its parent project's plans. Unknown action and create-story fields are rejected. Claim requires a live PTY session in that project. A session-bound agent may check criteria and submit review only for its own claim; review and administrative transitions require a user action. Reads and writes verify the stored plan's project; a story ID alone grants no cross-project access. Revisions are required for mutations to detect stale clients. The same service backs desktop IPC and MCP. There is no import or export endpoint.
+
 ## Project Progress
 
 Six routes, all `POST`, and normal route authentication. All but

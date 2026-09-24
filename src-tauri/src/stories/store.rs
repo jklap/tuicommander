@@ -118,6 +118,24 @@ impl StoryStore {
             .ok_or_else(|| format!("plan not found: {id}"))
     }
 
+    pub fn list_plans(&self, project: &str) -> Result<Vec<Plan>, String> {
+        let conn = self.connect()?;
+        let mut stmt = conn
+            .prepare("SELECT id,project,title,source FROM plans WHERE project=?1 ORDER BY rowid")
+            .map_err(|e| format!("prepare plan list: {e}"))?;
+        stmt.query_map([project], |row| {
+            Ok(Plan {
+                id: row.get(0)?,
+                project: row.get(1)?,
+                title: row.get(2)?,
+                source: row.get(3)?,
+            })
+        })
+        .map_err(|e| format!("list plans: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("read plans: {e}"))
+    }
+
     pub fn create_story(&self, input: NewStory) -> Result<Story, String> {
         validate_text("story title", &input.title, 200)?;
         if input.criteria.is_empty() || input.criteria.len() > 100 {
