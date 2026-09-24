@@ -1,7 +1,6 @@
 export { AgentsTab } from "./AgentsTab";
 export { AiChatTab } from "./AiChatTab";
 export { AppearanceTab } from "./AppearanceTab";
-export { DeveloperToolsTab } from "./DeveloperToolsTab";
 export { GeneralTab } from "./GeneralTab";
 export { GitHubTab } from "./GitHubTab";
 export { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";

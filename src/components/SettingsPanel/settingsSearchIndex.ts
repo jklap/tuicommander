@@ -80,6 +80,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
 	{ tab: "general", section: "Power Management", sectionKey: "general.heading.powerManagement" },
 	{ tab: "general", section: "Updates", sectionKey: "general.heading.updates" },
+	{ tab: "general", section: "TUIC CLI", sectionKey: "general.heading.cli", platform: "desktop" },
+	{
+		tab: "general",
+		section: "Code Intelligence",
+		sectionKey: "general.heading.codeIntelligence",
+		platform: "desktop",
+	},
+	{ tab: "general", section: "IDE", sectionKey: "developerTools.heading.ide" },
+	{
+		tab: "general",
+		section: "Custom Launchers",
+		sectionKey: "general.heading.customLaunchers",
+		platform: "desktop",
+	},
 	{ tab: "general", section: "Experimental Features", sectionKey: "general.heading.experimental" },
 	{ tab: "general", section: "General", label: "Language", labelKey: "general.label.language" },
 	{ tab: "general", section: "General", label: "Show agent context bar" },
@@ -129,6 +143,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.update_channel",
 	},
+	{ tab: "general", section: "IDE", label: "Default IDE", labelKey: "general.label.defaultIde" },
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
 	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
@@ -184,22 +199,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.scrollback_reflow",
 	},
-	// tabs/DeveloperToolsTab.tsx
-	{ tab: "developer-tools", section: "TUIC CLI", sectionKey: "general.heading.cli", platform: "desktop" },
-	{
-		tab: "developer-tools",
-		section: "Code Intelligence",
-		sectionKey: "general.heading.codeIntelligence",
-		platform: "desktop",
-	},
-	{ tab: "developer-tools", section: "IDE", sectionKey: "developerTools.heading.ide" },
-	{
-		tab: "developer-tools",
-		section: "Custom Launchers",
-		sectionKey: "general.heading.customLaunchers",
-		platform: "desktop",
-	},
-	{ tab: "developer-tools", section: "IDE", label: "Default IDE", labelKey: "general.label.defaultIde" },
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },
 	{ tab: "appearance", section: "Repository Groups", sectionKey: "appearance.heading.groups" },
