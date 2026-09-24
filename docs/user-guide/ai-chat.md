@@ -7,9 +7,9 @@ no tool loop and no sandbox of its own.
 
 ## Before it can talk
 
-1. Turn on **Experimental features** in `Settings > General`. The panel is behind
+1. Turn on **Experimental Features** in `Settings > General`. The panel is behind
    it and there is no separate AI Chat switch.
-2. Set **ego executable** in the same tab (**Select…** opens a file picker). While it is empty, ACP is not
+2. Set **ego executable** in `Settings > AI Chat` (**Select…** opens a file picker). While it is empty, ACP is not
    configured: the panel says so and launches nothing.
 
 ## Opening it
@@ -54,7 +54,7 @@ its own terminals and repositories rather than the default install's.
   publishes. There is no list of models in TUICommander: the session is asked,
   and the answer is what the control bar draws. This changes one conversation.
   The model every *new* run starts from is ego's own default, editable in
-  Settings → **AI Providers** (see [Settings](settings.md#ai-providers-tab)).
+  Settings → **AI Chat** (see [Settings](settings.md#ai-chat)).
 
 ## Questions ego asks back
 
@@ -95,7 +95,7 @@ model and re-deriving the history later is impossible.
 
 | Feature | Where it went |
 |---------|---------------|
-| Providers, models, slots, API keys, Ollama detection | Settings → **AI Providers** shows what ego is configured with and sets its default model (#786-4a6d). Slots, API keys and Ollama detection did not come back: no key is stored by TUICommander and no provider call is made from it |
+| Providers, models, slots, API keys, Ollama detection | Settings → **AI Chat** shows what ego is configured with and sets its default model (#786-4a6d). Slots, API keys and Ollama detection did not come back: no key is stored by TUICommander and no provider call is made from it |
 | Agent mode (ReAct loop), the safety checker, the file sandbox | nothing. ego runs its own tool loop and reaches terminals through TUICommander's MCP server |
 | Terminal watchers (autonomous rules) | not scheduled |
 | PR AI review, changelog generation, improvement scan | 795-320b |

@@ -1088,8 +1088,8 @@ under `/repo/`.
 `/config/provider-key*`, `/config/slot-test` and `/config/ollama-models` were
 removed with the provider registry (#784-0aec). TUICommander stores no model API
 key and makes no provider HTTP call, so there is nothing for a browser or remote
-client to proxy. Story 786-4a6d brings a Providers tab back, configured against
-ego rather than against a registry of TUICommander's own.
+client to proxy. Story 786-4a6d brings a provider list back (now on the Settings → AI Chat
+page), configured against ego rather than against a registry of TUICommander's own.
 
 The OAuth upstream flow (`start_mcp_upstream_oauth` / `cancel_mcp_upstream_oauth`) is
 **not** mapped: `start` binds a loopback callback server and opens the OS browser, so
@@ -2268,8 +2268,8 @@ session and request it is about.
 
 ## ego Command Line (`mcp_http/ego_routes.rs`)
 
-The browser half of `ego_providers` / `ego_set_default_model` — what Settings →
-AI Providers reads and writes. Same field names, same response body, same error
+The browser half of `ego_providers` / `ego_set_default_model` — what the Settings →
+AI Chat page reads and writes. Same field names, same response body, same error
 body: an `EgoCliError` serialized whole (`code`, `message`, `command`, `stdout`,
 `stderr`, `exitCode`).
 

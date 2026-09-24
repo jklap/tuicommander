@@ -4,7 +4,7 @@ The `tuic` command line tool lets you control TUICommander from the terminal. It
 
 ## Installation
 
-**From the app:** Settings > General > Command Line Interface > Install tuic CLI
+**From the app:** Settings > Developer Tools > TUIC CLI > Install TUIC CLI
 
 **First launch:** TUICommander offers to install the CLI on first run.
 

@@ -152,7 +152,7 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 | `src-tauri/src/tool_search.rs` | BM25 `ToolSearchIndex` backing `search_tools` / `get_tool_schema` |
 | `docs/backend/mcp-http.md` | Lazy Tool Discovery section, meta-tool table, filter-enforcement note |
 | `docs/backend/config.md` | `collapse_tools` field in `AppConfig` table |
-| `docs/user-guide/settings.md` | Services Tab — "Collapse tools" checkbox description |
+| `docs/user-guide/settings.md` | MCP page → TUIC Tools — "Collapse tools" checkbox description |
 
 #### Session tool actions added (swarm Layer 3–4)
 - `session action=submit` — submits one command to a confirmed-idle managed agent and returns a bounded terminal-movement receipt in the same response. It never queues or overwrites a partial composer; `session action=input` remains raw and write-only.
@@ -250,8 +250,8 @@ command ego runs, so the server-side synthesis in `granted` is what keeps it saf
 | `docs/user-guide/ai-chat.md` | User-facing AI Chat guide |
 | `docs/FEATURES.md` | AI Chat feature section |
 
-### Providers tab (ego's own configuration)
-Settings → AI Providers reads and writes **ego's** configuration through ego's
+### AI Chat settings page (ego's own configuration)
+Settings → AI Chat reads and writes **ego's** configuration through ego's
 command line (#786-4a6d). It replaces the provider registry #784-0aec deleted,
 and the replacement is not a registry: TUIC stores no API key, keeps nothing in
 its keyring, and makes no provider HTTP call. The one network call anywhere in
@@ -265,12 +265,12 @@ Refresh.
 | `src/transport.ts`, `src/__tests__/transport.test.ts` | The `ego_providers` / `ego_set_default_model` mappings and the generated path snapshot |
 | `src/types/ego.ts` | The TS mirror of the Rust projection. A mirror, not a second opinion — nothing reshapes it |
 | `src/services/egoCli.ts` | The two calls the tab makes |
-| `src/components/SettingsPanel/tabs/ProvidersTab.tsx` | What the tab draws: the default-model picker, the per-provider credential badge, and each of the four failure states |
+| `src/components/SettingsPanel/tabs/AiChatTab.tsx` | What the page draws: the ego executable field, the default-model picker, the per-provider credential badge, and each of the four failure states |
 | `src/components/SettingsPanel/SettingsPanel.tsx` | The nav entry (hidden while `isAiChatEnabled()` is false) and the tab body |
 | `src/components/SettingsPanel/settingsSearchIndex.ts` | Its rows in the settings search index — the drift test re-derives them from the JSX |
-| `docs/user-guide/settings.md` | The AI Providers tab section |
+| `docs/user-guide/settings.md` | The AI Chat page section |
 | `docs/api/tauri-commands.md`, `docs/api/http-api.md` | Both transports for the two commands |
-| `docs/FEATURES.md` | The AI Providers entry under Settings |
+| `docs/FEATURES.md` | The AI Chat page entry under Settings |
 
 ### Session knowledge store and TUI detection
 Neither module has anything to do with an LLM, which is why both outlived the
@@ -443,7 +443,7 @@ When modifying git operations, worktree logic, or GitHub API:
 | `docs/api/tauri-commands.md` | Git/worktree commands |
 
 ### Voice dictation, spoken replies and hands-free
-When modifying `src-tauri/src/dictation/**` or the Dictation settings panel:
+When modifying `src-tauri/src/dictation/**` or the Voice settings page (`DictationSettings.tsx`):
 
 | File | What to update |
 |------|----------------|
@@ -464,8 +464,11 @@ When adding config fields or settings UI:
 | File | What to update |
 |------|----------------|
 | `docs/backend/config.md` | Config files, schema, platform directories |
-| `docs/user-guide/settings.md` | Settings tab breakdown |
+| `docs/user-guide/settings.md` | Settings page breakdown, by navigation group |
 | `docs/FEATURES.md` | Section 11 (Settings) |
+| `src/components/SettingsPanel/SettingsPanel.tsx` | `GLOBAL_TAB_GROUPS` — which group and page a new page belongs to |
+| `src/components/SettingsPanel/settingsSearchIndex.ts` | Search index rows for every new label; the drift test re-derives them from the JSX |
+| `src/components/SettingsPanel/ExpertSetting.tsx`, `src/stores/settingsExpert.ts` | Wrap a control in `ExpertSetting` only with a `configKey` that `get_config_defaults` can resolve; update the Expert Mode section of `docs/user-guide/settings.md` if the visibility rule changes |
 
 ### Agent Detection
 

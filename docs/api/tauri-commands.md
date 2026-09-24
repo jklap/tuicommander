@@ -720,7 +720,7 @@ from "ego wanted a tool this mode cannot grant". The turn is abandoned after
 ## ego command line (`ego_cli.rs`)
 
 Reads and writes **ego's** configuration by running ego, for the Settings → AI
-Providers tab. TUIC stores no API key and makes no provider HTTP call; the one
+Chat page. TUIC stores no API key and makes no provider HTTP call; the one
 network call is `ego models --refresh`, which ego makes, and only when asked.
 
 Four rules hold this surface down:

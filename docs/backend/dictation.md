@@ -394,7 +394,7 @@ second segmenter that disagreed with the first one only on browsers. That is
 asserted directly (`sends silence too, rather than deciding the user stopped
 talking`), because it is the property that is invisible once it breaks.
 
-Since 832-e730 the Dictation tab renders in browser mode. Two groups stay behind
+Since 832-e730 the Voice settings page (formerly the Dictation tab) renders in browser mode. Two groups stay behind
 `isTauri()`: the global hotkey, which the browser cannot register, and the
 microphone device list, which enumerates the *server's* devices — offering a
 browser user a device in another building is worse than offering nothing.
@@ -542,7 +542,7 @@ all. They run in order and each returns a `skip_reason` the UI shows verbatim.
 **The two thresholds are settings, not constants** (`VoiceGates`, read from
 `DictationConfig` on every start). The right RMS floor depends on the room and
 the microphone: a headset a metre away picks up enough noise to clear a fixed
-floor, which is how an empty room ends up transcribed. Settings > Dictation
+floor, which is how an empty room ends up transcribed. Settings > Voice
 exposes both against a live meter — see the user guide.
 
 `no_speech_probability()` is read per segment and **filters per segment**

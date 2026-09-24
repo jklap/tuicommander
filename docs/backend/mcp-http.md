@@ -39,7 +39,7 @@ For isolated desktop verification, `TUIC_PORT=<port>` overrides the configured T
 port for the process without persisting the value. The normal startup retry still
 tries the next two ports when the selected port is occupied.
 
-Configuration via Settings > Services & MCP, or `config.json`:
+Configuration via Settings > MCP and Settings > Remote Access, or `config.json`:
 
 ```json
 {
@@ -478,7 +478,7 @@ does not add another blanket wrapper.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
-When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
+When `collapse_tools: true` in `config.json` (or via Settings > MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with three meta-tools (the Speakeasy pattern) plus the compact `progress` tool when enabled:
 
 | Meta-tool | Purpose |
 |-----------|---------|
@@ -1137,7 +1137,7 @@ enum UpstreamError {
 }
 ```
 
-A `NeedsOAuth` on any request transitions the upstream registry to `needs_auth`. The Services tab in Settings surfaces an *Authorize* button that calls `start_mcp_upstream_oauth`. Auto-triggered OAuth is gated behind explicit user consent (the confirm dialog shows the AS origin so the user can refuse an Authorization Server mix-up attempt).
+A `NeedsOAuth` on any request transitions the upstream registry to `needs_auth`. The MCP page in Settings (Upstream MCP Servers) surfaces an *Authorize* button that calls `start_mcp_upstream_oauth`. Auto-triggered OAuth is gated behind explicit user consent (the confirm dialog shows the AS origin so the user can refuse an Authorization Server mix-up attempt).
 
 **Off-domain authorization servers are never blocked.** MCP gateways, corporate proxies and hosted IdP tenants routinely serve AS metadata whose `issuer` and endpoints point at a different registrable domain than the MCP server — RFC 8414 §3.3 says the issuer must match the discovery URL, but refusing on that basis makes legitimate servers unusable. Discovery logs a warning on an issuer mismatch and continues; `start_mcp_upstream_oauth` returns `cross_domain_as: true` when the AS is off-domain, and the consent dialog switches to a `warning` kind naming the origin. The decision belongs to the user, not to a hard-coded gate.
 
@@ -1146,7 +1146,7 @@ A `NeedsOAuth` on any request transitions the upstream registry to `needs_auth`.
 1. **Start** — `start_mcp_upstream_oauth(name)` generates a PKCE verifier/challenge (S256), mints an opaque `state`, records the pending flow in a DashMap keyed by state, and returns the authorization URL + AS origin. The upstream moves to `authenticating` only *after* the flow is recorded — the status must never claim "Awaiting authorization…" for a flow that does not exist.
 
    **Flows are not serialized.** Each one owns its `state` nonce, PKCE verifier and callback port, so concurrent authorizations share nothing. An earlier design held a single-permit semaphore for the whole browser round-trip: a second *Authorize* click then blocked inside `start_flow` for the full 5-minute timeout with no browser, no dialog and no error, and `cancel_mcp_upstream_oauth` could not release it because the queued flow had never reached the pending map. Do not reintroduce a shared permit here.
-2. **Consent UI** — The frontend opens the URL via `tauri-plugin-opener` after user approval. The status bar and Services tab show "Awaiting authorization…".
+2. **Consent UI** — The frontend opens the URL via `tauri-plugin-opener` after user approval. The status bar and the Settings MCP page show "Awaiting authorization…".
 3. **Callback** — The AS redirects to `tuic://oauth-callback?code=…&state=…`. The OS routes the deep link to the desktop app (`src-tauri/src/mcp_oauth/mod.rs` — `DEEP_LINK_SCHEME = "tuic://oauth-callback"`). The deep-link handler calls `mcp_oauth_callback(code, oauth_state)`.
 4. **Exchange** — `TokenManager` posts code + PKCE verifier to the token endpoint, receives `{ access_token, refresh_token?, expires_in? }`, serializes into `OAuthTokenSet`, persists to the OS keyring (`mcp_upstream_credentials.rs` — structured JSON format with `"type": "oauth2"`), and transitions upstream to `connecting`.
 5. **Refresh** — `TokenManager` is shared across every `HttpMcpClient` refresh path (unified per upstream); a semaphore serializes concurrent refresh attempts to defeat thundering-herd. `expires_at` uses a 60 s margin; `None` means "no known expiry — do not treat as expired". A 401 recovery carries the exact bearer rejected by the server into the serialized refresh check. If an authorization exchange wrote a different valid credential between the request and recovery, that generation is retried as-is instead of being immediately refreshed or rotated; only the still-rejected or an invalid generation reaches the token endpoint.

@@ -48,16 +48,22 @@ App.tsx (central orchestrator)
 │       └── ZoomIndicator     # Font size display
 ├── TabBar/                   # Ordering, overflow, drag/drop, and menus
 │   └── TabViews              # Shared terminal, diff, Markdown, and editor tab views
-├── SettingsPanel/            # Tabbed settings overlay
-│   ├── tabs/GeneralTab       # Font, shell, IDE, theme
-│   ├── tabs/AgentsTab        # Agent detection, run configs, Claude Usage toggle
-│   ├── tabs/ServicesTab      # Local MCP and remote-access composition
-│   │   └── services/         # Upstream MCP and remote-machine domain panels
-│   ├── tabs/GitHubTab        # GitHub OAuth login, token management
-│   ├── tabs/PluginsTab       # Plugin management, logs
-│   ├── tabs/KeyboardShortcutsTab # Rebindable keyboard shortcuts
-│   ├── tabs/AppearanceTab    # Visual customization
+├── SettingsPanel/            # Settings overlay; nav grouped by task (GLOBAL_TAB_GROUPS)
+│   ├── ExpertSetting         # ExpertSetting / ExpertSection / ExpertModeSwitch
+│   ├── DictationSettings     # Voice page
+│   ├── tabs/GeneralTab       # Language, context bar, confirmations, updates, experimental
+│   ├── tabs/AppearanceTab    # Tabs, repository groups, layout, UI legend
 │   ├── tabs/NotificationsTab # Sound and notification prefs
+│   ├── tabs/TerminalTab      # Theme, shell, font, cursor, clipboard, blocks, power management
+│   ├── tabs/KeyboardShortcutsTab # Rebindable keyboard shortcuts, global hotkey
+│   ├── tabs/GitHubTab        # Git & GitHub: OAuth login, PR/issue display, repo + worktree defaults
+│   ├── tabs/AgentsTab        # Agent detection, run configs, Claude Usage toggle
+│   ├── tabs/AiChatTab        # ego executable, default model, providers
+│   ├── tabs/SmartPromptsTab  # Smart Prompts library
+│   ├── tabs/RemoteMachinesTab # Remote Machines page (wraps services/RemoteMachinesPanel)
+│   ├── tabs/PluginsTab       # Plugin management, logs
+│   ├── tabs/DeveloperToolsTab # TUIC CLI, Code Intelligence, IDE, custom launchers
+│   ├── tabs/services/        # LocalMcpPanel + UpstreamMcpPanel (MCP page), RemoteAccessPanel, RemoteMachinesPanel
 │   ├── tabs/RepoScriptsTab   # Per-repo scripts
 │   └── tabs/RepoWorktreeTab  # Per-repo worktree options
 ├── HelpPanel/                # Keyboard shortcuts documentation
@@ -168,23 +174,50 @@ window closes so one gesture cannot trigger both delivery paths.
 
 ### SettingsPanel (`SettingsPanel/`)
 
-Tabbed settings overlay.
+Settings overlay. The nav groups the global pages by task
+(`GLOBAL_TAB_GROUPS` in `SettingsPanel.tsx`); each group renders as a static
+label row above its pages, and the configured repositories follow under
+**Repositories**.
 
-**Tabs:**
-- **General** — Font family, font size, shell, IDE, theme, confirmations
-- **Agents** — Agent detection, run configurations, Claude Usage toggle
-- **Services** — MCP server, remote access, dictation settings (see below)
-- **GitHub** — GitHub OAuth login (Device Flow), token management, diagnostics
-- **Plugins** — Plugin management, enable/disable, log viewer
-- **Keyboard Shortcuts** — Rebindable shortcuts (auto-populated from `actionRegistry.ts`)
-- **Appearance** — Visual customization
-- **Notifications** — Sound and notification preferences
-- **Repo Scripts** — Setup and run scripts, plus the optional per-repository Dev Server URL for Design Mode
-- **Repo Worktree** — Base branch, copy ignored/untracked files
+**Pages:**
+- **Application**
+  - **General** (`GeneralTab`) — Language, agent context bar, confirmations, updates, Experimental Features
+  - **Appearance** (`AppearanceTab`) — Tabs, repository groups, layout reset, UI legend
+  - **Notifications** (`NotificationsTab`) — Sound and notification preferences
+- **Workspace**
+  - **Terminal** (`TerminalTab`) — Theme, shell, font, font size and weight, cursor style, clipboard, command blocks, scrollback reflow, power management
+  - **Keyboard Shortcuts** (`KeyboardShortcutsTab`) — Rebindable shortcuts (auto-populated from `actionRegistry.ts`) and the global hotkey. The Help panel reuses the same editor
+  - **Git & GitHub** (`GitHubTab`) — GitHub OAuth login (Device Flow), token management, diagnostics, PR and issue display, repository and worktree defaults, additional accounts, repository bindings
+- **AI**
+  - **Agents** (`AgentsTab`) — Agent detection, run configurations, Claude Usage toggle
+  - **AI Chat** (`AiChatTab`) — ego executable, default model, provider list. Hidden while `isAiChatEnabled()` is false
+  - **Voice** (`DictationSettings`) — see below
+  - **Smart Prompts** (`SmartPromptsTab`)
+- **Integrations**
+  - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
+  - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
+  - **Remote Machines** (`RemoteMachinesTab`) — `tuic-remote` connections
+  - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
+  - **Developer Tools** (`DeveloperToolsTab`) — TUIC CLI, Code Intelligence, default IDE, custom launchers
+- **Repositories**
+  - **Repo Scripts** — Setup and run scripts, plus the optional per-repository Dev Server URL for Design Mode
+  - **Repo Worktree** — Base branch, copy ignored/untracked files
+
+**Expert mode** (`ExpertSetting.tsx`, `stores/settingsExpert.ts`). The header
+carries `ExpertModeSwitch`, which flips the persisted UI pref
+`settings_expert_mode`. `<ExpertSetting configKey value>` hides its children in
+basic mode while `value` equals the default at `configKey`, as returned by
+`get_config_defaults`. It shows them in expert mode, when the value is
+modified, when a search result revealed that `configKey` during the current
+Settings open, or while the defaults are unknown. `<ExpertSection>` hides a
+section, heading included, when all of its `ExpertSetting`s are hidden. The
+search index marks labels inside an `ExpertSetting` with `expert: true` and the
+`configKey`, so a result shows an **Expert** badge and reveals the control on
+open.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 
-The **Dictation** tab. One `<h3>` per section. Speech-to-text and
+The **Voice** page (nav key `dictation`). One `<h3>` per section. Speech-to-text and
 text-to-speech are separate sections, and each keeps its own advanced controls
 at its bottom — there is deliberately no shared "Advanced" section:
 

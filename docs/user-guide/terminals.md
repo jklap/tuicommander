@@ -217,7 +217,7 @@ Also accessible via the "Search Terminals" command in the palette.
 
 ### Copy on Select
 
-When enabled (Settings > General > Terminal or Settings > Appearance), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar. This is enabled by default.
+When enabled (Settings > Terminal > Copy on select), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar. This is enabled by default.
 
 ## Clear Terminal
 
@@ -225,7 +225,7 @@ When enabled (Settings > General > Terminal or Settings > Appearance), selecting
 
 ## Terminal Bell
 
-The bell behavior when receiving BEL character (\x07) is configurable in Settings > Appearance:
+The bell behavior when receiving BEL character (\x07) is set by `bell_style` in `config.json` (Settings has no control for it):
 - **none** — silent
 - **visual** — brief screen flash
 - **sound** — plays notification sound
