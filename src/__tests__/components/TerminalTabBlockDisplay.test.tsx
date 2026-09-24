@@ -15,7 +15,7 @@ vi.mock("../../stores/appLogger", () => ({
 	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { GeneralTab } from "../../components/SettingsPanel/tabs/GeneralTab";
+import { TerminalTab } from "../../components/SettingsPanel/tabs/TerminalTab";
 import { settingsStore } from "../../stores/settings";
 
 /** A `SettingToggle` renders `<div class=toggle><input type=checkbox><span>{label}</span></div>`,
@@ -59,7 +59,7 @@ function savedConfigs(): Record<string, unknown>[] {
 		.map(([, args]) => (args as { config: Record<string, unknown> }).config);
 }
 
-describe("GeneralTab block display toggles", () => {
+describe("TerminalTab block display toggles", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockInvoke.mockImplementation(invokeImpl());
@@ -73,7 +73,7 @@ describe("GeneralTab block display toggles", () => {
 
 	it("renders every toggle under the Terminal heading", async () => {
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 
 		const terminalHeading = Array.from(container.querySelectorAll("h3")).find((h) => h.textContent === "Terminal");
 		expect(terminalHeading).toBeDefined();
@@ -92,7 +92,7 @@ describe("GeneralTab block display toggles", () => {
 	it("shows the values the config was loaded with", async () => {
 		mockInvoke.mockImplementation(invokeImpl({ show_block_timestamps: false, block_folding_enabled: false }));
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 
 		expect(toggleFor(container, TIMESTAMPS).checked).toBe(false);
 		expect(toggleFor(container, FOLDING).checked).toBe(false);
@@ -100,7 +100,7 @@ describe("GeneralTab block display toggles", () => {
 
 	it("defaults every toggle on when the config carries none of the fields", async () => {
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 
 		for (const { label } of DEFAULT_ON) {
 			expect(toggleFor(container, label).checked, `"${label}" did not default on`).toBe(true);
@@ -112,7 +112,7 @@ describe("GeneralTab block display toggles", () => {
 		mockInvoke.mockImplementation(invokeImpl({ [key]: true }));
 		await settingsStore.hydrate();
 
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 		mockInvoke.mockClear();
 		fireEvent.change(toggleFor(container, label), { target: { checked: false } });
 
@@ -133,7 +133,7 @@ describe("GeneralTab block display toggles", () => {
 		mockInvoke.mockImplementation(invokeImpl({ show_block_timestamps: true }));
 		await settingsStore.hydrate();
 
-		const first = render(() => <GeneralTab />);
+		const first = render(() => <TerminalTab />);
 		fireEvent.change(toggleFor(first.container, TIMESTAMPS), { target: { checked: false } });
 		await vi.advanceTimersByTimeAsync(600);
 		const written = savedConfigs()[0];
@@ -141,7 +141,7 @@ describe("GeneralTab block display toggles", () => {
 
 		mockInvoke.mockImplementation(invokeImpl(written));
 		await settingsStore.hydrate();
-		const { container } = render(() => <GeneralTab />);
+		const { container } = render(() => <TerminalTab />);
 		expect(toggleFor(container, TIMESTAMPS).checked).toBe(false);
 	});
 });

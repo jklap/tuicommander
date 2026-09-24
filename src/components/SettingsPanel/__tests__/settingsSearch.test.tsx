@@ -55,7 +55,11 @@ describe("SettingsSearchResults", () => {
 	});
 
 	it("lists matches from several tabs at once", () => {
-		const rows = rowsFor("terminal");
+		// "terminal" no longer spans tabs — Story 858 consolidated every
+		// terminal-related setting onto its own "Terminal" tab. "tab" still does:
+		// General's "Confirm before closing a tab" and Appearance's tab-management
+		// settings ("Split Tab Mode", "Tab Ordering", ...).
+		const rows = rowsFor("tab");
 		expect(rows.some((r) => r.includes("General"))).toBe(true);
 		expect(rows.some((r) => r.includes("Appearance"))).toBe(true);
 	});

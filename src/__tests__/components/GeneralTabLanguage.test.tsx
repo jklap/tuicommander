@@ -79,7 +79,9 @@ describe("GeneralTab language picker", () => {
 		const { container } = render(() => <GeneralTab />);
 		const labels = Array.from(container.querySelectorAll("label")).map((el) => el.textContent);
 		expect(labels).not.toContain("Language");
-		expect(labels).toContain("Shell");
+		// Non-vacuity: the tab rendered, so the absence above is meaningful.
+		const headings = Array.from(container.querySelectorAll("h3")).map((el) => el.textContent);
+		expect(headings).toContain("Confirmations");
 	});
 
 	it("offers one option per locale that has a catalog", () => {

@@ -124,6 +124,37 @@ describe("SettingsPanel", () => {
 		expect(labels).not.toContain("Groups");
 	});
 
+	it("shows the new Terminal, Developer Tools and Keyboard Shortcuts nav items, and the Voice label", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const navItems = container.querySelectorAll(".navItem");
+		const labels = Array.from(navItems).map((n) => n.textContent);
+		expect(labels).toContain("Terminal");
+		expect(labels).toContain("Developer Tools");
+		expect(labels).toContain("Keyboard Shortcuts");
+		expect(labels).toContain("Voice");
+		expect(labels).not.toContain("Dictation");
+	});
+
+	it("hides the AI Chat nav item while the feature flag is off", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const navItems = container.querySelectorAll(".navItem");
+		const labels = Array.from(navItems).map((n) => n.textContent);
+		expect(labels).not.toContain("AI Chat");
+		expect(labels).not.toContain("Providers");
+	});
+
+	it("shows the shortcut editor when the Keyboard Shortcuts nav item is active", () => {
+		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
+		const navItems = container.querySelectorAll(".navItem");
+		const item = Array.from(navItems).find((n) => n.textContent === "Keyboard Shortcuts")!;
+		fireEvent.click(item);
+
+		const heading = container.querySelector(".section h3");
+		expect(heading!.textContent).toBe("Keyboard Shortcuts");
+		// Reused from HelpPanel's KeyboardShortcutsTab — same shortcut rows render here.
+		expect(container.querySelectorAll("kbd").length).toBeGreaterThan(0);
+	});
+
 	it("close button calls onClose", () => {
 		const onClose = vi.fn();
 		const { container } = render(() => <SettingsPanel visible={true} onClose={onClose} />);
@@ -143,15 +174,13 @@ describe("SettingsPanel", () => {
 	it("switching nav items shows correct content", () => {
 		const { container } = render(() => <SettingsPanel visible={true} onClose={() => {}} />);
 
-		// Default is General (Git Integration moved to GitHub tab)
+		// Default is General (Terminal/Power Management moved to the Terminal tab)
 		const headings = container.querySelectorAll(".section h3");
-		expect(headings.length).toBeGreaterThanOrEqual(5);
+		expect(headings.length).toBeGreaterThanOrEqual(3);
 		// Use childNodes[0] to get heading text without tooltip content
 		const headingTexts = Array.from(headings).map((h) => h.childNodes[0]?.textContent?.trim() ?? "");
 		expect(headingTexts).toContain("General");
 		expect(headingTexts).toContain("Confirmations");
-		expect(headingTexts).toContain("Terminal");
-		expect(headingTexts).toContain("Power Management");
 		expect(headingTexts).toContain("Updates");
 
 		// Click Notifications nav item

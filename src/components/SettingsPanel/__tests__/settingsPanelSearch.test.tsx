@@ -76,7 +76,7 @@ describe("SettingsPanel search", () => {
 		expect(searchInput(container).value).toBe("");
 		expect(resultRows(container)).toHaveLength(0);
 		// The active tab is still rendered
-		expect(container.textContent).toContain("Power Management");
+		expect(container.textContent).toContain("Confirmations");
 	});
 
 	it("finds a setting that lives in a tab which was never opened", () => {
@@ -87,7 +87,7 @@ describe("SettingsPanel search", () => {
 		expect(rows[0].textContent).toContain("Master Volume");
 		expect(rows[0].textContent).toContain("Notifications");
 		// The General tab it replaced is gone while the query stands
-		expect(container.textContent).not.toContain("Power Management");
+		expect(container.textContent).not.toContain("Confirmations");
 	});
 
 	it("opens the result's tab, clears the query and scrolls to the setting", async () => {
@@ -120,7 +120,7 @@ describe("SettingsPanel search", () => {
 		expect(resultRows(container)).toHaveLength(1);
 		fireEvent.input(searchInput(container), { target: { value: "" } });
 		expect(resultRows(container)).toHaveLength(0);
-		expect(container.textContent).toContain("Power Management");
+		expect(container.textContent).toContain("Confirmations");
 	});
 
 	it("tells the user when nothing matches", () => {

@@ -9,6 +9,8 @@ const TAB_SOURCES: Record<string, string> = {
 	general: "tabs/GeneralTab.tsx",
 	appearance: "tabs/AppearanceTab.tsx",
 	notifications: "tabs/NotificationsTab.tsx",
+	terminal: "tabs/TerminalTab.tsx",
+	"keyboard-shortcuts": "tabs/KeyboardShortcutsTab.tsx",
 	dictation: "DictationSettings.tsx",
 	github: "tabs/GitHubTab.tsx",
 	mcp: "tabs/services/LocalMcpPanel.tsx",
@@ -17,7 +19,8 @@ const TAB_SOURCES: Record<string, string> = {
 	plugins: "tabs/PluginsTab.tsx",
 	"smart-prompts": "tabs/SmartPromptsTab.tsx",
 	agents: "tabs/AgentsTab.tsx",
-	providers: "tabs/ProvidersTab.tsx",
+	"ai-chat": "tabs/AiChatTab.tsx",
+	"developer-tools": "tabs/DeveloperToolsTab.tsx",
 };
 
 /** Occurrences the extraction rule cannot index, pinned so a new one is loud.
@@ -31,6 +34,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
 	notifications: { dynamic: 0, orphans: 0 },
+	terminal: { dynamic: 0, orphans: 0 },
+	// The `<label>{section.title}</label>` in the shortcut-conflict list — the
+	// section title is computed at runtime and has no static scroll target.
+	"keyboard-shortcuts": { dynamic: 1, orphans: 0 },
 	dictation: { dynamic: 0, orphans: 0 },
 	github: { dynamic: 0, orphans: 0 },
 	mcp: { dynamic: 0, orphans: 0 },
@@ -50,7 +57,8 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	agents: { dynamic: 8, orphans: 1 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
-	providers: { dynamic: 1, orphans: 0 },
+	"ai-chat": { dynamic: 1, orphans: 0 },
+	"developer-tools": { dynamic: 0, orphans: 0 },
 };
 
 const readTab = (file: string) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
@@ -116,14 +124,14 @@ describe("searchSettings", () => {
 
 	it("matches case-insensitively on any word order", () => {
 		const hits = searchSettings("THEME terminal", ALL_TABS);
-		expect(hits).toEqual([expect.objectContaining({ tab: "appearance", section: "Theme", label: "Terminal Theme" })]);
+		expect(hits).toEqual([expect.objectContaining({ tab: "terminal", section: "Theme", label: "Terminal Theme" })]);
 	});
 
 	it("matches a section heading, and the settings inside it", () => {
 		const hits = searchSettings("power management", ALL_TABS);
 		// The section entry first, then every setting it contains — searching a
 		// heading is how you browse a section you cannot name a field in.
-		expect(hits[0]).toEqual(expect.objectContaining({ tab: "general", section: "Power Management" }));
+		expect(hits[0]).toEqual(expect.objectContaining({ tab: "terminal", section: "Power Management" }));
 		expect(hits[0].label).toBeUndefined();
 		expect(hits.map((e) => e.label)).toEqual([
 			undefined,

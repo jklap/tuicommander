@@ -1,18 +1,23 @@
-import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
+import { type Component, createSignal, For, Match, Show, Switch, onMount } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
 import { appLogger } from "../../../stores/appLogger";
+import { settingsStore } from "../../../stores/settings";
+import { isTauri } from "../../../transport";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
 import { isEgoCliError } from "../../../types/ego";
+import { openDialog } from "../../../utils/nativeDialog";
+import { SettingInput } from "../SettingFields";
 import s from "../Settings.module.css";
 
 /**
  * Which model ego runs by default, and whether each provider can be used.
  *
- * Everything on this tab comes from ego's own command line and goes back to it.
- * TUICommander stores no API key, keeps nothing in its keyring, and speaks to
- * no provider: the one network call anywhere near this tab is `ego models
- * --refresh`, which ego makes, and only when a person presses Refresh.
+ * Everything below the ego executable field comes from ego's own command line
+ * and goes back to it. TUICommander stores no API key, keeps nothing in its
+ * keyring, and speaks to no provider: the one network call anywhere near this
+ * tab is `ego models --refresh`, which ego makes, and only when a person
+ * presses Refresh.
  *
  * Adding a credential is deliberately not here. `ego auth login` is an
  * interactive flow — a browser round trip or a device code — and running it
@@ -23,7 +28,7 @@ import s from "../Settings.module.css";
  * is an ACP session option, which changes one conversation. This changes the
  * default every new run starts from.
  */
-export const ProvidersTab: Component<{ client?: EgoCliClient }> = (props) => {
+export const AiChatTab: Component<{ client?: EgoCliClient }> = (props) => {
 	const client = () => props.client ?? egoCli;
 
 	const [data, setData] = createSignal<EgoProviders | null>(null);
@@ -72,8 +77,68 @@ export const ProvidersTab: Component<{ client?: EgoCliClient }> = (props) => {
 
 	const empty = () => data() !== null && (data()?.providers.length ?? 0) === 0;
 
+	const handleSelectEgo = async () => {
+		try {
+			const picked = await openDialog({
+				title: t("general.dialog.selectEgo", "Select the ego executable"),
+				defaultPath: settingsStore.state.egoExecutable || undefined,
+			});
+			if (picked) settingsStore.setEgoExecutable(picked);
+		} catch (err) {
+			appLogger.error("app", "Failed to pick the ego executable", err);
+		}
+	};
+
 	return (
 		<>
+			<div class={s.section}>
+				<h3>{t("general.heading.aiChat", "AI Chat")}</h3>
+
+				{/* The native picker exists only on desktop; a browser client names the path by hand. */}
+				<Show
+					when={isTauri()}
+					fallback={
+						<SettingInput
+							label={t("general.label.egoExecutable", "ego executable")}
+							value={settingsStore.state.egoExecutable}
+							onInput={(v) => settingsStore.setEgoExecutable(v)}
+							placeholder={t("general.placeholder.egoExecutable", "/usr/local/bin/ego")}
+							hint={t("general.hint.egoExecutable", "Path to the ego binary the AI Chat panel talks to over ACP")}
+						/>
+					}
+				>
+					<div class={s.group}>
+						<Show
+							when={settingsStore.isAcpConfigured()}
+							fallback={
+								<p class={s.hint}>
+									{t(
+										"general.hint.egoExecutableEmpty",
+										"Not configured: the AI Chat panel cannot start a conversation until you select the ego binary.",
+									)}
+								</p>
+							}
+						>
+							<p class={s.hint} style={{ color: "var(--success)" }}>
+								{t("general.hint.egoConfigured", "Configured at {path}", {
+									path: settingsStore.state.egoExecutable,
+								})}
+							</p>
+						</Show>
+						<div style={{ display: "flex", gap: "8px", "margin-top": "8px" }}>
+							<button class={s.testBtn} onClick={handleSelectEgo}>
+								{t("general.btn.selectEgo", "Select…")}
+							</button>
+							<Show when={settingsStore.isAcpConfigured()}>
+								<button class={s.testBtn} onClick={() => settingsStore.setEgoExecutable("")}>
+									{t("general.btn.clearEgo", "Clear")}
+								</button>
+							</Show>
+						</div>
+					</div>
+				</Show>
+			</div>
+
 			<div class={s.section}>
 				<h3>{t("providers.heading.defaultModel", "Default Model")}</h3>
 				<p class={s.hint}>
@@ -90,7 +155,7 @@ export const ProvidersTab: Component<{ client?: EgoCliClient }> = (props) => {
 						<p class={s.warning}>
 							{t(
 								"providers.unconfigured",
-								"ego is not configured. Name the ego binary under General → AI Chat, then come back — TUICommander launches that one binary and nothing else.",
+								"ego is not configured. Name the ego binary above, then come back — TUICommander launches that one binary and nothing else.",
 							)}
 						</p>
 					</Match>
@@ -102,7 +167,7 @@ export const ProvidersTab: Component<{ client?: EgoCliClient }> = (props) => {
 						<p class={s.warning}>
 							{t(
 								"providers.launchFailed",
-								"The configured ego executable could not be started. Check the path under General → AI Chat.",
+								"The configured ego executable could not be started. Check the path above.",
 							)}
 						</p>
 						<pre class={s.mcpSnippetPre}>{error()?.message}</pre>
