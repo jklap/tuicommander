@@ -44,13 +44,17 @@ import { t } from "../../i18n";
  * Repo-scoped tabs (`repo:<path>`) are not indexed: their nav key depends on
  * which repository the user means, and a global search box cannot know.
  *
- * ## Composed pages (mcp, ai-chat)
+ * A label inside `<Show when={isTauri()…}>` carries `platform: "desktop"`, one
+ * in that Show's `fallback` carries `platform: "browser"`; search offers each
+ * client only what it renders.
  *
- * `mcp` renders `LocalMcpPanel` and `UpstreamMcpPanel`; `ai-chat` renders only
- * `AiChatTab` (its ego section plus the inlined former ProvidersTab content, so
- * everything on that page IS indexed here). Where a page is genuinely composed
- * from more than one source file (`mcp`), only the primary source is indexed —
- * full multi-file extraction is story 860.
+ * ## Composed pages (mcp, remote-machines)
+ *
+ * A page rendered by several components is extracted from all of them, in
+ * render order: `mcp` is `LocalMcpPanel` then `UpstreamMcpPanel`,
+ * `remote-machines` is `RemoteMachinesTab` wrapping `RemoteMachinesPanel`. The
+ * drift test holds the source list and checks it against what `SettingsPanel`
+ * renders for each tab.
  */
 export interface SettingsSearchEntry {
 	/** `SettingsShell` nav key of the tab that renders this entry */
@@ -66,6 +70,8 @@ export interface SettingsSearchEntry {
 	expert?: boolean;
 	/** That `ExpertSetting`'s configKey — opening the result reveals it */
 	configKey?: string;
+	/** Rendered by one client only (an `isTauri()` Show or its fallback) */
+	platform?: "desktop" | "browser";
 }
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
@@ -140,10 +146,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "terminal", section: "Power Management", label: "Auto-Standby Timeout" },
 	{ tab: "terminal", section: "Power Management", label: "Content Indexing" },
 	// tabs/DeveloperToolsTab.tsx
-	{ tab: "developer-tools", section: "TUIC CLI", sectionKey: "general.heading.cli" },
-	{ tab: "developer-tools", section: "Code Intelligence", sectionKey: "general.heading.codeIntelligence" },
+	{ tab: "developer-tools", section: "TUIC CLI", sectionKey: "general.heading.cli", platform: "desktop" },
+	{
+		tab: "developer-tools",
+		section: "Code Intelligence",
+		sectionKey: "general.heading.codeIntelligence",
+		platform: "desktop",
+	},
 	{ tab: "developer-tools", section: "IDE", sectionKey: "developerTools.heading.ide" },
-	{ tab: "developer-tools", section: "Custom Launchers", sectionKey: "general.heading.customLaunchers" },
+	{
+		tab: "developer-tools",
+		section: "Custom Launchers",
+		sectionKey: "general.heading.customLaunchers",
+		platform: "desktop",
+	},
 	{ tab: "developer-tools", section: "IDE", label: "Default IDE", labelKey: "general.label.defaultIde" },
 	// tabs/AppearanceTab.tsx
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },
@@ -174,6 +190,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Notification Settings",
 		label: "Audio Output Device",
 		labelKey: "notifications.label.audioDevice",
+		platform: "desktop",
 	},
 	{
 		tab: "notifications",
@@ -203,10 +220,22 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "dictation", section: "Spoken replies", sectionKey: "dictation.heading.spokenReplies" },
 	{ tab: "dictation", section: "Hands-free conversation", sectionKey: "dictation.heading.handsFree" },
 	{ tab: "dictation", section: "Dictation", label: "Enable Dictation", labelKey: "dictation.enableLabel" },
-	{ tab: "dictation", section: "Dictation", label: "Hotkey", labelKey: "dictation.hotkeyLabel" },
-	{ tab: "dictation", section: "Dictation", label: "Long-press threshold", labelKey: "dictation.longPressLabel" },
+	{ tab: "dictation", section: "Dictation", label: "Hotkey", labelKey: "dictation.hotkeyLabel", platform: "desktop" },
+	{
+		tab: "dictation",
+		section: "Dictation",
+		label: "Long-press threshold",
+		labelKey: "dictation.longPressLabel",
+		platform: "desktop",
+	},
 	{ tab: "dictation", section: "Dictation", label: "Auto-send", labelKey: "dictation.autoSendLabel" },
-	{ tab: "dictation", section: "Speech recognition", label: "Input device", labelKey: "dictation.inputDeviceLabel" },
+	{
+		tab: "dictation",
+		section: "Speech recognition",
+		label: "Input device",
+		labelKey: "dictation.inputDeviceLabel",
+		platform: "desktop",
+	},
 	{ tab: "dictation", section: "Speech recognition", label: "Whisper Model", labelKey: "dictation.modelLabel" },
 	{ tab: "dictation", section: "Speech recognition", label: "Language", labelKey: "dictation.languageLabel" },
 	{ tab: "dictation", section: "Speech recognition", label: "Voice tuning", labelKey: "dictation.tuningLabel" },
@@ -250,6 +279,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Keyboard Shortcuts",
 		label: "Global Hotkey (Toggle Window)",
 		labelKey: "settings.globalHotkey",
+		platform: "desktop",
 	},
 	{
 		tab: "keyboard-shortcuts",
@@ -287,11 +317,23 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "github", section: "Worktree Defaults", label: "Auto-Fetch Interval" },
 	{ tab: "github", section: "Additional GitHub Accounts", label: "Add another github.com account" },
 	{ tab: "github", section: "Additional GitHub Accounts", label: "Add Enterprise account" },
-	// tabs/services/LocalMcpPanel.tsx
+	// tabs/services/LocalMcpPanel.tsx + tabs/services/UpstreamMcpPanel.tsx
 	{ tab: "mcp", section: "HTTP API Server", sectionKey: "services.heading.httpApiServer" },
 	{ tab: "mcp", section: "TUIC Tools" },
+	{ tab: "mcp", section: "Upstream MCP Servers" },
 	{ tab: "mcp", section: "HTTP API Server", label: "Server Status", labelKey: "services.label.serverStatus" },
 	{ tab: "mcp", section: "HTTP API Server", label: "MCP Connection", labelKey: "services.label.mcpConnection" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Upstreams on" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Authentication" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Timeout (s):" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "URL" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Bearer token" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "OAuth client ID" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Client Secret" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Scopes" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Command" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Args" },
+	{ tab: "mcp", section: "Upstream MCP Servers", label: "Working directory" },
 	// tabs/services/RemoteAccessPanel.tsx
 	{ tab: "remote-access", section: "Remote Access", sectionKey: "services.heading.remoteAccess" },
 	{ tab: "remote-access", section: "Tailscale HTTPS" },
@@ -338,8 +380,11 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-access", section: "Cloud Relay", label: "Relay Server URL", labelKey: "services.label.relayUrl" },
 	{ tab: "remote-access", section: "Cloud Relay", label: "Bearer Token", labelKey: "services.label.relayToken" },
 	{ tab: "remote-access", section: "Cloud Relay", label: "Session ID", labelKey: "services.label.relaySessionId" },
-	// tabs/RemoteMachinesTab.tsx
+	// tabs/RemoteMachinesTab.tsx + tabs/services/RemoteMachinesPanel.tsx
 	{ tab: "remote-machines", section: "Remote Machines", sectionKey: "settings.remoteMachines" },
+	{ tab: "remote-machines", section: "Remote Machines", label: "Port" },
+	{ tab: "remote-machines", section: "Remote Machines", label: "User" },
+	{ tab: "remote-machines", section: "Remote Machines", label: "Remote daemon port" },
 	// tabs/PluginsTab.tsx
 	{ tab: "plugins", section: "Plugins" },
 	{ tab: "plugins", section: "Plugins", label: "Check for plugin updates" },
@@ -356,13 +401,21 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "ai-chat", section: "AI Chat", sectionKey: "general.heading.aiChat" },
 	{ tab: "ai-chat", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
 	{ tab: "ai-chat", section: "Providers", sectionKey: "providers.heading.providers" },
-	{ tab: "ai-chat", section: "AI Chat", label: "ego executable", labelKey: "general.label.egoExecutable" },
 	{
 		tab: "ai-chat",
-		section: "Default Model",
-		label: "Default model",
-		labelKey: "providers.label.defaultModel",
+		section: "AI Chat",
+		label: "ego executable",
+		labelKey: "general.label.egoExecutable",
+		platform: "browser",
 	},
+	{
+		tab: "ai-chat",
+		section: "AI Chat",
+		label: "ego executable",
+		labelKey: "general.label.egoExecutable",
+		platform: "desktop",
+	},
+	{ tab: "ai-chat", section: "Default Model", label: "Default model", labelKey: "providers.label.defaultModel" },
 ];
 
 /** Section heading as rendered, i18n applied. */
@@ -383,14 +436,21 @@ function matches(entry: SettingsSearchEntry, terms: string[]): boolean {
 }
 
 /**
- * Entries matching `query`, restricted to tabs the user can actually open.
+ * Entries matching `query`, restricted to what the user can actually open.
  *
- * `availableTabs` is the live nav key set: the Dictation tab is absent in
- * browser mode, so its settings must not be offered — selecting one would open
- * a tab that does not exist.
+ * `availableTabs` is the live nav key set: AI Chat is absent while its
+ * experimental flag is off, so its settings must not be offered — selecting one
+ * would open a tab that does not exist. `client` drops the controls the other
+ * client renders instead: the global hotkey exists only on the desktop.
  */
-export function searchSettings(query: string, availableTabs: ReadonlySet<string>): SettingsSearchEntry[] {
+export function searchSettings(
+	query: string,
+	availableTabs: ReadonlySet<string>,
+	client: "desktop" | "browser",
+): SettingsSearchEntry[] {
 	const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
 	if (terms.length === 0) return [];
-	return SETTINGS_SEARCH_INDEX.filter((entry) => availableTabs.has(entry.tab) && matches(entry, terms));
+	return SETTINGS_SEARCH_INDEX.filter(
+		(entry) => availableTabs.has(entry.tab) && (!entry.platform || entry.platform === client) && matches(entry, terms),
+	);
 }

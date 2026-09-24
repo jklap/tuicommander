@@ -1,8 +1,8 @@
 import { type Component, Show } from "solid-js";
 import { AVAILABLE_LOCALES, localeName, t } from "../../../i18n";
+import { appLogger } from "../../../stores/appLogger";
 import type { UpdateChannel } from "../../../stores/settings";
 import { settingsStore } from "../../../stores/settings";
-import { appLogger } from "../../../stores/appLogger";
 import { updaterStore } from "../../../stores/updater";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";

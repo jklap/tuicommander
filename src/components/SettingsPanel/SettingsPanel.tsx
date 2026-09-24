@@ -204,9 +204,11 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 		return path ? repositoriesStore.getConnectionId(path) : undefined;
 	};
 
-	// Only tabs the nav actually offers: Dictation is absent in browser mode and
-	// AI Chat behind a flag, so their settings must not be offered either.
-	const results = () => searchSettings(query(), new Set(getGlobalTabs().map((tab) => tab.key)));
+	// Only tabs the nav actually offers (AI Chat sits behind a flag), and only
+	// controls this client renders: a desktop-only control would open a tab
+	// without it, so a browser is not offered it.
+	const results = () =>
+		searchSettings(query(), new Set(getGlobalTabs().map((tab) => tab.key)), isTauri() ? "desktop" : "browser");
 
 	const repoSettings = (path: string) => repoSettingsStore.getOrCreate(path, shortenHomePath(path));
 

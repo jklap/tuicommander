@@ -1,6 +1,6 @@
+import { render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../__tests__/mocks/tauri";
-import { render, waitFor } from "@solidjs/testing-library";
 
 vi.mock("../../../stores/ui", async () => {
 	const { createStore } = await import("solid-js/store");
@@ -13,8 +13,8 @@ vi.mock("../../../stores/ui", async () => {
 	};
 });
 
-import { uiStore } from "../../../stores/ui";
 import { settingsExpertStore } from "../../../stores/settingsExpert";
+import { uiStore } from "../../../stores/ui";
 import { ExpertSection, ExpertSetting } from "../ExpertSetting";
 
 const DEFAULTS = {

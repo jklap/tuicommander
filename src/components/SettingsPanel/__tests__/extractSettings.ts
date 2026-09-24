@@ -12,14 +12,20 @@
  *   - text is read from `t("key", "Default")`, from a `{"literal"}` or from a
  *     leading plain-text run; anything else is dynamic and is only counted,
  *   - a setting between `<ExpertSetting configKey="…">` and its closing tag
- *     carries that configKey (the index marks it `expert`).
+ *     carries that configKey (the index marks it `expert`),
+ *   - a section or setting inside `<Show when={isTauri()…}>` is `desktop`-only,
+ *     one inside that Show's `fallback={…}` is `browser`-only.
  */
+
+/** The client a gated occurrence renders in; absent means every client. */
+export type ClientPlatform = "desktop" | "browser";
 
 export interface ExtractedText {
 	/** i18n key, when the text came from a `t()` call */
 	key?: string;
 	/** Default (English) text */
 	text: string;
+	platform?: ClientPlatform;
 }
 
 export interface ExtractedTab {
@@ -49,7 +55,9 @@ function endOfOpenTag(src: string, from: number): number {
 const T_CALL = /^\{\s*t\(\s*"([^"]*)"\s*,\s*"((?:[^"\\]|\\.)*)"/;
 const BRACED_LITERAL = /^\{\s*"((?:[^"\\]|\\.)*)"\s*\}/;
 const BARE_LITERAL = /^"((?:[^"\\]|\\.)*)"/;
-const PLAIN = /^([^<{}]+)/;
+// A plain run followed by `{` continues into a runtime value — the rendered
+// text is not the run, so it is dynamic rather than a truncated label.
+const PLAIN = /^([^<{}]+)(?=<|$)/;
 
 /** Read the statically-known text out of `t("k","V")`, `{"V"}` or `"V"`. */
 function staticExpression(trimmed: string): ExtractedText | null {
@@ -84,9 +92,7 @@ function unescapeJsx(s: string): string {
 }
 
 /** Element occurrences (`<h3>`, `<label>`) and `label=` props, in source order. */
-function* occurrences(
-	src: string,
-): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number }> {
+function* occurrences(src: string): Generator<{ kind: "h3" | "label"; inner: string; isProp: boolean; at: number }> {
 	const re = /<(h3|label)\b|\blabel=/g;
 	let m: RegExpExecArray | null;
 	while ((m = re.exec(src)) !== null) {
@@ -119,10 +125,65 @@ function expertSpans(src: string): { start: number; end: number; configKey: stri
 	return spans;
 }
 
+/** Index just past the `}` closing the brace that opens at `from`. */
+function endOfBraces(src: string, from: number): number {
+	let depth = 0;
+	for (let i = from; i < src.length; i++) {
+		if (src[i] === "{") depth++;
+		else if (src[i] === "}" && --depth === 0) return i + 1;
+	}
+	return src.length;
+}
+
+/** Index of the `</Show>` closing the Show whose open tag ends at `open`,
+ * skipping nested Shows (a self-closing `<Show … />` opens nothing). */
+function closeOfShow(src: string, open: number): number {
+	const re = /<Show\b|<\/Show>/g;
+	re.lastIndex = open + 1;
+	let depth = 0;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(src)) !== null) {
+		if (m[0] === "</Show>") {
+			if (depth === 0) return m.index;
+			depth--;
+		} else {
+			const end = endOfOpenTag(src, m.index);
+			if (end < 0) break;
+			if (src[end - 1] !== "/") depth++;
+			re.lastIndex = end + 1;
+		}
+	}
+	return src.length;
+}
+
+/** Source spans that render in one client only: the body of a
+ * `<Show when={isTauri()…}>` renders on the desktop, its `fallback` in a
+ * browser. A compound `isTauri() && x` is still desktop-only. */
+function platformSpans(src: string): { start: number; end: number; platform: ClientPlatform }[] {
+	const spans: { start: number; end: number; platform: ClientPlatform }[] = [];
+	for (const m of src.matchAll(/<Show\b/g)) {
+		const open = endOfOpenTag(src, m.index);
+		if (open < 0) continue;
+		const tag = src.slice(m.index, open);
+		if (!/\bwhen=\{\s*isTauri\(\)/.test(tag)) continue;
+		const fallback = tag.match(/\bfallback=\{/);
+		if (fallback?.index !== undefined) {
+			const start = m.index + fallback.index + fallback[0].length - 1;
+			spans.push({ start, end: endOfBraces(src, start), platform: "browser" });
+		}
+		if (src[open - 1] !== "/") spans.push({ start: open, end: closeOfShow(src, open), platform: "desktop" });
+	}
+	return spans;
+}
+
 export function extractTab(src: string): ExtractedTab {
 	const out: ExtractedTab = { sections: [], settings: [], dynamic: 0 };
 	const spans = expertSpans(src);
 	const expertKeyAt = (at: number) => spans.find((span) => at > span.start && at < span.end)?.configKey;
+	const gates = platformSpans(src);
+	// Innermost gate wins: the latest-starting span that still contains `at`
+	const platformAt = (at: number) =>
+		gates.filter((gate) => at > gate.start && at < gate.end).sort((a, b) => b.start - a.start)[0]?.platform;
 	let section = "";
 	for (const occ of occurrences(src)) {
 		const text = staticText(occ.inner, !occ.isProp);
@@ -130,12 +191,13 @@ export function extractTab(src: string): ExtractedTab {
 			out.dynamic++;
 			continue;
 		}
+		const platform = platformAt(occ.at);
 		if (occ.kind === "h3") {
 			section = text.text;
-			out.sections.push(text);
+			out.sections.push({ ...text, ...(platform ? { platform } : {}) });
 		} else {
 			const configKey = expertKeyAt(occ.at);
-			out.settings.push({ ...text, section, ...(configKey ? { configKey } : {}) });
+			out.settings.push({ ...text, section, ...(configKey ? { configKey } : {}), ...(platform ? { platform } : {}) });
 		}
 	}
 	return out;
@@ -152,4 +214,20 @@ export function extractRenderedTabKeys(src: string): string[] {
 	const keys = new Set<string>();
 	for (const m of src.matchAll(/activeTab\(\)\s*===\s*"([^"]+)"/g)) keys.add(m[1]);
 	return [...keys];
+}
+
+/** Components `SettingsPanel` renders directly for each nav key, in order.
+ *
+ * Read from the body of each `<Show when={activeTab() === "…"…}>`: a page can
+ * be composed of several components, and every one of them has to be a source
+ * of that page's index entries. */
+export function extractRenderedTabComponents(src: string): Record<string, string[]> {
+	const out: Record<string, string[]> = {};
+	for (const m of src.matchAll(/<Show\s+when=\{activeTab\(\)\s*===\s*"([^"]+)"/g)) {
+		const open = endOfOpenTag(src, m.index);
+		if (open < 0) continue;
+		const body = src.slice(open + 1, closeOfShow(src, open));
+		out[m[1]] = [...body.matchAll(/<([A-Z]\w*)\b/g)].map((c) => c[1]);
+	}
+	return out;
 }

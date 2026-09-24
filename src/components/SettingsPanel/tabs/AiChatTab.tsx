@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, Match, Show, Switch, onMount } from "solid-js";
+import { type Component, createSignal, For, Match, onMount, Show, Switch } from "solid-js";
 import { t } from "../../../i18n";
 import { type EgoCliClient, egoCli } from "../../../services/egoCli";
 import { appLogger } from "../../../stores/appLogger";
@@ -108,6 +108,7 @@ export const AiChatTab: Component<{ client?: EgoCliClient }> = (props) => {
 					}
 				>
 					<div class={s.group}>
+						<label>{t("general.label.egoExecutable", "ego executable")}</label>
 						<Show
 							when={settingsStore.isAcpConfigured()}
 							fallback={
@@ -165,10 +166,7 @@ export const AiChatTab: Component<{ client?: EgoCliClient }> = (props) => {
 					    time, so the two are never collapsed into "ego is missing". */}
 					<Match when={error()?.code === "launchFailed"}>
 						<p class={s.warning}>
-							{t(
-								"providers.launchFailed",
-								"The configured ego executable could not be started. Check the path above.",
-							)}
+							{t("providers.launchFailed", "The configured ego executable could not be started. Check the path above.")}
 						</p>
 						<pre class={s.mcpSnippetPre}>{error()?.message}</pre>
 					</Match>

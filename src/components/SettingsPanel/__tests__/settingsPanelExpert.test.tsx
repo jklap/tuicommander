@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mockInvoke } from "../../../__tests__/mocks/tauri";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mockInvoke } from "../../../__tests__/mocks/tauri";
 
 vi.mock("../../../stores/settings", () => ({
 	settingsStore: {
@@ -69,8 +69,8 @@ vi.mock("../settingsSearchIndex", async (importOriginal) => {
 	};
 	return {
 		...real,
-		searchSettings: (query: string, tabs: ReadonlySet<string>) =>
-			query === "test expert" ? [entry] : real.searchSettings(query, tabs),
+		searchSettings: (query: string, tabs: ReadonlySet<string>, client: "desktop" | "browser") =>
+			query === "test expert" ? [entry] : real.searchSettings(query, tabs, client),
 	};
 });
 
