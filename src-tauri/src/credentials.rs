@@ -93,6 +93,7 @@ pub(crate) enum Credential<'a> {
     AiChatApiKey,
     LlmApiKey,
     GithubOauthToken,
+    CircleCiToken,
     RemoteSessionToken,
     RelayToken,
     PushVapidPrivateKey,
@@ -115,6 +116,7 @@ impl Credential<'_> {
             Self::AiChatApiKey => "ai-chat/api-key".into(),
             Self::LlmApiKey => "llm-api/api-key".into(),
             Self::GithubOauthToken => "github/oauth-token".into(),
+            Self::CircleCiToken => "circleci/token".into(),
             Self::RemoteSessionToken => "remote/session-token".into(),
             Self::RelayToken => "remote/relay-token".into(),
             Self::PushVapidPrivateKey => "remote/push-vapid-private-key".into(),
@@ -137,6 +139,7 @@ impl Credential<'_> {
             | Self::RelayToken
             | Self::PushVapidPrivateKey
             | Self::GithubToken(_)
+            | Self::CircleCiToken
             | Self::RemoteConnection(_)
             | Self::RemotePairingToken(_) => None,
         }
@@ -622,6 +625,7 @@ mod tests {
             "github/oauth-token"
         );
         assert_eq!(Credential::McpUpstream("foo").vault_key(), "mcp/foo");
+        assert_eq!(Credential::CircleCiToken.vault_key(), "circleci/token");
     }
 
     // The key is the connection's UUID, which is what makes `delete_remote_connection`
