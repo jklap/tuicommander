@@ -316,7 +316,7 @@ Used for all PTY input: typed characters, escape sequences (arrow keys), control
 
 Renders combined log history + current screen with auto-scroll management.
 
-**Text wrapping strategy:** Normal text uses `pre-wrap` so long lines wrap on narrow screens. Consecutive lines containing box-drawing characters (U+2500–U+257F) are grouped into scrollable `tableBlock` containers with `white-space: pre` and `overflow-x: auto`, preserving alignment for tables, tree views, and bordered output. Grouping is done by `groupLineBlocks()` and detection by `hasBoxDrawing()` in `src/mobile/utils/logLine.ts`.
+**Text wrapping strategy:** `reflowDisplayLines()` joins prose rows that the agent hard-wrapped before they reached the phone. It estimates the agent's wrap width from the widest row in a contiguous prose run; `LogLine.cols` provides a lower-bound gate because Claude may wrap near 80 columns inside a much wider PTY. Short lines, paragraph breaks, lists, indented code, and box drawing stay separate. The browser then wraps the joined paragraph once at the phone width. Normal text uses `pre-wrap`; consecutive box-drawing lines stay in scrollable `tableBlock` containers with `white-space: pre` and `overflow-x: auto`. The rendering helpers live in `src/mobile/utils/logLine.ts`.
 
 **Initialization:**
 1. HTTP fetch: `GET /sessions/{id}/output?format=log`
