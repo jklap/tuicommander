@@ -496,6 +496,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `plan_panel_width` | `u32` | `350` | Plan panel width in pixels |
 | `git_panel_width` | `u32` | `380` | Git panel width in pixels |
 | `settings_nav_width` | `u32` | `180` | Settings nav column width in pixels |
+| `settings_expert_mode` | `bool` | `false` | Settings "expert mode": off hides an expert control that is still at its default; on shows every control |
 | `diff_view_mode` | `String` | `"split"` | Diff viewer: `split` or `unified` |
 | `detached_panels` | `HashMap<String, String>` | `{}` | Panel id to detached window label |
 | `github_section_collapsed` | `HashMap<String, bool>` | `{}` | Collapsed GitHub sections (`my-prs`, `prs`, `issues`); absent key means the section's own default |
@@ -826,6 +827,34 @@ repository maps to which machine.
 | `auto_send` | `bool` | `false` | Auto-submit after transcription |
 
 **Commands:** `get_dictation_config()`, `set_dictation_config(config)`
+
+### Config Defaults (read-only, no file)
+
+**Type:** `ConfigDefaults`
+
+Backs Settings "expert mode" (SPEC.md → Settings navigation): an expert
+control compares its live value against the matching default here to decide
+whether it is hidden (at default, basic mode) or shown (modified, or expert
+mode on). Every field is that domain's own `Default::default()` — the exact
+value `load_json_config` falls back to when the file is missing — never a
+second, hand-copied literal. A dedicated test
+(`config::tests::get_config_defaults_returns_each_domains_own_default`) fails
+if the command ever diverges from that source, and a second one
+(`assert_no_field_default_drift_except`) fails if a struct's own
+`#[serde(default = ...)]` attributes drift from its `impl Default` — with a
+documented exception list for fields that are deliberately asymmetric, e.g.
+`mcp_server_enabled` (`true` for a brand-new install, `false` for an existing
+config.json written before the field existed — see
+`app_config_serde_default_for_new_fields`).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `app` | `AppConfig` | `AppConfig::default()` |
+| `notifications` | `NotificationConfig` | `NotificationConfig::default()` |
+| `agent_settings` | `AgentSettings` | Default for one entry of `AgentsConfig.agents` — there is no single default for the map itself |
+| `dictation` | `DictationConfig` | Desktop builds only — absent under `--no-default-features` (`tuic-remote`), where `mod dictation` does not compile and the route is not registered |
+
+**Command:** `get_config_defaults()`. HTTP: `GET /config/defaults` (see `docs/api/http-api.md`).
 
 ## Cache Files
 

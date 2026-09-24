@@ -2023,6 +2023,7 @@ pub fn run() {
             config::save_keybindings,
             boot_commands::load_agents_config_async,
             config::save_agents_config,
+            config::get_config_defaults,
             agent_hook_commands::set_agent_hook_instrumentation,
             agent_hook_commands::get_agent_hook_state,
             agent_hook_commands::get_agent_native_status_signals,

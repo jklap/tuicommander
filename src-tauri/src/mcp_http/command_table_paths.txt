@@ -65,6 +65,7 @@
 /config/branch-label
 /config/clear-caches
 /config/clear-repo-caches
+/config/defaults
 /config/hash-password
 /config/keybindings
 /config/note-assets/delete

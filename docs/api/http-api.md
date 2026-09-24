@@ -1125,6 +1125,16 @@ PUT /config/ui-prefs
 
 Load/save `UIPrefsConfig`.
 
+### Config Defaults
+
+```
+GET /config/defaults
+```
+
+Read-only. Returns `ConfigDefaults` — see `docs/backend/config.md` → "Config
+Defaults" — for Settings "expert mode": `{ app, notifications, agent_settings,
+dictation? }`. `dictation` is present only on desktop builds.
+
 ### Repository Settings
 
 ```

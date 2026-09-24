@@ -521,6 +521,7 @@ describe("transport", () => {
 				["get_hands_free_default_notice", {}, "GET", "/dictation/hands-free/default-notice"],
 				["disarm_hands_free_dictation", {}, "POST", "/dictation/hands-free/disarm"],
 				["get_relay_status", {}, "GET", "/system/relay-status"],
+				["get_config_defaults", {}, "GET", "/config/defaults"],
 				["check_update_channel", { channel: "nightly" }, "GET", "/system/check-update?channel=nightly"],
 				["get_session_shell_family", { sessionId: "s1" }, "GET", "/sessions/s1/shell-family"],
 			])("maps %s to %s %s", (command, args, method, path) => {
