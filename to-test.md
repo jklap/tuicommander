@@ -3722,3 +3722,8 @@ or credential is touched.
       Settings → AI Chat (Experimental Features on) shows only Default Model
       and Providers. With the ego path empty, AI Chat says to name the binary
       in Settings → General.
+## Mobile Basic Auth recovery (2026-09-25) — **Rust, needs a `make dev` restart**
+
+- [ ] **[HUMAN]** On a phone PWA with remote access enabled, enter a wrong password
+      until the rate-limit message appears, then enter the correct credentials without
+      reloading. The app must reconnect and resume the session.
