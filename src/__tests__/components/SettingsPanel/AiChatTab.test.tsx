@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 import "../../mocks/tauri";
 
-import { ProvidersTab } from "../../../components/SettingsPanel/tabs/ProvidersTab";
+import { AiChatTab } from "../../../components/SettingsPanel/tabs/AiChatTab";
 import type { EgoCliClient } from "../../../services/egoCli";
 import type { EgoCliError, EgoProvider, EgoProviders } from "../../../types/ego";
 
@@ -42,7 +42,7 @@ function fakeClient(over: Partial<EgoCliClient> = {}): EgoCliClient & { refreshe
 	};
 }
 
-describe("ProvidersTab", () => {
+describe("AiChatTab", () => {
 	it("lists every provider ego reported, with its models", async () => {
 		const client = fakeClient({
 			providers: async () =>
@@ -52,7 +52,7 @@ describe("ProvidersTab", () => {
 				]),
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		expect(await screen.findByText("anthropic")).toBeTruthy();
 		expect(screen.getByText("openrouter")).toBeTruthy();
@@ -64,7 +64,7 @@ describe("ProvidersTab", () => {
 
 	it("opens without asking ego to reach the network", async () => {
 		const client = fakeClient();
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		await screen.findByText(/ego knows no providers yet/);
 		expect(client.refreshes).toEqual([false]);
@@ -72,7 +72,7 @@ describe("ProvidersTab", () => {
 
 	it("asks for a refresh only when the button is pressed", async () => {
 		const client = fakeClient();
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 		await screen.findByText(/ego knows no providers yet/);
 
 		fireEvent.click(screen.getByRole("button", { name: "Refresh from providers" }));
@@ -89,7 +89,7 @@ describe("ProvidersTab", () => {
 			setDefaultModel: async () => snapshot([provider("anthropic", models)], "anthropic/claude-haiku-4-5"),
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 		const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
 		expect(select.value).toBe("anthropic/claude-opus-5");
 
@@ -106,7 +106,7 @@ describe("ProvidersTab", () => {
 		});
 		const spy = vi.spyOn(client, "setDefaultModel");
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 		const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
 		fireEvent.change(select, { target: { value: "anthropic/claude-haiku-4-5" } });
 
@@ -120,7 +120,7 @@ describe("ProvidersTab", () => {
 		});
 		const spy = vi.spyOn(client, "setDefaultModel");
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 		const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
 		fireEvent.change(select, { target: { value: "anthropic/claude-opus-5" } });
 
@@ -132,7 +132,7 @@ describe("ProvidersTab", () => {
 			providers: async () => snapshot([provider("anthropic", [model("anthropic/claude-opus-5")])], null),
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		// Without this option the picker would show the first model and imply ego
 		// had chosen it.
@@ -150,7 +150,7 @@ describe("ProvidersTab", () => {
 				]),
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		expect(await screen.findByText("credential stored")).toBeTruthy();
 		// Expired is not "log in again" — ego renews it by itself.
@@ -170,7 +170,7 @@ describe("ProvidersTab", () => {
 				]),
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		// The badge is our word for the state; this is ego's word for the case.
 		expect(await screen.findByText("the credential store is locked")).toBeTruthy();
@@ -184,9 +184,9 @@ describe("ProvidersTab", () => {
 			},
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
-		expect(await screen.findByText(/Name the ego binary under General/)).toBeTruthy();
+		expect(await screen.findByText(/Name the ego binary above/)).toBeTruthy();
 		expect(screen.queryByRole("combobox")).toBeNull();
 	});
 
@@ -197,11 +197,11 @@ describe("ProvidersTab", () => {
 			},
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		expect(await screen.findByText(/could not be started/)).toBeTruthy();
 		expect(screen.getByText(/os error 2/)).toBeTruthy();
-		expect(screen.queryByText(/Name the ego binary under General/)).toBeNull();
+		expect(screen.queryByText(/Name the ego binary above/)).toBeNull();
 	});
 
 	it("reports a failure with what ego printed", async () => {
@@ -216,7 +216,7 @@ describe("ProvidersTab", () => {
 			},
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		expect(await screen.findByText("ego exited with 1")).toBeTruthy();
 		expect(screen.getByText("ego models --json")).toBeTruthy();
@@ -236,7 +236,7 @@ describe("ProvidersTab", () => {
 			},
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 		await screen.findByText("ego exited with 1");
 
 		fireEvent.click(screen.getByRole("button", { name: "Refresh from providers" }));
@@ -257,7 +257,7 @@ describe("ProvidersTab", () => {
 				]),
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		// Two models, one cause: a source that is down says the same sentence
 		// about every model it offers.
@@ -273,9 +273,33 @@ describe("ProvidersTab", () => {
 			},
 		});
 
-		render(() => <ProvidersTab client={client} />);
+		render(() => <AiChatTab client={client} />);
 
 		expect(await screen.findByText(/the window has gone away/)).toBeTruthy();
-		expect(screen.queryByText(/Name the ego binary under General/)).toBeNull();
+		expect(screen.queryByText(/Name the ego binary above/)).toBeNull();
+	});
+});
+
+// Story 858: the ego executable field (formerly on GeneralTab, under a
+// "General → AI Chat" heading) moved onto this tab alongside the provider
+// picker it was cross-referenced from. GeneralTab must no longer own it.
+describe("AiChatTab — ego executable placement", () => {
+	it("renders the AI Chat heading and the ego executable control", async () => {
+		const client = fakeClient();
+		const { container } = render(() => <AiChatTab client={client} />);
+
+		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.childNodes[0]?.textContent?.trim());
+		expect(headings).toContain("AI Chat");
+		// Desktop (isTauri() true in tests): rendered as a button, not a text input.
+		expect(screen.getByRole("button", { name: "Select…" })).toBeTruthy();
+	});
+
+	it("does not render an ego executable control on GeneralTab", async () => {
+		const { GeneralTab } = await import("../../../components/SettingsPanel/tabs/GeneralTab");
+		const { container } = render(() => <GeneralTab />);
+
+		const headings = Array.from(container.querySelectorAll("h3")).map((h) => h.childNodes[0]?.textContent?.trim());
+		expect(headings).not.toContain("AI Chat");
+		expect(screen.queryByRole("button", { name: "Select…" })).toBeNull();
 	});
 });

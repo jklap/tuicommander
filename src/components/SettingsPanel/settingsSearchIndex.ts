@@ -40,6 +40,14 @@ import { t } from "../../i18n";
  *
  * Repo-scoped tabs (`repo:<path>`) are not indexed: their nav key depends on
  * which repository the user means, and a global search box cannot know.
+ *
+ * ## Composed pages (mcp, ai-chat)
+ *
+ * `mcp` renders `LocalMcpPanel` and `UpstreamMcpPanel`; `ai-chat` renders only
+ * `AiChatTab` (its ego section plus the inlined former ProvidersTab content, so
+ * everything on that page IS indexed here). Where a page is genuinely composed
+ * from more than one source file (`mcp`), only the primary source is indexed —
+ * full multi-file extraction is story 860.
  */
 export interface SettingsSearchEntry {
 	/** `SettingsShell` nav key of the tab that renders this entry */
@@ -56,18 +64,11 @@ export interface SettingsSearchEntry {
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
-	{ tab: "general", section: "AI Chat", sectionKey: "general.heading.aiChat" },
-	{ tab: "general", section: "TUIC CLI", sectionKey: "general.heading.cli" },
-	{ tab: "general", section: "Code Intelligence", sectionKey: "general.heading.codeIntelligence" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
-	{ tab: "general", section: "Terminal", sectionKey: "general.heading.terminal" },
-	{ tab: "general", section: "Power Management", sectionKey: "general.heading.powerManagement" },
 	{ tab: "general", section: "Updates", sectionKey: "general.heading.updates" },
-	{ tab: "general", section: "Custom Launchers", sectionKey: "general.heading.customLaunchers" },
 	{ tab: "general", section: "Experimental Features", sectionKey: "general.heading.experimental" },
 	{ tab: "general", section: "General", label: "Language", labelKey: "general.label.language" },
-	{ tab: "general", section: "General", label: "Shell", labelKey: "general.label.shell" },
-	{ tab: "general", section: "AI Chat", label: "ego executable", labelKey: "general.label.egoExecutable" },
+	{ tab: "general", section: "General", label: "Show agent context bar" },
 	{
 		tab: "general",
 		section: "Confirmations",
@@ -80,41 +81,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Confirm before closing a tab",
 		labelKey: "general.toggle.confirmBeforeClosingTab",
 	},
-	{ tab: "general", section: "Terminal", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Allow OSC 52 clipboard writes",
-		labelKey: "general.toggle.osc52Clipboard",
-	},
-	{ tab: "general", section: "Terminal", label: "Show agent context bar" },
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Show block timestamps",
-		labelKey: "general.toggle.showBlockTimestamps",
-	},
-	{ tab: "general", section: "Terminal", label: "Block folding", labelKey: "general.toggle.blockFolding" },
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Show scrollbar marks",
-		labelKey: "general.toggle.showScrollbarMarks",
-	},
-	{
-		tab: "general",
-		section: "Terminal",
-		label: "Reflow scrollback on resize",
-		labelKey: "general.toggle.scrollbackReflow",
-	},
-	{
-		tab: "general",
-		section: "Power Management",
-		label: "Prevent sleep when busy",
-		labelKey: "general.toggle.preventSleepWhenBusy",
-	},
-	{ tab: "general", section: "Power Management", label: "Auto-Standby Timeout" },
-	{ tab: "general", section: "Power Management", label: "Content Indexing" },
 	{
 		tab: "general",
 		section: "Updates",
@@ -122,19 +88,61 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "general.toggle.autoUpdateEnabled",
 	},
 	{ tab: "general", section: "Updates", label: "Update Channel", labelKey: "general.label.updateChannel" },
-	{ tab: "general", section: "Updates", label: "Default IDE", labelKey: "general.label.defaultIde" },
+	// tabs/TerminalTab.tsx
+	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
+	{ tab: "terminal", section: "Terminal", sectionKey: "general.heading.terminal" },
+	{ tab: "terminal", section: "Power Management", sectionKey: "general.heading.powerManagement" },
+	{ tab: "terminal", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
+	{ tab: "terminal", section: "Terminal", label: "Shell", labelKey: "general.label.shell" },
+	{ tab: "terminal", section: "Terminal", label: "Terminal Font", labelKey: "appearance.label.terminalFont" },
+	{ tab: "terminal", section: "Terminal", label: "Default Font Size", labelKey: "appearance.label.defaultFontSize" },
+	{ tab: "terminal", section: "Terminal", label: "Font Weight", labelKey: "appearance.label.fontWeight" },
+	{ tab: "terminal", section: "Terminal", label: "Cursor Style", labelKey: "appearance.label.cursorStyle" },
+	{ tab: "terminal", section: "Terminal", label: "Copy on select", labelKey: "general.toggle.copyOnSelect" },
+	{
+		tab: "terminal",
+		section: "Terminal",
+		label: "Allow OSC 52 clipboard writes",
+		labelKey: "general.toggle.osc52Clipboard",
+	},
+	{
+		tab: "terminal",
+		section: "Terminal",
+		label: "Show block timestamps",
+		labelKey: "general.toggle.showBlockTimestamps",
+	},
+	{ tab: "terminal", section: "Terminal", label: "Block folding", labelKey: "general.toggle.blockFolding" },
+	{
+		tab: "terminal",
+		section: "Terminal",
+		label: "Show scrollbar marks",
+		labelKey: "general.toggle.showScrollbarMarks",
+	},
+	{
+		tab: "terminal",
+		section: "Terminal",
+		label: "Reflow scrollback on resize",
+		labelKey: "general.toggle.scrollbackReflow",
+	},
+	{
+		tab: "terminal",
+		section: "Power Management",
+		label: "Prevent sleep when busy",
+		labelKey: "general.toggle.preventSleepWhenBusy",
+	},
+	{ tab: "terminal", section: "Power Management", label: "Auto-Standby Timeout" },
+	{ tab: "terminal", section: "Power Management", label: "Content Indexing" },
+	// tabs/DeveloperToolsTab.tsx
+	{ tab: "developer-tools", section: "TUIC CLI", sectionKey: "general.heading.cli" },
+	{ tab: "developer-tools", section: "Code Intelligence", sectionKey: "general.heading.codeIntelligence" },
+	{ tab: "developer-tools", section: "IDE", sectionKey: "developerTools.heading.ide" },
+	{ tab: "developer-tools", section: "Custom Launchers", sectionKey: "general.heading.customLaunchers" },
+	{ tab: "developer-tools", section: "IDE", label: "Default IDE", labelKey: "general.label.defaultIde" },
 	// tabs/AppearanceTab.tsx
-	{ tab: "appearance", section: "Theme", sectionKey: "appearance.heading.theme" },
-	{ tab: "appearance", section: "Terminal", sectionKey: "appearance.heading.terminal" },
 	{ tab: "appearance", section: "Tabs", sectionKey: "appearance.heading.tabs" },
 	{ tab: "appearance", section: "Repository Groups", sectionKey: "appearance.heading.groups" },
 	{ tab: "appearance", section: "Layout", sectionKey: "appearance.heading.layout" },
 	{ tab: "appearance", section: "UI Legend", sectionKey: "appearance.heading.uiLegend" },
-	{ tab: "appearance", section: "Theme", label: "Terminal Theme", labelKey: "appearance.label.terminalTheme" },
-	{ tab: "appearance", section: "Terminal", label: "Terminal Font", labelKey: "appearance.label.terminalFont" },
-	{ tab: "appearance", section: "Terminal", label: "Default Font Size", labelKey: "appearance.label.defaultFontSize" },
-	{ tab: "appearance", section: "Terminal", label: "Font Weight", labelKey: "appearance.label.fontWeight" },
-	{ tab: "appearance", section: "Terminal", label: "Cursor Style", labelKey: "appearance.label.cursorStyle" },
 	{ tab: "appearance", section: "Tabs", label: "Split Tab Mode", labelKey: "appearance.label.splitTabMode" },
 	{ tab: "appearance", section: "Tabs", label: "Tab Ordering", labelKey: "appearance.label.tabOrderingMode" },
 	{ tab: "appearance", section: "Tabs", label: "Cycle All Tab Types", labelKey: "appearance.label.tabCyclingAllTypes" },
@@ -227,6 +235,20 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Hands-free conversation",
 		label: "Start notice",
 		labelKey: "dictation.startNoticeLabel",
+	},
+	// tabs/KeyboardShortcutsTab.tsx
+	{ tab: "keyboard-shortcuts", section: "Keyboard Shortcuts", sectionKey: "settings.keyboardShortcuts" },
+	{
+		tab: "keyboard-shortcuts",
+		section: "Keyboard Shortcuts",
+		label: "Global Hotkey (Toggle Window)",
+		labelKey: "settings.globalHotkey",
+	},
+	{
+		tab: "keyboard-shortcuts",
+		section: "Keyboard Shortcuts",
+		label: "Plugin Commands",
+		labelKey: "helpPanel.pluginCommands",
 	},
 	// tabs/GitHubTab.tsx
 	{ tab: "github", section: "GitHub Authentication" },
@@ -322,11 +344,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
 	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
 	{ tab: "agents", section: "Agents", label: "Collect project progress" },
-	// tabs/ProvidersTab.tsx
-	{ tab: "providers", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
-	{ tab: "providers", section: "Providers", sectionKey: "providers.heading.providers" },
+	// tabs/AiChatTab.tsx — the ego section (moved from GeneralTab) plus the
+	// inlined former ProvidersTab content, in file order.
+	{ tab: "ai-chat", section: "AI Chat", sectionKey: "general.heading.aiChat" },
+	{ tab: "ai-chat", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
+	{ tab: "ai-chat", section: "Providers", sectionKey: "providers.heading.providers" },
+	{ tab: "ai-chat", section: "AI Chat", label: "ego executable", labelKey: "general.label.egoExecutable" },
 	{
-		tab: "providers",
+		tab: "ai-chat",
 		section: "Default Model",
 		label: "Default model",
 		labelKey: "providers.label.defaultModel",

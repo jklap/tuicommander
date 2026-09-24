@@ -19,18 +19,21 @@ import { SettingsShell } from "./SettingsShell";
 import { entryLabel, entrySection, type SettingsSearchEntry, searchSettings } from "./settingsSearchIndex";
 import {
 	AgentsTab,
+	AiChatTab,
 	AppearanceTab,
+	DeveloperToolsTab,
 	GeneralTab,
 	GitHubTab,
+	KeyboardShortcutsTab,
 	LocalMcpPanel,
 	NotificationsTab,
 	PluginsTab,
-	ProvidersTab,
 	RemoteAccessPanel,
 	RemoteMachinesTab,
 	RepoScriptsTab,
 	RepoWorktreeTab,
 	SmartPromptsTab,
+	TerminalTab,
 	UpstreamMcpPanel,
 } from "./tabs";
 
@@ -50,15 +53,18 @@ const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "general", label: t("settings.general", "General") },
 	{ key: "appearance", label: t("settings.appearance", "Appearance") },
 	{ key: "notifications", label: t("settings.notifications", "Notifications") },
-	{ key: "dictation", label: t("settings.dictation", "Dictation") },
+	{ key: "terminal", label: t("settings.terminal", "Terminal") },
+	{ key: "keyboard-shortcuts", label: t("settings.keyboardShortcuts", "Keyboard Shortcuts") },
 	{ key: "github", label: "Git & GitHub" },
+	{ key: "agents", label: t("settings.agents", "Agents") },
+	{ key: "ai-chat", label: t("settings.aiChat", "AI Chat") },
+	{ key: "dictation", label: t("settings.voice", "Voice") },
+	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
 	{ key: "mcp", label: t("settings.mcp", "MCP") },
 	{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 	{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
 	{ key: "plugins", label: t("settings.plugins", "Plugins") },
-	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
-	{ key: "agents", label: t("settings.agents", "Agents") },
-	{ key: "providers", label: t("settings.providers", "AI Providers") },
+	{ key: "developer-tools", label: t("settings.developerTools", "Developer Tools") },
 ];
 
 /** Tabs whose feature is switched off right now, so their nav entry is noise. */
@@ -69,10 +75,10 @@ function hiddenTabs(): Set<string> {
 	// socket (#832-e730). The controls that really are local — the global
 	// hotkey and this machine's input devices — are hidden inside the tab
 	// rather than by hiding the whole tab.
-	// Providers configures ego, and ego is reachable only from the AI Chat panel.
+	// AI Chat configures ego, and ego is reachable only from the AI Chat panel.
 	// While that panel is behind the experimental toggle, this tab would let a
 	// person set a default model for an engine they cannot open.
-	if (!settingsStore.isAiChatEnabled()) hidden.add("providers");
+	if (!settingsStore.isAiChatEnabled()) hidden.add("ai-chat");
 	return hidden;
 }
 
@@ -270,6 +276,12 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				<Show when={activeTab() === "notifications"}>
 					<NotificationsTab />
 				</Show>
+				<Show when={activeTab() === "terminal"}>
+					<TerminalTab />
+				</Show>
+				<Show when={activeTab() === "keyboard-shortcuts"}>
+					<KeyboardShortcutsTab />
+				</Show>
 				<Show when={activeTab() === "dictation"}>
 					<DictationSettings />
 				</Show>
@@ -295,8 +307,11 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				<Show when={activeTab() === "agents"}>
 					<AgentsTab connectionId={activeConnectionId()} />
 				</Show>
-				<Show when={activeTab() === "providers"}>
-					<ProvidersTab />
+				<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
+					<AiChatTab />
+				</Show>
+				<Show when={activeTab() === "developer-tools"}>
+					<DeveloperToolsTab />
 				</Show>
 			</Show>
 		</SettingsShell>
