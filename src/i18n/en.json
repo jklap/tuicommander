@@ -868,8 +868,6 @@
 	"tabBar.removeFromWorkspace": "Remove from Global Workspace",
 	"tabBar.removeTab": "Remove Tab",
 	"tabBar.renameTab": "Rename Tab",
-	"tabBar.splitHorizontal": "Split Horizontally",
-	"tabBar.splitVertical": "Split Vertically",
 	"tabBar.startDesignMode": "Start Design Mode",
 	"tabBar.stopCapture": "Stop Capture Session",
 	"tabBar.stopDesignMode": "Stop Design Mode",
