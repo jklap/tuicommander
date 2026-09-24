@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../__tests__/mocks/tauri";
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 
@@ -16,6 +16,7 @@ vi.mock("../../../stores/settings", () => ({
 		setConfirmBeforeQuit: vi.fn(),
 		setConfirmBeforeClosingTab: vi.fn(),
 		isAiChatEnabled: vi.fn().mockReturnValue(false),
+		isAcpConfigured: vi.fn().mockReturnValue(false),
 	},
 	IDE_NAMES: { vscode: "VS Code", cursor: "Cursor" },
 	FONT_FAMILIES: { "JetBrains Mono": "JetBrains Mono" },
@@ -57,6 +58,7 @@ vi.mock("../../../stores/repoSettings", () => ({
 	repoSettingsStore: { get: vi.fn(() => undefined), getOrCreate: vi.fn(), update: vi.fn(), reset: vi.fn() },
 }));
 
+import { settingsStore } from "../../../stores/settings";
 import { SettingsPanel } from "../SettingsPanel";
 
 const open = () => render(() => <SettingsPanel visible={true} onClose={() => {}} />);
@@ -66,9 +68,42 @@ const searchInput = (container: HTMLElement) => container.querySelector("nav inp
 const resultRows = (container: HTMLElement) =>
 	[...container.querySelectorAll(`[class*="searchResult"] button, button[class*="searchResult"]`)] as HTMLElement[];
 
+/** Text of an element's own text nodes — what `scrollToSetting` matches on. */
+const ownText = (el: Element) =>
+	[...el.childNodes]
+		.filter((n) => n.nodeType === Node.TEXT_NODE)
+		.map((n) => n.textContent ?? "")
+		.join("")
+		.trim();
+
+/** Search, open the row naming `tab` and `row`, and resolve to the element the
+ * panel scrolled to. Every candidate is spied on, so a scroll that lands on the
+ * wrong element — the section instead of the control — is caught. */
+async function openResult(container: HTMLElement, query: string, tab: string, row: string) {
+	fireEvent.input(searchInput(container), { target: { value: query } });
+	const hit = resultRows(container).find((r) => r.textContent?.includes(row) && r.textContent.includes(tab));
+	expect(hit, `a "${row}" result on ${tab}`).toBeDefined();
+	if (!hit) throw new Error("unreachable");
+	fireEvent.click(hit);
+	expect(container.querySelector("nav button[class*='active']")?.textContent).toBe(tab);
+
+	const scrolled: Element[] = [];
+	for (const el of container.querySelectorAll("h3, label, span")) {
+		el.scrollIntoView = () => scrolled.push(el);
+	}
+	await waitFor(() => expect(scrolled).toHaveLength(1));
+	return scrolled[0];
+}
+
 describe("SettingsPanel search", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(false);
+	});
+
+	afterEach(() => {
+		delete (globalThis as Record<string, unknown>).__TAURI_SHIM__;
+		vi.unstubAllGlobals();
 	});
 
 	it("shows no results until something is typed", () => {
@@ -128,5 +163,68 @@ describe("SettingsPanel search", () => {
 		fireEvent.input(searchInput(container), { target: { value: "zzzz nothing" } });
 		expect(resultRows(container)).toHaveLength(0);
 		expect(container.textContent).toContain("No settings match");
+	});
+
+	describe("lands on every reorganized page", () => {
+		it("an upstream MCP server heading opens MCP at the upstream panel", async () => {
+			const { container } = open();
+			const target = await openResult(container, "upstream mcp servers", "MCP", "Upstream MCP Servers");
+			expect(target.tagName).toBe("H3");
+			expect(ownText(target)).toBe("Upstream MCP Servers");
+		});
+
+		it("the remote machines heading opens Remote Machines at its heading", async () => {
+			const { container } = open();
+			const target = await openResult(container, "remote machines", "Remote Machines", "Remote Machines");
+			expect(target.tagName).toBe("H3");
+			expect(ownText(target)).toBe("Remote Machines");
+		});
+
+		it("the ego executable opens AI Chat at that control", async () => {
+			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+			const { container } = open();
+			const target = await openResult(container, "ego executable", "AI Chat", "ego executable");
+			expect(target.tagName).toBe("LABEL");
+			expect(ownText(target)).toBe("ego executable");
+		});
+
+		it("a keyboard shortcut opens Keyboard Shortcuts at that control", async () => {
+			const { container } = open();
+			const target = await openResult(container, "global hotkey", "Keyboard Shortcuts", "Global Hotkey");
+			expect(ownText(target)).toBe("Global Hotkey (Toggle Window)");
+		});
+
+		it("a terminal option opens Terminal at that control", async () => {
+			const { container } = open();
+			const target = await openResult(container, "cursor style", "Terminal", "Cursor Style");
+			expect(ownText(target)).toBe("Cursor Style");
+		});
+	});
+
+	describe("offers only what the current client can open", () => {
+		it("offers nothing on AI Chat while the experimental feature is off", () => {
+			const { container } = open();
+			fireEvent.input(searchInput(container), { target: { value: "ego executable" } });
+			expect(resultRows(container)).toHaveLength(0);
+		});
+
+		it("offers AI Chat once the feature is on", () => {
+			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+			const { container } = open();
+			fireEvent.input(searchInput(container), { target: { value: "ego executable" } });
+			expect(resultRows(container)).toHaveLength(1);
+		});
+
+		it("offers no desktop-only control in a browser", () => {
+			(globalThis as Record<string, unknown>).__TAURI_SHIM__ = true;
+			// Browser mode talks HTTP; no backend listens in a unit test
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(() => Promise.resolve(new Response("{}"))),
+			);
+			const { container } = open();
+			fireEvent.input(searchInput(container), { target: { value: "global hotkey" } });
+			expect(resultRows(container)).toHaveLength(0);
+		});
 	});
 });

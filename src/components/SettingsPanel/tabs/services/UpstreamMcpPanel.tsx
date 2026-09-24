@@ -404,11 +404,13 @@ export const UpstreamMcpPanel: Component = () => {
 	return (
 		<div
 			id={SETTINGS_SECTION_UPSTREAM_MCP}
+			class={s.section}
 			style={{ "margin-top": "24px", "border-top": "1px solid var(--border)", "padding-top": "16px" }}
 		>
 			<div class={s.group}>
-				<label style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
-					<span>Upstream MCP Servers</span>
+				{/* A heading, not a label: it is the section search scrolls to (#860-91a0) */}
+				<div style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
+					<h3 style={{ margin: 0 }}>Upstream MCP Servers</h3>
 					<button
 						class={s.copyBtn}
 						onClick={() => {
@@ -420,7 +422,7 @@ export const UpstreamMcpPanel: Component = () => {
 					>
 						{showAdd() ? "−" : "+"}
 					</button>
-				</label>
+				</div>
 				<p class={s.hint}>
 					Proxy external MCP servers through TUIC. Their tools appear prefixed as <code>{"{name}__{tool}"}</code>.
 				</p>

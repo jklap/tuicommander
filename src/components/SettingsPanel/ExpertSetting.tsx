@@ -1,4 +1,13 @@
-import { type Accessor, type Component, createContext, createSignal, type JSX, onCleanup, Show, useContext } from "solid-js";
+import {
+	type Accessor,
+	type Component,
+	createContext,
+	createSignal,
+	type JSX,
+	onCleanup,
+	Show,
+	useContext,
+} from "solid-js";
 import { t } from "../../i18n";
 import { settingsExpertStore } from "../../stores/settingsExpert";
 import { uiStore } from "../../stores/ui";

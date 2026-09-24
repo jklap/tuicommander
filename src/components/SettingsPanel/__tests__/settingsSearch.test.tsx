@@ -40,7 +40,11 @@ describe("SettingsSearchBox", () => {
 describe("SettingsSearchResults", () => {
 	const rowsFor = (query: string) => {
 		const { container } = render(() => (
-			<SettingsSearchResults results={searchSettings(query, availableTabs)} tabs={TABS} onSelect={() => {}} />
+			<SettingsSearchResults
+				results={searchSettings(query, availableTabs, "desktop")}
+				tabs={TABS}
+				onSelect={() => {}}
+			/>
 		));
 		return [...container.querySelectorAll("button")].map((b) => b.textContent ?? "");
 	};
@@ -68,7 +72,7 @@ describe("SettingsSearchResults", () => {
 		const onSelect = vi.fn();
 		const { container } = render(() => (
 			<SettingsSearchResults
-				results={searchSettings("relay server url", availableTabs)}
+				results={searchSettings("relay server url", availableTabs, "desktop")}
 				tabs={TABS}
 				onSelect={onSelect}
 			/>
@@ -81,7 +85,11 @@ describe("SettingsSearchResults", () => {
 
 	it("says so when nothing matches", () => {
 		const { container } = render(() => (
-			<SettingsSearchResults results={searchSettings("zzzzz", availableTabs)} tabs={TABS} onSelect={() => {}} />
+			<SettingsSearchResults
+				results={searchSettings("zzzzz", availableTabs, "desktop")}
+				tabs={TABS}
+				onSelect={() => {}}
+			/>
 		));
 		expect(container.querySelectorAll("button")).toHaveLength(0);
 		expect(container.textContent).toContain("No settings match");

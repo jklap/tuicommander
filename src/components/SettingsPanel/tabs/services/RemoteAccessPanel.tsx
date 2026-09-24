@@ -7,8 +7,8 @@ import { cx } from "../../../../utils";
 import { writeClipboard } from "../../../../utils/clipboard";
 import { SettingInput, SettingSelect, SettingToggle } from "../../SettingFields";
 import s from "../../Settings.module.css";
-import { saveConfigField, useMcpStatusPoll } from "./servicesShared";
 import type { AppConfig } from "./servicesShared";
+import { saveConfigField, useMcpStatusPoll } from "./servicesShared";
 
 /** Username the placeholder advertises, and the value used when the field is left blank. */
 export const DEFAULT_AUTH_USERNAME = "admin";
