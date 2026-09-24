@@ -203,7 +203,7 @@ describe("resolveHeadlessAgent — preferred agent with no template", () => {
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ preferredAgent: "claude" }));
 		expect(result.ok).toBe(false);
-		expect(result.reason).toMatch(/No headless agent configured/);
+		expect(result.reason).toMatch(/No headless agent configured — set one in Settings → Smart Prompts/);
 	});
 });
 
@@ -213,7 +213,7 @@ describe("resolveHeadlessAgent — no preferred agent", () => {
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ preferredAgent: undefined }));
 		expect(result.ok).toBe(false);
-		expect(result.reason).toMatch(/No headless agent configured/);
+		expect(result.reason).toMatch(/No headless agent configured — set one in Settings → Smart Prompts/);
 	});
 
 	it("returns ok=true when no preferred and global is a valid agent", () => {
@@ -231,7 +231,7 @@ describe("canExecute — unconfigured headless agent", () => {
 		const { canExecute } = useSmartPrompts();
 		const result = canExecute(makePrompt({ preferredAgent: "claude" }));
 		expect(result.ok).toBe(false);
-		expect(result.reason).toMatch(/No headless agent configured/);
+		expect(result.reason).toMatch(/No headless agent configured — set one in Settings → Smart Prompts/);
 	});
 });
 

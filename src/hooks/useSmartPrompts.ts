@@ -169,7 +169,7 @@ export function useSmartPrompts() {
 			// "api" is a headless agent the same way it is a mode: the work is one
 			// ego turn either way, so it answers to the same check.
 			if (resolved.agent === "api") return canExecuteApi();
-			if (!resolved.agent) return { ok: false, reason: "No headless agent configured — set one in Settings → Agents" };
+			if (!resolved.agent) return { ok: false, reason: "No headless agent configured — set one in Settings → Smart Prompts" };
 			return { ok: true };
 		}
 
@@ -321,7 +321,7 @@ export function useSmartPrompts() {
 		// Two paths to one behaviour would be two places to fix it.
 		if (headlessVal === "api") return executeApi(prompt, content);
 		if (!headlessVal) {
-			return { ok: false, reason: "No headless agent configured — set one in Settings → Agents" };
+			return { ok: false, reason: "No headless agent configured — set one in Settings → Smart Prompts" };
 		}
 
 		// Resolve headless_agent: "type:configName" format from grouped dropdown, or plain agent type.
