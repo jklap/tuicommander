@@ -19,6 +19,7 @@ pub mod app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
 pub(crate) mod chrome;
+pub(crate) mod circleci;
 pub(crate) mod claude_usage;
 pub(crate) mod cli;
 pub(crate) mod cli_usage_rpc;
