@@ -1,4 +1,5 @@
-import { render, waitFor } from "@solidjs/testing-library";
+import { fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../../../__tests__/mocks/tauri";
 
@@ -151,6 +152,64 @@ describe("ExpertSetting", () => {
 		expect(uiStore.state.settingsExpertMode).toBe(false);
 
 		await settingsExpertStore.open();
+		expect(control(container)).toBeNull();
+	});
+});
+
+describe("ExpertSetting pins on a user edit", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		settingsExpertStore._resetForTests();
+		uiStore.setSettingsExpertMode(false);
+	});
+
+	/** A checkbox bound to app.osc52_clipboard (default true), edited like a real tab control. */
+	function renderCheckbox(initial: boolean) {
+		const [value, setValue] = createSignal(initial);
+		const result = render(() => (
+			<ExpertSetting configKey="app.osc52_clipboard" value={value()}>
+				<div>
+					<input
+						type="checkbox"
+						data-testid="control"
+						checked={value()}
+						onChange={(e) => setValue(e.currentTarget.checked)}
+					/>
+				</div>
+			</ExpertSetting>
+		));
+		return { ...result, setValue };
+	}
+
+	it("keeps a control visible when the user edits it back to its default", async () => {
+		await openWithDefaults();
+		const { container } = renderCheckbox(false);
+		const box = control(container) as HTMLInputElement;
+
+		fireEvent.click(box);
+
+		expect(box.checked).toBe(true);
+		expect(control(container)).toBe(box);
+	});
+
+	it("hides a placeholder value that resolves to the default without a user edit", async () => {
+		// LocalMcpPanel-style: the local signal starts as a placeholder until load_config resolves.
+		await openWithDefaults();
+		const { container, setValue } = renderCheckbox(false);
+		expect(control(container)).not.toBeNull();
+
+		setValue(true);
+
+		expect(control(container)).toBeNull();
+	});
+
+	it("forgets the edit on the next open", async () => {
+		await openWithDefaults();
+		const { container } = renderCheckbox(false);
+		fireEvent.click(control(container) as HTMLInputElement);
+
+		await settingsExpertStore.open();
+
 		expect(control(container)).toBeNull();
 	});
 });
