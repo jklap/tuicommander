@@ -1,5 +1,9 @@
 # HTTP API Reference
 
+## Workflow definitions
+
+`POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one.
+
 ## Native stories
 
 `GET /stories/capabilities` returns JSON `true` when the running backend supports the native stories dialog. The frontend probes it once per dialog opening, recognizes a missing route by HTTP 404, and preserves other HTTP failures as errors.

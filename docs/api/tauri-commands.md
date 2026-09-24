@@ -1,5 +1,11 @@
 # Tauri Commands Reference
 
+## Workflow definitions
+
+| Command | Parameters | Result | Description |
+|---|---|---|---|
+| `workflow_definition_action` | `project, action` | tagged `WorkflowReply` | Reads, edits, validates, and publishes project-scoped workflow definitions. See [Workflow definitions](../backend/workflows.md). |
+
 ## Native stories
 
 | Command | Parameters | Result | Description |
