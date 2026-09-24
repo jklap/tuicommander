@@ -12353,6 +12353,64 @@ mod tests {
         assert_eq!(waited["next_since"], u64::MAX - 1);
     }
 
+    #[tokio::test]
+    async fn agent_wait_requeues_an_older_terminal_failure_after_advancing_its_cursor() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "older-terminal-mail".into(),
+                from_tuic_session: TEST_UUID_A.into(),
+                from_name: "sender".into(),
+                content: "older mail awaiting PTY delivery".into(),
+                timestamp: 100,
+                delivered_via_channel: false,
+            },
+        );
+        assert_eq!(
+            state.assign_agent_delivery(TEST_UUID_B, "older-terminal-mail", true),
+            crate::state::AgentDeliveryAssignment::Terminal
+        );
+
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "newer-wait-mail".into(),
+                from_tuic_session: TEST_UUID_A.into(),
+                from_name: "sender".into(),
+                content: "newer mail returned by wait".into(),
+                timestamp: 200,
+                delivered_via_channel: false,
+            },
+        );
+        let first = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            Some("mcp-recipient"),
+        )
+        .await;
+        assert_eq!(first["messages"][0]["id"], "newer-wait-mail");
+        assert_eq!(first["next_since"], 200);
+
+        // The queued terminal handoff then loses its PTY before anything is typed.
+        state.release_terminal_delivery(TEST_UUID_B, "older-terminal-mail");
+
+        let recovered = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            Some("mcp-recipient"),
+        )
+        .await;
+        assert_eq!(recovered["messages"][0]["id"], "older-terminal-mail");
+        assert!(
+            recovered["next_since"].as_u64().unwrap() > first["next_since"].as_u64().unwrap(),
+            "a failed terminal delivery must reappear beyond the stored implicit cursor"
+        );
+    }
+
     #[test]
     fn mcp_delivery_regression_inbox_only_preserves_completed_lifecycle() {
         let state = test_state();

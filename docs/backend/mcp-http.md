@@ -1443,6 +1443,12 @@ back to terminal delivery. This removes both duplicate inbox+terminal turns and
 the missed-wake race at the wait timeout boundary; inbox visibility itself is
 unchanged and remains backward compatible.
 
+If a terminal-owned message cannot be delivered before a PTY disappears, the
+server re-queues that same message with a fresh logical cursor while preserving
+its `meta.message_id`. This lets a later omitted-`since` wait recover it even if
+it had already returned newer mail; recipients deduplicate the replay by
+`meta.message_id`.
+
 The server never infers orchestrator role from child spawn, peer name, prompt, MCP
 activity, or SSE presence. Registration is the sole declaration seam. Wake
 capability remains server-derived: without a live managed PTY and its canonical
