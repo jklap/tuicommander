@@ -7991,4 +7991,46 @@ mod tests {
             serde_json::to_value(crate::dictation::commands::DictationConfig::default()).unwrap()
         );
     }
+
+    /// Pins the defaults command to the value a brand-new install actually
+    /// loads — not merely to a second, independently-derived
+    /// `Default::default()` call, which is what the test above checks.
+    /// `load_app_config`/`load_notification_config`/`get_dictation_config`
+    /// all fall back to `T::default()` when their file does not exist
+    /// (`read_app_config_unlocked`, `load_json_config`) — that fallback,
+    /// exercised here against a config dir with no files in it, is the
+    /// "fresh install" source of truth this command must mirror. If a
+    /// loader's missing-file fallback ever stopped being `T::default()`,
+    /// this test would catch the divergence where the one above could not.
+    ///
+    /// `agent_settings` has no whole-file loader to pin against here: the
+    /// on-disk domain is `AgentsConfig` (a map of agent name -> settings),
+    /// and there is no single default for the map itself — see the field's
+    /// doc comment on `ConfigDefaults`. Intentionally left out of this test.
+    #[test]
+    #[serial_test::serial]
+    fn get_config_defaults_matches_what_a_brand_new_install_loads() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let defaults = get_config_defaults();
+
+        assert_eq!(
+            serde_json::to_value(&defaults.app).unwrap(),
+            serde_json::to_value(load_app_config()).unwrap(),
+            "must match what a fresh config.json-less install loads"
+        );
+        assert_eq!(
+            serde_json::to_value(&defaults.notifications).unwrap(),
+            serde_json::to_value(load_notification_config()).unwrap(),
+            "must match what a fresh notifications.json-less install loads"
+        );
+        #[cfg(feature = "desktop")]
+        assert_eq!(
+            serde_json::to_value(&defaults.dictation).unwrap(),
+            serde_json::to_value(crate::dictation::commands::get_dictation_config()).unwrap(),
+            "must match what a fresh dictation.json-less install loads"
+        );
+    }
 }
