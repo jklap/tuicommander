@@ -343,4 +343,69 @@ describe("TerminalTab placement", () => {
 			expect(getByText(/only while Ctrl is held/)).toBeTruthy();
 		});
 	});
+
+	describe("Custom Environment Variables", () => {
+		let setCustomPtyEnv: ReturnType<typeof vi.spyOn>;
+
+		beforeEach(async () => {
+			mockInvoke.mockImplementation(invokeImpl({ custom_pty_env: [{ key: "EXISTING_VAR", value: "existing-value" }] }));
+			await settingsStore.hydrate();
+			setCustomPtyEnv = vi.spyOn(settingsStore, "setCustomPtyEnv").mockImplementation(() => {});
+		});
+
+		afterEach(() => {
+			setCustomPtyEnv.mockRestore();
+		});
+
+		it("renders the existing entry as a KEY = value row", () => {
+			const { getByText } = render(() => <TerminalTab />);
+			expect(getByText("EXISTING_VAR")).toBeTruthy();
+			expect(getByText("existing-value")).toBeTruthy();
+		});
+
+		it("adding a valid KEY=value pair calls setCustomPtyEnv with the appended list", () => {
+			const { getByPlaceholderText, getByText } = render(() => <TerminalTab />);
+			fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: "NEW_VAR" } });
+			fireEvent.input(getByPlaceholderText("value") as HTMLInputElement, { target: { value: "new-value" } });
+			fireEvent.click(getByText("Add"));
+
+			expect(setCustomPtyEnv).toHaveBeenCalledWith([
+				{ key: "EXISTING_VAR", value: "existing-value" },
+				{ key: "NEW_VAR", value: "new-value" },
+			]);
+		});
+
+		it("removing an entry calls setCustomPtyEnv with the list minus that entry", () => {
+			const { getByText } = render(() => <TerminalTab />);
+			fireEvent.click(getByText("Remove"));
+			expect(setCustomPtyEnv).toHaveBeenCalledWith([]);
+		});
+
+		it("refuses a malformed key with a visible error and does not call setCustomPtyEnv", () => {
+			const { getByPlaceholderText, getByText, queryByText } = render(() => <TerminalTab />);
+			fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: "1BAD" } });
+			fireEvent.click(getByText("Add"));
+
+			expect(setCustomPtyEnv).not.toHaveBeenCalled();
+			expect(queryByText(/Must start with a letter or underscore/)).not.toBeNull();
+		});
+
+		it("refuses a duplicate key with a visible error", () => {
+			const { getByPlaceholderText, getByText, queryByText } = render(() => <TerminalTab />);
+			fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: "EXISTING_VAR" } });
+			fireEvent.click(getByText("Add"));
+
+			expect(setCustomPtyEnv).not.toHaveBeenCalled();
+			expect(queryByText(/already in the list/)).not.toBeNull();
+		});
+
+		it("disables Add while the key field is blank", () => {
+			const { getByPlaceholderText, getByText } = render(() => <TerminalTab />);
+			const addButton = getByText("Add") as HTMLButtonElement;
+			expect(addButton.disabled).toBe(true);
+
+			fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: "X" } });
+			expect(addButton.disabled).toBe(false);
+		});
+	});
 });

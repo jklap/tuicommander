@@ -1456,6 +1456,72 @@ async fn mcp_delivery_regression_session_wait_wakes_from_pty_event_without_polli
     assert_eq!(response["timed_out"], false);
 }
 
+/// `wait_for_shell_idle` is the shared primitive the pane-materialize
+/// shell-readiness gate (`tmux_routes.rs::materialize`) reuses from
+/// `session action=wait`. Same event-driven proof as
+/// `mcp_delivery_regression_session_wait_wakes_from_pty_event_without_polling`
+/// above, but calling the extracted function directly rather than through
+/// the MCP handler — the regression this guards is specific to the
+/// extraction: a future edit could route `handle_session_wait` through it
+/// while accidentally leaving `materialize`'s call broken (or vice versa).
+#[tokio::test]
+async fn wait_for_shell_idle_wakes_on_event_not_polling() {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    let state = test_state();
+    insert_managed_test_session(&state, "readiness-probe", "/tmp");
+    state.session_maps.shell_states.insert(
+        "readiness-probe".to_string(),
+        AtomicU8::new(crate::pty::SHELL_BUSY),
+    );
+    let waiting_state = Arc::clone(&state);
+    let waiter =
+        tokio::spawn(
+            async move { wait_for_shell_idle(&waiting_state, "readiness-probe", 1_000).await },
+        );
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    state
+        .session_maps
+        .shell_states
+        .get("readiness-probe")
+        .unwrap()
+        .store(crate::pty::SHELL_IDLE, Ordering::Release);
+    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+        session_id: "readiness-probe".to_string(),
+        parsed: serde_json::json!({"type": "shell-state", "state": "idle"}).into(),
+    });
+
+    assert!(
+        waiter.await.unwrap(),
+        "wait_for_shell_idle must return true once shell_states flips to idle"
+    );
+}
+
+/// The fail-open half: a shell that never reaches idle within the deadline
+/// must not hang the caller forever — `materialize` relies on this to
+/// proceed with pane creation rather than blocking it indefinitely. Per
+/// this repo's "which timing assertions are load-bearing" rule, the bound
+/// under test IS the behaviour here (not a stand-in for "did setup
+/// succeed"), so a short literal is passed directly as a parameter rather
+/// than depending on a `cfg(test)` global — no risk of a loaded machine
+/// racing an unrelated setup step against it.
+#[tokio::test]
+async fn wait_for_shell_idle_fails_open_on_timeout() {
+    use std::sync::atomic::AtomicU8;
+
+    let state = test_state();
+    insert_managed_test_session(&state, "never-idle", "/tmp");
+    state.session_maps.shell_states.insert(
+        "never-idle".to_string(),
+        AtomicU8::new(crate::pty::SHELL_BUSY),
+    );
+    let met = wait_for_shell_idle(&state, "never-idle", 50).await;
+    assert!(
+        !met,
+        "wait_for_shell_idle must return false rather than hang when idle never arrives"
+    );
+}
+
 #[test]
 fn messaging_rejects_non_loopback_caller() {
     // A non-loopback caller (remote/LAN, even if it cleared auth via lan_auth_bypass)

@@ -364,6 +364,76 @@ pub(crate) fn resolve_session_suspend(
     }
 }
 
+/// Block (event-driven, not polling) until `predicate` returns true or
+/// `timeout_ms` elapses. Extracted from `handle_session_wait`'s own
+/// subscribe/check/re-check/timeout-boundary sequence so a second caller (the
+/// pane-materialize shell-readiness gate, `tmux_routes.rs`) gets the exact same
+/// no-lost-wake guarantee without duplicating the loop: a transition landing
+/// between the fast-path check and the subscription is still visible by
+/// re-reading state right after subscribing, and one landing exactly at the
+/// timeout boundary is caught by the final re-check rather than reported as a
+/// spurious miss.
+///
+/// Does not check whether `session_id` is a real session — callers that need
+/// that guard (to avoid `subscribe_pty_events` minting a channel for a
+/// made-up id) do it themselves before calling this, the way
+/// `handle_session_wait` still does.
+async fn wait_for_session_predicate<F>(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+    mut predicate: F,
+) -> bool
+where
+    F: FnMut(&AppState) -> bool,
+{
+    if predicate(state) {
+        return true;
+    }
+    let mut events = state.subscribe_pty_events(session_id);
+    if predicate(state) {
+        return true;
+    }
+    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+        loop {
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if predicate(state) {
+                        return true;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    woke || predicate(state)
+}
+
+/// Block until `session_id`'s shell reaches `SHELL_IDLE`, or `timeout_ms`
+/// elapses — the same event-driven mechanism `session action=wait until=idle`
+/// uses, shared via `wait_for_session_predicate`. Used by that handler and by
+/// the pane-materialize shell-readiness gate (`tmux_routes.rs::materialize`) so
+/// a freshly spawned pane's first injected keystrokes never arrive before the
+/// shell has actually reached a prompt — see
+/// `plans/p10k-wizard-hijack-agent-pane-spawn-race.md` for the race this closes.
+///
+/// Fail-open by design: returns `false` on timeout rather than erroring. Every
+/// caller must decide for itself what "gave up waiting" means in its own
+/// context — `handle_session_wait` reports `timed_out: true`, while
+/// `materialize` proceeds anyway rather than hanging pane creation forever.
+pub(crate) async fn wait_for_shell_idle(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+) -> bool {
+    wait_for_session_predicate(state, session_id, timeout_ms, |s| {
+        session_wait_met(s, session_id, "idle")
+    })
+    .await
+}
+
 /// `session action=wait` — block (server-side) until the session is idle or has
 /// exited, or the timeout elapses. Replaces an LLM polling loop (each poll is a
 /// full model turn) with one cheap blocking call.
@@ -400,31 +470,10 @@ pub(super) async fn handle_session_wait(
             "error": format!("Unknown session \"{session_id}\"")
         });
     }
-    // Subscribe, then re-read state. This closes the lost-wake window without
-    // polling: a transition landing between the fast path above and this
-    // subscription is still visible in state, while any later one is retained by
-    // the per-session event receiver.
-    let mut events = state.subscribe_pty_events(&session_id);
-    if session_wait_met(state, &session_id, until) {
-        return session_wait_response(state, &session_id, until, true);
-    }
-    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
-        loop {
-            match events.recv().await {
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    if session_wait_met(state, &session_id, until) {
-                        return true;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
-            }
-        }
+    let met = wait_for_session_predicate(state, &session_id, timeout_ms, |s| {
+        session_wait_met(s, &session_id, until)
     })
-    .await
-    .unwrap_or(false);
-    // Re-check at the timeout boundary so a simultaneous transition wins over
-    // a spurious timed_out response.
-    let met = woke || session_wait_met(state, &session_id, until);
+    .await;
     session_wait_response(state, &session_id, until, met)
 }
 

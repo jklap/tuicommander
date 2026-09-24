@@ -9073,6 +9073,32 @@ fn tuic_state_unknown_yields_no_awaiting_event() {
     );
 }
 
+/// Neither existing `build_shell_command` test asserts the `-l` (login shell)
+/// flag or any env var — both would pass unnoticed if `inject_unix_terminal_env`
+/// or the unconditional `-l` append were ever dropped from this function.
+#[cfg(not(windows))]
+#[test]
+fn build_shell_command_appends_login_flag_on_unix() {
+    let cmd = super::build_shell_command("/bin/zsh");
+    let argv = cmd.as_unix_command_line().unwrap();
+    assert!(
+        argv.split_whitespace().any(|token| token == "-l"),
+        "build_shell_command must append -l (login shell) on unix: {argv}"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn build_shell_command_applies_terminal_env() {
+    let cmd = super::build_shell_command("/bin/sh");
+    assert_eq!(
+        cmd.get_env("TERM_PROGRAM")
+            .map(|v| v.to_string_lossy().to_string()),
+        Some("ghostty".to_string()),
+        "build_shell_command must call inject_unix_terminal_env"
+    );
+}
+
 #[test]
 fn question_suppress_filters_only_questions_when_instrumented() {
     let q_low = ParsedEvent::Question {
