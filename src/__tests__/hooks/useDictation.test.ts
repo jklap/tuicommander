@@ -1,8 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import "../mocks/tauri";
 import { useDictation } from "../../hooks/useDictation";
 import { dictationStore } from "../../stores/dictation";
 import { terminalsStore } from "../../stores/terminals";
+import { mockInvoke } from "../mocks/tauri";
+
+/** Set auto-send for real. `setAutoSend` goes through a load-modify-save that
+ * refuses to save when the stored config cannot be read, so it needs the
+ * stored config to exist. */
+async function setAutoSend(value: boolean) {
+	mockInvoke.mockResolvedValueOnce({}).mockResolvedValueOnce(undefined);
+	await dictationStore.saveConfig({ auto_send: value });
+	expect(dictationStore.state.autoSend).toBe(value);
+}
 
 function resetStores() {
 	for (const id of terminalsStore.getIds()) {
@@ -46,11 +55,12 @@ describe("useDictation", () => {
 
 	let dictation: ReturnType<typeof useDictation>;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		resetStores();
 		vi.clearAllMocks();
 
-		dictationStore.setAutoSend(false);
+		// Auto-send defaults on; the plain-insertion tests below need it off.
+		await setAutoSend(false);
 
 		// Reset mock state
 		mockDictationStore.state = {
@@ -398,7 +408,7 @@ describe("useDictation", () => {
 
 	describe("autoSend", () => {
 		it("sends command to terminal when autoSend is enabled", async () => {
-			dictationStore.setAutoSend(true);
+			await setAutoSend(true);
 			const id = terminalsStore.add({
 				sessionId: "sess-1",
 				fontSize: 14,
@@ -418,7 +428,7 @@ describe("useDictation", () => {
 		});
 
 		it("does NOT auto-submit when focused on a textarea", async () => {
-			dictationStore.setAutoSend(true);
+			await setAutoSend(true);
 			const textarea = document.createElement("textarea");
 			textarea.value = "";
 			document.body.appendChild(textarea);
@@ -440,7 +450,7 @@ describe("useDictation", () => {
 		});
 
 		it("does NOT auto-submit when focused on an input", async () => {
-			dictationStore.setAutoSend(true);
+			await setAutoSend(true);
 			const input = document.createElement("input");
 			input.type = "text";
 			document.body.appendChild(input);

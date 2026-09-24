@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testInScope, testInScopeAsync } from "../helpers/store";
 import type { HandsFreeStatus } from "../../stores/dictation";
+import { testInScope, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
 /**
@@ -171,6 +171,26 @@ describe("dictationStore", () => {
 			await testInScopeAsync(async () => {
 				await store.refreshConfig();
 				expect(store.state.selectedModel).toBe("large-v3-turbo");
+			});
+		});
+
+		it("starts with auto-send on, like the Rust default, before any config loads", () => {
+			testInScope(() => {
+				expect(store.state.autoSend).toBe(true);
+			});
+		});
+
+		it("turns auto-send on for a config without the field, and keeps an explicit off", async () => {
+			mockInvoke.mockResolvedValueOnce({ enabled: false, hotkey: "F5", language: "auto" });
+			await testInScopeAsync(async () => {
+				await store.refreshConfig();
+				expect(store.state.autoSend).toBe(true);
+			});
+
+			mockInvoke.mockResolvedValueOnce({ enabled: false, hotkey: "F5", language: "auto", auto_send: false });
+			await testInScopeAsync(async () => {
+				await store.refreshConfig();
+				expect(store.state.autoSend).toBe(false);
 			});
 		});
 

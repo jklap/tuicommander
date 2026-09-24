@@ -2051,7 +2051,8 @@ pub struct DictationConfig {
     #[serde(default = "default_long_press_ms")]
     pub long_press_ms: u32,
     /// Automatically send (press Enter) after injecting transcribed text.
-    #[serde(default)]
+    /// On by default; a stored `false` is kept.
+    #[serde(default = "default_auto_send")]
     pub auto_send: bool,
     /// Minimum RMS before audio is sent to Whisper. See [`VoiceGates`].
     #[serde(default = "default_rms_threshold")]
@@ -2129,6 +2130,10 @@ pub(crate) fn default_hold_back_ms() -> u32 {
 }
 
 /// See [`DictationConfig::hands_free_notify_model`].
+fn default_auto_send() -> bool {
+    true
+}
+
 fn default_notify_model() -> bool {
     true
 }
@@ -2157,7 +2162,7 @@ impl Default for DictationConfig {
             model: default_model(),
             device: None,
             long_press_ms: default_long_press_ms(),
-            auto_send: false,
+            auto_send: default_auto_send(),
             rms_threshold: default_rms_threshold(),
             no_speech_threshold: default_no_speech_threshold(),
             hands_free_hold_back_ms: default_hold_back_ms(),
@@ -2467,6 +2472,25 @@ mod tests {
         let wire = serde_json::to_string(&off).expect("serialize");
         let back: DictationConfig = serde_json::from_str(&wire).expect("deserialize");
         assert!(!back.hands_free_earcons);
+    }
+
+    /// Auto-send is on for a fresh install and for a config written before the
+    /// field existed, and an explicit off must survive the whole-document rewrite.
+    #[test]
+    fn auto_send_defaults_on_and_an_explicit_off_survives_a_rewrite() {
+        assert!(DictationConfig::default().auto_send);
+        let older: DictationConfig =
+            serde_json::from_str(r#"{"enabled":true,"hotkey":"F5","language":"auto"}"#)
+                .expect("an older config loads");
+        assert!(older.auto_send);
+
+        let off = DictationConfig {
+            auto_send: false,
+            ..Default::default()
+        };
+        let wire = serde_json::to_string(&off).expect("serialize");
+        let back: DictationConfig = serde_json::from_str(&wire).expect("deserialize");
+        assert!(!back.auto_send);
     }
 
     /// The hold-back is a setting, not a constant, and arming is what reads it.
