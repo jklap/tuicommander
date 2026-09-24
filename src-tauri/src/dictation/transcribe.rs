@@ -99,7 +99,7 @@ fn language_of_last_pass(state: &WhisperState) -> Option<String> {
 /// They are settings rather than constants because the right value depends on
 /// the room and the microphone: a headset a metre away picks up enough noise to
 /// clear a fixed floor, which is exactly how Whisper ends up transcribing an
-/// empty room. Settings > Dictation exposes both with a live meter.
+/// empty room. Settings > Voice exposes both with a live meter.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VoiceGates {
     /// Minimum RMS of the captured audio. Below it, the audio never reaches

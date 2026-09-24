@@ -135,7 +135,7 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "MCP Proxy",
-		description: "Go to Settings → Services to add upstream MCP servers — all connected agents can use them.",
+		description: "Go to Settings → MCP to add upstream MCP servers — all connected agents can use them.",
 		shortcut: null,
 	},
 	{
@@ -300,7 +300,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "GitHub Login",
 		description:
-			"Sign in to GitHub from Settings > GitHub for automatic PR and CI monitoring. No need to manage tokens manually.",
+			"Sign in to GitHub from Settings > Git & GitHub for automatic PR and CI monitoring. No need to manage tokens manually.",
 		shortcut: null,
 	},
 	{

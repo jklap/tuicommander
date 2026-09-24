@@ -1231,7 +1231,7 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
                 &app,
                 "warn",
                 "dictation",
-                "Configured device not available — check Settings > Dictation > Microphone",
+                "Configured device not available — check Settings > Voice > Input device",
             );
         }
         e
@@ -2917,7 +2917,7 @@ mod tests {
         assert_eq!(config.gates(), transcribe::VoiceGates::default());
     }
 
-    /// Settings > Dictation moves these two numbers and nothing else carries
+    /// Settings > Voice moves these two numbers and nothing else carries
     /// them to the transcriber.
     // Exact equality on purpose: each assertion says the number is carried
     // through unchanged, not that it lands close to a computed value.

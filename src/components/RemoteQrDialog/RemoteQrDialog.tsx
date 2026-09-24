@@ -14,7 +14,7 @@ interface LocalIpEntry {
 
 /**
  * Full-size QR dialog for pairing a phone with Remote Mobile mode. Reuses the
- * same backend flow as Settings → Services (`get_connect_url` builds the URL +
+ * same backend flow as Settings → Remote Access (`get_connect_url` builds the URL +
  * embeds the session token server-side; the raw token never reaches JS), but
  * renders the code large so it can be scanned at a glance from the palette.
  */
@@ -63,7 +63,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 				appLogger.warn("network", "Remote QR connect URL failed", e);
 				setConnectUrl(null);
 				setQrDataUrl(null);
-				setError("Could not build a connection URL. Enable Remote Access in Settings → Services.");
+				setError("Could not build a connection URL. Enable Remote Access in Settings → Remote Access.");
 			});
 	});
 
@@ -93,7 +93,7 @@ export const RemoteQrDialog: Component<{ onClose: () => void }> = (props) => {
 				</div>
 				<div class={d.body}>
 					<Show when={serverEnabled() === false}>
-						<p class={s.warning}>Remote Access is off — enable it in Settings → Services so the phone can connect.</p>
+						<p class={s.warning}>Remote Access is off — enable it in Settings → Remote Access so the phone can connect.</p>
 					</Show>
 
 					<div class={s.qrCard}>
