@@ -771,6 +771,8 @@
 	"settings.developerTools": "Developer Tools",
 	"settings.dictation": "Dictation",
 	"settings.done": "Done",
+	"settings.expert.badge": "Expert",
+	"settings.expert.switch": "Expert",
 	"settings.general": "General",
 	"settings.globalHotkey": "Global Hotkey (Toggle Window)",
 	"settings.globalHotkeyHint": "Set an OS-level shortcut to show/hide TUICommander from any application.",

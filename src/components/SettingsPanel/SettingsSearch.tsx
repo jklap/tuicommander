@@ -47,7 +47,14 @@ export const SettingsSearchResults: Component<{
 					<For each={props.results}>
 						{(entry) => (
 							<button class={s.searchResult} onClick={() => props.onSelect(entry)}>
-								<span class={s.searchResultLabel}>{entryLabel(entry) ?? entrySection(entry)}</span>
+								<span class={s.searchResultLabel}>
+									{entryLabel(entry) ?? entrySection(entry)}
+									<Show when={entry.expert}>
+										<span class={s.expertBadge} data-expert-badge>
+											{t("settings.expert.badge", "Expert")}
+										</span>
+									</Show>
+								</span>
 								<span class={s.searchResultTrail}>
 									{tabLabel(entry.tab)} › {entrySection(entry)}
 								</span>

@@ -161,3 +161,21 @@ describe("scrollToSetting", () => {
 		expect(spy).not.toHaveBeenCalled();
 	});
 });
+
+describe("SettingsSearchResults — expert entries", () => {
+	it("marks an expert setting with an Expert badge and a basic one without", () => {
+		const { container } = render(() => (
+			<SettingsSearchResults
+				results={[
+					{ tab: "general", section: "Terminal", label: "Basic thing" },
+					{ tab: "general", section: "Terminal", label: "Expert thing", expert: true, configKey: "app.x" },
+				]}
+				tabs={TABS}
+				onSelect={() => {}}
+			/>
+		));
+		const [basic, expert] = [...container.querySelectorAll("button")];
+		expect(basic.querySelector("[data-expert-badge]")).toBeNull();
+		expect(expert.querySelector("[data-expert-badge]")?.textContent).toBe("Expert");
+	});
+});
