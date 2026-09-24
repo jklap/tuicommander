@@ -110,12 +110,13 @@ describe("ToastContainer", () => {
 		repositoriesStore.add({ path: "/toast-current-order", displayName: "Current" });
 		repositoriesStore.add({ path: "/toast-origin-order", displayName: "Origin" });
 		repositoriesStore.setActive("/toast-current-order");
+		const openProgress = vi.fn();
 		toastsStore.add(
 			"verified",
 			"ready to review",
 			"info",
 			false,
-			{ label: "Open Progress", onClick: vi.fn() },
+			{ label: "Open Progress", onClick: openProgress },
 			undefined,
 			"/toast-origin-order",
 		);
@@ -126,6 +127,11 @@ describe("ToastContainer", () => {
 		// Dialog footers put the secondary action before the primary one, so DOM
 		// and keyboard focus order match the visual left-to-right order.
 		expect(buttons.map((button) => button.textContent)).toEqual(["Go to repo", "Open Progress"]);
+
+		// Each handler moved with its button: the primary one runs, the repository stays.
+		fireEvent.click(buttons[1]);
+		expect(openProgress).toHaveBeenCalledOnce();
+		expect(repositoriesStore.state.activeRepoPath).toBe("/toast-current-order");
 	});
 
 	it("does not offer a repo action for the active repository", () => {
