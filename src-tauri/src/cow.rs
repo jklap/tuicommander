@@ -184,6 +184,11 @@ fn warming_candidates(src: &Path, dest: &Path) -> Result<Vec<PathBuf>, WarmingRe
             dest.display()
         )],
     })?;
+    candidates.retain(|candidate| {
+        !candidate
+            .components()
+            .any(|component| component.as_os_str() == ".tmp")
+    });
     candidates.extend(external_bin_candidates(src));
     candidates.sort();
     candidates.dedup();
@@ -690,6 +695,19 @@ mod tests {
             .unwrap(),
             "sidecar"
         );
+    }
+
+    #[test]
+    fn warming_excludes_tmp_directories() {
+        let (_temp, repo, worktree) = warming_fixture();
+        std::fs::write(repo.join(".gitignore"), "build/\n.tmp/\n").unwrap();
+        std::fs::create_dir_all(repo.join(".tmp/cache")).unwrap();
+        std::fs::write(repo.join(".tmp/cache/state"), "scratch").unwrap();
+
+        let report = warm_worktree_with(&repo, &worktree, plain_copy);
+
+        assert!(report.warnings.is_empty(), "{report:?}");
+        assert!(!worktree.join(".tmp").exists());
     }
 
     #[test]
