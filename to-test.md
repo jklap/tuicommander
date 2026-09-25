@@ -32,6 +32,7 @@
 
 ## Workflow definitions (2026-09-25) — Rust, needs `make dev` restart
 
+- [ ] After rebuilding an isolated instance, save a direct-executable check with `update_checks`, publish the workflow, and confirm the published revision keeps its check set after the draft changes. A shell command or stale draft revision must be rejected.
 - [ ] After rebuilding an isolated instance, read an existing workflow definition and confirm its closure is `human`. Try publishing an `automatic` draft and confirm the API rejects it; switch back to `human` and publish at the current draft revision.
 - [ ] After rebuilding an isolated instance, transition a throwaway story through review and approve it via the user action. Read `transition_history` through HTTP and confirm the approval records a human actor; an approval through a managed MCP story action must be refused without a new history row.
 - [ ] After a Rust restart in an isolated instance, launch a coordinator attempt into a registered throwaway worktree with `workflow_launch`, inspect its prompt and event timeline, create a story with `workflow_story_create` and retry its proposal key, submit `workflow_report` from that managed PTY, and verify a different PTY cannot report the attempt. Exit a second agent without reporting and confirm its attempt becomes interrupted and the run pauses. Do this only when losing the current dev sessions is acceptable.

@@ -13,6 +13,63 @@ pub enum WorkflowClosure {
     Automatic,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckDefinition {
+    pub id: String,
+    pub argv: Vec<String>,
+    pub timeout_secs: u32,
+}
+
+fn validate_checks(checks: &[CheckDefinition]) -> Result<(), String> {
+    if checks.len() > 16 {
+        return Err("too many workflow checks".into());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for check in checks {
+        if check.id.is_empty()
+            || check.id.len() > 80
+            || !check
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            || !ids.insert(&check.id)
+        {
+            return Err("invalid or duplicate workflow check id".into());
+        }
+        if check.argv.is_empty()
+            || check.argv.len() > 32
+            || !(1..=600).contains(&check.timeout_secs)
+            || check
+                .argv
+                .iter()
+                .any(|arg| arg.is_empty() || arg.len() > 4096 || arg.contains('\0'))
+        {
+            return Err("invalid workflow check command".into());
+        }
+        let executable = Path::new(&check.argv[0])
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(
+            executable.as_str(),
+            "sh" | "bash"
+                | "zsh"
+                | "fish"
+                | "cmd"
+                | "cmd.exe"
+                | "powershell"
+                | "powershell.exe"
+                | "pwsh"
+                | "pwsh.exe"
+        ) {
+            return Err("workflow checks must invoke an executable without a shell".into());
+        }
+    }
+    Ok(())
+}
+
 impl WorkflowClosure {
     fn as_str(self) -> &'static str {
         match self {
@@ -37,6 +94,8 @@ pub struct WorkflowDraft {
     pub name: String,
     pub kind: WorkflowKind,
     pub closure: WorkflowClosure,
+    #[serde(default)]
+    pub required_checks: Vec<CheckDefinition>,
     pub graph: WorkflowGraph,
     pub draft_revision: i64,
     pub latest_published_revision: i64,
@@ -51,6 +110,8 @@ pub struct PublishedWorkflow {
     pub name: String,
     pub kind: WorkflowKind,
     pub closure: WorkflowClosure,
+    #[serde(default)]
+    pub required_checks: Vec<CheckDefinition>,
     pub graph: WorkflowGraph,
     pub revision: i64,
 }
@@ -93,6 +154,7 @@ impl WorkflowStore {
                 name TEXT NOT NULL,
                 kind TEXT NOT NULL CHECK(kind IN ('plan','story')),
                 closure TEXT NOT NULL DEFAULT 'human' CHECK(closure IN ('human','automatic')),
+                checks_json TEXT NOT NULL DEFAULT '[]',
                 graph_json TEXT NOT NULL,
                 draft_revision INTEGER NOT NULL,
                 latest_published_revision INTEGER NOT NULL DEFAULT 0,
@@ -108,6 +170,7 @@ impl WorkflowStore {
                 name TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 closure TEXT NOT NULL DEFAULT 'human' CHECK(closure IN ('human','automatic')),
+                checks_json TEXT NOT NULL DEFAULT '[]',
                 graph_json TEXT NOT NULL,
                 PRIMARY KEY(id,revision)
             );",
@@ -127,6 +190,22 @@ impl WorkflowStore {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN closure TEXT NOT NULL DEFAULT 'human' CHECK(closure IN ('human','automatic'))"))
                     .map_err(|e| format!("migrate workflow closure schema: {e}"))?;
             }
+            let has_checks: bool = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM pragma_table_info('{table}') WHERE name='checks_json'"
+                    ),
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(|e| format!("inspect workflow check schema: {e}"))?
+                != 0;
+            if !has_checks {
+                conn.execute_batch(&format!(
+                    "ALTER TABLE {table} ADD COLUMN checks_json TEXT NOT NULL DEFAULT '[]'"
+                ))
+                .map_err(|e| format!("migrate workflow check schema: {e}"))?;
+            }
         }
         Ok(conn)
     }
@@ -145,6 +224,7 @@ impl WorkflowStore {
             name: name.trim().into(),
             kind,
             closure: WorkflowClosure::Human,
+            required_checks: vec![],
             graph,
             draft_revision: 1,
             latest_published_revision: 0,
@@ -220,6 +300,30 @@ impl WorkflowStore {
         Ok(updated)
     }
 
+    pub fn update_checks(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        checks: Vec<CheckDefinition>,
+    ) -> Result<WorkflowDraft, String> {
+        validate_checks(&checks)?;
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("begin workflow check edit: {e}"))?;
+        let draft = read_draft(&tx, id)?;
+        if draft.draft_revision != expected_revision {
+            return Err("stale workflow draft revision".into());
+        }
+        tx.execute("UPDATE workflow_definitions SET checks_json=?1,draft_revision=draft_revision+1 WHERE id=?2 AND draft_revision=?3",
+            params![serde_json::to_string(&checks).map_err(|e| format!("encode workflow checks: {e}"))?, id, expected_revision])
+            .map_err(|e| format!("update workflow checks: {e}"))?;
+        let updated = read_draft(&tx, id)?;
+        tx.commit()
+            .map_err(|e| format!("commit workflow check edit: {e}"))?;
+        Ok(updated)
+    }
+
     pub fn publish(
         &self,
         id: &str,
@@ -244,6 +348,7 @@ impl WorkflowStore {
             return Err("draft revision has already been published".into());
         }
         validate_graph(&draft.graph, draft.kind)?;
+        validate_checks(&draft.required_checks)?;
         if draft.closure == WorkflowClosure::Automatic {
             return Err(
                 "automatic closure cannot be published until its evidence gate exists".into(),
@@ -251,8 +356,8 @@ impl WorkflowStore {
         }
         validate_pinned_templates(&tx, &draft)?;
         let revision = draft.latest_published_revision + 1;
-        tx.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json,closure) VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![id, revision, draft.project, draft.name, kind_str(draft.kind), encode_graph(&draft.graph)?, draft.closure.as_str()])
+        tx.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json,closure,checks_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![id, revision, draft.project, draft.name, kind_str(draft.kind), encode_graph(&draft.graph)?, draft.closure.as_str(), serde_json::to_string(&draft.required_checks).map_err(|e| format!("encode workflow checks: {e}"))?])
             .map_err(|e| format!("publish workflow revision: {e}"))?;
         tx.execute("UPDATE workflow_definitions SET latest_published_revision=?1,last_published_draft_revision=?2 WHERE id=?3",
             params![revision, draft.draft_revision, id])
@@ -349,9 +454,9 @@ fn decode_graph(raw: String) -> Result<WorkflowGraph, String> {
 
 fn read_draft(conn: &Connection, id: &str) -> Result<WorkflowDraft, String> {
     let row = conn.query_row(
-        "SELECT id,project,name,kind,graph_json,draft_revision,latest_published_revision,builtin_key,closure FROM workflow_definitions WHERE id=?1",
+        "SELECT id,project,name,kind,graph_json,draft_revision,latest_published_revision,builtin_key,closure,checks_json FROM workflow_definitions WHERE id=?1",
         [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, Option<String>>(7)?, row.get::<_, String>(8)?))
+            row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, Option<String>>(7)?, row.get::<_, String>(8)?, row.get::<_, String>(9)?))
     ).optional().map_err(|e| format!("read workflow draft: {e}"))?.ok_or("workflow draft not found")?;
     Ok(WorkflowDraft {
         id: row.0,
@@ -359,6 +464,8 @@ fn read_draft(conn: &Connection, id: &str) -> Result<WorkflowDraft, String> {
         name: row.2,
         kind: parse_kind(&row.3)?,
         closure: WorkflowClosure::parse(&row.8)?,
+        required_checks: serde_json::from_str(&row.9)
+            .map_err(|e| format!("decode workflow checks: {e}"))?,
         graph: decode_graph(row.4)?,
         draft_revision: row.5,
         latest_published_revision: row.6,
@@ -368,9 +475,9 @@ fn read_draft(conn: &Connection, id: &str) -> Result<WorkflowDraft, String> {
 
 fn read_published(conn: &Connection, id: &str, revision: i64) -> Result<PublishedWorkflow, String> {
     let row = conn.query_row(
-        "SELECT id,project,name,kind,graph_json,revision,closure FROM workflow_published WHERE id=?1 AND revision=?2",
+        "SELECT id,project,name,kind,graph_json,revision,closure,checks_json FROM workflow_published WHERE id=?1 AND revision=?2",
         params![id, revision], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?))
+            row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?, row.get::<_, String>(7)?))
     ).optional().map_err(|e| format!("read published workflow: {e}"))?.ok_or("published workflow revision not found")?;
     Ok(PublishedWorkflow {
         id: row.0,
@@ -378,6 +485,8 @@ fn read_published(conn: &Connection, id: &str, revision: i64) -> Result<Publishe
         name: row.2,
         kind: parse_kind(&row.3)?,
         closure: WorkflowClosure::parse(&row.6)?,
+        required_checks: serde_json::from_str(&row.7)
+            .map_err(|e| format!("decode workflow checks: {e}"))?,
         graph: decode_graph(row.4)?,
         revision: row.5,
     })

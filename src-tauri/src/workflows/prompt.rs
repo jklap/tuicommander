@@ -324,6 +324,7 @@ mod tests {
             name: "Story delivery".into(),
             kind: WorkflowKind::Story,
             closure: WorkflowClosure::Human,
+            required_checks: vec![],
             graph: WorkflowGraph {
                 nodes: vec![Node {
                     id: "implement".into(),
@@ -468,6 +469,7 @@ mod tests {
             name: "Plan delivery".into(),
             kind: WorkflowKind::Plan,
             closure: WorkflowClosure::Human,
+            required_checks: vec![],
             graph: WorkflowGraph {
                 nodes: vec![Node {
                     id: "coordinate".into(),
