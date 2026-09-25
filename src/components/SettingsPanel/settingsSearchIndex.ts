@@ -351,6 +351,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "dictation.no_speech_threshold",
 	},
 	{ tab: "dictation", section: "Spoken replies", label: "Voice", labelKey: "dictation.voiceLabel" },
+	{ tab: "dictation", section: "Spoken replies", label: "Voice volume", labelKey: "dictation.voiceVolumeLabel" },
+	{ tab: "dictation", section: "Spoken replies", label: "Levelling", labelKey: "dictation.levellingLabel" },
+	{ tab: "dictation", section: "Spoken replies", label: "Voices", labelKey: "dictation.voicesLabel" },
 	{
 		tab: "dictation",
 		section: "Hands-free conversation",

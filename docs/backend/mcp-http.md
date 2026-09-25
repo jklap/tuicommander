@@ -310,6 +310,7 @@ When sessions are created or closed (via HTTP, MCP, or PTY exit), the server bro
 
 - **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI tags such tabs as sub-agents with the parent tab's name). Frontend uses this to auto-add remote tabs; a spawn-assigned name may be refined by an `intent:` title or replaced by a user rename, but an agent's OSC 0/2 title (Claude Code's own session title) never replaces it, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session`, for reconnect.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Published after `session-created` on the bus, and also as a desktop window event. Frontend uses this to update tab tooltips; it fires once, so after a reload the alias comes from the session list (`alias` on `GET /sessions` / `list_active_sessions`).
+- **`session-renamed`** — Emitted when MCP `session action=rename` changes a tab's display name. Carries `session_id`, `name` and `is_custom`. The desktop and browser UIs update the tab bar and sidebar from it. The name must be one line of at most 256 characters without control characters.
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 
 These events are available on the SSE `/events` stream used by the mobile PWA and any connected WebSocket clients.
@@ -651,7 +652,7 @@ say what was measured, not what the list costs today.
 
 | Tool | Actions | Default |
 |------|---------|---------|
-| `session` | list, create, submit, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
+| `session` | list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `repo` | list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list | Enabled |
@@ -854,7 +855,7 @@ equivalent, so a model that saw both had to guess, and paid for both catalogues
 on every turn. Six of the 13 needed a per-session filesystem sandbox only the
 embedded agent loop creates, so they refused every external caller before
 dispatch. Deleted in story 789-f6ed; the tool-by-tool comparison behind it is
-`plans/ego-integration/tool-family-comparison.md`. The embedded agent loop that
+`plans/ego-integration/archive/tool-family-comparison.md`. The embedded agent loop that
 created those sandboxes is itself gone (#784-0aec).
 
 **The surviving tool names are a public contract.** They appear in users' ego
@@ -1432,12 +1433,21 @@ Low-risk response compaction also omits an absent peer `project` from `list_peer
 `parent_session_id` from standalone spawn responses. Proxied upstream tool payloads are unchanged.
 
 Blocking waits and terminal wake-up use a per-recipient delivery lease. Each
-message is atomically assigned to exactly one wake-up owner: an active waiter,
-or SSE/PTY delivery. The deadline path performs its final inbox check while
+message is atomically assigned to at most one wake-up owner: an active waiter,
+or PTY delivery. A channel push does not take the lease: it is a best-effort
+notification into a running turn, so the message stays available and a later
+`agent action=wait` or `inbox` returns it once more. Dedupe on
+`meta.message_id`. The deadline path performs its final inbox check while
 releasing the lease, and cancellation hands unobserved waiter-owned messages
 back to terminal delivery. This removes both duplicate inbox+terminal turns and
 the missed-wake race at the wait timeout boundary; inbox visibility itself is
 unchanged and remains backward compatible.
+
+If a terminal-owned message cannot be delivered before a PTY disappears, the
+server re-queues that same message with a fresh logical cursor while preserving
+its `meta.message_id`. This lets a later omitted-`since` wait recover it even if
+it had already returned newer mail; recipients deduplicate the replay by
+`meta.message_id`.
 
 The server never infers orchestrator role from child spawn, peer name, prompt, MCP
 activity, or SSE presence. Registration is the sole declaration seam. Wake
@@ -1454,7 +1464,7 @@ is reserved for diagnosing the anomaly where that result message never arrived.
 
 When an already working ordinary Claude Code worker has an active SSE stream (`GET /mcp`), messages are pushed into that turn as `notifications/claude/channel` JSON-RPC notifications. Idle or completed ordinary managed recipients use PTY submission instead. Registered orchestrators never use this payload-bearing route:
 
-A channel notification is transport delivery into an existing turn, not proof that the recipient submitted a new one. It does not mutate the recipient's task epoch or lifecycle. Managed Codex and other non-Claude agents never receive this extension; an idle or completed Claude composer also takes the PTY split-write payload plus Enter path so delivery owns a real submitted turn.
+A channel notification is transport delivery into an existing turn, not proof that the recipient submitted a new one, nor that the recipient read it. The message therefore stays unowned in the delivery lease, and the recipient's next `agent action=wait` still returns it. It does not mutate the recipient's task epoch or lifecycle. Managed Codex and other non-Claude agents never receive this extension; an idle or completed Claude composer also takes the PTY split-write payload plus Enter path so delivery owns a real submitted turn.
 
 ```json
 {

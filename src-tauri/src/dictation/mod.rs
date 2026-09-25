@@ -6,6 +6,7 @@ pub mod corrections;
 pub mod echo;
 pub mod fn_key_monitor;
 pub mod language;
+pub mod loudness;
 pub mod model;
 pub mod permission;
 pub mod speaker;
@@ -77,6 +78,11 @@ pub struct DictationState {
     /// barge-in port: it must interrupt whatever is speaking *now*, which
     /// under Auto is a voice that did not exist when the loop started.
     pub speaker: Arc<Mutex<Option<speaker::Armed>>>,
+    /// The device a voice preview is playing on, held so the sound lasts past
+    /// the call that started it. A conversation reply stops it before it is
+    /// queued, so the two never play over each other. Always taken after
+    /// `speaker`, never before.
+    pub preview: Mutex<Option<Arc<dyn speaker::Output>>>,
     /// Where an utterance transition goes once a conversation is armed.
     ///
     /// Held here rather than passed in because the two places that build a
@@ -114,6 +120,7 @@ impl DictationState {
             echo: Arc::new(Mutex::new(echo::install())),
             speech: Arc::new(speech::library::SpeechLibrary::new()),
             speaker: Arc::new(Mutex::new(None)),
+            preview: Mutex::new(None),
             utterance_observer: Mutex::new(None),
             browser_endpoints: Arc::new(browser::BrowserEndpoints::default()),
         }

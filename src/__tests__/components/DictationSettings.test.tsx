@@ -46,7 +46,10 @@ const mockStore = vi.hoisted(() => ({
 		handsFreeStartNotice: "",
 		handsFreeActivationPhrase: "",
 		speechVoice: "",
+		speechVolumeDb: -18,
+		speechLevelling: 0.67,
 		speechAssets: [] as unknown[],
+		speechVoices: [] as { id: string; source: string }[],
 		speechDownloads: {} as Record<string, number | undefined>,
 		handsFree: null as unknown,
 		handsFreeError: null as string | null,
@@ -80,6 +83,12 @@ const mockStore = vi.hoisted(() => ({
 	cancelSpeechDownload: vi.fn(),
 	deleteSpeechAsset: vi.fn(),
 	setSpeechVoice: vi.fn(),
+	setSpeechVolumeDb: vi.fn(),
+	setSpeechLevelling: vi.fn(),
+	refreshSpeechVoices: vi.fn(),
+	importSpeechVoice: vi.fn(() => Promise.resolve(null as string | null)),
+	deleteSpeechVoice: vi.fn(),
+	previewSpeechVoice: vi.fn(() => Promise.resolve(null as string | null)),
 	refreshHandsFree: vi.fn(),
 	armHandsFree: vi.fn(),
 	disarmHandsFree: vi.fn(),
@@ -460,6 +469,22 @@ describe("DictationSettings – Spoken replies", () => {
 		expect(rows.every((row) => row.textContent?.includes("Downloaded"))).toBe(true);
 	});
 
+	it("keeps catalogue voices out of the download list, and never lets one stand in for its language", () => {
+		// `get_speech_assets` also returns every catalogue voice (`kind: "voice"`,
+		// with its language's code). Voices belong in the voice list, not among
+		// the runtime and language downloads.
+		mockStore.state.speechAssets = [
+			{ ...asset("voice-italian-jean", "it", "absent"), kind: "voice", voice: "jean" },
+			...mockStore.state.speechAssets,
+		];
+		const { container } = render(() => <DictationSettings />);
+		const rows = Array.from(container.querySelectorAll("[data-speech-downloads] .modelRow"));
+		expect(rows).toHaveLength(3);
+		expect(rows.some((row) => row.textContent?.includes("voice-italian-jean"))).toBe(false);
+		const active = rows.filter((row) => row.classList.contains("active"));
+		expect(active.map((row) => row.textContent)).toEqual([expect.stringContaining("italian")]);
+	});
+
 	it("cancels a running download from a × control, not a text button", () => {
 		mockStore.state.speechDownloads = { english: 40 };
 		const { container } = render(() => <DictationSettings />);
@@ -468,6 +493,176 @@ describe("DictationSettings – Spoken replies", () => {
 		expect(cancel.textContent).toBe("×");
 		fireEvent.click(cancel);
 		expect(mockStore.cancelSpeechDownload).toHaveBeenCalledWith("english");
+	});
+});
+
+describe("DictationSettings – Voice library", () => {
+	const voiceAsset = (voice: string, language: string, state: string) => ({
+		id: `voice-${language}-${voice}`,
+		display_name: voice,
+		kind: "voice",
+		language,
+		voice,
+		voices: [],
+		download_bytes: 6_000_000,
+		state,
+	});
+
+	const group = (container: HTMLElement, name: string) =>
+		container.querySelector(`[data-voice-group="${name}"]`) as HTMLElement | null;
+	const button = (root: ParentNode, text: string) =>
+		Array.from(root.querySelectorAll("button")).find((b) => b.textContent?.trim() === text);
+	const slider = (container: HTMLElement, label: string) =>
+		Array.from(container.querySelectorAll("label"))
+			.find((el) => el.textContent === label)
+			?.parentElement?.querySelector('input[type="range"]') as HTMLInputElement;
+	const voiceSelect = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("select")).find((el) =>
+			Array.from(el.options).some((o) => o.textContent === "Default for this language"),
+		) as HTMLSelectElement;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.state.language = "it";
+		mockStore.state.speechVoice = "";
+		mockStore.state.speechVolumeDb = -18;
+		mockStore.state.speechLevelling = 0.67;
+		mockStore.state.speechDownloads = { "voice-it-marco": 30 };
+		mockStore.state.speechAssets = [
+			{
+				id: "italian",
+				display_name: "Italian",
+				kind: "language",
+				language: "it",
+				voices: ["giovanni"],
+				download_bytes: 1,
+				state: "ready",
+			},
+			voiceAsset("jean", "it", "ready"),
+			voiceAsset("alba", "it", "absent"),
+			voiceAsset("marco", "it", "downloading"),
+			voiceAsset("lola", "es", "absent"),
+		];
+		mockStore.state.speechVoices = [
+			{ id: "giovanni", source: "default" },
+			{ id: "jean", source: "downloaded" },
+			{ id: "my_voice", source: "user" },
+		];
+	});
+
+	it("reads the voices of the language replies are spoken in", () => {
+		render(() => <DictationSettings />);
+		expect(mockStore.refreshSpeechVoices).toHaveBeenCalledWith("it");
+	});
+
+	it("groups the language's voices into Installed, Downloadable and Yours", () => {
+		const { container } = render(() => <DictationSettings />);
+		expect(group(container, "installed")?.textContent).toContain("jean");
+		const downloadable = group(container, "downloadable") as HTMLElement;
+		expect(downloadable.textContent).toContain("alba");
+		expect(downloadable.textContent).toContain("marco");
+		expect(downloadable.textContent).toContain("30%");
+		expect(group(container, "yours")?.textContent).toContain("my_voice");
+		// Another language's voice is in none of them.
+		expect(container.textContent).not.toContain("lola");
+	});
+
+	it("downloads a voice from its own row", () => {
+		const { container } = render(() => <DictationSettings />);
+		const row = Array.from(group(container, "downloadable")!.querySelectorAll(".modelRow")).find((r) =>
+			r.textContent?.includes("alba"),
+		)!;
+		fireEvent.click(button(row, "Download")!);
+		expect(mockStore.downloadSpeechAsset).toHaveBeenCalledWith("voice-it-alba");
+	});
+
+	it("imports a voice file into the language and deletes a user voice", async () => {
+		const { container } = render(() => <DictationSettings />);
+		const yours = group(container, "yours")!;
+		expect(button(yours, "Add voice file…")).toBeDefined();
+		const input = yours.querySelector('input[type="file"]') as HTMLInputElement;
+		const file = new File([new Uint8Array([1])], "mine.safetensors");
+		fireEvent.change(input, { target: { files: [file] } });
+		await Promise.resolve();
+		expect(mockStore.importSpeechVoice).toHaveBeenCalledWith("it", file);
+
+		fireEvent.click(yours.querySelector('button[title="Delete this voice file"]') as HTMLButtonElement);
+		expect(mockStore.deleteSpeechVoice).toHaveBeenCalledWith("it", "my_voice");
+	});
+
+	it("shows why an imported file was refused", async () => {
+		mockStore.importSpeechVoice.mockResolvedValueOnce("the voice file is over the 64 MB limit");
+		const { container, findByText } = render(() => <DictationSettings />);
+		const input = group(container, "yours")!.querySelector('input[type="file"]') as HTMLInputElement;
+		fireEvent.change(input, { target: { files: [new File([new Uint8Array([1])], "big.safetensors")] } });
+		expect(await findByText("the voice file is over the 64 MB limit")).toBeDefined();
+	});
+
+	it("offers only voices that can speak now in the voice picker", () => {
+		const { container } = render(() => <DictationSettings />);
+		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
+		expect(values).toEqual(["", "giovanni", "jean", "my_voice"]);
+	});
+
+	it("offers no voice in the picker while the language itself is not downloaded", () => {
+		// No voice speaks without the language's model, so the shipped voice
+		// the catalogue names must not stand in for an empty answer.
+		mockStore.state.speechAssets[0] = {
+			id: "italian",
+			display_name: "Italian",
+			kind: "language",
+			language: "it",
+			voices: ["giovanni"],
+			download_bytes: 1,
+			state: "absent",
+		};
+		mockStore.state.speechVoices = [];
+		const { container } = render(() => <DictationSettings />);
+		const values = Array.from(voiceSelect(container).options).map((o) => o.value);
+		expect(values).toEqual([""]);
+	});
+
+	it("keeps the Downloadable voices collapsed behind a disclosure that shows how many there are", () => {
+		// A language offers two dozen voices; listed open they push the volume
+		// sliders out of sight.
+		const { container } = render(() => <DictationSettings />);
+		const disclosure = group(container, "downloadable") as HTMLDetailsElement;
+		expect(disclosure.tagName).toBe("DETAILS");
+		expect(disclosure.open).toBe(false);
+		// A native <summary> is focusable and toggles on Enter and Space.
+		const summary = disclosure.querySelector(":scope > summary") as HTMLElement;
+		expect(summary.textContent).toContain("Downloadable");
+		expect(summary.textContent).toContain("2");
+		fireEvent.click(summary);
+		expect(disclosure.open).toBe(true);
+	});
+
+	it("Listen previews the selected voice and shows a refusal inline", async () => {
+		mockStore.state.speechVoice = "jean";
+		mockStore.previewSpeechVoice.mockResolvedValueOnce("a reply is being spoken; try again when it ends");
+		const { container, findByText } = render(() => <DictationSettings />);
+		fireEvent.click(button(container, "Listen")!);
+		expect(mockStore.previewSpeechVoice).toHaveBeenCalledWith("it", "jean");
+		expect(await findByText("a reply is being spoken; try again when it ends")).toBeDefined();
+	});
+
+	it("saves Voice volume and Levelling when the drag is released, not while it moves", () => {
+		const { container } = render(() => <DictationSettings />);
+		const volume = slider(container, "Voice volume");
+		expect(volume.value).toBe("-18");
+		fireEvent.input(volume, { target: { value: "-24" } });
+		expect(mockStore.setSpeechVolumeDb).not.toHaveBeenCalled();
+		expect(volume.parentElement?.textContent).toContain("-24 dB");
+		fireEvent.change(volume, { target: { value: "-24" } });
+		expect(mockStore.setSpeechVolumeDb).toHaveBeenCalledWith(-24);
+
+		const levelling = slider(container, "Levelling");
+		expect(levelling.value).toBe("67");
+		fireEvent.input(levelling, { target: { value: "0" } });
+		expect(levelling.parentElement?.textContent).toContain("Off");
+		fireEvent.change(levelling, { target: { value: "0" } });
+		expect(mockStore.setSpeechLevelling).toHaveBeenCalledWith(0);
 	});
 });
 

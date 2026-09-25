@@ -32,7 +32,7 @@ export interface RepoOwner {
 	 * `null` is deliberate and is not the same as "the main workspace". Whatever
 	 * is checked out at the repo root changes under the user's feet, so freezing a
 	 * name here would be a lie the moment they switch. Callers resolve the root's
-	 * workspace through `activeWorkspaceId` at the time they need it.
+	 * workspace at the time they need it (`placementWorkspaceFor`).
 	 */
 	workspaceId: string | null;
 }
@@ -52,7 +52,7 @@ function segments(path: string): string[] {
 }
 
 /** Do two paths name the same directory, trailing slash and separator aside? */
-function sameDir(left: string, right: string): boolean {
+export function sameDir(left: string, right: string): boolean {
 	const a = segments(left);
 	const b = segments(right);
 	return a.length === b.length && a.every((seg, i) => seg === b[i]);

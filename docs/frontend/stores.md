@@ -431,6 +431,21 @@ settings panel renders.
   `downloadSpeechAsset` clears its key with `setState("speechDownloads", id,
   undefined)`: a store update at a path *merges*, so returning a smaller object
   leaves the key exactly where it was.
+- `speechVoices` — the voices of one language as `get_speech_voices` returns
+  them (`{ id, source }`, `source` `"default"`, `"downloaded"` or `"user"`).
+  `refreshSpeechVoices(language)` reloads it; the voice picker offers only these
+  ids, because Rust refuses a catalogue voice that is not downloaded.
+- `importSpeechVoice(language, file)` sends the file as base64 (`dataBase64`)
+  under its file name without the extension, and `deleteSpeechVoice(language,
+  name)` removes a user voice. Both re-read the catalogue. The import returns the
+  reason Rust refused the file, or null, so the panel can show it.
+- `previewSpeechVoice(language, voice)` calls `preview_speech_voice` with a short
+  sample. It does not save the voice. It returns the refusal (for example, a
+  hands-free reply is being spoken), or null.
+- `speechVolumeDb` / `speechLevelling` — the loudness settings, read by
+  `refreshConfig` (defaults `DEFAULT_SPEECH_VOLUME_DB` -18 and
+  `DEFAULT_SPEECH_LEVELLING` 0.67 until then). `setSpeechVolumeDb` and
+  `setSpeechLevelling` each save one field.
 - `handsFree` / `speech` — polled status, never pushed. `refreshHandsFree` is
   deliberately **one** command, because the dictation hotkey asks on every press.
 - `turnEarcon(previous, next, owner)` — `applyHandsFree` plays an earcon
@@ -455,7 +470,8 @@ settings panel renders.
   falls back to the stored value, like the other one-panel fields.
 - `saveConfig` abandons the save when `get_dictation_config` cannot be read or
   answers something that is not a config. `hands_free_hold_back_ms`,
-  `hands_free_activation_phrase` and `speech_voice` fall back to the **stored**
+  `hands_free_activation_phrase`, `speech_voice`, `speech_volume_db` and
+  `speech_levelling` fall back to the **stored**
   value, not to store state: their controls live in one panel, so a save from
   anywhere else would otherwise write this session's default over a setting the
   user had chosen.

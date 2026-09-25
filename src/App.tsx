@@ -442,8 +442,6 @@ const App: Component = () => {
 		pty,
 		setQuitDialogVisible,
 		setStatusInfo,
-		setCurrentRepoPath: gitOps.setCurrentRepoPath,
-		setCurrentBranch: gitOps.setCurrentBranch,
 		handleBranchSelect: gitOps.handleBranchSelect,
 		refreshAllBranchStats: gitOps.refreshAllBranchStats,
 		getDefaultFontSize,
@@ -910,12 +908,8 @@ const App: Component = () => {
 							getNewAgentMenuItems={() => {
 								const target = gitOps.resolveNewTabTarget();
 								if (!target) return [];
-								// The sidebar nests every agent under one "Add Agent" entry; under + the list is the menu.
-								const items = terminalContextMenus.buildSidebarAgentMenuItems(target.repoPath, target.branchName);
-								return items.length === 1 && items[0].children ? items[0].children : items;
+								return terminalContextMenus.buildSidebarAgentMenuItems(target.repoPath, target.branchName);
 							}}
-							onSplitVertical={() => splitPanes.handleSplit("vertical")}
-							onSplitHorizontal={() => splitPanes.handleSplit("horizontal")}
 							onReorder={(from, to) => {
 								const activeRepo = repositoriesStore.getActive();
 								if (activeRepo?.activeWorkspaceId) {
@@ -981,9 +975,6 @@ const App: Component = () => {
 							const repoPath = gitOps.currentRepoPath();
 							if (repoPath) {
 								repositoriesStore.renameBranch(repoPath, oldName, newName);
-							}
-							if (gitOps.currentBranch() === oldName) {
-								gitOps.setCurrentBranch(newName);
 							}
 							setStatusInfo(`Renamed branch ${oldName} to ${newName}`);
 						}}

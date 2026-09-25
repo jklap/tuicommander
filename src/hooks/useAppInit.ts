@@ -111,6 +111,8 @@ export interface AppInitDeps {
 					awaiting_input?: boolean;
 					question_confident?: boolean;
 					agent_type?: string | null;
+					agent_intent?: string | null;
+					last_prompt?: string | null;
 					background_work?: boolean;
 				} | null;
 			}>
@@ -119,8 +121,6 @@ export interface AppInitDeps {
 	};
 	setQuitDialogVisible: (visible: boolean) => void;
 	setStatusInfo: (msg: string) => void;
-	setCurrentRepoPath: (path: string | undefined) => void;
-	setCurrentBranch: (branch: string | null) => void;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
 	refreshAllBranchStats: (scopeRepoPath?: string) => Promise<void> | void;
 	getDefaultFontSize: () => number;
@@ -593,6 +593,13 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.setPtyDescription(termId, event.payload.description ?? null);
 	}).catch((err) => appLogger.error("app", "Failed to register pty-description listener", err));
 
+	// An MCP rename starts in the backend; the IPC echo that update() sends
+	// back does not emit, so this cannot loop.
+	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
+		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
+		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
+	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
+
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
 		// A mirrored alias names a session on another machine: no tab here ever
 		// binds it, so retaining it would only grow the pending-alias map.
@@ -649,10 +656,7 @@ export async function initApp(deps: AppInitDeps) {
 				// its tab is filtered out by the current repo. Keep background opens in
 				// their repo, but move focused opens to their owning repo first.
 				if (focus !== false && repoPath && repoPath !== activeRepoPath) {
-					const repo = repositoriesStore.get(repoPath);
 					repositoriesStore.setActive(repoPath);
-					deps.setCurrentRepoPath(repoPath);
-					deps.setCurrentBranch(repo?.activeWorkspaceId ?? null);
 				}
 
 				// A background open must also stay in the background. Activating it
@@ -838,6 +842,12 @@ export async function initApp(deps: AppInitDeps) {
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
+				// The Context bar mounts once intent or prompt is known. Waiting for the
+				// lifecycle sync shows it after the terminal has measured, and the
+				// transient taller PTY height duplicates the agent's rows in history.
+				// The snapshot is complete, as in useAgentPolling: absence retracts.
+				agentIntent: session.state?.agent_intent ?? null,
+				lastPrompt: session.state?.last_prompt ?? null,
 				ptyDescription: session.pty_description ?? null,
 				...(session.alias ? { alias: session.alias } : {}),
 				agentState: session.state?.agent_state ?? null,
@@ -901,9 +911,7 @@ export async function initApp(deps: AppInitDeps) {
 		const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
 		const firstRepo = repositoriesStore.get(firstPath);
 		repositoriesStore.setActive(firstPath);
-		deps.setCurrentRepoPath(firstPath);
 		if (firstRepo?.activeWorkspaceId) {
-			deps.setCurrentBranch(firstRepo.activeWorkspaceId);
 			if (survivingSessions.length > 0) {
 				const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
 				const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];

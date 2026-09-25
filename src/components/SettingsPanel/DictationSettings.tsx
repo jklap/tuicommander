@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
@@ -546,7 +546,42 @@ const SpeechSetup: Component = () => {
 	});
 
 	const languageAsset = (): SpeechAsset | undefined =>
-		dictationStore.state.speechAssets.find((asset) => asset.language === dictationStore.state.language);
+		dictationStore.state.speechAssets.find(
+			(asset) => asset.kind === "language" && asset.language === dictationStore.state.language,
+		);
+
+	// A downloadable voice (`kind: "voice"`) belongs in the voice list below, not
+	// in this list of downloads.
+	const downloadRows = (): SpeechAsset[] => dictationStore.state.speechAssets.filter((asset) => asset.kind !== "voice");
+
+	// Re-read the language's voices whenever the catalogue moves (a voice was
+	// downloaded, repaired or deleted) or the language changes.
+	createEffect(() => {
+		const code = dictationStore.state.language;
+		void dictationStore.state.speechAssets;
+		if (code !== "auto") void dictationStore.refreshSpeechVoices(code);
+	});
+
+	/** Voice ids the picker offers: only voices that can speak now. Before the
+	 * list loads, the language's shipped voices — but only once the language is
+	 * downloaded, because without it no voice speaks. */
+	const voiceChoices = (): string[] => {
+		const loaded = dictationStore.state.speechVoices.map((voice) => voice.id);
+		if (loaded.length > 0) return loaded;
+		const asset = languageAsset();
+		return asset?.state === "ready" ? asset.voices : [];
+	};
+
+	const [previewError, setPreviewError] = createSignal<string | null>(null);
+	const listen = async () => {
+		const code = languageAsset()?.language;
+		if (!code) return;
+		setPreviewError(await dictationStore.previewSpeechVoice(code, dictationStore.state.speechVoice));
+	};
+
+	// The drag shows its value at once; the config is written on release.
+	const [volumeDrag, setVolumeDrag] = createSignal<number | undefined>();
+	const [levellingDrag, setLevellingDrag] = createSignal<number | undefined>();
 
 	/** Which language replies are spoken in, in the user's terms. */
 	const spokenLanguage = (): string => {
@@ -574,8 +609,8 @@ const SpeechSetup: Component = () => {
 			</p>
 
 			<div class={s.group}>
-				<div class={d.modelList}>
-					<For each={dictationStore.state.speechAssets}>{(asset) => <SpeechAssetRow asset={asset} />}</For>
+				<div class={d.modelList} data-speech-downloads>
+					<For each={downloadRows()}>{(asset) => <SpeechAssetRow asset={asset} />}</For>
 				</div>
 
 				<div class={d.conversation}>
@@ -589,13 +624,21 @@ const SpeechSetup: Component = () => {
 			<Show when={(languageAsset()?.voices.length ?? 0) > 0}>
 				<div class={s.group}>
 					<label>{t("dictation.voiceLabel", "Voice")}</label>
-					<select
-						value={dictationStore.state.speechVoice}
-						onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
-					>
-						<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
-						<For each={languageAsset()?.voices ?? []}>{(voice) => <option value={voice}>{voice}</option>}</For>
-					</select>
+					<div class={d.controlRow}>
+						<select
+							value={dictationStore.state.speechVoice}
+							onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
+						>
+							<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
+							<For each={voiceChoices()}>{(voice) => <option value={voice}>{voice}</option>}</For>
+						</select>
+						<button class={d.modelDownload} onClick={listen}>
+							{t("dictation.listen", "Listen")}
+						</button>
+					</div>
+					<Show when={previewError()}>
+						<p class={cx(s.hint, d.conversationError)}>{previewError()}</p>
+					</Show>
 					<p class={s.hint}>
 						{t(
 							"dictation.voiceHint",
@@ -603,8 +646,146 @@ const SpeechSetup: Component = () => {
 						)}
 					</p>
 				</div>
+
+				<VoiceLibrary language={languageAsset()?.language ?? ""} />
+
+				<SettingSlider
+					label={t("dictation.voiceVolumeLabel", "Voice volume")}
+					value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
+					onChange={setVolumeDrag}
+					onCommit={(v) => {
+						void dictationStore.setSpeechVolumeDb(v);
+						setVolumeDrag(undefined);
+					}}
+					min={-30}
+					max={-12}
+					step={1}
+					formatValue={(v) => `${v} dB`}
+					hint={t(
+						"dictation.voiceVolumeHint",
+						"How loud every reply is spoken. Peaks are limited, so a high level never clips. Applies to the next reply.",
+					)}
+				/>
+
+				<SettingSlider
+					label={t("dictation.levellingLabel", "Levelling")}
+					value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
+					onChange={setLevellingDrag}
+					onCommit={(v) => {
+						void dictationStore.setSpeechLevelling(v / 100);
+						setLevellingDrag(undefined);
+					}}
+					min={0}
+					max={100}
+					step={1}
+					formatValue={(v) =>
+						v === 0
+							? t("dictation.levellingOff", "Off")
+							: v === 100
+								? t("dictation.levellingStrong", "Strong")
+								: `${v}%`
+					}
+					hint={t(
+						"dictation.levellingHint",
+						"Evens out quiet and loud words within a reply. Off keeps the voice as recorded.",
+					)}
+				/>
 			</Show>
 		</>
+	);
+};
+
+/**
+ * The voices of one language: catalogue voices already installed, catalogue
+ * voices to download, and voice files the user imported. TUICommander does not
+ * make voices; a user voice is a `.safetensors` file made elsewhere.
+ */
+const VoiceLibrary: Component<{ language: string }> = (props) => {
+	const voiceAssets = (): SpeechAsset[] =>
+		dictationStore.state.speechAssets.filter((asset) => asset.kind === "voice" && asset.language === props.language);
+	const installed = () => voiceAssets().filter((asset) => asset.state === "ready");
+	const downloadable = () => voiceAssets().filter((asset) => asset.state !== "ready");
+	const userVoices = () => dictationStore.state.speechVoices.filter((voice) => voice.source === "user");
+
+	const [importError, setImportError] = createSignal<string | null>(null);
+	let fileInput: HTMLInputElement | undefined;
+	const importFile = async (file: File | undefined) => {
+		if (!file) return;
+		setImportError(await dictationStore.importSpeechVoice(props.language, file));
+		if (fileInput) fileInput.value = "";
+	};
+
+	return (
+		<div class={cx(s.group, d.voiceLibrary)}>
+			<label>{t("dictation.voicesLabel", "Voices")}</label>
+			<Show when={installed().length > 0}>
+				<div class={d.voiceGroup} data-voice-group="installed">
+					<span class={d.voiceGroupTitle}>{t("dictation.voiceGroupInstalled", "Installed")}</span>
+					<div class={d.modelList}>
+						<For each={installed()}>{(asset) => <SpeechAssetRow asset={asset} />}</For>
+					</div>
+				</div>
+			</Show>
+			<Show when={downloadable().length > 0}>
+				{/* Collapsed: a language offers two dozen voices, and listed open they
+				    push the volume sliders out of sight. A native <summary> is
+				    focusable and toggles on Enter and Space. */}
+				<details class={d.voiceGroup} data-voice-group="downloadable">
+					<summary class={cx(d.voiceGroupTitle, d.voiceGroupToggle)}>
+						{t("dictation.voiceGroupDownloadable", "Downloadable")} ({downloadable().length})
+					</summary>
+					<div class={d.modelList}>
+						<For each={downloadable()}>{(asset) => <SpeechAssetRow asset={asset} />}</For>
+					</div>
+				</details>
+			</Show>
+			<div class={d.voiceGroup} data-voice-group="yours">
+				<span class={d.voiceGroupTitle}>{t("dictation.voiceGroupYours", "Yours")}</span>
+				<Show when={userVoices().length > 0}>
+					<div class={d.modelList}>
+						<For each={userVoices()}>
+							{(voice) => (
+								<div class={cx(d.modelRow, voice.id === dictationStore.state.speechVoice && d.active)}>
+									<div class={d.modelInfo}>
+										<span class={d.modelName}>{voice.id}</span>
+									</div>
+									<div class={d.modelActions}>
+										<button
+											class={d.modelDelete}
+											onClick={() => dictationStore.deleteSpeechVoice(props.language, voice.id)}
+											title={t("dictation.voiceDeleteUser", "Delete this voice file")}
+										>
+											&times;
+										</button>
+									</div>
+								</div>
+							)}
+						</For>
+					</div>
+				</Show>
+				<div class={d.controlRow}>
+					<button class={d.modelDownload} onClick={() => fileInput?.click()}>
+						{t("dictation.addVoiceFile", "Add voice file…")}
+					</button>
+					<input
+						ref={fileInput}
+						type="file"
+						accept=".safetensors"
+						hidden
+						onChange={(e) => void importFile(e.currentTarget.files?.[0])}
+					/>
+				</div>
+				<Show when={importError()}>
+					<p class={cx(s.hint, d.conversationError)}>{importError()}</p>
+				</Show>
+			</div>
+			<p class={s.hint}>
+				{t(
+					"dictation.voicesHint",
+					"Each voice is a separate download. A voice file you add must be made for this language's model (.safetensors); TUICommander does not create voices.",
+				)}
+			</p>
+		</div>
 	);
 };
 
@@ -616,8 +797,9 @@ const SpeechAssetRow: Component<{ asset: SpeechAsset }> = (props) => {
 	// Whisper model, and highlighted the same way.
 	const speaking = () =>
 		props.asset.state === "ready" &&
-		props.asset.language !== null &&
-		props.asset.language === dictationStore.state.language;
+		(props.asset.kind === "voice"
+			? props.asset.voice === dictationStore.state.speechVoice
+			: props.asset.language !== null && props.asset.language === dictationStore.state.language);
 
 	return (
 		<div class={cx(d.modelRow, speaking() && d.active)}>

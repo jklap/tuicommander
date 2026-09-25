@@ -30,10 +30,15 @@ interface DictationConfig {
 	speech_command: string[];
 	/** Which of the language's voices speaks. Empty means the first one it ships. */
 	speech_voice: string;
+	/** Speech level of every reply in dBFS (-30..=-12). */
+	speech_volume_db: number;
+	/** Levelling strength within a reply: 0 is off, 1 is 4:1. */
+	speech_levelling: number;
 }
 
 /**
- * A downloadable speech asset: the ONNX runtime, or one language bundle.
+ * A downloadable speech asset: the ONNX runtime, one language bundle, or one
+ * catalogue voice of a language.
  *
  * Snake_case because `SpeechAssetInfo` carries no serde rename, unlike the
  * hands-free and speech status structs below it.
@@ -41,20 +46,30 @@ interface DictationConfig {
 export interface SpeechAsset {
 	id: string;
 	display_name: string;
-	/** `"language"` or `"runtime"`. */
+	/** `"language"`, `"runtime"` or `"voice"`. */
 	kind: string;
 	/**
 	 * The Whisper language code this speaks (`"it"`); null for the runtime
 	 * library. The same alphabet as `DictationConfig.language`, so the two can
-	 * be compared directly — which is the whole reason it is a code.
+	 * be compared directly — which is the whole reason it is a code. For a
+	 * voice, the code of the language it belongs to.
 	 */
 	language: string | null;
 	voices: string[];
+	/** The voice a `"voice"` asset downloads (`"jean"`); absent otherwise. */
+	voice?: string | null;
 	download_bytes: number;
 	/** `"absent"`, `"downloading"`, `"incomplete"` or `"ready"`. */
 	state: string;
 	/** Which files an incomplete asset is missing. Empty otherwise. */
 	missing: string[];
+}
+
+/** One voice a language can speak with. Mirrors Rust's `VoiceChoice`. */
+export interface SpeechVoice {
+	id: string;
+	/** Shipped with the language, downloaded from the catalogue, or imported by the user. */
+	source: "default" | "downloaded" | "user";
 }
 
 /** What the hands-free conversation is doing. Mirrors `Phase::as_wire`. */
@@ -173,6 +188,26 @@ export const DEFAULT_RMS_THRESHOLD = 0.001;
  * a delay. Only where the slider starts — Rust owns the number that is used.
  */
 export const DEFAULT_HOLD_BACK_MS = 1500;
+
+/**
+ * Loudness defaults, mirrored from `DictationConfig::default()`. Only where the
+ * sliders start before the config has loaded — Rust owns the numbers used.
+ */
+export const DEFAULT_SPEECH_VOLUME_DB = -18;
+export const DEFAULT_SPEECH_LEVELLING = 0.67;
+
+/** What "Listen" says. */
+const VOICE_PREVIEW_TEXT = "This is how replies will sound.";
+
+/** A file's bytes as base64, the form a voice file travels in over IPC and HTTP. */
+async function fileToBase64(file: Blob): Promise<string> {
+	const bytes = new Uint8Array(await file.arrayBuffer());
+	let binary = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	}
+	return btoa(binary);
+}
 
 /** GPU/CPU backend reported by whisper after model load. */
 export type DictationBackend = "cpu" | "gpu";
@@ -297,8 +332,14 @@ interface DictationStoreState {
 	handsFreeEarcons: boolean;
 	/** Which voice speaks. Empty means the language's first, decided in Rust. */
 	speechVoice: string;
+	/** Speech level of every reply in dBFS (-30..=-12). */
+	speechVolumeDb: number;
+	/** Levelling strength within a reply: 0 is off, 1 is strongest. */
+	speechLevelling: number;
 	/** The speech catalogue and what state each entry is in. */
 	speechAssets: SpeechAsset[];
+	/** The voices of the language last asked for (`refreshSpeechVoices`). */
+	speechVoices: SpeechVoice[];
 	/** Download percent per asset id, present only while one is downloading. */
 	speechDownloads: Record<string, number | undefined>;
 	/**
@@ -374,7 +415,10 @@ function createDictationStore() {
 		handsFreeActivationPhrase: "",
 		handsFreeEarcons: true,
 		speechVoice: "",
+		speechVolumeDb: DEFAULT_SPEECH_VOLUME_DB,
+		speechLevelling: DEFAULT_SPEECH_LEVELLING,
 		speechAssets: [],
+		speechVoices: [],
 		speechDownloads: {},
 		handsFree: null,
 		handsFreeError: null,
@@ -509,6 +553,8 @@ function createDictationStore() {
 					handsFreeActivationPhrase: config.hands_free_activation_phrase ?? "",
 					handsFreeEarcons: config.hands_free_earcons ?? true,
 					speechVoice: config.speech_voice ?? "",
+					speechVolumeDb: config.speech_volume_db ?? DEFAULT_SPEECH_VOLUME_DB,
+					speechLevelling: config.speech_levelling ?? DEFAULT_SPEECH_LEVELLING,
 					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
 					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
 				});
@@ -565,6 +611,9 @@ function createDictationStore() {
 					// the one panel, and a browser never loads it into state
 					// until it arms.
 					hands_free_earcons: partial.hands_free_earcons ?? stored.hands_free_earcons,
+					// Stored fallback: each slider saves only its own field.
+					speech_volume_db: partial.speech_volume_db ?? stored.speech_volume_db,
+					speech_levelling: partial.speech_levelling ?? stored.speech_levelling,
 					rms_threshold: partial.rms_threshold ?? state.rmsThreshold,
 					no_speech_threshold: partial.no_speech_threshold ?? state.noSpeechThreshold,
 				};
@@ -587,6 +636,8 @@ function createDictationStore() {
 				if (partial.hands_free_start_notice !== undefined)
 					storeUpdate.handsFreeStartNotice = partial.hands_free_start_notice;
 				if (partial.speech_voice !== undefined) storeUpdate.speechVoice = partial.speech_voice;
+				if (partial.speech_volume_db !== undefined) storeUpdate.speechVolumeDb = partial.speech_volume_db;
+				if (partial.speech_levelling !== undefined) storeUpdate.speechLevelling = partial.speech_levelling;
 				if (partial.hands_free_earcons !== undefined) storeUpdate.handsFreeEarcons = partial.hands_free_earcons;
 				if (partial.rms_threshold !== undefined) storeUpdate.rmsThreshold = partial.rms_threshold;
 				if (partial.no_speech_threshold !== undefined) storeUpdate.noSpeechThreshold = partial.no_speech_threshold;
@@ -660,6 +711,14 @@ function createDictationStore() {
 
 		setSpeechVoice(value: string): void {
 			actions.saveConfig({ speech_voice: value });
+		},
+
+		setSpeechVolumeDb(value: number): Promise<void> {
+			return actions.saveConfig({ speech_volume_db: value });
+		},
+
+		setSpeechLevelling(value: number): Promise<void> {
+			return actions.saveConfig({ speech_levelling: value });
 		},
 
 		setAutoSend(value: boolean): void {
@@ -880,6 +939,61 @@ function createDictationStore() {
 				appLogger.error("dictation", `Failed to delete speech asset: ${id}`, err);
 			}
 			await actions.refreshSpeechAssets();
+		},
+
+		/**
+		 * Import a voice file the user picked into a language (its Whisper code).
+		 *
+		 * The name is the file name without its extension; Rust validates it,
+		 * the size and whether the file fits that language's model. Returns the
+		 * reason a file was refused, or null when it was stored.
+		 */
+		async importSpeechVoice(language: string, file: File): Promise<string | null> {
+			const name = file.name.replace(/\.[^.]*$/, "");
+			try {
+				const dataBase64 = await fileToBase64(file);
+				await invoke<string>("import_speech_voice", { language, name, dataBase64 });
+				return null;
+			} catch (err) {
+				appLogger.error("dictation", `Failed to import voice file: ${file.name}`, err);
+				return String(err);
+			} finally {
+				await actions.refreshSpeechAssets();
+			}
+		},
+
+		/** Delete a voice file the user imported into a language. */
+		async deleteSpeechVoice(language: string, name: string): Promise<void> {
+			try {
+				await invoke<string>("delete_speech_voice", { language, name });
+			} catch (err) {
+				appLogger.error("dictation", `Failed to delete voice file: ${name}`, err);
+			}
+			await actions.refreshSpeechAssets();
+		},
+
+		/** Read which voices a language can speak with, and where each comes from. */
+		async refreshSpeechVoices(language: string): Promise<void> {
+			try {
+				setState("speechVoices", await invoke<SpeechVoice[]>("get_speech_voices", { language }));
+			} catch (err) {
+				appLogger.error("dictation", `Failed to list voices for ${language}`, err);
+			}
+		},
+
+		/**
+		 * Let the user hear a voice of a language. Needs no hands-free
+		 * conversation and does not change the saved voice. Returns why Rust
+		 * refused (for example, a reply is being spoken), or null.
+		 */
+		async previewSpeechVoice(language: string, voice: string): Promise<string | null> {
+			try {
+				await invoke("preview_speech_voice", { language, voice, text: VOICE_PREVIEW_TEXT });
+				return null;
+			} catch (err) {
+				appLogger.warn("dictation", `Voice preview refused: ${voice}`, err);
+				return String(err);
+			}
 		},
 
 		// --- Hands-free conversation (818-2a29) -----------------------------

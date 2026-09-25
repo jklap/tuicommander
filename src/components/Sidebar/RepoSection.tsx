@@ -29,6 +29,7 @@ import { handleOpenUrl } from "../../utils/openUrl";
 import { timeSync } from "../../utils/perfTrace";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
+import { createAgentLaunchMenu } from "../ContextMenu/createAgentLaunchMenu";
 import { remoteUrlToGitHub } from "../GitPanel/BranchesTab";
 import { PromptDialog } from "../PromptDialog";
 import b from "../shared/branch.module.css";
@@ -267,8 +268,22 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 									<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
 									<Show when={terminalsStore.getSubAgentTag(id)}>
 										{(parent) => (
-											<span class={s.branchSubAgentTag} title={`Spawned by ${parent()}`}>
-												↳ {parent()}
+											<span
+												class={s.branchSubAgentTag}
+												role="img"
+												aria-label={`Spawned by ${parent()}`}
+												title={`Spawned by ${parent()}`}
+											>
+												<svg
+													class={s.branchSubAgentIcon}
+													viewBox="0 0 16 16"
+													width="11"
+													height="11"
+													fill="currentColor"
+													aria-hidden="true"
+												>
+													<path d="M7.25 1h1.5v2H12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.25V1zM4 4.5a.5.5 0 0 0-.5.5v6a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V5a.5.5 0 0 0-.5-.5H4zm1.5 2h1.75v1.75H5.5V6.5zm3.25 0h1.75v1.75H8.75V6.5zM6 9.5h4V11H6V9.5zM0 6.5h1V10H0V6.5zm15 0h1V10h-1V6.5zM5 14h6v1.5H5V14z" />
+												</svg>
 											</span>
 										)}
 									</Show>
@@ -311,6 +326,12 @@ export const BranchItem: Component<{
 	 *  directory leaf — the one thing that differs. */
 }> = (props) => {
 	const ctxMenu = createContextMenu();
+	// Long press only. The agent list on right click waits for Boss's approval of a
+	// change to a sidebar click (AGENTS.md "Sidebar clicks"), so right click keeps
+	// opening the row menu. Shell rows have no agents, so a long press does nothing.
+	const agentLaunchMenu = createAgentLaunchMenu(() => (props.branch.isShell ? [] : (props.agentMenuItems?.() ?? [])), {
+		rightClick: false,
+	});
 
 	const branchLabel = createMemo(
 		() => repoSettingsStore.getEffectiveField(props.repoPath, "branchLabels")?.[props.branch.branchName],
@@ -696,8 +717,10 @@ export const BranchItem: Component<{
 						class={s.branchAddBtn}
 						onClick={(e) => {
 							e.stopPropagation();
+							if (agentLaunchMenu.consumeClick()) return;
 							props.onAddTerminal();
 						}}
+						{...agentLaunchMenu.buttonHandlers}
 						title={t("sidebar.addTerminal", "Add terminal")}
 					>
 						+
@@ -741,6 +764,13 @@ export const BranchItem: Component<{
 					y={ctxMenu.position().y}
 					visible={ctxMenu.visible()}
 					onClose={ctxMenu.close}
+				/>
+				<ContextMenu
+					items={agentLaunchMenu.items()}
+					x={agentLaunchMenu.position().x}
+					y={agentLaunchMenu.position().y}
+					visible={agentLaunchMenu.visible()}
+					onClose={agentLaunchMenu.close}
 				/>
 			</div>
 		</Show>

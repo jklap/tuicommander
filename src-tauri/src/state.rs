@@ -234,6 +234,14 @@ pub enum AppEvent {
         session_id: String,
         lines: Vec<crate::output_watchers::WatcherLine>,
     },
+    /// A tab's display name changed from the backend (MCP `session action=rename`).
+    /// IPC/HTTP renames start in the frontend and do not emit it.
+    #[serde(rename = "session-renamed")]
+    SessionRenamed {
+        session_id: String,
+        name: String,
+        is_custom: bool,
+    },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
     #[serde(rename = "pty-description-changed")]
     PtyDescriptionChanged {
@@ -507,6 +515,7 @@ impl AppEvent {
             | AppEvent::PtyOsc133 { session_id, .. }
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
+            | AppEvent::SessionRenamed { session_id, .. }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -2180,6 +2189,36 @@ impl AppState {
         let _ = self.event_bus.send(event);
     }
 
+    /// Rename a tab from the backend and tell every UI. Only for renames that
+    /// start here (MCP `session action=rename`): IPC/HTTP renames come from the
+    /// frontend, and emitting for them would echo every OSC title back. Returns
+    /// false when the session does not exist.
+    pub(crate) fn rename_session_from_backend(
+        &self,
+        session_id: &str,
+        name: String,
+        is_custom: bool,
+    ) -> bool {
+        let Some(entry) = self.session_maps.sessions.get(session_id) else {
+            return false;
+        };
+        entry.lock().set_display_name(Some(name.clone()), is_custom);
+        drop(entry);
+        self.emit_pty_event(AppEvent::SessionRenamed {
+            session_id: session_id.to_string(),
+            name: name.clone(),
+            is_custom,
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "session-renamed",
+                serde_json::json!({ "session_id": session_id, "name": name, "is_custom": is_custom }),
+            );
+        }
+        true
+    }
+
     /// Set or clear the orchestrator-owned description shown above a PTY.
     /// The event is dual-emitted for desktop Tauri listeners and browser/SSE
     /// clients, and is suppressed when the value did not change.
@@ -2432,12 +2471,12 @@ impl AppState {
         }
     }
 
-    pub(crate) fn assign_agent_delivery_with_terminal_attempt<F>(
+    pub(crate) fn assign_agent_delivery_with_channel_attempt<F>(
         &self,
         tuic_session: &str,
         message_id: &str,
         terminal_fallback_available: bool,
-        attempt_terminal_delivery: F,
+        attempt_channel_delivery: F,
     ) -> (AgentDeliveryAssignment, bool)
     where
         F: FnOnce() -> bool,
@@ -2461,11 +2500,12 @@ impl AppState {
                 .insert(message_id.to_string(), AgentDeliveryOwner::Waiter);
             return (AgentDeliveryAssignment::Waiter, false);
         }
-        if attempt_terminal_delivery() {
-            gate.owners.insert(
-                message_id.to_string(),
-                AgentDeliveryOwner::TerminalDispatched,
-            );
+        if attempt_channel_delivery() {
+            // An SSE channel push is a best-effort notification, not an inbox
+            // observation. Leave the retained message unowned so a later wait
+            // can claim and return it. Treating the push as terminal delivery
+            // hid it from wait and let an unrelated lifecycle message advance
+            // the implicit cursor past the unread mail.
             return (AgentDeliveryAssignment::Terminal, true);
         }
         if terminal_fallback_available {
@@ -2932,7 +2972,49 @@ impl AppState {
         if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
             let mut gate = gate.lock();
             if gate.owners.get(message_id) == Some(&AgentDeliveryOwner::TerminalPending) {
+                // The cursor may already have advanced past this message because a
+                // newer waiter-owned message returned first. Put the same durable
+                // mail at the end of the logical stream before releasing terminal
+                // ownership, so an omitted-since wait can recover this failed PTY
+                // delivery. The id stays stable for recipient-side deduplication.
+                // Beyond the stored read cursor as well as the other entries: a
+                // plain inbox poll may already have read this very message.
+                let cursor = self
+                    .agent_read_cursor
+                    .get(tuic_session)
+                    .map(|entry| *entry.value());
+                let requeued = self
+                    .agent_inbox
+                    .get_mut(tuic_session)
+                    .and_then(|mut inbox| {
+                        let index = inbox.iter().position(|message| message.id == message_id)?;
+                        let mut message = inbox.remove(index)?;
+                        let after_newest = inbox.back().map(|m| m.timestamp.saturating_add(1));
+                        let after_cursor = cursor.map(|c| c.saturating_add(1));
+                        message.timestamp = [Some(message.timestamp), after_newest, after_cursor]
+                            .into_iter()
+                            .flatten()
+                            .max()
+                            .unwrap_or(message.timestamp);
+                        inbox.push_back(message);
+                        Some(())
+                    })
+                    .is_some();
                 gate.owners.remove(message_id);
+                if requeued {
+                    gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
+                    let revision = gate.inbox_revision;
+                    gate.inbox_events.send_replace(revision);
+                } else {
+                    // The inbox no longer holds it (evicted at capacity, or the
+                    // recipient is gone): the failed delivery cannot be recovered.
+                    tracing::warn!(
+                        source = "agent",
+                        recipient = %tuic_session,
+                        message_id = %message_id,
+                        "failed terminal mail could not be requeued; it is no longer in the inbox"
+                    );
+                }
             }
         }
     }
@@ -3933,6 +4015,7 @@ impl AppState {
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
+            AppEvent::SessionRenamed { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
@@ -6116,11 +6199,11 @@ mod tests {
     }
 
     #[test]
-    fn terminal_attempt_assigns_exact_owner_for_success_failure_and_waiter() {
+    fn channel_attempt_keeps_mail_available_for_wait_after_a_successful_push() {
         let state = tests_support::make_test_app_state();
         state.push_agent_inbox("failed-peer", make_msg("failed-sse"));
         assert_eq!(
-            state.assign_agent_delivery_with_terminal_attempt(
+            state.assign_agent_delivery_with_channel_attempt(
                 "failed-peer",
                 "failed-sse",
                 false,
@@ -6140,7 +6223,7 @@ mod tests {
 
         state.push_agent_inbox("live-peer", make_msg("live-sse"));
         assert_eq!(
-            state.assign_agent_delivery_with_terminal_attempt(
+            state.assign_agent_delivery_with_channel_attempt(
                 "live-peer",
                 "live-sse",
                 false,
@@ -6150,14 +6233,15 @@ mod tests {
         );
         assert_eq!(
             state.agent_delivery_owner("live-peer", "live-sse"),
-            Some(AgentDeliveryOwner::TerminalDispatched)
+            None,
+            "an SSE push is not an inbox read and must remain visible to wait"
         );
 
         let waiter = state.begin_agent_wait("waiting-peer");
         state.push_agent_inbox("waiting-peer", make_msg("waiter-owned"));
         let terminal_attempted = std::cell::Cell::new(false);
         assert_eq!(
-            state.assign_agent_delivery_with_terminal_attempt(
+            state.assign_agent_delivery_with_channel_attempt(
                 "waiting-peer",
                 "waiter-owned",
                 true,

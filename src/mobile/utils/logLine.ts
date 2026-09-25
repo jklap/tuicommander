@@ -227,6 +227,7 @@ function sameColor(a: LogColor | undefined, b: LogColor | undefined): boolean {
  */
 export function sameLine(a: LogLine, b: LogLine): boolean {
 	if (a === b) return true;
+	if (a.cols !== b.cols) return false;
 	if (a.spans.length !== b.spans.length) return false;
 	for (let i = 0; i < a.spans.length; i++) {
 		const x = a.spans[i];
@@ -243,6 +244,106 @@ export function lineText(line: LogLine): string {
 	const d = derived(line);
 	if (d.text === undefined) d.text = line.spans.map((s) => s.text).join("");
 	return d.text;
+}
+
+/** Rejoin prose rows that the agent hard-wrapped at the source PTY width.
+ * The browser then gets one paragraph to wrap at its own width. Short lines,
+ * lists, indented blocks and box drawings keep their original row boundaries.
+ */
+const joinedLineCache = new WeakMap<LogLine, { rows: LogLine[]; line: LogLine }>();
+
+function joinedLineFor(rows: LogLine[]): LogLine {
+	if (rows.length === 1) return rows[0];
+	const cached = joinedLineCache.get(rows[0]);
+	if (cached && cached.rows.length === rows.length && cached.rows.every((row, i) => row === rows[i])) {
+		return cached.line;
+	}
+	const spans: LogSpan[] = [...rows[0].spans];
+	for (const row of rows.slice(1)) {
+		spans.push({ text: " " });
+		const continuation = row.spans.map((span) => ({ ...span }));
+		while (continuation.length > 0) {
+			continuation[0].text = continuation[0].text.trimStart();
+			if (continuation[0].text) break;
+			continuation.shift();
+		}
+		spans.push(...continuation);
+	}
+	const line = { spans, cols: rows[0].cols };
+	joinedLineCache.set(rows[0], { rows, line });
+	return line;
+}
+
+const codePoints = (text: string): number => [...text].length;
+
+export function reflowDisplayLines(lines: LogLine[]): LogLine[] {
+	const result: LogLine[] = [];
+	const listMarker = /^(?:[-*+•·] |\d+[.)] )/;
+	let i = 0;
+	while (i < lines.length) {
+		const first = lines[i];
+		const cols = first.cols ?? 0;
+		const firstText = lineText(first);
+		if (
+			cols < 48 ||
+			!firstText.trim() ||
+			hasBoxDrawing(first) ||
+			listMarker.test(firstText.trimStart()) ||
+			/^\s{4}/.test(firstText)
+		) {
+			result.push(first);
+			i++;
+			continue;
+		}
+		let end = i + 1;
+		while (end < lines.length) {
+			const next = lines[end];
+			const text = lineText(next);
+			if (
+				next.cols !== cols ||
+				!text.trim() ||
+				hasBoxDrawing(next) ||
+				listMarker.test(text.trimStart()) ||
+				/^\s{4}/.test(text)
+			)
+				break;
+			end++;
+		}
+		const run = lines.slice(i, end);
+		// Every length in the join test counts code points, so a surrogate pair
+		// never weighs 2 against a width that counted it as 1.
+		const width = Math.max(...run.map((line) => codePoints(lineText(line))));
+		// Claude often wraps prose near 80 even when the PTY is 200+ columns.
+		// The widest row in this run is the useful wrap width; cols only gates
+		// short deliberate lines from being treated as a wrapped paragraph.
+		const evidenceThreshold = Math.min(cols - 28, 60);
+		let group = [first];
+		let previous = first;
+		for (let j = 1; j < run.length; j++) {
+			const next = run[j];
+			const prevText = lineText(previous);
+			const nextText = lineText(next);
+			const prevIndent = prevText.length - prevText.trimStart().length;
+			const nextIndent = nextText.length - nextText.trimStart().length;
+			const nextWord = nextText.trimStart().split(/\s/, 1)[0];
+			const prevLength = codePoints(prevText);
+			const joins =
+				width >= evidenceThreshold &&
+				prevLength >= width - 24 &&
+				nextIndent <= prevIndent &&
+				prevLength + 1 + codePoints(nextWord) > width;
+			if (joins) {
+				group.push(next);
+			} else {
+				result.push(joinedLineFor(group));
+				group = [next];
+			}
+			previous = next;
+		}
+		result.push(joinedLineFor(group));
+		i = end;
+	}
+	return result;
 }
 
 /** Lowercased plain text, cached so filtering costs one `includes` per line. */

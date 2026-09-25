@@ -166,8 +166,14 @@ export type { AgentSeed } from "./git/agentSeed";
 export { buildAgentSeed, resolveAutofixAgent } from "./git/agentSeed";
 /** Git and repository operations extracted from App.tsx */
 export function useGitOperations(deps: GitOperationsDeps) {
-	const [currentRepoPath, setCurrentRepoPath] = createSignal<string | undefined>(undefined);
-	const [currentBranch, setCurrentBranch] = createSignal<string | null>(null);
+	// Derived, never stored: a second copy of the active repo drifts whenever a
+	// caller switches repos through repositoriesStore alone (navigateToTerminal).
+	const currentRepoPath = () => repositoriesStore.state.activeRepoPath ?? undefined;
+	const currentBranch = () => {
+		const repo = repositoriesStore.getActive();
+		if (!repo?.activeWorkspaceId) return null;
+		return repositoriesStore.branchNameFor(repo.path, repo.activeWorkspaceId);
+	};
 	const [repoStatus, setRepoStatus] = createSignal<"clean" | "dirty" | "conflict" | "merge" | "unknown">("unknown");
 	const [branchToRename, setBranchToRename] = createSignal<{ repoPath: string; branchName: string } | null>(null);
 	const [branchToCreate, setBranchToCreate] = createSignal<{ repoPath: string; startPoint: string | null } | null>(
@@ -214,8 +220,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			pty: deps.pty,
 			setStatusInfo: deps.setStatusInfo,
 			getDefaultFontSize: deps.getDefaultFontSize,
-			setCurrentRepoPath,
-			setCurrentBranch,
 		});
 
 	const handleRemoveRepo = async (repoPath: string) => {
@@ -255,11 +259,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		repositoriesStore.remove(repoPath);
 		repoSettingsStore.remove(repoPath);
 
-		if (currentRepoPath() === repoPath) {
-			setCurrentRepoPath(undefined);
-			setCurrentBranch(null);
-		}
-
 		deps.setStatusInfo(`Removed ${repoState.displayName}`);
 
 		if (terminalsStore.getCount() === 0) {
@@ -292,7 +291,11 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		await deps.repo.createBranch(target.repoPath, name, target.startPoint, checkout);
 
 		repositoriesStore.setWorkspace(target.repoPath, name, {});
-		if (checkout) setCurrentBranch(name);
+		if (checkout) {
+			// The checkout moves that repo's branch, not the app's focus: a branch
+			// created from a background repo's row leaves the active repo alone.
+			repositoriesStore.setActiveWorkspace(target.repoPath, name);
+		}
 		deps.setStatusInfo(`Created branch ${name}${checkout ? " (checked out)" : ""}`);
 		void refreshAllBranchStats();
 	};
@@ -310,10 +313,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		}
 
 		repositoriesStore.renameBranch(branch.repoPath, oldName, newName);
-
-		if (currentBranch() === oldName) {
-			setCurrentBranch(newName);
-		}
 
 		deps.setStatusInfo(`Renamed branch ${oldName} to ${newName}`);
 	};
@@ -376,8 +375,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			}
 
 			repositoriesStore.setActive(info.path);
-			setCurrentRepoPath(info.path);
-			setCurrentBranch(info.branch || (!info.is_git_repo ? "shell" : ""));
 			setRepoStatus(info.status === "not-git" ? "unknown" : info.status);
 
 			// Start unified repo watcher (covers HEAD, git state, working tree).
@@ -617,7 +614,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		repoPath: string,
 		openSettingsPanel: (context: { kind: "repo"; repoPath: string }) => void,
 	) => {
-		setCurrentRepoPath(repoPath);
 		openSettingsPanel({ kind: "repo", repoPath });
 	};
 
@@ -763,16 +759,12 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	const { cancelCwdTracking, getWorktreeTargets, handleTerminalCwdChange, moveTerminalToWorktree } =
 		createTerminalWorktreeCoordinator({
 			refreshBranches: refreshAllBranchStats,
-			setCurrentBranch,
-			setCurrentRepoPath,
 			writePty: deps.pty.write,
 		});
 
 	return {
 		currentRepoPath,
-		setCurrentRepoPath,
 		currentBranch,
-		setCurrentBranch,
 		repoStatus,
 		setRepoStatus,
 		branchToRename,

@@ -113,6 +113,10 @@
 /dictation/speech/speak
 /dictation/speech/status
 /dictation/speech/stop
+/dictation/speech/voices
+/dictation/speech/voices/delete
+/dictation/speech/voices/import
+/dictation/speech/voices/preview
 /dictation/start
 /dictation/status
 /dictation/stop
