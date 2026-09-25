@@ -122,6 +122,7 @@ pub enum StoryCommand {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoryTransitionActor {
     Human,
+    LocalApi,
     ManagedSession { session_id: String },
 }
 

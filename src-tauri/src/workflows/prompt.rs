@@ -266,6 +266,7 @@ mod tests {
 
     fn fixture() -> (RunSnapshot, Plan, Story, NodeAttempt, PublishedWorkflow) {
         let mut run = RunSnapshot {
+            canonical_ref: None,
             id: "run-1".into(),
             project: "/project".into(),
             plan_id: "plan-1".into(),

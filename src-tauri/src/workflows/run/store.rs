@@ -1,11 +1,14 @@
+use super::check::{CheckReceipt, clean_artifact, execute_pinned_check, git_output};
 use super::model::*;
 use super::reducer::apply_event;
 use crate::stories::{NewStory, Story, StoryOrigin, StoryStatus, StoryStore};
-use crate::workflows::{NodeKind, WorkflowKind, WorkflowStore};
+use crate::workflows::{CheckDefinition, NodeKind, WorkflowKind, WorkflowStore};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -13,6 +16,8 @@ use uuid::Uuid;
 pub struct RunStore {
     db_path: PathBuf,
 }
+
+static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
 
 impl RunStore {
     pub fn open() -> Result<Self, String> {
@@ -117,6 +122,7 @@ impl RunStore {
         }
         let initial = RunSnapshot {
             id: Uuid::now_v7().to_string(),
+            canonical_ref: git_output(Path::new(&owner), &["symbolic-ref", "HEAD"]).ok(),
             project: owner,
             plan_id: plan_id.into(),
             definition_id: definition_id.into(),
@@ -484,6 +490,225 @@ impl RunStore {
         )
     }
 
+    pub(crate) fn record_check_receipt(
+        &self,
+        run_id: &str,
+        story_id: &str,
+        command_id: &str,
+        expected_sequence: i64,
+        receipt: CheckReceipt,
+    ) -> Result<RunReceipt, String> {
+        self.command_expected(
+            run_id,
+            command_id,
+            expected_sequence,
+            RunCommand::RecordCheck {
+                story_id: story_id.into(),
+                receipt,
+            },
+        )
+    }
+
+    pub(crate) fn record_integration_receipt(
+        &self,
+        run_id: &str,
+        story_id: &str,
+        command_id: &str,
+        expected_sequence: i64,
+        receipt: IntegrationReceipt,
+    ) -> Result<RunReceipt, String> {
+        self.command_expected(
+            run_id,
+            command_id,
+            expected_sequence,
+            RunCommand::RecordIntegration {
+                story_id: story_id.into(),
+                receipt,
+            },
+        )
+    }
+
+    /// Record a merge already present on the canonical branch. The backend
+    /// verifies the source and merge parents, then executes the pinned checks
+    /// against the merged commit before committing an event.
+    pub fn record_integrated_story(
+        &self,
+        run_id: &str,
+        story_id: &str,
+        command_id: &str,
+        expected_sequence: i64,
+    ) -> Result<RunReceipt, String> {
+        let _service_guard = SERVICE_RECEIPT_LOCK
+            .lock()
+            .map_err(|_| "workflow receipt service lock is poisoned")?;
+        if let Some(prior) = self.existing_service_receipt(run_id, command_id, expected_sequence)? {
+            match &prior.event.kind {
+                RunEventKind::StoryIntegrated {
+                    story_id: prior_story,
+                    ..
+                } if prior_story == story_id => {
+                    StoryStore::open()?
+                        .reconcile_integrated_dependencies(&prior.snapshot.plan_id)?;
+                    return Ok(prior);
+                }
+                _ => return Err("workflow command id was reused with a different payload".into()),
+            }
+        }
+        let snapshot = self.snapshot(run_id)?;
+        if snapshot.sequence != expected_sequence {
+            return Err("stale workflow sequence".into());
+        }
+        let execution = snapshot
+            .stories
+            .iter()
+            .find(|item| item.story_id == story_id)
+            .ok_or("story execution not found")?;
+        let revision = execution.accepted_revision.ok_or("story is not accepted")?;
+        let story = StoryStore::open()?.get_story(story_id)?;
+        if story.status != StoryStatus::Done || story.revision != revision {
+            return Err("integration requires the accepted story revision".into());
+        }
+        let worktree = Path::new(
+            execution
+                .worktree_path
+                .as_deref()
+                .ok_or("story worktree is missing")?,
+        );
+        let (source_commit, source_tree) = clean_artifact(worktree)?;
+        let source_ref = git_output(worktree, &["symbolic-ref", "HEAD"])?;
+        let definition = WorkflowStore::open()?.get_published(
+            &snapshot.story_definition_id,
+            snapshot.story_definition_revision,
+        )?;
+        require_current_checks(
+            &definition.required_checks,
+            &execution.check_receipts,
+            &source_ref,
+            &source_commit,
+            &source_tree,
+        )?;
+        let canonical = Path::new(&snapshot.project);
+        let canonical_ref = git_output(canonical, &["symbolic-ref", "HEAD"])?;
+        if snapshot.canonical_ref.as_deref() != Some(canonical_ref.as_str()) {
+            return Err("canonical branch moved since the run started".into());
+        }
+        let (merge_commit, merge_tree) = clean_artifact(canonical)?;
+        let parents = git_output(canonical, &["rev-list", "--parents", "-n", "1", "HEAD"])?;
+        let parts: Vec<_> = parents.split_whitespace().collect();
+        if parts.len() != 3 || parts[0] != merge_commit || parts[2] != source_commit {
+            return Err("canonical HEAD is not a merge of the checked story commit".into());
+        }
+        let base_commit = parts[1].to_owned();
+        let mut post_checks = Vec::with_capacity(definition.required_checks.len());
+        for check in &definition.required_checks {
+            let receipt = execute_pinned_check(check, canonical)?;
+            if receipt.exit_code != 0 {
+                return Err(format!("post-integration check {} failed", check.id));
+            }
+            post_checks.push(receipt);
+        }
+        if git_output(canonical, &["symbolic-ref", "HEAD"])? != canonical_ref
+            || clean_artifact(canonical)? != (merge_commit.clone(), merge_tree.clone())
+            || git_output(worktree, &["symbolic-ref", "HEAD"])? != source_ref
+            || clean_artifact(worktree)? != (source_commit.clone(), source_tree.clone())
+        {
+            return Err("integration ref or tree moved after checks".into());
+        }
+        let receipt = IntegrationReceipt {
+            story_revision: revision,
+            canonical_ref,
+            base_commit,
+            source_commit,
+            source_tree,
+            merge_commit,
+            merge_tree,
+            post_checks,
+        };
+        let result = self.record_integration_receipt(
+            run_id,
+            story_id,
+            command_id,
+            expected_sequence,
+            receipt,
+        )?;
+        StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)?;
+        Ok(result)
+    }
+
+    /// Execute a check pinned by the run's published story definition. The
+    /// receipt is recorded only while its story revision and Git artifact stay current.
+    pub fn execute_check(
+        &self,
+        run_id: &str,
+        story_id: &str,
+        check_id: &str,
+        command_id: &str,
+        expected_sequence: i64,
+    ) -> Result<RunReceipt, String> {
+        let _service_guard = SERVICE_RECEIPT_LOCK
+            .lock()
+            .map_err(|_| "workflow receipt service lock is poisoned")?;
+        if let Some(prior) = self.existing_service_receipt(run_id, command_id, expected_sequence)? {
+            return match &prior.event.kind {
+                RunEventKind::CheckRecorded {
+                    story_id: prior_story,
+                    receipt,
+                } if prior_story == story_id && receipt.check_id == check_id => Ok(prior),
+                _ => Err("workflow command id was reused with a different payload".into()),
+            };
+        }
+        let snapshot = self.snapshot(run_id)?;
+        if snapshot.sequence != expected_sequence {
+            return Err("stale workflow sequence".into());
+        }
+        let execution = snapshot
+            .stories
+            .iter()
+            .find(|story| story.story_id == story_id)
+            .ok_or("story execution not found")?;
+        let path = execution
+            .worktree_path
+            .as_ref()
+            .ok_or("story worktree is missing")?;
+        let definition = WorkflowStore::open()?.get_published(
+            &snapshot.story_definition_id,
+            snapshot.story_definition_revision,
+        )?;
+        let check = definition
+            .required_checks
+            .iter()
+            .find(|check| check.id == check_id)
+            .ok_or("check is not pinned by the story definition")?;
+        let receipt = execute_pinned_check(check, Path::new(path))?;
+        if clean_artifact(Path::new(path))? != (receipt.commit.clone(), receipt.tree.clone())
+            || git_output(Path::new(path), &["symbolic-ref", "HEAD"])? != receipt.ref_name
+        {
+            return Err("workflow check artifact moved before receipt commit".into());
+        }
+        self.record_check_receipt(run_id, story_id, command_id, expected_sequence, receipt)
+    }
+
+    fn existing_service_receipt(
+        &self,
+        run_id: &str,
+        command_id: &str,
+        expected_sequence: i64,
+    ) -> Result<Option<RunReceipt>, String> {
+        validate_key("command id", command_id)?;
+        let conn = self.connect()?;
+        let prior = read_command_receipt(&conn, run_id, command_id)?;
+        let next_sequence = expected_sequence
+            .checked_add(1)
+            .ok_or("invalid expected workflow sequence")?;
+        if prior
+            .as_ref()
+            .is_some_and(|item| item.sequence != next_sequence)
+        {
+            return Err("workflow command id was reused with a different expected sequence".into());
+        }
+        Ok(prior)
+    }
+
     pub(crate) fn command_at(
         &self,
         run_id: &str,
@@ -587,7 +812,8 @@ impl RunStore {
         drop(stmt);
         drop(conn);
         for run_id in &run_ids {
-            self.reconcile(run_id)?;
+            let snapshot = self.reconcile(run_id)?;
+            StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)?;
         }
         Ok(run_ids.len())
     }
@@ -610,6 +836,122 @@ impl RunStore {
             .map_err(|e| format!("commit workflow reconcile: {e}"))?;
         Ok(())
     }
+}
+
+/// One authority for dependency release, dispatch, and final verification.
+/// A prior story receipt remains usable after a later *recorded and checked*
+/// integration on the same ref; an unrecorded ref or tree movement fails closed.
+pub fn story_integrated_at_revision(story_id: &str, revision: i64) -> Result<bool, String> {
+    story_integrated_at_revision_in(
+        &crate::config::config_dir().join("workflow_runs.sqlite3"),
+        story_id,
+        revision,
+    )
+}
+
+pub(crate) fn story_integrated_at_revision_in(
+    db_path: &Path,
+    story_id: &str,
+    revision: i64,
+) -> Result<bool, String> {
+    let store = RunStore::open_at(db_path)?;
+    let conn = store.connect()?;
+    let mut stmt = conn.prepare(
+        "SELECT r.snapshot_json FROM workflow_runs r JOIN workflow_story_executions s ON s.run_id=r.id WHERE s.story_id=?1 ORDER BY r.rowid DESC"
+    ).map_err(|error| format!("prepare integration receipts: {error}"))?;
+    let rows = stmt
+        .query_map([story_id], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("read integration receipts: {error}"))?;
+    for row in rows {
+        let snapshot: RunSnapshot =
+            decode(&row.map_err(|error| format!("read integration receipt: {error}"))?)?;
+        if receipt_current(&snapshot, story_id, revision)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(super) fn receipt_current(
+    snapshot: &RunSnapshot,
+    story_id: &str,
+    revision: i64,
+) -> Result<bool, String> {
+    let Some(execution) = snapshot
+        .stories
+        .iter()
+        .find(|item| item.story_id == story_id)
+    else {
+        return Ok(false);
+    };
+    let Some(receipt) = &execution.integration_receipt else {
+        return Ok(false);
+    };
+    if !execution.accepted
+        || execution.accepted_revision != Some(revision)
+        || receipt.story_revision != revision
+    {
+        return Ok(false);
+    }
+    let canonical = Path::new(&snapshot.project);
+    let Ok(current_ref) = git_output(canonical, &["symbolic-ref", "HEAD"]) else {
+        return Ok(false);
+    };
+    let Ok((head, tree)) = clean_artifact(canonical) else {
+        return Ok(false);
+    };
+    let current_receipt = snapshot
+        .stories
+        .iter()
+        .filter_map(|item| item.integration_receipt.as_ref())
+        .find(|item| {
+            item.canonical_ref == current_ref
+                && item.merge_commit == head
+                && item.merge_tree == tree
+                && item.post_checks.iter().all(|check| {
+                    check.exit_code == 0
+                        && check.ref_name == current_ref
+                        && check.commit == head
+                        && check.tree == tree
+                })
+        });
+    if current_receipt.is_none()
+        || receipt.canonical_ref != current_ref
+        || snapshot.canonical_ref.as_deref() != Some(current_ref.as_str())
+    {
+        return Ok(false);
+    }
+    let ancestor = Command::new("git")
+        .args(["merge-base", "--is-ancestor", &receipt.source_commit, &head])
+        .current_dir(canonical)
+        .status()
+        .map_err(|error| format!("verify integrated source ancestry: {error}"))?;
+    Ok(ancestor.success())
+}
+
+pub(super) fn require_current_checks(
+    required: &[CheckDefinition],
+    receipts: &[CheckReceipt],
+    ref_name: &str,
+    commit: &str,
+    tree: &str,
+) -> Result<(), String> {
+    for check in required {
+        if !receipts.iter().any(|receipt| {
+            receipt.check_id == check.id
+                && receipt.argv == check.argv
+                && receipt.exit_code == 0
+                && receipt.ref_name == ref_name
+                && receipt.commit == commit
+                && receipt.tree == tree
+        }) {
+            return Err(format!(
+                "required check {} is missing, failed, or stale",
+                check.id
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn now_ms() -> i64 {
@@ -818,15 +1160,12 @@ pub(super) fn ready_to_verify(snapshot: &RunSnapshot, stories: &[Story]) -> Resu
     }) {
         return Err("workflow has active or uncertain work".into());
     }
-    if !stories.iter().all(|story| {
-        story.status == StoryStatus::Done
-            && snapshot.stories.iter().any(|execution| {
-                execution.story_id == story.id
-                    && execution.accepted
-                    && execution.accepted_revision == Some(story.revision)
-            })
-    }) {
-        return Err("not all plan stories have accepted terminal outcomes".into());
+    for story in stories {
+        if story.status != StoryStatus::Done
+            || !receipt_current(snapshot, &story.id, story.revision)?
+        {
+            return Err("not all plan stories have current integration receipts at their accepted revisions".into());
+        }
     }
     Ok(())
 }
@@ -981,14 +1320,20 @@ fn choose_event(
                 .iter()
                 .find(|story| story.id == story_id)
                 .ok_or("story is not in plan")?;
+            for dependency_id in &story.dependencies {
+                let dependency = stories
+                    .iter()
+                    .find(|item| item.id == *dependency_id)
+                    .ok_or("dependency is not in plan")?;
+                if !receipt_current(snapshot, &dependency.id, dependency.revision)? {
+                    return Err("dependent story dispatch requires an integration receipt".into());
+                }
+            }
             if !matches!(
                 story.status,
                 StoryStatus::Ready | StoryStatus::InProgress | StoryStatus::Review
             ) {
                 return Err("story is not ready for a workflow attempt".into());
-            }
-            if !story.dependencies.is_empty() {
-                return Err("dependent story dispatch requires an integration receipt".into());
             }
             let active: Vec<_> = snapshot
                 .attempts
@@ -1382,6 +1727,46 @@ fn choose_event(
                 story_id,
                 revision: story.revision,
             })
+        }
+        RunCommand::RecordCheck { story_id, receipt } => {
+            let story = stories
+                .iter()
+                .find(|story| story.id == story_id)
+                .ok_or("story is not in plan")?;
+            let execution = snapshot
+                .stories
+                .iter()
+                .find(|item| item.story_id == story_id)
+                .ok_or("story execution not found")?;
+            if !execution.accepted || execution.accepted_revision != Some(story.revision) {
+                return Err("check receipt has a stale story revision".into());
+            }
+            if receipt.commit.is_empty() || receipt.tree.is_empty() {
+                return Err("check receipt has no artifact digest".into());
+            }
+            Ok(RunEventKind::CheckRecorded { story_id, receipt })
+        }
+        RunCommand::RecordIntegration { story_id, receipt } => {
+            let story = stories
+                .iter()
+                .find(|story| story.id == story_id)
+                .ok_or("story is not in plan")?;
+            let execution = snapshot
+                .stories
+                .iter()
+                .find(|item| item.story_id == story_id)
+                .ok_or("story execution not found")?;
+            if story.status != StoryStatus::Done
+                || !execution.accepted
+                || execution.accepted_revision != Some(story.revision)
+                || receipt.story_revision != story.revision
+            {
+                return Err("integration receipt has a stale story revision".into());
+            }
+            if execution.integration_receipt.is_some() {
+                return Err("story already has an integration receipt".into());
+            }
+            Ok(RunEventKind::StoryIntegrated { story_id, receipt })
         }
         RunCommand::FinalVerificationPassed => {
             ready_to_verify(snapshot, &stories)?;

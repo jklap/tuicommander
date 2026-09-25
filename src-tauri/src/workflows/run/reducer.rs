@@ -50,6 +50,8 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                         accepted_revision: None,
                         worktree_path: None,
                         attempt_ids: vec![attempt.id.clone()],
+                        check_receipts: vec![],
+                        integration_receipt: None,
                     });
                 }
             }
@@ -216,8 +218,35 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                     accepted_revision: Some(*revision),
                     worktree_path: None,
                     attempt_ids: vec![],
+                    check_receipts: vec![],
+                    integration_receipt: None,
                 });
             }
+        }
+        RunEventKind::CheckRecorded { story_id, receipt } => {
+            let story = snapshot
+                .stories
+                .iter_mut()
+                .find(|story| story.story_id == *story_id)
+                .ok_or("story execution not found")?;
+            if !story.accepted {
+                return Err("story has not been accepted".into());
+            }
+            story.check_receipts.push(receipt.clone());
+        }
+        RunEventKind::StoryIntegrated { story_id, receipt } => {
+            let story = snapshot
+                .stories
+                .iter_mut()
+                .find(|story| story.story_id == *story_id)
+                .ok_or("story execution not found")?;
+            if !story.accepted || story.accepted_revision != Some(receipt.story_revision) {
+                return Err("integration receipt has a stale story revision".into());
+            }
+            if story.integration_receipt.is_some() {
+                return Err("story has already been integrated".into());
+            }
+            story.integration_receipt = Some(receipt.clone());
         }
         RunEventKind::VerificationPassed { fingerprint } => {
             snapshot.verification_fingerprint = Some(fingerprint.clone())

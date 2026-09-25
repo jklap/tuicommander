@@ -69,6 +69,15 @@ pub fn story_action(
     action: StoryAction,
     actor_session: Option<&str>,
 ) -> Result<StoryReply, String> {
+    story_action_with_source(project, action, actor_session, false)
+}
+
+fn story_action_with_source(
+    project: &str,
+    action: StoryAction,
+    actor_session: Option<&str>,
+    unauthenticated_http: bool,
+) -> Result<StoryReply, String> {
     if !crate::fs::is_absolute_on_any_platform(project) {
         return Err("project must be an absolute path".into());
     }
@@ -166,12 +175,12 @@ pub fn story_action(
             command,
         } => {
             story_in_project(&story_id)?;
-            Ok(StoryReply::Story(store.transition_for_actor(
-                &story_id,
-                expected_revision,
-                command,
-                actor_session,
-            )?))
+            let changed = if unauthenticated_http && actor_session.is_none() {
+                store.transition_from_local_api(&story_id, expected_revision, command)?
+            } else {
+                store.transition_for_actor(&story_id, expected_revision, command, actor_session)?
+            };
+            Ok(StoryReply::Story(changed))
         }
     }
 }
@@ -182,6 +191,27 @@ pub fn story_action_for_session(
     project: &str,
     action: StoryAction,
     session_id: Option<&str>,
+) -> Result<StoryReply, String> {
+    story_action_for_session_with_source(state, project, action, session_id, false)
+}
+
+/// HTTP auth currently proves transport access, not a human identity: even
+/// loopback bypasses receive the auth marker. Only desktop IPC is a human path.
+pub fn story_action_for_http(
+    state: &crate::AppState,
+    project: &str,
+    action: StoryAction,
+    session_id: Option<&str>,
+) -> Result<StoryReply, String> {
+    story_action_for_session_with_source(state, project, action, session_id, true)
+}
+
+fn story_action_for_session_with_source(
+    state: &crate::AppState,
+    project: &str,
+    action: StoryAction,
+    session_id: Option<&str>,
+    unauthenticated_http: bool,
 ) -> Result<StoryReply, String> {
     if let Some(session) = session_id {
         let session_project = crate::progress::project_for_session(state, session)
@@ -195,7 +225,7 @@ pub fn story_action_for_session(
     if matches!(action, StoryAction::Claim { .. }) && session_id.is_none() {
         return Err("claim requires a live session".into());
     }
-    story_action(project, action, session_id)
+    story_action_with_source(project, action, session_id, unauthenticated_http)
 }
 
 #[cfg(test)]

@@ -31,6 +31,19 @@ pub enum RunAction {
         expected_sequence: i64,
         command: RunCommand,
     },
+    RecordIntegration {
+        run_id: String,
+        story_id: String,
+        command_id: String,
+        expected_sequence: i64,
+    },
+    ExecuteCheck {
+        run_id: String,
+        story_id: String,
+        check_id: String,
+        command_id: String,
+        expected_sequence: i64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -138,6 +151,8 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
                 RunCommand::BindAgent { .. }
                     | RunCommand::ReportBoundAttempt { .. }
                     | RunCommand::AssignWorktree { .. }
+                    | RunCommand::RecordCheck { .. }
+                    | RunCommand::RecordIntegration { .. }
             ) {
                 return Err(
                     "agent binding, reports, and worktree assignment require a managed MCP session"
@@ -149,6 +164,36 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
                 &command_id,
                 expected_sequence,
                 command,
+            )?))
+        }
+        RunAction::RecordIntegration {
+            run_id,
+            story_id,
+            command_id,
+            expected_sequence,
+        } => {
+            scoped_snapshot(&store, &owner, &run_id)?;
+            Ok(RunReply::Receipt(store.record_integrated_story(
+                &run_id,
+                &story_id,
+                &command_id,
+                expected_sequence,
+            )?))
+        }
+        RunAction::ExecuteCheck {
+            run_id,
+            story_id,
+            check_id,
+            command_id,
+            expected_sequence,
+        } => {
+            scoped_snapshot(&store, &owner, &run_id)?;
+            Ok(RunReply::Receipt(store.execute_check(
+                &run_id,
+                &story_id,
+                &check_id,
+                &command_id,
+                expected_sequence,
             )?))
         }
     }
@@ -163,7 +208,10 @@ pub fn run_action_with_events(
 ) -> Result<RunReply, String> {
     let mutation = matches!(
         action,
-        RunAction::StartPlan { .. } | RunAction::Command { .. }
+        RunAction::StartPlan { .. }
+            | RunAction::Command { .. }
+            | RunAction::RecordIntegration { .. }
+            | RunAction::ExecuteCheck { .. }
     );
     let reply = run_action(project, action)?;
     if mutation {

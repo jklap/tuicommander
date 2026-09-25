@@ -1,3 +1,4 @@
+use super::check::CheckReceipt;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -215,6 +216,23 @@ pub struct StoryExecution {
     #[serde(default)]
     pub worktree_path: Option<String>,
     pub attempt_ids: Vec<String>,
+    #[serde(default)]
+    pub check_receipts: Vec<CheckReceipt>,
+    #[serde(default)]
+    pub integration_receipt: Option<IntegrationReceipt>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IntegrationReceipt {
+    pub story_revision: i64,
+    pub canonical_ref: String,
+    pub base_commit: String,
+    pub source_commit: String,
+    pub source_tree: String,
+    pub merge_commit: String,
+    pub merge_tree: String,
+    pub post_checks: Vec<CheckReceipt>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -222,6 +240,8 @@ pub struct StoryExecution {
 pub struct RunSnapshot {
     pub id: String,
     pub project: String,
+    #[serde(default)]
+    pub canonical_ref: Option<String>,
     pub plan_id: String,
     pub definition_id: String,
     pub definition_revision: i64,
@@ -293,6 +313,14 @@ pub enum RunEventKind {
         #[serde(default)]
         revision: i64,
     },
+    CheckRecorded {
+        story_id: String,
+        receipt: CheckReceipt,
+    },
+    StoryIntegrated {
+        story_id: String,
+        receipt: IntegrationReceipt,
+    },
     VerificationPassed {
         fingerprint: String,
     },
@@ -363,6 +391,16 @@ pub enum RunCommand {
     AdvanceLoop,
     AcceptStory {
         story_id: String,
+    },
+    /// Internal only: receipts are computed by the backend check runner.
+    RecordCheck {
+        story_id: String,
+        receipt: CheckReceipt,
+    },
+    /// Internal only: integration receipts are computed by the backend.
+    RecordIntegration {
+        story_id: String,
+        receipt: IntegrationReceipt,
     },
     FinalVerificationPassed,
     Complete,

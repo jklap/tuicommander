@@ -3,6 +3,7 @@ import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
 import { workflowRunSignals } from "../../stores/workflowRunSignals";
+import { isTauri } from "../../transport";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
 import d from "../shared/dialog.module.css";
 import s from "./StoriesDialog.module.css";
@@ -343,7 +344,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								<div class={s.actions}>
 									<Show when={story().status === "ready"}><button type="button" disabled={busy()} onClick={() => transition("start_manual")}>Start work</button></Show>
 									<Show when={story().status === "in_progress"}><button type="button" disabled={busy()} onClick={() => transition("submit_review")}>Submit for review</button></Show>
-									<Show when={story().status === "review"}><button type="button" disabled={busy()} onClick={() => transition("approve")}>Approve</button><button type="button" disabled={busy()} onClick={() => transition("reject_review")}>Request changes</button></Show>
+									<Show when={story().status === "review"}><Show when={isTauri()} fallback={<span class={s.muted}>Approval requires the desktop app.</span>}><button type="button" disabled={busy()} onClick={() => transition("approve")}>Approve</button></Show><button type="button" disabled={busy()} onClick={() => transition("reject_review")}>Request changes</button></Show>
 									<Show when={["ready", "in_progress", "review"].includes(story().status)}><button type="button" disabled={busy()} onClick={() => transition("block")}>Block</button></Show>
 									<Show when={story().status === "blocked"}><button type="button" disabled={busy()} onClick={() => transition("unblock")}>Unblock</button></Show>
 									<Show when={story().status !== "done" && story().status !== "wontfix"}><button type="button" class={s.danger} disabled={busy()} onClick={() => transition("wont_fix")}>Won't fix</button></Show>
