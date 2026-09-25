@@ -28,8 +28,20 @@ ignored_dir="$(mktemp -d "$project_root/scripts/.shell-probe.XXXXXX")"
 trap 'rm -rf "$fixture_dir" "$ignored_dir"' EXIT
 printf '#!/usr/bin/env bash\necho IGNORED-PROBE-RAN\n' > "$ignored_dir/test-ignored.sh"
 git -C "$project_root" check-ignore -q "$ignored_dir/test-ignored.sh"
-output="$(SHELL_TEST_DIR="$ignored_dir" make -C "$project_root" test-shell 2>&1 || true)"
+if output="$(SHELL_TEST_DIR="$ignored_dir" make -C "$project_root" test-shell 2>&1)"; then
+  echo "a directory with only ignored scripts must fail as having no tests" >&2
+  exit 1
+fi
 if printf '%s\n' "$output" | grep -Fq IGNORED-PROBE-RAN; then
   echo "shell test runner executed a git-ignored script" >&2
   exit 1
 fi
+printf '%s\n' "$output" | grep -Fq "no shell tests found"
+
+# The shipped tests must stay tracked, or the skip above would hide them.
+for shipped in scripts/test-shell-entrypoint.sh scripts/hooks/test-install-hooks.sh; do
+  if git -C "$project_root" check-ignore -q "$shipped"; then
+    echo "$shipped is git-ignored and would never run" >&2
+    exit 1
+  fi
+done
