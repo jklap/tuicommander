@@ -1,6 +1,7 @@
 use super::model::{NewPlan, NewStory, Plan, PlanState, Story, StoryCommand, StoryStatus};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -13,9 +14,9 @@ const STORE_FILE: &str = "stories.sqlite3";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const SCHEMA_VERSION: i64 = 1;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct StoryStore {
-    db_path: PathBuf,
+    connection: Mutex<Connection>,
 }
 
 impl StoryStore {
@@ -55,15 +56,19 @@ impl StoryStore {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create story store directory: {e}"))?;
         }
-        let store = Self {
-            db_path: path.to_path_buf(),
-        };
-        store.connect()?;
-        Ok(store)
+        Ok(Self {
+            connection: Mutex::new(Self::open_connection(path)?),
+        })
     }
 
-    fn connect(&self) -> Result<Connection, String> {
-        let conn = Connection::open(&self.db_path).map_err(|e| format!("open story store: {e}"))?;
+    fn connect(&self) -> Result<MutexGuard<'_, Connection>, String> {
+        self.connection
+            .lock()
+            .map_err(|_| "story store connection lock poisoned".into())
+    }
+
+    fn open_connection(path: &Path) -> Result<Connection, String> {
+        let conn = Connection::open(path).map_err(|e| format!("open story store: {e}"))?;
         conn.busy_timeout(BUSY_TIMEOUT)
             .map_err(|e| format!("set story store timeout: {e}"))?;
         conn.pragma_update(None, "journal_mode", "WAL")
@@ -212,23 +217,28 @@ impl StoryStore {
     }
 
     pub fn get_story(&self, id: &str) -> Result<Story, String> {
-        read_story(&self.connect()?, id)
+        read_story(&*self.connect()?, id)
     }
 
     pub fn list_stories(&self, plan_id: &str) -> Result<Vec<Story>, String> {
         self.get_plan(plan_id)?;
-        read_plan_stories(&self.connect()?, plan_id)
+        read_plan_stories(&*self.connect()?, plan_id)
     }
 
     pub fn plan_state(&self, plan_id: &str) -> Result<PlanState, String> {
-        let stories = self.list_stories(plan_id)?;
-        if stories.is_empty() {
+        self.get_plan(plan_id)?;
+        let (total, unfinished): (i64, i64) = self
+            .connect()?
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status IN ('done', 'wontfix') THEN 0 ELSE 1 END), 0) FROM stories WHERE plan_id=?1",
+                [plan_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| format!("read plan state: {e}"))?;
+        if total == 0 {
             return Ok(PlanState::Draft);
         }
-        if stories
-            .iter()
-            .all(|s| matches!(s.status, StoryStatus::Done | StoryStatus::WontFix))
-        {
+        if unfinished == 0 {
             return Ok(PlanState::Done);
         }
         Ok(PlanState::Active)
@@ -280,5 +290,32 @@ impl StoryStore {
         tx.commit()
             .map_err(|e| format!("commit claim release: {e}"))?;
         Ok(ids.len())
+    }
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+
+    #[test]
+    fn story_store_reuses_its_sqlite_connection() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        store
+            .connect()
+            .expect("connection")
+            .execute_batch("CREATE TEMP TABLE story_connection_sentinel(value INTEGER); INSERT INTO story_connection_sentinel VALUES (1);")
+            .expect("create connection-local table");
+
+        let count: i64 = store
+            .connect()
+            .expect("same connection")
+            .query_row(
+                "SELECT count(*) FROM story_connection_sentinel",
+                [],
+                |row| row.get(0),
+            )
+            .expect("connection-local table survives method calls");
+        assert_eq!(count, 1);
     }
 }
