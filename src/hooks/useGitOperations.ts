@@ -292,7 +292,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 		repositoriesStore.setWorkspace(target.repoPath, name, {});
 		if (checkout) {
-			repositoriesStore.setActive(target.repoPath);
+			// The checkout moves that repo's branch, not the app's focus: a branch
+			// created from a background repo's row leaves the active repo alone.
 			repositoriesStore.setActiveWorkspace(target.repoPath, name);
 		}
 		deps.setStatusInfo(`Created branch ${name}${checkout ? " (checked out)" : ""}`);
