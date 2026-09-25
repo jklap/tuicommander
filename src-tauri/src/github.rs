@@ -3544,6 +3544,18 @@ enum CiLogsOutcome {
     },
 }
 
+#[cfg(test)]
+struct CiLogsTestFixture {
+    outcome: parking_lot::Mutex<Option<CiLogsOutcome>>,
+    token: String,
+    api_base: String,
+}
+
+#[cfg(test)]
+static CI_LOGS_TEST_FIXTURES: std::sync::LazyLock<
+    dashmap::DashMap<String, Arc<CiLogsTestFixture>>,
+> = std::sync::LazyLock::new(dashmap::DashMap::new);
+
 enum CiLogSource {
     GitHubActions,
     ExternalOnly(Vec<FailingCheck>),
@@ -3982,9 +3994,23 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     head_sha: Option<String>,
     _state: Arc<AppState>,
 ) -> Result<String, String> {
+    #[cfg(test)]
+    let test_fixture = CI_LOGS_TEST_FIXTURES
+        .get(&repo_path)
+        .map(|fixture| Arc::clone(fixture.value()));
+    #[cfg(test)]
+    let blocking_fixture = test_fixture.clone();
     let selected = check_url.clone();
     let selected_sha = if selected.is_some() { head_sha } else { None };
     let outcome = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        if let Some(fixture) = blocking_fixture {
+            return fixture
+                .outcome
+                .lock()
+                .take()
+                .ok_or_else(|| "CI log test fixture already consumed".to_string());
+        }
         fetch_ci_failure_logs_impl(
             &repo_path,
             &branch,
@@ -4025,12 +4051,32 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
                     external_ci_names(&checks)
                 ));
             }
-            let (token, _) = crate::circleci::resolve_token()?;
-            let token = token.ok_or_else(|| circleci_token_not_configured_error(&checks))?;
+            #[cfg(test)]
+            let fixture_token = test_fixture.as_ref().map(|fixture| fixture.token.clone());
+            #[cfg(not(test))]
+            let fixture_token: Option<String> = None;
+            let token = match fixture_token {
+                Some(token) => token,
+                None => crate::circleci::resolve_token()?
+                    .0
+                    .ok_or_else(|| circleci_token_not_configured_error(&checks))?,
+            };
             let mut logs = String::new();
             for (name, job) in jobs.into_iter().take(5) {
                 logs.push_str(&format!("===== FAILED CHECK: {name} =====\n"));
-                match crate::circleci::fetch_job_log(&job, &token, &head_sha).await {
+                #[cfg(test)]
+                let api_base = test_fixture
+                    .as_ref()
+                    .map(|fixture| fixture.api_base.as_str());
+                #[cfg(not(test))]
+                let api_base: Option<&str> = None;
+                let job_log = if let Some(api_base) = api_base {
+                    crate::circleci::fetch_job_log_from_base(&job, &token, api_base, &head_sha)
+                        .await
+                } else {
+                    crate::circleci::fetch_job_log(&job, &token, &head_sha).await
+                };
+                match job_log {
                     Ok(job_logs) => logs.push_str(&job_logs),
                     Err(error) => {
                         tracing::warn!(source = "fetch_ci_failure_logs", check = ?name, "failed to fetch CircleCI job log: {error}");
@@ -4182,6 +4228,84 @@ mod tests {
         assert!(
             circleci_token_not_configured_error(&checks).contains("CircleCI token not configured")
         );
+    }
+
+    #[tokio::test]
+    async fn selected_external_check_with_token_reaches_its_circleci_log() {
+        use mockito::{Matcher, Server};
+
+        struct FixtureGuard(String);
+        impl Drop for FixtureGuard {
+            fn drop(&mut self) {
+                CI_LOGS_TEST_FIXTURES.remove(&self.0);
+            }
+        }
+
+        let mut server = Server::new_async().await;
+        let head_sha = "a".repeat(40);
+        let output_url = format!("{}/output", server.url());
+        let selected_api = server
+            .mock("GET", "/api/v1.1/project/gh/acme/widget/42")
+            .match_header("circle-token", "secret")
+            .with_body(serde_json::json!({"vcs_revision":head_sha,"steps":[{"name":"test","actions":[{"failed":true,"output_url":output_url}]}]}).to_string())
+            .create_async()
+            .await;
+        let other_api = server
+            .mock("GET", "/api/v1.1/project/gh/acme/widget/41")
+            .expect(0)
+            .create_async()
+            .await;
+        let action_log = server
+            .mock("GET", "/output")
+            .match_header("circle-token", Matcher::Missing)
+            .with_body("[{\"message\":\"selected failure\"}]")
+            .create_async()
+            .await;
+
+        let selected_url = "https://circleci.com/gh/acme/widget/42";
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = repo.path().to_string_lossy().into_owned();
+        CI_LOGS_TEST_FIXTURES.insert(
+            repo_path.clone(),
+            Arc::new(CiLogsTestFixture {
+                outcome: parking_lot::Mutex::new(Some(CiLogsOutcome::ExternalOnly {
+                    checks: vec![
+                        FailingCheck {
+                            name: "other".into(),
+                            link: "https://circleci.com/gh/acme/widget/41".into(),
+                            is_github_actions: false,
+                        },
+                        FailingCheck {
+                            name: "selected".into(),
+                            link: selected_url.into(),
+                            is_github_actions: false,
+                        },
+                    ],
+                    owner: "acme".into(),
+                    repo: "widget".into(),
+                    head_sha: head_sha.clone(),
+                })),
+                token: "secret".into(),
+                api_base: format!("{}/api/v1.1/project/", server.url()),
+            }),
+        );
+        let _fixture_guard = FixtureGuard(repo_path.clone());
+        let logs = fetch_ci_failure_logs_with_state(
+            repo_path,
+            "feature".into(),
+            Some(selected_url.into()),
+            Some(head_sha),
+            Arc::new(crate::state::tests_support::make_test_app_state()),
+        )
+        .await
+        .unwrap();
+
+        assert!(logs.contains("FAILED CHECK: selected"), "{logs}");
+        assert!(logs.contains("selected failure"), "{logs}");
+        assert!(!logs.contains("FAILED CHECK: other"), "{logs}");
+        selected_api.assert_async().await;
+        other_api.assert_async().await;
+        action_log.assert_async().await;
     }
 
     #[test]

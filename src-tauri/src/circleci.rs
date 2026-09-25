@@ -242,7 +242,7 @@ pub(crate) async fn fetch_job_log(
     .await
 }
 
-async fn fetch_job_log_from_base(
+pub(crate) async fn fetch_job_log_from_base(
     job: &CircleCiJob,
     token: &str,
     api_base: &str,
