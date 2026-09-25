@@ -2687,6 +2687,36 @@ mod tests {
         req
     }
 
+    #[tokio::test]
+    async fn story_action_route_enforces_auth_and_returns_a_created_plan() {
+        let config = tempfile::tempdir().expect("config directory");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project directory");
+        let path = format!("/stories/action?path={}", project.path().display());
+        let body = serde_json::json!({
+            "action": {"action": "create_plan", "title": "Route plan", "source": "plan.md"}
+        });
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let denied = build_router(test_state(), false, true)
+            .oneshot(mcp_post_from(&path, &body, remote))
+            .await
+            .expect("remote response");
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let accepted = build_router(test_state(), false, true)
+            .oneshot(mcp_post_from(&path, &body, local))
+            .await
+            .expect("local response");
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(accepted.into_body(), usize::MAX)
+            .await
+            .expect("read story response");
+        let reply: serde_json::Value = serde_json::from_slice(&bytes).expect("story JSON");
+        assert_eq!(reply["type"], "plan", "unexpected response {reply}");
+        assert_eq!(reply["value"]["title"], "Route plan");
+    }
+
     /// `edd69ea7` moved the Progress routes into `shared_routes()` so a
     /// `tuic-remote` daemon serves them, and asserted in prose that "auth is
     /// unchanged". Nothing tested it: `progress_auth` had no test anywhere, and
