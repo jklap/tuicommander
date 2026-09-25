@@ -367,6 +367,12 @@ pub async fn basic_auth_middleware(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .map(String::from);
+    // Requests that cannot verify credentials do not need rate state. Keeping
+    // them out of the map prevents unauthenticated scans from retaining an IP
+    // entry for the whole rate-limit window.
+    if auth_header.is_none() || username.is_empty() || hash.is_empty() {
+        return unauthorized_response("Scan the QR code or authenticate with Basic Auth");
+    }
     let config_digest = auth_config_digest(&username, &hash);
     let credential_digest = failed_credential_digest(auth_header.as_deref(), &config_digest);
     let limit = state
@@ -916,6 +922,70 @@ mod tests {
             .unwrap();
         assert!(cookie.contains("tui-session=test-token"), "got {cookie}");
         assert!(cookie.contains("Max-Age=86400"), "got {cookie}");
+    }
+
+    #[tokio::test]
+    async fn missing_basic_headers_do_not_create_rate_limit_entries() {
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let app = axum::Router::new()
+            .route("/ping", axum::routing::get(|| async { "pong" }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&state),
+                basic_auth_middleware,
+            ));
+
+        for host in 1..=32 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get("/ping")
+                        .extension(ConnectInfo(SocketAddr::from(([203, 0, 113, host], 51234))))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        assert!(state.auth_rate_limits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn successful_basic_logins_do_not_retain_rate_limit_entries() {
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut config = state.config.write();
+            config.services.auth.username = "boss".to_string();
+            config.services.auth.password_hash = bcrypt::hash("correct", 4).unwrap();
+        }
+        let app = axum::Router::new()
+            .route("/ping", axum::routing::get(|| async { "pong" }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&state),
+                basic_auth_middleware,
+            ));
+
+        for host in 1..=32 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get("/ping")
+                        .header(header::AUTHORIZATION, basic_header("boss", "correct"))
+                        .extension(ConnectInfo(SocketAddr::from(([203, 0, 113, host], 51234))))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        assert!(state.auth_rate_limits.is_empty());
     }
 
     /// A browser may replay its stale Basic header while it waits for a new
