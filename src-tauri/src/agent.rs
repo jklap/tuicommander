@@ -670,6 +670,10 @@ fn resolve_probe_executable(path: &str) -> std::path::PathBuf {
 /// Probe the configured CLI with a bounded, single-flight help request. An
 /// inconclusive probe is retried after a short cooldown instead of pinning a
 /// false capability for the rest of this app process.
+// DEFERRED (2026-09-25) — Codex `--no-alt-screen` and OpenCode `--mini`
+// capture fixtures (story 939-475b): recording them launches a TUIC binary,
+// which can rewrite the user's agent MCP configs until the mcp-config-guard
+// fix (story 949-0421) lands. Capture them right after that landing.
 pub(crate) fn supports_no_alt_screen(agent_type: &str, path: &str) -> bool {
     let binary_name = std::path::Path::new(agent_type)
         .file_name()
