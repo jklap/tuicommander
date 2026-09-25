@@ -701,14 +701,46 @@ the slow path already established.
 **A client-side timeout shorter than a server-side bounded-wait feature's own
 timeout turns "slow but working" into an apparent client error.** `tuic-cli`'s
 IPC client had one fixed 3s socket timeout applied to every request; the new
-gate's `PANE_READY_TIMEOUT_MS` is 5s. Without raising the client's budget for
-this specific call (`ipc::post_with_timeout`, 8s), a legitimately slow (not
+gate's `SHELL_READINESS_TIMEOUT_MS` is 5s. Without raising the client's budget
+for this specific call (`ipc::post_with_timeout`, 8s), a legitimately slow (not
 hung) shell startup — the literal motivating scenario for this feature — would
 make the *client* time out and report failure before the *server's* own
 fail-open path had a chance to return `Ok`. Any new server-side bounded-wait
 feature reachable through this IPC client must check its timeout against
 whatever fixed client-side budget the call goes through, not just against the
 server's own request-handling timeout (if any).
+
+**The readiness gate's timeout is one shared constant,
+`mcp_transport::SHELL_READINESS_TIMEOUT_MS` — reuse it at any new gate call
+site.** A review finding on the first version of this gate predicted that "a
+future second readiness-gate call site would likely duplicate yet another ad
+hoc constant instead of reusing one." (On the pre-rebase branch the gate was
+also extended to a shared `pty::spawn_session_for_agent`; that function and its
+callers — the `ai_terminal_*` MCP tools, the cron scheduler, the PR-review
+watcher — do not exist on this codebase, and today's agent spawns exec the agent
+binary directly rather than typing into a shell, so `materialize` is the only
+server-side spawn-then-write path that needs it.) If you add a new server path
+that spawns a shell and writes into it right away, gate it with
+`wait_for_shell_idle` + that constant.
+
+**A test that subscribes to the event bus after a real materialized pane and
+expects a specific event type to be the very next message is fragile the
+moment anything makes the underlying shell run longer.** The readiness gate
+above (and its fast-path fix) give real spawned shells more running
+time before a test's next assertion, so ordinary background traffic (a
+`PtyOsc133` prompt marker, most often) can land on the bus in between —
+`rename_pane_is_idempotent_and_only_emits_on_real_change` actually flaked from
+this; two sibling tests (`set_pane_accent_color_resolves_and_applies_when_already_materialized`,
+`request_window_layout_emits_only_materialized_session_ids_in_pane_order`) had
+the identical latent shape and were fixed proactively before they did. The fix
+is always the same: drain-and-filter for the specific event type you care
+about (a `while let Ok(event) = rx.try_recv()` loop, `break`ing when found, or
+asserting the *specific* variant never appears rather than that the channel is
+empty) — several tests in this file already did this correctly
+(`materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`'s own
+comment names the exact same reason). When you add a test that subscribes
+after a real materialize/spawn call, use that pattern from the start rather
+than a bare single-shot `rx.try_recv()`.
 
 **A real-PTY test that records a cwd fixture and reads it back must use a real,
 existing directory once the code under test lets the shell actually run before
