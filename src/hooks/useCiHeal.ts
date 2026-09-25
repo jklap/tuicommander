@@ -70,6 +70,7 @@ type HealKind = "ci" | "conflict";
 function isExpectedHealFailure(message: string): boolean {
 	return (
 		message.includes("external CI (not supported)") ||
+		message.includes("CircleCI token not configured") ||
 		message.includes("No failed GitHub Actions job found") ||
 		message.includes("Timeout waiting for agent idle") ||
 		message.includes("Terminal no longer exists")

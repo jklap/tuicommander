@@ -22,6 +22,9 @@ const h = vi.hoisted(() => {
 		invoke: vi.fn().mockResolvedValue("raw ci log"),
 		sendCommand: vi.fn().mockResolvedValue(undefined),
 		getShellFamily: vi.fn().mockResolvedValue("zsh"),
+		loggerDebug: vi.fn(),
+		loggerWarn: vi.fn(),
+		loggerError: vi.fn(),
 	};
 });
 
@@ -56,6 +59,7 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: { get: (id: string) => h.terminals.get(id) },
 }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: h.toastAdd } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: h.loggerDebug, info: vi.fn(), warn: h.loggerWarn, error: h.loggerError } }));
 vi.mock("../../invoke", () => ({ invoke: h.invoke }));
 vi.mock("../../utils/sendCommand", () => ({ sendCommand: h.sendCommand, getShellFamily: h.getShellFamily }));
 vi.mock("../../transport", () => ({ rpc: vi.fn().mockResolvedValue(undefined) }));
@@ -86,6 +90,9 @@ describe("useCiHeal budget + re-entry guard", () => {
 		h.invoke.mockResolvedValue("raw ci log");
 		h.sendCommand.mockClear();
 		h.getShellFamily.mockClear();
+		h.loggerWarn.mockClear();
+		h.loggerDebug.mockClear();
+		h.loggerError.mockClear();
 		createRoot((d) => {
 			dispose = d;
 			useCiHeal();
@@ -152,6 +159,15 @@ describe("useCiHeal budget + re-entry guard", () => {
 			attempts: 0,
 			healing: false,
 		});
+	});
+
+	it("treats a missing CircleCI token as expected", async () => {
+		seed({ enabled: true, attempts: 0, healing: false });
+		h.invoke.mockRejectedValueOnce(new Error("CircleCI token not configured"));
+		fireCiFailed();
+		await flush();
+		expect(h.loggerWarn).toHaveBeenCalled();
+		expect(h.loggerError).not.toHaveBeenCalled();
 	});
 
 	it("does not consume an attempt when prompt delivery fails", async () => {
