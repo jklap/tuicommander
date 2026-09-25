@@ -50,6 +50,9 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",
     "@solidjs/testing-library": "^0.8.10",
+    "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/typescript-checker": "^10.0.0",
+    "@stryker-mutator/vitest-runner": "^10.0.0",
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/jest-dom": "^6.10.0",
     "@types/jsdom": "^30.0.0",
