@@ -33,6 +33,9 @@ type Reply =
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
 
+const MISSING_BACKEND_MESSAGE =
+	"Restart TUICommander to load Plans and Stories. The running app needs a newer backend.";
+
 export interface StoriesDialogProps {
 	project: string;
 	onClose: () => void;
@@ -63,13 +66,34 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 	const selectedPlan = () => plans().find((plan) => plan.id === planId());
 	const selectedStory = () => stories().find((story) => story.id === storyId());
+	const wontFixCount = () => stories().filter((story) => story.status === "wontfix").length;
+	const abandoned = (story: Story, seen = new Set<string>()): boolean => {
+		if (seen.has(story.id)) return false;
+		seen.add(story.id);
+		return (
+			story.status === "wontfix" ||
+			story.dependencies.some((id) => {
+				const dependency = stories().find((item) => item.id === id);
+				return dependency ? abandoned(dependency, seen) : false;
+			})
+		);
+	};
 	const fail = (cause: unknown): void => {
 		const message = String(cause);
 		appLogger.warn("store", "Stories: action failed", { error: message });
-		setError(message);
+		setError(
+			message.includes("story_action_command") && /(?:not found|unknown command|failed: 404)/i.test(message)
+				? MISSING_BACKEND_MESSAGE
+				: message,
+		);
 	};
-	const call = (action: Record<string, unknown>) =>
-		invoke<Reply>("story_action_command", { project: props.project, action });
+	const call = async (action: Record<string, unknown>): Promise<Reply> => {
+		const reply = await invoke<unknown>("story_action_command", { project: props.project, action });
+		if (typeof reply === "string" && /^\s*<!doctype html|^\s*<html/i.test(reply)) {
+			throw new Error(MISSING_BACKEND_MESSAGE);
+		}
+		return reply as Reply;
+	};
 
 	async function refresh(preferredPlan = planId(), preferredStory = storyId()): Promise<void> {
 		const current = ++request;
@@ -209,6 +233,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		setDependencyId("");
 	}
 
+	function removeDependency(dependencyId: string): void {
+		const story = selectedStory();
+		if (story?.status !== "backlog") return;
+		void mutate({
+			action: "remove_dependency",
+			story_id: story.id,
+			dependency_id: dependencyId,
+			expected_revision: story.revision,
+		});
+	}
+
 	onMount(() => void refresh());
 
 	return (
@@ -260,6 +295,11 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 								New plan
 							</button>
 						</div>
+						<Show when={selectedPlan() && wontFixCount() > 0}>
+							<p class={s.planNotice}>
+								{wontFixCount() === stories().length ? "All cancelled" : `${wontFixCount()} won't fix`}
+							</p>
+						</Show>
 						<Show when={newPlan()}>
 							<form class={s.form} onSubmit={(event) => void createPlan(event)}>
 								<label>
@@ -415,7 +455,27 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 										<Show when={story().dependencies.length} fallback={<p class={s.muted}>None</p>}>
 											<ul>
 												<For each={story().dependencies}>
-													{(id) => <li>{stories().find((item) => item.id === id)?.title ?? id}</li>}
+													{(id) => {
+														const dependency = stories().find((item) => item.id === id);
+														return (
+															<li class={s.dependencyRow}>
+																<span>
+																	{dependency?.title ?? id} · {dependency?.status.replaceAll("_", " ") ?? "unknown"}
+																	{dependency && abandoned(dependency) ? " · abandoned" : ""}
+																</span>
+																<Show when={story().status === "backlog" && dependency?.status === "wontfix"}>
+																	<button
+																		type="button"
+																		disabled={busy()}
+																		aria-label={`Remove ${dependency?.title}`}
+																		onClick={() => removeDependency(id)}
+																	>
+																		Remove
+																	</button>
+																</Show>
+															</li>
+														);
+													}}
 												</For>
 											</ul>
 										</Show>

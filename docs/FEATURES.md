@@ -33,9 +33,9 @@
 | Project history | [Project Progress](user-guide/project-progress.md) |
 | Native plans and stories | [Native plans and stories](user-guide/native-stories.md) |
 
- Native plans and stories are available through `tuic story`, the `story` MCP tool, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. Story import/export is outside this release.
+ Native plans and stories are available through `tuic story`, the `story` MCP tool, desktop IPC, and authenticated HTTP. They support criteria, dependencies, revision-checked transitions, and live-tab claims. WontFix closes cancelled scope but never satisfies a prerequisite; a human can remove a cancelled dependency from a Backlog story. Story import/export is outside this release.
 
- The Plans and Stories dialog provides a manual project view on desktop and in the browser: create plans and stories, inspect criteria and dependencies, start work without a terminal, check criteria, submit reviews, and approve or block outcomes.
+ The Plans and Stories dialog provides a manual project view on desktop and in the browser: create plans and stories, inspect criteria and dependency status, identify abandoned prerequisites, remove a direct cancelled prerequisite, start work without a terminal, check criteria, submit reviews, and approve or block outcomes. It shows a plan's cancelled-story count.
 ---
 
 ## 1. Terminal Management

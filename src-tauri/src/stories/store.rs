@@ -225,7 +225,10 @@ impl StoryStore {
         if stories.is_empty() {
             return Ok(PlanState::Draft);
         }
-        if stories.iter().all(|s| s.status == StoryStatus::Done) {
+        if stories
+            .iter()
+            .all(|s| matches!(s.status, StoryStatus::Done | StoryStatus::WontFix))
+        {
             return Ok(PlanState::Done);
         }
         Ok(PlanState::Active)

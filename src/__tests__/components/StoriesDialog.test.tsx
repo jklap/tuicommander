@@ -60,6 +60,20 @@ describe("StoriesDialog", () => {
 		await screen.findByRole("heading", { name: "Implement API" });
 	});
 
+	it("explains how to load the missing native stories backend", async () => {
+		vi.mocked(invoke).mockRejectedValueOnce("Command story_action_command not found");
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByText(/Restart TUICommander/);
+		expect(screen.queryByText(/Command story_action_command not found/)).toBeNull();
+	});
+
+	it("recognizes an older browser backend serving its HTML fallback", async () => {
+		vi.mocked(invoke).mockResolvedValueOnce("<!doctype html><html><body>TUICommander</body></html>");
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByText(/Restart TUICommander/);
+		expect(screen.queryByText("Invalid plan response")).toBeNull();
+	});
+
 	it("creates a story with criteria and relative file scope", async () => {
 		const created = { ...story, id: "s2", title: "Review API" };
 		let rows = [story];
@@ -184,5 +198,34 @@ describe("StoriesDialog", () => {
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText(/offline/);
 		expect(appLogger.warn).toHaveBeenCalledWith("store", expect.stringContaining("Stories"), expect.anything());
+	});
+
+	it("shows cancelled dependencies and waives only the direct cancelled edge", async () => {
+		const cancelled = { ...story, id: "s2", title: "Cancelled API", status: "wontfix" };
+		const intermediate = { ...story, id: "s3", title: "Intermediate API", status: "backlog", dependencies: ["s2"] };
+		const dependent = { ...story, id: "s4", title: "Ship API", status: "backlog", dependencies: ["s2", "s3"] };
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "list_stories") return { type: "stories", value: [cancelled, intermediate, dependent] };
+			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			if (action.action === "remove_dependency") return { type: "story", value: dependent };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Cancelled API" });
+		expect(screen.getByText("1 won't fix")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: /Ship API/ }));
+		await screen.findByRole("heading", { name: "Ship API" });
+		expect(screen.getAllByText(/abandoned/i)).toHaveLength(2);
+		const remove = screen.getByRole("button", { name: /Remove.*Cancelled API/ });
+		fireEvent.click(remove);
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("story_action_command", {
+				project: "/repo",
+				action: { action: "remove_dependency", story_id: "s4", dependency_id: "s2", expected_revision: 1 },
+			}),
+		);
+		expect(screen.queryByRole("button", { name: /Remove.*Intermediate API/ })).toBeNull();
 	});
 });

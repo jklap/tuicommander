@@ -168,6 +168,223 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_stories_close_a_nonempty_plan_but_never_release_dependents() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        assert_eq!(
+            store.plan_state(&plan.id).expect("empty state"),
+            PlanState::Draft
+        );
+        let make_story = |title: &str| NewStory {
+            plan_id: plan.id.clone(),
+            title: title.into(),
+            criteria: vec!["Done".into()],
+            priority: 1,
+            origin: StoryOrigin::Native,
+            file_scope: vec![],
+        };
+        let prerequisite = store
+            .create_story(make_story("Prerequisite"))
+            .expect("prerequisite");
+        let dependent = store
+            .create_story(make_story("Dependent"))
+            .expect("dependent");
+        let dependent = store
+            .add_dependency(&dependent.id, &prerequisite.id, dependent.revision)
+            .expect("dependency");
+        store
+            .transition(
+                &prerequisite.id,
+                prerequisite.revision,
+                StoryCommand::WontFix,
+            )
+            .expect("cancel prerequisite");
+        assert_eq!(
+            store.get_story(&dependent.id).expect("dependent").status,
+            StoryStatus::Backlog
+        );
+        assert!(
+            store
+                .claim(&dependent.id, "agent", dependent.revision)
+                .is_err()
+        );
+        assert_eq!(
+            store.plan_state(&plan.id).expect("unfinished state"),
+            PlanState::Active
+        );
+        let dependent = store
+            .remove_dependency(&dependent.id, &prerequisite.id, dependent.revision, None)
+            .expect("remove cancelled edge");
+        assert_eq!(dependent.status, StoryStatus::Ready);
+        store
+            .transition(&dependent.id, dependent.revision, StoryCommand::WontFix)
+            .expect("cancel dependent");
+        assert_eq!(
+            store.plan_state(&plan.id).expect("cancelled state"),
+            PlanState::Done
+        );
+    }
+
+    #[test]
+    fn removing_a_cancelled_dependency_respects_every_remaining_prerequisite() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let make_story = |title: &str| NewStory {
+            plan_id: plan.id.clone(),
+            title: title.into(),
+            criteria: vec!["Done".into()],
+            priority: 1,
+            origin: StoryOrigin::Native,
+            file_scope: vec![],
+        };
+        let cancelled = store
+            .create_story(make_story("Cancelled"))
+            .expect("cancelled");
+        let outstanding = store
+            .create_story(make_story("Outstanding"))
+            .expect("outstanding");
+        let dependent = store
+            .create_story(make_story("Dependent"))
+            .expect("dependent");
+        let dependent = store
+            .add_dependency(&dependent.id, &cancelled.id, dependent.revision)
+            .expect("first dependency");
+        let dependent = store
+            .add_dependency(&dependent.id, &outstanding.id, dependent.revision)
+            .expect("second dependency");
+        assert!(
+            store
+                .remove_dependency(
+                    &dependent.id,
+                    &cancelled.id,
+                    dependent.revision,
+                    Some("agent")
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .remove_dependency(&dependent.id, &cancelled.id, dependent.revision, None)
+                .is_err()
+        );
+        store
+            .transition(&cancelled.id, cancelled.revision, StoryCommand::WontFix)
+            .expect("cancel");
+        assert!(
+            store
+                .remove_dependency(&dependent.id, &cancelled.id, dependent.revision - 1, None)
+                .is_err()
+        );
+        assert!(
+            store
+                .remove_dependency(&dependent.id, "missing", dependent.revision, None)
+                .is_err()
+        );
+        let dependent = store
+            .remove_dependency(&dependent.id, &cancelled.id, dependent.revision, None)
+            .expect("remove cancelled edge");
+        assert_eq!(dependent.status, StoryStatus::Backlog);
+        assert_eq!(dependent.dependencies, vec![outstanding.id.clone()]);
+        assert!(
+            store
+                .remove_dependency(&dependent.id, &outstanding.id, dependent.revision, None)
+                .is_err()
+        );
+        let outstanding = store
+            .transition(
+                &outstanding.id,
+                outstanding.revision,
+                StoryCommand::StartManual,
+            )
+            .expect("start");
+        let outstanding = store
+            .transition(
+                &outstanding.id,
+                outstanding.revision,
+                StoryCommand::CheckCriterion(0),
+            )
+            .expect("check");
+        let outstanding = store
+            .transition(
+                &outstanding.id,
+                outstanding.revision,
+                StoryCommand::SubmitReview,
+            )
+            .expect("review");
+        store
+            .transition(&outstanding.id, outstanding.revision, StoryCommand::Approve)
+            .expect("done");
+        assert_eq!(
+            store.get_story(&dependent.id).expect("promoted").status,
+            StoryStatus::Ready
+        );
+        assert_eq!(
+            store.plan_state(&plan.id).expect("state"),
+            PlanState::Active
+        );
+    }
+
+    #[test]
+    fn completed_and_cancelled_stories_close_a_plan_but_done_cannot_be_cancelled() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let make_story = |title: &str| NewStory {
+            plan_id: plan.id.clone(),
+            title: title.into(),
+            criteria: vec!["Done".into()],
+            priority: 1,
+            origin: StoryOrigin::Native,
+            file_scope: vec![],
+        };
+        let done = store.create_story(make_story("Done")).expect("done");
+        let cancelled = store
+            .create_story(make_story("Cancelled"))
+            .expect("cancelled");
+        let done = store
+            .transition(&done.id, done.revision, StoryCommand::StartManual)
+            .expect("start");
+        let done = store
+            .transition(&done.id, done.revision, StoryCommand::CheckCriterion(0))
+            .expect("check");
+        let done = store
+            .transition(&done.id, done.revision, StoryCommand::SubmitReview)
+            .expect("review");
+        let done = store
+            .transition(&done.id, done.revision, StoryCommand::Approve)
+            .expect("done");
+        assert!(
+            store
+                .transition(&done.id, done.revision, StoryCommand::WontFix)
+                .is_err()
+        );
+        store
+            .transition(&cancelled.id, cancelled.revision, StoryCommand::WontFix)
+            .expect("cancel");
+        assert_eq!(store.plan_state(&plan.id).expect("state"), PlanState::Done);
+    }
+
+    #[test]
     fn dependency_cycle_and_stale_revision_are_rejected() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
@@ -348,7 +565,8 @@ mod tests {
         let store = StoryStore::open().expect("store");
         let lock = rusqlite::Connection::open(dir.path().join("stories.sqlite3"))
             .expect("open locking connection");
-        lock.execute_batch("BEGIN IMMEDIATE").expect("acquire write lock");
+        lock.execute_batch("BEGIN IMMEDIATE")
+            .expect("acquire write lock");
 
         let (sent, received) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

@@ -29,6 +29,11 @@ pub enum StoryAction {
         dependency_id: String,
         expected_revision: i64,
     },
+    RemoveDependency {
+        story_id: String,
+        dependency_id: String,
+        expected_revision: i64,
+    },
     Claim {
         story_id: String,
         expected_revision: i64,
@@ -111,6 +116,20 @@ pub fn story_action(
                 expected_revision,
             )?))
         }
+        StoryAction::RemoveDependency {
+            story_id,
+            dependency_id,
+            expected_revision,
+        } => {
+            story_in_project(&story_id)?;
+            story_in_project(&dependency_id)?;
+            Ok(StoryReply::Story(store.remove_dependency(
+                &story_id,
+                &dependency_id,
+                expected_revision,
+                actor_session,
+            )?))
+        }
         StoryAction::Claim {
             story_id,
             expected_revision,
@@ -168,9 +187,12 @@ mod tests {
 
     #[test]
     fn story_actions_reject_unknown_fields() {
-        assert!(serde_json::from_value::<StoryAction>(serde_json::json!({
-            "action": "get_story", "story_id": "s", "project": "/other"
-        })).is_err());
+        assert!(
+            serde_json::from_value::<StoryAction>(serde_json::json!({
+                "action": "get_story", "story_id": "s", "project": "/other"
+            }))
+            .is_err()
+        );
     }
 
     #[test]
