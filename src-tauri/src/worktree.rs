@@ -670,23 +670,47 @@ fn link_shared_stores(src: &Path, dest: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
     for store in SHARED_WORKTREE_STORES {
         let source = src.join(store);
-        if !source.is_dir() { continue; }
-        let target = dest.join(store);
-        if std::fs::symlink_metadata(&target).is_ok() {
-            warnings.push(format!("could not link shared store '{store}': '{}' already exists", target.display()));
+        if !source.is_dir() {
             continue;
         }
-        #[cfg(unix)] let result = std::os::unix::fs::symlink(&source, &target);
-        #[cfg(windows)] let result = std::os::windows::fs::symlink_dir(&source, &target);
-        #[cfg(not(any(unix, windows)))] let result: std::io::Result<()> = Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "directory symlinks are unsupported"));
-        if let Err(error) = result { warnings.push(format!("could not link shared store '{store}': {error}")); }
+        let target = dest.join(store);
+        if std::fs::symlink_metadata(&target).is_ok() {
+            warnings.push(format!(
+                "could not link shared store '{store}': '{}' already exists",
+                target.display()
+            ));
+            continue;
+        }
+        #[cfg(unix)]
+        let result = std::os::unix::fs::symlink(&source, &target);
+        #[cfg(windows)]
+        let result = std::os::windows::fs::symlink_dir(&source, &target);
+        #[cfg(not(any(unix, windows)))]
+        let result: std::io::Result<()> = Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "directory symlinks are unsupported",
+        ));
+        if let Err(error) = result {
+            warnings.push(format!("could not link shared store '{store}': {error}"));
+        }
     }
     warnings
 }
 
 fn initialize_submodules(src: &Path, dest: &Path) -> Vec<String> {
-    if !src.join(".gitmodules").is_file() { return Vec::new(); }
-    let Ok(listed) = git_cmd(src).args(["config", "--file", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"]).run() else {
+    if !src.join(".gitmodules").is_file() {
+        return Vec::new();
+    }
+    let Ok(listed) = git_cmd(src)
+        .args([
+            "config",
+            "--file",
+            ".gitmodules",
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ])
+        .run()
+    else {
         return vec!["could not read submodule declarations".into()];
     };
     listed.stdout.lines().filter_map(|line| {
@@ -5124,7 +5148,10 @@ branch refs/heads/feat
         let (_temp, repo, workspaces) = workspace_fixture();
         fs::write(repo.join(".gitignore"), "stories\nplans\nideas\n").unwrap();
         git_cmd(&repo).args(["add", ".gitignore"]).run().unwrap();
-        git_cmd(&repo).args(["commit", "-m", "ignore stores"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "ignore stores"])
+            .run()
+            .unwrap();
         fs::create_dir(repo.join("stories")).unwrap();
         fs::write(repo.join("stories").join("keep.md"), "parent story").unwrap();
         let config = WorktreeConfig {
@@ -5144,8 +5171,14 @@ branch refs/heads/feat
                 .is_symlink()
         );
 
-        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "shared-remove", false, None, false)
-            .expect("an ignored store link must not make the workspace dirty");
+        remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "shared-remove",
+            false,
+            None,
+            false,
+        )
+        .expect("an ignored store link must not make the workspace dirty");
 
         assert!(!created.path.exists(), "workspace directory removed");
         assert_eq!(
@@ -5190,11 +5223,20 @@ branch refs/heads/feat
         let module = repo.parent().unwrap().join("module");
         fs::create_dir(&module).unwrap();
         git_cmd(&module).args(["init"]).run().unwrap();
-        git_cmd(&module).args(["config", "user.email", "test@test.com"]).run().unwrap();
-        git_cmd(&module).args(["config", "user.name", "Test"]).run().unwrap();
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
         fs::write(module.join("sidecar.txt"), "local object").unwrap();
         git_cmd(&module).args(["add", "."]).run().unwrap();
-        git_cmd(&module).args(["commit", "-m", "module"]).run().unwrap();
+        git_cmd(&module)
+            .args(["commit", "-m", "module"])
+            .run()
+            .unwrap();
         git_cmd(&repo)
             .args([
                 "-c",
@@ -5207,7 +5249,10 @@ branch refs/heads/feat
             .run()
             .unwrap();
         git_cmd(&repo).args(["add", "."]).run().unwrap();
-        git_cmd(&repo).args(["commit", "-m", "submodule"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "submodule"])
+            .run()
+            .unwrap();
         git_cmd(&repo)
             .args([
                 "config",
@@ -5219,7 +5264,10 @@ branch refs/heads/feat
             .run()
             .unwrap();
         git_cmd(&repo).args(["add", ".gitmodules"]).run().unwrap();
-        git_cmd(&repo).args(["commit", "-m", "unavailable remote"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "unavailable remote"])
+            .run()
+            .unwrap();
 
         let config = WorktreeConfig {
             task_name: "local-submodule".into(),
@@ -5318,6 +5366,48 @@ branch refs/heads/feat
 
         let status = inspect_workspace_lifecycle(&repo, "trails");
 
+    #[test]
+    fn create_workspace_reports_an_unavailable_submodule_as_a_warning() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(
+            repo.join(".gitmodules"),
+            "[submodule \"missing\"]\n\tpath = modules/missing\n\turl = /missing/remote\n",
+        )
+        .unwrap();
+        git_cmd(&repo)
+            .args([
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000,1111111111111111111111111111111111111111,modules/missing",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", ".gitmodules"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "missing submodule"])
+            .run()
+            .unwrap();
+        let config = WorktreeConfig {
+            task_name: "missing-submodule".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("missing-submodule".into()),
+            create_branch: true,
+        };
+
+        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
+            crate::cow::WarmingReport::default()
+        })
+        .unwrap();
+
+        assert!(
+            created.warnings.iter().any(|warning| {
+                warning.contains("modules/missing") && warning.contains("could not initialize")
+            }),
+            "warnings: {:?}",
+            created.warnings
+        );
+    }
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
         assert_eq!(status.dirty_files, Some(0));
         assert!(worktree.exists());
