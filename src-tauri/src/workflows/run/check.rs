@@ -10,12 +10,14 @@ pub struct CheckReceipt {
     pub check_id: String,
     pub argv: Vec<String>,
     pub exit_code: i32,
+    #[serde(default)]
+    pub ref_name: String,
     pub commit: String,
     pub tree: String,
     pub duration_ms: u64,
 }
 
-fn git_output(path: &Path, args: &[&str]) -> Result<String, String> {
+pub(super) fn git_output(path: &Path, args: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
         .args(args)
         .current_dir(path)
@@ -33,7 +35,7 @@ fn git_output(path: &Path, args: &[&str]) -> Result<String, String> {
         .map_err(|error| format!("decode git output: {error}"))
 }
 
-fn clean_artifact(path: &Path) -> Result<(String, String), String> {
+pub(super) fn clean_artifact(path: &Path) -> Result<(String, String), String> {
     if !git_output(path, &["status", "--porcelain", "--untracked-files=all"])?.is_empty() {
         return Err("workflow check requires a clean worktree".into());
     }
@@ -53,6 +55,7 @@ fn clean_artifact(path: &Path) -> Result<(String, String), String> {
 /// yields no usable receipt, even when the command exits successfully.
 pub fn execute_pinned_check(check: &CheckDefinition, path: &Path) -> Result<CheckReceipt, String> {
     let (commit, tree) = clean_artifact(path)?;
+    let ref_name = git_output(path, &["symbolic-ref", "HEAD"])?;
     let executable = check
         .argv
         .first()
@@ -86,13 +89,16 @@ pub fn execute_pinned_check(check: &CheckDefinition, path: &Path) -> Result<Chec
         std::thread::sleep(Duration::from_millis(10));
     };
     let duration_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
-    if clean_artifact(path)? != (commit.clone(), tree.clone()) {
-        return Err("workflow check changed the artifact commit or tree".into());
+    if clean_artifact(path)? != (commit.clone(), tree.clone())
+        || git_output(path, &["symbolic-ref", "HEAD"])? != ref_name
+    {
+        return Err("workflow check changed the branch, commit, or tree".into());
     }
     Ok(CheckReceipt {
         check_id: check.id.clone(),
         argv: check.argv.clone(),
         exit_code,
+        ref_name,
         commit,
         tree,
         duration_ms,

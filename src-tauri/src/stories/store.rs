@@ -369,6 +369,9 @@ impl StoryStore {
         if story.status != StoryStatus::Ready {
             return Err("story is not ready".into());
         }
+        if !dependencies_integrated(&tx, &story, &self.db_path)? {
+            return Err("story dependency lacks a current integration receipt".into());
+        }
         story.status = StoryStatus::InProgress;
         story.claim_session = Some(session.into());
         save_story(&tx, &mut story, expected_revision)?;

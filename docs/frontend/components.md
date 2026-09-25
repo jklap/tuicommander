@@ -385,6 +385,8 @@ ordered events through `workflow_run_action`; `workflowRunSignals` is a wake hin
 that causes a cursor-based read, so missed or duplicate notifications cannot
 replace the backend's durable sequence. The view pages events and stays usable
 without starting a workflow.
+The review view offers Approve only in the desktop app; browser clients show
+that approval requires the desktop app.
 
 ### ProgressDialog (`ProgressDialog/`)
 

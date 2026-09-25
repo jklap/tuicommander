@@ -83,20 +83,43 @@ pub(super) fn save_story(
     Ok(())
 }
 
-pub(super) fn dependencies_done(conn: &Connection, story: &Story) -> Result<bool, String> {
+pub(super) fn dependencies_integrated(
+    conn: &Connection,
+    story: &Story,
+    story_db: &Path,
+) -> Result<bool, String> {
+    let run_db = story_db
+        .parent()
+        .ok_or("story store has no parent directory")?
+        .join("workflow_runs.sqlite3");
     for id in &story.dependencies {
-        if read_story(conn, id)?.status != StoryStatus::Done {
+        let dependency = read_story(conn, id)?;
+        if dependency.status != StoryStatus::Done
+            || !crate::workflows::story_integrated_at_revision_in(&run_db, id, dependency.revision)?
+        {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-pub(super) fn promote_ready(tx: &Transaction<'_>, plan_id: &str) -> Result<(), String> {
+pub(super) fn reconcile_ready(
+    tx: &Transaction<'_>,
+    plan_id: &str,
+    story_db: &Path,
+) -> Result<(), String> {
     for mut candidate in read_plan_stories(tx, plan_id)? {
-        if candidate.status == StoryStatus::Backlog && dependencies_done(tx, &candidate)? {
+        if !matches!(candidate.status, StoryStatus::Backlog | StoryStatus::Ready) {
+            continue;
+        }
+        let desired = if dependencies_integrated(tx, &candidate, story_db)? {
+            StoryStatus::Ready
+        } else {
+            StoryStatus::Backlog
+        };
+        if candidate.status != desired {
             let revision = candidate.revision;
-            candidate.status = StoryStatus::Ready;
+            candidate.status = desired;
             save_story(tx, &mut candidate, revision)?;
         }
     }

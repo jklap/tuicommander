@@ -79,6 +79,560 @@ mod tests {
         );
     }
 
+    #[test]
+    fn failed_or_stale_pinned_check_cannot_authorize_integration() {
+        let check = crate::workflows::CheckDefinition {
+            id: "unit".into(),
+            argv: vec!["cargo".into(), "test".into()],
+            timeout_secs: 30,
+        };
+        let mut receipt = CheckReceipt {
+            check_id: "unit".into(),
+            argv: check.argv.clone(),
+            exit_code: 1,
+            ref_name: "refs/heads/story".into(),
+            commit: "a".repeat(40),
+            tree: "b".repeat(40),
+            duration_ms: 25,
+        };
+        assert!(
+            super::store::require_current_checks(
+                &[check.clone()],
+                &[receipt.clone()],
+                &receipt.ref_name,
+                &receipt.commit,
+                &receipt.tree
+            )
+            .is_err()
+        );
+        receipt.exit_code = 0;
+        assert!(
+            super::store::require_current_checks(
+                &[check.clone()],
+                &[receipt.clone()],
+                &receipt.ref_name,
+                &"c".repeat(40),
+                &receipt.tree
+            )
+            .is_err()
+        );
+        receipt.argv.push("--ignored".into());
+        assert!(
+            super::store::require_current_checks(
+                &[check.clone()],
+                &[receipt.clone()],
+                &receipt.ref_name,
+                &receipt.commit,
+                &receipt.tree
+            )
+            .is_err()
+        );
+        receipt.argv = check.argv.clone();
+        assert!(
+            super::store::require_current_checks(
+                &[check.clone()],
+                &[receipt.clone()],
+                "refs/heads/moved",
+                &receipt.commit,
+                &receipt.tree
+            )
+            .is_err()
+        );
+        assert!(
+            super::store::require_current_checks(
+                &[check],
+                &[receipt.clone()],
+                &receipt.ref_name,
+                &receipt.commit,
+                &receipt.tree
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn check_receipt_is_durable_and_replayed_after_restart() {
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let db = config.path().join("runs.sqlite3");
+        let store = RunStore::open_at(&db).expect("run store");
+        let run = store
+            .start_plan(
+                project.path().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .expect("run");
+        let stories = StoryStore::open().expect("stories");
+        let story = stories
+            .transition(&story_id, 1, StoryCommand::StartManual)
+            .expect("start");
+        let story = stories
+            .transition(&story_id, story.revision, StoryCommand::CheckCriterion(0))
+            .expect("criterion");
+        let story = stories
+            .transition(&story_id, story.revision, StoryCommand::SubmitReview)
+            .expect("review");
+        let story = stories
+            .transition(&story_id, story.revision, StoryCommand::Approve)
+            .expect("approve");
+        let accepted = store
+            .command(
+                &run.id,
+                "accept",
+                RunCommand::AcceptStory {
+                    story_id: story_id.clone(),
+                },
+            )
+            .expect("accept");
+        let receipt = CheckReceipt {
+            check_id: "unit".into(),
+            argv: vec!["git".into(), "status".into()],
+            exit_code: 0,
+            ref_name: "refs/heads/story".into(),
+            commit: "a".repeat(40),
+            tree: "b".repeat(40),
+            duration_ms: 1,
+        };
+        assert_eq!(
+            accepted.snapshot.stories[0].accepted_revision,
+            Some(story.revision)
+        );
+        store
+            .record_check_receipt(
+                &run.id,
+                &story_id,
+                "check-1",
+                accepted.sequence,
+                receipt.clone(),
+            )
+            .expect("record");
+        let reopened = RunStore::open_at(&db).expect("reopen");
+        assert_eq!(
+            reopened.snapshot(&run.id).unwrap().stories[0].check_receipts,
+            vec![receipt]
+        );
+        assert!(reopened.replay(&run.id).is_ok());
+    }
+
+    #[test]
+    fn integration_receipt_is_durable_and_binds_the_accepted_revision() {
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).expect("run store");
+        let run = store
+            .start_plan(
+                project.path().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .expect("run");
+        let stories = StoryStore::open().expect("stories");
+        let story = stories
+            .transition(&story_id, 1, StoryCommand::StartManual)
+            .unwrap();
+        let story = stories
+            .transition(&story_id, story.revision, StoryCommand::CheckCriterion(0))
+            .unwrap();
+        let story = stories
+            .transition(&story_id, story.revision, StoryCommand::SubmitReview)
+            .unwrap();
+        let story = stories
+            .transition(&story_id, story.revision, StoryCommand::Approve)
+            .unwrap();
+        let accepted = store
+            .command(
+                &run.id,
+                "accept",
+                RunCommand::AcceptStory {
+                    story_id: story_id.clone(),
+                },
+            )
+            .unwrap();
+        let receipt = IntegrationReceipt {
+            story_revision: story.revision,
+            canonical_ref: "refs/heads/main".into(),
+            base_commit: "a".repeat(40),
+            source_commit: "b".repeat(40),
+            source_tree: "c".repeat(40),
+            merge_commit: "d".repeat(40),
+            merge_tree: "e".repeat(40),
+            post_checks: vec![],
+        };
+        let stale = IntegrationReceipt {
+            story_revision: story.revision - 1,
+            ..receipt.clone()
+        };
+        assert!(
+            store
+                .record_integration_receipt(&run.id, &story_id, "stale", accepted.sequence, stale)
+                .is_err()
+        );
+        store
+            .record_integration_receipt(
+                &run.id,
+                &story_id,
+                "integrate",
+                accepted.sequence,
+                receipt.clone(),
+            )
+            .expect("integrate");
+        let reopened = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        assert_eq!(
+            reopened
+                .record_integration_receipt(
+                    &run.id,
+                    &story_id,
+                    "integrate",
+                    accepted.sequence,
+                    receipt.clone()
+                )
+                .unwrap()
+                .sequence,
+            accepted.sequence + 1
+        );
+        assert_eq!(
+            reopened.snapshot(&run.id).unwrap().stories[0].integration_receipt,
+            Some(receipt)
+        );
+        assert_eq!(
+            reopened.replay(&run.id).unwrap(),
+            reopened.snapshot(&run.id).unwrap()
+        );
+    }
+
+    #[test]
+    fn recorded_merge_releases_dependents_and_ref_movement_invalidates_receipts() {
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let definitions = WorkflowStore::open().unwrap();
+        let plan_draft = definitions.get_draft(&definition_id).unwrap();
+        let story_template_id = plan_draft
+            .graph
+            .nodes
+            .iter()
+            .find_map(|node| {
+                if let crate::workflows::NodeKind::StoryDispatch {
+                    story_template_id, ..
+                } = &node.kind
+                {
+                    Some(story_template_id.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let story_draft = definitions.get_draft(&story_template_id).unwrap();
+        let check = crate::workflows::CheckDefinition {
+            id: "status".into(),
+            argv: vec!["git".into(), "status".into(), "--porcelain".into()],
+            timeout_secs: 10,
+        };
+        let story_draft = definitions
+            .update_checks(&story_template_id, story_draft.draft_revision, vec![check])
+            .unwrap();
+        let story_published = definitions
+            .publish(&story_template_id, story_draft.draft_revision)
+            .unwrap();
+        let mut graph = plan_draft.graph.clone();
+        for node in &mut graph.nodes {
+            if let crate::workflows::NodeKind::StoryDispatch { story_revision, .. } = &mut node.kind
+            {
+                *story_revision = story_published.revision;
+            }
+        }
+        let plan_draft = definitions
+            .update_draft(&definition_id, plan_draft.draft_revision, graph)
+            .unwrap();
+        let plan_published = definitions
+            .publish(&definition_id, plan_draft.draft_revision)
+            .unwrap();
+        let repo = project.path();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.name", "Workflow Test"],
+            vec!["config", "user.email", "workflow@example.invalid"],
+        ] {
+            crate::git_cli::git_cmd(repo).args(args).run().unwrap();
+        }
+        std::fs::write(repo.join("README.md"), "base\n").unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["add", "README.md"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["commit", "-qm", "base"])
+            .run()
+            .unwrap();
+        let worktree = config.path().join("story-worktree");
+        crate::git_cli::git_cmd(repo)
+            .args([
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "story",
+                worktree.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(worktree.join("story.txt"), "accepted\n").unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["add", "story.txt"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["commit", "-qm", "story"])
+            .run()
+            .unwrap();
+
+        let stories = StoryStore::open().unwrap();
+        let dependent = stories
+            .create_story(NewStory {
+                plan_id: plan_id.clone(),
+                title: "Dependent".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec!["dependent.txt".into()],
+            })
+            .unwrap();
+        stories
+            .add_dependency(&dependent.id, &story_id, dependent.revision)
+            .unwrap();
+        let store = RunStore::open().unwrap();
+        let run = store
+            .start_plan(
+                repo.to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                plan_published.revision,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let started = store
+            .command(
+                &run.id,
+                "attempt",
+                RunCommand::StartAttempt {
+                    story_id: story_id.clone(),
+                    node_id: "implement".into(),
+                },
+            )
+            .unwrap();
+        let attempt = &started.snapshot.attempts[0];
+        store
+            .command(
+                &run.id,
+                "worktree",
+                RunCommand::AssignWorktree {
+                    story_id: story_id.clone(),
+                    path: worktree
+                        .canonicalize()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                },
+            )
+            .unwrap();
+        store
+            .command(
+                &run.id,
+                "report",
+                RunCommand::ReportAttempt {
+                    attempt_id: attempt.id.clone(),
+                    generation: attempt.generation,
+                    outcome: AttemptOutcome::Completed,
+                },
+            )
+            .unwrap();
+        let mut story = stories.get_story(&story_id).unwrap();
+        for command in [
+            StoryCommand::StartManual,
+            StoryCommand::CheckCriterion(0),
+            StoryCommand::SubmitReview,
+            StoryCommand::Approve,
+        ] {
+            story = stories
+                .transition(&story_id, story.revision, command)
+                .unwrap();
+        }
+        let accepted = store
+            .command(
+                &run.id,
+                "accept",
+                RunCommand::AcceptStory {
+                    story_id: story_id.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Backlog
+        );
+        let checked = store
+            .execute_check(&run.id, &story_id, "status", "check", accepted.sequence)
+            .unwrap();
+        assert!(matches!(
+            checked.event.kind,
+            RunEventKind::CheckRecorded { .. }
+        ));
+        assert!(
+            store
+                .record_integrated_story(&run.id, &story_id, "before-merge", checked.sequence)
+                .is_err()
+        );
+        crate::git_cli::git_cmd(repo)
+            .args(["merge", "--no-ff", "--no-edit", "story"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&worktree)
+            .args(["switch", "-qc", "moved-source-ref"])
+            .run()
+            .unwrap();
+        assert!(
+            store
+                .record_integrated_story(&run.id, &story_id, "wrong-source-ref", checked.sequence)
+                .is_err()
+        );
+        crate::git_cli::git_cmd(&worktree)
+            .args(["switch", "-q", "story"])
+            .run()
+            .unwrap();
+        let integrated = store
+            .record_integrated_story(&run.id, &story_id, "integrate", checked.sequence)
+            .unwrap();
+        assert!(matches!(
+            integrated.event.kind,
+            RunEventKind::StoryIntegrated { .. }
+        ));
+        let receipt = integrated
+            .snapshot
+            .stories
+            .iter()
+            .find(|item| item.story_id == story_id)
+            .unwrap()
+            .integration_receipt
+            .as_ref()
+            .unwrap();
+        assert_eq!(receipt.post_checks.len(), 1);
+        assert_eq!(receipt.post_checks[0].commit, receipt.merge_commit);
+        assert_eq!(
+            store
+                .record_integrated_story(&run.id, &story_id, "integrate", checked.sequence)
+                .unwrap()
+                .sequence,
+            integrated.sequence
+        );
+        assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        let mut verification_snapshot = integrated.snapshot.clone();
+        verification_snapshot.planning_fingerprint = Some("closed".into());
+        assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_ok());
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Ready
+        );
+        drop(store);
+        let store = RunStore::open().unwrap();
+        assert_eq!(store.reconcile_active().unwrap(), 1);
+        assert_eq!(store.snapshot(&run.id).unwrap().status, RunStatus::Paused);
+        assert_eq!(
+            store.replay(&run.id).unwrap(),
+            store.snapshot(&run.id).unwrap()
+        );
+        assert_eq!(
+            store
+                .record_integrated_story(&run.id, &story_id, "integrate", checked.sequence)
+                .unwrap()
+                .sequence,
+            integrated.sequence
+        );
+        crate::git_cli::git_cmd(repo)
+            .args(["switch", "-qc", "moved-ref"])
+            .run()
+            .unwrap();
+        assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
+        assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_err());
+        store.reconcile_active().unwrap();
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Backlog
+        );
+        crate::git_cli::git_cmd(repo)
+            .args(["switch", "-q", "main"])
+            .run()
+            .unwrap();
+        assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        store.reconcile_active().unwrap();
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Ready
+        );
+        std::fs::write(repo.join("later.txt"), "later\n").unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["add", "later.txt"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["commit", "-qm", "later"])
+            .run()
+            .unwrap();
+        assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
+        let current = stories.get_story(&dependent.id).unwrap();
+        assert!(
+            stories
+                .transition(&dependent.id, current.revision, StoryCommand::StartManual)
+                .is_err()
+        );
+        let conflict_worktree = config.path().join("conflict-worktree");
+        crate::git_cli::git_cmd(repo)
+            .args([
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "conflict",
+                conflict_worktree.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(conflict_worktree.join("README.md"), "branch\n").unwrap();
+        crate::git_cli::git_cmd(&conflict_worktree)
+            .args(["add", "README.md"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&conflict_worktree)
+            .args(["commit", "-qm", "branch edit"])
+            .run()
+            .unwrap();
+        std::fs::write(repo.join("README.md"), "canonical\n").unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["add", "README.md"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["commit", "-qm", "canonical edit"])
+            .run()
+            .unwrap();
+        assert!(
+            crate::git_cli::git_cmd(repo)
+                .args(["merge", "--no-ff", "--no-edit", "conflict"])
+                .run()
+                .is_err()
+        );
+        assert!(
+            store
+                .record_integrated_story(
+                    &run.id,
+                    &story_id,
+                    "conflicted",
+                    store.snapshot(&run.id).unwrap().sequence
+                )
+                .is_err()
+        );
+    }
+
     fn fixture() -> (
         tempfile::TempDir,
         tempfile::TempDir,
@@ -674,6 +1228,10 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(prerequisite.status, crate::stories::StoryStatus::Done);
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Backlog
+        );
         let project_path = project
             .path()
             .canonicalize()
@@ -1639,7 +2197,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_plan_requires_closure_accepted_stories_and_fresh_verification() {
+    fn resolve_plan_requires_closure_accepted_stories_and_integration_receipts() {
         let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
         let store = RunStore::open_at(&config.path().join("runs.sqlite3")).expect("run store");
         let project_path = project
@@ -1698,12 +2256,15 @@ mod tests {
         assert!(
             super::store::ready_to_verify(&store.snapshot(&run.id).unwrap(), &[revised]).is_err()
         );
-        store
-            .command(&run.id, "verify", RunCommand::FinalVerificationPassed)
-            .expect("verify");
-        let finished = store
-            .command(&run.id, "complete", RunCommand::Complete)
-            .expect("complete");
-        assert_eq!(finished.snapshot.status, RunStatus::Completed);
+        assert!(
+            store
+                .command(&run.id, "verify", RunCommand::FinalVerificationPassed)
+                .is_err()
+        );
+        assert!(
+            store
+                .command(&run.id, "complete", RunCommand::Complete)
+                .is_err()
+        );
     }
 }

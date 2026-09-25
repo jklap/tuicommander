@@ -7,6 +7,7 @@ import { workflowRunSignals } from "../../stores/workflowRunSignals";
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/modalStack", () => ({ registerModal: vi.fn() }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
 
 const plan = { id: "p1", project: "/repo", title: "Plan A", source: "plans/a.md" };
 const story = {
@@ -28,6 +29,26 @@ beforeEach(() => {
 });
 
 describe("StoriesDialog", () => {
+	it("shows the browser approval limitation instead of an action that cannot succeed", async () => {
+		const environment = globalThis as Record<string, unknown>;
+		const priorShim = environment.__TAURI_SHIM__;
+		environment.__TAURI_SHIM__ = true;
+		try {
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "list_stories") return { type: "stories", value: [{ ...story, status: "review" }] };
+			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+		expect(screen.getByText("Approval requires the desktop app.")).toBeTruthy();
+		} finally {
+			environment.__TAURI_SHIM__ = priorShim;
+		}
+	});
 	it("loads plan and story detail, then starts manual work through the backend", async () => {
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByRole("heading", { name: "Implement API" });

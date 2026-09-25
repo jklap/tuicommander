@@ -212,6 +212,11 @@ mod tests {
         let done = store
             .transition(&story.id, review.revision, StoryCommand::Approve)
             .expect("approve");
+        assert!(
+            store
+                .transition(&story.id, done.revision, StoryCommand::Approve)
+                .is_err()
+        );
         assert_eq!(done.status, StoryStatus::Done);
     }
 
@@ -536,7 +541,7 @@ mod tests {
             .expect("approve A");
         assert_eq!(
             store.get_story(&b.id).expect("B").status,
-            StoryStatus::Ready
+            StoryStatus::Backlog
         );
     }
 
@@ -602,6 +607,53 @@ mod tests {
         assert_eq!(
             history.last().expect("approval").command,
             StoryCommand::Approve
+        );
+    }
+
+    #[test]
+    fn unauthenticated_local_http_transition_is_not_human_approval() {
+        let dir = tempfile::tempdir().expect("config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let started = store
+            .transition_from_local_api(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("local action");
+        assert_eq!(
+            store
+                .transition_history(&story.id)
+                .unwrap()
+                .last()
+                .unwrap()
+                .actor,
+            StoryTransitionActor::LocalApi
+        );
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .unwrap();
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .unwrap();
+        assert!(
+            store
+                .transition_from_local_api(&story.id, review.revision, StoryCommand::Approve)
+                .is_err()
         );
     }
 

@@ -2,6 +2,16 @@ use super::*;
 use std::collections::HashSet;
 
 impl StoryStore {
+    /// Rebuild dependent readiness from durable integration receipts. Safe to
+    /// repeat after a crash between the run event and the story projection.
+    pub fn reconcile_integrated_dependencies(&self, plan_id: &str) -> Result<(), String> {
+        let mut conn = self.connect()?;
+        let tx = immediate(&mut conn)?;
+        reconcile_ready(&tx, plan_id, &self.db_path)?;
+        tx.commit()
+            .map_err(|error| format!("commit dependency release: {error}"))
+    }
+
     pub fn transition_history(&self, story_id: &str) -> Result<Vec<StoryTransition>, String> {
         let conn = self.connect()?;
         read_story(&conn, story_id)?;
@@ -63,7 +73,7 @@ impl StoryStore {
             }
         }
         story.dependencies.push(dependency_id.into());
-        if dependency.status != StoryStatus::Done {
+        if !dependencies_integrated(&tx, &story, &self.db_path)? {
             story.status = StoryStatus::Backlog;
         }
         save_story(&tx, &mut story, expected_revision)?;
@@ -121,11 +131,40 @@ impl StoryStore {
         command: StoryCommand,
         actor_session: Option<&str>,
     ) -> Result<Story, String> {
+        let actor = actor_session.map_or(StoryTransitionActor::Human, |session_id| {
+            StoryTransitionActor::ManagedSession {
+                session_id: session_id.into(),
+            }
+        });
+        self.transition_as(story_id, expected_revision, command, actor)
+    }
+
+    pub(crate) fn transition_from_local_api(
+        &self,
+        story_id: &str,
+        expected_revision: i64,
+        command: StoryCommand,
+    ) -> Result<Story, String> {
+        self.transition_as(
+            story_id,
+            expected_revision,
+            command,
+            StoryTransitionActor::LocalApi,
+        )
+    }
+
+    fn transition_as(
+        &self,
+        story_id: &str,
+        expected_revision: i64,
+        command: StoryCommand,
+        actor: StoryTransitionActor,
+    ) -> Result<Story, String> {
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
-        if let Some(actor) = actor_session {
+        if let StoryTransitionActor::ManagedSession { session_id: actor } = &actor {
             match command {
                 StoryCommand::CheckCriterion(_)
                 | StoryCommand::UncheckCriterion(_)
@@ -141,10 +180,16 @@ impl StoryStore {
                 }
             }
         }
+        if actor == StoryTransitionActor::LocalApi && command == StoryCommand::Approve {
+            return Err("approval requires an authenticated user action".into());
+        }
         match command {
             StoryCommand::StartManual => {
                 if story.status != StoryStatus::Ready {
                     return Err("story must be ready for manual work".into());
+                }
+                if !dependencies_integrated(&tx, &story, &self.db_path)? {
+                    return Err("story dependency lacks a current integration receipt".into());
                 }
                 story.status = StoryStatus::InProgress;
             }
@@ -198,7 +243,7 @@ impl StoryStore {
                 if story.status != StoryStatus::Blocked {
                     return Err("story is not blocked".into());
                 }
-                story.status = if dependencies_done(&tx, &story)? {
+                story.status = if dependencies_integrated(&tx, &story, &self.db_path)? {
                     StoryStatus::Ready
                 } else {
                     StoryStatus::Backlog
@@ -221,13 +266,10 @@ impl StoryStore {
             rusqlite::params![
                 story.id, story.revision,
                 serde_json::to_string(&command).map_err(|e| format!("encode story command: {e}"))?,
-                serde_json::to_string(&actor_session.map_or(StoryTransitionActor::Human, |session_id| StoryTransitionActor::ManagedSession { session_id: session_id.into() }))
+                serde_json::to_string(&actor)
                     .map_err(|e| format!("encode story actor: {e}"))?,
             ],
         ).map_err(|e| format!("record story transition: {e}"))?;
-        if story.status == StoryStatus::Done {
-            promote_ready(&tx, &story.plan_id)?;
-        }
         tx.commit()
             .map_err(|e| format!("commit story transition: {e}"))?;
         Ok(story)
