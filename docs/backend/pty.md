@@ -602,6 +602,8 @@ This closes a real race (`plans/p10k-wizard-hijack-agent-pane-spawn-race.md`): t
 
 **The `tuic-cli` HTTP client's socket timeout for `materialize_pane` must exceed `PANE_READY_TIMEOUT_MS` with real margin.** `ipc.rs`'s default per-request timeout (3s) is shorter than the server's 5s gate bound — without an override, a legitimately slow (not hung) shell startup would make the *client* time out and report failure before the server's own fail-open path had a chance to return `Ok`, turning "slow but working" into an apparent error that didn't exist before this gate. Fixed via `ipc::post_with_timeout`, used by `materialize_pane`'s `IpcBackend` impl with an 8s timeout (5s + 3s margin, matching this codebase's "outer bound strictly larger than every bound inside it" rule — see "Which timing assertions are load-bearing" in `src-tauri/AGENTS.md`).
 
+**Known limitation, deliberately out of scope for this fix:** the readiness gate lives only in `tmux_routes::materialize` — the specific path Claude Code's agent-teams `respawn-pane` uses, and the one implicated in the reported incident. Other spawn-then-immediately-write shapes (e.g. the `ai_terminal_drive_agent` MCP tool's `spawn_session` → `send_input`, and `watcher.rs`'s scheduled-agent spawn path) go through different code and are not covered — they could in principle hit the same p10k-instant-prompt-hijack race under the right timing, just via a different caller. Not fixed here; flagged by code review, confirmed as a real gap, and left for a future decision on whether it's worth closing given it wasn't the reported bug.
+
 ## Child Process Priority
 
 Each spawned shell is given a lower scheduling priority right after spawn
