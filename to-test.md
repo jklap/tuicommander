@@ -42,6 +42,9 @@
 ## Streaming Progress intents (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After restarting an isolated `make dev` instance, stream an `intent:` line in a narrow Codex or Ink terminal. The Progress journal gets the complete text and title once, including an indented hard-wrap row; closing a tab with a title-less open intent preserves one final entry. Check that a token in a done/blocked report is redacted in the journal.
+## MCP bridge config guard (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, verify the dev app still resolves its adjacent `tuic-bridge` and agent MCP entries remain absolute. With a disposable `HOME` under `~/Gits/.tmp/` and `TUIC_APP_INSTANCE=<id>`, launch a test binary without an adjacent bridge; confirm its startup warning and that the disposable agent configs do not change.
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 

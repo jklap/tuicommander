@@ -335,9 +335,12 @@ private key to disk in cleartext.
 
 ### MCP Bridge Auto-Install
 
-On every launch `agent_mcp::ensure_mcp_configs` writes the `tuicommander` bridge
-entry into each supported agent's own MCP config, and repairs the path when the
-sidecar moves. Each target is written in the format its tool reads:
+On launch `agent_mcp::ensure_mcp_configs` writes the `tuicommander` bridge
+entry into each supported agent's own MCP config only when `tuic-bridge` is a
+file beside the running executable. A test binary, temporary copy or worktree
+build without that sidecar leaves every user agent config untouched, even if a
+bridge exists elsewhere on the machine. With a sidecar, the launch pass repairs
+stale paths when the app moves. Each target uses the format its tool reads:
 
 | Agent | Config file | Shape |
 |---|---|---|
@@ -374,11 +377,14 @@ support comes from the optional pi-mcp-adapter extension, which owns
 auto-written entry would configure nothing.
 
 A target that already holds a `tuicommander` entry keeps getting path repairs
-even when presence no longer resolves, so a stale bridge path is never left
-behind. All gates live in `auto_install_allowed`, which only the launch pass
-consults: Settings → Agents installs on demand through `ensure_spec_entry`
-directly, because pressing Install states that the target is there — that is an
-explicit request, not a guess.
+even when presence no longer resolves, provided the launch has a bridge beside
+its executable. If an explicit install cannot locate a bridge, it warns with the
+searched paths and may use the bare `tuic-bridge` name for a new entry only. It
+never replaces an existing entry with that fallback, including a working
+absolute command. All target-presence gates live in `auto_install_allowed`,
+which only the launch pass consults: Settings → Agents installs on demand
+through `ensure_spec_entry` directly, because pressing Install states that the
+target is there — that is an explicit request, not a guess.
 
 **Shared settings files need an explicit install.** Zed, Amp and Gemini keep
 their MCP server list inside the `settings.json` that also holds every other
