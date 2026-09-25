@@ -1,5 +1,8 @@
-use super::model::{NewPlan, NewStory, Plan, PlanState, Story, StoryCommand, StoryStatus};
+use super::model::{
+    NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryRead, StoryStatus,
+};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -223,6 +226,58 @@ impl StoryStore {
     pub fn list_stories(&self, plan_id: &str) -> Result<Vec<Story>, String> {
         self.get_plan(plan_id)?;
         read_plan_stories(&*self.connect()?, plan_id)
+    }
+
+    pub fn plan_view(&self, plan_id: &str) -> Result<PlanView, String> {
+        let stories = self.list_stories(plan_id)?;
+        let by_id: HashMap<&str, &Story> = stories
+            .iter()
+            .map(|story| (story.id.as_str(), story))
+            .collect();
+        let wont_fix_count = stories
+            .iter()
+            .filter(|story| story.status == StoryStatus::WontFix)
+            .count();
+        let state = if stories.is_empty() {
+            PlanState::Draft
+        } else if stories
+            .iter()
+            .all(|story| matches!(story.status, StoryStatus::Done | StoryStatus::WontFix))
+        {
+            PlanState::Done
+        } else {
+            PlanState::Active
+        };
+        let reads = stories
+            .iter()
+            .map(|story| {
+                let mut stack = vec![story.id.as_str()];
+                let mut visited = HashSet::new();
+                let mut abandoned = false;
+                while let Some(id) = stack.pop() {
+                    if !visited.insert(id) {
+                        continue;
+                    }
+                    if let Some(found) = by_id.get(id) {
+                        if found.status == StoryStatus::WontFix {
+                            abandoned = true;
+                            break;
+                        }
+                        stack.extend(found.dependencies.iter().map(String::as_str));
+                    }
+                }
+                StoryRead {
+                    story: story.clone(),
+                    abandoned,
+                }
+            })
+            .collect();
+        Ok(PlanView {
+            stories: reads,
+            state,
+            wont_fix_count,
+            all_cancelled: !stories.is_empty() && wont_fix_count == stories.len(),
+        })
     }
 
     pub fn plan_state(&self, plan_id: &str) -> Result<PlanState, String> {

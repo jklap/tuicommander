@@ -23,6 +23,7 @@ const story = {
 	status: "ready",
 	revision: 1,
 	claimSession: null,
+	abandoned: false,
 };
 
 beforeEach(() => {
@@ -31,8 +32,8 @@ beforeEach(() => {
 		if (_command === "story_capabilities") return true;
 		const action = (args as { action: { action: string } }).action;
 		if (action.action === "list_plans") return { type: "plans", value: [plan] };
-		if (action.action === "list_stories") return { type: "stories", value: [story] };
-		if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+		if (action.action === "plan_view")
+			return { type: "plan_view", value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false } };
 		if (action.action === "transition")
 			return { type: "story", value: { ...story, status: "in_progress", revision: 2 } };
 		throw new Error(`unexpected action ${action.action}`);
@@ -111,8 +112,8 @@ describe("StoriesDialog", () => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string; input?: unknown } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
-			if (action.action === "list_stories") return { type: "stories", value: rows };
+			if (action.action === "plan_view")
+				return { type: "plan_view", value: { stories: rows, state: "active", wontFixCount: 0, allCancelled: false } };
 			if (action.action === "create_story") {
 				rows = [story, created];
 				return { type: "story", value: created };
@@ -153,8 +154,16 @@ describe("StoriesDialog", () => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
-			if (action.action === "list_stories") return { type: "stories", value: [{ ...story, status: "in_progress" }] };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: {
+						stories: [{ ...story, status: "in_progress" }],
+						state: "active",
+						wontFixCount: 0,
+						allCancelled: false,
+					},
+				};
 			if (action.action === "transition") return { type: "story", value: { ...story, status: "in_progress" } };
 			throw new Error(`unexpected action ${action.action}`);
 		});
@@ -180,8 +189,11 @@ describe("StoriesDialog", () => {
 				created = true;
 				return { type: "plan", value: plan };
 			}
-			if (action.action === "list_stories") return { type: "stories", value: [story, dependent] };
-			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story, dependent], state: "active", wontFixCount: 0, allCancelled: false },
+				};
 			if (action.action === "add_dependency") return { type: "story", value: { ...story, dependencies: ["s2"] } };
 			throw new Error(`unexpected action ${action.action}`);
 		});
@@ -213,8 +225,11 @@ describe("StoriesDialog", () => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "list_stories") return { type: "stories", value: [story, second, third] };
-			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story, second, third], state: "active", wontFixCount: 0, allCancelled: false },
+				};
 			throw new Error(`unexpected action ${action.action}`);
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
@@ -235,15 +250,37 @@ describe("StoriesDialog", () => {
 	});
 
 	it("shows cancelled dependencies and waives only the direct cancelled edge", async () => {
-		const cancelled = { ...story, id: "s2", title: "Cancelled API", status: "wontfix" };
-		const intermediate = { ...story, id: "s3", title: "Intermediate API", status: "backlog", dependencies: ["s2"] };
-		const dependent = { ...story, id: "s4", title: "Ship API", status: "backlog", dependencies: ["s2", "s3"] };
+		const cancelled = { ...story, id: "s2", title: "Cancelled API", status: "wontfix", abandoned: true };
+		const intermediate = {
+			...story,
+			id: "s3",
+			title: "Intermediate API",
+			status: "backlog",
+			dependencies: ["s2"],
+			abandoned: true,
+		};
+		const dependent = {
+			...story,
+			id: "s4",
+			title: "Ship API",
+			status: "backlog",
+			dependencies: ["s2", "s3"],
+			abandoned: true,
+		};
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "list_stories") return { type: "stories", value: [cancelled, intermediate, dependent] };
-			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: {
+						stories: [cancelled, intermediate, dependent],
+						state: "active",
+						wontFixCount: 1,
+						allCancelled: false,
+					},
+				};
 			if (action.action === "remove_dependency") return { type: "story", value: dependent };
 			throw new Error(`unexpected action ${action.action}`);
 		});
@@ -262,5 +299,18 @@ describe("StoriesDialog", () => {
 			}),
 		);
 		expect(screen.queryByRole("button", { name: /Remove.*Intermediate API/ })).toBeNull();
+	});
+
+	it("renders the service cancellation summary without recounting story statuses", async () => {
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "plan_view")
+				return { type: "plan_view", value: { stories: [story], state: "done", wontFixCount: 1, allCancelled: true } };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByText("All cancelled");
 	});
 });

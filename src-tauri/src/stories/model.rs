@@ -88,6 +88,23 @@ pub struct Story {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryRead {
+    #[serde(flatten)]
+    pub story: Story,
+    pub abandoned: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanView {
+    pub stories: Vec<StoryRead>,
+    pub state: PlanState,
+    pub wont_fix_count: usize,
+    pub all_cancelled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
     StartManual,

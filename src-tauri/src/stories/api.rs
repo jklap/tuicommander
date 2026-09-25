@@ -1,4 +1,4 @@
-use super::{NewPlan, NewStory, Plan, PlanState, Story, StoryCommand, StoryStore};
+use super::{NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryStore};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -13,6 +13,9 @@ pub enum StoryAction {
         plan_id: String,
     },
     PlanState {
+        plan_id: String,
+    },
+    PlanView {
         plan_id: String,
     },
     CreateStory {
@@ -51,6 +54,7 @@ pub enum StoryReply {
     Plan(Plan),
     Plans(Vec<Plan>),
     PlanState(PlanState),
+    PlanView(PlanView),
     Story(Story),
     Stories(Vec<Story>),
 }
@@ -93,6 +97,10 @@ pub fn story_action(
         StoryAction::PlanState { plan_id } => {
             plan_in_project(&plan_id)?;
             Ok(StoryReply::PlanState(store.plan_state(&plan_id)?))
+        }
+        StoryAction::PlanView { plan_id } => {
+            plan_in_project(&plan_id)?;
+            Ok(StoryReply::PlanView(store.plan_view(&plan_id)?))
         }
         StoryAction::CreateStory { input } => {
             plan_in_project(&input.plan_id)?;
