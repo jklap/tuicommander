@@ -5536,6 +5536,49 @@ branch refs/heads/feat
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn submodule_remote_fallback_gives_up_at_its_deadline() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        fs::write(
+            repo.join(".gitmodules"),
+            "[submodule \"hanging\"]\n\tpath = modules/hanging\n\turl = ext::sleep 12\n",
+        )
+        .unwrap();
+        git_cmd(&repo)
+            .args([
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000,1111111111111111111111111111111111111111,modules/hanging",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", ".gitmodules"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "hanging submodule"])
+            .run()
+            .unwrap();
+        let worktree = add_worktree(&repo, "submodule-timeout");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let source = repo.clone();
+        std::thread::spawn(move || {
+            // Git's submodule child refuses ext even when the repository config
+            // allows it. Restrict the opt-in to this test process/thread window.
+            unsafe { std::env::set_var("GIT_ALLOW_PROTOCOL", "ext") };
+            let warnings = initialize_submodules(&source, &worktree);
+            unsafe { std::env::remove_var("GIT_ALLOW_PROTOCOL") };
+            let _ = tx.send(warnings);
+        });
+        let warnings = rx
+            .recv_timeout(FETCH_TIMEOUT + Duration::from_secs(30))
+            .expect("submodule fallback must return within its deadline");
+        assert!(
+            warnings.iter().any(|warning| warning.contains("timed out")),
+            "{warnings:?}"
+        );
+    }
+
     #[test]
     fn pending_warm_instructions_do_not_claim_the_workspace_is_cold() {
         let (_temp, repo, workspaces) = workspace_fixture();
@@ -5566,13 +5609,11 @@ branch refs/heads/feat
             create_branch: true,
         };
         let workspace = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
-        begin_warm(&workspace.path);
         let response = ipc_worktree_response(&workspace, &repo.to_string_lossy());
         assert_eq!(
             response["instructions"]["warm_artifacts"]["status"],
             "pending"
         );
-        clear_warm(&workspace.path);
     }
 
     #[test]
@@ -5975,6 +6016,37 @@ branch refs/heads/feat
         assert_eq!(warm_status(&worktree)["status"], "pending");
         finish_warm(&worktree, new_token, serde_json::json!({"status": "done"}));
         clear_warm(&worktree);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removal_clears_pending_warm_even_when_leftover_path_cleanup_fails() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "warm-cleanup-failure");
+        let token = begin_warm(&path);
+        assert_eq!(warm_status(&path)["status"], "pending");
+
+        // Git has already unregistered the checkout. A protected directory at
+        // the old path makes recursive cleanup fail, but the pending state
+        // must still be removed before a later checkout can inherit it.
+        git_cmd(&repo)
+            .args(["worktree", "remove", &path.to_string_lossy()])
+            .run()
+            .unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("protected"), "x").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o500)).unwrap();
+        let worktree = WorktreeInfo {
+            name: "warm-cleanup-failure".into(),
+            path: path.clone(),
+            branch: Some("warm-cleanup-failure".into()),
+            base_repo: repo,
+        };
+        let error = remove_worktree_internal(&worktree, true).unwrap_err();
+        assert!(!warm_token_is_current(&path, token), "{error}");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(&path).unwrap();
     }
 
     /// Dirtiness is orthogonal to the commit verdict, and that is exactly why
