@@ -51,6 +51,11 @@ interface GitHubDiagnostics {
 	repos_monitored: number;
 }
 
+interface CircleCiTokenStatus {
+	configured: boolean;
+	source: "vault" | "env" | "cliconfig" | "none";
+}
+
 type AccountKind = "github_com_oauth" | "github_com_env" | "github_com_gh_cli" | "ghe_pat";
 
 interface GitHubHost {
@@ -97,6 +102,8 @@ export const GitHubTab: Component = () => {
 	const [copied, setCopied] = createSignal(false);
 	const [avatarBroken, setAvatarBroken] = createSignal(false);
 	const [diagnostics, setDiagnostics] = createSignal<GitHubDiagnostics | null>(null);
+	const [circleCiStatus, setCircleCiStatus] = createSignal<CircleCiTokenStatus | null>(null);
+	const [circleCiToken, setCircleCiToken] = createSignal("");
 
 	// Additional accounts (beyond the ambient github.com default): extra
 	// github.com accounts added via device-flow, plus GitHub Enterprise (PAT).
@@ -130,7 +137,16 @@ export const GitHubTab: Component = () => {
 		fetchDiagnostics();
 		fetchAccounts();
 		fetchResolutions();
+		void rpc<CircleCiTokenStatus>("circleci_token_status")
+			.then(setCircleCiStatus)
+			.catch(() => {});
 	});
+
+	async function saveCircleCiToken() {
+		await rpc("circleci_set_token", { token: circleCiToken() });
+		setCircleCiToken("");
+		setCircleCiStatus(await rpc<CircleCiTokenStatus>("circleci_token_status"));
+	}
 
 	async function fetchAccounts() {
 		try {
@@ -893,6 +909,25 @@ export const GitHubTab: Component = () => {
 					</div>
 				</Show>
 			</Show>
+
+			<h3>CircleCI</h3>
+			<p class={s.hint}>Use a read-only CircleCI token. Stored tokens are never shown again.</p>
+			<div class={s.group}>
+				<input
+					type="password"
+					placeholder="CircleCI read-only token"
+					value={circleCiToken()}
+					onInput={(e) => setCircleCiToken(e.currentTarget.value)}
+				/>
+				<div class={g.actions}>
+					<button class={cx(g.btn, g.btnPrimary)} onClick={saveCircleCiToken}>
+						Save token
+					</button>
+				</div>
+				<div class={g.tokenSource}>
+					{circleCiStatus()?.configured ? `Configured (${circleCiStatus()?.source})` : "Not configured"}
+				</div>
+			</div>
 
 			{/* Repository → account bindings. Every repo resolves to one account;
 			    ambiguous repos (multiple GitHub remotes/accounts) are chosen here.
