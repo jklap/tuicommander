@@ -76,8 +76,7 @@ Run Stryker on the changed source files and their relevant Vitest files. Keep bo
 lists narrow; a mutation run executes the selected tests for each mutant.
 
 ```bash
-~/.claude/skills/adversarial-tdd/scripts/gate-lock.sh run <owner> -- \
-  node scripts/ts-mutants.mjs \
+node scripts/ts-mutants.mjs \
   'src/utils/pathUtils.ts:65-65' -- \
   'src/__tests__/utils/pathUtils.test.ts'
 ```
