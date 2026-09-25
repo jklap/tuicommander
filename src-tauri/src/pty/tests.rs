@@ -19560,6 +19560,78 @@ fn tuic_osc_bgtasks_empty_payload_clears_declaration() {
 }
 
 #[test]
+#[serial_test::serial]
+fn tuic_osc_userwrap_recognized_agent_opens_a_pending_prompt() {
+    // End-to-end regression for the zsh deferred integration's `ask` branch
+    // (shell_integration.rs) — a real `\e]7770;userwrap=claude\a` byte
+    // sequence replayed through `ChunkProcessor::process_chunk` must reach
+    // `agent_wrap_prompt::request` and open exactly one pending prompt.
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-userwrap-claude";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    assert!(state.agent_wrap_pending.is_empty());
+    processor.process_chunk(
+        "\x1b]7770;userwrap=claude\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert!(
+        state.agent_wrap_pending.contains_key("claude"),
+        "a recognized userwrap payload must open a pending prompt for that agent"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn tuic_osc_userwrap_unrecognized_payload_is_ignored() {
+    // Terminal output is untrusted — any process can print an OSC sequence.
+    // An agent name outside the claude/codex/goose allow-list must be
+    // silently ignored: no prompt, no panic.
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-userwrap-unrecognized";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk(
+        "\x1b]7770;userwrap=rm -rf ~\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert!(
+        state.agent_wrap_pending.is_empty(),
+        "an unrecognized userwrap payload must not open a prompt"
+    );
+}
+
+#[test]
 fn declared_background_work_self_expires_on_a_new_turn() {
     // Mirrors `stale_background_clear_cannot_emit_after_new_turn`'s shape
     // for the OS-heuristic `background_work` field: a declaration made at

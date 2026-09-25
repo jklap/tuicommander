@@ -780,6 +780,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Context menu integration:** Right-click terminal > Agents submenu with per-agent run configurations
 - **Busy detection:** Agents submenu disabled when a process is already running in the active terminal
 - **Environment Flags** — Per-agent environment variables injected into every new terminal session. Configure in Settings > Agents > expand an agent > Environment Flags. Useful for setting feature flags without manual export. (Note: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is not one of these — it's injected unconditionally by TUICommander itself and isn't user-togglable here.)
+- **Wrap my own claude/codex/goose function** — zsh only. If your shell already defines its own `claude`/`codex`/`goose` function (e.g. to pick a model), TUIC's launch-flag injection above is skipped for that shell, silently. The first time this is detected, a dialog asks whether to wrap your function (calling it, then appending the flag) or leave it alone, explaining the trade-off (wrapping only works if your function forwards its arguments, and a flag your function already sets would silently lose to TUIC's). Configure per agent in Settings > Agents > expand an agent > "If your shell already defines its own ⟨agent⟩ function" (three states: Ask when detected / Wrap my function / Leave my function alone). Applies to new terminals only.
 
 ### 6.10 Agent Teams
 - **Purpose:** Enables Claude Code's Agent Teams feature to use TUIC tabs instead of tmux panes

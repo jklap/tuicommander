@@ -49,7 +49,10 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	"smart-prompts": { dynamic: 3, orphans: 11 },
 	selection: { dynamic: 2, orphans: 3 },
 	providers: { dynamic: 2, orphans: 0 },
-	agents: { dynamic: 8, orphans: 3 },
+	// dynamic: 9 — was 8; +1 for the new "If your shell already defines its
+	// own <agent> function" wrap-user-function control, same per-agent-card
+	// runtime label shape as the other 8 (native status signals, etc.).
+	agents: { dynamic: 9, orphans: 3 },
 	"ai-chat": { dynamic: 2, orphans: 0 },
 	streamdock: { dynamic: 1, orphans: 0 },
 };

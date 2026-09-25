@@ -37,6 +37,8 @@ pub(crate) fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::McpToast { .. } => "mcp-toast",
         AppEvent::McpConfirm { .. } => "mcp-confirm",
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
+        AppEvent::AgentWrapPrompt { .. } => "agent-wrap-prompt",
+        AppEvent::AgentWrapPromptResolved { .. } => "agent-wrap-prompt-resolved",
         AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::RepositoriesChanged => "repositories-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
@@ -251,6 +253,23 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
             confirmed,
         } => {
             serde_json::json!({ "request_id": request_id, "confirmed": confirmed })
+        }
+        AppEvent::AgentWrapPrompt {
+            request_id,
+            agent_type,
+        } => {
+            serde_json::json!({ "request_id": request_id, "agent_type": agent_type })
+        }
+        AppEvent::AgentWrapPromptResolved {
+            request_id,
+            agent_type,
+            decision,
+        } => {
+            serde_json::json!({
+                "request_id": request_id,
+                "agent_type": agent_type,
+                "decision": decision,
+            })
         }
         // Forwarded whole: the notice IS the payload, in the same camelCase the
         // `/acp` routes use, so a client needs no per-transport translation.

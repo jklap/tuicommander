@@ -678,6 +678,7 @@ async fn inject_localhost_connect_info(
 const API_PREFIXES: &[&str] = &[
     "acp",
     "agent",
+    "agent-wrap-prompt",
     "agents",
     "ai",
     "api",
@@ -1294,6 +1295,32 @@ async fn mcp_confirm_response_http(
     Json(serde_json::json!({ "ok": true }))
 }
 
+/// Body of `POST /agent-wrap-prompt/response`.
+#[derive(serde::Deserialize)]
+struct AgentWrapPromptResponseBody {
+    request_id: String,
+    agent_type: String,
+    decision: Option<bool>,
+}
+
+async fn agent_wrap_prompt_response_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AgentWrapPromptResponseBody>,
+) -> impl IntoResponse {
+    match crate::agent_wrap_prompt::resolve(
+        &state,
+        &body.request_id,
+        &body.agent_type,
+        body.decision,
+    ) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ),
+    }
+}
+
 /// Resolve a pending MCP confirmation and tell every client to dismiss it.
 ///
 /// Shared by the Tauri command and the HTTP route so the two transports cannot
@@ -1769,6 +1796,17 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/agents/{agent}/native-status-signals",
             get(config_routes::get_agent_native_status_signals)
                 .put(config_routes::put_agent_native_status_signals),
+        )
+        .route(
+            "/config/agents/{agent}/wrap-user-function",
+            get(config_routes::get_agent_wrap_user_function)
+                .put(config_routes::put_agent_wrap_user_function),
+        )
+        // Answer a pending "wrap my shell function?" prompt (the browser/PWA
+        // half of the desktop `agent_wrap_prompt_response` command).
+        .route(
+            "/agent-wrap-prompt/response",
+            post(agent_wrap_prompt_response_http),
         )
         .route(
             "/config/provider-registry",

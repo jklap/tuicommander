@@ -389,6 +389,30 @@ pub enum AppEvent {
     /// request must dismiss it; `confirmed` is the answer that won.
     #[serde(rename = "mcp-confirm-resolved")]
     McpConfirmResolved { request_id: String, confirmed: bool },
+    /// A zsh shell detected the user already has their own
+    /// `claude`/`codex`/`goose` function and the decision is still undecided
+    /// (`AgentSettings::wrap_user_function` is `None`) — see
+    /// `agent_wrap_prompt::request`. Deliberately NOT built on
+    /// `McpConfirm`/`McpConfirmResolved`'s oneshot/timeout shape: that
+    /// mechanism collapses "explicit No" and "dismissed without answering"
+    /// into the same `bool`, which is exactly the distinction this feature
+    /// needs to keep. Broadcast to every client — the first answer wins,
+    /// same reasoning as `McpConfirm`.
+    #[serde(rename = "agent-wrap-prompt")]
+    AgentWrapPrompt {
+        request_id: String,
+        agent_type: String,
+    },
+    /// The prompt was answered (persisting `Some(decision)`) or dismissed
+    /// (`decision: None`, snoozed for this app run only — see
+    /// `AppState::agent_wrap_snoozed`). Clients showing that agent's prompt
+    /// must dismiss it.
+    #[serde(rename = "agent-wrap-prompt-resolved")]
+    AgentWrapPromptResolved {
+        request_id: String,
+        agent_type: String,
+        decision: Option<bool>,
+    },
     /// Something happened on an ACP connection that a client may want to look at.
     ///
     /// Only the wake signal rides this bus. The ordered frames of a turn stay on
@@ -2494,6 +2518,17 @@ pub struct AppState {
     /// able to unblock an agent that a native desktop dialog would have pinned to
     /// whoever is sitting at the machine.
     pub(crate) confirm_responses: DashMap<String, tokio::sync::oneshot::Sender<bool>>,
+    /// One in-flight "wrap my shell function?" prompt per agent type (agent
+    /// type → request_id) — deliberately app-wide, not per-session: a
+    /// workspace with many tabs, each detecting the same undecided
+    /// `claude`/`codex`/`goose` wrapper, must open the dialog once, not once
+    /// per tab. See `agent_wrap_prompt::request`.
+    pub(crate) agent_wrap_pending: DashMap<String, String>,
+    /// Agent types whose "wrap my shell function?" prompt was dismissed
+    /// without an explicit answer this app run. In-memory only, by design —
+    /// this is the confirmed dismiss semantics (snooze for this run,
+    /// re-prompt on restart if still undecided), never persisted to disk.
+    pub(crate) agent_wrap_snoozed: DashSet<String>,
     /// App-wide process-tree snapshot shared by agent lifecycle polling.
     pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
     /// Repos with active terminals — used to throttle watcher/polling for cold repos.
@@ -3680,6 +3715,8 @@ impl AppState {
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             confirm_responses: DashMap::new(),
+            agent_wrap_pending: DashMap::new(),
+            agent_wrap_snoozed: DashSet::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }
@@ -5278,6 +5315,8 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::McpConfirm { .. }
             | AppEvent::McpConfirmResolved { .. }
+            | AppEvent::AgentWrapPrompt { .. }
+            | AppEvent::AgentWrapPromptResolved { .. }
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
             | AppEvent::WorktreeCreated { .. }

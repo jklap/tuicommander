@@ -7466,6 +7466,20 @@ impl ChunkProcessor {
                                     .set_declared_background_work(running, turn_epoch);
                             }
                         }
+                        "userwrap" => {
+                            // From the zsh deferred integration's `ask` branch
+                            // (see `shell_integration.rs`'s module doc comment)
+                            // — the shell detected the user already has their
+                            // own `claude`/`codex`/`goose` function and the
+                            // setting is still undecided. Terminal output is
+                            // untrusted (any program can print an OSC
+                            // sequence), so validate the payload against a
+                            // known agent-type allow-list rather than trusting
+                            // it — same defensive posture as `bgtasks` above.
+                            if matches!(payload.as_str(), "claude" | "codex" | "goose") {
+                                crate::agent_wrap_prompt::request(state, &payload);
+                            }
+                        }
                         // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
                         // metadata `tuic-hook` extracted natively from a Claude Code
                         // hook's stdin JSON (SessionStart/Pre/PostToolUse/

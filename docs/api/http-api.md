@@ -1375,6 +1375,8 @@ follow-up): `set_ansi_colors` (PTY ring-buffer state), the `mdkb_*` daemon comma
 
 `GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer.
 
+`GET /config/agents/{agent}/wrap-user-function` returns `{ "value": boolean | null }` — `null` means "ask when detected", for claude/codex/goose (see AI Agents → Native Hook Instrumentation). `PUT` accepts the same tri-state `value` field and changes behavior for new zsh shells only. `POST /agent-wrap-prompt/response` (body `{ "request_id": string, "agent_type": string, "decision": boolean | null }`) answers a pending prompt raised over SSE as `agent-wrap-prompt` — `decision: null` dismisses without persisting a choice (asked again next app run); the resolution broadcasts as `agent-wrap-prompt-resolved` so every client dismisses the dialog. Deliberately not built on `/mcp/confirm-response`'s shape, which cannot distinguish a dismiss from an explicit "No".
+
 ### Provider keyring + slot/ollama checks (story 072)
 
 Browser/PWA parity for provider API-key storage (the OS keyring is proxied through

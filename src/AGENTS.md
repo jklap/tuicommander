@@ -49,6 +49,28 @@ Any panel with this "reclaim focus on blur" pattern needs the same
 `document.activeElement !== document.body` / `anyModalOpen()` guard, not a
 z-index fix — the two panels were never actually z-index-conflicting.
 
+**A component-local key handler (not routed through `modalStack`'s own
+Escape listener) breaks the instant more than one instance of that component
+is open at once.** `ConfirmDialog.tsx`'s Enter-to-confirm handler used to be
+a bare `document.addEventListener("keydown", ...)` added by every mounted
+instance, with no notion of which one is "on top." Escape already worked
+correctly because it's routed centrally through `modalStack`'s own listener,
+which only ever invokes the top-most registered `close`; Enter had no
+equivalent because each `ConfirmDialog` wired it itself, assuming (correctly,
+for every existing caller until this one) that at most one instance would
+ever be visible at a time. `AgentWrapPromptHost` broke that assumption on
+purpose — it renders one `ConfirmDialog` per pending agent
+(claude/codex/goose can each have an independent prompt in flight), so with
+two open, a single Enter press fired both dialogs' default action at once.
+Fixed by adding `isTopModal(id)` to `modalStack.ts` and having
+`ConfirmDialog` call `pushModal`/`popModal` directly (instead of the
+`registerModal` convenience wrapper) so it can check `isTopModal` before
+acting on Enter, while Escape stays exactly as it was. Any future
+component-local key handler that isn't already routed through `modalStack`
+needs the same check the moment more than one instance of that component can
+be mounted simultaneously — don't assume "this dialog is always alone"
+without checking every call site.
+
 
 ## Panel Refresh
 

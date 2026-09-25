@@ -393,6 +393,15 @@ export interface AgentSettingsConfig {
 	prefer_tuic_spawning?: boolean;
 	/** Launch-scoped native status signals. Undefined means enabled. */
 	native_status_signals?: boolean;
+	/**
+	 * zsh only. What to do when the user's shell already defines its own
+	 * `claude`/`codex`/`goose` function, which otherwise silently skips
+	 * TUIC's launch-flag injection for that agent. `null`/undefined = ask
+	 * when detected; `true` = wrap the user's function and append TUIC's
+	 * launch flag; `false` = leave the user's function alone, never ask
+	 * again.
+	 */
+	wrap_user_function?: boolean | null;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */

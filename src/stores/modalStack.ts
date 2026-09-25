@@ -63,6 +63,17 @@ export function anyModalOpen(): boolean {
 }
 
 /**
+ * True when `id` (from `pushModal`) is the top-most open modal. For a key
+ * handler a component wires itself (e.g. Enter-to-confirm) rather than
+ * routing through this module's own Escape listener — when more than one
+ * such modal can be open at once, each instance's handler must check this
+ * before acting, or a single keypress fires all of them at once.
+ */
+export function isTopModal(id: number): boolean {
+	return stack.length > 0 && stack[stack.length - 1].id === id;
+}
+
+/**
  * Solid hook: register `close` as the current component's modal for as long as it
  * is mounted. Call once in a modal component's setup with its close/dismiss action.
  * Escape (via the global capture listener) will invoke the top-most open modal's

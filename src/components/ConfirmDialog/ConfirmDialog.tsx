@@ -1,5 +1,5 @@
 import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { registerModal } from "../../stores/modalStack";
+import { isTopModal, popModal, pushModal } from "../../stores/modalStack";
 import d from "../shared/dialog.module.css";
 
 export interface ConfirmDialogProps {
@@ -51,12 +51,18 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 	createEffect(() => {
 		if (!props.visible) return;
 
-		// Escape-to-close is handled centrally (stores/modalStack): registering routes
-		// Escape to props.onClose AND stops it reaching the terminal underneath.
-		registerModal(props.onClose);
+		// Escape-to-close is handled centrally (stores/modalStack): pushing here
+		// routes Escape to props.onClose AND stops it reaching the terminal
+		// underneath. Keep the id so the Enter handler below can check whether
+		// THIS instance is the top-most modal — more than one ConfirmDialog can
+		// be visible at once (e.g. AgentWrapPromptHost, one per pending agent),
+		// and without this check a single Enter press would fire every open
+		// instance's default action simultaneously.
+		const modalId = pushModal(props.onClose);
+		onCleanup(() => popModal(modalId));
 
 		const handleKeydown = (e: KeyboardEvent) => {
-			if (e.key === "Enter") {
+			if (e.key === "Enter" && isTopModal(modalId)) {
 				e.preventDefault();
 				// Enter activates the configured default button. Destructive dialogs
 				// point it at Cancel so an accidental Enter takes the safe path.
