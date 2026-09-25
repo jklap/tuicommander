@@ -2,7 +2,7 @@ use super::{
     DictationState, audio, browser, continuous, corrections, echo, model, permission, speaker,
     speech, streaming, transcribe,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -2313,6 +2313,10 @@ pub struct DictationConfig {
     /// How strongly a reply is levelled within itself: 0 is off, 1 is 4:1.
     #[serde(default = "default_speech_levelling")]
     pub speech_levelling: f32,
+    /// Set only on a read response when malformed fields were replaced by
+    /// defaults. It is cleared before persistence.
+    #[serde(default)]
+    pub recovered_from_corruption: bool,
 }
 
 fn default_model() -> String {
@@ -2405,8 +2409,142 @@ impl Default for DictationConfig {
             speech_voice: String::new(),
             speech_volume_db: default_speech_volume_db(),
             speech_levelling: default_speech_levelling(),
+            recovered_from_corruption: false,
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn partial_dictation_config_keeps_valid_fields() {
+    let loaded = dictation_config_from_value(serde_json::json!({
+        "hotkey": "F8",
+        "language": "it",
+        "speech_volume_db": "loud"
+    }));
+
+    assert_eq!(loaded.hotkey, "F8");
+    assert_eq!(loaded.language, "it");
+    assert_eq!(loaded.speech_volume_db, default_speech_volume_db());
+    assert!(loaded.recovered_from_corruption);
+}
+
+fn recovered_field<T: DeserializeOwned>(
+    object: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    default: T,
+    recovered: &mut bool,
+) -> T {
+    match object.get(name) {
+        None => default,
+        Some(value) => serde_json::from_value(value.clone()).unwrap_or_else(|_| {
+            *recovered = true;
+            default
+        }),
+    }
+}
+
+fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
+    let serde_json::Value::Object(object) = value else {
+        tracing::warn!(
+            source = "dictation",
+            "Dictation config is not a JSON object; using defaults"
+        );
+        return DictationConfig {
+            recovered_from_corruption: true,
+            ..Default::default()
+        };
+    };
+    let defaults = DictationConfig::default();
+    let mut recovered = false;
+    let config = DictationConfig {
+        enabled: recovered_field(&object, "enabled", defaults.enabled, &mut recovered),
+        hotkey: recovered_field(&object, "hotkey", defaults.hotkey, &mut recovered),
+        language: recovered_field(&object, "language", defaults.language, &mut recovered),
+        model: recovered_field(&object, "model", defaults.model, &mut recovered),
+        device: recovered_field(&object, "device", defaults.device, &mut recovered),
+        long_press_ms: recovered_field(
+            &object,
+            "long_press_ms",
+            defaults.long_press_ms,
+            &mut recovered,
+        ),
+        auto_send: recovered_field(&object, "auto_send", defaults.auto_send, &mut recovered),
+        rms_threshold: recovered_field(
+            &object,
+            "rms_threshold",
+            defaults.rms_threshold,
+            &mut recovered,
+        ),
+        no_speech_threshold: recovered_field(
+            &object,
+            "no_speech_threshold",
+            defaults.no_speech_threshold,
+            &mut recovered,
+        ),
+        hands_free_hold_back_ms: recovered_field(
+            &object,
+            "hands_free_hold_back_ms",
+            defaults.hands_free_hold_back_ms,
+            &mut recovered,
+        ),
+        hands_free_activation_phrase: recovered_field(
+            &object,
+            "hands_free_activation_phrase",
+            defaults.hands_free_activation_phrase,
+            &mut recovered,
+        ),
+        hands_free_notify_model: recovered_field(
+            &object,
+            "hands_free_notify_model",
+            defaults.hands_free_notify_model,
+            &mut recovered,
+        ),
+        hands_free_start_notice: recovered_field(
+            &object,
+            "hands_free_start_notice",
+            defaults.hands_free_start_notice,
+            &mut recovered,
+        ),
+        hands_free_earcons: recovered_field(
+            &object,
+            "hands_free_earcons",
+            defaults.hands_free_earcons,
+            &mut recovered,
+        ),
+        speech_command: recovered_field(
+            &object,
+            "speech_command",
+            defaults.speech_command,
+            &mut recovered,
+        ),
+        speech_voice: recovered_field(
+            &object,
+            "speech_voice",
+            defaults.speech_voice,
+            &mut recovered,
+        ),
+        speech_volume_db: recovered_field(
+            &object,
+            "speech_volume_db",
+            defaults.speech_volume_db,
+            &mut recovered,
+        ),
+        speech_levelling: recovered_field(
+            &object,
+            "speech_levelling",
+            defaults.speech_levelling,
+            &mut recovered,
+        ),
+        recovered_from_corruption: recovered,
+    };
+    if recovered {
+        tracing::warn!(
+            source = "dictation",
+            "Recovered valid dictation settings from malformed fields"
+        );
+    }
+    config
 }
 
 const DICTATION_CONFIG_FILE: &str = "dictation-config.json";
@@ -2420,7 +2558,30 @@ pub fn get_hands_free_default_notice() -> String {
 
 #[tauri::command]
 pub fn get_dictation_config() -> DictationConfig {
-    crate::config::load_json_config(DICTATION_CONFIG_FILE)
+    let path = crate::config::config_dir().join(DICTATION_CONFIG_FILE);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return DictationConfig::default();
+        }
+        Err(error) => {
+            tracing::warn!(source = "dictation", path = %path.display(), "Could not read dictation config: {error}");
+            return DictationConfig {
+                recovered_from_corruption: true,
+                ..Default::default()
+            };
+        }
+    };
+    match serde_json::from_str(content.as_str()) {
+        Ok(value) => dictation_config_from_value(value),
+        Err(error) => {
+            tracing::warn!(source = "dictation", path = %path.display(), "Could not parse dictation config: {error}");
+            DictationConfig {
+                recovered_from_corruption: true,
+                ..Default::default()
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -2438,7 +2599,7 @@ pub fn set_dictation_config(
 /// passes it so a language change takes effect on the voice that is speaking
 /// right now, rather than on the one after it.
 pub(crate) fn save_dictation_config(
-    config: DictationConfig,
+    mut config: DictationConfig,
     dictation: Option<&DictationState>,
 ) -> Result<(), String> {
     // DEFERRED (2026-09-21) — switching the input device while hands-free is
@@ -2448,6 +2609,7 @@ pub(crate) fn save_dictation_config(
     // which is a change to `arm_hands_free_with` rather than to this function.
     // Until then the mode keeps capturing from the device it armed with.
     let previous = get_dictation_config();
+    config.recovered_from_corruption = false;
     crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)?;
     // The configured model is part of the cached status snapshot.
     invalidate_model_snapshot();

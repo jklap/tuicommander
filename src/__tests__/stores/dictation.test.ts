@@ -25,6 +25,11 @@ vi.mock("../../utils/earcon", () => ({
 	primeEarcons: () => primeEarcons(),
 }));
 
+const addToast = vi.fn();
+vi.mock("../../stores/toasts", () => ({
+	toastsStore: { add: addToast },
+}));
+
 /**
  * Load the store the way a browser tab loads it: no Tauri internals, so
  * `src/invoke.ts` routes every command over HTTP.
@@ -110,6 +115,7 @@ describe("dictationStore", () => {
 		stopBrowserVoice.mockClear();
 		playEarcon.mockClear();
 		primeEarcons.mockClear();
+		addToast.mockClear();
 		// `get_dictation_config` answers with a config, never with nothing:
 		// `saveConfig` reads fields off it directly to hold the load-modify-save
 		// rule, so a bare `undefined` here would be a shape Rust cannot produce
@@ -205,6 +211,26 @@ describe("dictationStore", () => {
 			await testInScopeAsync(async () => {
 				await store.refreshConfig();
 				expect(store.state.selectedDevice).toBeNull();
+			});
+		});
+
+		it("warns when the backend recovered valid settings from corruption", async () => {
+			mockInvoke.mockResolvedValueOnce({
+				enabled: true,
+				hotkey: "F8",
+				language: "it",
+				recovered_from_corruption: true,
+			});
+
+			await testInScopeAsync(async () => {
+				await store.refreshConfig();
+				expect(store.state.hotkey).toBe("F8");
+				expect(store.state.language).toBe("it");
+				expect(addToast).toHaveBeenCalledWith(
+					"Dictation settings recovered",
+					"Some invalid settings were reset; valid settings were kept.",
+					"warn",
+				);
 			});
 		});
 	});

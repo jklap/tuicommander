@@ -4,6 +4,7 @@ import { isTauri } from "../transport";
 import { type BrowserVoiceSession, connectBrowserVoice } from "../utils/browserVoice";
 import { type Earcon, playEarcon, primeEarcons } from "../utils/earcon";
 import { appLogger } from "./appLogger";
+import { toastsStore } from "./toasts";
 
 /** Dictation config persisted to ~/.tuicommander/dictation-config.json */
 interface DictationConfig {
@@ -34,6 +35,8 @@ interface DictationConfig {
 	speech_volume_db: number;
 	/** Levelling strength within a reply: 0 is off, 1 is 4:1. */
 	speech_levelling: number;
+	/** The backend kept valid fields while replacing malformed config fields. */
+	recovered_from_corruption?: boolean;
 }
 
 /**
@@ -572,6 +575,14 @@ function createDictationStore() {
 					rmsThreshold: config.rms_threshold ?? DEFAULT_RMS_THRESHOLD,
 					noSpeechThreshold: config.no_speech_threshold ?? DEFAULT_NO_SPEECH_THRESHOLD,
 				});
+				if (config.recovered_from_corruption) {
+					appLogger.warn("dictation", "Recovered valid dictation settings from malformed config fields");
+					toastsStore.add(
+						"Dictation settings recovered",
+						"Some invalid settings were reset; valid settings were kept.",
+						"warn",
+					);
+				}
 			} catch (err) {
 				appLogger.error("dictation", "Failed to get dictation config", err);
 			}
