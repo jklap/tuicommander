@@ -389,6 +389,9 @@ function createDictationStore() {
 	 * state would make every subscriber re-run when a socket opened.
 	 */
 	let browserVoice: BrowserVoiceSession | null = null;
+	// A language switch may start a second request before the first answers.
+	// Only the most recently requested voice list may update the picker.
+	let speechVoicesRequest = 0;
 
 	const [state, setState] = createStore<DictationStoreState>({
 		enabled: false,
@@ -974,8 +977,10 @@ function createDictationStore() {
 
 		/** Read which voices a language can speak with, and where each comes from. */
 		async refreshSpeechVoices(language: string): Promise<void> {
+			const request = ++speechVoicesRequest;
 			try {
-				setState("speechVoices", await invoke<SpeechVoice[]>("get_speech_voices", { language }));
+				const voices = await invoke<SpeechVoice[]>("get_speech_voices", { language });
+				if (request === speechVoicesRequest) setState("speechVoices", voices);
 			} catch (err) {
 				appLogger.error("dictation", `Failed to list voices for ${language}`, err);
 			}
