@@ -1116,7 +1116,7 @@ fn native_tool_definitions() -> serde_json::Value {
             "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts three forms of the same address: the PTY id, the tuic_session, or the alias (e.g. tu-1).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, close, kill, pause, resume, process_stats" },
-                "session_id": { "type": "string", "description": "Session address — the PTY id, the tuic_session, or the alias (e.g. 'tu-1'). Required for submit, input, output, status, resize, rename, close, kill, pause, resume, wait" },
+                "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
                 "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
@@ -1156,7 +1156,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "orchestrator": { "type": "boolean", "description": "Explicitly enable or remove orchestrator inbox-only routing (action=register). Omission preserves the current role; spawning a child never infers it." },
-                "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, the id of the PTY it runs in, or that terminal's alias (e.g. 'tu-1')" },
+                "to": { "type": "string", "description": "Recipient address (action=send, required): its tuic_session UUID, PTY id, alias, unique short PTY-id prefix, or unique display name" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
@@ -1527,9 +1527,10 @@ fn require_session_id(
             "Action '{action}' requires 'session_id' — a PTY id, a tuic_session, or an alias such as 'tu-1'. Get valid values with session action='list'"
         )})
     })?;
-    Ok(state
-        .resolve_session_ref(reference)
-        .unwrap_or_else(|| reference.to_string()))
+    state
+        .resolve_session_ref_checked(reference)
+        .map_err(|error| serde_json::json!({"error": error}))
+        .map(|resolved| resolved.unwrap_or_else(|| reference.to_string()))
 }
 
 fn require_string<'a>(
@@ -3678,7 +3679,9 @@ fn spawn_response(
     } else if let Some(obj) = response.as_object_mut() {
         obj.insert(
             "communication_warning".to_string(),
-            serde_json::json!("Caller has no bound TUIC peer identity; child can receive messages, but child-to-parent messaging is unavailable until the parent calls agent action=register. A headerless caller may omit tuic_session."),
+            serde_json::json!(
+                "Child has no parent: child-to-parent messaging is unavailable for this spawn."
+            ),
         );
     }
     response
@@ -3800,8 +3803,12 @@ fn handle_agent_with_parent_cwd(
 
             // Resolve caller's tuic_session from their MCP session via the O(1) reverse map.
             // Only set when caller is a registered peer — drives multi-agent context + TUIC_PARENT.
-            let caller_tuic: Option<String> = mcp_session_id
+            let caller_identity: Option<String> = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()));
+            let caller_tuic = caller_identity
+                .as_deref()
+                .filter(|identity| state.live_pty_for_peer(identity).is_some())
+                .map(str::to_string);
 
             // Effective prompt: context prepended for managed-peer spawns, unchanged otherwise.
             let effective_prompt =
@@ -4037,9 +4044,12 @@ fn handle_agent_with_parent_cwd(
             }
             // Resolved before the session-created broadcast so the event names the
             // parent; the parent map entry below uses the same value.
-            let spawn_parent = caller_tuic
-                .clone()
-                .or_else(|| mcp_session_id.map(pending_parent_id));
+            let spawn_parent = caller_tuic.clone().or_else(|| {
+                caller_identity
+                    .is_none()
+                    .then(|| mcp_session_id.map(pending_parent_id))
+                    .flatten()
+            });
             // What the UI is told. A placeholder matches no tab, and nothing
             // corrects the tab once `register` resolves it; the session row does,
             // on the next reload.
@@ -4613,7 +4623,10 @@ fn handle_messaging(
             // Mail is filed under the peer key, so an address that names the
             // terminal has to be walked back to the peer that owns it — otherwise
             // "notify tu-1" is a dead letter with a valid-looking address.
-            let resolved_to = state.resolve_peer_ref(requested_to);
+            let resolved_to = match state.resolve_peer_ref_checked(requested_to) {
+                Ok(resolved) => resolved,
+                Err(error) => return serde_json::json!({"error": error}),
+            };
             let to = resolved_to.as_deref().unwrap_or(requested_to);
             let message = match args["message"].as_str() {
                 Some(s) if !s.is_empty() => s,
@@ -17038,9 +17051,15 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn spawn_without_multi_agent_preamble_for_unregistered_caller_succeeds() {
+    async fn headerless_registered_spawn_has_no_parent() {
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "name": "external"}),
+            Some("mcp-anon"),
+        );
+        assert_eq!(registered["ok"], true, "registration failed: {registered}");
         let result = handle_agent(
             &state,
             addr,
@@ -17063,12 +17082,18 @@ mod tests {
         }
         assert!(
             result.get("error").is_none(),
-            "unregistered caller spawn must succeed: {result}"
+            "headerless registered caller spawn must succeed: {result}"
         );
         assert!(result["session_id"].as_str().is_some());
         assert!(
             result.get("parent_session_id").is_none(),
-            "unregistered spawn must omit the absent parent"
+            "an external caller has an MCP identity but no terminal parent"
+        );
+        assert!(
+            result["communication_warning"]
+                .as_str()
+                .is_some_and(|warning| warning.contains("Child has no parent")),
+            "the spawn response must state the child has no parent: {result}"
         );
     }
 

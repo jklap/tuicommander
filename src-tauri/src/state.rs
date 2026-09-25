@@ -3329,10 +3329,49 @@ impl AppState {
     /// tu-1" works without a UUID lookup.
     ///
     /// `None` means no live session answers to that name — never a guess.
+    ///
+    /// Exact addresses win. A short UUID prefix and a display name are accepted
+    /// only when they identify exactly one live session.
+    pub(crate) fn resolve_session_ref_checked(
+        &self,
+        reference: &str,
+    ) -> Result<Option<String>, String> {
+        let exact = self
+            .session_maps
+            .sessions
+            .contains_key(reference)
+            .then(|| reference.to_string())
+            .or_else(|| self.live_pty_for_peer(reference))
+            .or_else(|| self.resolve_alias(reference));
+        if let Some(session_id) = exact.filter(|id| self.session_maps.sessions.contains_key(id)) {
+            return Ok(Some(session_id));
+        }
+
+        let matches: Vec<String> = self
+            .session_maps
+            .sessions
+            .iter()
+            .filter_map(|entry| {
+                let session_id = entry.key();
+                let session = entry.value().lock();
+                (session_id.starts_with(reference)
+                    || session.display_name.as_deref() == Some(reference))
+                .then(|| session_id.clone())
+            })
+            .collect();
+        match matches.as_slice() {
+            [] => Ok(None),
+            [session_id] => Ok(Some(session_id.clone())),
+            _ => Err(format!(
+                "Session reference '{reference}' is ambiguous; matches {}",
+                matches.join(", ")
+            )),
+        }
+    }
+
+    /// Compatibility helper for callers that cannot surface an ambiguity error.
     pub(crate) fn resolve_session_ref(&self, reference: &str) -> Option<String> {
-        self.live_pty_for_peer(reference)
-            .or_else(|| self.resolve_alias(reference))
-            .filter(|session_id| self.session_maps.sessions.contains_key(session_id))
+        self.resolve_session_ref_checked(reference).ok().flatten()
     }
 
     /// Resolve any address into the key a peer's mail is filed under.
@@ -3341,16 +3380,28 @@ impl AppState {
     /// way, because `peer_agents` is keyed by `tuic_session`. An alias or a PTY key
     /// therefore has to be walked back to the peer that owns that terminal.
     pub(crate) fn resolve_peer_ref(&self, reference: &str) -> Option<String> {
+        self.resolve_peer_ref_checked(reference).ok().flatten()
+    }
+
+    /// Resolve a peer address while retaining an ambiguity error from the
+    /// terminal address resolver.
+    pub(crate) fn resolve_peer_ref_checked(
+        &self,
+        reference: &str,
+    ) -> Result<Option<String>, String> {
         if self.peer_agents.contains_key(reference) {
-            return Some(reference.to_string());
+            return Ok(Some(reference.to_string()));
         }
-        let session_id = self.resolve_session_ref(reference)?;
-        self.peer_agents
+        let Some(session_id) = self.resolve_session_ref_checked(reference)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .peer_agents
             .iter()
             .find(|entry| {
                 self.live_pty_for_peer(entry.key()).as_deref() == Some(session_id.as_str())
             })
-            .map(|entry| entry.key().clone())
+            .map(|entry| entry.key().clone()))
     }
 
     /// This session's knowledge record, read off disk when it is not resident.
@@ -6903,14 +6954,28 @@ mod tests {
     #[test]
     fn resolve_session_ref_accepts_pty_id_tuic_session_and_alias() {
         let state = tests_support::make_test_app_state();
-        tests_support::insert_dummy_session(&state, "pty-key");
-        state.bind_live_pty("tuic-uuid", "pty-key");
-        let alias = state.assign_term_alias("pty-key", None);
+        let session_id = "01234567-89ab-cdef-0123-456789abcdef";
+        tests_support::insert_dummy_session(&state, session_id);
+        state.bind_live_pty("tuic-uuid", session_id);
+        state
+            .session_maps
+            .sessions
+            .get(session_id)
+            .expect("test session")
+            .lock()
+            .set_display_name(Some("reviewer".to_string()), true);
+        let alias = state.assign_term_alias(session_id, None);
 
-        for reference in ["pty-key", "tuic-uuid", alias.as_str()] {
+        for reference in [
+            session_id,
+            "tuic-uuid",
+            alias.as_str(),
+            "01234567",
+            "reviewer",
+        ] {
             assert_eq!(
                 state.resolve_session_ref(reference),
-                Some("pty-key".to_string()),
+                Some(session_id.to_string()),
                 "'{reference}' must address the terminal behind it"
             );
         }
@@ -6919,6 +6984,36 @@ mod tests {
             None,
             "an unknown reference resolves to nothing rather than to a guess"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_session_ref_reports_ambiguous_display_names() {
+        let state = tests_support::make_test_app_state();
+        for session_id in [
+            "11111111-89ab-cdef-0123-456789abcdef",
+            "11111111-89ab-cdef-0123-456789abcdef0",
+        ] {
+            tests_support::insert_dummy_session(&state, session_id);
+            state
+                .session_maps
+                .sessions
+                .get(session_id)
+                .expect("test session")
+                .lock()
+                .set_display_name(Some("reviewer".to_string()), true);
+        }
+
+        let error = state
+            .resolve_session_ref_checked("reviewer")
+            .expect_err("duplicate display names must not pick a session");
+        assert!(error.contains("ambiguous"), "{error}");
+        assert!(error.contains("reviewer"), "{error}");
+
+        let error = state
+            .resolve_session_ref_checked("11111111")
+            .expect_err("duplicate short IDs must not pick a session");
+        assert!(error.contains("ambiguous"), "{error}");
     }
 
     /// Browser/PWA clients learn a tab's alias from the bus (`/events` SSE),
