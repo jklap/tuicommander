@@ -178,10 +178,11 @@ uses it only after checking submodule status and rechecking dirtiness immediatel
 before removal. A separate, confirmed lock override bypasses the lock during
 removal; dirty-file `force` alone does not bypass a lock. Before removal, every
 initialized submodule's HEAD and refs are copied into preserved refs in the
-main checkout's module repository under a unique namespace; if this fails, removal stops. The checkout is checked again after preservation, immediately before Git removes it. A missing checkout is pruned only after any registered submodule module repositories are preserved. An
+main checkout's module repository under a unique namespace; if this fails, removal stops. The checkout is checked again after preservation, immediately before Git removes it. Removing one checkout does not prune unrelated missing worktree registrations. A missing checkout is pruned only after any registered submodule module repositories are preserved. An
 uninitialized submodule without Git state is safe to remove. Force confirmation
-can carry a fingerprint of checkout status, HEAD, and submodule refs, rechecked
-under the removal lock. Branch deletion in
+can carry a fingerprint of checkout status per path, HEAD, and submodule refs, rechecked
+under the removal lock. The status portion records Git's per-path porcelain
+entries, not the contents of a file that was already dirty. Branch deletion in
 either mode uses the captured OID in a compare-and-delete operation. If proof
 fails or the branch moves, removal reports a warning and keeps the ref. For
 branch deletion, it checks the default branch's ancestry. A clean branch

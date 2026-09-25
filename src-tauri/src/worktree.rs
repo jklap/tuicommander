@@ -628,6 +628,11 @@ fn preserve_submodule_refs(
     let source_gitdir = rev_at(&source, "--absolute-git-dir")?;
     // Without an initialized module repository in the main checkout there is
     // nowhere durable to move the objects. Refuse rather than delete their only copy.
+    if !destination.join(".git").exists() {
+        return Err(format!(
+            "Cannot remove worktree: main checkout has no repository for submodule {submodule_path}"
+        ));
+    }
     rev_at(&destination, "--absolute-git-dir").map_err(|_| {
         format!(
             "Cannot remove worktree: main checkout has no repository for submodule {submodule_path}"
@@ -883,15 +888,6 @@ impl CreatedWorkspace {
     }
 }
 
-/// Create a linked worktree and warm its ignored build directories.
-pub(crate) fn create_workspace(
-    worktrees_dir: &Path,
-    config: &WorktreeConfig,
-    base_ref: Option<&str>,
-) -> Result<CreatedWorkspace, String> {
-    create_workspace_with(worktrees_dir, config, base_ref, crate::cow::warm_worktree)
-}
-
 /// Create the registered worktree and its required local inputs, but defer the
 /// expensive cache warm to the caller.
 pub(crate) fn create_workspace_unwarmed(
@@ -920,6 +916,7 @@ pub(crate) fn create_workspace_unwarmed(
 }
 
 /// `create_workspace` with warming injected for deterministic tests.
+#[cfg(test)]
 pub(crate) fn create_workspace_with(
     worktrees_dir: &Path,
     config: &WorktreeConfig,
@@ -1021,14 +1018,6 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
 }
 pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
     remove_worktree_internal_with_lock(worktree, force, false, None)
-}
-
-struct ClearWarmOnDrop<'a>(&'a Path);
-
-impl Drop for ClearWarmOnDrop<'_> {
-    fn drop(&mut self) {
-        clear_warm(self.0);
-    }
 }
 
 fn registered_worktree_admin_dir(base_repo: &Path, path: &Path) -> Result<Option<PathBuf>, String> {
@@ -1206,7 +1195,6 @@ fn remove_worktree_internal_with_lock(
         lock.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     });
-    let _clear_warm = ClearWarmOnDrop(&worktree.path);
     let wt_path_str = worktree.path.to_string_lossy().to_string();
     tracing::info!(
         source = "worktree",
@@ -1248,6 +1236,7 @@ fn remove_worktree_internal_with_lock(
                 return Err("Cannot prune missing worktree registration".into());
             }
         }
+        clear_warm(&worktree.path);
         return Ok(());
     }
     if admin.is_none() && worktree.path.join(".git").exists() {
@@ -1351,6 +1340,10 @@ fn remove_worktree_internal_with_lock(
         }
     }
 
+    // Git has now removed this registration. A queued warm must not recreate
+    // the checkout even if leftover path cleanup below fails.
+    clear_warm(&worktree.path);
+
     // A non-force request must not turn a failed Git cleanup into recursive deletion.
     if worktree.path.exists() {
         if !force {
@@ -1370,16 +1363,6 @@ fn remove_worktree_internal_with_lock(
         tracing::info!(source = "worktree", branch = %worktree.name, "directory removed");
     } else {
         tracing::info!(source = "worktree", branch = %worktree.name, "directory already gone after git worktree remove");
-    }
-
-    // Prune worktrees (non-fatal: stale entries are harmless)
-    if let Err(e) = git_cmd(&worktree.base_repo)
-        .args(["worktree", "prune"])
-        .run()
-    {
-        tracing::warn!(source = "worktree", "git worktree prune failed: {e}");
-    } else {
-        tracing::info!(source = "worktree", branch = %worktree.name, "git worktree prune: OK");
     }
 
     tracing::info!(source = "worktree", branch = %worktree.name, "remove_worktree_internal: done");
@@ -1646,7 +1629,6 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
                 format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
             }));
         }
-        verify_submodules_at(&worktree_path, &base_repo, false)?;
     }
     if has_operation_in_progress(&workspace.path) {
         return Err(format!(
@@ -2868,6 +2850,7 @@ pub(crate) fn merge_preflight(
 /// `merge_and_archive_worktree_impl` uses, through the same gate.
 ///
 /// Blocking — callers wrap in `spawn_blocking` when on an async runtime.
+#[cfg(test)]
 pub(crate) fn finalize_merged_worktree_impl(
     state: &Arc<AppState>,
     repo_path: String,
@@ -3018,6 +3001,7 @@ pub(crate) async fn finalize_merged_worktree(
 /// 3. Based on `after_merge`: archive (move dir) or delete (remove worktree + branch)
 ///
 /// Blocking — callers wrap in `spawn_blocking` when on an async runtime.
+#[cfg(test)]
 pub(crate) fn merge_and_archive_worktree_impl(
     state: &Arc<AppState>,
     repo_path: String,
@@ -3795,6 +3779,90 @@ mod tests {
             result.is_ok(),
             "Removing nonexistent worktree should succeed"
         );
+    }
+
+    #[test]
+    fn removing_one_worktree_keeps_another_missing_worktree_module_registration() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let missing = add_worktree(&repo, "missing-neighbor");
+        let removed = add_worktree(&repo, "removed-neighbor");
+        git_cmd(&missing)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = missing.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "neighbor-only.txt", "neighbor commit\n");
+        let oid = rev_at(&module, "HEAD").unwrap();
+        let module_gitdir = PathBuf::from(rev_at(&module, "--absolute-git-dir").unwrap());
+        assert!(module_gitdir.exists());
+        let admin = registered_worktree_admin_dir(&repo, &missing)
+            .unwrap()
+            .unwrap();
+        fs::remove_dir_all(&missing).unwrap();
+        let worktree = WorktreeInfo {
+            name: "removed-neighbor".into(),
+            path: removed,
+            branch: Some("removed-neighbor".into()),
+            base_repo: repo,
+        };
+        remove_worktree_internal(&worktree, false).unwrap();
+        assert!(
+            admin.exists(),
+            "unrelated missing worktree registration was pruned"
+        );
+        assert!(
+            module_gitdir.exists(),
+            "unpreserved module gitdir was pruned"
+        );
+        assert!(
+            git_cmd(&worktree.base_repo)
+                .args([
+                    "--git-dir",
+                    &module_gitdir.to_string_lossy(),
+                    "--work-tree",
+                    &worktree.base_repo.to_string_lossy(),
+                    "cat-file",
+                    "-e",
+                    &oid,
+                ])
+                .run()
+                .is_ok(),
+            "module-only commit was lost"
+        );
+    }
+
+    #[test]
+    fn refused_dirty_removal_preserves_pending_warm_token() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "dirty-pending-warm");
+        let token = begin_warm(&path);
+        fs::write(path.join("dirty.txt"), "uncommitted\n").unwrap();
+        let worktree = WorktreeInfo {
+            name: "dirty-pending-warm".into(),
+            path: path.clone(),
+            branch: Some("dirty-pending-warm".into()),
+            base_repo: repo,
+        };
+        let error = remove_worktree_internal(&worktree, false).unwrap_err();
+        assert!(error.contains("uncommitted changes"), "{error}");
+        assert!(path.exists());
+        assert!(warm_token_is_current(&path, token));
+        clear_warm(&path);
     }
 
     #[test]
@@ -6554,6 +6622,40 @@ branch refs/heads/feat
                 "{oid} lost its preservation ref"
             );
         }
+    }
+
+    #[test]
+    fn preservation_refuses_uninitialized_main_module_without_writing_superproject_refs() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "main-module-deinitialized");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["submodule", "deinit", "--force", "modules/local"])
+            .run()
+            .unwrap();
+        assert!(!repo.join("modules/local/.git").exists());
+        let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
+        assert!(error.contains("main checkout has no repository"), "{error}");
+        assert!(path.exists());
+        assert!(
+            git_cmd(&repo)
+                .args(["for-each-ref", "--format=%(refname)", "refs/tuic/preserved"])
+                .run()
+                .unwrap()
+                .stdout
+                .trim()
+                .is_empty()
+        );
     }
 
     #[test]
