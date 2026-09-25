@@ -11523,6 +11523,24 @@ pub(crate) async fn spawn_session_for_agent(
 
     spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
+    // Shell-readiness gate, same shape and rationale as
+    // `tmux_routes::materialize`'s (see `plans/p10k-wizard-hijack-agent-pane-spawn-race.md`):
+    // every caller of this function hands the returned session id straight to
+    // something that can write into it immediately — the `ai_terminal_drive_agent`
+    // MCP tool's `spawn_session` followed by `send_input`/`send_key`/`drive_agent`,
+    // a scheduled cron job's autonomous conversation, or a PR-review watcher's
+    // fired rule — all of which are the identical "raw keystrokes can land while
+    // the shell is still sourcing .zshrc" race, just via a different caller than
+    // the tmux shim. Bounded, event-driven, fail-open: proceeds anyway if the
+    // shell never reaches SHELL_IDLE within the bound, rather than hanging every
+    // caller of this function forever.
+    crate::mcp_http::mcp_transport::wait_for_shell_idle(
+        state,
+        &session_id,
+        crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+    )
+    .await;
+
     Ok(session_id)
 }
 

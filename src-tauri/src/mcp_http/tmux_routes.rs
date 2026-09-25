@@ -498,7 +498,13 @@ async fn materialize(
         // is cheap to call redundantly: `wait_for_shell_idle`'s own fast path
         // returns immediately once the shell is already idle, which is the
         // common case here (the pane was materialized a while ago).
-        apply_pane_readiness_gate(state, pane_id, &existing, PANE_READY_TIMEOUT_MS).await;
+        apply_pane_readiness_gate(
+            state,
+            pane_id,
+            &existing,
+            crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+        )
+        .await;
         return Ok(existing);
     }
     // `respawn-pane` — the only caller that ever materializes `new-session`'s
@@ -587,15 +593,15 @@ async fn materialize(
     // (plans/p10k-wizard-hijack-agent-pane-spawn-race.md) at its source: raw
     // keystrokes landing during `.zshrc` sourcing used to get eaten by
     // Instant Prompt's own remediation menu instead of reaching the shell.
-    apply_pane_readiness_gate(state, pane_id, &spawn, PANE_READY_TIMEOUT_MS).await;
+    apply_pane_readiness_gate(
+        state,
+        pane_id,
+        &spawn,
+        crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+    )
+    .await;
     Ok(spawn)
 }
-
-/// Bound on the shell-readiness wait in [`materialize`]. Long enough for a
-/// normal `zsh -l`/`bash -l` startup (including Oh My Zsh/Powerlevel10k, which
-/// motivated this gate) under real spawn-burst contention, short enough that a
-/// shell with no detectable prompt signal doesn't stall pane creation for long.
-const PANE_READY_TIMEOUT_MS: u64 = 5_000;
 
 /// Fail-open, not fail-hard: a shell with no detectable prompt marker (no OSC
 /// 133 integration — bash/fish without it sourced) must not hang pane creation
@@ -1011,8 +1017,23 @@ mod tests {
             }),
         )
         .await;
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::SessionRenamed {
+        // The shell-readiness gate (`materialize`'s own `apply_pane_readiness_gate`
+        // call, both on the fresh-spawn path above and its "already materialized"
+        // fast path) means a real, still-running shell can emit ordinary
+        // background traffic (e.g. a subsequent `PtyOsc133` prompt marker) on
+        // this same event bus between the subscribe above and the rename below —
+        // drain until `SessionRenamed` turns up rather than assuming it's the
+        // very first event, matching the sibling pattern a few tests below this
+        // one for the identical reason.
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionRenamed { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionRenamed {
                 display_name,
                 is_custom,
                 ..
@@ -1038,10 +1059,16 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            rx.try_recv().is_err(),
-            "repeated select-pane -T with an unchanged title must not re-emit session-renamed"
-        );
+        // Same background-traffic caveat as above: assert no `SessionRenamed`
+        // specifically, not that the channel is silent — the still-running real
+        // shell can legitimately put other event kinds (e.g. `PtyOsc133`) on
+        // this bus regardless of the no-op rename.
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(event, crate::state::AppEvent::SessionRenamed { .. }),
+                "repeated select-pane -T with an unchanged title must not re-emit session-renamed, got {event:?}"
+            );
+        }
 
         // A genuinely different title still renames and emits.
         let _ = rename_pane(
@@ -1053,8 +1080,15 @@ mod tests {
             }),
         )
         .await;
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::SessionRenamed { display_name, .. }) => {
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionRenamed { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionRenamed { display_name, .. }) => {
                 assert_eq!(display_name, Some("test".to_string()));
             }
             other => panic!("expected SessionRenamed on a genuine tmux rename, got {other:?}"),
@@ -1508,7 +1542,7 @@ mod tests {
     /// Fail-open at the integration point: a session rigged to never reach
     /// idle must not make `materialize`'s gate call hang — bounded here with a
     /// short parameterized timeout rather than the real 5s
-    /// `PANE_READY_TIMEOUT_MS`, per this repo's rule against baking a
+    /// `SHELL_READINESS_TIMEOUT_MS`, per this repo's rule against baking a
     /// load-bearing timing bound into a test's wall-clock budget.
     #[tokio::test]
     async fn apply_pane_readiness_gate_does_not_hang_when_shell_never_goes_idle() {
@@ -1811,8 +1845,20 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::SessionAccentColorChanged { session_id, color }) => {
+        // Same background-traffic caveat as the rename tests above: the
+        // shell-readiness gate lets a real, still-running shell put other
+        // event kinds (e.g. `PtyOsc133`) on this bus around the same time —
+        // drain until the expected event turns up rather than assuming it's
+        // the very first one.
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::SessionAccentColorChanged { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::SessionAccentColorChanged { session_id, color }) => {
                 assert_eq!(session_id, tuic_session_id);
                 assert_eq!(color, Some("blue".to_string()));
             }
@@ -1832,10 +1878,15 @@ mod tests {
             }),
         )
         .await;
-        assert!(
-            rx.try_recv().is_err(),
-            "the same resolved color from a sibling set-option call must not re-emit"
-        );
+        while let Ok(event) = rx.try_recv() {
+            assert!(
+                !matches!(
+                    event,
+                    crate::state::AppEvent::SessionAccentColorChanged { .. }
+                ),
+                "the same resolved color from a sibling set-option call must not re-emit, got {event:?}"
+            );
+        }
     }
 
     /// Mirrors `materialize_applies_a_title_recorded_while_the_pane_was_still_virtual`
@@ -2009,8 +2060,18 @@ mod tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
-        match rx.try_recv() {
-            Ok(crate::state::AppEvent::TmuxWindowLayoutRequested {
+        // Two real materialized panes are already running by the time this
+        // subscribes — same background-traffic caveat as the rename/accent-color
+        // tests above — drain until the expected event turns up.
+        let mut found = None;
+        while let Ok(event) = rx.try_recv() {
+            if let crate::state::AppEvent::TmuxWindowLayoutRequested { .. } = &event {
+                found = Some(event);
+                break;
+            }
+        }
+        match found {
+            Some(crate::state::AppEvent::TmuxWindowLayoutRequested {
                 session_ids,
                 layout,
             }) => {
