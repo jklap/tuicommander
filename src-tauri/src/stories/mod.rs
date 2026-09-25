@@ -38,6 +38,35 @@ mod tests {
     }
 
     #[test]
+    fn version_zero_store_is_upgraded_in_place_with_its_data() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Pre-version plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        // Builds before the schema was versioned wrote the same tables at user_version 0.
+        rusqlite::Connection::open(&db)
+            .and_then(|conn| conn.pragma_update(None, "user_version", 0))
+            .expect("mark store as version 0");
+
+        let reopened = StoryStore::open_at(&db).expect("version 0 opens");
+        assert_eq!(
+            reopened.get_plan(&plan.id).expect("plan survives").title,
+            "Pre-version plan"
+        );
+        let version: i64 = rusqlite::Connection::open(&db)
+            .expect("open database")
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read schema version");
+        assert_eq!(version, 1);
+    }
+
+    #[test]
     fn operator_can_work_a_story_without_a_terminal_claim() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
