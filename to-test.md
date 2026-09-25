@@ -37,7 +37,8 @@
 - [ ] Start an isolated test instance with an absolute `TUIC_CAPTURE_DIR` under a disposable directory. Enable `POST /diagnostics/capture` for a throwaway session; `GET /diagnostics/capture` must report that directory and its `.tcap` must appear there. A relative override must return `TUIC_CAPTURE_DIR must be absolute` and leave capture disabled.
 ## Markdown link navigation guard (2026-09-25) — Rust, needs `make dev` restart
 
-- [ ] After a `make dev` restart, click a relative source link in a Markdown file: the code editor opens and no localhost page opens in the system browser. A link to another localhost port is blocked by the WebView navigation guard. Restart only when current live sessions can be interrupted.
+- [ ] After a `make dev` restart, click a relative source link in a Markdown file: the code editor opens and no localhost page opens in the system browser. A link to an external web origin is blocked by the WebView navigation guard. Restart only when current live sessions can be interrupted.
+- [ ] In the restarted instance, open an HTML preview, PDF preview, URL plugin panel on localhost, srcdoc plugin panel, and reveal.js deck. Their iframe content and in-frame links/slide navigation still load. Export a text download on Linux through a blob URL. _(Static coverage: `lib.rs` navigation guard allows the internal frame schemes and loopback origins; runtime platform behavior needs the restarted app.)_
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 

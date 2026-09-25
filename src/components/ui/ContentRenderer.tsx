@@ -345,11 +345,20 @@ function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOff
 		// Preserve the source href in an inert attribute. DOMPurify strips unsafe
 		// href schemes, including useful `file.rs:42` line links; the click
 		// dispatcher still needs their text to block or route them explicitly.
-		html = html.replace(
-			/<a\b([^>]*?)\shref="([^"]*)"([^>]*)>/gi,
-			(_match, before, href, after) => `<a${before} href="${href}" data-tuic-href="${href}"${after}>`,
-		);
+		// Remove any source-supplied copy first so raw HTML cannot dispatch a
+		// different destination from the link shown to the user.
+		if (/<a\b/i.test(html)) {
+			const template = document.createElement("template");
+			template.innerHTML = html;
+			for (const anchor of template.content.querySelectorAll("a")) {
+				const href = anchor.getAttribute("href");
+				anchor.removeAttribute("data-tuic-href");
+				if (href !== null) anchor.setAttribute("data-tuic-href", href);
+			}
+			html = template.innerHTML;
+		}
 		return DOMPurify.sanitize(stripEventHandlers(html), {
+			FORBID_TAGS: ["form", "map", "area"],
 			ADD_ATTR: [
 				"data-tuic-href",
 				"data-tweak-id",

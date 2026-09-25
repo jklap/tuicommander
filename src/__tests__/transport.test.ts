@@ -962,6 +962,19 @@ describe("transport", () => {
 			expect(result.body).toEqual({ cwd: "/repo", candidates: ["src/x.ts", "missing.ts"] });
 		});
 
+		it("maps Markdown link resolution to the shared HTTP endpoint", () => {
+			const result = mapCommandToHttp("resolve_markdown_link", {
+				root: "/repo",
+				currentFile: "docs/review.md",
+				href: "../guide.md#intro",
+			});
+			expect(result).toMatchObject({
+				method: "POST",
+				path: "/fs/resolve-markdown-link",
+				body: { root: "/repo", currentFile: "docs/review.md", href: "../guide.md#intro" },
+			});
+		});
+
 		it("maps stat_path to GET /fs/stat?path=", () => {
 			const result = mapCommandToHttp("stat_path", { path: "/repo/file.md" });
 			expect(result.method).toBe("GET");

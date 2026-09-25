@@ -453,6 +453,14 @@ pub(super) struct FsResolveTerminalPathsRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FsResolveMarkdownLinkRequest {
+    pub root: String,
+    pub current_file: String,
+    pub href: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct FsWarmIndexRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,

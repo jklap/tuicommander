@@ -195,6 +195,7 @@ describe("ContentRenderer", () => {
 		"file.rs#L42",
 		"My%20File.md",
 		"./doc.md",
+		"//attacker.example/share/readme.md",
 		"file://etc/passwd",
 		"javascript:alert(1)",
 		"javascript:42",
@@ -223,7 +224,7 @@ describe("ContentRenderer", () => {
 		},
 	);
 
-	it.each(["src/main.rs", "file.rs:42", "My%20File.md", "docs/", "#heading"])(
+	it.each(["src/main.rs", "file.rs:42", "Makefile:42", "My%20File.md", "docs/", "#heading"])(
 		"passes local link %s to its file handler",
 		(href) => {
 			const onLinkClick = vi.fn();
@@ -242,6 +243,33 @@ describe("ContentRenderer", () => {
 		container.querySelector("a")!.dispatchEvent(event);
 		expect(event.defaultPrevented).toBe(true);
 		expect(onLinkClick).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'<a data-tuic-href="https://evil.example" href="docs/guide.md">guide</a>',
+		"<a data-tuic-href='https://evil.example' href='docs/guide.md'>guide</a>",
+		'<a data-tuic-href=https://evil.example href="docs/guide.md">guide</a>',
+		'<a data-tuic-href="https://evil.example/?q=>" href="docs/guide.md">guide</a>',
+		'<a data-tuic-href href="docs/guide.md">guide</a>',
+		'<a href="docs/guide.md" href="https://evil.example" data-tuic-href="https://evil.example">guide</a>',
+		"<a href='docs/guide.md' href=\"https://evil.example\" data-tuic-href='https://evil.example'>guide</a>",
+		'<A DATA-TUIC-HREF="https://evil.example" HREF="docs/guide.md">guide</A>',
+	])("does not let raw HTML pre-seed the dispatched link", (content) => {
+		vi.mocked(handleOpenUrl).mockClear();
+		const onLinkClick = vi.fn();
+		const { container } = render(() => (
+			<ContentRenderer content={content} onLinkClick={onLinkClick} />
+		));
+		fireEvent.click(container.querySelector("a")!);
+		expect(onLinkClick).toHaveBeenCalledWith("docs/guide.md");
+		expect(handleOpenUrl).not.toHaveBeenCalledWith("https://evil.example");
+	});
+
+	it("removes forms and image-map links from raw Markdown HTML", () => {
+		const { container } = render(() => (
+			<ContentRenderer content={'<form action="?mode=panel"><button>go</button></form><map><area href="?mode=panel"></map>'} />
+		));
+		expect(container.querySelector("form, map, area")).toBeNull();
 	});
 
 	describe("image src sanitization", () => {

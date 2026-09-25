@@ -137,6 +137,6 @@ When the editor has no unsaved changes, files reload silently when they change o
 
 `.md` and `.mdx` files open in the Markdown viewer panel instead of the code editor. The viewer renders Markdown with syntax-highlighted code blocks.
 
-Links in rendered Markdown stay inside TUICommander: file links open a Markdown or media preview when supported, otherwise the code editor; directory links open the File Browser. `#heading` scrolls within a document, and `file.rs:42` or `file.rs#L42` opens the editor at that line. Relative paths resolve from the Markdown file, including percent-encoded spaces. Missing files show a toast. Web and email links open with the system handler; other URL schemes are blocked.
+Links in rendered Markdown stay inside TUICommander: file links open a Markdown or media preview when supported, otherwise the code editor; directory links open the File Browser. `#heading` scrolls within a document, and `file.rs:42` or `file.rs#L42` opens the editor at that line. Relative paths resolve from the Markdown file, including percent-encoded spaces and local symlinks; direct UNC/network hrefs are refused. Missing files show a toast. Web and email links open with the system handler; other URL schemes are blocked.
 
 See [ai-agents.md](ai-agents.md) for how AI-generated plan files are detected and surfaced as a one-click shortcut to open in the viewer.
