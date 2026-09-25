@@ -2,9 +2,11 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StoriesDialog } from "../../components/StoriesDialog/StoriesDialog";
 import { invoke } from "../../invoke";
+import { appLogger } from "../../stores/appLogger";
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/modalStack", () => ({ registerModal: vi.fn() }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
 
 const plan = { id: "p1", project: "/repo", title: "Plan A", source: "plans/a.md" };
 const story = {
@@ -155,5 +157,32 @@ describe("StoriesDialog", () => {
 				action: { action: "add_dependency", story_id: "s1", dependency_id: "s2", expected_revision: 1 },
 			}),
 		);
+	});
+
+	it("drops a pending dependency choice when another story is selected", async () => {
+		const second = { ...story, id: "s2", title: "Review API" };
+		const third = { ...story, id: "s3", title: "Ship API" };
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "list_stories") return { type: "stories", value: [story, second, third] };
+			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.change(screen.getByRole("combobox", { name: "Add dependency" }), { target: { value: "s3" } });
+		fireEvent.click(screen.getByRole("button", { name: /Review API/ }));
+		await screen.findByRole("heading", { name: "Review API" });
+		// s3 is also a valid candidate for s2: a leaked choice would stay armed for a story the user never chose it for.
+		expect((screen.getByRole("combobox", { name: "Add dependency" }) as HTMLSelectElement).value).toBe("");
+		expect((screen.getByRole("button", { name: "Add dependency" }) as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("logs a failed story action as well as showing it", async () => {
+		vi.mocked(invoke).mockRejectedValueOnce(new Error("offline"));
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByText(/offline/);
+		expect(appLogger.warn).toHaveBeenCalledWith("store", expect.stringContaining("Stories"), expect.anything());
 	});
 });
