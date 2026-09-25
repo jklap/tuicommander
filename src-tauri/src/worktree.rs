@@ -6018,6 +6018,29 @@ branch refs/heads/feat
         clear_warm(&worktree);
     }
 
+    #[test]
+    fn warm_states_remain_isolated_between_workspace_paths() {
+        let temp = TempDir::new().unwrap();
+        let first = temp.path().join("first");
+        let second = temp.path().join("second");
+        let first_token = begin_warm(&first);
+        let second_token = begin_warm(&second);
+
+        finish_warm(&first, first_token, serde_json::json!({"status": "done"}));
+        assert_eq!(warm_status(&first)["status"], "done");
+        assert_eq!(warm_status(&second)["status"], "pending");
+
+        finish_warm(
+            &second,
+            second_token,
+            serde_json::json!({"status": "failed", "reason": "copy failed"}),
+        );
+        assert_eq!(warm_status(&first)["status"], "done");
+        assert_eq!(warm_status(&second)["status"], "failed");
+        clear_warm(&first);
+        clear_warm(&second);
+    }
+
     #[cfg(unix)]
     #[test]
     fn removal_clears_pending_warm_even_when_leftover_path_cleanup_fails() {
