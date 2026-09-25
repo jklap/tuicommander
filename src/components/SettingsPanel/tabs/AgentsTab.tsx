@@ -623,6 +623,11 @@ export const AgentRow: Component<{
 	const supportsMcp = () => MCP_SUPPORT[props.agentType];
 	const supportsHooks = () => HOOK_SUPPORT[props.agentType];
 	const supportsLaunchSignals = () => props.agentType === "claude" || props.agentType === "codex";
+	// zsh only (see AgentSettings::wrap_user_function's doc comment) — but the
+	// setting itself isn't shell-specific to gate on here, so this predicate
+	// just names the three agents whose deferred zsh wrapper injects a
+	// launch flag that could conflict with a user's own same-named function.
+	const supportsWrapUserFunction = () => ["claude", "codex", "goose"].includes(props.agentType);
 	const supportsGlobalHooks = () => ["gemini", "grok", "opencode"].includes(props.agentType);
 
 	const loadMcpStatus = async () => {
@@ -689,6 +694,25 @@ export const AgentRow: Component<{
 			appLogger.error("config", `Native status signal toggle failed for ${props.agentType}`, err);
 		} finally {
 			setHookLoading(false);
+		}
+	};
+
+	/**
+	 * Three real states (ask / wrap / leave alone), not two — a plain
+	 * checkbox has no way back to "ask", so this is a `<select>` rather than
+	 * the toggle-row pattern above (see `SettingsPanel/AGENTS.md`'s
+	 * "Tri-State Inheritable Settings" section: `TriStateToggle` is
+	 * specifically for a global-default-to-inherit-from shape, which this
+	 * setting doesn't have — it's a genuine three-choice preference, not an
+	 * override-vs-inherit one).
+	 */
+	const handleWrapUserFunctionChange = async (value: "ask" | "wrap" | "leave") => {
+		const next = value === "ask" ? null : value === "wrap";
+		try {
+			await invoke("set_agent_wrap_user_function", { agentType: props.agentType, value: next });
+			configStore.syncWrapUserFunction(props.agentType, next);
+		} catch (err) {
+			appLogger.error("config", `Wrap-user-function setting failed for ${props.agentType}`, err);
 		}
 	};
 
@@ -833,6 +857,32 @@ export const AgentRow: Component<{
 							</label>
 							<p class={s.hint}>
 								Adds process-scoped status integration only to agents launched inside TUIC. Applies on next launch.
+							</p>
+						</div>
+					</Show>
+
+					<Show when={supportsWrapUserFunction()}>
+						<div class={a.expandedSection}>
+							<label class={a.toggleRow} onClick={(e) => e.stopPropagation()}>
+								<span>If your shell already defines its own {props.agentType} function</span>
+								<select
+									value={
+										configStore.getWrapUserFunction(props.agentType) === null
+											? "ask"
+											: configStore.getWrapUserFunction(props.agentType)
+												? "wrap"
+												: "leave"
+									}
+									onChange={(e) => void handleWrapUserFunctionChange(e.currentTarget.value as "ask" | "wrap" | "leave")}
+								>
+									<option value="ask">Ask when detected</option>
+									<option value="wrap">Wrap my function</option>
+									<option value="leave">Leave my function alone</option>
+								</select>
+							</label>
+							<p class={s.hint}>
+								zsh only. Applies to new terminals. Only relevant if your shell already defines its own{" "}
+								{props.agentType} function — otherwise TUIC's launch-flag injection applies normally either way.
 							</p>
 						</div>
 					</Show>

@@ -586,6 +586,46 @@ pub(super) async fn put_agent_native_status_signals(
     }
 }
 
+/// `value` is tri-state — `null` (not yet decided, TUIC will ask) /
+/// `true` (wrap) / `false` (leave alone) — see
+/// `AgentSettings::wrap_user_function`'s doc comment.
+pub(super) async fn get_agent_wrap_user_function(Path(agent): Path<String>) -> impl IntoResponse {
+    Json(serde_json::json!({
+        "value": crate::agent_hook_commands::get_agent_wrap_user_function(agent),
+    }))
+}
+
+pub(super) async fn put_agent_wrap_user_function(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Path(agent): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp;
+    }
+    let value: Option<bool> = match serde_json::from_value(
+        body.get("value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    ) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "value must be true, false, or null"})),
+            );
+        }
+    };
+    match crate::agent_hook_commands::set_agent_wrap_user_function(agent, value) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
 // --- Provider Registry ---
 
 pub(super) async fn get_provider_registry() -> impl IntoResponse {

@@ -235,6 +235,19 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { request_id: args.requestId, confirmed: args.confirmed },
 		}),
 	},
+	// Same reasoning as mcp_confirm_response: a client away from the desktop
+	// must still be able to answer this.
+	agent_wrap_prompt_response: {
+		map: (args) => ({
+			method: "POST",
+			path: "/agent-wrap-prompt/response",
+			body: {
+				request_id: args.requestId,
+				agent_type: args.agentType,
+				decision: args.decision,
+			},
+		}),
+	},
 	get_session_foreground_process: {
 		map: (args) => ({
 			method: "GET",
@@ -485,6 +498,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "PUT",
 			path: `/config/agents/${p("agentType")}/native-status-signals`,
 			body: { enabled: args.enabled },
+		}),
+	},
+	get_agent_wrap_user_function: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/config/agents/${p("agentType")}/wrap-user-function`,
+			transform: (data) => (data as { value: boolean | null }).value,
+		}),
+	},
+	set_agent_wrap_user_function: {
+		map: (args, p) => ({
+			method: "PUT",
+			path: `/config/agents/${p("agentType")}/wrap-user-function`,
+			body: { value: args.value },
 		}),
 	},
 

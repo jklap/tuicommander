@@ -196,6 +196,23 @@ tests` step / `pnpm test:plugins` reports 0 tests collected and exits 1). Both a
 environment drift, not a regression — don't spend time fixing the submodule pointer unless
 explicitly asked.
 
+**Confirmed 2026-09-25: the current pin (`497bb1f`, in BOTH the main checkout and every worktree
+checked) is stale enough to fail `cargo check`/`cargo build` outright, not just the Plugin tests
+step.** `plugins.rs`'s `SEEDED_PLUGINS` unconditionally `include_str!`s
+`plugins/plan/{manifest.json,main.js,README.md}` and `plugins/stories-ticker/{...}` — neither
+directory exists at `497bb1f` (`git -C plugins ls-tree HEAD --name-only` confirms), so the whole
+crate fails to compile with six `couldn't read ... No such file or directory` errors, blocking
+`make check`/`check-gate.sh` end to end for every subsystem, not just plugin-related work. If you
+hit this: it is not your change's fault — verify with `git -C plugins ls-tree HEAD --name-only |
+grep -E '^(plan|stories-ticker)$'` (empty output confirms the gap) before assuming a regression.
+A same-day workaround that unblocks local verification without touching the submodule pin: create
+throwaway stub files at `plugins/plan/{manifest.json,main.js,README.md}` and
+`plugins/stories-ticker/{same}` (any valid-enough placeholder content), run your checks, then
+`rm -rf plugins/plan plugins/stories-ticker` and confirm `git -C plugins status --porcelain` is
+empty again — this is reversible and touches nothing tracked. The real fix is advancing the
+submodule pin to a commit that has both directories (or removing the two `SEEDED_PLUGINS` entries
+if they're no longer meant to ship this way); neither has been done yet as of this note.
+
 **Committing a change under `plugins/` needs TWO commits, in two separate git histories.**
 `cd plugins && git add ... && git commit` lands a commit inside the submodule's own repo
 (likely detached-HEAD, since worktrees don't check the submodule out onto a branch) — this is

@@ -191,6 +191,34 @@ pub(crate) fn set_agent_native_status_signals(
     crate::config::save_agents_config(config)
 }
 
+/// `None` here means "ask when detected" — see `AgentSettings::wrap_user_function`'s
+/// own doc comment. Unlike `get_agent_native_status_signals`, this one does NOT
+/// collapse to a bool default: the caller (Settings UI) needs to render three
+/// distinct states, not two.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn get_agent_wrap_user_function(agent_type: String) -> Option<bool> {
+    crate::agent_hook_launch::wrap_user_function(&agent_type)
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn set_agent_wrap_user_function(
+    agent_type: String,
+    value: Option<bool>,
+) -> Result<(), String> {
+    if !matches!(agent_type.as_str(), "claude" | "codex" | "goose") {
+        return Err(format!(
+            "wrapping a user-defined shell function is unsupported for '{agent_type}'"
+        ));
+    }
+    let mut config = crate::config::load_agents_config();
+    config
+        .agents
+        .entry(agent_type)
+        .or_default()
+        .wrap_user_function = value;
+    crate::config::save_agents_config(config)
+}
+
 /// Startup migration: re-install hooks for every agent that already has
 /// `hook_instrumentation` enabled but whose installed commands no longer
 /// match the current map (e.g. a version bump moved the shell-hook generator

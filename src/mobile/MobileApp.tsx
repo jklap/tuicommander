@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { AgentWrapPromptHost } from "../components/AgentWrapPromptHost/AgentWrapPromptHost";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
 import { PtyOpenUrlHost } from "../components/PtyOpenUrlHost/PtyOpenUrlHost";
 import { appLogger } from "../stores/appLogger";
@@ -166,6 +167,7 @@ export default function MobileApp() {
 			</Show>
 			<MobileToastContainer />
 			<McpConfirmHost />
+			<AgentWrapPromptHost />
 			<PtyOpenUrlHost />
 		</div>
 	);

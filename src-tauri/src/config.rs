@@ -2018,6 +2018,14 @@ pub(crate) struct AgentSettings {
     /// Launch-scoped native status signals. Missing means enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) native_status_signals: Option<bool>,
+    /// zsh only. What to do when the user's shell already defines its own
+    /// `claude`/`codex`/`goose` function, which otherwise silently skips
+    /// TUIC's launch-flag injection for that agent (see `shell_integration.rs`'s
+    /// module doc comment). `None` = ask when detected; `Some(true)` = wrap
+    /// the user's function and append TUIC's launch flag; `Some(false)` =
+    /// leave the user's function alone, never ask again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) wrap_user_function: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -6381,8 +6389,9 @@ mod tests {
                 suggest_followups: None,
                 prefer_tuic_messaging: Some(false),
                 prefer_tuic_spawning: Some(true),
-                hook_instrumentation: None,
-                native_status_signals: None,
+                hook_instrumentation: Some(true),
+                native_status_signals: Some(false),
+                wrap_user_function: Some(true),
             },
         );
         let loaded: AgentsConfig = round_trip_in_dir(dir.path(), "agents.json", &agents);
@@ -6405,6 +6414,26 @@ mod tests {
         assert_eq!(claude.suggest_followups, None);
         assert_eq!(claude.prefer_tuic_messaging, Some(false));
         assert_eq!(claude.prefer_tuic_spawning, Some(true));
+        // These two were previously set in the literal above but never
+        // actually asserted on the round-tripped value — a real, if minor,
+        // pre-existing coverage gap closed alongside adding
+        // `wrap_user_function` below (found auditing this test before
+        // extending it, per this repo's own test-coverage-first convention).
+        assert_eq!(claude.hook_instrumentation, Some(true));
+        assert_eq!(claude.native_status_signals, Some(false));
+        assert_eq!(claude.wrap_user_function, Some(true));
+    }
+
+    #[test]
+    fn agents_config_wrap_user_function_defaults_to_none_for_old_json() {
+        // Forward-compat, same shape as the sibling test for
+        // prefer_tuic_messaging/prefer_tuic_spawning: an agents.json written
+        // before this field existed must still deserialize, with the field
+        // defaulting to None (i.e. "ask when detected").
+        let old_json = r#"{"agents":{"claude":{"run_configs":[],"intent_tab_title":true}}}"#;
+        let loaded: AgentsConfig = serde_json::from_str(old_json).unwrap();
+        let claude = loaded.agents.get("claude").unwrap();
+        assert_eq!(claude.wrap_user_function, None);
     }
 
     #[test]
