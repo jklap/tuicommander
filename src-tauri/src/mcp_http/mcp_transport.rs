@@ -1096,7 +1096,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list";
+const REPO_ACTIONS: &str = "list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -3263,6 +3263,19 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
         Err(e) => return e,
     };
     match action {
+        "ci_logs" => {
+            let path = match require_path(args, action) {
+                Ok(path) => path,
+                Err(error) => return error,
+            };
+            let branch = match args.get("branch").and_then(serde_json::Value::as_str) {
+                Some(branch) => branch.to_string(),
+                None => return serde_json::json!({"error":"Action 'ci_logs' requires 'branch'"}),
+            };
+            to_json_or_error(
+                crate::github::fetch_ci_failure_logs_with_state(path, branch, state.clone()).await,
+            )
+        }
         "prs" => {
             let path = match require_path(args, "prs") {
                 Ok(p) => p,
@@ -6702,7 +6715,7 @@ async fn handle_repo(
     };
     match action {
         "list" | "active" => handle_workspace(state, args),
-        "prs" | "status" | "issues" | "close_issue" | "reopen_issue" => {
+        "prs" | "status" | "ci_logs" | "issues" | "close_issue" | "reopen_issue" => {
             handle_github(state, args).await
         }
         "worktree_list" | "worktree_create" | "worktree_remove" => {
