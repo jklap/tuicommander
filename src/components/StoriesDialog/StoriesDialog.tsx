@@ -27,11 +27,16 @@ interface Story {
 	status: Status;
 	revision: number;
 	claimSession: string | null;
+	abandoned: boolean;
 }
 type Reply =
 	| { type: "plan"; value: Plan }
 	| { type: "plans"; value: Plan[] }
 	| { type: "plan_state"; value: "draft" | "active" | "done" }
+	| {
+			type: "plan_view";
+			value: { stories: Story[]; state: "draft" | "active" | "done"; wontFixCount: number; allCancelled: boolean };
+	  }
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
 
@@ -91,6 +96,8 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [planId, setPlanId] = createSignal<string | null>(null);
 	const [storyId, setStoryId] = createSignal<string | null>(null);
 	const [planState, setPlanState] = createSignal<string>("draft");
+	const [wontFixCount, setWontFixCount] = createSignal(0);
+	const [allCancelled, setAllCancelled] = createSignal(false);
 	const [loading, setLoading] = createSignal(true);
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal("");
@@ -111,18 +118,6 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 	const selectedPlan = () => plans().find((plan) => plan.id === planId());
 	const selectedStory = () => stories().find((story) => story.id === storyId());
-	const wontFixCount = () => stories().filter((story) => story.status === "wontfix").length;
-	const abandoned = (story: Story, seen = new Set<string>()): boolean => {
-		if (seen.has(story.id)) return false;
-		seen.add(story.id);
-		return (
-			story.status === "wontfix" ||
-			story.dependencies.some((id) => {
-				const dependency = stories().find((item) => item.id === id);
-				return dependency ? abandoned(dependency, seen) : false;
-			})
-		);
-	};
 	const fail = (cause: unknown): void => {
 		const message = String(cause);
 		appLogger.warn("store", "Stories: action failed", { error: message });
@@ -163,21 +158,23 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			const nextPlan = list.value.find((plan) => plan.id === preferredPlan)?.id ?? list.value[0]?.id ?? null;
 			let nextStories: Story[] = [];
 			let nextState = "draft";
+			let nextWontFixCount = 0;
+			let nextAllCancelled = false;
 			if (nextPlan) {
-				const [rows, state] = await Promise.all([
-					call({ action: "list_stories", plan_id: nextPlan }),
-					call({ action: "plan_state", plan_id: nextPlan }),
-				]);
-				if (rows.type !== "stories" || state.type !== "plan_state")
-					throw new Error(t("stories.error.invalidStory", "Invalid story response"));
-				nextStories = rows.value;
-				nextState = state.value;
+				const view = await call({ action: "plan_view", plan_id: nextPlan });
+				if (view.type !== "plan_view") throw new Error(t("stories.error.invalidStory", "Invalid story response"));
+				nextStories = view.value.stories;
+				nextState = view.value.state;
+				nextWontFixCount = view.value.wontFixCount;
+				nextAllCancelled = view.value.allCancelled;
 			}
 			if (current !== request) return;
 			setPlans(list.value);
 			setPlanId(nextPlan);
 			setStories(nextStories);
 			setPlanState(nextState);
+			setWontFixCount(nextWontFixCount);
+			setAllCancelled(nextAllCancelled);
 			setStoryId(nextStories.find((story) => story.id === preferredStory)?.id ?? nextStories[0]?.id ?? null);
 		} catch (cause) {
 			if (current === request) fail(cause);
@@ -365,7 +362,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</div>
 						<Show when={selectedPlan() && wontFixCount() > 0}>
 							<p class={s.planNotice}>
-								{wontFixCount() === stories().length
+								{allCancelled()
 									? t("stories.allCancelled", "All cancelled")
 									: t("stories.wontFixCount", "{count} won't fix", { count: String(wontFixCount()) })}
 							</p>
@@ -544,9 +541,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 																<span>
 																	{dependency?.title ?? id} ·{" "}
 																	{dependency ? statusLabel(dependency.status) : t("stories.unknown", "Unknown")}
-																	{dependency && abandoned(dependency)
-																		? ` · ${t("stories.abandoned", "abandoned")}`
-																		: ""}
+																	{dependency?.abandoned ? ` · ${t("stories.abandoned", "abandoned")}` : ""}
 																</span>
 																<Show when={story().status === "backlog" && dependency?.status === "wontfix"}>
 																	<button

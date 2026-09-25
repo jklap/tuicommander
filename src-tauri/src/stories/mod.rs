@@ -598,4 +598,67 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn plan_view_derives_transitive_abandonment_and_cancellation_summary() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let create = |title: &str| {
+            store
+                .create_story(NewStory {
+                    plan_id: plan.id.clone(),
+                    title: title.into(),
+                    criteria: vec!["Done".into()],
+                    priority: 1,
+                    origin: StoryOrigin::Native,
+                    file_scope: vec![],
+                })
+                .expect("story")
+        };
+        let cancelled = create("Cancelled");
+        let middle = create("Middle");
+        let last = create("Last");
+        let middle = store
+            .add_dependency(&middle.id, &cancelled.id, middle.revision)
+            .expect("edge");
+        store
+            .add_dependency(&last.id, &middle.id, last.revision)
+            .expect("edge");
+        store
+            .transition(&cancelled.id, cancelled.revision, StoryCommand::WontFix)
+            .expect("cancel");
+        let view = store.plan_view(&plan.id).expect("view");
+        assert_eq!(view.state, PlanState::Active);
+        assert_eq!(view.wont_fix_count, 1);
+        assert!(!view.all_cancelled);
+        assert!(view.stories.iter().all(|story| story.abandoned));
+        let empty = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Empty".into(),
+                source: "empty.md".into(),
+            })
+            .expect("empty plan");
+        let empty_view = store.plan_view(&empty.id).expect("empty view");
+        assert_eq!(empty_view.state, PlanState::Draft);
+        assert!(!empty_view.all_cancelled);
+        store
+            .transition(&middle.id, middle.revision, StoryCommand::WontFix)
+            .expect("cancel middle");
+        let last = store.get_story(&last.id).expect("last");
+        store
+            .transition(&last.id, last.revision, StoryCommand::WontFix)
+            .expect("cancel last");
+        let cancelled_view = store.plan_view(&plan.id).expect("cancelled view");
+        assert_eq!(cancelled_view.state, PlanState::Done);
+        assert_eq!(cancelled_view.wont_fix_count, 3);
+        assert!(cancelled_view.all_cancelled);
+    }
 }
