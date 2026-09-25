@@ -5749,3 +5749,19 @@ section. All of the below needs a rebuilt build to check.
   instant-prompt in verbose mode and confirm a burst of several simultaneous agent-teams pane
   spawns no longer triggers the config wizard. Also confirm the setting is findable via the
   Settings search box (typing "Environment Variables" should scroll to it).
+
+## Ghost pane-tab / Global Workspace stale-layout fix (2026-09-25, **frontend-only — needs app restart or reload**)
+- Fixes a live-reported bug: a new tab kept landing inside a 6-way split left over from an
+  Agent Teams swarm, and "Reset Panel Sizes" only worked until the next new terminal. Root
+  cause + fix details: `src/AGENTS.md`'s "`paneLayoutStore` Ghost Tabs Can Permanently Wedge A
+  Split..." section. Unit-tested (`useTerminalLifecycle.test.ts`, `useSplitPanes.test.ts`), but
+  the actual live scenario (a real tmux-shim-materialized pane whose PTY died outside the
+  normal close path) can't be reproduced from a unit test.
+- **Verify after restart/reload:** with the Global Workspace active and holding a split (any
+  auto-consolidated repo with 2+ terminals promoted), run "Reset Panel Sizes" from the Command
+  Palette, then open a brand-new terminal in that same repo — it should land as its own flat
+  tab, NOT get pulled back into a resurrected split. Separately, manually verify a pane whose
+  only tab is a session TUICommander no longer tracks (hardest to force manually — closest
+  approximation: kill a teammate pane's PTY process directly from a shell, e.g. `kill -9`, in a
+  way that bypasses the app's own close path) can still be closed via the pane's close-pane
+  action.

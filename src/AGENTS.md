@@ -111,6 +111,95 @@ by live `shellState` in the specific consumer that cares about liveness,
 never by mutating branch membership.
 
 
+## `paneLayoutStore` Ghost Tabs Can Permanently Wedge A Split, And Global Workspace Has Its Own Independent Stale-Layout Cache
+
+Found 2026-09-25 from a live user report ("a new tab keeps landing in a pane
+split into 6, and Reset Panel Sizes doesn't stick"). Two distinct bugs, same
+root shape as `branch.terminals`'s ghost problem above, in a different store.
+
+**Bug 1 — a tab whose content never made it into (or was removed from) its
+owning store can permanently block a pane from ever collapsing.** A pane
+materialized by the tmux compatibility shim (Agent Teams teammate panes)
+whose underlying PTY died via a path that never fired `session-closed` — e.g.
+a `kill-pane` outside the shim's own `DELETE /tmux/panes/{id}` route, or the
+process dying with its parent tmux socket — leaves a tab id in
+`paneLayoutStore` with no `terminalsStore` entry (the same shape applies to a
+diff/markdown/editor tab whose entry disappeared from its own store by some
+other path). It renders nothing (no tab strip entry, no close button), so a
+user can never close it by hand. `useTerminalLifecycle.ts`'s
+`removeTabFromPane` used to gate pane-collapse on `group.tabs.length === 0` —
+a ghost's phantom tab entry means that count can never reach zero, so the pane
+(and, transitively, the whole split it's part of) is stuck open forever, and
+any *new* tab opened while that pane happens to be active lands inside it.
+Fixed by treating a tab with no live entry in its owning store as not
+counting toward "this pane still has content" — see `isPaneTabLive`
+(`src/utils/paneTabLiveness.ts`), which switches on `tab.type` to check the
+right one of `terminalsStore`/`diffTabsStore`/`mdTabsStore`/`editorTabsStore`.
+`useSplitPanes.ts`'s `closeActivePane` never had this gate (it unconditionally
+closes its target group), so it was never affected.
+
+**Bug 1b (found by code review, same day) — a pane whose ONLY tab is a ghost
+has no sibling tab to ever trigger `removeTabFromPane`'s check at all.** The
+fix above only re-evaluates a group's liveness when some OTHER tab in it is
+explicitly closed — a solo-ghost pane (the common shape for a tmux-shim
+teammate pane, which is usually alone in its own tiled cell) has nothing else
+to close, so it stayed wedged open even after the fix above. Closed with a
+second, independent mechanism: `paneLayout.ts` now wires
+`terminalsStore.onRemove(...)` at module scope (mirroring
+`globalWorkspace.ts`'s own identical wiring for itself) to sweep a removed
+terminal's tab out of its group immediately, collapsing the pane via
+`isPaneTabLive` if nothing else in it is live — event-driven off the actual
+removal, not dependent on an unrelated tab-close ever happening in that same
+group. (Not extended to diff/markdown/editor tabs: their shared
+`createTabManager` factory has no `onRemove`-style hook at all today — adding
+one to fix a not-yet-live-confirmed gap for those three tab types wasn't
+worth the risk; `isPaneTabLive`'s read-side check still covers them for the
+sibling-close path above.)
+
+**Bug 1c (found by the same review pass) — `globalWorkspaceStore
+.resetActiveLayout()` (below) could rebuild the visible pane without moving
+focus to match.** `addTerminalToLayout` sets a rebuilt group's `activeTabId`
+to the LAST id it folds in (`Set` iteration order), which won't generally be
+whatever `terminalsStore.state.activeId` (focus/keyboard routing) already
+pointed at. Fixed by reconciling `activeId` to the rebuilt layout's
+`activeTabId` at the end of `resetActiveLayout()`, mirroring `activate()`'s
+own pre-existing reconciliation for the identical reason — safe unconditionally
+there because the only caller (`useSplitPanes.ts`'s `resetLayout()`) gates the
+whole call on `isActive()`, so the user is guaranteed to be looking at this
+workspace already.
+
+**Bug 2 — `globalWorkspaceStore` caches its own layout snapshot, independent
+of `paneLayoutStore`, and reapplies it on every promote/unpromote.** While the
+Global Workspace (auto-consolidation, #e767) is active, `syncToPaneStore()`
+calls `paneLayoutStore.restore(workspace().layout)` on essentially every
+membership change — so a plain `paneLayoutStore.reset()` (what "Reset Panel
+Sizes" used to do) doesn't stick: the very next new terminal (which gets
+auto-consolidated into the active workspace) re-triggers a sync that restores
+the stale cached layout right back. Fixed with a new
+`globalWorkspaceStore.resetActiveLayout()` — rebuilds the active workspace's
+own cached layout as a flat single pane from its *current* `promoted` set,
+discarding whatever split geometry was cached — called alongside
+`paneLayoutStore.reset()` from `useSplitPanes.ts`'s `resetLayout()`.
+
+**Deliberately NOT fixed:** making `globalWorkspaceStore` filter dead members
+out of `promoted`/`layout` on every read (e.g. inside `syncToPaneStore()`) was
+tried and reverted — it broke ~22 existing tests that promote synthetic ids
+with no matching `terminalsStore` entry, which is this store's own established
+testing convention (see `globalWorkspaceScopes.test.ts`), not a bug in those
+tests. The store's real invariant, honored by every production call site
+(`useAppInit.ts`, `useWorktreeConsolidation.ts`), is that a promoted id is
+always `terminalsStore`-backed at the moment of promotion — a member that
+later dies without the normal `terminalsStore.onRemove` → `onTerminalRemoved`
+cleanup path firing is a narrower, not-yet-live-confirmed gap (a *promoted*
+ghost, as opposed to the *paneLayoutStore*-only ghosts that caused this
+report) than the fix above closes. If a promoted-but-dead member is ever
+confirmed live (e.g. a stuck entry in the sidebar's Global Workspace badge
+count, or a blank tab in its `TabBar` list while active), fix it the same way
+`branch.terminals` was fixed — filter by liveness in the specific reader that
+needs it, not by mutating `promoted` — rather than reaching for a blanket
+prune-on-every-sync pass again.
+
+
 ## SolidJS `<For>` Index Staleness
 
 `<For>`'s mapping callback is invoked once per distinct item **reference**, not once per render — it does not re-run just because filtering/sorting shifted that same item to a new position. `<For>` hands the callback an `index` **accessor** (a function) specifically so consumers can read the item's current position later; calling it immediately (`i()`) and stashing the plain number in a closure throws that liveness away. Any handler built from that captured number (a click/hover callback that indexes back into the filtered array) goes stale the instant the array's composition changes without that item's own identity changing — the callback still runs, but against a now-wrong (sometimes out-of-bounds) slot, so it silently no-ops instead of throwing.
