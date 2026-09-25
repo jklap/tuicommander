@@ -54,10 +54,35 @@ describe("StoriesDialog", () => {
 		await screen.findByRole("heading", { name: "Implement API" });
 		expect(screen.getByText("API works")).toBeTruthy();
 		expect(screen.getByText("src/api.rs")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
 		fireEvent.click(screen.getByRole("button", { name: "Start work" }));
 		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_action_command", {
 			project: "/repo",
 			action: { action: "transition", story_id: "s1", expected_revision: 1, command: "start_manual" },
+		}));
+	});
+
+	it("offers desktop review actions and sends the selected transition", async () => {
+		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			const action = (args as { action: { action: string } }).action;
+			if (action.action === "list_plans") return { type: "plans", value: [plan] };
+			if (action.action === "list_stories") return { type: "stories", value: [{ ...story, status: "review" }] };
+			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
+			if (action.action === "transition") return { type: "story", value: { ...story, status: "review" } };
+			throw new Error(`unexpected action ${action.action}`);
+		});
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_action_command", {
+			project: "/repo",
+			action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
+		}));
+		await waitFor(() => expect((screen.getByRole("button", { name: "Request changes" }) as HTMLButtonElement).disabled).toBe(false));
+		fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
+		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_action_command", {
+			project: "/repo",
+			action: { action: "transition", story_id: "s1", expected_revision: 1, command: "reject_review" },
 		}));
 	});
 
