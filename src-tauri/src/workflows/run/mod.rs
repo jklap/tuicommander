@@ -1,9 +1,11 @@
 mod api;
+mod check;
 mod model;
 mod reducer;
 mod store;
 
 pub use api::*;
+pub use check::*;
 pub use model::*;
 pub use store::*;
 
@@ -12,6 +14,70 @@ mod tests {
     use super::*;
     use crate::stories::{NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStore};
     use crate::workflows::{WorkflowKind, WorkflowStore};
+
+    #[test]
+    fn tuic_check_receipt_binds_a_clean_commit_and_reports_failures() {
+        use std::process::Command;
+        let repo = tempfile::tempdir().expect("repo");
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Workflow Test"],
+            vec!["config", "user.email", "workflow@example.test"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(repo.path())
+                    .status()
+                    .expect("git setup")
+                    .success()
+            );
+        }
+        std::fs::write(repo.path().join("file.txt"), "first\n").expect("file");
+        assert!(
+            Command::new("git")
+                .args(["add", "file.txt"])
+                .current_dir(repo.path())
+                .status()
+                .expect("add")
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["commit", "-qm", "initial"])
+                .current_dir(repo.path())
+                .status()
+                .expect("commit")
+                .success()
+        );
+        let check = crate::workflows::CheckDefinition {
+            id: "head".into(),
+            argv: vec!["git".into(), "rev-parse".into(), "HEAD".into()],
+            timeout_secs: 10,
+        };
+        let receipt = execute_pinned_check(&check, repo.path()).expect("check");
+        assert_eq!(receipt.exit_code, 0);
+        assert_eq!(receipt.argv, check.argv);
+        assert_eq!(receipt.commit.len(), 40);
+        assert_eq!(receipt.tree.len(), 40);
+        let failed = crate::workflows::CheckDefinition {
+            id: "bad".into(),
+            argv: vec!["git".into(), "rev-parse".into(), "missing-ref".into()],
+            timeout_secs: 10,
+        };
+        assert_ne!(
+            execute_pinned_check(&failed, repo.path())
+                .expect("failed check receipt")
+                .exit_code,
+            0
+        );
+        std::fs::write(repo.path().join("file.txt"), "changed\n").expect("edit");
+        assert!(
+            execute_pinned_check(&check, repo.path())
+                .expect_err("dirty worktree")
+                .contains("clean")
+        );
+    }
 
     fn fixture() -> (
         tempfile::TempDir,
