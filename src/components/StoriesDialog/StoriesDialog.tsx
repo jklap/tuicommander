@@ -3,6 +3,7 @@ import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
+import { HttpRpcError, isTauri } from "../../transport";
 import d from "../shared/dialog.module.css";
 import s from "./StoriesDialog.module.css";
 
@@ -39,6 +40,12 @@ const missingBackendMessage = () =>
 		"stories.error.missingBackend",
 		"Restart TUICommander to load Plans and Stories. The running app needs a newer backend.",
 	);
+
+class MissingStoriesBackendError extends Error {
+	constructor() {
+		super(missingBackendMessage());
+	}
+}
 
 const statusLabel = (status: Status): string => {
 	switch (status) {
@@ -98,6 +105,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [dependencyId, setDependencyId] = createSignal("");
 	let closeButton: HTMLButtonElement | undefined;
 	let request = 0;
+	let capabilitiesReady = false;
 	// A dependency choice belongs to the story it was made for.
 	createEffect(on(storyId, () => setDependencyId("")));
 
@@ -118,11 +126,23 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const fail = (cause: unknown): void => {
 		const message = String(cause);
 		appLogger.warn("store", "Stories: action failed", { error: message });
-		setError(
-			message.includes("story_action_command") && /(?:not found|unknown command|failed: 404)/i.test(message)
-				? missingBackendMessage()
-				: message,
-		);
+		setError(cause instanceof Error ? cause.message : message);
+	};
+	const ensureCapabilities = async (): Promise<void> => {
+		if (capabilitiesReady) return;
+		try {
+			if ((await invoke<unknown>("story_capabilities")) !== true) throw new MissingStoriesBackendError();
+			capabilitiesReady = true;
+		} catch (cause) {
+			if (
+				cause instanceof MissingStoriesBackendError ||
+				isTauri() ||
+				(cause instanceof HttpRpcError && cause.status === 404)
+			) {
+				throw new MissingStoriesBackendError();
+			}
+			throw cause;
+		}
 	};
 	const call = async (action: Record<string, unknown>): Promise<Reply> => {
 		const reply = await invoke<unknown>("story_action_command", { project: props.project, action });
@@ -137,6 +157,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		setLoading(true);
 		setError("");
 		try {
+			await ensureCapabilities();
 			const list = await call({ action: "list_plans" });
 			if (list.type !== "plans") throw new Error(t("stories.error.invalidPlan", "Invalid plan response"));
 			const nextPlan = list.value.find((plan) => plan.id === preferredPlan)?.id ?? list.value[0]?.id ?? null;

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StoriesDialog } from "../../components/StoriesDialog/StoriesDialog";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { HttpRpcError } from "../../transport";
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/modalStack", () => ({ registerModal: vi.fn() }));
@@ -27,6 +28,7 @@ const story = {
 beforeEach(() => {
 	vi.mocked(invoke).mockReset();
 	vi.mocked(invoke).mockImplementation(async (_command, args) => {
+		if (_command === "story_capabilities") return true;
 		const action = (args as { action: { action: string } }).action;
 		if (action.action === "list_plans") return { type: "plans", value: [plan] };
 		if (action.action === "list_stories") return { type: "stories", value: [story] };
@@ -61,7 +63,7 @@ describe("StoriesDialog", () => {
 	});
 
 	it("shows a recoverable error when loading fails", async () => {
-		vi.mocked(invoke).mockRejectedValueOnce(new Error("offline"));
+		vi.mocked(invoke).mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("offline"));
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText(/offline/);
 		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -69,10 +71,30 @@ describe("StoriesDialog", () => {
 	});
 
 	it("explains how to load the missing native stories backend", async () => {
-		vi.mocked(invoke).mockRejectedValueOnce("Command story_action_command not found");
+		vi.stubGlobal("__TAURI_INTERNALS__", {});
+		try {
+			vi.mocked(invoke).mockRejectedValueOnce("Command story_capabilities not found");
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByText(/Restart TUICommander/);
+			expect(invoke).toHaveBeenCalledWith("story_capabilities");
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("preserves an HTTP domain error even when it says a story was not found", async () => {
+		vi.mocked(invoke)
+			.mockResolvedValueOnce(true)
+			.mockRejectedValueOnce(new HttpRpcError("story_action_command", 500, '{"error":"story not found: s1"}'));
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByText(/story not found: s1/);
+		expect(screen.queryByText(/Restart TUICommander/)).toBeNull();
+	});
+
+	it("classifies a missing HTTP capability route by its status", async () => {
+		vi.mocked(invoke).mockRejectedValueOnce(new HttpRpcError("story_capabilities", 404, "Not Found"));
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText(/Restart TUICommander/);
-		expect(screen.queryByText(/Command story_action_command not found/)).toBeNull();
 	});
 
 	it("recognizes an older browser backend serving its HTML fallback", async () => {
@@ -86,6 +108,7 @@ describe("StoriesDialog", () => {
 		const created = { ...story, id: "s2", title: "Review API" };
 		let rows = [story];
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string; input?: unknown } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
@@ -127,6 +150,7 @@ describe("StoriesDialog", () => {
 
 	it("sends indexed criterion changes in the backend enum shape", async () => {
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "plan_state") return { type: "plan_state", value: "active" };
@@ -149,6 +173,7 @@ describe("StoriesDialog", () => {
 		let created = false;
 		const dependent = { ...story, id: "s2", title: "Review API" };
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: created ? [plan] : [] };
 			if (action.action === "create_plan") {
@@ -185,6 +210,7 @@ describe("StoriesDialog", () => {
 		const second = { ...story, id: "s2", title: "Review API" };
 		const third = { ...story, id: "s3", title: "Ship API" };
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "list_stories") return { type: "stories", value: [story, second, third] };
@@ -202,7 +228,7 @@ describe("StoriesDialog", () => {
 	});
 
 	it("logs a failed story action as well as showing it", async () => {
-		vi.mocked(invoke).mockRejectedValueOnce(new Error("offline"));
+		vi.mocked(invoke).mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("offline"));
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByText(/offline/);
 		expect(appLogger.warn).toHaveBeenCalledWith("store", expect.stringContaining("Stories"), expect.anything());
@@ -213,6 +239,7 @@ describe("StoriesDialog", () => {
 		const intermediate = { ...story, id: "s3", title: "Intermediate API", status: "backlog", dependencies: ["s2"] };
 		const dependent = { ...story, id: "s4", title: "Ship API", status: "backlog", dependencies: ["s2", "s3"] };
 		vi.mocked(invoke).mockImplementation(async (_command, args) => {
+			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
 			if (action.action === "list_stories") return { type: "stories", value: [cancelled, intermediate, dependent] };

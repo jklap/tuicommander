@@ -299,6 +299,7 @@
 /sessions/x/write-parts
 /stats
 /stories/action
+/stories/capabilities
 /system/check-update
 /system/local-ip
 /system/local-ips

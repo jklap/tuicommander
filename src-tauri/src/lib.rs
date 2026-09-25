@@ -441,6 +441,12 @@ fn progress_mark_viewed(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+fn story_capabilities() -> bool {
+    true
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 async fn story_action_command(
     state: State<'_, Arc<AppState>>,
     project: String,
@@ -1974,6 +1980,7 @@ pub fn run() {
             progress_flow,
             progress_flow_detail,
             story_action_command,
+            story_capabilities,
             get_local_ip,
             get_local_ips,
             updater::check_update_channel,

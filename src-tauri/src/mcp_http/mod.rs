@@ -450,6 +450,10 @@ async fn post_story_action(
     .and_then(|result| result);
     json_result(result)
 }
+
+async fn get_story_capabilities() -> Json<bool> {
+    Json(true)
+}
 async fn post_progress_delete(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
@@ -803,6 +807,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/progress/flow", post(post_progress_flow))
         .route("/progress/flow/detail", post(post_progress_flow_detail))
         .route("/stories/action", post(post_story_action))
+        .route("/stories/capabilities", get(get_story_capabilities))
         // Session lifecycle
         .route(
             "/sessions",

@@ -6,7 +6,10 @@ Open a project, then select **Plans and Stories** in the toolbar. Create a plan 
 
 The close button receives keyboard focus when the dialog opens. If the running backend predates native stories, the dialog asks you to restart TUICommander to load the newer backend.
 
+Before loading plans, the dialog checks whether the running backend has native story support. A missing capability prompts a restart; a story action error remains visible as that action's error.
+
 "Won't fix" cancels a story without delivering its output. It never satisfies a dependency or releases a dependent story for work. The dialog marks a cancelled prerequisite, including one reached through another dependency, as **abandoned**. A human can remove a direct cancelled prerequisite from a Backlog story; this changes that story's requirements and makes it Ready only when every remaining prerequisite is Done. A separate Blocked story is never automatically unblocked. A plan remains Active while an unfinished dependent remains. A nonempty plan becomes Done when every story is either Done or Won't fix; an empty plan stays Draft. The dialog shows the cancellation count, or **All cancelled** when every story was discarded.
+
 
 Use `tuic story '<JSON action>' --project /absolute/project` to call the story service. For example:
 
