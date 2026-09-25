@@ -530,7 +530,12 @@ pub(super) async fn close_session(
             );
         }
 
-        crate::pty::cleanup_session(&session_id, &state);
+        let cleanup_session_id = session_id.clone();
+        let cleanup_state = state.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::pty::cleanup_session(&cleanup_session_id, &cleanup_state);
+        })
+        .await;
 
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
     } else {

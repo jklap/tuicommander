@@ -1,5 +1,5 @@
 use super::model::{NewPlan, NewStory, Plan, PlanState, Story, StoryCommand, StoryStatus};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
@@ -30,7 +30,22 @@ impl StoryStore {
         if !path.exists() {
             return Ok(0);
         }
+        if !Self::session_has_claim(&path, session)? {
+            return Ok(0);
+        }
         Self::open_at(&path)?.release_session_claims(session)
+    }
+
+    /// Check for a claim without opening the schema or acquiring a write transaction.
+    fn session_has_claim(path: &Path, session: &str) -> Result<bool, String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("open story store read-only: {e}"))?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM stories WHERE claim_session=?1)",
+            [session],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("find session claim: {e}"))
     }
 
     pub(crate) fn open_at(path: &Path) -> Result<Self, String> {
