@@ -49,6 +49,9 @@ it runs, so a copy that fails costs build time and nothing else — creation sti
 succeeds and the response carries a warning naming the directory that stayed
 cold. Measured on this repository: **~38 s for 30 GB across 80k files**
 (`node_modules` 19.5 s, `src-tauri/target` 17.4 s, everything else under 0.3 s).
+For HTTP/MCP creation, wait until the workspace's warm status is `done` or
+`failed` before installing dependencies or building. The configured setup script
+runs before the copy starts. Desktop creation waits for the copy before returning.
 
 Copy-on-write warming needs filesystem support (APFS, Btrfs, XFS with reflink…) and both
 directories on the same volume. TUICommander never trusts the filesystem *name*

@@ -2094,6 +2094,10 @@ not carried over, lists warm artifact directories with their sizes and
 parent. It is byte-identical to
 what MCP `repo action=worktree_create` returns — one value, two carriers — and
 it is the ONLY instruction channel: there is no enforcement layer behind it.
+Its `warm_artifacts.status` starts as `pending`; wait for `done` or `failed`
+in `GET /worktrees/paths?path=<base_repo>` before installing or building.
+The setup script completes before warming begins. Desktop IPC creation waits
+for warming and returns `done`.
 
 `workspace_id` is how every later call addresses this workspace — `DELETE
 /worktrees/:workspaceId`, `POST /worktrees/finalize`,
@@ -2122,7 +2126,7 @@ Returns the base directory where worktrees are created.
 GET /worktrees/paths?path=/path/to/repo
 ```
 
-Returns `{ "<workspace-id>": { "branch": "feature-x", "path": "/worktree/path", "kind": "worktree" }, ... }`.
+Returns `{ "<workspace-id>": { "branch": "feature-x", "path": "/worktree/path", "kind": "worktree", "warm_artifacts": { "status": "pending" } }, ... }`.
 
 The map is keyed by workspace id and carries the branch explicitly as display
 data. Linked-worktree ids currently equal their branches, but clients should

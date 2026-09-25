@@ -760,6 +760,7 @@ impl GitReads for GixGitReads {
                     branch,
                     path: real(main_wd),
                     kind: crate::worktree::WorkspaceKind::Worktree,
+                    warm_artifacts: None,
                 },
             );
         }
@@ -786,6 +787,7 @@ impl GitReads for GixGitReads {
                         branch,
                         path,
                         kind: crate::worktree::WorkspaceKind::Worktree,
+                        warm_artifacts: None,
                     },
                 );
             }

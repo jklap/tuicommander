@@ -3,14 +3,31 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use std::sync::LazyLock;
 
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
 
-static WARM_STATES: LazyLock<dashmap::DashMap<String, serde_json::Value>> =
-    LazyLock::new(dashmap::DashMap::new);
+fn spawn_background_warm(
+    source: PathBuf,
+    destination: PathBuf,
+    warm: impl FnOnce(&FsPath, &FsPath) -> crate::cow::WarmingReport + Send + 'static,
+) -> tokio::task::JoinHandle<()> {
+    let token = crate::worktree::begin_warm(&destination);
+    tokio::task::spawn_blocking(move || {
+        let report = warm(&source, &destination);
+        let status = if report.warnings.is_empty() {
+            serde_json::json!({"status": "done"})
+        } else {
+            serde_json::json!({"status": "failed", "reason": report.warnings.join("; ")})
+        };
+        crate::worktree::finish_warm(&destination, token, status);
+        for warning in report.warnings {
+            tracing::warn!(source = "worktree", worktree = %destination.display(), "background warm failed: {warning}");
+        }
+    })
+}
 
 pub(super) struct CreatedWorktree {
     pub worktree: crate::state::WorktreeInfo,
@@ -42,9 +59,7 @@ pub(super) async fn list_worktrees_http(State(state): State<Arc<AppState>>) -> i
                     "path": wt.path.to_string_lossy(),
                     "branch": wt.branch,
                     "base_repo": wt.base_repo.to_string_lossy(),
-                    "warm_artifacts": WARM_STATES.get(&wt.path.to_string_lossy().to_string())
-                        .map(|state| state.clone())
-                        .unwrap_or_else(|| serde_json::json!({"status": "done"})),
+                    "warm_artifacts": crate::worktree::warm_status(&wt.path),
                 })
             })
         })
@@ -147,7 +162,11 @@ pub(super) async fn create_worktree_shared(
     let config_bg = config.clone();
     let worktrees_dir_bg = worktrees_dir.clone();
     let result = match tokio::task::spawn_blocking(move || {
-        crate::worktree::create_workspace_unwarmed(&worktrees_dir_bg, &config_bg, base_ref.as_deref())
+        crate::worktree::create_workspace_unwarmed(
+            &worktrees_dir_bg,
+            &config_bg,
+            base_ref.as_deref(),
+        )
     })
     .await
     {
@@ -167,8 +186,7 @@ pub(super) async fn create_worktree_shared(
             // Built before the setup script runs: the payload describes what the
             // workspace ARRIVED with, and a script that installs something does
             // not change what was already warm.
-            let mut instructions = workspace.instruction_payload();
-            instructions["warm_artifacts"]["status"] = serde_json::json!("pending");
+            let instructions = workspace.instruction_payload_pending();
             state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
                 repo_path: base_repo.clone(),
                 workspace_id: workspace_id.clone(),
@@ -178,22 +196,6 @@ pub(super) async fn create_worktree_shared(
             });
             let warm_source = std::path::PathBuf::from(&base_repo);
             let warm_destination = workspace.path.clone();
-            WARM_STATES.insert(
-                warm_destination.to_string_lossy().to_string(),
-                serde_json::json!({"status": "pending"}),
-            );
-            tokio::task::spawn_blocking(move || {
-                let report = crate::cow::warm_worktree(&warm_source, &warm_destination);
-                let key = warm_destination.to_string_lossy().to_string();
-                if report.warnings.is_empty() {
-                    WARM_STATES.insert(key, serde_json::json!({"status": "done"}));
-                } else {
-                    WARM_STATES.insert(key, serde_json::json!({"status": "failed", "reason": report.warnings.join("; ")}));
-                }
-                for warning in report.warnings {
-                    tracing::warn!(source = "worktree", worktree = %warm_destination.display(), "background warm failed: {warning}");
-                }
-            });
             let mut setup_script = None;
             let mut setup_script_error = None;
             let repo_for_script = base_repo.clone();
@@ -221,6 +223,7 @@ pub(super) async fn create_worktree_shared(
                     }
                 }
             }
+            spawn_background_warm(warm_source, warm_destination, crate::cow::warm_worktree);
             Ok(CreatedWorktree {
                 worktree: crate::state::WorktreeInfo {
                     name: workspace
@@ -535,5 +538,33 @@ pub(super) async fn run_setup_script_http(
     match res {
         Ok(r) => json_result(r),
         Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod warm_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_slow_warm_keeps_the_returned_workspace_pending_until_it_finishes() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("workspace");
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+
+        let task = spawn_background_warm(source, destination.clone(), move |_, _| {
+            wait.recv().unwrap();
+            crate::cow::WarmingReport::default()
+        });
+
+        assert!(!task.is_finished());
+        assert_eq!(
+            crate::worktree::warm_status(&destination)["status"],
+            "pending"
+        );
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert_eq!(crate::worktree::warm_status(&destination)["status"], "done");
+        crate::worktree::clear_warm(&destination);
     }
 }

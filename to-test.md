@@ -45,6 +45,9 @@
 ## MCP bridge config guard (2026-09-25) — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, verify the dev app resolves its adjacent `tuic-bridge` but leaves existing working absolute agent MCP commands unchanged. Confirm a missing command is repaired to the dev sidecar only in a disposable agent config. The targeted Rust child-process test covers launch without a sidecar and checks that a disposable HOME stays byte-identical.
+## Worktree warm status and safe removal (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, create a worktree through HTTP/MCP in an isolated `TUIC_APP_INSTANCE`. Its response says warming is pending; `GET /worktrees/paths?path=<repo>` moves to `done` or `failed`, and a configured setup script finishes before copying begins.
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 
