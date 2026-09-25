@@ -3011,6 +3011,10 @@ restart, not before.
       instead of being dropped entirely; the same for an intent long enough that
       the agent's own wrapping pushes the `(Title)` onto the next row. Prose is
       still rejected — `Ready when you are. intent: x` must NOT set a title.
+- [ ] **Needs a `make dev` restart (Rust).** In a 120-column agent tab, a long
+      `intent:` soft-wrapped across five rows still sets its final `(Title)` and
+      writes one truncated journal row. A following different intent must not
+      silently erase a previous titleless line ending in an unfinished `(`.
 
 ## Remote repo browser (2026-09-20) — frontend only, Vite HMR picks it up
 

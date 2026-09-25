@@ -239,8 +239,13 @@ Two shapes the row-anchored regex cannot read on its own, both rejoined before i
 
 The PTY reader retains one open intent per session while a TUI redraws growing
 prefixes. It reconstructs soft-wrapped grid lines and joins width-verified
-hard-wrap rows before parsing. Long intent text is redacted and truncated to
-the Progress journal limit, while the parsed event keeps the full text. It
+hard-wrap rows before parsing. It reads continuation rows lazily and caches
+each anchor for one reader tick, so a repaint below an intent does not
+repeatedly scan the same grid rows. The grid reconstruction budget matches
+the parser's 2048-character candidate budget, including UTF-8 and terminal
+padding. Long intent text is redacted and truncated to the Progress journal
+limit, while the parsed event keeps the full text. An unfinished `(` suffix
+is recorded as titleless text when a different intent replaces it. The reader
 journals on a closed `(title)`, a VTE hard
 line break that did not grow the candidate, subsequent prose below the line,
 replacement of the line, or an idle turn boundary after output has gone quiet.

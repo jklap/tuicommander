@@ -12872,9 +12872,10 @@ fn run_progress_intent_case_grid(
     }
     if !alt_screen && history_capacity == 20 {
         let vt = state.grid.vt_log_buffers.get(sid).expect("terminal grid");
+        let vt = vt.lock();
         assert!(
-            vt.lock().grid_screen_origin() > history_capacity,
-            "the main-screen test must scroll beyond its history cap"
+            vt.grid_screen_origin() > vt.grid_history_size(),
+            "the main-screen test must scroll beyond the actual grid history cap"
         );
     }
     if timer_idle {
@@ -13208,13 +13209,15 @@ async fn indented_prose_after_a_soft_wrapped_intent_is_not_a_hard_wrap() {
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn capped_main_screen_origin_closes_a_titleless_intent() {
-    let filler = "filler\r\n".repeat(60);
+    let filler = "filler\r\n".repeat(10_040);
     let (events, entries) = run_progress_intent_case_grid(
         &[
             &filler,
             "\x1b[12;1H\x1b[2K• intent: Inspect capped scrollback",
             "\x1b[S",
-            "\x1b[14;1H\x1b[2KFollowing prose after the scroll",
+            // The prose is only one row below the scrolled anchor. A capped
+            // history_size origin leaves the old row number in place.
+            "\x1b[12;1H\x1b[2KFollowing prose after the scroll",
         ],
         80,
         true,
@@ -13312,6 +13315,131 @@ async fn ordinary_agent_repaint_avoids_intent_grid_scans() {
             reads.get()
         );
     });
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn wide_soft_wrapped_intent_keeps_complete_title_and_journal() {
+    let text = "review ".repeat(76).trim_end().to_string();
+    let chunk = format!("\x1b[4;1H\x1b[2K• intent: {text} (Wide review)");
+    let (events, entries) = run_progress_intent_case(&[&chunk], 120, true, false);
+    assert_eq!(events, [(text.clone(), Some("Wide review".into()))]);
+    assert_eq!(entries.len(), 1);
+    assert!(text.starts_with(entries[0].trim_end_matches('…')));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn unclosed_title_does_not_silently_discard_prior_intent() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (",
+            "\x1b[5;1H\x1b[2K• intent: Review routing (Routing)",
+        ],
+        80,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [
+            ("Inspect auth (".into(), None),
+            ("Review routing".into(), Some("Routing".into()))
+        ]
+    );
+    assert_eq!(entries, ["Review routing", "Inspect auth ("]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn repaint_below_open_intent_reads_each_continuation_once() {
+    let mut frame = String::from("\x1b[1;1H\x1b[2K• intent: Inspect current state");
+    for row in 2..=16 {
+        frame.push_str(&format!("\x1b[{row};1H\x1b[2KFrame row {row}"));
+    }
+    INTENT_CONTINUATION_GRID_READS.with(|reads| reads.set(0));
+    let _ = run_progress_intent_case(&[&frame], 80, true, false);
+    INTENT_CONTINUATION_GRID_READS.with(|reads| {
+        assert!(reads.get() <= 2, "{} continuation grid reads", reads.get());
+    });
+
+    let completed = frame.replace("Inspect current state", "Inspect current state (Current)");
+    INTENT_CONTINUATION_GRID_READS.with(|reads| reads.set(0));
+    let (events, _) = run_progress_intent_case(&[&completed], 80, true, false);
+    assert_eq!(
+        events,
+        [("Inspect current state".into(), Some("Current".into()))]
+    );
+    INTENT_CONTINUATION_GRID_READS.with(|reads| {
+        assert_eq!(reads.get(), 0, "closed title scanned continuation rows");
+    });
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn silence_timer_drains_open_intent_after_idle() {
+    tokio::time::pause();
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "progress-intent-timer";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    state.grid.vt_log_buffers.insert(
+        sid.into(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 80, 2000)),
+    );
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    ChunkProcessor::new(None, None).process_chunk(
+        "\x1b[4;1H\x1b[2K• intent: Review idle drain",
+        &silence,
+        sid,
+        &state,
+    );
+    silence.lock().last_output_at =
+        std::time::Instant::now() - STARTUP_SETTLE_SILENCE - std::time::Duration::from_secs(1);
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_IDLE, Ordering::Release);
+    let running = std::sync::Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state);
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                parsed["text"].as_str().map(str::to_string)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(intents, ["Review idle drain"]);
 }
 
 /// Live idle Codex animation from brainstorming (2026-09-21). The capture
