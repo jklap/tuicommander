@@ -197,6 +197,23 @@ tests` step / `pnpm test:plugins` reports 0 tests collected and exits 1). Both a
 environment drift, not a regression — don't spend time fixing the submodule pointer unless
 explicitly asked.
 
+**Plugins pin status (rebase onto main, 2026-10): the `497bb1f` breakage is fixed, but the pin is
+undecided between two diverged plugin commits.** `497bb1f` predated the plugins repo's `20b2e09`
+(`feat(plugins): externalize plan and stories tools`), so `plugins/plan/` and
+`plugins/stories-ticker/` — which `plugins.rs`'s `SEEDED_PLUGINS` unconditionally `include_str!`s —
+did not exist and the whole crate failed to compile (six `couldn't read ... No such file or
+directory` errors). Both later pins have them: this tree records main's `670c36628` (adds
+`sqlite-viewer/`); the pre-rebase `wip` branch recorded `6dc4b8047`, the plugins repo's `wip` tip
+(adds `md-kanban/` and `tuic-voice/`). They diverge from `c964e7bb9`, so `src/__tests__/plugins/mdKanban.test.ts`
+cannot pass against a checkout of `670c36628`. **The final pin needs a commit inside the plugins
+repo that merges `670c36628` and `6dc4b8047`, pushed to that repo's remote** (see the two-commit
+dance below — the parent repo's push does not carry it), and then a parent-repo commit pinning it.
+If a similar gap reappears (a new bundled plugin referenced via `include_str!` before the pin
+catches up), verify with `git -C plugins ls-tree HEAD --name-only | grep -E
+'^(plan|stories-ticker|<new-plugin>)$'` (empty output confirms the gap), then advance the pin to a
+commit — check both `origin/main` and `origin/wip` in the plugins repo — that has every directory
+`SEEDED_PLUGINS` references.
+
 **Committing a change under `plugins/` needs TWO commits, in two separate git histories.**
 `cd plugins && git add ... && git commit` lands a commit inside the submodule's own repo
 (likely detached-HEAD, since worktrees don't check the submodule out onto a branch) — this is
