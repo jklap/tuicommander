@@ -1103,6 +1103,21 @@ fn yaml_edit_is_surgical(
         .get_mut(key)
         .and_then(serde_yaml::Value::as_mapping_mut)
         .and_then(|map| map.remove(TUIC_MCP_KEY));
+    // Removing the last entry leaves `extensions:` with no value, which YAML
+    // reads as null; that is the same document as an empty section.
+    if after.get(key).is_some_and(serde_yaml::Value::is_null)
+        && before
+            .get(key)
+            .and_then(serde_yaml::Value::as_mapping)
+            .is_some_and(serde_yaml::Mapping::is_empty)
+    {
+        if let Some(root) = after.as_mapping_mut() {
+            root.insert(
+                serde_yaml::Value::String(key.to_string()),
+                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            );
+        }
+    }
     if before.get(key).is_none()
         && after.get(key).is_some_and(|section| {
             section
@@ -2582,6 +2597,31 @@ mod tests {
         assert_eq!(
             read_yaml_file(&path).unwrap()["extensions"][TUIC_MCP_KEY]["cmd"].as_str(),
             Some("/bridge")
+        );
+    }
+
+    /// Removing the only goose extension leaves `extensions:` with no value,
+    /// which YAML reads as null. The surgical guard must accept that, or the
+    /// user can never remove TUIC and every launch re-adds it.
+    #[test]
+    fn yaml_removal_of_the_only_extension_is_allowed() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("goose.yaml");
+        std::fs::write(
+            &path,
+            "extensions:\n  tuicommander:\n    cmd: /bridge\n    enabled: true\n",
+        )
+        .unwrap();
+        remove_yaml_mcp_entry(&path, "extensions", "goose")
+            .expect("removing the only extension must succeed");
+        let after: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            after
+                .get("extensions")
+                .and_then(|extensions| extensions.get(TUIC_MCP_KEY))
+                .is_none()
         );
     }
 
