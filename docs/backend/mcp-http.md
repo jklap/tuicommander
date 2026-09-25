@@ -1327,6 +1327,9 @@ filter, output directory, and byte count per opened session. A new enable starts
 fresh files, and each `<config dir>/captures/<session-id>.tcap` file is capped at
 512 KiB. Records preserve direction, original read/write boundaries and monotonic
 timestamps; legacy `.raw` fixtures remain readable as output-only captures.
+Set `TUIC_CAPTURE_DIR` to an absolute path before starting the server to place
+captures there instead. A relative value rejects activation with an `error`
+field and leaves capture disabled.
 
 Capture must be enabled before reproduction. `/sessions/:id/output` is not a
 fixture-acquisition fallback: its bounded ring can lose a one-shot marker and its

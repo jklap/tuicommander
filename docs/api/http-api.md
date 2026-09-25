@@ -1502,6 +1502,16 @@ GET /metrics
 
 Returns `{ "total_spawned": N, "failed_spawns": N, "bytes_emitted": N, "pauses_triggered": N }`.
 
+### Raw PTY Capture
+
+`POST /diagnostics/capture` accepts `{ "enabled": true, "session_id"?: "<id>" }`
+to start recording one or all sessions; `{ "enabled": false }` stops it.
+`GET /diagnostics/capture` reports the active directory, session filter and
+bytes recorded. Captures default to `<config dir>/captures/<id>.tcap`.
+Set the process environment variable `TUIC_CAPTURE_DIR` to an absolute path
+before launch to select another directory. A relative value returns
+`{ "enabled": false, "error": "TUIC_CAPTURE_DIR must be absolute" }` on enable.
+
 ### Local IPs
 
 ```
