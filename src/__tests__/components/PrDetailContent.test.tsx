@@ -66,6 +66,17 @@ describe("PrDetailContent — ego review result metadata", () => {
 		expect(getByText("No findings")).toBeTruthy();
 	});
 
+	it("fetches and renders a failed CircleCI check log without opening its URL", async () => {
+		mockGithubStore.getCheckDetails.mockReturnValue([
+			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },
+		]);
+		mockInvoke.mockResolvedValue("\u001b[31mfailed step\u001b[0m");
+		const { getByText, findByText } = render(() => <PrDetailContent repoPath={nextRepo()} branch="feature" />);
+		fireEvent.click(getByText("Log"));
+		expect(mockInvoke).toHaveBeenCalledWith("fetch_circleci_logs", { url: "https://circleci.com/gh/acme/widget/42" });
+		expect(await findByText("failed step")).toBeTruthy();
+	});
+
 	it("does not pluralise a single reviewed file", async () => {
 		mockInvoke.mockResolvedValue({
 			repo_path: "/repo",
