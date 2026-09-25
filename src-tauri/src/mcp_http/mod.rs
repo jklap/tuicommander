@@ -6700,6 +6700,7 @@ mod tests {
                 name: "peer".to_string(),
                 project: None,
                 registered_at: 0,
+                mcp_scoped_identity: false,
             },
         );
     }
