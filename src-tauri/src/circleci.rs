@@ -216,7 +216,15 @@ async fn fetch_job_log_from_base(
     api_base: &str,
 ) -> Result<String, String> {
     let mut url = url::Url::parse(api_base).map_err(|error| format!("Invalid CircleCI API base: {error}"))?;
-    url.path_segments_mut().expect("static URL can hold path segments").extend([job.vcs.as_str(), job.org.as_str(), job.repo.as_str(), &job.build_num.to_string()]);
+    url.path_segments_mut()
+        .expect("static URL can hold path segments")
+        .pop_if_empty()
+        .extend([
+            job.vcs.as_str(),
+            job.org.as_str(),
+            job.repo.as_str(),
+            &job.build_num.to_string(),
+        ]);
     // The credential must never follow a provider-controlled redirect. S3 log
     // downloads below deliberately use the shared client without this header.
     let api_client = reqwest::Client::builder()
@@ -448,6 +456,7 @@ mod tests {
         let job = super::CircleCiJob { vcs: "gh".into(), org: "acme".into(), repo: "widget".into(), build_num: 42 };
 
         assert!(super::fetch_job_log_from_base(&reqwest::Client::new(), &job, "secret", &(server.url() + "/api/v1.1/project/")).await.unwrap().contains("failed"));
+        _api.assert_async().await;
         output.assert_async().await;
     }
 }
