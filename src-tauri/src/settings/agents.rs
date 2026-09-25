@@ -107,6 +107,9 @@ impl Store for AgentsSettingsStore {
     }
 
     async fn apply(&self, _: &CommitReply) -> Result<bool, Failure> {
+        // The committed write must not be answered from the in-process cache
+        // the OSC-title hot path reads (`config::load_agents_config`).
+        crate::config::invalidate_agents_config_cache();
         // Launches read the instruction files; the config itself is re-read on every launch.
         tokio::task::spawn_blocking(crate::config::refresh_launch_instructions)
             .await

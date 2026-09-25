@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getShortcutSections, KeyboardShortcutsTab } from "../../components/SettingsPanel/tabs/KeyboardShortcutsTab";
 import { ACTION_NAMES } from "../../keybindingDefaults";
 import { settingsStore } from "../../stores/settings";
+import { isPerfDebug, setPerfDebug } from "../../utils/perfDebug";
 
 describe("KeyboardShortcutsTab", () => {
 	// Catches: named rebind controls disappearing or obsolete permanent walkthroughs returning.
@@ -91,17 +92,23 @@ describe("KeyboardShortcutsTab completeness", () => {
 
 	it("renders a row for every canonical action (no silent drift from ACTION_NAMES)", () => {
 		// toggle-ai-chat is gated behind the AI-chat feature flag; force it on so
-		// the completeness check covers it too.
+		// the completeness check covers it too. toggle-diagnostics-capture is
+		// gated behind isPerfDebug() the same way.
 		vi.spyOn(settingsStore, "isAiChatEnabled").mockReturnValue(true);
-
-		const displayed = new Set<string>();
-		for (const section of getShortcutSections()) {
-			for (const sc of section.shortcuts) {
-				if (sc.action) displayed.add(sc.action);
+		const originalPerfDebug = isPerfDebug();
+		setPerfDebug(true);
+		try {
+			const displayed = new Set<string>();
+			for (const section of getShortcutSections()) {
+				for (const sc of section.shortcuts) {
+					if (sc.action) displayed.add(sc.action);
+				}
 			}
-		}
 
-		const missing = ACTION_NAMES.filter((a) => !EXEMPT.has(a) && !displayed.has(a));
-		expect(missing).toEqual([]);
+			const missing = ACTION_NAMES.filter((a) => !EXEMPT.has(a) && !displayed.has(a));
+			expect(missing).toEqual([]);
+		} finally {
+			setPerfDebug(originalPerfDebug);
+		}
 	});
 });

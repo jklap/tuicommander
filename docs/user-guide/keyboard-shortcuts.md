@@ -314,6 +314,7 @@ Hold `Cmd` alone (`Ctrl` on Windows/Linux) for 450 ms to show shortcut badges on
 | `toggle-compose-panel` | `Cmd+I` | Toggle compose panel |
 | `detach-activity-dashboard` | — | Open Activity Dashboard in separate window |
 | `toggle-tunnels` | — | SSH Tunnels panel |
+| `toggle-diagnostics-capture` | — | Toggle diagnostics capture for the active tab (debug tool, visible only while `isPerfDebug()` is on) |
 | `process-manager` | — | Process Manager |
 | `open-generators` | — | Open generators |
 | `show-remote-qr` | — | QR for Remote Mobile Connection |
