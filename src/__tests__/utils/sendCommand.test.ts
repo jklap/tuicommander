@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetPlatformCache } from "../../platform";
 import {
 	AGENT_ENTER_GAP_MS,
+	CODEX_ENTER_GAP_MS,
 	containsShellMetacharacters,
 	sendCommand,
 	shouldAutoSubmitSuggestion,
@@ -171,10 +172,17 @@ describe("sendCommand", () => {
 	});
 
 	it("keeps the existing Enter gap for Claude", async () => {
-		const stamps: number[] = [];
-		await sendCommand(async () => { stamps.push(performance.now()); }, "run tests", "claude", "posix");
-		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
-		expect(stamps[2] - stamps[1]).toBeLessThan(120);
+		// Assert the chosen delay, not wall-clock time: a late timer on a loaded
+		// machine is not a defect, so no upper bound belongs here.
+		const timeout = vi.spyOn(globalThis, "setTimeout");
+		try {
+			await sendCommand(async () => {}, "run tests", "claude", "posix");
+			const delays = timeout.mock.calls.map(([, ms]) => ms);
+			expect(delays).toContain(AGENT_ENTER_GAP_MS);
+			expect(delays).not.toContain(CODEX_ENTER_GAP_MS);
+		} finally {
+			timeout.mockRestore();
+		}
 	});
 
 	it("does not delay the Enter on a plain shell (line-buffered, no coalescing risk)", async () => {
