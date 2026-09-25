@@ -862,3 +862,26 @@ registerDebugSnapshot("paneLayout", () => {
 		),
 	};
 });
+
+// Sweep a terminal's tab out of the layout the moment it's actually removed,
+// collapsing the pane if nothing live is left. Closes a gap the explicit
+// tab-close path (useTerminalLifecycle.ts's removeTabFromPane) can't reach on
+// its own: a pane whose ONLY tab is a ghost (its session died via a path that
+// never fired session-closed — e.g. a tmux-shim-materialized pane killed
+// outside the normal close route) has no live sibling tab to ever trigger a
+// close, so it stays wedged open until something unrelated happens to close a
+// tab in that same group. This mirrors globalWorkspace.ts's own
+// terminalsStore.onRemove wiring for the identical reason. See
+// src/AGENTS.md's "paneLayoutStore Ghost Tabs..." section.
+import { isPaneTabLive } from "../utils/paneTabLiveness";
+import { terminalsStore } from "./terminals";
+
+terminalsStore.onRemove((id) => {
+	const groupId = paneLayoutStore.getGroupForTab(id);
+	if (!groupId) return;
+	paneLayoutStore.removeTab(groupId, id);
+	const updated = paneLayoutStore.state.groups[groupId];
+	if (!updated?.tabs.some(isPaneTabLive)) {
+		paneLayoutStore.closePane(groupId);
+	}
+});
