@@ -235,11 +235,13 @@ Detected as a plain-prefix token at the start of a row: `intent: <text> (<title>
 Two shapes the row-anchored regex cannot read on its own, both rejoined before it runs:
 
 - **After the ack sentence.** The protocol puts the ack and the first `intent:` in the same message by construction, so an agent that writes them as one sentence run leaves the token mid-row. `ACK_SENTENCE_PREFIX` allows that one sentence and nothing else — any other leading prose is still rejected, so `The intent: of this code` stays prose.
-- **Wrapped across physical rows.** `suggest:` is bounded by its closing `]`; `intent:` has no terminator, so the regex `$` cuts the token at the wrap and drops the `(title)` — the tab title — with it. `dewrap_intent_continuation` rejoins at most two following rows, and only the wrap shape an Ink-hosted agent produces: indented, non-empty, no bullet or prompt glyph, and never past a row that already carries a closed `(title)`.
+- **Wrapped across physical rows.** `suggest:` is bounded by its closing `]`; `intent:` has no terminator, so the regex `$` cuts the token at the wrap and drops the `(title)` — the tab title — with it. `dewrap_intent_continuation` rejoins indented rows only when the preceding row plus the next word would exceed the terminal width. A character budget bounds the candidate even in a very narrow pane. Blank rows, bullets, prompt and chrome glyphs, and a closed `(title)` stop the join.
 
 The PTY reader retains one open intent per session while a TUI redraws growing
-prefixes. It reconstructs soft-wrapped grid lines and joins up to two indented
-hard-wrap rows before parsing. It journals on a closed `(title)`, a VTE hard
+prefixes. It reconstructs soft-wrapped grid lines and joins width-verified
+hard-wrap rows before parsing. Long intent text is redacted and truncated to
+the Progress journal limit, while the parsed event keeps the full text. It
+journals on a closed `(title)`, a VTE hard
 line break that did not grow the candidate, subsequent prose below the line,
 replacement of the line, or an idle turn boundary after output has gone quiet.
 Cursor moves, carriage returns, and growing Ink frame repaints do not close an

@@ -32,6 +32,8 @@ TUI agents can redraw an intent one word at a time. Progress waits for the
 completed line or turn boundary before saving it, so a growing preview appears
 as one entry rather than a series of partial entries.
 The journal redacts secrets from intents and agent reports before writing them.
+Long intents keep their full terminal event, while the stored note is shortened
+to 500 characters after redaction.
 
 ## How an agent reports
 

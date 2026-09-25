@@ -12798,6 +12798,32 @@ fn run_progress_intent_case_ending(
     idle_is_quiet: bool,
     fail_journal: bool,
 ) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    run_progress_intent_case_grid(
+        chunks,
+        cols,
+        agent,
+        timer_idle,
+        teardown,
+        idle_is_quiet,
+        fail_journal,
+        2000,
+        true,
+    )
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn run_progress_intent_case_grid(
+    chunks: &[&str],
+    cols: u16,
+    agent: bool,
+    timer_idle: bool,
+    teardown: Option<&str>,
+    idle_is_quiet: bool,
+    fail_journal: bool,
+    history_capacity: usize,
+    alt_screen: bool,
+) -> (Vec<(String, Option<String>)>, Vec<String>) {
     let config = tempfile::tempdir().expect("config directory");
     let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
     let project = tempfile::tempdir().expect("registered project");
@@ -12828,7 +12854,7 @@ fn run_progress_intent_case_ending(
         .agent_type = agent.then(|| "codex".to_string());
     state.grid.vt_log_buffers.insert(
         sid.to_string(),
-        Mutex::new(crate::state::VtLogBuffer::new(16, cols, 2000)),
+        Mutex::new(crate::state::VtLogBuffer::new(16, cols, history_capacity)),
     );
     let silence = state
         .session_maps
@@ -12838,9 +12864,18 @@ fn run_progress_intent_case_ending(
         .clone();
     let mut parsed_events = state.event_bus.subscribe();
     let mut processor = ChunkProcessor::new(None, None);
-    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    if alt_screen {
+        processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    }
     for chunk in chunks {
         processor.process_chunk(chunk, &silence, sid, &state);
+    }
+    if !alt_screen && history_capacity == 20 {
+        let vt = state.grid.vt_log_buffers.get(sid).expect("terminal grid");
+        assert!(
+            vt.lock().grid_screen_origin() > history_capacity,
+            "the main-screen test must scroll beyond its history cap"
+        );
     }
     if timer_idle {
         if idle_is_quiet {
@@ -12979,27 +13014,6 @@ async fn progress_open_intent_close_matrix() {
         [("Inspect the auth path".into(), Some("Auth path".into()))]
     );
     assert_eq!(entries, ["Inspect the auth path"]);
-
-    let filled_scrollback = "filler\r\n".repeat(2020);
-    let (events, entries) = run_progress_intent_case(
-        &[
-            &filled_scrollback,
-            "\x1b[16;1H\x1b[2K• intent: Inspect",
-            "\x1b[S",
-            "\x1b[15;1H\x1b[2K• intent: Inspect capped scrollback (Scrollback)",
-        ],
-        80,
-        true,
-        false,
-    );
-    assert_eq!(
-        events,
-        [(
-            "Inspect capped scrollback".into(),
-            Some("Scrollback".into())
-        )]
-    );
-    assert_eq!(entries, ["Inspect capped scrollback"]);
 
     for chunks in [
         vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader\x1b[14;3H"],
@@ -13156,6 +13170,122 @@ async fn progress_open_intent_close_matrix() {
     );
     assert!(events.is_empty());
     assert!(entries.is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn indented_prose_after_a_short_intent_is_not_a_wrap() {
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K• intent: Inspect the auth path\r\n  Reading src/auth.rs (the entry point)"],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Inspect the auth path".into(), None)]);
+    assert_eq!(entries, ["Inspect the auth path"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn capped_main_screen_origin_closes_a_titleless_intent() {
+    let filler = "filler\r\n".repeat(60);
+    let (events, entries) = run_progress_intent_case_grid(
+        &[
+            &filler,
+            "\x1b[12;1H\x1b[2K• intent: Inspect capped scrollback",
+            "\x1b[S",
+            "\x1b[14;1H\x1b[2KFollowing prose after the scroll",
+        ],
+        80,
+        true,
+        false,
+        None,
+        true,
+        false,
+        20,
+        false,
+    );
+    assert_eq!(events, [("Inspect capped scrollback".into(), None)]);
+    assert_eq!(entries, ["Inspect capped scrollback"]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn narrow_intent_absorbs_three_hard_wrap_rows() {
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K● intent: Review narrow rows and\r\n  preserve every continuation while\r\n  collecting the complete title and\r\n  journal text (Narrow complete)"],
+        40,
+        true,
+        false,
+    );
+    let full = "Review narrow rows and preserve every continuation while collecting the complete title and journal text";
+    assert_eq!(events, [(full.into(), Some("Narrow complete".into()))]);
+    assert_eq!(entries, [full]);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn incomplete_narrow_title_is_not_discarded_by_the_next_intent() {
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Review narrow rows and\r\n  preserve every continuation while\r\n  collecting the complete title and (",
+            "\r\n  Narrow complete)",
+            "\r\n• intent: Begin the next step (Next)",
+        ],
+        40,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [
+            (
+                "Review narrow rows and preserve every continuation while collecting the complete title and".into(),
+                Some("Narrow complete".into())
+            ),
+            ("Begin the next step".into(), Some("Next".into()))
+        ]
+    );
+    assert_eq!(
+        entries,
+        [
+            "Review narrow rows and preserve every continuation while collecting the complete title and",
+            "Begin the next step"
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn long_intent_keeps_its_title_and_truncates_only_the_journal() {
+    let full = format!("{} {}", "a".repeat(380), "b".repeat(220));
+    let chunk = format!(
+        "\x1b[4;1H\x1b[2K• intent: {}\r\n  {} (Long)",
+        "a".repeat(380),
+        "b".repeat(220)
+    );
+    let (events, entries) = run_progress_intent_case(&[&chunk], 400, true, false);
+    assert_eq!(events, [(full.clone(), Some("Long".into()))]);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].chars().count(), crate::progress::MAX_TEXT_CHARS);
+    assert!(entries[0].ends_with('…'));
+    assert!(full.starts_with(entries[0].trim_end_matches('…')));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn ordinary_agent_repaint_avoids_intent_grid_scans() {
+    let mut frame = String::new();
+    for row in 1..=16 {
+        frame.push_str(&format!("\x1b[{row};1H\x1b[2KFrame row {row}"));
+    }
+    INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(0));
+    let (events, entries) = run_progress_intent_case(&[&frame], 80, true, false);
+    assert!(events.is_empty());
+    assert!(entries.is_empty());
+    INTENT_CANDIDATE_GRID_READS.with(|reads| {
+        assert!(reads.get() <= 2, "{} logical grid scans for a non-intent repaint", reads.get());
+    });
 }
 
 /// Live idle Codex animation from brainstorming (2026-09-21). The capture
