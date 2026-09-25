@@ -523,6 +523,232 @@ mod tests {
     }
 
     #[test]
+    fn workflow_dispatch_serializes_unknown_or_overlapping_scopes_and_limits_parallelism() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let stories = StoryStore::open().unwrap();
+        let make = |title: &str, scope: Vec<&str>| {
+            stories
+                .create_story(NewStory {
+                    plan_id: plan_id.clone(),
+                    title: title.into(),
+                    criteria: vec!["Done".into()],
+                    priority: 1,
+                    origin: StoryOrigin::Native,
+                    file_scope: scope.into_iter().map(str::to_owned).collect(),
+                })
+                .unwrap()
+        };
+        let first = make("First", vec!["src/alpha"]);
+        let separate = make("Separate", vec!["src/beta"]);
+        let overlap = make("Overlap", vec!["src/alpha/nested"]);
+        let unknown = make("Unknown", vec![]);
+        let glob = make("Glob", vec!["src/{alpha,beta}"]);
+        let third = make("Third", vec!["src/gamma"]);
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let start = |story_id: String, key: &str| {
+            store.command(
+                &run.id,
+                key,
+                RunCommand::StartAttempt {
+                    story_id,
+                    node_id: "implement".into(),
+                },
+            )
+        };
+        start(first.id, "first").unwrap();
+        assert!(start(overlap.id, "overlap").is_err());
+        assert!(start(unknown.id, "unknown").is_err());
+        assert!(start(glob.id, "glob").is_err());
+        start(separate.id, "separate").unwrap();
+        assert!(start(third.id, "third").is_err());
+    }
+
+    #[test]
+    fn workflow_dispatch_holds_dependents_after_manual_done_without_integration_receipt() {
+        let (config, project, plan_id, prerequisite_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let stories = StoryStore::open().unwrap();
+        let dependent = stories
+            .create_story(NewStory {
+                plan_id: plan_id.clone(),
+                title: "Dependent".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec!["src/dependent".into()],
+            })
+            .unwrap();
+        stories
+            .add_dependency(&dependent.id, &prerequisite_id, dependent.revision)
+            .unwrap();
+        let mut prerequisite = stories.get_story(&prerequisite_id).unwrap();
+        for command in [
+            StoryCommand::StartManual,
+            StoryCommand::CheckCriterion(0),
+            StoryCommand::SubmitReview,
+            StoryCommand::Approve,
+        ] {
+            prerequisite = stories
+                .transition(&prerequisite_id, prerequisite.revision, command)
+                .unwrap();
+        }
+        assert_eq!(prerequisite.status, crate::stories::StoryStatus::Done);
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let error = store
+            .command(
+                &run.id,
+                "dependent",
+                RunCommand::StartAttempt {
+                    story_id: dependent.id,
+                    node_id: "implement".into(),
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("integration receipt"), "{error}");
+    }
+
+    #[test]
+    fn workflow_assigns_distinct_registered_worktrees_before_worker_spawn() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let repo = project.path();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Workflow Test"],
+            vec!["config", "user.email", "workflow@example.invalid"],
+        ] {
+            crate::git_cli::git_cmd(repo).args(args).run().unwrap();
+        }
+        std::fs::write(repo.join("README.md"), "initial\n").unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["add", "README.md"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["commit", "-qm", "initial"])
+            .run()
+            .unwrap();
+        let path_a = config.path().join("worktree-a");
+        let path_b = config.path().join("worktree-b");
+        for (name, path) in [("story-a", &path_a), ("story-b", &path_b)] {
+            crate::git_cli::git_cmd(repo)
+                .args(["worktree", "add", "-q", "-b", name, path.to_str().unwrap()])
+                .run()
+                .unwrap();
+        }
+        let stories = StoryStore::open().unwrap();
+        let create = |title: &str, scope: &str| {
+            stories
+                .create_story(NewStory {
+                    plan_id: plan_id.clone(),
+                    title: title.into(),
+                    criteria: vec!["Done".into()],
+                    priority: 1,
+                    origin: StoryOrigin::Native,
+                    file_scope: vec![scope.into()],
+                })
+                .unwrap()
+        };
+        let first = create("First", "src/a");
+        let second = create("Second", "src/b");
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let project_path = repo.canonicalize().unwrap().to_string_lossy().to_string();
+        let run = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        for (key, story_id) in [("first", &first.id), ("second", &second.id)] {
+            store
+                .command(
+                    &run.id,
+                    key,
+                    RunCommand::StartAttempt {
+                        story_id: story_id.clone(),
+                        node_id: "implement".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let assign = |key: &str, story_id: String, path: &std::path::Path| {
+            store.command(
+                &run.id,
+                key,
+                RunCommand::AssignWorktree {
+                    story_id,
+                    path: path.canonicalize().unwrap().to_string_lossy().to_string(),
+                },
+            )
+        };
+        let first_assignment = assign("assign-first", first.id.clone(), &path_a).unwrap();
+        assert_eq!(
+            assign("assign-first", first.id.clone(), &path_a).unwrap(),
+            first_assignment
+        );
+        assert!(assign("assign-first", first.id.clone(), &path_b).is_err());
+        assert!(assign("assign-duplicate", second.id.clone(), &path_a).is_err());
+        let unrelated = config.path().join("unrelated");
+        std::fs::create_dir(&unrelated).unwrap();
+        assert!(assign("assign-unregistered", second.id.clone(), &unrelated).is_err());
+        let result = assign("assign-second", second.id.clone(), &path_b).unwrap();
+        assert_eq!(
+            result
+                .snapshot
+                .stories
+                .iter()
+                .find(|entry| entry.story_id == first.id)
+                .unwrap()
+                .worktree_path
+                .as_deref(),
+            path_a.canonicalize().unwrap().to_str()
+        );
+        assert_eq!(
+            result
+                .snapshot
+                .stories
+                .iter()
+                .find(|entry| entry.story_id == second.id)
+                .unwrap()
+                .worktree_path
+                .as_deref(),
+            path_b.canonicalize().unwrap().to_str()
+        );
+        assert_eq!(store.replay(&run.id).unwrap(), result.snapshot);
+    }
+
+    #[test]
     fn cancellation_records_an_unfinished_spawn_as_uncertain() {
         let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
         let store = RunStore::open_at(&config.path().join("runs.sqlite3")).expect("run store");
@@ -985,6 +1211,7 @@ mod tests {
             max_loops: 1,
             max_story_creations: 1,
             max_spawns: 1,
+            max_parallel_stories: 1,
             max_duration_secs: 3600,
         };
         let run = store

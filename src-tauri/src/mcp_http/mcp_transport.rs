@@ -5857,10 +5857,6 @@ fn launch_workflow_agent(
     let caller_cwd = std::path::Path::new(&caller_cwd)
         .canonicalize()
         .map_err(|error| format!("resolve calling worktree: {error}"))?;
-    if !caller_cwd.starts_with(std::path::Path::new(&worktree)) {
-        return Err("workflow launch must use the caller's isolated worktree".into());
-    }
-
     let store = crate::workflows::RunStore::open()?;
     let run = store.snapshot(&input.run_id)?;
     if run.project != owner {
@@ -5881,6 +5877,9 @@ fn launch_workflow_agent(
         && crate::workflows::active_coordinator_session(&run)?.as_deref() != Some(&caller)
     {
         return Err("only this run's active coordinator may launch a story worker".into());
+    }
+    if attempt.story_id == run.plan_id && !caller_cwd.starts_with(std::path::Path::new(&worktree)) {
+        return Err("workflow plan launch must use the caller's isolated worktree".into());
     }
     if let Some(binding) = &attempt.agent {
         return Ok(serde_json::json!({
@@ -5924,6 +5923,19 @@ fn launch_workflow_agent(
     let effect_key = format!("spawn:{}", attempt.id);
     if run.effects.iter().any(|effect| effect.key == effect_key) {
         return Err("spawn intent already exists; reconcile before retrying".into());
+    }
+    if attempt.story_id != run.plan_id {
+        let assignment = store.command(
+            &run.id,
+            &format!("assign-worktree:{}", attempt.story_id),
+            crate::workflows::RunCommand::AssignWorktree {
+                story_id: attempt.story_id.clone(),
+                path: worktree.clone(),
+            },
+        )?;
+        if assignment.sequence > run.sequence {
+            crate::workflows::emit_run_changed(state, &run.project, &run.id, assignment.sequence);
+        }
     }
     let reserved = store.command(
         &run.id,

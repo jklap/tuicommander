@@ -6,6 +6,8 @@
 
 The `command` action also accepts `answer_input {attempt_id,answer}` for a paused run. The answer is an idempotent durable event; `resume` is a separate command and refuses an unanswered input request.
 
+`start_plan.limits` accepts `maxParallelStories` (default 2 when omitted, range 1–8). `start_attempt` conservatively serializes unknown or overlapping file scopes and refuses dependent stories until an integration receipt path exists. `assign_worktree` is an internal managed-agent command and is rejected on this operator API.
+
 ## Workflow definitions
 
 `POST /workflows/definition/action?path=<absolute-project>` accepts one `WorkflowAction` object and returns `{ type, value }`. Actions are `seed_templates`, `create_draft {name,kind,graph}`, `list_drafts`, `get_draft {id}`, `update_draft {id,expected_revision,graph}`, `publish {id,expected_revision}`, and `get_published {id,revision}`. A graph has `nodes` and `edges`; see [Workflow definitions](../backend/workflows.md) for node, outcome, and publication rules. The path resolves to the canonical owning project. Published revisions are immutable. This endpoint defines workflows; it does not start one.
