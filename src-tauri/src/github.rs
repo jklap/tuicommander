@@ -3525,7 +3525,12 @@ struct FailingCheck {
 #[derive(Debug)]
 enum CiLogsOutcome {
     Logs(String),
-    ExternalOnly { checks: Vec<FailingCheck>, owner: String, repo: String },
+    ExternalOnly {
+        checks: Vec<FailingCheck>,
+        owner: String,
+        repo: String,
+        head_sha: String,
+    },
 }
 
 /// A check's detail link points at `/actions/runs/…` only for GitHub Actions.
@@ -3592,16 +3597,41 @@ fn circleci_token_not_configured_error(checks: &[FailingCheck]) -> String {
 ///
 /// `gh pr checks` exits non-zero when any check is failing/pending, so we parse
 /// stdout regardless of exit status and only bail when stdout has no JSON.
-fn list_failing_checks_cli(gh: &str, repo_slug: &str, branch: &str) -> Vec<FailingCheck> {
+fn list_failing_checks_cli(gh: &str, repo_slug: &str, head_sha: &str) -> Vec<FailingCheck> {
+    // Resolve the PR by its commit: a fork can use the same branch name.
+    let mut list_cmd = Command::new(gh);
+    list_cmd.args([
+        "pr",
+        "list",
+        "--repo",
+        repo_slug,
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,headRefOid",
+    ]);
+    crate::cli::apply_no_window(&mut list_cmd);
+    let prs = list_cmd.output();
+    let Some(pr_number) = prs
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
+        .and_then(|prs| pr_number_for_head(&prs, head_sha))
+    else {
+        return Vec::new();
+    };
     let mut cmd = Command::new(gh);
     cmd.args([
         "pr",
         "checks",
-        branch,
         "--repo",
         repo_slug,
         "--json",
         "name,bucket,link",
+        "--",
+        &pr_number.to_string(),
     ]);
     crate::cli::apply_no_window(&mut cmd);
     let output = match cmd.output() {
@@ -3613,6 +3643,14 @@ fn list_failing_checks_cli(gh: &str, repo_slug: &str, branch: &str) -> Vec<Faili
         Err(_) => return Vec::new(),
     };
     failing_checks_from_json(&json)
+}
+
+fn pr_number_for_head(prs: &serde_json::Value, head_sha: &str) -> Option<u64> {
+    prs.as_array()?
+        .iter()
+        .find(|pr| pr["headRefOid"].as_str() == Some(head_sha))?
+        .get("number")?
+        .as_u64()
 }
 
 /// Find failed jobs for the branch's latest head commit and fetch their logs.
@@ -3645,6 +3683,26 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
         .ok_or_else(|| format!("Cannot parse GitHub owner/repo from remote URL: {remote_url}"))?;
     let repo_slug = format!("{owner}/{repo}");
     let gh = crate::agent::resolve_cli("gh");
+    let head_output = Command::new("git")
+        .args([
+            "-C",
+            repo_path,
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ])
+        .output()
+        .map_err(|error| format!("Failed to resolve branch head: {error}"))?;
+    if !head_output.status.success() {
+        return Err("Cannot resolve the local branch head".to_string());
+    }
+    let head_sha = String::from_utf8_lossy(&head_output.stdout)
+        .trim()
+        .to_string();
+    if head_sha.len() != 40 || !head_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Invalid local branch head SHA".to_string());
+    }
 
     // Step 1: list recent runs and restrict inspection to the latest head SHA.
     // A commit commonly has several workflow runs, all of which may contribute
@@ -3660,8 +3718,7 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
         "list",
         "--repo",
         &repo_slug,
-        "--branch",
-        branch,
+        &format!("--branch={branch}"),
         "--limit",
         "50",
         "--json",
@@ -3682,16 +3739,10 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
     let runs = list_json
         .as_array()
         .ok_or_else(|| "Unexpected gh run list response".to_string())?;
-    let latest_head_sha = runs
-        .first()
-        .and_then(|run| run.get("headSha"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|sha| !sha.is_empty())
-        .ok_or_else(|| "No workflow runs found for this branch".to_string())?;
     let run_ids: Vec<u64> = runs
         .iter()
         .filter(|run| {
-            run.get("headSha").and_then(serde_json::Value::as_str) == Some(latest_head_sha)
+            run.get("headSha").and_then(serde_json::Value::as_str) == Some(head_sha.as_str())
         })
         .filter_map(|run| run.get("databaseId").and_then(serde_json::Value::as_u64))
         .collect();
@@ -3748,7 +3799,7 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
         // No failed GitHub Actions job — but the PR summary may still be red from
         // external CI (CircleCI, Codacy, …). Auto-heal only reads GitHub Actions
         // logs, so name the real culprits instead of the misleading "no jobs".
-        let failing = list_failing_checks_cli(&gh, &repo_slug, branch);
+        let failing = list_failing_checks_cli(&gh, &repo_slug, &head_sha);
         if failing.iter().any(|check| !check.is_github_actions) {
             return Ok(CiLogsOutcome::ExternalOnly {
                 checks: failing
@@ -3757,6 +3808,7 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
                     .collect(),
                 owner,
                 repo,
+                head_sha,
             });
         }
         return Err("No failed GitHub Actions job found for this branch head".to_string());
@@ -3807,7 +3859,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     repo_path: String,
     branch: String,
     check_url: Option<String>,
-    state: Arc<AppState>,
+    _state: Arc<AppState>,
 ) -> Result<String, String> {
     let outcome =
         tokio::task::spawn_blocking(move || fetch_ci_failure_logs_impl(&repo_path, &branch))
@@ -3816,11 +3868,27 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
             .and_then(|result| result)?;
     match outcome {
         CiLogsOutcome::Logs(logs) => Ok(logs),
-        CiLogsOutcome::ExternalOnly { checks, owner, repo } => {
-            let checks = check_url.as_deref().map_or(checks, |selected| checks.into_iter().filter(|check| check.link == selected).collect());
+        CiLogsOutcome::ExternalOnly {
+            checks,
+            owner,
+            repo,
+            head_sha,
+        } => {
+            let checks = if let Some(selected) = check_url.as_deref() {
+                checks
+                    .into_iter()
+                    .filter(|check| check.link == selected)
+                    .collect()
+            } else {
+                checks
+            };
             let jobs: Vec<_> = circleci_jobs_from_checks(&checks)
                 .into_iter()
-                .filter(|(_, job)| job.vcs == "gh" && job.org.eq_ignore_ascii_case(&owner) && job.repo.eq_ignore_ascii_case(&repo))
+                .filter(|(_, job)| {
+                    job.vcs == "gh"
+                        && job.org.eq_ignore_ascii_case(&owner)
+                        && job.repo.eq_ignore_ascii_case(&repo)
+                })
                 .collect();
             if jobs.is_empty() {
                 return Err(format!(
@@ -3833,11 +3901,13 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
             let mut logs = String::new();
             for (name, job) in jobs.into_iter().take(5) {
                 logs.push_str(&format!("===== FAILED CHECK: {name} =====\n"));
-                match crate::circleci::fetch_job_log(&state.http_client, &job, &token).await {
+                match crate::circleci::fetch_job_log(&job, &token, &head_sha).await {
                     Ok(job_logs) => logs.push_str(&job_logs),
                     Err(error) => {
                         tracing::warn!(source = "fetch_ci_failure_logs", check = %name, "failed to fetch CircleCI job log: {error}");
-                        logs.push_str(&format!("Unable to fetch this CircleCI job's logs: {error}\n"));
+                        logs.push_str(&format!(
+                            "Unable to fetch this CircleCI job's logs: {error}\n"
+                        ));
                     }
                 }
             }
@@ -3882,6 +3952,16 @@ mod tests {
     }
 
     #[test]
+    fn circleci_pr_selection_uses_head_sha_not_branch_name() {
+        let prs = serde_json::json!([
+            {"number": 10, "headRefName": "feature", "headRefOid": "fork-sha"},
+            {"number": 11, "headRefName": "feature", "headRefOid": "local-sha"}
+        ]);
+        assert_eq!(pr_number_for_head(&prs, "local-sha"), Some(11));
+        assert_eq!(pr_number_for_head(&prs, "missing-sha"), None);
+    }
+
+    #[test]
     fn codacy_and_empty_links_are_not_github_actions() {
         assert!(!is_github_actions_link(
             "https://app.codacy.com/gh/sstraus/tuicommander/pull-requests/38"
@@ -3919,12 +3999,18 @@ mod tests {
 
     #[test]
     fn sanitizes_provider_logs_for_http_and_mcp_consumers() {
-        assert_eq!(sanitize_ci_logs("\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;clipboard\u{7}\nkeep\tthis\u{7f}"), "red\nkeepthis");
+        assert_eq!(
+            sanitize_ci_logs("\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;clipboard\u{7}\nkeep\tthis\u{7f}"),
+            "red\nkeepthis"
+        );
     }
 
     #[test]
     fn formats_github_actions_logs_before_returning_them() {
-        assert_eq!(format_ci_logs("\u{1b}[31mGHA failure\u{1b}[0m\u{1b}]52;c;clipboard\u{7}"), "GHA failure");
+        assert_eq!(
+            format_ci_logs("\u{1b}[31mGHA failure\u{1b}[0m\u{1b}]52;c;clipboard\u{7}"),
+            "GHA failure"
+        );
     }
 
     // --- hex_to_rgba tests ---
@@ -6082,10 +6168,15 @@ mod tests {
                 let logs = format!("{}{}", "a".repeat(pad), glyph.repeat(CI_LOG_MAX_CHARS));
                 let result = truncate_ci_logs(&logs);
 
-                let tail = result.split_once('\n').map_or(result.as_str(), |(_, tail)| tail);
+                let tail = result
+                    .split_once('\n')
+                    .map_or(result.as_str(), |(_, tail)| tail);
                 assert!(tail.len() <= CI_LOG_MAX_CHARS, "{glyph} pad {pad}");
                 assert!(tail.ends_with(glyph), "{glyph} pad {pad}");
-                assert!(tail.chars().all(|c| c.to_string() == glyph), "{glyph} pad {pad}");
+                assert!(
+                    tail.chars().all(|c| c.to_string() == glyph),
+                    "{glyph} pad {pad}"
+                );
             }
         }
     }
