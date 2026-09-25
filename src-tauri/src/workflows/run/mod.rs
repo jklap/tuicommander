@@ -325,8 +325,13 @@ mod tests {
             .unwrap();
         let story_draft = definitions.get_draft(&story_template_id).unwrap();
         let check = crate::workflows::CheckDefinition {
-            id: "status".into(),
-            argv: vec!["git".into(), "status".into(), "--porcelain".into()],
+            id: "policy".into(),
+            argv: vec![
+                "git".into(),
+                "config".into(),
+                "--get".into(),
+                "workflow.testpass".into(),
+            ],
             timeout_secs: 10,
         };
         let story_draft = definitions
@@ -353,6 +358,7 @@ mod tests {
             vec!["init", "-q", "-b", "main"],
             vec!["config", "user.name", "Workflow Test"],
             vec!["config", "user.email", "workflow@example.invalid"],
+            vec!["config", "workflow.testpass", "true"],
         ] {
             crate::git_cli::git_cmd(repo).args(args).run().unwrap();
         }
@@ -472,7 +478,7 @@ mod tests {
             crate::stories::StoryStatus::Backlog
         );
         let checked = store
-            .execute_check(&run.id, &story_id, "status", "check", accepted.sequence)
+            .execute_check(&run.id, &story_id, "policy", "check", accepted.sequence)
             .unwrap();
         assert!(matches!(
             checked.event.kind,
@@ -498,6 +504,24 @@ mod tests {
         );
         crate::git_cli::git_cmd(&worktree)
             .args(["switch", "-q", "story"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["config", "--unset", "workflow.testpass"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            store
+                .record_integrated_story(&run.id, &story_id, "failed-post-check", checked.sequence)
+                .unwrap_err(),
+            "post-integration check policy failed"
+        );
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Backlog
+        );
+        crate::git_cli::git_cmd(repo)
+            .args(["config", "workflow.testpass", "true"])
             .run()
             .unwrap();
         let integrated = store
