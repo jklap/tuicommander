@@ -1384,6 +1384,7 @@ POST /fs/copy          { "repoPath": "...", "from": "...", "to": "..." }
 POST /fs/gitignore     { "repoPath": "...", "pattern": "..." }
 GET  /fs/resolve-terminal-path?cwd=/repo&candidate=src/x.ts   -> ResolvedFilePath | null
 POST /fs/resolve-terminal-paths { "cwd": "/repo", "candidates": [...] } -> (ResolvedFilePath | null)[]
+POST /fs/resolve-markdown-link { "root": "/repo", "currentFile": "docs/readme.md", "href": "../guide.md#intro" } -> MarkdownLinkTarget
 GET  /fs/stat?path=/absolute/path                              -> PathStat (exists/is_dir/size/modified_at)
 POST /fs/warm-index    { "repoPath": "..." }                   -> { "ok": true } (fire-and-forget BM25 build; strategy-gated, see below)
 POST /fs/write-external { "path": "/abs", "content": "..." }   -> { "ok": true }
@@ -1464,6 +1465,8 @@ session-local UI data, not a stable account quota contract. TUIC therefore does
 not expose a Gemini account-usage route.
 
 **Absolute-path write boundary.** `/fs/write-external`, `/fs/copy-abs`, and `/fs/move-abs` are gated to **registered repository roots** for the HTTP boundary (a 403 otherwise), mirroring `/fs/read-external`. The gate rejects traversal syntax (`..`), NUL bytes, and relative paths *before* the containment check: containment is `Path::starts_with`, which is purely lexical, so `/repo/../../etc/passwd` is "inside" `/repo` by components while the OS resolves it far outside. Paths are deliberately **not** canonicalized — a symlink inside a registered repo that points outside it is an accepted design decision in this project. `/fs/transfer` gates only its `destDir` — sources are commonly external (a file dragged in from the desktop). `/fs/stat` and `/fs/resolve-terminal-path` return only metadata (no content) so they are not repo-gated; both also refuse macOS TCC-protected directories. `/fs/resolve-terminal-path` returns JSON `null` on a miss (`Option<ResolvedFilePath>`). `/fs/resolve-terminal-paths` is its batched sibling and is a POST for one reason: a whole terminal screen's candidates do not fit a query string, and being able to send many of them is the point. It answers **positionally** — the array it returns has one entry per input candidate, in order, `null` where that candidate resolved to nothing — so a caller may index the response by the index of the request.
+
+`/fs/resolve-markdown-link` returns a tagged `kind` (`heading`, `file`, `missing`, or `blocked`). It decodes path and fragment separately, resolves relative to the source file, permits local symlinks outside the root, and refuses UNC/network paths before filesystem access.
 
 ## Monitoring Endpoints
 

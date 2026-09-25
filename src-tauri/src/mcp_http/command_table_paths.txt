@@ -137,6 +137,7 @@
 /fs/read-editor-external
 /fs/read-external
 /fs/rename
+/fs/resolve-markdown-link
 /fs/resolve-terminal-path
 /fs/resolve-terminal-paths
 /fs/search

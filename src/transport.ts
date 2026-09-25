@@ -1808,6 +1808,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { cwd: args.cwd, candidates: args.candidates },
 		}),
 	},
+	resolve_markdown_link: {
+		map: (args) => ({
+			method: "POST",
+			path: "/fs/resolve-markdown-link",
+			body: { root: args.root, currentFile: args.currentFile, href: args.href },
+		}),
+	},
 	stat_path: {
 		map: (_args, p) => ({ method: "GET", path: `/fs/stat?path=${p("path")}` }),
 	},

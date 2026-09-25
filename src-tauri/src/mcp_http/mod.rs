@@ -1110,6 +1110,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/fs/resolve-terminal-paths",
             post(fs_routes::resolve_terminal_paths_http),
         )
+        .route(
+            "/fs/resolve-markdown-link",
+            post(fs_routes::resolve_markdown_link_http),
+        )
         .route("/fs/stat", get(fs_routes::stat_path_http))
         .route("/fs/warm-index", post(fs_routes::warm_content_index_http))
         .route(

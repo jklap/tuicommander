@@ -50,8 +50,8 @@ const STARTUP_DELAY: Duration = Duration::from_secs(30);
 ///
 /// Every `about:` URL qualifies: `about:blank` after a WebContent crash,
 /// `about:srcdoc` after the standby incident above. Nothing else can legitimately
-/// be the top document — the navigation handler in `lib.rs` sends external links
-/// to the system browser instead of loading them — and restricting the test to
+/// be the top document — the navigation handler in `lib.rs` blocks implicit
+/// external navigation instead of loading it — and restricting the test to
 /// the `about:` scheme means a healthy URL can never be mistaken for a lost one
 /// and re-navigated in a loop.
 pub(crate) fn is_lost(url: &str) -> bool {
