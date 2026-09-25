@@ -64,6 +64,7 @@ export interface GitOperationsDeps {
 			deleteBranch: boolean,
 			force?: boolean,
 			overrideLock?: boolean,
+			expectedFingerprint?: string,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		createWorktree: (
 			baseRepo: string,
@@ -136,7 +137,12 @@ export interface GitOperationsDeps {
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
 		/** Archiving or deleting this worktree would destroy uncommitted work — proceed anyway? */
-		confirmDirtyWorktreeCleanup?: (branchName: string, action: string, commitsAhead: number) => Promise<boolean>;
+		confirmDirtyWorktreeCleanup?: (
+			branchName: string,
+			action: string,
+			commitsAhead: number,
+			lifecycle?: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
+		) => Promise<boolean>;
 		/** Surface a git failure in a dialog with the full output; returns true if the user chose Retry. */
 		reportGitError?: (title: string, detail: string, offerRetry?: boolean) => Promise<boolean>;
 		/** Browser mode only: show an in-app text-input dialog to enter a repo path */
@@ -205,6 +211,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		hasDirtyFiles: boolean;
 		/** The branch's own worktree has uncommitted changes — archive/delete destroys them. */
 		worktreeDirty: boolean;
+		worktreeFingerprint?: string;
+		submoduleUnpushedCommits?: Array<{ path: string; count: number }>;
 	} | null>(null);
 
 	const { markRecentlyCreated, refreshAllBranchStats } = createRepositoryRefreshCoordinator({
@@ -492,8 +500,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setStatusInfo: deps.setStatusInfo,
 		// No dialog wired: refuse rather than silently destroy. The guard only fires
 		// when uncommitted work would be swept away by the cleanup.
-		confirmDirtyWorktreeCleanup: (branchName, action, commitsAhead) =>
-			deps.dialogs.confirmDirtyWorktreeCleanup?.(branchName, action, commitsAhead) ?? Promise.resolve(false),
+		confirmDirtyWorktreeCleanup: (branchName, action, commitsAhead, lifecycle) =>
+			deps.dialogs.confirmDirtyWorktreeCleanup?.(branchName, action, commitsAhead, lifecycle) ?? Promise.resolve(false),
 		creatingWorktreeRepos,
 		setCreatingWorktreeRepos,
 		setMergePendingCtx,

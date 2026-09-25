@@ -113,6 +113,7 @@ describe("useGitOperations", () => {
 			.mockResolvedValue({ success: true, stashed: false, previous_branch: "main", new_branch: "feature" }),
 		runSetupScript: vi.fn().mockResolvedValue({ exit_code: 0, stdout: "", stderr: "" }),
 		getWorkspaceLifecycle: vi.fn().mockResolvedValue({
+			dirtyFingerprint: "confirmed-worktree",
 			dirtyFiles: 0,
 			commitStatus: "merged",
 			removalSafety: "safe",
@@ -1066,7 +1067,12 @@ describe("useGitOperations", () => {
 
 				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "archive", 0);
+				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith(
+					"feature/x",
+					"archive",
+					0,
+					expect.objectContaining({ dirtyFingerprint: "confirmed-worktree" }),
+				);
 				expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenCalledTimes(1);
 				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			});
@@ -1087,7 +1093,12 @@ describe("useGitOperations", () => {
 
 				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "delete");
 
-				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "delete", 7);
+				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith(
+					"feature/x",
+					"delete",
+					7,
+					expect.objectContaining({ dirtyFingerprint: "confirmed-worktree" }),
+				);
 				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 			});
 
@@ -1121,6 +1132,7 @@ describe("useGitOperations", () => {
 					"main",
 					"archive",
 					true,
+					"confirmed-worktree",
 				);
 				expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeUndefined();
 			});
@@ -1174,6 +1186,7 @@ describe("useGitOperations", () => {
 				baseBranch: "main",
 				hasDirtyFiles: false,
 				worktreeDirty: false,
+				worktreeFingerprint: "confirmed-worktree",
 			});
 		});
 
@@ -1290,6 +1303,7 @@ describe("useGitOperations", () => {
 				baseBranch: "main",
 				hasDirtyFiles: false,
 				worktreeDirty: false,
+				worktreeFingerprint: "confirmed-worktree",
 			});
 			expect(repositoriesStore.get("/repo")?.workspaces["feature/x"]).toBeDefined();
 		});
@@ -1990,6 +2004,8 @@ describe("useGitOperations", () => {
 		it("passes force only after confirming destructive state", async () => {
 			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce({
 				dirtyFiles: 2,
+				dirtyFingerprint: "confirmed-state",
+				submoduleUnpushedCommits: [{ path: "plugins", count: 3 }],
 				commitStatus: "merged",
 				removalSafety: "requires_force",
 			});
@@ -2002,7 +2018,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledWith("/repo", "feature", true, true, false, "confirmed-state");
 		});
 
 		it("closes branch terminals before removing", async () => {

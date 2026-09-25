@@ -19,6 +19,7 @@ export interface CleanupConfig {
 	/** When set, the "worktree" step calls finalize_merged_worktree with this action */
 	worktreeAction?: "archive" | "delete";
 	worktreeDirty?: boolean;
+	worktreeFingerprint?: string;
 	/** When true, pop the stash after switching branches */
 	unstash?: boolean;
 }
@@ -52,12 +53,16 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 					// Addressed by workspace id: the checkout to dispose of is the row
 					// the user is cleaning up, which a branch cannot name once two
 					// workspaces share one.
-					const outcome = await invoke<{ action?: string; branch_delete_warning?: string | null }>("finalize_merged_worktree", {
-						repoPath,
-						workspaceId,
-						action: config.worktreeAction,
-						force: config.worktreeDirty === true,
-					});
+					const outcome = await invoke<{ action?: string; branch_delete_warning?: string | null }>(
+						"finalize_merged_worktree",
+						{
+							repoPath,
+							workspaceId,
+							action: config.worktreeAction,
+							force: config.worktreeDirty === true,
+							...(config.worktreeFingerprint ? { expectedFingerprint: config.worktreeFingerprint } : {}),
+						},
+					);
 					if (outcome?.action === "needs_confirmation") {
 						throw new Error("Worktree state changed since confirmation; review it before cleanup");
 					}

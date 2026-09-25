@@ -1009,6 +1009,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				targetBranch: args.targetBranch,
 				afterMerge: args.afterMerge,
 				force: args.force,
+				...(args.expectedFingerprint ? { expectedFingerprint: args.expectedFingerprint } : {}),
 			},
 		}),
 	},
@@ -1475,10 +1476,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => {
 			const force = args.force === true ? "&force=true" : "";
 			const overrideLock = args.overrideLock === true ? "&overrideLock=true" : "";
-			const deleteBranch = args.deleteBranch ?? (args.force !== true);
+			const expectedFingerprint = args.expectedFingerprint ? `&expectedFingerprint=${p("expectedFingerprint")}` : "";
+			const deleteBranch = args.deleteBranch ?? args.force !== true;
 			return {
 				method: "DELETE",
-				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}`,
+				path: `/worktrees/${p("workspaceId")}?repoPath=${p("repoPath")}&deleteBranch=${deleteBranch}${force}${overrideLock}${expectedFingerprint}`,
 			};
 		},
 	},
@@ -1498,6 +1500,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				workspaceId: args.workspaceId,
 				action: args.action,
 				force: args.force,
+				...(args.expectedFingerprint ? { expectedFingerprint: args.expectedFingerprint } : {}),
 			},
 		}),
 	},

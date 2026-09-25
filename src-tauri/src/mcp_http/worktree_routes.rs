@@ -286,16 +286,25 @@ pub(super) async fn remove_worktree_http(
     let force = q.force.unwrap_or(false);
     let delete_branch = q.delete_branch.unwrap_or(!force);
     let override_lock = q.override_lock.unwrap_or(false);
+    let expected_fingerprint = q.expected_fingerprint.clone();
+    if force && expected_fingerprint.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "force requires expectedFingerprint from the confirmed lifecycle status"})),
+        )
+            .into_response();
+    }
     let id_for_event = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         let archive = crate::worktree::resolve_archive_script(&repo_path);
-        crate::worktree::remove_worktree_by_workspace_id_with_lock(
+        crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
             &repo_path,
             &workspace_id,
             delete_branch,
             archive.as_deref(),
             force,
             override_lock,
+            expected_fingerprint.as_deref(),
         )
     })
     .await;
@@ -471,16 +480,21 @@ pub(super) async fn finalize_merged_worktree_http(
         workspace_id,
         action,
         force,
+        expected_fingerprint,
     } = body;
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "force requires expectedFingerprint from the confirmed lifecycle status"}))).into_response();
+    }
     // Shares `finalize_merged_worktree_impl` with the Tauri command: the dirty-worktree
     // gate and the "worktree removed" notification live there, once, for both transports.
     let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::finalize_merged_worktree_impl(
+        crate::worktree::finalize_merged_worktree_impl_with_confirmation(
             &state,
             repo_path,
             workspace_id,
             action,
             force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
         )
     })
     .await;
@@ -527,9 +541,13 @@ pub(super) async fn merge_and_archive_worktree_http(
         target_branch,
         after_merge,
         force,
+        expected_fingerprint,
     } = body;
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "force requires expectedFingerprint from the confirmed lifecycle status"}))).into_response();
+    }
     let res = tokio::task::spawn_blocking(move || {
-        crate::worktree::merge_and_archive_worktree_impl(
+        crate::worktree::merge_and_archive_worktree_impl_with_confirmation(
             &state,
             repo_path,
             branch_name,
@@ -537,6 +555,7 @@ pub(super) async fn merge_and_archive_worktree_http(
             target_branch,
             after_merge,
             force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
         )
     })
     .await;
@@ -603,8 +622,10 @@ mod warm_tests {
     fn set_gated_setup_script(started: &std::path::Path, gate: &std::path::Path) {
         let mut defaults = crate::config::RepoDefaultsConfig::default();
         let finished = gate.with_extension("finished");
+        let pid = gate.with_extension("pid");
         defaults.setup_script = format!(
-            "echo started > '{}'; while [ ! -f '{}' ]; do sleep 0.02; done; echo finished > '{}'",
+            "echo $$ > '{}'; echo started > '{}'; while [ ! -f '{}' ]; do sleep 0.02; done; echo finished > '{}'",
+            pid.display(),
             started.display(),
             gate.display(),
             finished.display()
@@ -613,14 +634,31 @@ mod warm_tests {
     }
 
     #[cfg(unix)]
-    async fn wait_for_file(path: &std::path::Path) {
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    async fn wait_for_file(path: &std::path::Path, failure: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while !path.exists() {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         })
         .await
-        .expect("setup script did not start");
+        .unwrap_or_else(|_| panic!("{failure}"));
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_setup_exit(pid_file: &std::path::Path) {
+        wait_for_file(pid_file, "setup script did not record its PID").await;
+        let pid: i32 = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            while unsafe { libc::kill(pid, 0) } == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("detached setup shell did not exit");
     }
 
     #[cfg(unix)]
@@ -647,7 +685,7 @@ mod warm_tests {
             .await
         });
 
-        wait_for_file(&started).await;
+        wait_for_file(&started, "setup script did not start").await;
         let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
         assert_eq!(
             paths["pending-setup"].warm_artifacts.as_ref().unwrap()["status"],
@@ -697,17 +735,19 @@ mod warm_tests {
             .await
         });
 
-        wait_for_file(&started).await;
+        wait_for_file(&started, "setup script did not start").await;
         let paths = crate::worktree::get_worktree_paths(repo_path).unwrap();
         let path = std::path::PathBuf::from(&paths["cancelled-setup"].path);
         assert_eq!(crate::worktree::warm_status(&path)["status"], "pending");
         create.abort();
         let _ = create.await;
         std::fs::write(&gate, "release").unwrap();
-        wait_for_file(&gate.with_extension("finished")).await;
-        // The marker is written just before the detached setup shell exits.
-        // Let it close its inherited test pipes before nextest checks for leaks.
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        wait_for_file(
+            &gate.with_extension("finished"),
+            "setup script did not finish",
+        )
+        .await;
+        wait_for_setup_exit(&gate.with_extension("pid")).await;
         assert_eq!(crate::worktree::warm_status(&path)["status"], "failed");
         crate::worktree::clear_warm(&path);
     }

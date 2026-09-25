@@ -3814,3 +3814,4 @@ or credential is touched.
 ## Safe linked-worktree removal — **Rust, needs a `make dev` restart**
 
 - [ ] After restarting an isolated worktree build, remove a clean linked worktree with a populated submodule. It succeeds without a dirty-file confirmation. A submodule with a local commit stays intact on a non-force request. A forced removal of a branch with unmerged commits keeps the branch and reports why. The running app cannot load this Rust change until restart.
+- [ ] After the same restart, confirm a forced removal with a dirty submodule, then change its HEAD before the request completes. Removal must stop with a changed-state message; retry after a fresh review. A clean merged submodule commit must remain accessible from the main checkout after removal.

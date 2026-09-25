@@ -119,9 +119,12 @@ export function useConfirmDialog() {
 			? "Git will safely delete the local branch; if it is unmerged, the branch is kept."
 			: "The local branch will be kept.";
 		const destructive = status.removalSafety === "requires_force";
+		const submoduleCommits = (status.submoduleUnpushedCommits ?? [])
+			.filter((entry) => entry.count > 0)
+			.map((entry) => `${entry.path}: ${entry.count} commits not on a remote-tracking branch`);
 		return await confirm({
 			title: destructive ? "Destroy workspace state?" : "Remove workspace?",
-			message: `Remove "${branchName}"?\n\nWorking tree: ${dirty}.\nCommit state: ${commits}.\n${branchAction}`,
+			message: `Remove "${branchName}"?\n\nWorking tree: ${dirty}.${submoduleCommits.length ? `\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\nCommit state: ${commits}.\n${branchAction}`,
 			okLabel: destructive ? "Delete anyway" : "Remove",
 			cancelLabel: "Cancel",
 			kind: destructive ? "error" : "warning",
@@ -232,6 +235,7 @@ export function useConfirmDialog() {
 		branchName: string,
 		action: string,
 		commitsAhead: number,
+		lifecycle?: import("../stores/workspaceIdentity").WorkspaceLifecycleStatus,
 	): Promise<boolean> {
 		const verb = action === "delete" ? "Deleting" : "Archiving";
 		const fate =
@@ -242,9 +246,12 @@ export function useConfirmDialog() {
 			commitsAhead === 0
 				? `\n\n"${branchName}" also has no commits the target branch lacks, so the merge itself would do nothing.`
 				: "";
+		const submoduleCommits = (lifecycle?.submoduleUnpushedCommits ?? [])
+			.filter((entry) => entry.count > 0)
+			.map((entry) => `${entry.path}: ${entry.count} commits not on a remote-tracking branch`);
 		return await confirm({
 			title: "Uncommitted work in the worktree",
-			message: `The worktree for "${branchName}" has uncommitted changes. ${verb} it ${fate}${noop}\n\nContinue?`,
+			message: `The worktree for "${branchName}" has uncommitted changes. ${verb} it ${fate}${noop}${submoduleCommits.length ? `\n\nSubmodules: ${submoduleCommits.join("; ")}.` : ""}\n\nContinue?`,
 			okLabel: action === "delete" ? "Delete anyway" : "Archive anyway",
 			cancelLabel: "Keep it",
 			kind: "warning",

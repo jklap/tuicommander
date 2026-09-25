@@ -350,6 +350,7 @@ const App: Component = () => {
 			steps: steps.map((s) => ({ id: s.id, checked: s.checked })),
 			worktreeAction: worktreeCleanupAction(),
 			worktreeDirty: ctx.worktreeDirty,
+			worktreeFingerprint: ctx.worktreeFingerprint,
 			unstash: options?.unstash,
 			onStepStart: (id) => setWorktreeCleanupStepStatuses((prev) => ({ ...prev, [id]: "running" as StepStatus })),
 			onStepDone: (id, result, error) => {

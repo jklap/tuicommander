@@ -1,6 +1,7 @@
 use crate::git_cli::{FETCH_TIMEOUT, finish_failed_git_operation_after_abort, git_cmd};
 use crate::state::{AppState, WorktreeInfo};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -526,10 +527,19 @@ pub(crate) struct WorkspaceLifecycleStatus {
     /// Count of staged, unstaged and untracked changes. Ignored files are not
     /// counted; removal also deletes those files, including warmed caches.
     pub(crate) dirty_files: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dirty_fingerprint: Option<String>,
+    pub(crate) submodule_unpushed_commits: Vec<SubmoduleUnpushedCommits>,
     pub(crate) commit_status: WorkspaceCommitStatus,
     pub(crate) removal_safety: WorkspaceRemovalSafety,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct SubmoduleUnpushedCommits {
+    pub(crate) path: String,
+    pub(crate) count: usize,
 }
 
 fn rev_at(path: &Path, spec: &str) -> Result<String, String> {
@@ -553,13 +563,146 @@ fn dirty_files_at(path: &Path) -> Result<usize, String> {
         .map_err(|e| format!("could not check the workspace for uncommitted changes: {e}"))
 }
 
-fn verify_submodules_at(path: &Path) -> Result<(), String> {
+fn dirty_fingerprint_at(path: &Path) -> Result<(String, Vec<SubmoduleUnpushedCommits>), String> {
+    let status = git_cmd(path)
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
+        .run()
+        .map_err(|e| format!("could not fingerprint worktree status: {e}"))?;
+    let submodules = git_cmd(path)
+        .args(["submodule", "status", "--recursive"])
+        .run()
+        .map_err(|e| format!("could not fingerprint submodules: {e}"))?;
+    let mut digest = Sha256::new();
+    digest.update(status.stdout.as_bytes());
+    digest.update([0]);
+    digest.update(rev_at(path, "HEAD")?.as_bytes());
+    digest.update([0]);
+    digest.update(submodules.stdout.as_bytes());
+    let mut unpushed = Vec::new();
+    for line in submodules.stdout.lines() {
+        if !matches!(line.chars().next(), Some(' ' | '+')) {
+            continue;
+        }
+        let (_, description) = line[1..]
+            .split_once(' ')
+            .ok_or_else(|| format!("Cannot parse submodule status: {line}"))?;
+        let submodule_path = description
+            .rsplit_once(" (")
+            .map_or(description, |(path, _)| path);
+        let module = path.join(submodule_path);
+        let refs = git_cmd(&module)
+            .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+            .run()
+            .map_err(|e| format!("Cannot inspect submodule {submodule_path}: {e}"))?;
+        digest.update(refs.stdout.as_bytes());
+        let count = git_cmd(&module)
+            .args(["rev-list", "--count", "HEAD", "--all", "--not", "--remotes"])
+            .run()
+            .map_err(|e| format!("Cannot count submodule commits in {submodule_path}: {e}"))?
+            .stdout
+            .trim()
+            .parse()
+            .map_err(|e| format!("Cannot parse submodule commit count in {submodule_path}: {e}"))?;
+        if count > 0 {
+            unpushed.push(SubmoduleUnpushedCommits {
+                path: submodule_path.into(),
+                count,
+            });
+        }
+    }
+    Ok((hex::encode(digest.finalize()), unpushed))
+}
+
+fn preserve_submodule_refs(
+    base_repo: &Path,
+    worktree: &Path,
+    submodule_path: &str,
+) -> Result<(), String> {
+    let source = worktree.join(submodule_path);
+    let destination = base_repo.join(submodule_path);
+    let source_gitdir = rev_at(&source, "--absolute-git-dir")?;
+    // Without an initialized module repository in the main checkout there is
+    // nowhere durable to move the objects. Refuse rather than delete their only copy.
+    rev_at(&destination, "--absolute-git-dir").map_err(|_| {
+        format!(
+            "Cannot remove worktree: main checkout has no repository for submodule {submodule_path}"
+        )
+    })?;
+    let refs = git_cmd(&source)
+        .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+        .run()
+        .map_err(|e| format!("Cannot inspect submodule refs in {submodule_path}: {e}"))?;
+    let mut tips = vec![("HEAD".to_string(), rev_at(&source, "HEAD")?)];
+    for line in refs.stdout.lines() {
+        let (name, oid) = line
+            .split_once(' ')
+            .ok_or_else(|| format!("Cannot parse submodule ref in {submodule_path}: {line}"))?;
+        tips.push((name.to_string(), oid.to_string()));
+    }
+    let namespace = format!(
+        "refs/tuic/preserved/{}/{}/",
+        hex::encode(worktree.to_string_lossy().as_bytes()),
+        hex::encode(submodule_path.as_bytes())
+    );
+    let mut args = vec![
+        "fetch".to_string(),
+        "--no-tags".to_string(),
+        "--no-write-fetch-head".to_string(),
+        source_gitdir,
+    ];
+    for (name, oid) in tips {
+        args.push(format!(
+            "+{oid}:{}{}",
+            namespace,
+            hex::encode(name.as_bytes())
+        ));
+    }
+    git_cmd(&destination)
+        .args(&args)
+        .timeout(Duration::from_secs(60))
+        .run()
+        .map_err(|e| format!("Cannot preserve submodule refs in {submodule_path}: {e}"))?;
+    Ok(())
+}
+
+fn verify_submodules_at(path: &Path, base_repo: &Path, force: bool) -> Result<(), String> {
     let output = git_cmd(path)
         .args(["submodule", "status", "--recursive"])
         .run()
         .map_err(|e| format!("Cannot verify submodules before removal: {e}"))?;
-    if output.stdout.lines().any(|line| !line.starts_with(' ')) {
-        return Err("Cannot remove worktree: a submodule is uninitialized, conflicted, or has a different commit".into());
+    let admin_gitdir = rev_at(path, "--absolute-git-dir")?;
+    for line in output.stdout.lines() {
+        let state = line.chars().next().ok_or("Empty submodule status line")?;
+        let (_, description) = line[1..]
+            .split_once(' ')
+            .ok_or_else(|| format!("Cannot parse submodule status before removal: {line}"))?;
+        let submodule_path = description
+            .rsplit_once(" (")
+            .map_or(description, |(path, _)| path);
+        if state == '-' {
+            if path.join(submodule_path).join(".git").exists()
+                || Path::new(&admin_gitdir)
+                    .join("modules")
+                    .join(submodule_path)
+                    .exists()
+            {
+                return Err(format!(
+                    "Cannot remove worktree: uninitialized submodule {submodule_path} still has Git state"
+                ));
+            }
+            continue;
+        }
+        if state == 'U' || (state == '+' && !force) || (state != ' ' && state != '+') {
+            return Err(format!(
+                "Cannot remove worktree: submodule {submodule_path} is conflicted or has a different commit"
+            ));
+        }
+        preserve_submodule_refs(base_repo, path, submodule_path)?;
     }
     Ok(())
 }
@@ -571,6 +714,8 @@ pub(crate) fn inspect_workspace_lifecycle(
     let inspected = (|| -> Result<WorkspaceLifecycleStatus, String> {
         let workspace = resolve_any_workspace(base_repo, workspace_id)?;
         let dirty_files = dirty_files_at(Path::new(&workspace.path))?;
+        let (dirty_fingerprint, submodule_unpushed_commits) =
+            dirty_fingerprint_at(Path::new(&workspace.path))?;
         let dirty = dirty_files > 0;
         let default_branch = get_remote_default_branch(&base_repo.to_string_lossy())?;
         let ancestry = git_cmd(Path::new(&workspace.path))
@@ -602,6 +747,8 @@ pub(crate) fn inspect_workspace_lifecycle(
         };
         Ok(WorkspaceLifecycleStatus {
             dirty_files: Some(dirty_files),
+            dirty_fingerprint: Some(dirty_fingerprint),
+            submodule_unpushed_commits,
             commit_status,
             removal_safety: if dirty {
                 WorkspaceRemovalSafety::RequiresForce
@@ -614,6 +761,8 @@ pub(crate) fn inspect_workspace_lifecycle(
 
     inspected.unwrap_or_else(|error| WorkspaceLifecycleStatus {
         dirty_files: None,
+        dirty_fingerprint: None,
+        submodule_unpushed_commits: Vec::new(),
         commit_status: WorkspaceCommitStatus::Unknown,
         removal_safety: WorkspaceRemovalSafety::Unknown,
         error: Some(error),
@@ -869,13 +1018,14 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
     }
 }
 pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
-    remove_worktree_internal_with_lock(worktree, force, false)
+    remove_worktree_internal_with_lock(worktree, force, false, None)
 }
 
 fn remove_worktree_internal_with_lock(
     worktree: &WorktreeInfo,
     force: bool,
     override_lock: bool,
+    expected_fingerprint: Option<&str>,
 ) -> Result<(), String> {
     // A copy already in flight must finish before Git can remove its destination.
     // If removal wins, the queued copy sees the cleared token and never starts.
@@ -893,11 +1043,23 @@ fn remove_worktree_internal_with_lock(
         "remove_worktree_internal: start"
     );
 
-    if !force && worktree.path.exists() {
+    if !worktree.path.exists() {
+        return Err("Cannot remove worktree: its directory is missing, so submodule Git state cannot be preserved".into());
+    }
+
+    if !force {
         if dirty_files_at(&worktree.path)? != 0 {
             return Err("Cannot remove worktree: the worktree has uncommitted changes".into());
         }
-        verify_submodules_at(&worktree.path)?;
+    }
+    verify_submodules_at(&worktree.path, &worktree.base_repo, force)?;
+    if let Some(expected) = expected_fingerprint {
+        let (current, _) = dirty_fingerprint_at(&worktree.path)?;
+        if current != expected {
+            return Err(
+                "Worktree state changed since confirmation; review it before removal".into(),
+            );
+        }
     }
 
     // Git requires one --force even for clean populated submodules. The caller
@@ -1198,6 +1360,26 @@ pub(crate) fn remove_worktree_by_workspace_id_with_lock(
     force: bool,
     override_lock: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    remove_worktree_by_workspace_id_with_confirmation(
+        repo_path,
+        workspace_id,
+        delete_branch,
+        archive_script,
+        force,
+        override_lock,
+        None,
+    )
+}
+
+pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+    override_lock: bool,
+    expected_fingerprint: Option<&str>,
+) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
     let mut removal_rule = if force { "force" } else { "kept_branch" };
@@ -1226,13 +1408,20 @@ pub(crate) fn remove_worktree_by_workspace_id_with_lock(
     let branch_ref = format!("refs/heads/{branch_name}");
     let expected_branch_oid = rev_at(&base_repo, &branch_ref)?;
     let lifecycle = inspect_workspace_lifecycle(&base_repo, workspace_id);
+    if force && let Some(expected) = expected_fingerprint {
+        if lifecycle.dirty_fingerprint.as_deref() != Some(expected) {
+            return Err(
+                "Worktree state changed since confirmation; review it before removal".into(),
+            );
+        }
+    }
     if !force {
         if lifecycle.dirty_files != Some(0) {
             return Err(lifecycle.error.clone().unwrap_or_else(|| {
                 format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
             }));
         }
-        verify_submodules_at(&worktree_path)?;
+        verify_submodules_at(&worktree_path, &base_repo, false)?;
     }
     if has_operation_in_progress(&workspace.path) {
         return Err(format!(
@@ -1319,7 +1508,7 @@ pub(crate) fn remove_worktree_by_workspace_id_with_lock(
         base_repo,
     };
 
-    remove_worktree_internal_with_lock(&worktree, force, override_lock)?;
+    remove_worktree_internal_with_lock(&worktree, force, override_lock, expected_fingerprint)?;
 
     // Compare-and-delete prevents an archive hook or another process from
     // advancing the branch after the safety proof.
@@ -1377,8 +1566,14 @@ pub(crate) async fn remove_worktree(
     delete_branch: Option<bool>,
     force: Option<bool>,
     override_lock: Option<bool>,
+    expected_fingerprint: Option<String>,
 ) -> Result<RemoveWorktreeOutcome, String> {
     let force = force.unwrap_or(false);
+    if force && expected_fingerprint.is_none() {
+        return Err(
+            "force requires expected_fingerprint from the confirmed lifecycle status".into(),
+        );
+    }
     let delete_branch = delete_branch.unwrap_or(!force);
     let override_lock = override_lock.unwrap_or(false);
     tracing::info!(
@@ -1393,13 +1588,14 @@ pub(crate) async fn remove_worktree(
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        remove_worktree_by_workspace_id_with_lock(
+        remove_worktree_by_workspace_id_with_confirmation(
             &repo_path_clone,
             &workspace_id_clone,
             delete_branch,
             script.as_deref(),
             force,
             override_lock,
+            expected_fingerprint.as_deref(),
         )
     })
     .await
@@ -2454,8 +2650,35 @@ pub(crate) fn finalize_merged_worktree_impl(
     action: String,
     force: bool,
 ) -> Result<MergeArchiveResult, String> {
+    finalize_merged_worktree_impl_with_confirmation(
+        state,
+        repo_path,
+        workspace_id,
+        action,
+        force,
+        None,
+    )
+}
+
+pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
+    state: &Arc<AppState>,
+    repo_path: String,
+    workspace_id: String,
+    action: String,
+    force: bool,
+    expected_fingerprint: Option<&str>,
+) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = std::path::PathBuf::from(&repo_path);
+
+    if let Some(expected) = expected_fingerprint {
+        let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
+        if dirty_fingerprint_at(Path::new(&workspace.path))?.0 != expected {
+            return Err(
+                "Worktree state changed since confirmation; review it before cleanup".into(),
+            );
+        }
+    }
 
     let dirt = worktree_dirtiness(&base_repo, &workspace_id);
     if cleanup_needs_confirmation(&action, force, &dirt) {
@@ -2497,12 +2720,14 @@ pub(crate) fn finalize_merged_worktree_impl(
             })
         }
         "delete" => {
-            let outcome = remove_worktree_by_workspace_id(
+            let outcome = remove_worktree_by_workspace_id_with_confirmation(
                 &repo_path,
                 &workspace_id,
                 true,
                 script.as_deref(),
                 force,
+                false,
+                expected_fingerprint,
             )?;
             state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                 repo_path: repo_path.clone(),
@@ -2538,15 +2763,22 @@ pub(crate) async fn finalize_merged_worktree(
     workspace_id: String,
     action: String,
     force: Option<bool>,
+    expected_fingerprint: Option<String>,
 ) -> Result<MergeArchiveResult, String> {
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return Err(
+            "force requires expected_fingerprint from the confirmed lifecycle status".into(),
+        );
+    }
     let state = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        finalize_merged_worktree_impl(
+        finalize_merged_worktree_impl_with_confirmation(
             &state,
             repo_path,
             workspace_id,
             action,
             force.unwrap_or(false),
+            expected_fingerprint.as_deref(),
         )
     })
     .await
@@ -2570,8 +2802,38 @@ pub(crate) fn merge_and_archive_worktree_impl(
     after_merge: String,
     force: bool,
 ) -> Result<MergeArchiveResult, String> {
+    merge_and_archive_worktree_impl_with_confirmation(
+        state,
+        repo_path,
+        branch_name,
+        workspace_id,
+        target_branch,
+        after_merge,
+        force,
+        None,
+    )
+}
+
+pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
+    state: &Arc<AppState>,
+    repo_path: String,
+    branch_name: String,
+    workspace_id: String,
+    target_branch: String,
+    after_merge: String,
+    force: bool,
+    expected_fingerprint: Option<&str>,
+) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = PathBuf::from(&repo_path);
+    if let Some(expected) = expected_fingerprint {
+        let workspace = resolve_any_workspace(&base_repo, &workspace_id)?;
+        if dirty_fingerprint_at(Path::new(&workspace.path))?.0 != expected {
+            return Err(
+                "Worktree state changed since confirmation; review it before cleanup".into(),
+            );
+        }
+    }
 
     // 0. Pre-flight: would the cleanup take uncommitted work with it? Both
     //    "archive" and "delete" end in `git worktree remove --force`, so any
@@ -2643,12 +2905,14 @@ pub(crate) fn merge_and_archive_worktree_impl(
             })
         }
         "delete" => {
-            let outcome = remove_worktree_by_workspace_id(
+            let outcome = remove_worktree_by_workspace_id_with_confirmation(
                 &repo_path,
                 &workspace_id,
                 true,
                 script.as_deref(),
                 force,
+                false,
+                expected_fingerprint,
             )?;
             state.notify_worktree_removed(crate::state::WorktreeRemovedPayload {
                 repo_path: repo_path.clone(),
@@ -2693,8 +2957,14 @@ pub(crate) fn merge_and_archive_worktree(
     target_branch: String,
     after_merge: String,
     force: Option<bool>,
+    expected_fingerprint: Option<String>,
 ) -> Result<MergeArchiveResult, String> {
-    merge_and_archive_worktree_impl(
+    if force.unwrap_or(false) && expected_fingerprint.is_none() {
+        return Err(
+            "force requires expected_fingerprint from the confirmed lifecycle status".into(),
+        );
+    }
+    merge_and_archive_worktree_impl_with_confirmation(
         state.inner(),
         repo_path,
         branch_name,
@@ -2702,6 +2972,7 @@ pub(crate) fn merge_and_archive_worktree(
         target_branch,
         after_merge,
         force.unwrap_or(false),
+        expected_fingerprint.as_deref(),
     )
 }
 
@@ -5852,6 +6123,314 @@ branch refs/heads/feat
         remove_worktree_by_workspace_id(&repo.to_string_lossy(), "clean-module", true, None, false)
             .expect("a clean populated submodule can be safely removed");
         assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn merged_submodule_commit_survives_non_force_worktree_removal() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, "module-commit");
+        git_cmd(&worktree)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = worktree.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "local-only.txt", "only in this worktree\n");
+        let submodule_oid = rev_at(&module, "HEAD").unwrap();
+        git_cmd(&worktree)
+            .args(["add", "modules/local"])
+            .run()
+            .unwrap();
+        git_cmd(&worktree)
+            .args(["commit", "-m", "advance gitlink"])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args([
+                "merge",
+                "--no-ff",
+                "module-commit",
+                "-m",
+                "merge module commit",
+            ])
+            .run()
+            .unwrap();
+        assert_eq!(dirty_files_at(&worktree).unwrap(), 0);
+        assert!(
+            git_cmd(&worktree)
+                .args(["submodule", "status"])
+                .run()
+                .unwrap()
+                .stdout
+                .starts_with(' ')
+        );
+        assert!(
+            git_cmd(&repo.join("modules/local"))
+                .args(["cat-file", "-e", &submodule_oid])
+                .run()
+                .is_err()
+        );
+
+        remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "module-commit",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(
+            git_cmd(&repo.join("modules/local"))
+                .args(["cat-file", "-e", &submodule_oid])
+                .run()
+                .is_ok(),
+            "removal must preserve the submodule object in the main module repository"
+        );
+    }
+
+    #[test]
+    fn clean_submodule_local_branch_and_stash_survive_removal() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, "module-refs");
+        git_cmd(&worktree)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = worktree.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        let original = rev_at(&module, "HEAD").unwrap();
+        git_cmd(&module)
+            .args(["switch", "-c", "local-only"])
+            .run()
+            .unwrap();
+        commit_file(&module, "local-ref.txt", "local ref\n");
+        let local_oid = rev_at(&module, "HEAD").unwrap();
+        git_cmd(&module)
+            .args(["checkout", "--detach", &original])
+            .run()
+            .unwrap();
+        fs::write(module.join("module.txt"), "stash-only\n").unwrap();
+        git_cmd(&module)
+            .args(["stash", "push", "-m", "test stash"])
+            .run()
+            .unwrap();
+        let stash_oid = rev_at(&module, "refs/stash").unwrap();
+        assert_eq!(dirty_files_at(&worktree).unwrap(), 0);
+
+        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "module-refs", true, None, false)
+            .unwrap();
+        let main_module = repo.join("modules/local");
+        for oid in [local_oid, stash_oid] {
+            assert!(
+                git_cmd(&main_module)
+                    .args(["cat-file", "-e", &oid])
+                    .run()
+                    .is_ok(),
+                "lost submodule ref object {oid}"
+            );
+        }
+    }
+
+    #[test]
+    fn uninitialized_submodule_does_not_block_non_force_removal() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, "uninitialized-module");
+        assert!(
+            git_cmd(&worktree)
+                .args(["submodule", "status"])
+                .run()
+                .unwrap()
+                .stdout
+                .starts_with('-')
+        );
+        remove_worktree_by_workspace_id(
+            &repo.to_string_lossy(),
+            "uninitialized-module",
+            true,
+            None,
+            false,
+        )
+        .unwrap();
+        assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn missing_worktree_directory_cannot_discard_its_submodule_gitdir() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree_path = add_worktree(&repo, "missing-module");
+        git_cmd(&worktree_path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = worktree_path.join("modules/local");
+        let module_gitdir = rev_at(&module, "--absolute-git-dir").unwrap();
+        assert!(Path::new(&module_gitdir).exists());
+        fs::remove_dir_all(&worktree_path).unwrap();
+        let worktree = WorktreeInfo {
+            name: "missing-module".into(),
+            path: worktree_path,
+            branch: Some("missing-module".into()),
+            base_repo: repo,
+        };
+        let error = remove_worktree_internal(&worktree, false).unwrap_err();
+        assert!(error.contains("missing"), "{error}");
+        assert!(Path::new(&module_gitdir).exists());
+    }
+
+    #[test]
+    fn force_refuses_when_the_confirmed_worktree_state_changes() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "stale-confirmation");
+        fs::write(worktree.join("first.txt"), "first\n").unwrap();
+        let confirmed = inspect_workspace_lifecycle(&repo, "stale-confirmation")
+            .dirty_fingerprint
+            .unwrap();
+        fs::write(worktree.join("second.txt"), "second\n").unwrap();
+
+        let error = remove_worktree_by_workspace_id_with_confirmation(
+            &repo.to_string_lossy(),
+            "stale-confirmation",
+            false,
+            None,
+            true,
+            false,
+            Some(&confirmed),
+        )
+        .unwrap_err();
+        assert!(error.contains("changed since confirmation"), "{error}");
+        assert!(worktree.join("first.txt").exists());
+        assert!(worktree.join("second.txt").exists());
+    }
+
+    #[test]
+    fn merge_cleanup_entry_points_refuse_stale_force_confirmation() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let worktree = dirty_worktree_with(repo.path(), "stale-merge-cleanup", false);
+        let confirmed = dirty_fingerprint_at(&worktree).unwrap().0;
+        fs::write(worktree.join("after-confirmation.txt"), "new work\n").unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.path().to_string_lossy().to_string();
+
+        let finalize_error = finalize_merged_worktree_impl_with_confirmation(
+            &state,
+            repo_path.clone(),
+            "stale-merge-cleanup".into(),
+            "delete".into(),
+            true,
+            Some(&confirmed),
+        )
+        .err()
+        .expect("stale confirmation must be rejected");
+        assert!(
+            finalize_error.contains("changed since confirmation"),
+            "{finalize_error}"
+        );
+
+        let merge_error = merge_and_archive_worktree_impl_with_confirmation(
+            &state,
+            repo_path,
+            "stale-merge-cleanup".into(),
+            "stale-merge-cleanup".into(),
+            base,
+            "archive".into(),
+            true,
+            Some(&confirmed),
+        )
+        .err()
+        .expect("stale confirmation must be rejected");
+        assert!(
+            merge_error.contains("changed since confirmation"),
+            "{merge_error}"
+        );
+        assert!(worktree.join("after-confirmation.txt").exists());
+    }
+
+    #[test]
+    fn force_refuses_new_submodule_commit_even_when_dirty_file_count_is_unchanged() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let worktree = add_worktree(&repo, "stale-module");
+        git_cmd(&worktree)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let module = worktree.join("modules/local");
+        git_cmd(&module)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&module)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(&module, "first.txt", "first\n");
+        let confirmed = inspect_workspace_lifecycle(&repo, "stale-module");
+        assert_eq!(confirmed.dirty_files, Some(1));
+        assert!(
+            confirmed
+                .submodule_unpushed_commits
+                .iter()
+                .any(|entry| entry.path == "modules/local" && entry.count > 0)
+        );
+        commit_file(&module, "second.txt", "second\n");
+        assert_eq!(dirty_files_at(&worktree).unwrap(), 1);
+
+        let error = remove_worktree_by_workspace_id_with_confirmation(
+            &repo.to_string_lossy(),
+            "stale-module",
+            false,
+            None,
+            true,
+            false,
+            confirmed.dirty_fingerprint.as_deref(),
+        )
+        .unwrap_err();
+        assert!(error.contains("changed since confirmation"), "{error}");
+        assert!(worktree.exists());
     }
 
     #[test]

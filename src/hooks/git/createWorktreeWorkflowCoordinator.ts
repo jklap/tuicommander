@@ -6,12 +6,14 @@ import { githubStore } from "../../stores/github";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
 import { effectiveMergeMethod, isMergeMethodNotAllowed } from "../../utils/prMerge";
 import { type AgentSeed, buildAgentSeed } from "./agentSeed";
 import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
 
 interface WorktreeWorkflowCoordinatorDeps {
 	repo: {
+		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
 		listBaseRefOptions: (repoPath: string) => Promise<Array<{ name: string; is_default?: boolean }>>;
 		createWorktree: (
 			baseRepo: string,
@@ -27,6 +29,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 			targetBranch: string,
 			afterMerge: string,
 			force?: boolean,
+			expectedFingerprint?: string,
 		) => Promise<{
 			merged: boolean;
 			action: string;
@@ -39,13 +42,19 @@ interface WorktreeWorkflowCoordinatorDeps {
 			workspaceId: string,
 			action: "archive" | "delete",
 			force?: boolean,
+			expectedFingerprint?: string,
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	setStatusInfo: (message: string) => void;
 	/** Ask the user to confirm a cleanup that would destroy the worktree's
 	 *  uncommitted work. Resolves false to abort. */
-	confirmDirtyWorktreeCleanup: (branchName: string, action: string, commitsAhead: number) => Promise<boolean>;
+	confirmDirtyWorktreeCleanup: (
+		branchName: string,
+		action: string,
+		commitsAhead: number,
+		lifecycle?: WorkspaceLifecycleStatus,
+	) => Promise<boolean>;
 	creatingWorktreeRepos: Accessor<Set<string>>;
 	setCreatingWorktreeRepos: Setter<Set<string>>;
 	setMergePendingCtx: Setter<{
@@ -57,6 +66,8 @@ interface WorktreeWorkflowCoordinatorDeps {
 		baseBranch: string;
 		hasDirtyFiles: boolean;
 		worktreeDirty: boolean;
+		worktreeFingerprint?: string;
+		submoduleUnpushedCommits?: Array<{ path: string; count: number }>;
 	} | null>;
 	setupNewWorktree: (
 		repoPath: string,
@@ -277,14 +288,32 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 
 		let worktreeDirty = false;
+		let worktreeFingerprint: string | undefined;
+		let submoduleUnpushedCommits: Array<{ path: string; count: number }> | undefined;
 		try {
 			worktreeDirty = await invoke<boolean>("check_worktree_dirty", { repoPath, workspaceId });
 		} catch (err) {
 			appLogger.warn("git", `Could not check the ${branchName} worktree, assuming dirty`, err);
 			worktreeDirty = true;
 		}
+		try {
+			const lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
+			worktreeFingerprint = lifecycle.dirtyFingerprint;
+			submoduleUnpushedCommits = lifecycle.submoduleUnpushedCommits;
+		} catch (err) {
+			appLogger.warn("git", `Could not fingerprint the ${branchName} worktree`, err);
+		}
 
-		setMergePendingCtx({ repoPath, workspaceId, branchName, baseBranch, hasDirtyFiles, worktreeDirty });
+		setMergePendingCtx({
+			repoPath,
+			workspaceId,
+			branchName,
+			baseBranch,
+			hasDirtyFiles,
+			worktreeDirty,
+			...(worktreeFingerprint ? { worktreeFingerprint } : {}),
+			...(submoduleUnpushedCommits ? { submoduleUnpushedCommits } : {}),
+		});
 	};
 
 	/** Archive/delete a merged worktree, asking first when the backend refuses.
@@ -296,8 +325,10 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		// The merge already landed; only the cleanup stopped. Nothing is lost yet.
 		// The dialog names the branch, because that is what the user recognises.
 		const branchName = repositoriesStore.branchNameFor(repoPath, workspaceId);
-		if (!(await deps.confirmDirtyWorktreeCleanup(branchName, action, 0))) return false;
-		await deps.repo.finalizeMergedWorktree(repoPath, workspaceId, action, true);
+		const lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
+		if (!lifecycle.dirtyFingerprint) throw new Error("Cannot verify worktree state before force confirmation");
+		if (!(await deps.confirmDirtyWorktreeCleanup(branchName, action, 0, lifecycle))) return false;
+		await deps.repo.finalizeMergedWorktree(repoPath, workspaceId, action, true, lifecycle.dirtyFingerprint);
 		return true;
 	};
 
@@ -318,7 +349,14 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		// deleting it would make the row vanish and take that uncommitted work with
 		// it. Neither the merge nor the cleanup has run — ask, then retry with force.
 		if (result.action === "needs_confirmation") {
-			const proceed = await deps.confirmDirtyWorktreeCleanup(branchName, afterMerge, result.commits_ahead ?? 0);
+			const lifecycle = await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId);
+			if (!lifecycle.dirtyFingerprint) throw new Error("Cannot verify worktree state before force confirmation");
+			const proceed = await deps.confirmDirtyWorktreeCleanup(
+				branchName,
+				afterMerge,
+				result.commits_ahead ?? 0,
+				lifecycle,
+			);
 			if (!proceed) {
 				deps.setStatusInfo(`Left ${branchName} alone — its worktree still has uncommitted work`);
 				return;
@@ -330,6 +368,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				targetBranch,
 				afterMerge,
 				true,
+				lifecycle.dirtyFingerprint,
 			);
 		}
 

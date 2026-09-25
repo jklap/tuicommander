@@ -1059,6 +1059,9 @@ optional `delete_branch` flag defaults to `true` for a normal removal and
 branch safety proof and may return a branch-retained warning. Unlocking a
 locked worktree requires the separate `override_lock=true` flag and user
 confirmation. Only an explicit lock override sends Git two `--force` flags.
+Use `repo action=worktree_lifecycle` to obtain the fresh verdict and commit counts. The required `expected_fingerprint` binds force to that lifecycle snapshot; a
+changed checkout status, HEAD, or submodule ref then stops removal. Initialized
+submodule refs are preserved before Git removes the worktree.
 
 When `delete_branch=true` and safe branch
 deletion fails after a linked worktree is removed, the action still succeeds

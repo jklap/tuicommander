@@ -1096,7 +1096,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, close, kill, pause, resume, status, process_stats, wait";
 const AGENT_ACTIONS: &str =
     "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list";
+const REPO_ACTIONS: &str = "list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -1171,14 +1171,15 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- ci_logs: Fetch bounded, terminal-safe failed CI logs for a branch. Requires path and branch.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, GitHub PR/CI and issues, manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- prs: Open PRs with CI, merge readiness, reviews. Requires path.\n- status: Cross-repo {path, branch, ahead, behind, open_prs, failing_ci}.\n- ci_logs: Fetch bounded, terminal-safe failed CI logs for a branch. Requires path and branch.\n- issues: GitHub issues for a repo. Requires path. Optional: filter (default assigned).\n- close_issue: Close an issue. Requires path, issue_number.\n- reopen_issue: Reopen an issue. Requires path, issue_number.\n- worktree_list: Worktrees for a repo. Requires path.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and workspace_id.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session. Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, workspace_id.\n- progress_list: The project's journal, newest first — read it to learn what was already done before you start. Requires path. Optional input.blockedOnly. Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove, progress_list" },
-                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
+                "action": { "type": "string", "description": "One of: list, active, prs, status, ci_logs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, progress_list" },
+                "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_lifecycle, worktree_create, worktree_remove)" },
                 "workspace_id": { "type": "string", "description": "Workspace id from action=worktree_list (required for action=worktree_remove)." },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
                 "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
+                "expected_fingerprint": { "type": "string", "description": "action=worktree_remove: lifecycle fingerprint shown at force confirmation. Removal refuses if the worktree changed." },
                 "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
                 "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
                 "branch": { "type": "string", "description": "Branch name (action=worktree_create optional)" },
@@ -3468,6 +3469,25 @@ async fn handle_worktree(
                 Err(e) => serde_json::json!({"error": e}),
             }
         }
+        "worktree_lifecycle" => {
+            let path = match require_path(args, "worktree_lifecycle") {
+                Ok(path) => path,
+                Err(error) => return error,
+            };
+            if let Err(error) = validate_mcp_repo_path(&path) {
+                return error;
+            }
+            let workspace_id = match args["workspace_id"].as_str() {
+                Some(id) => id,
+                None => {
+                    return serde_json::json!({"error": "Action 'worktree_lifecycle' requires 'workspace_id' parameter"});
+                }
+            };
+            to_json_or_error(crate::worktree::inspect_workspace_lifecycle(
+                std::path::Path::new(&path),
+                workspace_id,
+            ))
+        }
         "worktree_create" => {
             let path = match require_path(args, "worktree_create") {
                 Ok(p) => p,
@@ -3568,17 +3588,22 @@ async fn handle_worktree(
             let force = args["force"].as_bool().unwrap_or(false);
             let delete_branch = args["delete_branch"].as_bool().unwrap_or(!force);
             let override_lock = args["override_lock"].as_bool().unwrap_or(false);
+            let expected_fingerprint = args["expected_fingerprint"].as_str().map(str::to_owned);
+            if force && expected_fingerprint.is_none() {
+                return serde_json::json!({"error": "force requires expected_fingerprint from worktree_lifecycle after user confirmation"});
+            }
             let path_for_remove = path.clone();
             let workspace_id_for_remove = workspace_id.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
-                crate::worktree::remove_worktree_by_workspace_id_with_lock(
+                crate::worktree::remove_worktree_by_workspace_id_with_confirmation(
                     &path_for_remove,
                     &workspace_id_for_remove,
                     delete_branch,
                     archive.as_deref(),
                     force,
                     override_lock,
+                    expected_fingerprint.as_deref(),
                 )
             })
             .await;
@@ -6750,7 +6775,7 @@ async fn handle_repo(
         "prs" | "status" | "ci_logs" | "issues" | "close_issue" | "reopen_issue" => {
             handle_github(state, args).await
         }
-        "worktree_list" | "worktree_create" | "worktree_remove" => {
+        "worktree_list" | "worktree_lifecycle" | "worktree_create" | "worktree_remove" => {
             handle_worktree(state, args, is_claude_code).await
         }
         "progress_list" => {
@@ -8088,9 +8113,32 @@ mod tests {
             .args(["commit", "-m", "unique change"])
             .run()
             .unwrap();
-        let removed = handle_worktree(
+        let missing_confirmation = handle_worktree(
             &state,
             &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "feature", "force": true, "delete_branch": true}),
+            false,
+        )
+        .await;
+        assert!(
+            missing_confirmation["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("fingerprint")),
+            "{missing_confirmation}"
+        );
+        assert!(worktree.exists());
+        let lifecycle = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_lifecycle", "path": &repo_path, "workspace_id": "feature"}),
+            false,
+        )
+        .await;
+        let fingerprint = lifecycle["dirty_fingerprint"]
+            .as_str()
+            .expect("MCP lifecycle fingerprint");
+        assert!(lifecycle["submodule_unpushed_commits"].is_array());
+        let removed = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "feature", "force": true, "delete_branch": true, "expected_fingerprint": fingerprint}),
             false,
         )
         .await;
@@ -8121,9 +8169,16 @@ mod tests {
             .run()
             .unwrap();
         std::fs::write(second.join("untracked.txt"), "discardable\n").unwrap();
+        let second_lifecycle = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_lifecycle", "path": &repo_path, "workspace_id": "force-default"}),
+            false,
+        )
+        .await;
+        let second_fingerprint = second_lifecycle["dirty_fingerprint"].as_str().unwrap();
         let force_without_delete = handle_worktree(
             &state,
-            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "force-default", "force": true}),
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "workspace_id": "force-default", "force": true, "expected_fingerprint": second_fingerprint}),
             false,
         )
         .await;
