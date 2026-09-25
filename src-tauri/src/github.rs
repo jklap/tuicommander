@@ -3521,7 +3521,7 @@ struct FailingCheck {
 #[derive(Debug)]
 enum CiLogsOutcome {
     Logs(String),
-    ExternalOnly(Vec<FailingCheck>),
+    ExternalOnly { checks: Vec<FailingCheck>, owner: String, repo: String },
 }
 
 /// A check's detail link points at `/actions/runs/…` only for GitHub Actions.
@@ -3746,12 +3746,14 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
         // logs, so name the real culprits instead of the misleading "no jobs".
         let failing = list_failing_checks_cli(&gh, &repo_slug, branch);
         if failing.iter().any(|check| !check.is_github_actions) {
-            return Ok(CiLogsOutcome::ExternalOnly(
-                failing
+            return Ok(CiLogsOutcome::ExternalOnly {
+                checks: failing
                     .into_iter()
                     .filter(|check| !check.is_github_actions)
                     .collect(),
-            ));
+                owner,
+                repo,
+            });
         }
         return Err("No failed GitHub Actions job found for this branch head".to_string());
     }
@@ -3808,8 +3810,11 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
             .and_then(|result| result)?;
     match outcome {
         CiLogsOutcome::Logs(logs) => Ok(logs),
-        CiLogsOutcome::ExternalOnly(checks) => {
-            let jobs = circleci_jobs_from_checks(&checks);
+        CiLogsOutcome::ExternalOnly { checks, owner, repo } => {
+            let jobs: Vec<_> = circleci_jobs_from_checks(&checks)
+                .into_iter()
+                .filter(|(_, job)| job.vcs == "gh" && job.org.eq_ignore_ascii_case(&owner) && job.repo.eq_ignore_ascii_case(&repo))
+                .collect();
             if jobs.is_empty() {
                 return Err(format!(
                     "Auto-heal can only fetch GitHub Actions logs, but the failing checks run on external CI (not supported): {}. Fix them on that provider — auto-heal can't retrieve their logs.",
