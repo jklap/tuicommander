@@ -79,6 +79,12 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             command,
         } => {
             scoped_snapshot(&store, &owner, &run_id)?;
+            if matches!(
+                command,
+                RunCommand::BindAgent { .. } | RunCommand::ReportBoundAttempt { .. }
+            ) {
+                return Err("agent binding and reports require a managed MCP session".into());
+            }
             Ok(RunReply::Receipt(store.command_expected(
                 &run_id,
                 &command_id,
@@ -111,24 +117,33 @@ pub fn run_action_with_events(
             ),
             RunReply::Events(_) => unreachable!("mutations return a snapshot or receipt"),
         };
-        let payload = serde_json::json!({ "runId": run_id, "sequence": sequence });
-        #[cfg(feature = "desktop")]
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(
-                "workflow-run-changed",
-                serde_json::json!({
-                    "repo_path": repo_path, "payload": &payload,
-                }),
-            );
-        }
-        let _ = state
-            .event_bus
-            .send(crate::state::AppEvent::WorkflowRunChanged {
-                repo_path: repo_path.clone(),
-                payload,
-            });
+        emit_run_changed(state, repo_path, run_id, sequence);
     }
     Ok(reply)
+}
+
+pub fn emit_run_changed(
+    state: &crate::state::AppState,
+    repo_path: &str,
+    run_id: &str,
+    sequence: i64,
+) {
+    let payload = serde_json::json!({ "runId": run_id, "sequence": sequence });
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit(
+            "workflow-run-changed",
+            serde_json::json!({
+                "repo_path": repo_path, "payload": &payload,
+            }),
+        );
+    }
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::WorkflowRunChanged {
+            repo_path: repo_path.to_owned(),
+            payload,
+        });
 }
 
 fn scoped_snapshot(store: &RunStore, owner: &str, run_id: &str) -> Result<RunSnapshot, String> {

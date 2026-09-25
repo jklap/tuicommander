@@ -1,10 +1,12 @@
 mod api;
 mod definition;
+mod prompt;
 mod run;
 mod store;
 
 pub use api::*;
 pub use definition::*;
+pub use prompt::*;
 pub use run::*;
 pub use store::*;
 

@@ -32,6 +32,10 @@
 
 ## Workflow definitions (2026-09-25) — Rust, needs `make dev` restart
 
+- [ ] After a Rust restart in an isolated instance, launch a coordinator attempt into a registered throwaway worktree with `workflow_launch`, inspect its prompt and event timeline, submit `workflow_report` from that managed PTY, and verify a different PTY cannot report the attempt. Exit a second agent without reporting and confirm its attempt becomes interrupted and the run pauses. Do this only when losing the current dev sessions is acceptable.
+
+- [ ] After restarting Boss's desktop build when sessions can be interrupted, open Plans and Stories from the project toolbar and inspect the layout and stale-revision error. The isolated browser build already completed the create → start manual → check criterion → submit review → approve flow on 2026-09-25; screen capture is pending because agent-browser returned white images even for a solid-red test page and MCPMacControl.app lacks Screen Recording permission.
+
 - [ ] After a restart in an isolated instance, start a run for a published `Resolve plan` definition through the workflow run API, page events from sequence zero, pause and resume, and confirm the run survives another restart. The runtime currently requires explicit commands; the scheduler is not yet connected.
 
 - [ ] In an isolated instance after restart, list workflow definitions for a project, edit a draft, publish revision 2, and confirm a run or reader pinned to revision 1 still sees revision 1. Confirm a malformed graph reports a validation error.
