@@ -4,7 +4,7 @@
 
 | Command | Parameters | Result | Description |
 |---|---|---|---|
-| `workflow_run_action` | `project, action` | tagged `RunReply` | Starts, reads, pages events, or commands a durable project-scoped plan run. See [Workflow runs](../backend/workflows.md#durable-runs). |
+| `workflow_run_action` | `project, action` | tagged `RunReply` | Starts, reads, lists plan runs, pages events, or commands a durable project-scoped run. See [Workflow runs](../backend/workflows.md#durable-runs). |
 
 ## Workflow definitions
 

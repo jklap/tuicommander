@@ -16,7 +16,7 @@ Commands have caller-supplied IDs bound to their payload hashes and an expected 
 
 Before executing an external action, the runtime reserves a stable effect key. Desktop and headless startup reconcile active runs: unfinished attempts become interrupted, intended external effects become uncertain, and every active run pauses for an explicit resume decision. Effects are never repeated automatically. An operator must resolve each uncertain effect before resuming. Planning closure stores a fingerprint of the current story set and requirements. The next command reopens planning if that set changes. Completion also requires every story to be Done and accepted at its current revision, no active attempts or uncertain effects, and a current final-verification fingerprint. The runtime currently records the final-verification decision supplied by the caller; the policy and evidence gate are part of the later evaluation slice.
 
-`workflow_run_action` and `POST /workflows/run/action?path=<project>` expose `start_plan`, `get`, `events`, and `command` using the same Rust service and canonical project checks. This is an operator API. Agent binding and typed reports are refused on this API; they require the managed MCP session.
+`workflow_run_action` and `POST /workflows/run/action?path=<project>` expose `start_plan`, `get`, `list_plan_runs`, `events`, and `command` using the same Rust service and canonical project checks. `list_plan_runs` returns the newest run snapshots for a plan with a limit of 1–100, so a timeline can discover its durable run ID. This is an operator API. Agent binding and typed reports are refused on this API; they require the managed MCP session.
 
 ## Managed agent attempts
 

@@ -918,8 +918,8 @@ mod tests {
         let RunReply::Snapshot(run) = run_action(
             &project_path,
             RunAction::StartPlan {
-                plan_id,
-                definition_id,
+                plan_id: plan_id.clone(),
+                definition_id: definition_id.clone(),
                 definition_revision: 1,
                 limits: RunLimits::default(),
             },
@@ -927,6 +927,38 @@ mod tests {
         .expect("start") else {
             panic!("snapshot reply");
         };
+        let RunReply::Runs(runs) = run_action(
+            &project_path,
+            RunAction::ListPlanRuns {
+                plan_id: plan_id.clone(),
+                limit: 20,
+            },
+        )
+        .expect("list runs") else {
+            panic!("runs reply")
+        };
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, run.id);
+        assert!(
+            run_action(
+                other.path().to_str().unwrap(),
+                RunAction::ListPlanRuns {
+                    plan_id: plan_id.clone(),
+                    limit: 20,
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            run_action(
+                &project_path,
+                RunAction::ListPlanRuns {
+                    plan_id: plan_id.clone(),
+                    limit: 0,
+                }
+            )
+            .is_err()
+        );
         assert!(
             run_action(
                 other.path().to_str().unwrap(),
@@ -985,6 +1017,39 @@ mod tests {
             )
             .is_err()
         );
+        let RunReply::Receipt(cancelled) = run_action(
+            &project_path,
+            RunAction::Command {
+                run_id: paused.snapshot.id,
+                command_id: "cancel-after-pause".into(),
+                expected_sequence: paused.sequence,
+                command: RunCommand::Cancel,
+            },
+        )
+        .expect("cancel") else {
+            panic!("cancel receipt")
+        };
+        assert_eq!(cancelled.snapshot.status, RunStatus::Cancelled);
+        let RunReply::Snapshot(newest) = run_action(
+            &project_path,
+            RunAction::StartPlan {
+                plan_id: plan_id.clone(),
+                definition_id,
+                definition_revision: 1,
+                limits: RunLimits::default(),
+            },
+        )
+        .expect("restart plan") else {
+            panic!("new run")
+        };
+        let RunReply::Runs(latest) =
+            run_action(&project_path, RunAction::ListPlanRuns { plan_id, limit: 1 })
+                .expect("latest run")
+        else {
+            panic!("latest runs")
+        };
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].id, newest.id);
     }
 
     #[test]

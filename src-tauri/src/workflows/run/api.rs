@@ -15,6 +15,10 @@ pub enum RunAction {
     Get {
         run_id: String,
     },
+    ListPlanRuns {
+        plan_id: String,
+        limit: usize,
+    },
     Events {
         run_id: String,
         after_sequence: i64,
@@ -32,6 +36,7 @@ pub enum RunAction {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum RunReply {
     Snapshot(RunSnapshot),
+    Runs(Vec<RunSnapshot>),
     Events(Vec<RunEvent>),
     Receipt(RunReceipt),
 }
@@ -60,6 +65,15 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
         RunAction::Get { run_id } => Ok(RunReply::Snapshot(scoped_snapshot(
             &store, &owner, &run_id,
         )?)),
+        RunAction::ListPlanRuns { plan_id, limit } => {
+            let plan = crate::stories::StoryStore::open()?.get_plan(&plan_id)?;
+            if plan.project != owner {
+                return Err("plan does not belong to project".into());
+            }
+            Ok(RunReply::Runs(
+                store.list_plan_runs(&owner, &plan_id, limit)?,
+            ))
+        }
         RunAction::Events {
             run_id,
             after_sequence,
@@ -115,7 +129,9 @@ pub fn run_action_with_events(
                 &receipt.snapshot.id,
                 receipt.sequence,
             ),
-            RunReply::Events(_) => unreachable!("mutations return a snapshot or receipt"),
+            RunReply::Events(_) | RunReply::Runs(_) => {
+                unreachable!("mutations return a snapshot or receipt")
+            }
         };
         emit_run_changed(state, repo_path, run_id, sequence);
     }
