@@ -2195,9 +2195,9 @@ DELETE /worktrees/:workspaceId?repoPath=/path&deleteBranch=true
 
 Query parameters:
 - `repoPath` (required) -- base repository path
-- `deleteBranch` (optional, default `true`; default `false` with `force=true`) -- when `true`, also requests deletion of the local git branch
+- `deleteBranch` (optional, default `true`, or `false` when `force=true`) -- when `true`, also requests deletion of the local git branch
 - `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
-- `overrideLock` (optional, default `false`) -- explicit authorization to unlock a locked worktree before removal
+- `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 

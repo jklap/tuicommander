@@ -163,8 +163,9 @@ as workspace warnings.
 HTTP, MCP, and desktop IPC creation return while copy-on-write warming is pending. Their
 instructions say to wait before running a build; `GET /worktrees/paths?path=<repo>`
 and IPC `get_worktree_paths` report each workspace's `warm_artifacts.status`
-(`pending`, `done`, or `failed`). A configured setup script runs before the warm,
-so it cannot write the same cache tree concurrently. Pending is recorded before
+(`pending`, `done`, or `failed`). HTTP and MCP run a configured setup script
+before warming. Desktop IPC currently starts warming before its frontend setup
+script, so those two operations can overlap. Pending is recorded before
 the setup script starts. If creation is cancelled during setup, the status
 becomes `failed` instead of remaining `pending`. Removing or archiving a
 worktree waits for an active copy, clears its warm state, and prevents a queued
@@ -174,7 +175,7 @@ Non-force removal first requires a clean checkout and submodules, no Git
 operation in progress, and a HEAD matching the captured branch tip. Git needs
 one `--force` to remove a populated submodule even when it is clean; TUICommander
 uses it only after checking submodule status and rechecking dirtiness immediately
-before removal. A separate, confirmed lock override unlocks the worktree before
+before removal. A separate, confirmed lock override bypasses the lock during
 removal; dirty-file `force` alone does not bypass a lock. Branch deletion in
 either mode uses the captured OID in a compare-and-delete operation. If proof
 fails or the branch moves, removal reports a warning and keeps the ref. For

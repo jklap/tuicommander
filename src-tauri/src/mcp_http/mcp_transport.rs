@@ -1177,6 +1177,8 @@ fn native_tool_definitions() -> serde_json::Value {
                 "path": { "type": "string", "description": "Absolute path to git repository (required for prs, issues, close_issue, reopen_issue, worktree_list, worktree_create, worktree_remove)" },
                 "workspace_id": { "type": "string", "description": "Workspace id from action=worktree_list (required for action=worktree_remove)." },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
+                "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
+                "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
                 "filter": { "type": "string", "description": "Issue filter, default 'assigned' (action=issues)" },
                 "issue_number": { "type": "integer", "description": "Issue number (action=close_issue/reopen_issue, required)" },
                 "branch": { "type": "string", "description": "Branch name (action=worktree_create optional)" },
@@ -3564,16 +3566,19 @@ async fn handle_worktree(
                 }
             };
             let force = args["force"].as_bool().unwrap_or(false);
+            let delete_branch = args["delete_branch"].as_bool().unwrap_or(!force);
+            let override_lock = args["override_lock"].as_bool().unwrap_or(false);
             let path_for_remove = path.clone();
             let workspace_id_for_remove = workspace_id.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let archive = crate::worktree::resolve_archive_script(&path_for_remove);
-                crate::worktree::remove_worktree_by_workspace_id(
+                crate::worktree::remove_worktree_by_workspace_id_with_lock(
                     &path_for_remove,
                     &workspace_id_for_remove,
-                    true,
+                    delete_branch,
                     archive.as_deref(),
                     force,
+                    override_lock,
                 )
             })
             .await;
@@ -8029,7 +8034,10 @@ mod tests {
             .run()
             .unwrap();
         std::fs::write(repo.join("README.md"), "base\n").unwrap();
-        crate::git_cli::git_cmd(&repo).args(["add", "."]).run().unwrap();
+        crate::git_cli::git_cmd(&repo)
+            .args(["add", "."])
+            .run()
+            .unwrap();
         crate::git_cli::git_cmd(&repo)
             .args(["commit", "-m", "base"])
             .run()
@@ -8040,7 +8048,13 @@ mod tests {
             .unwrap();
         let worktree = temp.path().join("feature");
         crate::git_cli::git_cmd(&repo)
-            .args(["worktree", "add", "-b", "feature", &worktree.to_string_lossy()])
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &worktree.to_string_lossy(),
+            ])
             .run()
             .unwrap();
         let dirty = worktree.join("untracked.txt");
@@ -8054,12 +8068,17 @@ mod tests {
             false,
         )
         .await;
-        assert!(refused["error"].as_str().unwrap().contains("uncommitted"), "{refused}");
+        assert!(
+            refused["error"].as_str().unwrap().contains("uncommitted"),
+            "{refused}"
+        );
         assert!(dirty.exists());
-        assert!(crate::git_cli::git_cmd(&repo)
-            .args(["show-ref", "--verify", "refs/heads/feature"])
-            .run()
-            .is_ok());
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/feature"])
+                .run()
+                .is_ok()
+        );
 
         crate::git_cli::git_cmd(&worktree)
             .args(["add", "untracked.txt"])
@@ -8076,16 +8095,29 @@ mod tests {
         )
         .await;
         assert_eq!(removed["ok"], true, "{removed}");
-        assert!(removed["branch_delete_warning"].as_str().is_some_and(|s| s.contains("unmerged")), "{removed}");
+        assert!(
+            removed["branch_delete_warning"]
+                .as_str()
+                .is_some_and(|s| s.contains("unmerged")),
+            "{removed}"
+        );
         assert!(!worktree.exists());
-        assert!(crate::git_cli::git_cmd(&repo)
-            .args(["show-ref", "--verify", "refs/heads/feature"])
-            .run()
-            .is_ok());
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/feature"])
+                .run()
+                .is_ok()
+        );
 
         let second = temp.path().join("force-default");
         crate::git_cli::git_cmd(&repo)
-            .args(["worktree", "add", "-b", "force-default", &second.to_string_lossy()])
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "force-default",
+                &second.to_string_lossy(),
+            ])
             .run()
             .unwrap();
         std::fs::write(second.join("untracked.txt"), "discardable\n").unwrap();
@@ -8097,10 +8129,13 @@ mod tests {
         .await;
         assert_eq!(force_without_delete["ok"], true, "{force_without_delete}");
         assert!(!second.exists());
-        assert!(crate::git_cli::git_cmd(&repo)
-            .args(["show-ref", "--verify", "refs/heads/force-default"])
-            .run()
-            .is_ok(), "force alone does not authorize branch deletion");
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/force-default"])
+                .run()
+                .is_ok(),
+            "force alone does not authorize branch deletion"
+        );
     }
 
     #[test]

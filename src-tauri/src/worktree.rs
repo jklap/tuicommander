@@ -523,9 +523,8 @@ pub(crate) enum WorkspaceRemovalSafety {
 /// workspace. Optional fields mean inspection failed; unknown is never zero.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct WorkspaceLifecycleStatus {
-    /// How many files removal would discard — staged, unstaged and untracked
-    /// alike. A count rather than a flag because "dirty" tells the user nothing
-    /// about what is at stake, and this number is exactly what removal loses.
+    /// Count of staged, unstaged and untracked changes. Ignored files are not
+    /// counted; removal also deletes those files, including warmed caches.
     pub(crate) dirty_files: Option<usize>,
     pub(crate) commit_status: WorkspaceCommitStatus,
     pub(crate) removal_safety: WorkspaceRemovalSafety,
@@ -543,10 +542,26 @@ fn rev_at(path: &Path, spec: &str) -> Result<String, String> {
 
 fn dirty_files_at(path: &Path) -> Result<usize, String> {
     git_cmd(path)
-        .args(["status", "--porcelain", "--untracked-files=all"])
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
         .run()
         .map(|out| out.stdout.lines().filter(|l| !l.trim().is_empty()).count())
         .map_err(|e| format!("could not check the workspace for uncommitted changes: {e}"))
+}
+
+fn verify_submodules_at(path: &Path) -> Result<(), String> {
+    let output = git_cmd(path)
+        .args(["submodule", "status", "--recursive"])
+        .run()
+        .map_err(|e| format!("Cannot verify submodules before removal: {e}"))?;
+    if output.stdout.lines().any(|line| !line.starts_with(' ')) {
+        return Err("Cannot remove worktree: a submodule is uninitialized, conflicted, or has a different commit".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn inspect_workspace_lifecycle(
@@ -854,6 +869,14 @@ fn ensure_branch_has_no_workspace(base_repo: &Path, branch: &str) -> Result<(), 
     }
 }
 pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> Result<(), String> {
+    remove_worktree_internal_with_lock(worktree, force, false)
+}
+
+fn remove_worktree_internal_with_lock(
+    worktree: &WorktreeInfo,
+    force: bool,
+    override_lock: bool,
+) -> Result<(), String> {
     // A copy already in flight must finish before Git can remove its destination.
     // If removal wins, the queued copy sees the cleared token and never starts.
     let warm_lock = warm_lock(&worktree.path);
@@ -870,10 +893,19 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
         "remove_worktree_internal: start"
     );
 
-    let force_args: &[&str] = if force {
+    if !force && worktree.path.exists() {
+        if dirty_files_at(&worktree.path)? != 0 {
+            return Err("Cannot remove worktree: the worktree has uncommitted changes".into());
+        }
+        verify_submodules_at(&worktree.path)?;
+    }
+
+    // Git requires one --force even for clean populated submodules. The caller
+    // proves cleanliness first; a second --force would also override a lock.
+    let force_args: &[&str] = if override_lock {
         &["worktree", "remove", "--force", "--force"]
     } else {
-        &["worktree", "remove"]
+        &["worktree", "remove", "--force"]
     };
 
     match git_cmd(&worktree.base_repo)
@@ -897,13 +929,10 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
             );
         }
         Err(crate::git_cli::GitError::NonZeroExit { ref stderr, .. })
-            if !force
-                && (stderr.contains("locked working tree")
-                    || stderr.contains("cannot remove a locked")) =>
+            if stderr.contains("locked working tree")
+                || stderr.contains("cannot remove a locked") =>
         {
-            // Worktree is locked and caller did not request force. Surface a
-            // distinctive error so the JS layer can prompt the user to confirm
-            // before retrying with force=true.
+            // A lock is independent of permission to discard dirty files.
             tracing::warn!(
                 source = "worktree",
                 branch = %worktree.name,
@@ -1151,6 +1180,24 @@ pub(crate) fn remove_worktree_by_workspace_id(
     archive_script: Option<&str>,
     force: bool,
 ) -> Result<RemoveWorktreeOutcome, String> {
+    remove_worktree_by_workspace_id_with_lock(
+        repo_path,
+        workspace_id,
+        delete_branch,
+        archive_script,
+        force,
+        false,
+    )
+}
+
+pub(crate) fn remove_worktree_by_workspace_id_with_lock(
+    repo_path: &str,
+    workspace_id: &str,
+    delete_branch: bool,
+    archive_script: Option<&str>,
+    force: bool,
+    override_lock: bool,
+) -> Result<RemoveWorktreeOutcome, String> {
     let base_repo = PathBuf::from(repo_path);
     let mut branch_delete_warning = None;
     let mut removal_rule = if force { "force" } else { "kept_branch" };
@@ -1174,35 +1221,42 @@ pub(crate) fn remove_worktree_by_workspace_id(
     let branch_name = workspace.branch.as_str();
     let worktree_path = PathBuf::from(&workspace.path);
 
-    // Refuse every non-force removal unless the checkout is proven clean and
-    // still points at the branch tip whose commits are being inspected.
-    let expected_branch_oid = if !force {
-        let branch_ref = format!("refs/heads/{branch_name}");
-        let oid = rev_at(&base_repo, &branch_ref)?;
-        let lifecycle = inspect_workspace_lifecycle(&base_repo, workspace_id);
+    // Force permits discarding dirty files, but never detached commits or a
+    // lock. Branch deletion still needs its own proof in either mode.
+    let branch_ref = format!("refs/heads/{branch_name}");
+    let expected_branch_oid = rev_at(&base_repo, &branch_ref)?;
+    let lifecycle = inspect_workspace_lifecycle(&base_repo, workspace_id);
+    if !force {
         if lifecycle.dirty_files != Some(0) {
-            return Err(lifecycle.error.unwrap_or_else(|| {
+            return Err(lifecycle.error.clone().unwrap_or_else(|| {
                 format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
             }));
         }
-        if has_operation_in_progress(&workspace.path) {
-            return Err(format!(
-                "Cannot remove {branch_name}: a Git operation is in progress"
-            ));
-        }
-        if rev_at(&worktree_path, "HEAD")? != oid {
-            return Err(format!(
-                "Cannot remove {branch_name}: worktree HEAD differs from its branch tip"
-            ));
-        }
-        if delete_branch {
+        verify_submodules_at(&worktree_path)?;
+    }
+    if has_operation_in_progress(&workspace.path) {
+        return Err(format!(
+            "Cannot remove {branch_name}: a Git operation is in progress"
+        ));
+    }
+    if rev_at(&worktree_path, "HEAD")? != expected_branch_oid {
+        return Err(format!(
+            "Cannot remove {branch_name}: worktree HEAD differs from its branch tip"
+        ));
+    }
+    if delete_branch {
+        let branch_proof = (|| -> Result<&'static str, String> {
             match lifecycle.commit_status {
                 WorkspaceCommitStatus::Unmerged => {
                     let default_branch = get_remote_default_branch(repo_path)?;
                     // `git cherry` omits merge commits, including their resolution
                     // changes. Require every commit on this path to be comparable.
                     let merges = git_cmd(&base_repo)
-                        .args(["rev-list", "--merges", &format!("{default_branch}..{oid}")])
+                        .args([
+                            "rev-list",
+                            "--merges",
+                            &format!("{default_branch}..{expected_branch_oid}"),
+                        ])
                         .run()
                         .map_err(|e| {
                             format!("Cannot check merge commits for {branch_name}: {e}")
@@ -1213,7 +1267,7 @@ pub(crate) fn remove_worktree_by_workspace_id(
                         ));
                     }
                     let cherry = git_cmd(&base_repo)
-                        .args(["cherry", &default_branch, &oid])
+                        .args(["cherry", &default_branch, &expected_branch_oid])
                         .run()
                         .map_err(|e| {
                             format!("Cannot check patch equivalence for {branch_name}: {e}")
@@ -1223,21 +1277,23 @@ pub(crate) fn remove_worktree_by_workspace_id(
                             "Cannot remove {branch_name}: branch has unmerged commits. Merge it first, or remove the worktree while keeping the branch."
                         ));
                     }
-                    removal_rule = "patch_equivalence";
+                    Ok("patch_equivalence")
                 }
                 WorkspaceCommitStatus::Unknown => {
-                    return Err(lifecycle.error.unwrap_or_else(|| {
+                    Err(lifecycle.error.clone().unwrap_or_else(|| {
                         format!("Cannot verify whether {branch_name} can be safely removed")
-                    }));
+                    }))
                 }
-                WorkspaceCommitStatus::InSync => removal_rule = "in_sync",
-                WorkspaceCommitStatus::Merged => removal_rule = "ancestry",
+                WorkspaceCommitStatus::InSync => Ok("in_sync"),
+                WorkspaceCommitStatus::Merged => Ok("ancestry"),
             }
+        })();
+        match branch_proof {
+            Ok(rule) => removal_rule = rule,
+            Err(error) if force => branch_delete_warning = Some(error),
+            Err(error) => return Err(error),
         }
-        Some(oid)
-    } else {
-        None
-    };
+    }
 
     tracing::info!(
         source = "worktree",
@@ -1263,23 +1319,19 @@ pub(crate) fn remove_worktree_by_workspace_id(
         base_repo,
     };
 
-    remove_worktree_internal(&worktree, force)?;
+    remove_worktree_internal_with_lock(&worktree, force, override_lock)?;
 
     // Compare-and-delete prevents an archive hook or another process from
     // advancing the branch after the safety proof.
-    if delete_branch {
-        let deleted = if let Some(expected_oid) = expected_branch_oid.as_deref() {
+    if delete_branch && branch_delete_warning.is_none() {
+        let deleted = {
             git_cmd(&worktree.base_repo)
                 .args([
                     "update-ref",
                     "-d",
                     &format!("refs/heads/{branch_name}"),
-                    expected_oid,
+                    &expected_branch_oid,
                 ])
-                .run()
-        } else {
-            git_cmd(&worktree.base_repo)
-                .args(["branch", "-D", "--", branch_name])
                 .run()
         };
         match deleted {
@@ -1315,7 +1367,7 @@ pub(crate) fn remove_worktree_by_workspace_id(
 
 /// Remove one workspace's checkout by workspace id (Tauri command with cache invalidation)
 ///
-/// `delete_branch` defaults to `true` when omitted (preserving existing behavior).
+/// `delete_branch` defaults to `false` with force and `true` otherwise.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn remove_worktree(
@@ -1324,9 +1376,11 @@ pub(crate) async fn remove_worktree(
     workspace_id: String,
     delete_branch: Option<bool>,
     force: Option<bool>,
+    override_lock: Option<bool>,
 ) -> Result<RemoveWorktreeOutcome, String> {
-    let delete_branch = delete_branch.unwrap_or(true);
     let force = force.unwrap_or(false);
+    let delete_branch = delete_branch.unwrap_or(!force);
+    let override_lock = override_lock.unwrap_or(false);
     tracing::info!(
         source = "worktree",
         workspace_id = %workspace_id,
@@ -1339,12 +1393,13 @@ pub(crate) async fn remove_worktree(
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        remove_worktree_by_workspace_id(
+        remove_worktree_by_workspace_id_with_lock(
             &repo_path_clone,
             &workspace_id_clone,
             delete_branch,
             script.as_deref(),
             force,
+            override_lock,
         )
     })
     .await
@@ -2261,6 +2316,8 @@ pub(crate) struct MergeArchiveResult {
     pub(crate) commits_ahead: usize,
     /// Whether the worktree had uncommitted changes at pre-flight time.
     pub(crate) worktree_dirty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) branch_delete_warning: Option<String>,
 }
 
 /// Whether a branch's worktree holds uncommitted work.
@@ -2408,6 +2465,7 @@ pub(crate) fn finalize_merged_worktree_impl(
             archive_path: None,
             commits_ahead: 0,
             worktree_dirty: dirt.is_dirty(),
+            branch_delete_warning: None,
         });
     }
 
@@ -2435,6 +2493,7 @@ pub(crate) fn finalize_merged_worktree_impl(
                 // this one; its pre-flight numbers were reported there.
                 commits_ahead: 0,
                 worktree_dirty: dirt.is_dirty(),
+                branch_delete_warning: None,
             })
         }
         "delete" => {
@@ -2456,6 +2515,7 @@ pub(crate) fn finalize_merged_worktree_impl(
                 archive_path: None,
                 commits_ahead: 0,
                 worktree_dirty: dirt.is_dirty(),
+                branch_delete_warning: outcome.branch_delete_warning,
             })
         }
         _ => Err(format!(
@@ -2526,6 +2586,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
             archive_path: None,
             commits_ahead: preflight.commits_ahead,
             worktree_dirty: preflight.worktree_dirty.is_dirty(),
+            branch_delete_warning: None,
         });
     }
 
@@ -2578,6 +2639,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
                 archive_path: Some(archive_path),
                 commits_ahead,
                 worktree_dirty,
+                branch_delete_warning: None,
             })
         }
         "delete" => {
@@ -2599,6 +2661,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
                 archive_path: None,
                 commits_ahead,
                 worktree_dirty,
+                branch_delete_warning: outcome.branch_delete_warning,
             })
         }
         _ => {
@@ -2610,6 +2673,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
                 archive_path: None,
                 commits_ahead,
                 worktree_dirty,
+                branch_delete_warning: None,
             })
         }
     }
@@ -2676,6 +2740,11 @@ pub(crate) fn archive_worktree(
     // record's branch, so a same-branch sibling can never be the one moved away.
     let workspace = resolve_workspace(base_repo, workspace_id)?;
     let wt_path = PathBuf::from(&workspace.path);
+    let lock = warm_lock(&wt_path);
+    let _warm_guard = lock.as_ref().map(|lock| {
+        lock.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
 
     // Run archive script before archiving (if configured)
     if let Some(script) = archive_script
@@ -2703,6 +2772,7 @@ pub(crate) fn archive_worktree(
         std::fs::rename(&wt_path, &archive_dest)
             .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
     }
+    clear_warm(&wt_path);
 
     // The directory is out of the repo now; drop git's administrative entry for
     // it. Unlock first — `prune` skips locked worktrees and would leave a ghost
@@ -3309,6 +3379,29 @@ mod tests {
     }
 
     #[test]
+    fn explicit_lock_override_removes_a_locked_clean_worktree() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "locked-override");
+        git_cmd(&repo)
+            .args(["worktree", "lock", &path.to_string_lossy()])
+            .run()
+            .unwrap();
+
+        let outcome = remove_worktree_by_workspace_id_with_lock(
+            &repo.to_string_lossy(),
+            "locked-override",
+            true,
+            None,
+            false,
+            true,
+        )
+        .unwrap();
+
+        assert!(!path.exists());
+        assert!(outcome.branch_delete_warning.is_none());
+    }
+
+    #[test]
     fn test_remove_main_worktree_returns_main_prefix_error() {
         let repo = setup_test_repo();
 
@@ -3406,7 +3499,13 @@ mod tests {
             true,
         );
         let outcome = res.expect("force remove should succeed");
-        assert!(outcome.branch_delete_warning.as_deref().is_some_and(|w| w.contains("unmerged")), "{outcome:?}");
+        assert!(
+            outcome
+                .branch_delete_warning
+                .as_deref()
+                .is_some_and(|w| w.contains("unmerged")),
+            "{outcome:?}"
+        );
 
         let branches = git_cmd(repo.path())
             .args(["branch", "--list", "feat-force"])
@@ -3891,11 +3990,18 @@ mod tests {
         assert_eq!(result.action, "deleted");
         assert!(!worktree.exists());
         let payload = serde_json::to_value(result).unwrap();
-        assert!(payload["branch_delete_warning"].as_str().is_some_and(|w| w.contains("unmerged")), "{payload}");
-        assert!(git_cmd(repo.path())
-            .args(["show-ref", "--verify", "refs/heads/feat-finalize-unmerged"])
-            .run()
-            .is_ok());
+        assert!(
+            payload["branch_delete_warning"]
+                .as_str()
+                .is_some_and(|w| w.contains("unmerged")),
+            "{payload}"
+        );
+        assert!(
+            git_cmd(repo.path())
+                .args(["show-ref", "--verify", "refs/heads/feat-finalize-unmerged"])
+                .run()
+                .is_ok()
+        );
     }
 
     #[test]
@@ -5733,18 +5839,18 @@ branch refs/heads/feat
         add_populated_submodule(&repo);
         let worktree = add_worktree(&repo, "clean-module");
         git_cmd(&worktree)
-            .args(["-c", "protocol.file.allow=always", "submodule", "update", "--init"])
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
             .run()
             .unwrap();
 
-        remove_worktree_by_workspace_id(
-            &repo.to_string_lossy(),
-            "clean-module",
-            true,
-            None,
-            false,
-        )
-        .expect("a clean populated submodule can be safely removed");
+        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "clean-module", true, None, false)
+            .expect("a clean populated submodule can be safely removed");
         assert!(!worktree.exists());
     }
 
@@ -5754,7 +5860,13 @@ branch refs/heads/feat
         add_populated_submodule(&repo);
         let worktree = add_worktree(&repo, "modified-module");
         git_cmd(&worktree)
-            .args(["-c", "protocol.file.allow=always", "submodule", "update", "--init"])
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
             .run()
             .unwrap();
         let module = worktree.join("modules/local");
@@ -5780,7 +5892,10 @@ branch refs/heads/feat
             false,
         )
         .unwrap_err();
-        assert!(error.contains("uncommitted") || error.contains("submodule"), "{error}");
+        assert!(
+            error.contains("uncommitted") || error.contains("submodule"),
+            "{error}"
+        );
         assert!(worktree.exists());
         assert!(gitdir.exists(), "local-only commit must stay reachable");
     }
@@ -6038,10 +6153,12 @@ branch refs/heads/feat
                 .is_some_and(|warning| warning.contains("changed")),
             "{outcome:?}"
         );
-        assert!(git_cmd(&repo)
-            .args(["show-ref", "--verify", "refs/heads/force-late-commit"])
-            .run()
-            .is_ok());
+        assert!(
+            git_cmd(&repo)
+                .args(["show-ref", "--verify", "refs/heads/force-late-commit"])
+                .run()
+                .is_ok()
+        );
     }
 
     #[test]
@@ -6081,7 +6198,9 @@ branch refs/heads/feat
             true,
         )
         .unwrap_err();
-        assert!(error.contains("HEAD differs"), "{error}");
+        // A plain detached checkout has no branch-keyed workspace id, so the
+        // request fails before the branch-tip comparison can run.
+        assert!(error.contains("No workspace found"), "{error}");
         assert!(worktree.exists());
         assert_eq!(rev_at(&worktree, "HEAD").unwrap(), detached_oid);
     }

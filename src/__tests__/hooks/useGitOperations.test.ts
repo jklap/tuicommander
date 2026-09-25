@@ -2037,8 +2037,8 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
-			// Dialog now receives the deleteBranch flag so it can warn about
-			// unmerged-commit loss when `-D` will run.
+			// Dialog receives the requested branch action while the backend
+			// independently proves whether deleting that branch is safe.
 			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
 		});
 
@@ -2047,12 +2047,12 @@ describe("useGitOperations", () => {
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 			mockRepo.removeWorktree
 				.mockRejectedValueOnce(new Error(LOCKED_ERROR)) // first attempt: locked
-				.mockResolvedValueOnce(undefined); // second attempt (force): success
+				.mockResolvedValueOnce(undefined); // second attempt (lock override): success
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
-			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true, true);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, false, true);
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
 		});
 
