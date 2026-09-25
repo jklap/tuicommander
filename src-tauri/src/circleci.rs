@@ -19,6 +19,10 @@ pub(crate) enum TokenSource {
 
 const MAX_FAILED_ACTIONS: usize = 5;
 const MAX_LOG_BODY_BYTES: usize = 64 * 1024;
+/// Bounds a half-open credential-bearing API connection without constraining S3 downloads.
+const CIRCLECI_API_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Bounds the complete CircleCI API request so callers cannot leave healing active indefinitely.
+const CIRCLECI_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn is_safe_segment(value: &str) -> bool {
     !value.is_empty()
@@ -229,6 +233,8 @@ async fn fetch_job_log_from_base(
     // downloads below deliberately use the shared client without this header.
     let api_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CIRCLECI_API_CONNECT_TIMEOUT)
+        .timeout(CIRCLECI_API_TIMEOUT)
         .build()
         .map_err(|error| format!("Failed to build CircleCI client: {error}"))?;
     let detail: serde_json::Value = api_client
