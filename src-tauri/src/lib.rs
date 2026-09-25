@@ -1925,6 +1925,8 @@ pub fn run() {
             improvement_scan::create_issue_from_proposal,
             conflict_assist::start_conflict_assist,
             github::fetch_ci_failure_logs,
+            circleci::circleci_token_status,
+            circleci::circleci_set_token,
             github::get_all_issues,
             github::get_issue_detail,
             github::close_issue,

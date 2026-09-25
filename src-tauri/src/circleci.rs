@@ -80,6 +80,21 @@ pub(crate) fn resolve_token() -> (Option<String>, TokenSource) {
     resolve_token_from_sources(vault, env, token_from_cli_config_file())
 }
 
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn circleci_token_status() -> Result<serde_json::Value, String> {
+    let (token, source) = resolve_token();
+    Ok(serde_json::json!({ "configured": token.is_some(), "source": source }))
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn circleci_set_token(token: String) -> Result<(), String> {
+    if token.trim().is_empty() {
+        crate::credentials::delete(crate::credentials::Credential::CircleCiToken)
+    } else {
+        crate::credentials::set(crate::credentials::Credential::CircleCiToken, &token)
+    }
+}
+
 fn resolve_token_from_sources(
     vault: Option<String>,
     env: Option<String>,

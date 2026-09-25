@@ -1403,7 +1403,7 @@ describe("transport", () => {
 			expect(result.path).toBe("/github/viewer-login");
 		});
 
-		it("maps fetch_ci_failure_logs to GET with query", () => {
+	it("maps fetch_ci_failure_logs to GET with query", () => {
 			const result = mapCommandToHttp("fetch_ci_failure_logs", { repoPath: "/r", branch: "feat" });
 			expect(result.method).toBe("GET");
 			expect(result.path).toBe("/repo/ci-failure-logs?repoPath=%2Fr&branch=feat");
@@ -1756,6 +1756,15 @@ describe("transport", () => {
 				model: "gpt-5",
 			});
 			expect(spawn.transform?.({ session_id: "s1" })).toBe("s1");
+		});
+	});
+
+	it("maps CircleCI token commands without exposing a token in status", () => {
+		expect(mapCommandToHttp("circleci_token_status", {})).toEqual({ method: "GET", path: "/circleci/token" });
+		expect(mapCommandToHttp("circleci_set_token", { token: "read-only" })).toEqual({
+			method: "POST",
+			path: "/circleci/token",
+			body: { token: "read-only" },
 		});
 	});
 
