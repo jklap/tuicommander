@@ -12702,16 +12702,31 @@ mod tests {
             "mcp-2",
         );
 
-        // Send more than AGENT_INBOX_CAPACITY messages
-        for i in 0..(crate::state::AGENT_INBOX_CAPACITY + 10) {
-            handle_messaging(
+        // Fill with peer mail, which cannot be reconstructed from later state.
+        for i in 0..crate::state::AGENT_INBOX_CAPACITY {
+            let sent = handle_messaging(
                 &state,
                 &serde_json::json!({
                     "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
                 }),
                 Some("mcp-1"),
             );
+            assert!(sent.get("error").is_none(), "message {i} must fit: {sent}");
         }
+
+        let rejected = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": "msg-overflow"
+            }),
+            Some("mcp-1"),
+        );
+        assert!(
+            rejected["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("inbox is full")),
+            "sender must receive retryable back-pressure: {rejected}"
+        );
 
         let inbox = handle_messaging(
             &state,
@@ -12720,8 +12735,8 @@ mod tests {
         );
         let msgs = inbox["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), crate::state::AGENT_INBOX_CAPACITY);
-        // First message should be msg-10 (oldest 10 evicted)
-        assert_eq!(msgs[0]["content"], "msg-10");
+        assert_eq!(msgs[0]["content"], "msg-0");
+        assert_eq!(msgs.last().unwrap()["content"], "msg-99");
     }
 
     #[test]
@@ -12740,46 +12755,49 @@ mod tests {
             "mcp-2",
         );
 
-        // Fill to capacity — no eviction yet
+        // Fill with lifecycle state observations, which are replaceable.
         for i in 0..crate::state::AGENT_INBOX_CAPACITY {
-            handle_messaging(
-                &state,
-                &serde_json::json!({
-                    "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
-                }),
-                Some("mcp-1"),
+            state.push_agent_inbox(
+                "550e8400-e29b-41d4-a716-446655440a02",
+                crate::state::AgentMessage {
+                    id: format!("tuic-auto-state-{i}"),
+                    from_tuic_session: "child".into(),
+                    from_name: "tuic".into(),
+                    content: format!("state-{i}"),
+                    timestamp: i as u64,
+                    delivered_via_channel: false,
+                },
             );
         }
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": "peer-result"
+            }),
+            Some("mcp-1"),
+        );
+        assert!(
+            sent.get("error").is_none(),
+            "peer mail replaces lifecycle: {sent}"
+        );
         let inbox = handle_messaging(
             &state,
-            &serde_json::json!({"action": "inbox"}),
+            &serde_json::json!({"action": "inbox", "limit": 200}),
             Some("mcp-2"),
         );
         assert_eq!(
-            inbox["missed_count"].as_u64().unwrap_or(0),
-            0,
-            "no evictions yet"
-        );
-
-        // 5 more messages → 5 evictions
-        for i in 0..5 {
-            handle_messaging(
-                &state,
-                &serde_json::json!({
-                    "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("extra-{}", i)
-                }),
-                Some("mcp-1"),
-            );
-        }
-        let inbox = handle_messaging(
-            &state,
-            &serde_json::json!({"action": "inbox"}),
-            Some("mcp-2"),
+            inbox["missed_count"].as_u64(),
+            Some(1),
+            "the lifecycle eviction must be reported"
         );
         assert_eq!(
-            inbox["missed_count"].as_u64().unwrap(),
-            5,
-            "5 evictions reported"
+            inbox["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|message| message["content"] == "peer-result")
+                .count(),
+            1
         );
 
         // Second read — counter reset after first read
@@ -12792,6 +12810,64 @@ mod tests {
             inbox2["missed_count"].as_u64().unwrap_or(0),
             0,
             "counter reset after read"
+        );
+    }
+
+    #[test]
+    fn messaging_inbox_counts_rejected_lifecycle_notice_as_missed() {
+        let state = test_state();
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "alice",
+            "mcp-1",
+        );
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a02",
+            "bob",
+            "mcp-2",
+        );
+
+        for i in 0..crate::state::AGENT_INBOX_CAPACITY {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({
+                    "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("peer-{i}")
+                }),
+                Some("mcp-1"),
+            );
+            assert!(
+                sent.get("error").is_none(),
+                "peer message {i} must fit: {sent}"
+            );
+        }
+
+        assert_eq!(
+            state.push_agent_inbox(
+                "550e8400-e29b-41d4-a716-446655440a02",
+                crate::state::AgentMessage {
+                    id: "tuic-auto-state-overflow".into(),
+                    from_tuic_session: "child".into(),
+                    from_name: "tuic".into(),
+                    content: "state update".into(),
+                    timestamp: u64::MAX,
+                    delivered_via_channel: false,
+                },
+            ),
+            None,
+            "a peer-only inbox rejects the lifecycle notice"
+        );
+
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 200}),
+            Some("mcp-2"),
+        );
+        assert_eq!(
+            inbox["missed_count"].as_u64(),
+            Some(1),
+            "the recipient must learn that a lifecycle state change was lost"
         );
     }
 

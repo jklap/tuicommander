@@ -1413,7 +1413,7 @@ requests (`focus=false`) do not change repository context.
    to the stored position when the batch is empty. Previously it was omitted whenever there were no
    messages, which left a timed-out waiter with `since=0` as its only recoverable value and made it
    reload the whole history on the next call. Wait never consumes the
-   authoritative inbox; actual FIFO eviction is still reported by `missed_count` on inbox reads.
+   authoritative inbox; lifecycle evictions and rejected lifecycle notices are reported by `missed_count` on inbox reads.
    Both wait actions sleep on inbox or per-session lifecycle events; they do not run an internal
    polling loop. `session action=wait` resolves in three steps, in this order:
 
@@ -1456,6 +1456,9 @@ never evicts `TerminalPending` or waiter-owned mail, because either may still
 need a terminal-failure requeue. If the inbox contains peer mail only, or every
 lifecycle notice is in flight, `agent action=send` rejects the new message with
 an error asking the sender to retry; it does not silently discard any mail.
+System-generated lifecycle mail uses the same bound: when it is rejected because no
+safe eviction candidate remains, the recipient's next inbox read reports it through
+`missed_count`.
 
 The server never infers orchestrator role from child spawn, peer name, prompt, MCP
 activity, or SSE presence. Registration is the sole declaration seam. Wake

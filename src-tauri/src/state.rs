@@ -2293,6 +2293,10 @@ impl AppState {
         match self.try_push_agent_inbox(recipient, msg) {
             Ok(timestamp) => Some(timestamp),
             Err(AgentInboxFull) => {
+                *self
+                    .agent_inbox_evictions
+                    .entry(recipient.to_string())
+                    .or_insert(0) += 1;
                 tracing::warn!(
                     source = "agent",
                     recipient,

@@ -159,7 +159,7 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
    deliberately replays the whole inbox. `next_since` comes back on every response,
    timeouts included.
 
-5. **Check inbox directly** — useful after a reported FIFO eviction or if channel push was missed:
+5. **Check inbox directly** — useful after a reported lifecycle eviction or if channel push was missed:
    ```
    agent action=inbox
    agent action=inbox limit=10 since=1712000000000
@@ -181,7 +181,7 @@ not send that report.
 | **Orchestrator wake** | Registered parent is idle/completed and not waiting | Real-time, coalesced | Managed PTY + authoritative lifecycle |
 | **Inbox buffer** | Always | Poll-based | Registration only |
 
-Messages are always buffered in the inbox regardless of whether another delivery path succeeds. The inbox holds up to 100 messages per agent (FIFO eviction). Individual messages are capped at 64 KB.
+Messages are always buffered in the inbox regardless of whether another delivery path succeeds. The inbox holds up to 100 messages per agent: it evicts safe lifecycle notices before peer mail, and rejects a peer send when only protected peer mail remains. Individual messages are capped at 64 KB.
 
 ### Using Messaging from a Standalone Claude Code Session
 
