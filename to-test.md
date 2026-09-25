@@ -3744,4 +3744,4 @@ or credential is touched.
 
 ## CircleCI failure logs — **Rust, needs a `make dev` restart**
 
-- [ ] After restarting the worktree build, open a failed CircleCI check on a PR whose local branch points at the same head SHA. Its Log button shows the end of a long failed step, while a stale or mismatched CircleCI build reports a revision mismatch. The running app cannot load this Rust change until restart.
+- [ ] After restarting the worktree build, open a failed CircleCI check on a PR whose local branch points at the same head SHA, including a PR with a failed GitHub Actions job. Its Log button shows only that CircleCI check's log and the end of a long failed step; a stale or mismatched CircleCI build reports a revision mismatch. The running app cannot load this Rust change until restart.

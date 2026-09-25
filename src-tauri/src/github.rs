@@ -3533,6 +3533,40 @@ enum CiLogsOutcome {
     },
 }
 
+enum CiLogSource {
+    GitHubActions,
+    ExternalOnly(Vec<FailingCheck>),
+}
+
+fn choose_ci_log_source(
+    selected: Option<&str>,
+    gha_failed: bool,
+    checks: Vec<FailingCheck>,
+) -> Result<CiLogSource, String> {
+    if let Some(url) = selected {
+        let checks: Vec<_> = checks
+            .into_iter()
+            .filter(|check| !check.is_github_actions && check.link == url)
+            .collect();
+        return if checks.is_empty() {
+            Err("Selected CI check is not a failing external check on this PR head".to_string())
+        } else {
+            Ok(CiLogSource::ExternalOnly(checks))
+        };
+    }
+    if gha_failed {
+        return Ok(CiLogSource::GitHubActions);
+    }
+    let checks: Vec<_> = checks
+        .into_iter()
+        .filter(|check| !check.is_github_actions)
+        .collect();
+    if checks.is_empty() {
+        return Err("No failed external CI check found".to_string());
+    }
+    Ok(CiLogSource::ExternalOnly(checks))
+}
+
 /// A check's detail link points at `/actions/runs/…` only for GitHub Actions.
 /// External CI (CircleCI, Codacy, …) links to its own host, so this cleanly
 /// separates checks whose logs auto-heal can fetch from those it can't.
@@ -3657,7 +3691,11 @@ fn pr_number_for_head(prs: &serde_json::Value, head_sha: &str) -> Option<u64> {
 /// Job-level log downloads work even while sibling jobs keep the overall
 /// workflow run in progress, unlike `gh run view --log-failed`.
 /// Resolves the GitHub repo slug from the local repo path.
-fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOutcome, String> {
+fn fetch_ci_failure_logs_impl(
+    repo_path: &str,
+    branch: &str,
+    check_url: Option<&str>,
+) -> Result<CiLogsOutcome, String> {
     let repo_path_buf = PathBuf::from(repo_path);
 
     // gh-CLI-assisted CI log fetch is only available for github.com in v1. If
@@ -3795,23 +3833,25 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<CiLogsOut
         failed_jobs.extend(failed_jobs_from_run_json(&run_json));
     }
 
-    if failed_jobs.is_empty() {
-        // No failed GitHub Actions job — but the PR summary may still be red from
-        // external CI (CircleCI, Codacy, …). Auto-heal only reads GitHub Actions
-        // logs, so name the real culprits instead of the misleading "no jobs".
-        let failing = list_failing_checks_cli(&gh, &repo_slug, &head_sha);
-        if failing.iter().any(|check| !check.is_github_actions) {
+    // A selected PR row must use that exact backend-listed external check even
+    // when GitHub Actions also failed. Unselected auto-heal keeps GHA priority.
+    let failing = if check_url.is_some() || failed_jobs.is_empty() {
+        list_failing_checks_cli(&gh, &repo_slug, &head_sha)
+    } else {
+        Vec::new()
+    };
+    match choose_ci_log_source(check_url, !failed_jobs.is_empty(), failing) {
+        Ok(CiLogSource::ExternalOnly(checks)) => {
             return Ok(CiLogsOutcome::ExternalOnly {
-                checks: failing
-                    .into_iter()
-                    .filter(|check| !check.is_github_actions)
-                    .collect(),
+                checks,
                 owner,
                 repo,
                 head_sha,
             });
         }
-        return Err("No failed GitHub Actions job found for this branch head".to_string());
+        Ok(CiLogSource::GitHubActions) => {}
+        Err(error) if check_url.is_some() => return Err(error),
+        Err(_) => return Err("No failed GitHub Actions job found for this branch head".to_string()),
     }
 
     // Step 3: download each failed job directly. The jobs API exposes completed
@@ -3861,11 +3901,13 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
     check_url: Option<String>,
     _state: Arc<AppState>,
 ) -> Result<String, String> {
-    let outcome =
-        tokio::task::spawn_blocking(move || fetch_ci_failure_logs_impl(&repo_path, &branch))
-            .await
-            .map_err(|e| format!("Task failed: {e}"))
-            .and_then(|result| result)?;
+    let selected = check_url.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        fetch_ci_failure_logs_impl(&repo_path, &branch, selected.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Task failed: {e}"))
+    .and_then(|result| result)?;
     match outcome {
         CiLogsOutcome::Logs(logs) => Ok(logs),
         CiLogsOutcome::ExternalOnly {
@@ -3959,6 +4001,47 @@ mod tests {
         ]);
         assert_eq!(pr_number_for_head(&prs, "local-sha"), Some(11));
         assert_eq!(pr_number_for_head(&prs, "missing-sha"), None);
+    }
+
+    #[test]
+    fn selected_circleci_row_uses_only_its_log_when_actions_also_fail() {
+        let selected = "https://circleci.com/gh/acme/widget/42";
+        let checks = failing_checks_from_json(&serde_json::json!([
+            {"name":"GHA", "bucket":"fail", "link":"https://github.com/acme/widget/actions/runs/1"},
+            {"name":"other CircleCI", "bucket":"fail", "link":"https://circleci.com/gh/acme/widget/41"},
+            {"name":"selected CircleCI", "bucket":"fail", "link":selected}
+        ]));
+        let source = choose_ci_log_source(Some(selected), true, checks).unwrap();
+        match source {
+            CiLogSource::ExternalOnly(checks) => {
+                assert_eq!(checks.len(), 1);
+                assert_eq!(checks[0].name, "selected CircleCI");
+                assert_eq!(checks[0].link, selected);
+            }
+            CiLogSource::GitHubActions => panic!("selected CircleCI row must not receive GHA logs"),
+        }
+    }
+
+    #[test]
+    fn unselected_ci_heal_keeps_github_actions_priority() {
+        let checks = failing_checks_from_json(&serde_json::json!([
+            {"name":"CircleCI", "bucket":"fail", "link":"https://circleci.com/gh/acme/widget/42"}
+        ]));
+        assert!(matches!(
+            choose_ci_log_source(None, true, checks),
+            Ok(CiLogSource::GitHubActions)
+        ));
+    }
+
+    #[test]
+    fn unknown_selected_check_does_not_fall_back_to_actions() {
+        let checks = failing_checks_from_json(&serde_json::json!([
+            {"name":"GHA", "bucket":"fail", "link":"https://github.com/acme/widget/actions/runs/1"}
+        ]));
+        assert!(
+            choose_ci_log_source(Some("https://circleci.com/gh/acme/widget/42"), true, checks)
+                .is_err()
+        );
     }
 
     #[test]
@@ -6257,7 +6340,7 @@ mod tests {
         );
         bindings.save().unwrap();
 
-        let err = fetch_ci_failure_logs_impl(repo.to_str().unwrap(), "main").unwrap_err();
+        let err = fetch_ci_failure_logs_impl(repo.to_str().unwrap(), "main", None).unwrap_err();
         assert!(
             err.contains("github.com accounts"),
             "expected gh-CLI-disabled message, got: {err}"
