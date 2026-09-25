@@ -8351,6 +8351,25 @@ impl ChunkProcessor {
                                     .set_declared_background_work(running, turn_epoch);
                             }
                         }
+                        "userwrap" => {
+                            // From the zsh deferred integration's `ask` branch
+                            // (see `shell_integration.rs`'s module doc comment):
+                            // the shell found the user's own `claude`/`codex`/
+                            // `goose` function with no recorded decision for its
+                            // fingerprint. Payload `<agent>:<fingerprint>`.
+                            // Terminal output is untrusted (any program can print
+                            // an OSC sequence), so both halves are validated
+                            // (agent allow-list, digits-and-dash fingerprint)
+                            // before use. Even a forged verb can only open the
+                            // consent dialog — wrapping still needs the user's
+                            // explicit answer.
+                            if let Some((agent, fingerprint)) = payload.split_once(':')
+                                && crate::agent_wrap_prompt::is_wrappable_agent(agent)
+                                && crate::shell_integration::is_user_function_fingerprint(fingerprint)
+                            {
+                                crate::agent_wrap_prompt::request(state, agent, fingerprint);
+                            }
+                        }
                         // `ccsession`/`cwd`/`transcript`/`tool`/`notify`: free-text
                         // metadata `tuic-hook` extracted natively from a Claude Code
                         // hook's stdin JSON (SessionStart/Pre/PostToolUse/

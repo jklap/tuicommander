@@ -1459,6 +1459,10 @@ under `/repo/`.
 
 `GET /config/agents/{agent}/native-status-signals` returns `{ "enabled": boolean }`. `PUT` accepts the same boolean field for Claude or Codex and changes launch behavior for new sessions only. The existing `/hook-instrumentation` route remains the explicit global installer.
 
+`GET /config/agents/{agent}/wrap-user-function` returns `{ "value": boolean | null }` for claude/codex/goose — `null` means "ask when detected" (see AI Agents → "A user's own claude/codex/goose function"). `PUT` accepts the same tri-state `value` field and affects new zsh shells only; it never records consent to wrap a specific function by itself: `true` keeps an existing consented fingerprint only if the stored value was already `true`, otherwise the shell still asks before wrapping anything; `false`/`null` clear the fingerprint. Desktop-only like its siblings.
+
+`POST /agent-wrap-prompt/response` (body `{ "request_id": string, "agent_type": string, "decision": boolean | null }`) answers a pending prompt raised over SSE as `agent-wrap-prompt` (payload `{ request_id, agent_type }`). An explicit `true`/`false` is persisted together with the fingerprint of the exact function the shell reported; `decision: null` dismisses without persisting anything (asked again next app run). The resolution broadcasts as `agent-wrap-prompt-resolved` (`{ request_id, agent_type, decision }`) so every client dismisses the dialog; an unknown or already-answered `request_id` is a no-op (200). Served by `shared_routes()` (a `tuic-remote` daemon raises and answers its own prompts) and, like `/mcp/confirm-response`, not behind `require_local_or_auth` — the server-generated UUID is the credential (see AGENTS.md → Accepted Security Decisions). Deliberately not built on `/mcp/confirm-response`'s shape, which cannot distinguish a dismiss from an explicit "No".
+
 ### No provider keyring routes
 
 `/config/provider-key*`, `/config/slot-test` and `/config/ollama-models` were

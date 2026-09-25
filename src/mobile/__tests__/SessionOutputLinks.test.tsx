@@ -32,6 +32,10 @@ vi.mock("../useVersionCheck", () => ({
 }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
 vi.mock("../../components/McpConfirmHost/McpConfirmHost", () => ({ McpConfirmHost: () => <div /> }));
+vi.mock("../../stores/agentWrapPrompt", () => ({
+	subscribeAgentWrapPrompt: () => Promise.resolve(() => {}),
+	pendingAgentWrapPrompts: () => [],
+}));
 vi.mock("../../components/PtyOpenUrlHost/PtyOpenUrlHost", () => ({ PtyOpenUrlHost: () => null }));
 
 const session: SessionInfo = {

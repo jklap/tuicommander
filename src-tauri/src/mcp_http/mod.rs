@@ -796,6 +796,7 @@ async fn inject_localhost_connect_info(
 const API_PREFIXES: &[&str] = &[
     "acp",
     "agent",
+    "agent-wrap-prompt",
     "agents",
     "ai",
     "api",
@@ -1470,6 +1471,14 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // The tab's verdict on a `session action=suspend` request (browser/PWA half
         // of the desktop `session_suspend_response` command).
         .route("/mcp/suspend-response", post(session_suspend_response_http))
+        // Answer a pending "wrap my shell function?" prompt (the browser/PWA
+        // half of the desktop `agent_wrap_prompt_response` command). Shared, like
+        // the two above: a zsh session on a `tuic-remote` daemon raises the
+        // prompt on that daemon, and its answer must be accepted there.
+        .route(
+            "/agent-wrap-prompt/response",
+            post(agent_wrap_prompt_response_http),
+        )
         // ACP (ego). Shared, not desktop-only: driving ego from a phone is the
         // whole point of the client, and the binary it may launch comes from
         // this host's configuration rather than from any request.
@@ -1511,6 +1520,32 @@ async fn session_suspend_response_http(
 ) -> Json<serde_json::Value> {
     mcp_transport::resolve_session_suspend(&state, &body.request_id, body.ok, body.reason);
     Json(serde_json::json!({ "ok": true }))
+}
+
+/// Body of `POST /agent-wrap-prompt/response`.
+#[derive(serde::Deserialize)]
+struct AgentWrapPromptResponseBody {
+    request_id: String,
+    agent_type: String,
+    decision: Option<bool>,
+}
+
+async fn agent_wrap_prompt_response_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AgentWrapPromptResponseBody>,
+) -> impl IntoResponse {
+    match crate::agent_wrap_prompt::resolve(
+        &state,
+        &body.request_id,
+        &body.agent_type,
+        body.decision,
+    ) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ),
+    }
 }
 
 /// Resolve a pending MCP confirmation and tell every client to dismiss it.
@@ -1943,6 +1978,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/agents/{agent}/native-status-signals",
             get(config_routes::get_agent_native_status_signals)
                 .put(config_routes::put_agent_native_status_signals),
+        )
+        .route(
+            "/config/agents/{agent}/wrap-user-function",
+            get(config_routes::get_agent_wrap_user_function)
+                .put(config_routes::put_agent_wrap_user_function),
         )
         .route(
             "/config/remote-connections",
