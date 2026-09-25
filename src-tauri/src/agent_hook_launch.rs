@@ -185,6 +185,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn actual_agent_argument_builder_defaults_to_native_scrollback() {
+        for (agent, flag) in [
+            ("codex", "--no-alt-screen"),
+            ("grok", "--no-alt-screen"),
+            ("opencode", "--mini"),
+        ] {
+            let script = crate::test_support::fake_ssh_script(
+                &format!("screen-help-{agent}"),
+                &format!("printf '%s\\n' '{flag}'"),
+                &format!("echo {flag}"),
+            );
+            let binary = script.to_string_lossy();
+            let args = vec!["resume".to_string()];
+            let built = augment_args(agent, &binary, &args, Path::new("/unused"), false);
+            assert_eq!(built.first().map(String::as_str), Some(flag), "{agent}");
+            assert_eq!(built.get(1).map(String::as_str), Some("resume"), "{agent}");
+
+            let opted_out = augment_args(agent, &binary, &args, Path::new("/unused"), true);
+            assert!(!opted_out.iter().any(|arg| arg == flag), "{agent}");
+        }
+    }
+
+    #[test]
     fn screen_flags_are_placed_before_subcommands_only_when_supported() {
         let args = vec!["resume".to_string(), "abc".to_string()];
         assert_eq!(
