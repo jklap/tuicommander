@@ -595,30 +595,20 @@ fn cmd_send(target: &str, keys: &[String]) -> Result<(), String> {
 
 /// Build the `/output` query for `capture`. `raw` takes no format so the server
 /// returns the untouched byte tail; `lines` maps to the server's `limit`.
-#[cfg(test)]
-fn capture_query(format: &str, lines: Option<usize>) -> String {
-    let mut params: Vec<String> = Vec::new();
-    match format {
-        "raw" => {}
-        "log" => params.push("format=log".to_string()),
-        _ => params.push("format=text".to_string()),
+fn capture_payload(format: &str, lines: Option<usize>) -> Result<serde_json::Value, String> {
+    if !matches!(format, "raw" | "text") {
+        return Err(format!(
+            "capture format '{format}' is not supported; use raw or text"
+        ));
     }
-    if let Some(n) = lines {
-        params.push(format!("limit={n}"));
-    }
-    if params.is_empty() {
-        String::new()
-    } else {
-        format!("?{}", params.join("&"))
-    }
+    Ok(optional_fields(
+        serde_json::json!({"format": format}),
+        [("limit", lines.map(serde_json::Value::from))],
+    ))
 }
 
 fn cmd_capture(target: &str, format: &str, lines: Option<usize>) -> Result<(), String> {
-    let payload = mcp_session_call(
-        "output",
-        target,
-        serde_json::json!({"format": format, "limit": lines}),
-    )?;
+    let payload = mcp_session_call("output", target, capture_payload(format, lines)?)?;
     if let Some(data) = payload["data"].as_str() {
         print!("{data}");
     } else if let Some(lines) = payload["lines"].as_array() {
@@ -696,7 +686,7 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                 output_format: output_format.as_deref(),
                 binary_path: binary_path.as_deref(),
             });
-            let response = mcp::McpClient::connect()?.call("agent", payload)?;
+            let response = mcp::McpClient::connect_for_orchestration()?.call("agent", payload)?;
             print_mcp_payload(&response, json);
         }
         AgentAction::Ls => {
@@ -737,7 +727,8 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
             // so routing through it answered "Session not found" while the MCP
             // tool delivered the same UUID fine. PTY text injection stays
             // available, and explicit, as `tuic send` / `tuic send-keys`.
-            let report = mcp::agent_send(&target, &message)?;
+            let client = mcp::McpClient::connect_for_orchestration()?;
+            let report = mcp::agent_send(&client, &target, &message)?;
             if json {
                 println!("{report}");
             } else {
@@ -765,7 +756,10 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                     ("timeout_ms", timeout_ms.map(serde_json::Value::from)),
                 ],
             );
-            print_mcp_payload(&mcp::McpClient::connect()?.call("agent", payload)?, json);
+            print_mcp_payload(
+                &mcp::McpClient::connect_for_orchestration()?.call("agent", payload)?,
+                json,
+            );
         }
         AgentAction::Inbox { since, limit, json } => {
             let payload = optional_fields(
@@ -775,7 +769,10 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                     ("limit", limit.map(serde_json::Value::from)),
                 ],
             );
-            print_mcp_payload(&mcp::McpClient::connect()?.call("agent", payload)?, json);
+            print_mcp_payload(
+                &mcp::McpClient::connect_for_orchestration()?.call("agent", payload)?,
+                json,
+            );
         }
         AgentAction::ListPeers { project, json } => {
             let payload = optional_fields(
@@ -1595,7 +1592,7 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Path, PathBuf, agent_send_parts, capture_query, disposable_roots, is_disposable_root,
+        Path, PathBuf, agent_send_parts, capture_payload, disposable_roots, is_disposable_root,
         resolve_path, session_status, short_id, short_repo, strip_verbatim, translate_keys,
         truncate, without_flag,
     };
@@ -1629,12 +1626,11 @@ mod tests {
 
     #[test]
     fn session_target_is_forwarded_without_cli_resolution() {
-        let payload =
-            super::session_payload("input", "tu-33", json!({"input":"echo ok"})).expect("payload");
-        assert_eq!(
-            payload,
-            json!({"action":"input","session_id":"tu-33","input":"echo ok"})
-        );
+        for target in ["01234567", "reviewer"] {
+            let payload = super::session_payload("input", target, json!({"input":"echo ok"}))
+                .expect("payload");
+            assert_eq!(payload["session_id"], target);
+        }
     }
     use serde_json::json;
 
@@ -1683,12 +1679,19 @@ mod tests {
     }
 
     #[test]
-    fn capture_query_combines_format_and_line_limit() {
-        assert_eq!(capture_query("text", None), "?format=text");
-        assert_eq!(capture_query("log", Some(50)), "?format=log&limit=50");
-        // raw means "give me the bytes"; only the limit may narrow it.
-        assert_eq!(capture_query("raw", None), "");
-        assert_eq!(capture_query("raw", Some(10)), "?limit=10");
+    fn capture_payload_rejects_log_and_omits_absent_limit() {
+        assert_eq!(
+            capture_payload("log", None).unwrap_err(),
+            "capture format 'log' is not supported; use raw or text"
+        );
+        assert_eq!(
+            capture_payload("text", None).expect("text payload"),
+            json!({"format":"text"})
+        );
+        assert_eq!(
+            capture_payload("raw", Some(10)).expect("raw payload"),
+            json!({"format":"raw", "limit":10})
+        );
     }
 
     #[test]

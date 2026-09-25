@@ -16,11 +16,17 @@ use crate::ipc;
 /// Protocol revision this client speaks. Kept in step with the server's
 /// advertised revision; the server negotiates down if it is older.
 const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const EXTERNAL_CALLER_NOTICE: &str =
+    "tuic: no TUIC_SESSION; registering an external MCP caller";
 
 /// The tuic session UUID of the PTY this CLI runs inside, injected by TUIC.
 /// Absent when `tuic` is run from a plain terminal outside TUICommander.
 fn tuic_session() -> Option<String> {
     std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty())
+}
+
+fn requires_external_registration(tuic_session: Option<&str>) -> bool {
+    tuic_session.is_none()
 }
 
 fn post(
@@ -113,6 +119,21 @@ impl McpClient {
         })
     }
 
+    /// Establish an MCP-scoped identity when this command did not inherit a
+    /// managed terminal identity.
+    pub fn connect_for_orchestration() -> Result<Self, String> {
+        let client = Self::connect()?;
+        if requires_external_registration(client.tuic_session.as_deref()) {
+            eprintln!("{EXTERNAL_CALLER_NOTICE}");
+            let registered =
+                client.call("agent", json!({"action": "register", "name": "tuic-cli"}))?;
+            if registered["ok"] != true {
+                return Err("External MCP caller registration did not succeed".to_string());
+            }
+        }
+        Ok(client)
+    }
+
     /// Call one server-owned MCP tool and return its unmodified payload.
     pub fn call(&self, tool: &str, arguments: Value) -> Result<Value, String> {
         let call = json!({
@@ -170,8 +191,7 @@ fn validate_delivery_report(payload: Value) -> Result<Value, String> {
 /// Returns the delivery report so the caller can print the route. The current
 /// contract is `message_id` + `delivered` + `delivery_path`; the removed
 /// `accepted` field must not be required by this client.
-pub fn agent_send(to: &str, message: &str) -> Result<Value, String> {
-    let client = McpClient::connect()?;
+pub fn agent_send(client: &McpClient, to: &str, message: &str) -> Result<Value, String> {
     let payload = client.call(
         "agent",
         json!({ "action": "send", "to": to, "message": message }),
@@ -188,6 +208,16 @@ mod tests {
         let headers = mcp_headers(Some("mcp-1"), Some("peer-1"));
         assert!(headers.contains(&("Mcp-Session-Id", "mcp-1")));
         assert!(headers.contains(&("x-tuic-session", "peer-1")));
+    }
+
+    #[test]
+    fn an_external_cli_call_requires_headerless_registration() {
+        assert!(requires_external_registration(None));
+        assert!(!requires_external_registration(Some("managed-peer")));
+        assert_eq!(
+            EXTERNAL_CALLER_NOTICE,
+            "tuic: no TUIC_SESSION; registering an external MCP caller"
+        );
     }
 
     fn response(status: u16, body: &str, headers: &[(&str, &str)]) -> ipc::Response {

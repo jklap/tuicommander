@@ -89,6 +89,9 @@ tuic capture <id-or-name>
 tuic capture <id-or-name> -n 50          # last 50 lines
 tuic capture <id-or-name> --format raw
 
+`capture` supports `raw` and `text`; `--format log` is not supported by the
+CLI and returns an error.
+
 # Kill a session
 tuic kill <id-or-name>
 
@@ -135,9 +138,9 @@ tuic agent list-peers --json
 tuic agent stats --json
 
 # Server-owned session state and output
-tuic session status <id-or-alias> --json
-tuic session wait <id-or-alias> --until idle --timeout-ms 60000 --json
-tuic session output <id-or-alias> --limit 50 --json
+tuic session status <id-or-name> --json
+tuic session wait <id-or-name> --until idle --timeout-ms 60000 --json
+tuic session output <id-or-name> --limit 50 --json
 
 # Server-owned worktree lifecycle
 tuic repo worktree-list /path/to/repo --json
@@ -148,6 +151,9 @@ tuic repo worktree-remove /path/to/repo <workspace-id> --json
 The orchestration commands above call the same MCP tools as an agent. They use
 the local `mcp.sock` transport and send `$TUIC_SESSION` as `x-tuic-session`, so
 a child spawned from a managed terminal records that terminal as its parent.
+Outside TUICommander, `tuic` prints one notice and registers a headerless
+external MCP caller; a child then has no parent and cannot report back to that
+caller.
 Use `--json` for the unmodified server payload. A server error is printed to
 stderr and makes `tuic` exit non-zero.
 
@@ -192,11 +198,10 @@ after a `Buffered` line. The CLI validates this current report contract through
 as **separate** PTY writes, because a raw-mode Ink TUI treats a combined
 `text\r` as a prefill and leaves it unsent. `tuic send` does not do this.
 
-`tuic agent send` must run inside a TUICommander session (it reads
-`$TUIC_SESSION` to identify the sender). It binds that identity when it is free;
-when the agent in that pane is itself connected over MCP it already owns the
-identity, so the CLI registers an anonymous sender named `<session> (cli)`
-rather than stealing a live binding.
+`tuic agent send` uses `$TUIC_SESSION` when it runs inside a TUICommander
+session. Outside one, it registers a headerless external caller for the MCP
+connection and prints a notice on stderr. It has no terminal, automatic wake-up,
+or managed parent relationship; a spawned child cannot reply to it.
 
 ## tmux Compatibility
 
