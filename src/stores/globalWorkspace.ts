@@ -296,6 +296,43 @@ function createGlobalWorkspaceStore() {
 			return workspace().promoted.size > 0;
 		},
 
+		/**
+		 * Rebuild the active workspace's cached layout as a single flat pane
+		 * holding every currently-promoted terminal, discarding whatever split
+		 * arrangement was cached — membership (`promoted`) is untouched, only
+		 * the geometry resets. Immediately pushes the result live.
+		 *
+		 * A plain `paneLayoutStore.reset()` alone doesn't stick while this
+		 * workspace is active: `syncToPaneStore()` re-applies `workspace().layout`
+		 * on the very next promote/unpromote (e.g. opening a new terminal that
+		 * gets auto-consolidated), so a stuck split (a leftover Agent Teams
+		 * arrangement whose panes never got individually unpromoted, or any
+		 * split the user just wanted to collapse) reappears right after. Called
+		 * by the "Reset Panel Sizes" action alongside `paneLayoutStore.reset()`.
+		 */
+		resetActiveLayout(): void {
+			const ws = workspace();
+			let rebuilt: PaneLayoutState | null = null;
+			for (const id of ws.promoted) {
+				rebuilt = addTerminalToLayout(rebuilt, id);
+			}
+			ws.layout = rebuilt;
+			syncToPaneStore();
+
+			// Keep focus/keyboard-routing (terminalsStore.state.activeId) in sync with
+			// whichever tab the rebuilt layout now actually shows — addTerminalToLayout
+			// sets a group's activeTabId to the LAST id it folded in (Set-iteration
+			// order), which won't generally match whatever was focused before the
+			// reset. Mirrors activate()'s own reconciliation above, for the identical
+			// reason; only called while this workspace is active (useSplitPanes.ts's
+			// resetLayout gates the call on isActive()), so the user is guaranteed to
+			// actually be looking at this workspace right now.
+			const activeGroup = rebuilt?.activeGroupId ? rebuilt.groups[rebuilt.activeGroupId] : undefined;
+			if (activeGroup?.activeTabId) {
+				terminalsStore.setActive(activeGroup.activeTabId);
+			}
+		},
+
 		/** Handle terminal removal — auto-unpromote and auto-deactivate if needed */
 		onTerminalRemoved(termId: string): void {
 			// A closed terminal has to leave EVERY workspace that holds it: an
