@@ -895,6 +895,7 @@ pub(crate) fn remove_worktree_internal(worktree: &WorktreeInfo, force: bool) -> 
     }
 
     tracing::info!(source = "worktree", branch = %worktree.name, "remove_worktree_internal: done");
+    clear_warm(&worktree.path);
     Ok(())
 }
 
@@ -5498,6 +5499,34 @@ branch refs/heads/feat
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    #[test]
+    fn removing_a_worktree_clears_its_warm_state() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let worktree = add_worktree(&repo, "warm-removal");
+        let old_token = begin_warm(&worktree);
+        assert_eq!(warm_status(&worktree)["status"], "pending");
+        let listed = get_worktree_paths(repo.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(
+            listed["warm-removal"].warm_artifacts.as_ref().unwrap()["status"],
+            "pending"
+        );
+
+        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "warm-removal", true, None, false)
+            .unwrap();
+
+        assert!(!WARM_STATES.contains_key(&warm_key(&worktree)));
+        assert_eq!(warm_status(&worktree)["status"], "done");
+        let new_token = begin_warm(&worktree);
+        finish_warm(
+            &worktree,
+            old_token,
+            serde_json::json!({"status": "failed"}),
+        );
+        assert_eq!(warm_status(&worktree)["status"], "pending");
+        finish_warm(&worktree, new_token, serde_json::json!({"status": "done"}));
+        clear_warm(&worktree);
     }
 
     /// Dirtiness is orthogonal to the commit verdict, and that is exactly why
