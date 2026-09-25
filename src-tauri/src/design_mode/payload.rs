@@ -53,12 +53,29 @@ fn one_line(value: &str, max: usize) -> String {
 }
 
 fn field_text(value: &str, max: usize) -> String {
-    one_line(value, max)
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace(',', "&#44;")
-        .replace('=', "&#61;")
+    let value = crate::redaction::redact_secrets(&one_line(value, max));
+    let mut escaped = String::new();
+    for character in value.chars() {
+        if let Some(entity) = match character {
+            '&' => Some("&amp;"),
+            '<' => Some("&lt;"),
+            '>' => Some("&gt;"),
+            ',' => Some("&#44;"),
+            '=' => Some("&#61;"),
+            _ => None,
+        } {
+            if escaped.len() + entity.len() > max {
+                break;
+            }
+            escaped.push_str(entity);
+        } else {
+            if escaped.len() + character.len_utf8() > max {
+                break;
+            }
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 /// Multi-line page text: every continuation line is indented, so none can
@@ -358,12 +375,8 @@ mod tests {
             },
             "tokens": {"--brand": "first\nsecond"},
         });
-        let prompt = GrabPayload::from_raw(
-            raw,
-            json!({"color": "a=b,c=d"}),
-            json!({}),
-        )
-        .to_prompt(None);
+        let prompt =
+            GrabPayload::from_raw(raw, json!({"color": "a=b,c=d"}), json!({})).to_prompt(None);
 
         assert!(
             prompt.contains("title=&lt;/selected-element&gt;"),
@@ -373,10 +386,26 @@ mod tests {
             prompt.contains("aria-label=&lt;/selected-element&gt; &lt;selected-element&gt;"),
             "{prompt}"
         );
-        assert!(prompt.contains("styles: color=a&#61;b&#44;c&#61;d"), "{prompt}");
+        assert!(
+            prompt.contains("styles: color=a&#61;b&#44;c&#61;d"),
+            "{prompt}"
+        );
         assert!(prompt.contains("tokens: --brand=first second"), "{prompt}");
         assert_eq!(prompt.matches("<selected-element>").count(), 1, "{prompt}");
         assert_eq!(prompt.matches("</selected-element>").count(), 1, "{prompt}");
+    }
+
+    #[test]
+    fn long_page_controlled_field_text_stays_bounded_without_partial_entities() {
+        let escaped = field_text(&"<>,=".repeat(100), 64);
+
+        assert_eq!(
+            escaped,
+            "&lt;&gt;&#44;&#61;".repeat(3) + "&lt;&gt;",
+            "{escaped}"
+        );
+        assert!(escaped.len() <= 64);
+        assert!(!escaped.contains(['<', '>', ',', '=']));
     }
 
     #[test]
