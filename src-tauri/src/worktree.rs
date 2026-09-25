@@ -4,9 +4,50 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 #[cfg(feature = "desktop")]
 use tauri::State;
+
+static WARM_STATES: LazyLock<dashmap::DashMap<String, (u64, serde_json::Value)>> =
+    LazyLock::new(dashmap::DashMap::new);
+static NEXT_WARM_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+fn warm_key(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub(crate) fn begin_warm(path: &Path) -> u64 {
+    let token = NEXT_WARM_TOKEN.fetch_add(1, Ordering::Relaxed);
+    WARM_STATES.insert(
+        warm_key(path),
+        (token, serde_json::json!({"status": "pending"})),
+    );
+    token
+}
+
+pub(crate) fn finish_warm(path: &Path, token: u64, status: serde_json::Value) {
+    if let Some(mut current) = WARM_STATES.get_mut(&warm_key(path))
+        && current.0 == token
+    {
+        current.1 = status;
+    }
+}
+
+pub(crate) fn clear_warm(path: &Path) {
+    WARM_STATES.remove(&warm_key(path));
+}
+
+pub(crate) fn warm_status(path: &Path) -> serde_json::Value {
+    WARM_STATES
+        .get(&warm_key(path))
+        .map(|state| state.1.clone())
+        .unwrap_or_else(|| serde_json::json!({"status": "done"}))
+}
 
 /// Resolve the effective archive_script for a repo from the three-tier config:
 /// per-repo settings → repo-local .tuic.json → global defaults.
@@ -560,6 +601,15 @@ pub(crate) struct CreatedWorkspace {
 }
 
 impl CreatedWorkspace {
+    pub(crate) fn instruction_payload_pending(&self) -> serde_json::Value {
+        let mut payload = self.instruction_payload();
+        payload["warm_artifacts"]["status"] = serde_json::json!("pending");
+        payload["warm_artifacts"]["note"] = serde_json::json!(
+            "Build inputs are still being copied. Check this workspace's warm_artifacts.status with get_worktree_paths(repo_path) or GET /worktrees/paths?path=<repo_path>. Wait for done or failed before installing dependencies or building here."
+        );
+        payload
+    }
+
     /// What the caller needs to know to USE this workspace, at the moment it
     /// can act on it.
     ///
@@ -600,6 +650,7 @@ impl CreatedWorkspace {
                 "note": "Tracked changes are not carried over: this workspace starts from a clean checkout.",
             },
             "warm_artifacts": {
+                "status": "done",
                 "present": warm,
                 "warmed_directories": self.warmed_directories,
                 "note": setup,
@@ -1487,6 +1538,8 @@ pub(crate) struct WorkspaceWorktree {
     pub(crate) branch: String,
     pub(crate) path: String,
     pub(crate) kind: WorkspaceKind,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) warm_artifacts: Option<serde_json::Value>,
 }
 
 /// The workspace id a freshly created **git worktree** gets.
@@ -1525,8 +1578,9 @@ fn map_worktree_workspace_paths(porcelain: &str) -> HashMap<String, WorkspaceWor
                 workspace_id_of_worktree(&branch),
                 WorkspaceWorktree {
                     branch,
-                    path: entry.path,
+                    path: entry.path.clone(),
                     kind: WorkspaceKind::Worktree,
+                    warm_artifacts: Some(warm_status(Path::new(&entry.path))),
                 },
             );
         }
@@ -5328,6 +5382,26 @@ branch refs/heads/feat
             "warnings: {:?}",
             created.warnings
         );
+    }
+
+    #[test]
+    fn pending_warm_instructions_do_not_claim_the_workspace_is_cold() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        let config = WorktreeConfig {
+            task_name: "pending-warm".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("pending-warm".into()),
+            create_branch: true,
+        };
+        let workspace = create_workspace_unwarmed(&workspaces, &config, None).unwrap();
+
+        let instructions = workspace.instruction_payload_pending();
+
+        assert_eq!(instructions["warm_artifacts"]["status"], "pending");
+        let note = instructions["warm_artifacts"]["note"].as_str().unwrap();
+        assert!(note.contains("GET /worktrees/paths"), "{note}");
+        assert!(!note.contains("No build output"), "{note}");
+        assert!(!note.contains("build to set up"), "{note}");
     }
 
     #[test]

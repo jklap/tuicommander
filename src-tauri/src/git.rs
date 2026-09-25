@@ -4384,6 +4384,7 @@ mod tests {
                     branch: "sentinel-branch".to_string(),
                     path: repo.clone(),
                     kind: crate::worktree::WorkspaceKind::Worktree,
+                    warm_artifacts: None,
                 },
             )])),
         );
