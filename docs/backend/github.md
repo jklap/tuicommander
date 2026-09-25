@@ -61,7 +61,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
 | `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
 | `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String) -> String` | Merge PR via GitHub API |
-| `fetch_ci_failure_logs` | `(repo_path: String, branch: String) -> String` | Fetch failure logs for the branch's latest head commit, for CI auto-heal |
+| `fetch_ci_failure_logs` | `(repo_path: String, branch: String) -> String` | Fetch failure logs for the branch's latest head commit, including configured CircleCI jobs, for CI auto-heal |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 
 ### Circuit breaker coverage
@@ -298,7 +298,7 @@ PR diff reads use the GitHub REST diff representation first. If GitHub returns t
 
 Lists workflow runs for the branch's latest head commit, inspects their jobs, and downloads logs for every completed failed job through the GitHub Actions jobs API. Job-level retrieval works while sibling jobs are still running, before the containing workflow has a final `failure` conclusion. Used by the CI auto-heal hook (`useCiHeal`) to inject failure context into agent terminals for automatic fix cycles (up to 3 delivered attempts per cycle).
 
-**GitHub Actions only.** The aggregated PR check summary (which triggers `ci_failed`) also counts external CI — CircleCI, Codacy, etc. — but this fetcher reads only GitHub Actions logs. When the red checks are all external, it returns a clear error naming them (`… failing checks run on external CI (not supported): ci/circleci: lint-blades, on_pr …`) instead of the misleading "no jobs found". The auto-heal hook surfaces that message as a warn toast and does **not** consume an attempt (attempts increment only after a fix prompt is delivered). Provider is classified from the check's detail link (`is_github_actions_link`: GHA links contain `/actions/runs/`).
+GitHub Actions jobs are downloaded through GitHub's jobs API. CircleCI check links are parsed in Rust, restricted to the repository's GitHub owner/repository, and are fetched only when a CircleCI token is configured. CircleCI API requests never follow redirects; pre-signed action-log downloads do not receive that token, are size-bounded, and their output is sanitised before transport. Other external providers return a clear error naming the checks instead of the misleading "no jobs found". The auto-heal hook surfaces that message as a warn toast and does **not** consume an attempt (attempts increment only after a fix prompt is delivered).
 
 ## Stale PR Filtering
 
