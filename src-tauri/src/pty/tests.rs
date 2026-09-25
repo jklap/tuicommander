@@ -12224,6 +12224,479 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
     })
 }
 
+/// Codex CLI 0.156, captured through `/diagnostics/capture` on 2026-09-24.
+/// The TUI redraws this marker through several growing cursor prefixes. Replay
+/// the production chunk processor rather than the row parser alone: cursor
+/// completeness is the boundary that prevents every prefix entering Progress.
+#[test]
+fn captured_codex_streaming_intent_emits_one_complete_marker() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-streaming-intent-20260924.tcap",
+    ))
+    .expect("valid framed capture");
+    // A capture taken before the session's grid is initialized has no recorded
+    // geometry; replay it at a fixed, spacious size rather than rejecting valid
+    // stream evidence before it reaches the parser.
+    let (rows, cols) = capture.geometry.unwrap_or((41, 128));
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "captured-codex-streaming-intent";
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("Codex capture is UTF-8"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        intents,
+        vec![(
+            "validating the streaming capture".to_string(),
+            Some("Capture test".to_string())
+        )],
+        "the captured growing prefixes must produce one complete intent"
+    );
+}
+
+/// Codex redraws its streaming response in place, then returns its cursor to
+/// the input row. Cursor-local filtering therefore cannot see the marker.
+/// This is deliberately raw VT input: CSI H moves back to the same row and
+/// CSI K clears the prior render just as the captured Codex repaint stream
+/// does.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_cursor_away_repaint_journals_only_the_closed_intent_and_title() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-narrow-streaming-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 128, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let prefixes = [
+        "Individuo",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino il comportamento corretto (Accapo mobile)",
+    ];
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    for prefix in prefixes {
+        processor.process_chunk(
+            &format!("\x1b[4;1H\x1b[2K• intent: {prefix}\x1b[14;3H"),
+            &silence,
+            sid,
+            &state,
+        );
+    }
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let text = prefixes
+        .last()
+        .expect("complete prefix")
+        .split(" (")
+        .next()
+        .unwrap();
+    assert_eq!(
+        intents,
+        vec![(text.to_string(), Some("Accapo mobile".to_string()))]
+    );
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+/// A legacy intent need not have a title. Once its row is no longer live under
+/// the cursor, the production parser must journal it rather than treating the
+/// missing optional title as a streaming redraw.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_cursor_away_titleless_intent_is_journaled_once() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-titleless-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 128, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let text = "Read the configuration loader";
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    processor.process_chunk(
+        &format!("\x1b[4;1H\x1b[2K• intent: {text}\r\n"),
+        &silence,
+        sid,
+        &state,
+    );
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(intents, vec![(text.to_string(), None)]);
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+/// A title can close an intent after it soft-wraps. The logical marker must be
+/// retained when Codex returns the cursor to its composer in the same chunk.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_narrow_cursor_away_intent_journals_full_text_and_title_once() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-wrapped-away-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 20, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let text = "Restore the mobile terminal line wrapping behavior";
+    let title = "Mobile wrapping";
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    processor.process_chunk(
+        &format!("\x1b[4;1H\x1b[2K• intent: {text} ({title})\x1b[14;3H"),
+        &silence,
+        sid,
+        &state,
+    );
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(intents, vec![(text.to_string(), Some(title.to_string()))]);
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+/// At 20 columns the completed marker spans six soft-wrapped rows. The cursor
+/// remains on the marker while Codex repaints it, so this exercises the grid
+/// prefix path rather than parsing a hand-built logical line.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_narrow_repaint_journals_only_the_closed_intent_and_title() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "codex-narrow-streaming-intent";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, 20, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("agent silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    let prefixes = [
+        "Individuo",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino",
+        "Individuo la regressione dell'a capo nel terminale mobile e ripristino il comportamento corretto (Accapo mobile)",
+    ];
+
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    for prefix in prefixes {
+        processor.process_chunk(
+            &format!("\x1b[4;1H\x1b[2K• intent: {prefix}"),
+            &silence,
+            sid,
+            &state,
+        );
+    }
+
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    parsed
+                        .get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let text = prefixes
+        .last()
+        .expect("complete prefix")
+        .split(" (")
+        .next()
+        .unwrap();
+    assert_eq!(
+        intents,
+        vec![(text.to_string(), Some("Accapo mobile".to_string()))]
+    );
+
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
 /// Live idle Codex animation from brainstorming (2026-09-21). The capture
 /// starts after turn completion: seed that observed protocol boundary, then
 /// replay the original repaint chunks through the production reader.
