@@ -69,8 +69,12 @@ Finds terminals that exist in the store but aren't associated with any branch. U
 ### ptyCapture.ts
 
 `ptyCaptureStore` drives the raw PTY capture tap from the UI: `isRecording(sessionId)`,
-`bytes(sessionId)`, `refresh()`, and `toggle(sessionId)`. It backs the **Capture Session**
-item in the tab context menu, which appears only while `isPerfDebug()` is on.
+`bytes(sessionId)`, `refresh()`, `applyStatus(status)`, and `toggle(sessionId)`. It backs the
+**Capture Session** tab context-menu item and the **Toggle diagnostics capture (active tab)**
+Command Palette action (`toggle-diagnostics-capture`, `actionRegistry.ts`) — both appear only
+while `isPerfDebug()` is on, and both call the same `toggle(sessionId)`. `isRecording` treats a
+tap with no session filter (`session_filter: null` — recording every session) as recording
+*every* session, not just an exact filter match.
 
 The tap has to be armed *before* a reproduction — the per-session output ring holds only the
 last 8 KB, so a state-detection bug reported after the fact has already lost its evidence.
@@ -78,9 +82,14 @@ That is why the control sits one click from the misbehaving tab instead of in a 
 reporter has to look up.
 
 The tap is one global switch that `POST /diagnostics/capture` and other windows can also
-flip, so `refresh()` runs on every context-menu open rather than trusting the last value this
-window wrote. Starting always opens a fresh file, so the byte count reported when stopping
-belongs to that recording alone.
+flip. The backend pushes a `pty-capture-changed` event (`{enabled, session_filter}`) from the
+single mutation point (`pty_capture::set_enabled`) whenever ANY caller flips it — the Tauri
+command, the HTTP route, or a raw curl POST from outside the app — so `useAppInit.ts`'s
+listener calls `applyStatus()` and every open tab's "recording" badge (`TabViews.tsx`, next to
+the standby badge) updates live with no polling. `refresh()` still runs on context-menu open as
+a defensive fallback (an event missed before the listener registered), but is no longer the
+only way this state reaches the UI. Starting always opens a fresh file, so the byte count
+reported when stopping belongs to that recording alone.
 
 ## Path Utilities (`pathUtils.ts`)
 

@@ -9,6 +9,7 @@ import { settingsStore } from "../../../stores/settings";
 import { isTauri } from "../../../transport";
 import { comboToDisplay, keyFor } from "../../../utils/hotkey";
 import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRecorder";
+import { isPerfDebug } from "../../../utils/perfDebug";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
 import s from "../Settings.module.css";
 
@@ -129,6 +130,15 @@ export function getShortcutSections(): ShortcutSection[] {
 				{ action: "block-next", keys: keyFor("block-next"), description: "Next command block" },
 				{ action: "block-fold-toggle", keys: keyFor("block-fold-toggle"), description: "Toggle block fold" },
 				{ action: "block-search-toggle", keys: keyFor("block-search-toggle"), description: "Search in block" },
+				...(isPerfDebug()
+					? [
+							{
+								action: "toggle-diagnostics-capture" as const,
+								keys: keyFor("toggle-diagnostics-capture"),
+								description: "Toggle diagnostics capture (active tab)",
+							},
+						]
+					: []),
 			],
 		},
 		{

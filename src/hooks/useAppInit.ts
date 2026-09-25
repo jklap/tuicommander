@@ -26,6 +26,7 @@ import { subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
+import { ptyCaptureStore } from "../utils/ptyCapture";
 import { unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
@@ -809,6 +810,13 @@ export async function initApp(deps: AppInitDeps) {
 		const termId = terminalsStore.getTerminalForSession(session_id);
 		if (termId) terminalsStore.update(termId, { standby });
 	}).catch((err) => appLogger.error("app", "Failed to register session-standby listener", err));
+
+	// Live tab-bar "recording" badge — pushed regardless of whether the
+	// diagnostics-capture tap was toggled via this window, another window,
+	// or a raw curl POST to /diagnostics/capture from outside the app.
+	listen<{ enabled: boolean; session_filter?: string | null }>("pty-capture-changed", (event) => {
+		ptyCaptureStore.applyStatus(event.payload);
+	}).catch((err) => appLogger.error("app", "Failed to register pty-capture-changed listener", err));
 
 	// Listen for UI tab open/update requests from MCP tools
 	listen<{

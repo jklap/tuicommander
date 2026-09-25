@@ -357,6 +357,27 @@ it too. When adding a new per-agent disk-config field read inside `build_mcp_ins
 audit every existing test that passes a Claude-family `client_name` and add the annotation
 where it's missing — don't assume "I didn't touch that test" means it's safe.
 
+**`load_agents_config()` itself is now cached (2026-09-24), fixing a real CPU/latency bug: it
+was called — with a full uncached `read_to_string` + JSON parse of `agents.json` — from
+`osc_title::should_skip` on every OSC 0/2 title repaint for any session with an active agent
+intent, and some agents repaint their title at ~8Hz+.** The cache (`AGENTS_CONFIG_CACHE` in
+`config.rs`) is keyed on `(path, mtime, len)`, not on `CONFIG_DIR_OVERRIDE` directly — a cache
+hit requires the exact same resolved path AND an unchanged mtime/len. This does not reintroduce
+the cross-test hazard described above: two sequential tests sharing the exact same literal path
+only share a stale cache entry if the file's content is *also* actually the same, which is the
+correct (not stale) result anyway. Regression test:
+`load_agents_config_picks_up_a_second_write_not_a_stale_cache`.
+
+**mtime/len alone is not quite enough for this process's OWN writes — `save_agents_config` also
+explicitly clears the cache on every successful save.** A code-review pass caught the gap:
+two writes landing within the same filesystem mtime tick (a coarse-mtime mount, or simply two
+writes fast enough to share a tick) that happen to produce equal-length JSON collide on
+`(mtime, len)` with the first write's now-stale entry, and a stat-only check alone can't tell
+them apart. Clearing unconditionally on save removes any entry regardless of whether the new
+stat happens to collide, so there's nothing left to falsely match against. Regression test:
+`load_agents_config_picks_up_a_second_write_of_equal_length_content` (can't force an actual mtime
+collision portably, but exercises the same-length case the finding was about).
+
 
 ## Git Ref Enumeration — Never Classify a Ref by Its Short Name
 
@@ -905,6 +926,10 @@ curl localhost:9876/diagnostics/capture         # state + bytes written per sess
 Captures land in `<config dir>/captures/<session-id>.tcap`, capped at 512 KB each. TUICCAP2 preserves the initial terminal rows/columns plus output/input direction, original chunk boundaries, ordering, and monotonic timestamps. The decoder remains backward-compatible with geometry-less TUICCAP1 and legacy output-only `.raw` fixtures; a faithful replay of either old format must supply the observed geometry explicitly rather than silently assuming 41x128.
 Off by default (one relaxed atomic load per chunk when off) — code in
 `src-tauri/src/pty_capture.rs`.
+
+**The tap is one global switch, but the UI no longer has to poll to see it change.** Toggling it — via `POST /diagnostics/capture`, the `set_pty_capture` Tauri command, the tab context menu's "Capture Session", or the Command Palette's "Toggle diagnostics capture (active tab)" (`isPerfDebug()`-gated, `actionRegistry.ts`) — dual-emits `AppEvent::PtyCaptureChanged { enabled, session_filter }` from `pty_capture::set_enabled`, the single mutation point every entry point funnels through. Every open tab's recording badge (`TabViews.tsx`, next to the standby badge) updates live off that event (`useAppInit.ts` → `ptyCaptureStore.applyStatus`) regardless of which entry point flipped it — including a raw curl from outside the app. `session_filter: None` means every session is being recorded, so `ptyCaptureStore.isRecording(id)` treats a `null` filter as "yes, this one too," not just an exact match.
+
+**`applyStatus()` merges, it must never fully replace.** A code-review pass on this feature (2026-09-24) caught that it originally did — the push event's payload only ever carries `{enabled, session_filter}` (no `dir`/`sessions`), and reusing `refresh()`'s own full-replace `adopt()` for it silently wiped whatever byte counts a prior `refresh()` had populated. This was reachable in a single window with no other window involved at all: `toggle()`'s own `invoke("set_pty_capture", ...)` call is exactly what makes the backend emit this event, and the ordering between that invoke's own response and this window's async event listener processing the resulting push is not guaranteed — so `toggle()`'s own `bytes(sessionId)` read (used for the "N KB written" stop toast) could read 0 even though the real `.tcap` file has content. Fixed by merging only `enabled`/`session_filter` into the existing signal, leaving `dir`/`sessions` untouched — those are `refresh()`'s job alone. If you add a second push-event-consuming store method anywhere in this codebase, check whether it's merging into partial state or replacing wholesale; whichever existing full-status adopter it's tempting to reuse is very likely the wrong shape for a partial payload.
 
 **A reproduced failure becomes a fixture, always.** Drop the `.tcap` in
 `src-tauri/src/fixtures/agent_prompts/` and add a case to the

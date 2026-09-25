@@ -23,6 +23,8 @@
 //! growing at [`MAX_CAPTURE_BYTES`] each: a fixture is a moment, not a session
 //! transcript, and an unattended tap must not fill Boss's disk.
 
+use crate::AppState;
+use crate::state::AppEvent;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::Write;
@@ -86,11 +88,22 @@ pub(crate) fn is_enabled() -> bool {
 /// Start or stop recording. Starting always begins a fresh set of files:
 /// a capture that silently appended to a previous run's bytes would replay as
 /// one impossible stream.
-pub(crate) fn set_enabled(enabled: bool, session_filter: Option<String>, dir: PathBuf) {
+///
+/// Emits `AppEvent::PtyCaptureChanged` so a tab-bar "recording" badge can
+/// update live, regardless of whether this was reached via the Tauri
+/// command, the HTTP route, or a raw curl POST from outside the app —
+/// `state` is threaded through specifically so this one mutation point can
+/// be the single emitter, rather than duplicating the emit at every caller.
+pub(crate) fn set_enabled(
+    state: &AppState,
+    enabled: bool,
+    session_filter: Option<String>,
+    dir: PathBuf,
+) {
     let mut guard = STATE.lock();
     if enabled {
         *guard = Some(CaptureState {
-            session_filter,
+            session_filter: session_filter.clone(),
             files: HashMap::new(),
             dir: Some(dir),
             started_at: std::time::Instant::now(),
@@ -98,7 +111,12 @@ pub(crate) fn set_enabled(enabled: bool, session_filter: Option<String>, dir: Pa
     } else {
         *guard = None;
     }
+    drop(guard);
     ENABLED.store(enabled, Ordering::Relaxed);
+    state.emit_dual(AppEvent::PtyCaptureChanged {
+        enabled,
+        session_filter: if enabled { session_filter } else { None },
+    });
 }
 
 /// Record one raw chunk. Called from the PTY read path, so it must never panic
@@ -256,10 +274,12 @@ pub(crate) fn decode_capture(bytes: &[u8]) -> Result<DecodedCapture, String> {
 /// menu — goes through here, so the two can never disagree about where a
 /// capture lands.
 pub(crate) fn set_enabled_in_config_dir(
+    state: &AppState,
     enabled: bool,
     session_filter: Option<String>,
 ) -> serde_json::Value {
     set_enabled(
+        state,
         enabled,
         session_filter,
         crate::config::config_dir().join("captures"),
@@ -271,8 +291,12 @@ pub(crate) fn set_enabled_in_config_dir(
 /// `mcp_http::log_routes::capture_set`.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn set_pty_capture(enabled: bool, session_id: Option<String>) -> serde_json::Value {
-    set_enabled_in_config_dir(enabled, session_id)
+pub(crate) fn set_pty_capture(
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+    enabled: bool,
+    session_id: Option<String>,
+) -> serde_json::Value {
+    set_enabled_in_config_dir(&state, enabled, session_id)
 }
 
 /// Read the tap state from the desktop app. HTTP twin: `GET /diagnostics/capture`.
@@ -311,9 +335,10 @@ mod tests {
     #[test]
     fn disabled_tap_writes_nothing() {
         let _guard = TEST_LOCK.lock();
+        let state = crate::state::tests_support::make_test_app_state();
         let dir = std::env::temp_dir().join("tuic-capture-test-disabled");
         let _ = std::fs::remove_dir_all(&dir);
-        set_enabled(false, None, dir.clone());
+        set_enabled(&state, false, None, dir.clone());
         record_with_geometry("session-a", b"hello", Some((24, 80)));
         assert!(!dir.exists());
     }
@@ -321,9 +346,10 @@ mod tests {
     #[test]
     fn capture_respects_the_session_filter_and_the_size_cap() {
         let _guard = TEST_LOCK.lock();
+        let state = crate::state::tests_support::make_test_app_state();
         let dir = std::env::temp_dir().join("tuic-capture-test-filter");
         let _ = std::fs::remove_dir_all(&dir);
-        set_enabled(true, Some("wanted".into()), dir.clone());
+        set_enabled(&state, true, Some("wanted".into()), dir.clone());
 
         record_with_geometry(
             "wanted",
@@ -337,7 +363,7 @@ mod tests {
             &vec![b'x'; (MAX_CAPTURE_BYTES + 1024) as usize],
             Some((63, 160)),
         );
-        set_enabled(false, None, dir.clone());
+        set_enabled(&state, false, None, dir.clone());
 
         let wanted = std::fs::read(dir.join("wanted.tcap")).expect("filtered session recorded");
         assert!(wanted.starts_with(CAPTURE_MAGIC));
@@ -358,16 +384,17 @@ mod tests {
     #[test]
     fn restarting_the_tap_truncates() {
         let _guard = TEST_LOCK.lock();
+        let state = crate::state::tests_support::make_test_app_state();
         let dir = std::env::temp_dir().join("tuic-capture-test-restart");
         let _ = std::fs::remove_dir_all(&dir);
 
-        set_enabled(true, None, dir.clone());
+        set_enabled(&state, true, None, dir.clone());
         record_with_geometry("s", b"first run", Some((24, 80)));
-        set_enabled(false, None, dir.clone());
+        set_enabled(&state, false, None, dir.clone());
 
-        set_enabled(true, None, dir.clone());
+        set_enabled(&state, true, None, dir.clone());
         record_with_geometry("s", b"second", Some((24, 80)));
-        set_enabled(false, None, dir.clone());
+        set_enabled(&state, false, None, dir.clone());
 
         let bytes = std::fs::read(dir.join("s.tcap")).unwrap();
         let records = decode(&bytes).expect("framed capture decodes");
@@ -379,13 +406,14 @@ mod tests {
     #[test]
     fn framed_capture_preserves_output_input_order_and_boundaries() {
         let _guard = TEST_LOCK.lock();
+        let state = crate::state::tests_support::make_test_app_state();
         let dir = std::env::temp_dir().join("tuic-capture-test-framed");
         let _ = std::fs::remove_dir_all(&dir);
-        set_enabled(true, Some("s".into()), dir.clone());
+        set_enabled(&state, true, Some("s".into()), dir.clone());
         record_with_geometry("s", b"question?", Some((63, 160)));
         record_input_with_geometry("s", b"\r", Some((63, 160)));
         record_with_geometry("s", b"working", Some((63, 160)));
-        set_enabled(false, None, dir.clone());
+        set_enabled(&state, false, None, dir.clone());
 
         let records = decode(&std::fs::read(dir.join("s.tcap")).unwrap()).unwrap();
         assert_eq!(records.len(), 3);
@@ -406,11 +434,12 @@ mod tests {
     #[test]
     fn capture_exposes_geometry_and_decodes_tuiccap1() {
         let _guard = TEST_LOCK.lock();
+        let state = crate::state::tests_support::make_test_app_state();
         let dir = std::env::temp_dir().join("tuic-capture-test-geometry");
         let _ = std::fs::remove_dir_all(&dir);
-        set_enabled(true, Some("s".into()), dir.clone());
+        set_enabled(&state, true, Some("s".into()), dir.clone());
         record_with_geometry("s", b"frame", Some((63, 160)));
-        set_enabled(false, None, dir.clone());
+        set_enabled(&state, false, None, dir.clone());
 
         let decoded = decode_capture(&std::fs::read(dir.join("s.tcap")).unwrap()).unwrap();
         assert_eq!(decoded.geometry, Some((63, 160)));
@@ -425,6 +454,45 @@ mod tests {
         assert_eq!(decoded.geometry, None);
         assert_eq!(decoded.records[0].elapsed_us, 7);
         assert_eq!(decoded.records[0].data, b"old");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tab-bar "recording" badge has to learn about a capture toggle
+    /// regardless of who flipped it — the Tauri command, the HTTP route, or
+    /// a raw curl POST from outside the app — so `set_enabled` itself must
+    /// be the one emitter, not each caller.
+    #[test]
+    fn set_enabled_emits_pty_capture_changed() {
+        let _guard = TEST_LOCK.lock();
+        let state = crate::state::tests_support::make_test_app_state();
+        let dir = std::env::temp_dir().join("tuic-capture-test-event");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut rx = state.event_bus.subscribe();
+
+        set_enabled(&state, true, Some("s".into()), dir.clone());
+        match rx.try_recv().expect("PtyCaptureChanged on start") {
+            AppEvent::PtyCaptureChanged {
+                enabled,
+                session_filter,
+            } => {
+                assert!(enabled);
+                assert_eq!(session_filter, Some("s".to_string()));
+            }
+            other => panic!("expected PtyCaptureChanged, got {other:?}"),
+        }
+
+        set_enabled(&state, false, None, dir.clone());
+        match rx.try_recv().expect("PtyCaptureChanged on stop") {
+            AppEvent::PtyCaptureChanged {
+                enabled,
+                session_filter,
+            } => {
+                assert!(!enabled);
+                assert_eq!(session_filter, None);
+            }
+            other => panic!("expected PtyCaptureChanged, got {other:?}"),
+        }
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

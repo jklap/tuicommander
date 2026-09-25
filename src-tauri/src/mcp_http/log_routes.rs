@@ -188,9 +188,11 @@ pub(crate) async fn capture_get() -> Json<serde_json::Value> {
 /// the capture it leaves behind becomes a `pty::tests` fixture, which is the only
 /// way a detector regression stops recurring. See `pty_capture` for the why.
 pub(crate) async fn capture_set(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<super::types::SetCaptureRequest>,
 ) -> Json<serde_json::Value> {
     Json(crate::pty_capture::set_enabled_in_config_dir(
+        &state,
         body.enabled,
         body.session_id,
     ))
