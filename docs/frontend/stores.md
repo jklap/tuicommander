@@ -411,6 +411,7 @@ Per-repository settings (base branch, scripts, worktree options).
 
 ### uiStore (`ui.ts`)
 Panel visibility (sidebar, diff, markdown, notes, file browser), sidebar width, dropdown state, loading state.
+Editor wrap defaults for text and code live here too; they use localStorage, like recent command-palette actions, so toggling them needs no backend restart.
 
 ### notificationsStore (`notifications.ts`)
 Notification sound preferences and playback. Remote orchestration muting uses

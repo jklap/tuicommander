@@ -12,6 +12,10 @@
 
 - [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` build with no saved `file_browser_view_mode`, open the file browser and confirm tree view is selected. Switch to flat list, restart, and confirm that choice remains selected.
 
+## Editor line wrapping (2026-09-25) — Vite hot reload
+
+- [ ] After Vite reloads the frontend, open a `.txt` file with a long line and confirm it wraps without horizontal scrolling; open a `.rs` file and confirm it does not. Toggle either with the header button or `Alt+Z`, then reopen the file and restart the app to confirm each file kind keeps its own setting. Check the active button style and that cursor, selection, search, git gutter, and inline blame still work while wrapped.
+
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, run `tuic agent spawn …` outside TUICommander (no `TUIC_SESSION`): stderr shows one `registering an external MCP caller` notice and the spawn succeeds. `tuic session status <unique name or short id>` resolves; an ambiguous name returns an error.

@@ -379,6 +379,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Find/Replace: `Cmd+F` (find), `Cmd+G` / `Cmd+Shift+G` (next/prev), `Cmd+H` (replace), selection match highlighting
 - Save: `Cmd+S` (when editor tab is focused)
 - Read-only toggle: padlock icon in editor header
+- Line wrapping: header toggle or `Alt+Z`; text-like and Markdown files start wrapped, code files start unwrapped; each kind remembers its choice
 - Unsaved changes: dot indicator in tab bar and header
 - Disk conflict detection: banner with "Reload" (discard local) or "Keep mine" options
 - Auto-reloads silently when file changes on disk and editor is clean

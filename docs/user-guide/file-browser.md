@@ -112,6 +112,7 @@ Clicking a non-Markdown file opens it in an in-app code editor tab in the main t
 - **Syntax highlighting** — Auto-detected from file extension; disabled for files larger than 500 KB
 - **Line numbers**, bracket matching, active line highlight, indentation support
 - **Save** — `Cmd+S` saves the file when the editor tab is focused
+- **Wrap lines** — Click the wrap button in the editor header or press `Alt+Z`. Text, logs, unknown file types, and Markdown start wrapped; code starts unwrapped. The choice is remembered separately for text and code files.
 
 ### Read-Only Mode
 

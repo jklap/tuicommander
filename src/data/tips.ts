@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Editor Line Wrapping",
+		description: "Press Alt+Z in the editor to wrap long lines. Text and code files remember separate choices.",
+		shortcut: "Alt+Z",
+	},
+	{
 		feature: "Plans and Stories",
 		description: "Open Plans and Stories from the project toolbar to create plans, track criteria, and review work.",
 		shortcut: null,
