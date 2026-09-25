@@ -1473,6 +1473,9 @@ pub(crate) enum AgentDeliveryAssignment {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AgentInboxFull;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorDeliveryAssignment {
     Waiter,
     WakeSubmitted,
@@ -2283,18 +2286,46 @@ impl AppState {
             .subscribe()
     }
 
+    /// Buffer a system message, logging back-pressure when every retained
+    /// message is still owned by an uncompleted delivery.
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> Option<u64> {
+        let message_id = msg.id.clone();
+        match self.try_push_agent_inbox(recipient, msg) {
+            Ok(timestamp) => Some(timestamp),
+            Err(AgentInboxFull) => {
+                tracing::warn!(
+                    source = "agent",
+                    recipient,
+                    message_id,
+                    "agent inbox is full of in-flight messages; rejecting new system mail"
+                );
+                None
+            }
+        }
+    }
+
     /// Buffer a message into `recipient`'s inbox with bounded, lifecycle-aware
-    /// FIFO eviction. Single source of truth for BOTH push sites (peer `send`
-    /// and auto lifecycle notifications) so the two can't drift in how they
-    /// handle overflow.
+    /// FIFO eviction. An overflow may evict only mail whose owner has already
+    /// observed or dispatched it; in-flight delivery stays recoverable.
     ///
     /// On overflow we evict the oldest *non-lifecycle* message first, so peer
     /// chatter can never silently drop a `tuic-auto-*` lifecycle notification;
     /// we only fall back to evicting the oldest message overall when the inbox
     /// is entirely lifecycle notifications (orchestrator badly stuck). Every
     /// genuine eviction bumps `agent_inbox_evictions`, surfaced as
-    /// `missed_count` on the next `inbox` read — nothing is dropped silently.
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
+    /// `missed_count` on the next `inbox` read. When every retained message is
+    /// in flight, reject the new one so the sender can retry instead of dropping
+    /// a message that terminal delivery may need to requeue.
+    pub(crate) fn try_push_agent_inbox(
+        &self,
+        recipient: &str,
+        mut msg: AgentMessage,
+    ) -> Result<u64, AgentInboxFull> {
+        let gate_entry = self
+            .active_agent_waiters
+            .entry(recipient.to_string())
+            .or_default();
+        let mut gate = gate_entry.lock();
         let (evicted_id, stored_timestamp) = {
             let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
             if let Some(last_timestamp) = inbox.back().map(|message| message.timestamp)
@@ -2308,8 +2339,24 @@ impl AppState {
             let evicted = if inbox.len() >= AGENT_INBOX_CAPACITY {
                 let evict_idx = inbox
                     .iter()
-                    .position(|m| !m.id.starts_with(LIFECYCLE_MSG_ID_PREFIX))
-                    .unwrap_or(0);
+                    .position(|message| {
+                        !message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX)
+                            && matches!(
+                                gate.owners.get(&message.id),
+                                None | Some(AgentDeliveryOwner::WaiterObserved)
+                                    | Some(AgentDeliveryOwner::TerminalDispatched)
+                            )
+                    })
+                    .or_else(|| {
+                        inbox.iter().position(|message| {
+                            matches!(
+                                gate.owners.get(&message.id),
+                                None | Some(AgentDeliveryOwner::WaiterObserved)
+                                    | Some(AgentDeliveryOwner::TerminalDispatched)
+                            )
+                        })
+                    })
+                    .ok_or(AgentInboxFull)?;
                 inbox.remove(evict_idx).map(|message| message.id)
             } else {
                 None
@@ -2323,17 +2370,12 @@ impl AppState {
                 .agent_inbox_evictions
                 .entry(recipient.to_string())
                 .or_insert(0) += 1;
-            if let Some(gate) = self.active_agent_waiters.get(recipient) {
-                gate.lock().owners.remove(&evicted_id);
-            }
+            gate.owners.remove(&evicted_id);
         }
-        if let Some(gate) = self.active_agent_waiters.get(recipient) {
-            let mut gate = gate.lock();
-            gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
-            let revision = gate.inbox_revision;
-            gate.inbox_events.send_replace(revision);
-        }
-        stored_timestamp
+        gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
+        let revision = gate.inbox_revision;
+        gate.inbox_events.send_replace(revision);
+        Ok(stored_timestamp)
     }
 
     #[cfg(test)]
@@ -5451,6 +5493,114 @@ mod tests {
         assert_eq!(
             inbox.back().unwrap().id,
             format!("tuic-auto-{AGENT_INBOX_CAPACITY}")
+        );
+    }
+
+    #[test]
+    fn push_agent_inbox_does_not_evict_terminal_pending_mail() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+
+        state.push_agent_inbox(recipient, make_msg("terminal-pending"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "terminal-pending", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        for index in 0..(AGENT_INBOX_CAPACITY - 1) {
+            state.push_agent_inbox(recipient, make_msg(&format!("returned-{index}")));
+        }
+
+        state.push_agent_inbox(recipient, make_msg("overflow"));
+
+        assert!(
+            state
+                .agent_inbox
+                .get(recipient)
+                .is_some_and(|inbox| inbox.iter().any(|message| message.id == "terminal-pending")),
+            "a terminal-pending message must remain available for requeue after delivery failure"
+        );
+    }
+
+    #[test]
+    fn push_agent_inbox_evicts_oldest_waiter_observed_mail_before_terminal_pending() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+
+        state.push_agent_inbox(recipient, make_msg("terminal-pending"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "terminal-pending", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        state.push_agent_inbox(recipient, make_msg("waiter-observed"));
+        let lease = state.begin_agent_wait(recipient);
+        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        assert_eq!(
+            state.finish_agent_wait(recipient, lease, 0, true).messages[0].id,
+            "waiter-observed"
+        );
+        for index in 0..(AGENT_INBOX_CAPACITY - 2) {
+            state.push_agent_inbox(recipient, make_msg(&format!("returned-{index}")));
+        }
+
+        state
+            .try_push_agent_inbox(recipient, make_msg("overflow"))
+            .expect("returned mail leaves an eviction slot");
+
+        let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
+        assert!(inbox.iter().any(|message| message.id == "terminal-pending"));
+        assert!(!inbox.iter().any(|message| message.id == "waiter-observed"));
+    }
+
+    #[test]
+    fn push_agent_inbox_rejects_overflow_when_every_message_is_in_flight() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+
+        for index in 0..AGENT_INBOX_CAPACITY {
+            let message_id = format!("pending-{index}");
+            state.push_agent_inbox(recipient, make_msg(&message_id));
+            assert_eq!(
+                state.assign_agent_delivery(recipient, &message_id, true),
+                AgentDeliveryAssignment::Terminal
+            );
+        }
+
+        assert_eq!(
+            state.try_push_agent_inbox(recipient, make_msg("overflow")),
+            Err(AgentInboxFull)
+        );
+        let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
+        assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
+        assert!(inbox.iter().all(|message| message.id != "overflow"));
+    }
+
+    #[test]
+    fn terminal_pending_mail_requeues_after_eviction_pressure() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+
+        state.push_agent_inbox(recipient, make_msg("terminal-pending"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "terminal-pending", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        for index in 0..(AGENT_INBOX_CAPACITY - 1) {
+            state.push_agent_inbox(recipient, make_msg(&format!("returned-{index}")));
+        }
+        state
+            .try_push_agent_inbox(recipient, make_msg("overflow"))
+            .expect("returned mail leaves an eviction slot");
+
+        state.release_terminal_delivery(recipient, "terminal-pending");
+
+        let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
+        assert_eq!(
+            inbox.back().map(|message| message.id.as_str()),
+            Some("terminal-pending")
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "terminal-pending"),
+            None
         );
     }
 
