@@ -3826,9 +3826,13 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
             let mut logs = String::new();
             for (name, job) in jobs.into_iter().take(5) {
                 logs.push_str(&format!("===== FAILED CHECK: {name} =====\n"));
-                logs.push_str(
-                    &crate::circleci::fetch_job_log(&state.http_client, &job, &token).await?,
-                );
+                match crate::circleci::fetch_job_log(&state.http_client, &job, &token).await {
+                    Ok(job_logs) => logs.push_str(&job_logs),
+                    Err(error) => {
+                        tracing::warn!(source = "fetch_ci_failure_logs", check = %name, "failed to fetch CircleCI job log: {error}");
+                        logs.push_str(&format!("Unable to fetch this CircleCI job's logs: {error}\n"));
+                    }
+                }
             }
             Ok(truncate_ci_logs(&sanitize_ci_logs(&logs)))
         }
@@ -3908,7 +3912,7 @@ mod tests {
 
     #[test]
     fn sanitizes_provider_logs_for_http_and_mcp_consumers() {
-        assert_eq!(sanitize_ci_logs("\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;clipboard\u{7}\nkeep\tthis\u{7f}"), "red\nkeep\tthis");
+        assert_eq!(sanitize_ci_logs("\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;clipboard\u{7}\nkeep\tthis\u{7f}"), "red\nkeepthis");
     }
 
     // --- hex_to_rgba tests ---

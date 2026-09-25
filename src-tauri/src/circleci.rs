@@ -200,7 +200,13 @@ pub(crate) async fn fetch_job_log(
 ) -> Result<String, String> {
     let mut url = url::Url::parse("https://circleci.com/api/v1.1/project/").expect("static URL");
     url.path_segments_mut().expect("static URL can hold path segments").extend([job.vcs.as_str(), job.org.as_str(), job.repo.as_str(), &job.build_num.to_string()]);
-    let detail: serde_json::Value = client
+    // The credential must never follow a provider-controlled redirect. S3 log
+    // downloads below deliberately use the shared client without this header.
+    let api_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| format!("Failed to build CircleCI client: {error}"))?;
+    let detail: serde_json::Value = api_client
         .get(url)
         .header("Circle-Token", token)
         .header("Accept", "application/json")
