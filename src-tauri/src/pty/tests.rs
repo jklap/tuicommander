@@ -9256,7 +9256,6 @@ fn tombstone_transient_cleanup_removes_swarm_maps() {
             name: "worker".to_string(),
             project: None,
             registered_at: 1,
-            mcp_scoped_identity: false,
         },
     );
     state.agent_inbox.entry(sid.to_string()).or_default();
@@ -14163,7 +14162,6 @@ fn populate_swarm_session_maps(state: &crate::state::AppState, sid: &str, mcp_si
             name: "worker".to_string(),
             project: None,
             registered_at: 1,
-            mcp_scoped_identity: false,
         },
     );
     state.agent_inbox.entry(sid.to_string()).or_default();

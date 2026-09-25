@@ -1428,8 +1428,6 @@ pub struct PeerAgent {
     pub project: Option<String>,
     /// When the agent registered (unix millis for serialization)
     pub registered_at: u64,
-    /// True only for an identity minted by a headerless MCP registration.
-    pub mcp_scoped_identity: bool,
 }
 
 /// A message in the inter-agent mailbox.
@@ -7055,7 +7053,6 @@ mod tests {
                 name: "worker".to_string(),
                 project: None,
                 registered_at: 0,
-                mcp_scoped_identity: false,
             },
         );
 

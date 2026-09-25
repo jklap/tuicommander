@@ -104,8 +104,9 @@ tuic resume <id-or-name>
 ```
 
 Session targets are resolved by the server. Use the PTY ID, its stable
-`tuic_session`, or the terminal alias (for example `tu-33`); an ambiguous
-target is rejected rather than guessed.
+`tuic_session`, the terminal alias (for example `tu-33`), a unique short PTY-ID
+prefix, or a unique display name; an ambiguous target is rejected rather than
+guessed.
 
 ### Sending keys
 
@@ -152,8 +153,9 @@ The orchestration commands above call the same MCP tools as an agent. They use
 the local `mcp.sock` transport and send `$TUIC_SESSION` as `x-tuic-session`, so
 a child spawned from a managed terminal records that terminal as its parent.
 Outside TUICommander, `tuic` prints one notice and registers a headerless
-external MCP caller; a child then has no parent and cannot report back to that
-caller.
+external MCP caller. That caller is the parent of a child it spawns, but its
+identity lasts only for that `tuic` invocation, so a later `tuic` call cannot
+read the mail the child sends back.
 Use `--json` for the unmodified server payload. A server error is printed to
 stderr and makes `tuic` exit non-zero.
 
