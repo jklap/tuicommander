@@ -1250,6 +1250,17 @@ pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// meaning to.
 pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 
+/// The one route allowed a larger body than [`MAX_BODY_BYTES`]: importing a
+/// voice file, which travels whole as base64 in JSON so the payload is the same
+/// over IPC and HTTP. The cap is what the largest accepted voice
+/// (`MAX_USER_VOICE_BYTES`, 64 MB) encodes to, plus room for the JSON around
+/// it; the handler refuses anything longer before decoding it. A layer on the
+/// route overrides the router-wide `DefaultBodyLimit`, and only for this path —
+/// `only_the_voice_import_route_accepts_a_large_body` pins both halves.
+#[cfg(feature = "desktop")]
+pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
+    crate::dictation::speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4 + 64 * 1024;
+
 /// Apply the server's two resource bounds to an assembled router.
 ///
 /// `timeout` is a parameter rather than a read of `REQUEST_TIMEOUT` because the
@@ -1805,6 +1816,24 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/dictation/speech/assets/delete",
             post(dictation_routes::delete_speech_asset_http),
+        )
+        .route(
+            "/dictation/speech/voices",
+            get(dictation_routes::get_speech_voices_http),
+        )
+        .route(
+            "/dictation/speech/voices/import",
+            post(dictation_routes::import_speech_voice_http).layer(
+                axum::extract::DefaultBodyLimit::max(SPEECH_VOICE_IMPORT_BODY_BYTES),
+            ),
+        )
+        .route(
+            "/dictation/speech/voices/delete",
+            post(dictation_routes::delete_speech_voice_http),
+        )
+        .route(
+            "/dictation/speech/voices/preview",
+            post(dictation_routes::preview_speech_voice_http),
         )
         .route(
             "/dictation/speech/speak",
@@ -5376,6 +5405,9 @@ mod tests {
             ("POST", "/dictation/inject"),
             ("GET", "/dictation/config"),
             ("PUT", "/dictation/config"),
+            ("GET", "/dictation/speech/voices?language=it"),
+            ("POST", "/dictation/speech/voices/import"),
+            ("POST", "/dictation/speech/voices/delete"),
             ("POST", "/agents/open-in-app"),
             ("POST", "/agents/detect-all"),
             ("POST", "/system/notification-sound"),
@@ -6819,6 +6851,50 @@ mod tests {
             post_bytes(MAX_BODY_BYTES - 1).await,
             StatusCode::OK,
             "the cap must not reject a body that fits under it"
+        );
+    }
+
+    /// A voice file is imported whole, as base64 in JSON, so its one route has
+    /// to take more than the 2 MB every other route is held to — and only it.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn only_the_voice_import_route_accepts_a_large_body() {
+        async fn post_json(path: &str, body_bytes: usize) -> StatusCode {
+            let payload = format!(
+                r#"{{"language":"xx","name":"nonna","dataBase64":"{}"}}"#,
+                "A".repeat(body_bytes)
+            );
+            build_router(test_state(), false, true)
+                .oneshot(
+                    Request::post(path)
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(payload))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+
+        let over_the_default = MAX_BODY_BYTES + 1024 * 1024;
+        assert_ne!(
+            post_json("/dictation/speech/voices/import", over_the_default).await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "a voice file over 2 MB must reach the import handler"
+        );
+        assert_eq!(
+            post_json("/dictation/speech/voices/delete", over_the_default).await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the larger limit must not leak to the route beside it"
+        );
+        assert_eq!(
+            post_json(
+                "/dictation/speech/voices/import",
+                SPEECH_VOICE_IMPORT_BODY_BYTES + 1
+            )
+            .await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the import route is still capped"
         );
     }
 

@@ -125,6 +125,33 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	delete_speech_asset: {
 		map: (args) => ({ method: "POST", path: "/dictation/speech/assets/delete", body: { asset: args.asset } }),
 	},
+	get_speech_voices: {
+		map: (args) => ({
+			method: "GET",
+			path: `/dictation/speech/voices?language=${encodeURIComponent(String(args.language))}`,
+		}),
+	},
+	import_speech_voice: {
+		map: (args) => ({
+			method: "POST",
+			path: "/dictation/speech/voices/import",
+			body: { language: args.language, name: args.name, dataBase64: args.dataBase64 },
+		}),
+	},
+	delete_speech_voice: {
+		map: (args) => ({
+			method: "POST",
+			path: "/dictation/speech/voices/delete",
+			body: { language: args.language, name: args.name },
+		}),
+	},
+	preview_speech_voice: {
+		map: (args) => ({
+			method: "POST",
+			path: "/dictation/speech/voices/preview",
+			body: { language: args.language, voice: args.voice, text: args.text },
+		}),
+	},
 	speak_reply: {
 		map: (args) => ({
 			method: "POST",

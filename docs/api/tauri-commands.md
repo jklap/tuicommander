@@ -456,10 +456,14 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `get_model_info` | -- | `Vec<ModelInfo>` | Available models |
 | `download_whisper_model` | `model_name` | `String` | Download model |
 | `delete_whisper_model` | `model_name` | `String` | Delete model |
-| `get_speech_assets` | -- | `Vec<SpeechAssetInfo>` | Installable speech languages and the ONNX runtime, each `absent`/`downloading`/`incomplete`/`ready` |
+| `get_speech_assets` | -- | `Vec<SpeechAssetInfo>` | The ONNX runtime, the speech languages, then every catalogue voice (`kind: "voice"`, with `language` and `voice`), each `absent`/`downloading`/`incomplete`/`ready` |
 | `download_speech_asset` | `asset` | `String` | Download and install, verifying every pinned sha256. `asset` is an id from the catalogue allowlist |
 | `cancel_speech_download` | `asset` | `String` | Abandon a download in flight |
 | `delete_speech_asset` | `asset` | `String` | Unload the engine, then remove the files |
+| `get_speech_voices` | `language` | `Vec<VoiceChoice>` | The voices a language (Whisper code) can speak with now: `{ id, source }` with `source` `"default"`, `"downloaded"` or `"user"`; empty while the language is not fully downloaded |
+| `import_speech_voice` | `language`, `name`, `dataBase64` | `String` | Store a user voice file (base64) at `<speech>/user-voices/<language>/<name>.safetensors`. Refused with the reason for a bad name, a catalogue voice name, more than 64 MB, a file that is not safetensors, or a voice that does not fit the language's model |
+| `delete_speech_voice` | `language`, `name` | `String` | Remove a user voice file. Absent is success |
+| `preview_speech_voice` | `language`, `voice`, `text` | `()` | Speak `text` (max 200 characters) in `voice` on this machine's speaker with the saved loudness. Needs no hands-free conversation and does not change `speech_voice`. Refused while a hands-free reply is queued, rendering or playing |
 | `speak_reply` | `text`, `turn?` | `SpokenReply` | Queue one spoken reply, max 2000 characters. Returns `state: "queued"` — never `"finished"`; poll `get_speech_status` with the id. `turn` refuses a reply written for a turn the user talked over |
 | `stop_speech` | -- | `SpeechStatus` | Stop now, drop the queue, open a new turn. Returns the status so the caller learns that turn |
 | `get_speech_status` | `utterance?` | `SpeechStatus` | Whether anything can be spoken, and optionally what became of one reply. An id no longer remembered reports `state: "unknown"`. `language` is the conversation's language — empty under `auto` before the first turn, which is the one state in which nothing can be spoken |

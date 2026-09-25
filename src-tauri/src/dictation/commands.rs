@@ -286,10 +286,10 @@ pub fn delete_whisper_model(
 pub struct SpeechAssetInfo {
     pub id: String,
     pub display_name: String,
-    /// `"language"` or `"runtime"`.
+    /// `"language"`, `"runtime"` or `"voice"`.
     pub kind: String,
     /// The **Whisper language code** this speaks (`"it"`), absent for the
-    /// runtime library.
+    /// runtime library. For a voice, the code of the language it belongs to.
     ///
     /// The code rather than the engine's own name for the language
     /// (`"italian"`), because this is the field a caller joins against: the
@@ -300,6 +300,8 @@ pub struct SpeechAssetInfo {
     /// bundle one row above.
     pub language: Option<String>,
     pub voices: Vec<String>,
+    /// The voice a `"voice"` asset downloads (`"jean"`); absent otherwise.
+    pub voice: Option<String>,
     pub download_bytes: u64,
     /// `"absent"`, `"downloading"`, `"incomplete"` or `"ready"`.
     pub state: String,
@@ -326,22 +328,30 @@ fn describe(asset: &speech::assets::Asset, downloading: bool) -> SpeechAssetInfo
         display_name: asset.display_name.to_string(),
         kind: if asset.language().is_some() {
             "language".to_string()
+        } else if asset.voice().is_some() {
+            "voice".to_string()
         } else {
             "runtime".to_string()
         },
-        language: asset.code().map(str::to_string),
+        language: asset
+            .code()
+            .or_else(|| speech::assets::language_of(asset).and_then(|language| language.code()))
+            .map(str::to_string),
         voices: asset.voices().iter().map(|v| (*v).to_string()).collect(),
+        voice: asset.voice().map(str::to_string),
         download_bytes: asset.download_bytes(),
         state,
         missing,
     }
 }
 
-/// Everything a user may install, and what state it is in.
+/// Everything a user may install, and what state it is in: the runtime and
+/// the languages first, then every downloadable voice (`kind: "voice"`, with
+/// its language's code), so the settings page can list a language's voices
+/// under it without a second request.
 #[tauri::command]
 pub fn get_speech_assets(dictation: tauri::State<'_, DictationState>) -> Vec<SpeechAssetInfo> {
-    speech::assets::CATALOGUE
-        .iter()
+    speech::assets::every_asset()
         .map(|asset| describe(asset, dictation.speech.is_downloading(asset.id)))
         .collect()
 }
@@ -514,6 +524,63 @@ pub fn delete_speech_asset(
     Ok(format!("Deleted {}", target.display_name))
 }
 
+/// The language a voice command names, by its Whisper code (`"it"`) — the
+/// same alphabet as `SpeechAssetInfo.language` and the dictation setting.
+fn voice_language(language: &str) -> Result<&'static speech::assets::Asset, String> {
+    speech::assets::for_language_code(language)
+        .ok_or_else(|| format!("No speech bundle ships for language \"{language}\""))
+}
+
+/// The longest base64 payload an import accepts: what the voice size cap
+/// encodes to. Checked on the string, before decoding, so an oversized upload
+/// is refused without allocating it a second time.
+fn speech_voice_base64_limit() -> usize {
+    speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4
+}
+
+/// The voices a language can speak with right now, and where each comes
+/// from (`language` is its Whisper code). Read-only: what the voice picker
+/// lists. See [`speech::library::available_voices`].
+#[tauri::command]
+pub fn get_speech_voices(language: String) -> Result<Vec<speech::library::VoiceChoice>, String> {
+    let asset = voice_language(&language)?;
+    Ok(speech::library::available_voices(asset))
+}
+
+/// Import a voice file the user chose into a language (`language` is its
+/// Whisper code). The file travels as base64 so the payload is the same JSON
+/// over IPC and over HTTP. See [`speech::library::import_speech_voice`] for
+/// what is checked before anything is stored.
+#[tauri::command]
+pub fn import_speech_voice(
+    language: String,
+    name: String,
+    data_base64: String,
+) -> Result<String, String> {
+    use base64::Engine as _;
+    let asset = voice_language(&language)?;
+    if data_base64.len() > speech_voice_base64_limit() {
+        return Err(format!(
+            "the voice file is over the {} MB limit",
+            speech::assets::MAX_USER_VOICE_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|error| format!("the voice file is not valid base64: {error}"))?;
+    speech::library::import_speech_voice(asset, &name, &bytes)?;
+    Ok(format!("Imported the {} voice {name}", asset.display_name))
+}
+
+/// Delete a voice file the user imported into a language (`language` is its
+/// Whisper code). Absent is success.
+#[tauri::command]
+pub fn delete_speech_voice(language: String, name: String) -> Result<String, String> {
+    let asset = voice_language(&language)?;
+    speech::library::delete_speech_voice(asset, &name)?;
+    Ok(format!("Deleted the {} voice {name}", asset.display_name))
+}
+
 // ---------------------------------------------------------------------------
 // Spoken replies (817-f67c)
 // ---------------------------------------------------------------------------
@@ -563,7 +630,7 @@ fn open_voice(
     // serialises replacing a language against speaking it, and an engine built
     // beside it would hold the very files a download is about to rename away.
     let engine = library.engine(asset.language().unwrap_or_default());
-    Ok((engine, voice.to_string()))
+    Ok((engine, voice))
 }
 
 /// Which of a language's voices to speak with.
@@ -572,35 +639,49 @@ fn open_voice(
 /// untouched configuration says and what every configuration said before the
 /// setting existed.
 ///
-/// A named voice the language does not ship is an error rather than a silent
-/// fall back to the first one. The two ways to get here are a catalogue that
-/// dropped a voice and a language the user changed underneath the setting;
-/// both are cases where speaking in a voice nobody chose is worse than saying
-/// why nothing was spoken, and the message reaches the user through the
-/// hands-free status rather than being buried in a log.
-fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<&'static str, String> {
-    let offered = asset.voices();
+/// A named voice must be one the language holds — the one it ships, a
+/// catalogue voice that is downloaded, or a file the user imported
+/// ([`speech::library::installed_voices`]). Anything else is an error rather
+/// than a silent fall back to the first one. The ways to get here are a voice
+/// that was deleted, a download that is not there yet, and a language the user
+/// changed underneath the setting; all are cases where speaking in a voice
+/// nobody chose is worse than saying why nothing was spoken, and the message
+/// reaches the user through the hands-free status rather than being buried in
+/// a log.
+fn choose_voice(asset: &speech::assets::Asset, configured: &str) -> Result<String, String> {
     if configured.is_empty() {
-        return offered
+        return asset
+            .voices()
             .first()
-            .copied()
+            .map(|voice| (*voice).to_string())
             .ok_or_else(|| format!("{} ships no voice", asset.display_name));
     }
-    offered
-        .iter()
-        .copied()
-        .find(|voice| *voice == configured)
-        .ok_or_else(|| {
-            format!(
-                "{} does not ship a voice called \"{configured}\"; it offers {}",
-                asset.display_name,
-                if offered.is_empty() {
-                    "none".to_string()
-                } else {
-                    offered.join(", ")
-                }
-            )
-        })
+    let available = speech::library::installed_voices(asset);
+    if available.iter().any(|choice| choice.id == configured) {
+        return Ok(configured.to_string());
+    }
+    let language = asset.language().unwrap_or_default();
+    if speech::assets::downloadable_voices(language).any(|voice| voice.voice() == Some(configured))
+    {
+        // The catalogue has it, so the fix is one download away.
+        return Err(format!(
+            "The {} voice \"{configured}\" is not downloaded; download it in Settings → Voice",
+            asset.display_name
+        ));
+    }
+    Err(format!(
+        "{} has no voice called \"{configured}\"; it offers {}",
+        asset.display_name,
+        if available.is_empty() {
+            "none".to_string()
+        } else {
+            available
+                .iter()
+                .map(|choice| choice.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    ))
 }
 
 /// The language this conversation is being held in.
@@ -719,6 +800,7 @@ fn open_speaker_for(
     // canceller exists for. Only the *devices* moved.
     let tapped = speech_far_end(device, dictation);
     let queue = Arc::new(speaker::Speaker::new(engine, tapped, generation));
+    queue.set_loudness(config.loudness());
     // Before the first reply can be queued, which is the whole requirement:
     // `observe` is set-once, and nothing has transitioned yet.
     if let Some(observer) = dictation.utterance_observer.lock().clone() {
@@ -937,6 +1019,12 @@ pub(crate) fn speak(
             owner.as_deref(),
         )?);
     }
+    // A voice preview gives way to the conversation instead of playing under
+    // its reply. Stopped with the speaker lock held: the preview takes the two
+    // locks in the same order, so it cannot start between this and `say`.
+    if let Some(preview) = dictation.preview.lock().take() {
+        preview.stop();
+    }
     let armed = slot.as_ref().expect("a queue was just built or kept");
     // The speaker's own counter, not the caller's guess: it is what `say`
     // compares against, and reading it here makes an interruption landing in
@@ -1104,6 +1192,119 @@ pub fn get_speech_status(
     utterance: Option<String>,
 ) -> SpeechStatus {
     speech_status(&dictation, utterance.as_deref())
+}
+
+// ---------------------------------------------------------------------------
+// Voice preview ("Listen" in Settings → Voice, 855)
+// ---------------------------------------------------------------------------
+
+/// The longest preview text, in characters: a sentence or two, enough to hear
+/// a voice without turning the settings panel into a reader.
+const MAX_PREVIEW_CHARS: usize = 200;
+
+/// Speak `text` in `voice` of `language` on this machine's speaker, the way a
+/// reply would sound: the same engine, the same loudness stage, and the same
+/// echo-tapped output. Needs no conversation and changes no setting.
+///
+/// Refused, not queued, while a conversation reply is queued, rendering or
+/// playing. Queued behind it, the preview would play whenever the
+/// conversation left a gap — seconds or minutes later, long after the user
+/// clicked. Refused, it says why at once, and a click after the reply works.
+#[tauri::command(async)]
+pub fn preview_speech_voice(
+    dictation: tauri::State<'_, DictationState>,
+    language: String,
+    voice: String,
+    text: String,
+) -> Result<(), String> {
+    preview_voice(&dictation, &language, &voice, &text)
+}
+
+pub(crate) fn preview_voice(
+    dictation: &DictationState,
+    language: &str,
+    voice: &str,
+    text: &str,
+) -> Result<(), String> {
+    let text = preview_text(text)?;
+    // Named first, so an unknown voice is reported as such rather than as a
+    // missing download of the language.
+    choose_voice(voice_language(language)?, voice)?;
+    let config = DictationConfig {
+        // The bundled engine and the voice asked for, in a copy of the
+        // configuration only: previewing a voice does not select it.
+        speech_command: Vec::new(),
+        speech_voice: voice.to_string(),
+        ..get_dictation_config()
+    };
+    let (engine, voice) = open_voice(&config, &dictation.speech, language)?;
+    let device = open_reply_output(dictation, None)?;
+    play_preview(
+        dictation,
+        engine.as_ref(),
+        device,
+        &voice,
+        text,
+        config.loudness(),
+    )
+}
+
+fn preview_text(text: &str) -> Result<&str, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("Nothing to say".to_string());
+    }
+    let length = text.chars().count();
+    if length > MAX_PREVIEW_CHARS {
+        return Err(format!(
+            "A voice preview is limited to {MAX_PREVIEW_CHARS} characters; this one is {length}"
+        ));
+    }
+    Ok(text)
+}
+
+/// Why a preview may not play now, if it may not.
+fn conversation_busy(slot: &Option<speaker::Armed>) -> Option<String> {
+    let status = slot.as_ref()?.speaker.status();
+    (status.speaking || status.rendering || status.queued > 0).then(|| {
+        "A hands-free reply is being spoken; listen to the voice after it finishes".to_string()
+    })
+}
+
+/// Render, level and play a preview on `device`, through the echo tap.
+fn play_preview(
+    dictation: &DictationState,
+    engine: &dyn speech::Speech,
+    device: Arc<dyn speaker::Output>,
+    voice: &str,
+    text: &str,
+    loudness: super::loudness::Loudness,
+) -> Result<(), String> {
+    // Checked before rendering, so a busy conversation costs no synthesis…
+    if let Some(reason) = conversation_busy(&dictation.speaker.lock()) {
+        return Err(reason);
+    }
+    let mut audio = engine
+        .synthesize(text, voice, &speech::SpeechCancel::new())
+        .map_err(|error| error.to_string())?;
+    super::loudness::process(&mut audio, loudness);
+    let device = speech_far_end(device, dictation);
+
+    // …and again with the speaker lock held while the device is handed the
+    // audio, because a reply can be queued while this renders. `speak` takes
+    // the same two locks in the same order and stops a playing preview, so a
+    // reply and a preview never overlap.
+    let slot = dictation.speaker.lock();
+    if let Some(reason) = conversation_busy(&slot) {
+        return Err(reason);
+    }
+    let mut preview = dictation.preview.lock();
+    if let Some(previous) = preview.take() {
+        previous.stop();
+    }
+    device.play(&audio)?;
+    *preview = Some(device);
+    Ok(())
 }
 
 /// Start push-to-talk recording.
@@ -2104,6 +2305,13 @@ pub struct DictationConfig {
     /// voices inside its command template. See [`choose_voice`].
     #[serde(default)]
     pub speech_voice: String,
+    /// The speech level every reply is brought to, in dBFS (-30..=-12). See
+    /// [`loudness`](crate::dictation::loudness).
+    #[serde(default = "default_speech_volume_db")]
+    pub speech_volume_db: f32,
+    /// How strongly a reply is levelled within itself: 0 is off, 1 is 4:1.
+    #[serde(default = "default_speech_levelling")]
+    pub speech_levelling: f32,
 }
 
 fn default_model() -> String {
@@ -2138,12 +2346,30 @@ fn default_earcons() -> bool {
     true
 }
 
+/// See [`DictationConfig::speech_volume_db`].
+fn default_speech_volume_db() -> f32 {
+    -18.0
+}
+
+/// See [`DictationConfig::speech_levelling`].
+fn default_speech_levelling() -> f32 {
+    0.67
+}
+
 impl DictationConfig {
     /// The speech gates this configuration asks for.
     pub fn gates(&self) -> transcribe::VoiceGates {
         transcribe::VoiceGates {
             rms_threshold: self.rms_threshold,
             no_speech_threshold: self.no_speech_threshold,
+        }
+    }
+
+    /// The level replies are brought to.
+    pub fn loudness(&self) -> super::loudness::Loudness {
+        super::loudness::Loudness {
+            volume_db: self.speech_volume_db,
+            levelling: self.speech_levelling,
         }
     }
 }
@@ -2167,6 +2393,8 @@ impl Default for DictationConfig {
             hands_free_earcons: default_earcons(),
             speech_command: Vec::new(),
             speech_voice: String::new(),
+            speech_volume_db: default_speech_volume_db(),
+            speech_levelling: default_speech_levelling(),
         }
     }
 }
@@ -2225,8 +2453,15 @@ pub(crate) fn save_dictation_config(
     let voice_changed = previous.language != config.language
         || previous.speech_command != config.speech_command
         || previous.speech_voice != config.speech_voice;
-    if voice_changed && let Some(dictation) = dictation {
-        *dictation.speaker.lock() = None;
+    if let Some(dictation) = dictation {
+        let mut slot = dictation.speaker.lock();
+        if voice_changed {
+            *slot = None;
+        } else if let Some(armed) = slot.as_ref() {
+            // A level, not a voice: the queue keeps speaking and the next
+            // reply it renders takes the new level.
+            armed.speaker.set_loudness(config.loudness());
+        }
     }
     Ok(())
 }
@@ -2915,6 +3150,25 @@ mod tests {
             transcribe::DEFAULT_NO_SPEECH_THRESHOLD
         );
         assert_eq!(config.gates(), transcribe::VoiceGates::default());
+    }
+
+    /// A config written before the loudness stage existed must load at the
+    /// level a fresh install gets, not at 0 dB and no levelling.
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn a_config_written_before_loudness_existed_keeps_the_speech_level_defaults() {
+        let stored = serde_json::json!({
+            "enabled": true,
+            "hotkey": "F5",
+            "language": "auto",
+        });
+        let config: DictationConfig = serde_json::from_value(stored).expect("deserialize");
+
+        assert_eq!(config.speech_volume_db, -18.0);
+        assert_eq!(config.speech_levelling, 0.67);
+        let fresh = DictationConfig::default();
+        assert_eq!(config.speech_volume_db, fresh.speech_volume_db);
+        assert_eq!(config.speech_levelling, fresh.speech_levelling);
     }
 
     /// Settings > Dictation moves these two numbers and nothing else carries
@@ -3664,6 +3918,159 @@ mod tests {
         );
     }
 
+    /// A speech directory of its own, so installed and imported voices of one
+    /// test are not another's.
+    fn speech_root() -> (tempfile::TempDir, impl Drop) {
+        let root = tempfile::tempdir().unwrap();
+        let guard = crate::config::set_config_dir_override(root.path().to_path_buf());
+        (root, guard)
+    }
+
+    /// Put every file of `asset` where a download would, at its pinned size.
+    fn install_asset(asset: &speech::assets::Asset) {
+        for file in asset.installed_files() {
+            let path = asset.install_dir().join(file.name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::File::create(path)
+                .unwrap()
+                .set_len(file.size_bytes.unwrap_or(1))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn get_speech_voices_offers_nothing_until_the_language_is_downloaded() {
+        let (_root, _guard) = speech_root();
+        assert!(
+            get_speech_voices("it".into())
+                .expect("Italian ships")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn choose_voice_accepts_an_installed_voice_asset() {
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        let jean = speech::assets::find("voice-italian-jean").expect("jean is in the catalogue");
+        std::fs::create_dir_all(jean.install_dir()).unwrap();
+        for file in jean.installed_files() {
+            std::fs::File::create(jean.install_dir().join(file.name))
+                .unwrap()
+                .set_len(file.size_bytes.unwrap())
+                .unwrap();
+        }
+        assert_eq!(choose_voice(italian, "jean").expect("downloaded"), "jean");
+    }
+
+    /// The catalogue offers it, so the fix is one click away: say which one.
+    #[test]
+    fn choose_voice_rejects_a_catalogue_voice_that_is_not_downloaded_and_says_download() {
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        let error = choose_voice(italian, "jean").expect_err("not downloaded");
+        assert!(error.contains("jean"), "{error}");
+        assert!(error.to_lowercase().contains("download"), "{error}");
+    }
+
+    #[test]
+    fn choose_voice_accepts_a_user_voice() {
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        let dir = speech::assets::user_voices_dir("italian");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nonna.safetensors"), b"x").unwrap();
+        assert_eq!(choose_voice(italian, "nonna").expect("imported"), "nonna");
+    }
+
+    #[test]
+    fn choose_voice_still_reads_empty_as_the_language_default() {
+        let (_root, _guard) = speech_root();
+        let italian = speech::assets::for_language_code("it").expect("catalogue ships Italian");
+        let dir = speech::assets::user_voices_dir("italian");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("aaa.safetensors"), b"x").unwrap();
+        assert_eq!(
+            choose_voice(italian, "").expect("default"),
+            italian.voices()[0]
+        );
+    }
+
+    #[test]
+    fn import_speech_voice_names_a_language_by_its_whisper_code() {
+        let (_root, _guard) = speech_root();
+        let error = import_speech_voice("xx".into(), "nonna".into(), "AAAA".into()).unwrap_err();
+        assert!(error.contains("xx"), "{error}");
+    }
+
+    #[test]
+    fn import_speech_voice_refuses_what_is_not_base64() {
+        let (_root, _guard) = speech_root();
+        let error =
+            import_speech_voice("it".into(), "nonna".into(), "not base64!".into()).unwrap_err();
+        assert!(error.contains("base64"), "{error}");
+    }
+
+    /// Refused on its length, before a byte of it is decoded: decoding 100 MB
+    /// to find out it is too big is the allocation the cap exists to avoid.
+    #[test]
+    fn import_speech_voice_refuses_an_oversized_payload_before_decoding_it() {
+        let (_root, _guard) = speech_root();
+        let payload = "!".repeat(speech_voice_base64_limit() + 1);
+        let error = import_speech_voice("it".into(), "nonna".into(), payload).unwrap_err();
+        assert!(error.contains("MB"), "{error}");
+    }
+
+    #[test]
+    fn get_speech_voices_lists_what_a_language_can_speak_with_by_its_whisper_code() {
+        let (_root, _guard) = speech_root();
+        install_asset(speech::assets::find("italian").unwrap());
+        let dir = speech::assets::user_voices_dir("italian");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nonna.safetensors"), b"x").unwrap();
+        let voices = get_speech_voices("it".into()).expect("Italian ships");
+        let ids: Vec<(&str, speech::library::VoiceSource)> =
+            voices.iter().map(|v| (v.id.as_str(), v.source)).collect();
+        assert_eq!(
+            ids,
+            vec![
+                ("giovanni", speech::library::VoiceSource::Default),
+                ("nonna", speech::library::VoiceSource::User),
+            ]
+        );
+        assert!(get_speech_voices("xx".into()).unwrap_err().contains("xx"));
+    }
+
+    /// The wire shape the settings page reads: `source` in lowercase.
+    #[test]
+    fn get_speech_voices_serializes_source_as_the_frontend_expects() {
+        let (_root, _guard) = speech_root();
+        install_asset(speech::assets::find("italian").unwrap());
+        let json = serde_json::to_value(get_speech_voices("it".into()).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([{ "id": "giovanni", "source": "default" }])
+        );
+    }
+
+    #[test]
+    fn delete_speech_voice_names_a_language_by_its_whisper_code() {
+        let (_root, _guard) = speech_root();
+        assert!(delete_speech_voice("xx".into(), "nonna".into()).is_err());
+        assert!(delete_speech_voice("it".into(), "nonna".into()).is_ok());
+    }
+
+    #[test]
+    fn a_voice_asset_is_described_as_a_voice_of_its_language() {
+        let jean = speech::assets::find("voice-italian-jean").expect("jean is in the catalogue");
+        let info = describe(jean, false);
+        assert_eq!(info.kind, "voice");
+        assert_eq!(info.language.as_deref(), Some("it"));
+        assert_eq!(info.voice.as_deref(), Some("jean"));
+        let italian = speech::assets::for_language_code("it").unwrap();
+        assert_eq!(describe(italian, false).voice, None);
+    }
+
     /// A voice belongs to a conversation exactly as much as a language does,
     /// so it obeys the same rule: change it and the replies written for the
     /// old one stop rather than finishing in the new one.
@@ -3716,6 +4123,42 @@ mod tests {
                 .is_empty(),
             false,
             "the reply in flight still has a fate to report"
+        );
+    }
+
+    /// The volume and levelling sliders are not a voice change: the queue
+    /// that is speaking keeps speaking, and its next reply takes the new level.
+    #[test]
+    fn moving_the_volume_reaches_the_voice_that_is_speaking() {
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        let accepted = speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+        let before = Arc::clone(&dictation.speaker.lock().as_ref().expect("armed").speaker);
+
+        let config = DictationConfig {
+            language: "it".to_string(),
+            speech_volume_db: -24.0,
+            speech_levelling: 0.2,
+            ..Default::default()
+        };
+        save_dictation_config(config.clone(), Some(&dictation)).expect("config save");
+
+        let after = Arc::clone(
+            &dictation
+                .speaker
+                .lock()
+                .as_ref()
+                .expect("the queue was dropped")
+                .speaker,
+        );
+        assert!(Arc::ptr_eq(&before, &after), "the queue was rebuilt");
+        assert_eq!(after.loudness(), Some(config.loudness()));
+        assert_ne!(
+            speech_status(&dictation, Some(&accepted.utterance_id))
+                .utterance
+                .expect("asked")
+                .state,
+            "interrupted",
+            "the reply in flight was cut off"
         );
     }
 
@@ -4069,5 +4512,173 @@ mod tests {
             state.pending_injections.get("voice-ptt").is_none(),
             "no Compose entry belongs to a push-to-talk transcription"
         );
+    }
+
+    // -- Voice preview (855) ------------------------------------------------
+
+    use crate::dictation::loudness::Loudness;
+
+    /// Renders half a second of a -32 dBFS tone: a quiet voice, so the test
+    /// can tell whether the loudness stage ran.
+    struct QuietTone;
+
+    impl speech::Speech for QuietTone {
+        fn synthesize(
+            &self,
+            _text: &str,
+            _voice: &str,
+            _cancel: &speech::SpeechCancel,
+        ) -> Result<speech::SpeechAudio, speech::SpeechError> {
+            let amplitude = 10f32.powf(-32.0 / 20.0) * 2f32.sqrt();
+            let phase = 2.0 * std::f32::consts::PI * 440.0 / 24_000.0;
+            Ok(speech::SpeechAudio {
+                samples: (0..12_000)
+                    .map(|n| amplitude * (phase * n as f32).sin())
+                    .collect(),
+                sample_rate: 24_000,
+            })
+        }
+    }
+
+    /// A device that remembers what it played and how often it was stopped.
+    #[derive(Default)]
+    struct PreviewDevice {
+        played: parking_lot::Mutex<Vec<Vec<f32>>>,
+        stops: std::sync::atomic::AtomicUsize,
+    }
+
+    impl speaker::Output for PreviewDevice {
+        fn play(&self, audio: &speech::SpeechAudio) -> Result<(), String> {
+            self.played.lock().push(audio.samples.clone());
+            Ok(())
+        }
+        fn stop(&self) {
+            self.stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn is_speaking(&self) -> bool {
+            !self.played.lock().is_empty()
+        }
+    }
+
+    const REPLY_LEVEL: Loudness = Loudness {
+        volume_db: -18.0,
+        levelling: 0.67,
+    };
+
+    fn preview_on(dictation: &DictationState, device: &Arc<PreviewDevice>) -> Result<(), String> {
+        play_preview(
+            dictation,
+            &QuietTone,
+            Arc::clone(device) as Arc<dyn speaker::Output>,
+            "giovanni",
+            "Ciao, sono la voce.",
+            REPLY_LEVEL,
+        )
+    }
+
+    #[test]
+    fn a_preview_sounds_like_a_reply_and_is_heard_by_the_canceller() {
+        // "Listen" must play what a reply would: at the reply level, and
+        // through the echo tap, or an armed microphone hears the preview as
+        // the user talking.
+        let dictation = DictationState::new();
+        let device = Arc::new(PreviewDevice::default());
+
+        preview_on(&dictation, &device).expect("played");
+
+        let played = device.played.lock().clone();
+        assert_eq!(played.len(), 1);
+        let power = played[0]
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>()
+            / played[0].len() as f64;
+        let level = 10.0 * power.log10();
+        assert!(
+            (level + 18.0).abs() <= 1.0,
+            "previewed at {level} dBFS, replies at -18"
+        );
+        assert!(
+            dictation.echo.lock().is_playing(),
+            "the canceller was not told about the preview"
+        );
+        assert!(
+            dictation.preview.lock().is_some(),
+            "the device must outlive the call, or the preview is cut off"
+        );
+    }
+
+    #[test]
+    fn a_preview_is_refused_while_a_reply_is_pending() {
+        // Refused, not queued: a preview that waits for a gap in the
+        // conversation plays long after the click, over whatever comes next.
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
+        let held = gate.lock();
+        speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+        let device = Arc::new(PreviewDevice::default());
+
+        let error = preview_on(&dictation, &device).expect_err("the conversation is speaking");
+
+        assert!(error.contains("hands-free reply"), "{error}");
+        assert!(
+            device.played.lock().is_empty(),
+            "the preview played over the reply"
+        );
+        drop(held);
+    }
+
+    #[test]
+    fn a_reply_stops_a_preview_before_it_is_queued() {
+        // The other direction: the conversation wins, and the preview stops
+        // rather than playing under the reply.
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        let device = Arc::new(PreviewDevice::default());
+        preview_on(&dictation, &device).expect("the conversation is idle");
+
+        speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+
+        assert_eq!(device.stops.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(dictation.preview.lock().is_none());
+    }
+
+    #[test]
+    fn a_second_preview_replaces_the_first() {
+        let dictation = DictationState::new();
+        let first = Arc::new(PreviewDevice::default());
+        let second = Arc::new(PreviewDevice::default());
+
+        preview_on(&dictation, &first).expect("played");
+        preview_on(&dictation, &second).expect("played");
+
+        assert_eq!(first.stops.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(second.played.lock().len(), 1);
+    }
+
+    #[test]
+    fn preview_text_is_bounded_and_not_empty() {
+        assert_eq!(preview_text("  ciao \n"), Ok("ciao"));
+        assert!(preview_text(&"a".repeat(MAX_PREVIEW_CHARS)).is_ok());
+        let error = preview_text(&"a".repeat(MAX_PREVIEW_CHARS + 1)).expect_err("too long");
+        assert!(error.contains("201"), "{error}");
+        assert!(preview_text("   ").is_err());
+    }
+
+    #[test]
+    fn previewing_an_unknown_voice_names_it_and_selects_nothing() {
+        let _config = config_of_this_test(DictationConfig {
+            language: "it".to_string(),
+            ..Default::default()
+        });
+        let dictation = DictationState::new();
+
+        let error = preview_voice(&dictation, "it", "nessuno", "ciao").expect_err("no such voice");
+
+        assert!(error.contains("nessuno"), "{error}");
+        assert_eq!(
+            get_dictation_config().speech_voice,
+            "",
+            "a preview selected the voice"
+        );
+        assert!(preview_voice(&dictation, "xx", "", "ciao").is_err());
     }
 }

@@ -202,13 +202,26 @@ without one would file its labels under the wrong section.
 
 The two voice sections:
 
-- **Spoken replies** (`SpeechSetup`) — the installable speech assets from
-  `get_speech_assets`, each with Download / Repair / Cancel / delete, and a voice
-  `<select>` for the language's voices. It offers **no language control**: the
-  spoken language is the Whisper language, and a second control would be a second
-  source that disagrees with it (see `docs/backend/dictation.md` → "The language
-  of the conversation"). The select is hidden unless the language asset ships
-  more than one voice.
+- **Spoken replies** (`SpeechSetup`) — the runtime and language downloads from
+  `get_speech_assets` (voices excluded), each with Download / Repair / Cancel /
+  delete. Then, while the language ships a voice:
+  - a voice `<select>` with the ids from `get_speech_voices` (only voices that
+    can speak now), and a **Listen** button that previews the selected voice
+    through `previewSpeechVoice` and shows a refusal inline;
+  - `VoiceLibrary`, the **Voices** list of the language, in three groups:
+    **Installed** (downloaded catalogue voices), **Downloadable** (the others,
+    with Download and progress, collapsed by default in a `<details>` whose
+    `<summary>` shows the count; both reuse `SpeechAssetRow`) and **Yours** (the
+    user's voice files, each with a delete button, and **Add voice file…**, a
+    hidden `.safetensors` file input; a refused file shows its reason inline);
+  - two `SettingSlider`s: **Voice volume** (-30 to -12 dB) and **Levelling**
+    (Off to Strong, stored as 0–1). Each shows the value while it is dragged and
+    saves only on release (`onCommit`).
+  It offers **no language control**: the spoken language is the Whisper
+  language, and a second control would be a second source that disagrees with it
+  (see `docs/backend/dictation.md` → "The language of the conversation"). A
+  voice row is **Active** when it is the selected voice; only a language row is
+  active for the language.
 - **Hands-free conversation** (`HandsFreeControls`) — a terminal picker, Start /
   Stop, the polled phase, the activation phrase, the hold-back slider, the
   earcons toggle, the "notify model" toggle and, while that is on, the start
