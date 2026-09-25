@@ -2671,6 +2671,21 @@ build has the old behaviour until restart.
       own HTTP instance — creating a throwaway session, reporting, listing and
       deleting — rather than against the orchestrator on `:9876`.
 
+## TypeScript mutation tooling (story `944-15f3`, 2026-09-25)
+
+- [x] Run the narrow canary from `docs/guides/development-setup.md` and confirm
+      Stryker reports the `pathBasename` condition mutant as `Killed`, with at
+      least one Vitest test executed against it. _(verified: 2026-09-25;
+      `scripts/ts-mutants.mjs` on `pathUtils.ts:65-65` reported 6 Killed, 0
+      Survived, and 1.00 tests per mutant; JSON saved under
+      `~/Gits/.tmp/results/ts-mutation-gate/mutation.json`.)_
+- [ ] On the next changed TypeScript source/test pair, run the same scoped
+      command before using its mutation score as a story gate.
+- [ ] After the StoriesDialog dependency-removal change is present in this
+      checkout, run its targeted test through `scripts/ts-mutants.mjs` and
+      verify the previously false-surviving click-handler mutant is `Killed`
+      (story `944-15f3`).
+
 ## File pickers moved off `tauri-plugin-dialog` — needs a `make dev` restart
 
 The app died on 2026-09-18 when `+[NSOpenPanel openPanel]` returned NULL after
