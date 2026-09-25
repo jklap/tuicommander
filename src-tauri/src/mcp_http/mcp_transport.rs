@@ -5766,12 +5766,14 @@ fn queue_workflow_coordinator_wake(
         delivered_via_channel: false,
     };
     let message_id = message.id.clone();
-    let timestamp = {
+    let Some(timestamp) = ({
         let _guard = PEER_IDENTITY_BIND_LOCK.lock();
         if !state.peer_agents.contains_key(recipient) {
             return false;
         }
         state.push_agent_inbox(recipient, message)
+    }) else {
+        return false;
     };
     if crate::pty::route_registered_orchestrator_mail(state, recipient, &message_id, timestamp)
         .is_none()
