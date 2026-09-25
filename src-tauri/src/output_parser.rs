@@ -483,14 +483,6 @@ impl OutputParser {
         parse_suggest_with_line(text, agent_active).is_some()
     }
 
-    /// A protocol title is an authoritative close for a streaming intent.
-    pub(crate) fn has_closed_title(&self, text: &str, agent_active: bool) -> bool {
-        matches!(
-            parse_intent(text, agent_active),
-            Some(ParsedEvent::Intent { title: Some(_), .. })
-        )
-    }
-
     /// Reopen the error dedup when the user submits a line: the agent is being
     /// asked again, so a recurrence of the same failure is a NEW failure and
     /// must notify.
@@ -1603,7 +1595,7 @@ pub(crate) fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnch
 /// Detect agent-declared intent tokens: `intent: <text>` or `intent: <text> (<title>)`
 /// at column 0. Only parsed when an agent is active — prevents false positives from
 /// prose like "The intent: of this code".
-fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
+pub(crate) fn parse_intent(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
     if !agent_active || !clean.contains("intent:") {
         return None;
     }

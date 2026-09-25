@@ -12226,8 +12226,8 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
 
 /// Codex CLI 0.156, captured through `/diagnostics/capture` on 2026-09-24.
 /// The TUI redraws this marker through several growing cursor prefixes. Replay
-/// the production chunk processor rather than the row parser alone: cursor
-/// completeness is the boundary that prevents every prefix entering Progress.
+/// the production chunk processor rather than the row parser alone: an open
+/// intent must absorb every growing prefix before Progress sees it.
 #[test]
 fn captured_codex_streaming_intent_emits_one_complete_marker() {
     let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
@@ -12695,6 +12695,218 @@ async fn codex_narrow_repaint_journals_only_the_closed_intent_and_title() {
         .entries;
     assert!(matches!(entries.as_slice(), [entry]
         if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
+fn run_progress_intent_case(
+    chunks: &[&str],
+    cols: u16,
+    agent: bool,
+    timer_idle: bool,
+) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "progress-intent-matrix";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("session")
+        .agent_type = agent.then(|| "codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(16, cols, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk("\x1b[?1049h", &silence, sid, &state);
+    for chunk in chunks {
+        processor.process_chunk(chunk, &silence, sid, &state);
+    }
+    if timer_idle {
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .expect("shell state")
+            .store(SHELL_IDLE, std::sync::atomic::Ordering::Release);
+        emit_open_intent_if_idle(&state, &silence, sid);
+        emit_open_intent_if_idle(&state, &silence, sid);
+    }
+    let events = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed["text"].as_str().unwrap_or_default().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries
+        .into_iter()
+        .filter(|entry| entry.kind == crate::progress::ProgressKind::Intent)
+        .map(|entry| entry.text)
+        .collect();
+    (events, entries)
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn progress_open_intent_close_matrix() {
+    for chunks in [
+        vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader\x1b[14;3H"],
+        vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader\r"],
+        vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader"],
+    ] {
+        let (events, entries) = run_progress_intent_case(&chunks, 128, true, false);
+        assert!(events.is_empty(), "cursor move or CR closed an open intent");
+        assert!(entries.is_empty());
+    }
+
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K• intent: Restore terminal wrapping across narrow panes"],
+        20,
+        true,
+        false,
+    );
+    assert!(events.is_empty(), "soft wrap closed an open intent");
+    assert!(entries.is_empty());
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Read",
+            "\x1b[4;1H\x1b[2K• intent: Read the configuration loader\x1b[14;3H",
+            "\x1b[5;1HChecking the settings now",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Read the configuration loader".into(), None)]);
+    assert_eq!(entries, ["Read the configuration loader"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K• intent: Inspect the startup path\x1b[14;3H"],
+        128,
+        true,
+        true,
+    );
+    assert_eq!(events, [("Inspect the startup path".into(), None)]);
+    assert_eq!(entries, ["Inspect the startup path"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect the session journal",
+            "\r",
+            "\n",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Inspect the session journal".into(), None)]);
+    assert_eq!(entries, ["Inspect the session journal"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Check the completion signal\x1b[14;3H",
+            "\x1b]7770;state=idle\x07",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events, [("Check the completion signal".into(), None)]);
+    assert_eq!(entries, ["Check the completion signal"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Restore terminal wrapping across narrow panes",
+            "\x1b[8;1HFollowing prose closes the wrapped line",
+        ],
+        20,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [("Restore terminal wrapping across narrow panes".into(), None)]
+    );
+    assert_eq!(entries, ["Restore terminal wrapping across narrow panes"]);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+            "\x1b[4;1H\x1b[2K• intent: Inspect routing (Routing)",
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].0, "Inspect auth");
+    assert_eq!(events[1].0, "Inspect routing");
+    assert_eq!(events[2].0, "Inspect auth");
+    assert_eq!(entries.len(), 3);
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+            "\x1b[4;1H\x1b[2K",
+            "\x1b[4;1H\x1b[2K• intent: Inspect auth (Auth)",
+        ],
+        128,
+        true,
+        false,
+    );
+    assert_eq!(events.len(), 1);
+    assert_eq!(entries.len(), 1);
+
+    let (events, entries) = run_progress_intent_case(
+        &["\x1b[4;1H\x1b[2K• intent: Shell output (Ignored)"],
+        128,
+        false,
+        false,
+    );
+    assert!(events.is_empty());
+    assert!(entries.is_empty());
 }
 
 /// Live idle Codex animation from brainstorming (2026-09-21). The capture

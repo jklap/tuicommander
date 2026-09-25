@@ -237,6 +237,13 @@ Two shapes the row-anchored regex cannot read on its own, both rejoined before i
 - **After the ack sentence.** The protocol puts the ack and the first `intent:` in the same message by construction, so an agent that writes them as one sentence run leaves the token mid-row. `ACK_SENTENCE_PREFIX` allows that one sentence and nothing else — any other leading prose is still rejected, so `The intent: of this code` stays prose.
 - **Wrapped across physical rows.** `suggest:` is bounded by its closing `]`; `intent:` has no terminator, so the regex `$` cuts the token at the wrap and drops the `(title)` — the tab title — with it. `dewrap_intent_continuation` rejoins at most two following rows, and only the wrap shape an Ink-hosted agent produces: indented, non-empty, no bullet or prompt glyph, and never past a row that already carries a closed `(title)`.
 
+The PTY reader retains one open intent per session while a TUI redraws growing
+prefixes. It reconstructs soft-wrapped grid lines and journals only on a closed
+`(title)`, a VTE hard line break, subsequent prose below the line, replacement
+of the line, or an idle turn boundary. Cursor moves and carriage returns alone
+do not close an intent. Repainting the last recorded value adds no journal row;
+a different intervening intent lets the earlier value be recorded again.
+
 Agents receive this instruction automatically via MCP init. To use manually without MCP, add to CLAUDE.md or equivalent:
 
 ```
