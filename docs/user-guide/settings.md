@@ -191,6 +191,7 @@ repository and worktree defaults.
 | **Repository Defaults** | Base branch, **Copy ignored files** and **Copy untracked files** (two separate toggles), setup/run/archive scripts applied to new repos |
 | **Worktree Defaults** | Storage strategy, branch-name prompt, branch deletion, auto-archive, orphan cleanup, merge strategy, after-merge behavior, auto-fetch interval. See [Worktrees](worktrees.md). |
 | **Additional GitHub Accounts** | Extra github.com or Enterprise logins. See [GitHub Integration](github-integration.md). |
+| **CircleCI** | Store or remove a read-only CircleCI token for failed job logs. The saved token is never displayed again. |
 | **Repository Bindings** | Which account each workspace repo resolves to |
 
 Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh` CLI config → `gh auth token` subprocess.

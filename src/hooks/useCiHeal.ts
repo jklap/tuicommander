@@ -173,7 +173,7 @@ export function useCiHeal(): void {
 		// Mark the operation as in-flight, but do not consume the attempt until the
 		// fix prompt has actually reached the agent. Log-fetch, terminal, or PTY
 		// failures are delivery failures rather than heal attempts.
-		repositoriesStore.setCiAutoHeal(repoPath, branch, {
+		repositoriesStore.setCiAutoHeal(repoPath, workspaceId, {
 			...branchState.ciAutoHeal,
 			healing: true,
 		});

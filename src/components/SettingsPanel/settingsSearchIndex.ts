@@ -421,6 +421,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "github", section: "Repository Defaults" },
 	{ tab: "github", section: "Worktree Defaults" },
 	{ tab: "github", section: "Additional GitHub Accounts" },
+	{ tab: "github", section: "CircleCI" },
 	{ tab: "github", section: "Repository Bindings" },
 	{ tab: "github", section: "Pull Requests", label: "Auto-show PR popover" },
 	{ tab: "github", section: "Pull Requests", label: "Hide Draft PRs" },

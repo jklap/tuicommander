@@ -13,8 +13,8 @@ const h = vi.hoisted(() => {
 	};
 	return {
 		repoState,
-		setCiAutoHeal: vi.fn((repoPath: string, branch: string, val: unknown) => {
-			repoState.repositories[repoPath].workspaces[branch].ciAutoHeal = val;
+		setCiAutoHeal: vi.fn((repoPath: string, workspaceId: string, val: unknown) => {
+			repoState.repositories[repoPath].workspaces[workspaceId].ciAutoHeal = val;
 		}),
 		handlers: { onCiFailed: null as ((r: string, b: string, n: number) => void) | null },
 		terminals: new Map<string, unknown>(),
@@ -59,7 +59,9 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: { get: (id: string) => h.terminals.get(id) },
 }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: h.toastAdd } }));
-vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: h.loggerDebug, info: vi.fn(), warn: h.loggerWarn, error: h.loggerError } }));
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { debug: h.loggerDebug, info: vi.fn(), warn: h.loggerWarn, error: h.loggerError },
+}));
 vi.mock("../../invoke", () => ({ invoke: h.invoke }));
 vi.mock("../../utils/sendCommand", () => ({ sendCommand: h.sendCommand, getShellFamily: h.getShellFamily }));
 vi.mock("../../transport", () => ({ rpc: vi.fn().mockResolvedValue(undefined) }));
@@ -159,6 +161,28 @@ describe("useCiHeal budget + re-entry guard", () => {
 			attempts: 0,
 			healing: false,
 		});
+	});
+
+	it("clears healing on a workspace whose id differs from its branch", async () => {
+		seed({ enabled: true, attempts: 0, healing: false });
+		const workspace = h.repoState.repositories["/repo"].workspaces.main;
+		workspace.branchName = "main";
+		h.repoState.repositories["/repo"].workspaces = { "workspace-1": workspace };
+		let rejectLogs!: (error: Error) => void;
+		h.invoke.mockImplementationOnce(
+			() =>
+				new Promise((_resolve, reject) => {
+					rejectLogs = reject;
+				}),
+		);
+		fireCiFailed();
+		expect(workspace.ciAutoHeal).toEqual({ enabled: true, attempts: 0, healing: true });
+		expect(h.repoState.repositories["/repo"].workspaces).not.toHaveProperty("main");
+		rejectLogs(new Error("logs unavailable"));
+		await flush();
+		expect(h.setCiAutoHeal).toHaveBeenCalledWith("/repo", "workspace-1", expect.objectContaining({ healing: true }));
+		expect(workspace.ciAutoHeal).toEqual({ enabled: true, attempts: 0, healing: false });
+		expect(h.repoState.repositories["/repo"].workspaces).not.toHaveProperty("main");
 	});
 
 	it("treats a missing CircleCI token as expected", async () => {

@@ -2,15 +2,15 @@ import { type Component, createEffect, createMemo, createSignal, For, type JSX, 
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
-import { rpc } from "../../transport";
 import { flattenReviewFindings, postableFindings, prReviewStore, type SelectableFinding } from "../../stores/prReview";
 import { repositoriesStore } from "../../stores/repositories";
+import { rpc } from "../../transport";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { getCiClass, getCiIcon } from "../../utils/ciDisplay";
 import { handleOpenUrl } from "../../utils/openUrl";
-import { relativeTime } from "../../utils/time";
 import { stripAnsi } from "../../utils/stripAnsi";
+import { relativeTime } from "../../utils/time";
 import { SeverityIcon } from "../shared/SeverityIcon";
 import { CiRing } from "../ui/CiRing";
 import s from "./PrDetailPopover.module.css";
@@ -112,7 +112,9 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	const checkSummary = () => githubStore.getCheckSummary(props.repoPath, props.branch);
 	const checkDetails = () => githubStore.getCheckDetails(props.repoPath, props.branch);
 	const [expandedCircleCiLog, setExpandedCircleCiLog] = createSignal<string | null>(null);
-	const [circleCiLogs, setCircleCiLogs] = createSignal<Record<string, { text?: string; error?: string; loading?: boolean }>>({});
+	const [circleCiLogs, setCircleCiLogs] = createSignal<
+		Record<string, { text?: string; error?: string; loading?: boolean }>
+	>({});
 	const isCircleCiFailure = (check: { state: string; html_url: string }) =>
 		getCiClass(check.state) === "failure" && /(^|\/\/)(app\.)?circleci\.com\//.test(check.html_url);
 	const toggleCircleCiLog = async (url: string) => {
@@ -121,7 +123,12 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		if (circleCiLogs()[url]?.text || circleCiLogs()[url]?.loading) return;
 		setCircleCiLogs((logs) => ({ ...logs, [url]: { loading: true } }));
 		try {
-			const text = await rpc<string>("fetch_ci_failure_logs", { repoPath: props.repoPath, branch: props.branch, checkUrl: url });
+			const text = await rpc<string>("fetch_ci_failure_logs", {
+				repoPath: props.repoPath,
+				branch: props.branch,
+				checkUrl: url,
+				headSha: prData()?.head_ref_oid,
+			});
 			setCircleCiLogs((logs) => ({ ...logs, [url]: { text } }));
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -382,13 +389,30 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 											<span class={s.checkName}>{check.context}</span>
 											<span class={cx(s.checkStatus, CI_CLASSES[getCiClass(check.state)])}>{check.state}</span>
 											<Show when={isCircleCiFailure(check)}>
-											<button type="button" onClick={(event) => { event.stopPropagation(); void toggleCircleCiLog(check.html_url); }}>{t("prDetail.circleCiLog", "Log")}</button>
-										</Show>
-										<Show when={expandedCircleCiLog() === check.html_url}>
-											<Show when={circleCiLogs()[check.html_url]?.loading}><span>{t("prDetail.loading", "Loading…")}</span></Show>
-											<Show when={circleCiLogs()[check.html_url]?.error}><span>{circleCiLogs()[check.html_url]?.error}</span></Show>
-											<Show when={circleCiLogs()[check.html_url]?.text}><pre onClick={(event) => event.stopPropagation()}>{stripAnsi(circleCiLogs()[check.html_url]?.text ?? "")}</pre></Show>
-										</Show>
+												<button
+													type="button"
+													onKeyDown={(event) => event.stopPropagation()}
+													onClick={(event) => {
+														event.stopPropagation();
+														void toggleCircleCiLog(check.html_url);
+													}}
+												>
+													{t("prDetail.circleCiLog", "Log")}
+												</button>
+											</Show>
+											<Show when={expandedCircleCiLog() === check.html_url}>
+												<Show when={circleCiLogs()[check.html_url]?.loading}>
+													<span>{t("prDetail.loading", "Loading…")}</span>
+												</Show>
+												<Show when={circleCiLogs()[check.html_url]?.error}>
+													<span>{circleCiLogs()[check.html_url]?.error}</span>
+												</Show>
+												<Show when={circleCiLogs()[check.html_url]?.text}>
+													<pre onClick={(event) => event.stopPropagation()}>
+														{stripAnsi(circleCiLogs()[check.html_url]?.text ?? "")}
+													</pre>
+												</Show>
+											</Show>
 										</div>
 									);
 								}}

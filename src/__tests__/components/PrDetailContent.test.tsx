@@ -1,25 +1,29 @@
 import { fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CheckDetail } from "../../types";
 import { mockInvoke } from "../mocks/tauri";
 
 const mockGithubStore = vi.hoisted(() => ({
 	getBranchPrData: vi.fn(),
 	getCheckSummary: vi.fn(() => null),
-	getCheckDetails: vi.fn(() => []),
+	getCheckDetails: vi.fn((): CheckDetail[] => []),
 	loadCheckDetails: vi.fn(() => Promise.resolve()),
 }));
 const mockRpc = vi.hoisted(() => vi.fn());
+const mockOpenUrl = vi.hoisted(() => vi.fn());
 
 vi.mock("../../stores/github", () => ({ githubStore: mockGithubStore }));
 vi.mock("../../transport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../transport")>()),
 	rpc: mockRpc,
 }));
+vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: mockOpenUrl }));
 
 import { PrDetailContent } from "../../components/PrDetailPopover/PrDetailContent";
 
 const basePr = {
 	number: 42,
+	head_ref_oid: "a".repeat(40),
 	state: "OPEN",
 	branch: "feature",
 	base_ref_name: "main",
@@ -83,8 +87,19 @@ describe("PrDetailContent — ego review result metadata", () => {
 			repoPath: repo,
 			branch: "feature",
 			checkUrl: "https://circleci.com/gh/acme/widget/42",
+			headSha: "a".repeat(40),
 		});
 		expect(await findByText("failed step")).toBeTruthy();
+	});
+
+	it.each(["Enter", " "])("keeps %s on the CircleCI Log button from opening the check URL", (key) => {
+		mockGithubStore.getCheckDetails.mockReturnValue([
+			{ context: "ci/circleci: test", state: "failure", html_url: "https://circleci.com/gh/acme/widget/42" },
+		]);
+		const { getByText } = render(() => <PrDetailContent repoPath={nextRepo()} branch="feature" />);
+		fireEvent.keyDown(getByText("Log"), { key });
+		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockOpenUrl).not.toHaveBeenCalled();
 	});
 
 	it("does not pluralise a single reviewed file", async () => {

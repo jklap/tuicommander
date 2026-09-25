@@ -3480,10 +3480,21 @@ fn truncate_ci_logs(logs: &str) -> String {
     )
 }
 
-fn sanitize_ci_logs(logs: &str) -> String {
+pub(crate) fn sanitize_ci_logs(logs: &str) -> String {
     String::from_utf8_lossy(&strip_ansi_escapes::strip(logs.as_bytes()))
         .chars()
-        .filter(|character| *character == '\n' || *character == '\t' || !character.is_control())
+        .filter(|character| {
+            (*character == '\n' || *character == '\t' || !character.is_control())
+                && !matches!(*character, '\u{00ad}' | '\u{0600}'..='\u{0605}' | '\u{061c}' | '\u{06dd}' | '\u{070f}' | '\u{0890}'..='\u{0891}' | '\u{08e2}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}' | '\u{110bd}' | '\u{110cd}' | '\u{13430}'..='\u{1343f}' | '\u{1bca0}'..='\u{1bca3}' | '\u{1d173}'..='\u{1d17a}' | '\u{e0000}'..='\u{e007f}')
+        })
+        .collect()
+}
+
+pub(crate) fn sanitize_ci_label(label: &str) -> String {
+    sanitize_ci_logs(label)
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(200)
         .collect()
 }
 
@@ -3506,7 +3517,7 @@ fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("failed job")
                 .to_string();
-            Some((id, name))
+            Some((id, sanitize_ci_label(&name)))
         })
         .collect()
 }
@@ -3591,7 +3602,7 @@ fn failing_checks_from_json(json: &serde_json::Value) -> Vec<FailingCheck> {
                 .unwrap_or("")
                 .to_string();
             FailingCheck {
-                name,
+                name: sanitize_ci_label(&name),
                 is_github_actions: is_github_actions_link(&link),
                 link,
             }
@@ -3631,7 +3642,13 @@ fn circleci_token_not_configured_error(checks: &[FailingCheck]) -> String {
 ///
 /// `gh pr checks` exits non-zero when any check is failing/pending, so we parse
 /// stdout regardless of exit status and only bail when stdout has no JSON.
-fn list_failing_checks_cli(gh: &str, repo_slug: &str, head_sha: &str) -> Vec<FailingCheck> {
+const CI_CLI_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn list_failing_checks_cli(
+    gh: &str,
+    repo_slug: &str,
+    head_sha: &str,
+) -> Result<Vec<FailingCheck>, String> {
     // Resolve the PR by its commit: a fork can use the same branch name.
     let mut list_cmd = Command::new(gh);
     list_cmd.args([
@@ -3647,14 +3664,33 @@ fn list_failing_checks_cli(gh: &str, repo_slug: &str, head_sha: &str) -> Vec<Fai
         "number,headRefOid",
     ]);
     crate::cli::apply_no_window(&mut list_cmd);
-    let prs = list_cmd.output();
-    let Some(pr_number) = prs
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
-        .and_then(|prs| pr_number_for_head(&prs, head_sha))
-    else {
-        return Vec::new();
+    let prs =
+        crate::git_cli::output_with_deadline(&mut list_cmd, CI_CLI_TIMEOUT).map_err(|error| {
+            tracing::warn!(
+                source = "fetch_ci_failure_logs_impl",
+                ?error,
+                "gh pr list failed"
+            );
+            format!("gh pr list failed: {error}")
+        })?;
+    if !prs.status.success() {
+        let error = format!(
+            "gh pr list failed: {}",
+            sanitize_ci_logs(&String::from_utf8_lossy(&prs.stderr))
+        );
+        tracing::warn!(source = "fetch_ci_failure_logs_impl", ?error);
+        return Err(error);
+    }
+    let prs_json: serde_json::Value = serde_json::from_slice(&prs.stdout).map_err(|error| {
+        tracing::warn!(
+            source = "fetch_ci_failure_logs_impl",
+            ?error,
+            "failed to parse gh pr list output"
+        );
+        format!("Failed to parse gh pr list output: {error}")
+    })?;
+    let Some(pr_number) = pr_number_for_head(&prs_json, head_sha) else {
+        return Ok(Vec::new());
     };
     let mut cmd = Command::new(gh);
     cmd.args([
@@ -3668,15 +3704,32 @@ fn list_failing_checks_cli(gh: &str, repo_slug: &str, head_sha: &str) -> Vec<Fai
         &pr_number.to_string(),
     ]);
     crate::cli::apply_no_window(&mut cmd);
-    let output = match cmd.output() {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
-    };
-    let json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-        Ok(j) => j,
-        Err(_) => return Vec::new(),
-    };
-    failing_checks_from_json(&json)
+    let output =
+        crate::git_cli::output_with_deadline(&mut cmd, CI_CLI_TIMEOUT).map_err(|error| {
+            tracing::warn!(
+                source = "fetch_ci_failure_logs_impl",
+                ?error,
+                "gh pr checks failed"
+            );
+            format!("gh pr checks failed: {error}")
+        })?;
+    // Failing checks make gh exit non-zero, but its JSON is still usable.
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        let message = format!(
+            "gh pr checks failed: {error}; {}",
+            sanitize_ci_logs(&String::from_utf8_lossy(&output.stderr))
+        );
+        tracing::warn!(source = "fetch_ci_failure_logs_impl", ?message);
+        message
+    })?;
+    if !json.is_array() {
+        tracing::warn!(
+            source = "fetch_ci_failure_logs_impl",
+            "gh pr checks returned a non-array response"
+        );
+        return Err("gh pr checks returned an invalid response".to_string());
+    }
+    Ok(failing_checks_from_json(&json))
 }
 
 fn pr_number_for_head(prs: &serde_json::Value, head_sha: &str) -> Option<u64> {
@@ -3695,6 +3748,7 @@ fn fetch_ci_failure_logs_impl(
     repo_path: &str,
     branch: &str,
     check_url: Option<&str>,
+    selected_head_sha: Option<&str>,
 ) -> Result<CiLogsOutcome, String> {
     let repo_path_buf = PathBuf::from(repo_path);
 
@@ -3721,25 +3775,34 @@ fn fetch_ci_failure_logs_impl(
         .ok_or_else(|| format!("Cannot parse GitHub owner/repo from remote URL: {remote_url}"))?;
     let repo_slug = format!("{owner}/{repo}");
     let gh = crate::agent::resolve_cli("gh");
-    let head_output = Command::new("git")
-        .args([
+    let head_sha = if let Some(sha) = selected_head_sha {
+        sha.to_string()
+    } else {
+        let mut head_cmd = Command::new("git");
+        head_cmd.args([
             "-C",
             repo_path,
             "rev-parse",
             "--verify",
             "--end-of-options",
             &format!("refs/heads/{branch}^{{commit}}"),
-        ])
-        .output()
-        .map_err(|error| format!("Failed to resolve branch head: {error}"))?;
-    if !head_output.status.success() {
-        return Err("Cannot resolve the local branch head".to_string());
-    }
-    let head_sha = String::from_utf8_lossy(&head_output.stdout)
-        .trim()
-        .to_string();
+        ]);
+        let head_output = crate::git_cli::output_with_deadline(&mut head_cmd, CI_CLI_TIMEOUT)
+            .map_err(|error| format!("Failed to resolve branch head: {error}"))?;
+        if !head_output.status.success() {
+            return Err("Cannot resolve the local branch head".to_string());
+        }
+        String::from_utf8_lossy(&head_output.stdout)
+            .trim()
+            .to_string()
+    };
     if head_sha.len() != 40 || !head_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("Invalid local branch head SHA".to_string());
+        return Err(if selected_head_sha.is_some() {
+            "Invalid PR head SHA"
+        } else {
+            "Invalid local branch head SHA"
+        }
+        .to_string());
     }
 
     // Step 1: list recent runs and restrict inspection to the latest head SHA.
@@ -3764,11 +3827,10 @@ fn fetch_ci_failure_logs_impl(
     ]);
     crate::cli::apply_no_window(&mut list_cmd);
 
-    let list_output = list_cmd
-        .output()
+    let list_output = crate::git_cli::output_with_deadline(&mut list_cmd, CI_CLI_TIMEOUT)
         .map_err(|e| format!("Failed to run gh: {e}"))?;
     if !list_output.status.success() {
-        let stderr = String::from_utf8_lossy(&list_output.stderr);
+        let stderr = sanitize_ci_logs(&String::from_utf8_lossy(&list_output.stderr));
         return Err(format!("gh run list failed: {stderr}"));
     }
 
@@ -3805,14 +3867,13 @@ fn fetch_ci_failure_logs_impl(
             "jobs",
         ]);
         crate::cli::apply_no_window(&mut view_cmd);
-        let view_output = view_cmd
-            .output()
+        let view_output = crate::git_cli::output_with_deadline(&mut view_cmd, CI_CLI_TIMEOUT)
             .map_err(|e| format!("Failed to run gh: {e}"))?;
         // A single run that can't be viewed (e.g. HTTP 404 for a stale/deleted or
         // cross-repo run surfaced by `run list`) must NOT abort the whole heal —
         // other runs on the same head may still carry the failing jobs. Skip it.
         if !view_output.status.success() {
-            let stderr = String::from_utf8_lossy(&view_output.stderr);
+            let stderr = sanitize_ci_logs(&String::from_utf8_lossy(&view_output.stderr));
             tracing::warn!(
                 source = "fetch_ci_failure_logs_impl",
                 "gh run view {run_id} failed, skipping: {}",
@@ -3836,7 +3897,7 @@ fn fetch_ci_failure_logs_impl(
     // A selected PR row must use that exact backend-listed external check even
     // when GitHub Actions also failed. Unselected auto-heal keeps GHA priority.
     let failing = if check_url.is_some() || failed_jobs.is_empty() {
-        list_failing_checks_cli(&gh, &repo_slug, &head_sha)
+        list_failing_checks_cli(&gh, &repo_slug, &head_sha)?
     } else {
         Vec::new()
     };
@@ -3867,11 +3928,10 @@ fn fetch_ci_failure_logs_impl(
         let mut logs_cmd = Command::new(&gh);
         logs_cmd.args(["api", &endpoint]);
         crate::cli::apply_no_window(&mut logs_cmd);
-        let logs_output = logs_cmd
-            .output()
+        let logs_output = crate::git_cli::output_with_deadline(&mut logs_cmd, CI_CLI_TIMEOUT)
             .map_err(|e| format!("Failed to run gh: {e}"))?;
         if !logs_output.status.success() {
-            let stderr = String::from_utf8_lossy(&logs_output.stderr);
+            let stderr = sanitize_ci_logs(&String::from_utf8_lossy(&logs_output.stderr));
             return Err(format!("gh api job logs failed: {stderr}"));
         }
         if !logs.is_empty() {
@@ -3890,20 +3950,35 @@ pub(crate) async fn fetch_ci_failure_logs(
     repo_path: String,
     branch: String,
     check_url: Option<String>,
+    head_sha: Option<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    fetch_ci_failure_logs_with_state(repo_path, branch, check_url, state.inner().clone()).await
+    fetch_ci_failure_logs_with_state(
+        repo_path,
+        branch,
+        check_url,
+        head_sha,
+        state.inner().clone(),
+    )
+    .await
 }
 
 pub(crate) async fn fetch_ci_failure_logs_with_state(
     repo_path: String,
     branch: String,
     check_url: Option<String>,
+    head_sha: Option<String>,
     _state: Arc<AppState>,
 ) -> Result<String, String> {
     let selected = check_url.clone();
+    let selected_sha = if selected.is_some() { head_sha } else { None };
     let outcome = tokio::task::spawn_blocking(move || {
-        fetch_ci_failure_logs_impl(&repo_path, &branch, selected.as_deref())
+        fetch_ci_failure_logs_impl(
+            &repo_path,
+            &branch,
+            selected.as_deref(),
+            selected_sha.as_deref(),
+        )
     })
     .await
     .map_err(|e| format!("Task failed: {e}"))
@@ -3946,7 +4021,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
                 match crate::circleci::fetch_job_log(&job, &token, &head_sha).await {
                     Ok(job_logs) => logs.push_str(&job_logs),
                     Err(error) => {
-                        tracing::warn!(source = "fetch_ci_failure_logs", check = %name, "failed to fetch CircleCI job log: {error}");
+                        tracing::warn!(source = "fetch_ci_failure_logs", check = ?name, "failed to fetch CircleCI job log: {error}");
                         logs.push_str(&format!(
                             "Unable to fetch this CircleCI job's logs: {error}\n"
                         ));
@@ -4086,6 +4161,30 @@ mod tests {
             sanitize_ci_logs("\u{1b}[31mred\u{1b}[0m\u{1b}]52;c;clipboard\u{7}\nkeep\tthis\u{7f}"),
             "red\nkeepthis"
         );
+        assert_eq!(
+            sanitize_ci_logs("safe\u{202e}evil\u{2066}\u{200b}\u{e0001}\u{009b}end"),
+            "safeevilend"
+        );
+    }
+
+    #[test]
+    fn sanitizes_check_names_before_returning_errors_or_logs() {
+        let checks = failing_checks_from_json(&serde_json::json!([{
+            "name": "safe\n\u{1b}]52;c;clipboard\u{7}\u{202e}check",
+            "bucket": "fail",
+            "link": "https://circleci.com/gh/acme/widget/42"
+        }]));
+        assert_eq!(external_ci_names(&checks), "safecheck");
+        assert!(circleci_token_not_configured_error(&checks).contains("safecheck"));
+    }
+
+    #[test]
+    fn pr_list_spawn_failure_is_not_a_clean_ci_result() {
+        let missing = tempfile::tempdir().unwrap().path().join("missing-gh");
+        let error =
+            list_failing_checks_cli(missing.to_str().unwrap(), "acme/widget", &"a".repeat(40))
+                .unwrap_err();
+        assert!(error.contains("gh pr list failed"));
     }
 
     #[test]
@@ -6340,7 +6439,8 @@ mod tests {
         );
         bindings.save().unwrap();
 
-        let err = fetch_ci_failure_logs_impl(repo.to_str().unwrap(), "main", None).unwrap_err();
+        let err =
+            fetch_ci_failure_logs_impl(repo.to_str().unwrap(), "main", None, None).unwrap_err();
         assert!(
             err.contains("github.com accounts"),
             "expected gh-CLI-disabled message, got: {err}"
