@@ -706,6 +706,7 @@ describe("useGitOperations", () => {
 			expect(mockDialogs.confirmRemoveRepo).toHaveBeenCalledWith("My Repo");
 			expect(repositoriesStore.get("/repo")).toBeUndefined();
 			expect(gitOps.currentRepoPath()).toBeUndefined();
+			expect(gitOps.currentBranch()).toBeNull();
 		});
 
 		it("does not remove when user cancels", async () => {
@@ -885,6 +886,7 @@ describe("useGitOperations", () => {
 	describe("handleCreateBranch", () => {
 		it("creates a branch in backend + store and checks it out when requested", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setActive("/repo");
 			gitOps.setBranchToCreate({ repoPath: "/repo", startPoint: "main" });
 
 			await gitOps.handleCreateBranch("feat/new", true);
@@ -892,6 +894,19 @@ describe("useGitOperations", () => {
 			expect(mockRepo.createBranch).toHaveBeenCalledWith("/repo", "feat/new", "main", true);
 			expect(repositoriesStore.get("/repo")?.workspaces["feat/new"]).toBeDefined();
 			expect(gitOps.currentBranch()).toBe("feat/new");
+		});
+
+		it("keeps the app on the active repo when it checks out a branch in a background repo", async () => {
+			repositoriesStore.add({ path: "/active", displayName: "Active" });
+			repositoriesStore.setWorkspace("/active", "main", { worktreePath: "/active" });
+			repositoriesStore.setActive("/active");
+			repositoriesStore.add({ path: "/background", displayName: "Background" });
+			gitOps.setBranchToCreate({ repoPath: "/background", startPoint: "main" });
+
+			await gitOps.handleCreateBranch("feat/bg", true);
+
+			expect(repositoriesStore.state.activeRepoPath).toBe("/active");
+			expect(repositoriesStore.get("/background")?.activeWorkspaceId).toBe("feat/bg");
 		});
 
 		it("does not switch the current branch when checkout is false", async () => {
@@ -3235,6 +3250,8 @@ describe("useGitOperations", () => {
 		it("reassigns terminal from main to worktree branch on cwd change", async () => {
 			const id = addTerminal({ sessionId: "s1", cwd: "/repo" });
 			repositoriesStore.addTerminalToWorkspace("/repo", "main", id);
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveWorkspace("/repo", "main");
 			terminalsStore.setActive(id);
 
 			gitOps.handleTerminalCwdChange(id, "/repo/.worktrees/feature-x");
@@ -3244,6 +3261,8 @@ describe("useGitOperations", () => {
 			const feature = repositoriesStore.get("/repo")?.workspaces["feature-x"];
 			expect(main?.terminals).not.toContain(id);
 			expect(feature?.terminals).toContain(id);
+			// The active terminal moved, so the derived branch follows it.
+			expect(gitOps.currentBranch()).toBe("feature-x");
 		});
 
 		it("does nothing when cwd maps to the same branch", async () => {
