@@ -18,6 +18,14 @@ TUICommander detects, monitors, and manages AI coding agents running in your ter
 | Grok | `grok` | `grok --continue` | `grok --resume <discovered id>` |
 | pi | `pi` | `pi --continue` | — |
 
+### Native scrollback on launch
+
+TUICommander keeps agent conversations in the terminal's native scrollback on new launches and resumes. Every TUICommander PTY sets `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1`, so Claude Code inherits it even when started manually inside a tab. Codex and Grok receive `--no-alt-screen` when their installed CLI advertises it in `--help`; OpenCode receives `--mini` when available. The CLI capability is checked once per binary, so older versions still start without an unsupported option. Existing flags are not duplicated.
+
+Gemini currently defaults to the primary screen (`ui.useAlternateBuffer: false`), Cursor enables fullscreen only when requested, and pi defaults to regular TUI mode. Other agents without a documented alternate-screen control keep their own defaults. If an agent enters the alternate screen despite these defaults, TUICommander records one warning for that session with the agent name and detected version.
+
+To deliberately allow alternate screen for a Codex, Grok or OpenCode run config, set `TUIC_ALLOW_ALT_SCREEN=1` in its environment flags. For Claude Code, launch the command with `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0` in that process's environment. These choices do not change your global agent configuration.
+
 ## Agent Detection
 
 TUICommander auto-detects which agent is running in each terminal by matching output patterns. Detection uses agent-specific status line markers:

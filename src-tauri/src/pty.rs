@@ -105,6 +105,9 @@ pub(crate) fn bind_pty_identity(
 ) {
     let identity = tuic_session.unwrap_or(session_id);
     cmd.env("TUIC_SESSION", identity);
+    // Every Claude process started inside this PTY inherits native scrollback,
+    // including manual launches and restored tabs on every host shell.
+    cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
     cmd.env(
         "TUIC_CONFIG_DIR",
         crate::config::config_dir().to_string_lossy().as_ref(),
@@ -5213,6 +5216,8 @@ struct ChunkProcessor {
     /// Last VtLogBuffer total_lines observed — distinguishes a chunk that
     /// scrolled in new output from one that only repainted existing rows.
     last_vt_log_total: usize,
+    /// Report a TUIC-managed agent entering alternate screen only once per PTY.
+    alt_screen_warned: bool,
     /// Command text captured on OSC 133 C — used when the matching D arrives
     /// to build a `CommandOutcome`. Cleared after D.
     pending_command: Option<String>,
@@ -5243,6 +5248,14 @@ struct ChunkProcessor {
 }
 
 impl ChunkProcessor {
+    fn should_warn_alt_screen(&mut self, agent_type: Option<&str>, alt_screen: bool) -> bool {
+        if agent_type.is_none() || !alt_screen || self.alt_screen_warned {
+            return false;
+        }
+        self.alt_screen_warned = true;
+        true
+    }
+
     fn new(session_cwd: Option<String>, tuic_session: Option<String>) -> Self {
         Self {
             parser: OutputParser::new(),
@@ -5259,6 +5272,7 @@ impl ChunkProcessor {
             alt_buffer_needs_clear: false,
             last_cursor_up_n: 0,
             last_vt_log_total: 0,
+            alt_screen_warned: false,
             pending_command: None,
             pending_command_started: None,
             tuic_session,
@@ -5594,6 +5608,7 @@ impl ChunkProcessor {
         // the buffer out of `self` keeps the later `&mut self` uses (parser,
         // dedup markers) borrow-checkable; it is put back at the end.
         let mut screen_buf = std::mem::take(&mut self.screen_buf);
+        let mut unexpected_alt_screen = false;
 
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // `total_lines` comes back with it: a chunk that grew the buffer produced
@@ -5618,6 +5633,8 @@ impl ChunkProcessor {
                 flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
             }
             let total = vt.total_lines();
+            unexpected_alt_screen =
+                self.should_warn_alt_screen(agent_type.as_deref(), vt.is_alternate_screen());
             let hist = vt.grid_history_size();
             // Did this chunk produce real output, or merely repaint rows that were
             // already there (SIGWINCH reflow, cursor blink, statusline)? In the
@@ -5741,6 +5758,23 @@ impl ChunkProcessor {
                 0,
             )
         };
+
+        if unexpected_alt_screen {
+            let agent = agent_type.unwrap_or_else(|| "unknown".to_string());
+            let session_id = session_id.to_string();
+            std::thread::spawn(move || {
+                let version = crate::agent::detect_agent_binary(agent.clone())
+                    .version
+                    .unwrap_or_else(|| "unknown".to_string());
+                tracing::warn!(
+                    source = "terminal",
+                    session_id,
+                    agent,
+                    version,
+                    "Agent entered alternate screen despite native scrollback default"
+                );
+            });
+        }
 
         // Nothing is emitted for scrollback growth. There was a throttled
         // `pty-vt-log-total-{session_id}` here whose comment claimed the frontend

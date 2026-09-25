@@ -27,6 +27,9 @@
 - [ ] After restarting an isolated dev instance, open Plans and Stories to verify the capability probe succeeds; also confirm an actual story action error shows its own message rather than a restart instruction.
 - [ ] After the native-stories backend rebuild, cancel a prerequisite with an indirect dependent and confirm the dialog shows both dependencies as abandoned, the Rust-supplied cancellation count, and the plan's Active state.
 - [ ] After the native-stories backend rebuild, cancelling an already cancelled story must show an error and leave its revision unchanged; removing a cancelled dependency remains limited to a Backlog story.
+## Agent native scrollback (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After a `make dev` restart, launch Claude, Codex, Grok and OpenCode through the agent menu, PR Review where configured, and MCP `agent spawn` in an isolated `TUIC_APP_INSTANCE`; confirm terminal histories remain available after exit. Resume each session and check the same behavior. A CLI without the flag in `--help` should still launch.
 
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 

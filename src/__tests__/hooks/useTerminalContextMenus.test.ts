@@ -7,6 +7,7 @@ const {
 	mockPaneLayout,
 	mockTerminals,
 	mockWriteClipboard,
+	mockRpc,
 } = vi.hoisted(() => ({
 	mockAgentConfigs: { getRunConfigs: vi.fn() },
 	mockRemoteAgentConfigs: { getRunConfigs: vi.fn() },
@@ -19,6 +20,7 @@ const {
 		update: vi.fn(),
 	},
 	mockWriteClipboard: vi.fn(),
+	mockRpc: vi.fn(),
 }));
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
@@ -48,8 +50,10 @@ vi.mock("../../utils/sendCommand", () => ({
 	getShellFamily: vi.fn().mockResolvedValue("posix"),
 	sendCommand: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock("../../transport", () => ({ rpc: mockRpc }));
 
 import { useTerminalContextMenus } from "../../hooks/useTerminalContextMenus";
+import { sendCommand } from "../../utils/sendCommand";
 
 function createOptions(available: Array<{ type: string }> = []) {
 	return {
@@ -76,6 +80,7 @@ describe("useTerminalContextMenus", () => {
 		mockPaneLayout.isSplit.mockReset().mockReturnValue(false);
 		mockPaneLayout.canSplit.mockReset().mockReturnValue(true);
 		mockWriteClipboard.mockClear();
+		mockRpc.mockReset();
 	});
 
 	it("builds core terminal actions and disables splitting without an active terminal", () => {
@@ -116,6 +121,46 @@ describe("useTerminalContextMenus", () => {
 			"new-term",
 			expect.objectContaining({ name: "Claude Code", agentType: "claude", agentLaunchCommand: "claude" }),
 		);
+	});
+
+	it("runs the selected agent in the active shell and records its resume command", async () => {
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
+		mockTerminals.getActive.mockReturnValue({
+			id: "term-1",
+			ref: {},
+			sessionId: "session-1",
+			tuicSession: "tuic-1",
+			cwd: "/repo",
+		});
+		const menus = useTerminalContextMenus(createOptions([{ type: "claude" }]) as never);
+		const agentMenu = menus.getContextMenuItems().find((item) => item.label === "Agents");
+		await agentMenu?.children?.[0]?.action();
+		expect(sendCommand).toHaveBeenCalledWith(expect.any(Function), "claude", null, "posix");
+		expect(mockTerminals.update).toHaveBeenCalledWith(
+			"term-1",
+			expect.objectContaining({
+				agentLaunchCommand: "claude",
+				name: "Claude Code",
+			}),
+		);
+	});
+
+	it.each(["codex", "grok"])("passes native scrollback to %s from the active agent menu", async (agentType) => {
+		mockRpc.mockResolvedValue({ path: `/opt/bin/${agentType}`, supports_no_alt_screen: true });
+		mockTerminals.state.activeId = "term-1";
+		mockTerminals.get.mockReturnValue({ agentType: null, commandBlocks: [] });
+		mockTerminals.getActive.mockReturnValue({
+			id: "term-1",
+			ref: {},
+			sessionId: "session-1",
+			tuicSession: "tuic-1",
+			cwd: "/repo",
+		});
+		const menus = useTerminalContextMenus(createOptions([{ type: agentType }]) as never);
+		const agentMenu = menus.getContextMenuItems().find((item) => item.label === "Agents");
+		await agentMenu?.children?.[0]?.action();
+		expect(sendCommand).toHaveBeenCalledWith(expect.any(Function), `${agentType} --no-alt-screen`, null, "posix");
 	});
 
 	/**

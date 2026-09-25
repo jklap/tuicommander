@@ -25,6 +25,7 @@ pub(super) async fn detect_agents() -> impl IntoResponse {
                 "name": name,
                 "path": detection.path,
                 "version": detection.version,
+                "supports_no_alt_screen": detection.supports_no_alt_screen,
             })
         })
         .collect();
@@ -39,6 +40,7 @@ pub(super) async fn detect_agent_binary_http(Query(q): Query<DetectBinaryQuery>)
     Json(serde_json::json!({
         "path": detection.path,
         "version": detection.version,
+        "supports_no_alt_screen": detection.supports_no_alt_screen,
     }))
     .into_response()
 }
@@ -290,6 +292,10 @@ pub(super) async fn spawn_agent_session(
     let spawn_output_format = body.output_format.clone();
     let spawn_print_mode = body.print_mode;
     let spawn_cwd = body.cwd.clone();
+    let spawn_agent_type = body
+        .agent_type
+        .clone()
+        .unwrap_or_else(|| "claude".to_string());
     let (pair, child) = match crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -301,23 +307,34 @@ pub(super) async fn spawn_agent_session(
             let mut cmd = CommandBuilder::new(&spawn_binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
+            let mut launch_args = Vec::new();
             if let Some(ref args) = spawn_args {
-                for arg in args {
-                    cmd.arg(arg);
-                }
+                launch_args.extend(args.iter().cloned());
             } else {
                 if spawn_print_mode.unwrap_or(false) {
-                    cmd.arg("--print");
+                    launch_args.push("--print".to_string());
                 }
                 if let Some(ref format) = spawn_output_format {
-                    cmd.arg("--output-format");
-                    cmd.arg(format);
+                    launch_args.push("--output-format".to_string());
+                    launch_args.push(format.clone());
                 }
                 if let Some(ref model) = spawn_model {
-                    cmd.arg("--model");
-                    cmd.arg(model);
+                    launch_args.push("--model".to_string());
+                    launch_args.push(model.clone());
                 }
-                cmd.arg(&spawn_prompt);
+                launch_args.push(spawn_prompt.clone());
+            }
+            if spawn_agent_type == "claude" {
+                cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+            }
+            for arg in crate::agent_hook_launch::augment_args(
+                &spawn_agent_type,
+                &spawn_binary_path,
+                &launch_args,
+                &crate::config::config_dir(),
+                false,
+            ) {
+                cmd.arg(arg);
             }
 
             if let Some(ref cwd) = spawn_cwd {

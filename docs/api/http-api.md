@@ -1588,7 +1588,7 @@ Returns detected agent binaries and installed IDEs.
 GET /agents/detect?binary=claude
 ```
 
-Returns detection result for a specific agent binary.
+Returns `{ "path": string|null, "version": string|null, "supports_no_alt_screen": boolean }` for a specific agent binary. Codex and Grok probe `--no-alt-screen`; OpenCode probes `--mini`. The help result is cached per executable and false when no compatible option is advertised.
 
 ### Detect Installed IDEs
 
@@ -1607,7 +1607,7 @@ Content-Type: application/json
 { "binaries": ["claude", "codex"] }
 ```
 
-Returns `{ "<binary>": { "path": string|null, "version": string|null }, ... }`.
+Returns `{ "<binary>": { "path": string|null, "version": string|null, "supports_no_alt_screen": false }, ... }`.
 Detection runs in parallel and skips version lookup for speed; use
 `GET /agents/detect` when the version matters. Blank names are dropped, so a name
 that was sent may be absent from the map.

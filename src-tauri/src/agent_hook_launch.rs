@@ -97,8 +97,43 @@ pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> 
     Ok(())
 }
 
-pub(crate) fn augment_args(agent_type: &str, args: &[String], config_dir: &Path) -> Vec<String> {
-    augment_args_when(enabled(agent_type), agent_type, args, config_dir)
+pub(crate) fn augment_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    config_dir: &Path,
+    allow_alt_screen: bool,
+) -> Vec<String> {
+    add_screen_flag(
+        agent_type,
+        args,
+        augment_args_when(enabled(agent_type), agent_type, args, config_dir),
+        allow_alt_screen,
+        crate::agent::supports_no_alt_screen(agent_type, binary_path),
+    )
+}
+
+fn add_screen_flag(
+    agent_type: &str,
+    args: &[String],
+    mut result: Vec<String>,
+    allow_alt_screen: bool,
+    supported: bool,
+) -> Vec<String> {
+    let screen_flag = if agent_type == "opencode" {
+        "--mini"
+    } else {
+        "--no-alt-screen"
+    };
+    if !allow_alt_screen
+        && !(agent_type == "opencode" && args.first().is_some_and(|arg| arg == "run"))
+        && !(agent_type == "codex" && args.first().is_some_and(|arg| arg == "exec"))
+        && !args.iter().any(|arg| arg == screen_flag)
+        && supported
+    {
+        result.insert(0, screen_flag.to_string());
+    }
+    result
 }
 
 fn augment_args_when(
@@ -149,6 +184,46 @@ fn augment_args_when(
 mod tests {
     use super::*;
 
+    #[test]
+    fn screen_flags_are_placed_before_subcommands_only_when_supported() {
+        let args = vec!["resume".to_string(), "abc".to_string()];
+        assert_eq!(
+            add_screen_flag("codex", &args, args.clone(), false, true),
+            ["--no-alt-screen", "resume", "abc"]
+        );
+        assert_eq!(
+            add_screen_flag("codex", &args, args.clone(), false, false),
+            args
+        );
+        let args = vec!["--model".to_string(), "fast".to_string()];
+        assert_eq!(
+            add_screen_flag("grok", &args, args.clone(), false, true),
+            ["--no-alt-screen", "--model", "fast"]
+        );
+        assert_eq!(
+            add_screen_flag("opencode", &args, args.clone(), false, true),
+            ["--mini", "--model", "fast"]
+        );
+    }
+
+    #[test]
+    fn screen_flags_respect_existing_flags_and_opt_out() {
+        let args = vec!["--no-alt-screen".to_string()];
+        assert_eq!(
+            add_screen_flag("codex", &args, args.clone(), false, true),
+            args
+        );
+        assert_eq!(
+            add_screen_flag("codex", &[], vec![], true, true),
+            Vec::<String>::new()
+        );
+        let args = vec!["run".to_string(), "task".to_string()];
+        assert_eq!(
+            add_screen_flag("opencode", &args, args.clone(), false, true),
+            args
+        );
+    }
+
     /// Gated with its only caller, which is unix-only because the hooks it
     /// builds are POSIX shell. Without the gate this is dead code on Windows,
     /// and the Windows job warns about it where nothing reads the warning.
@@ -167,15 +242,20 @@ mod tests {
     fn explicit_agent_flags_are_not_overridden() {
         let root = Path::new("/config");
         assert_eq!(
-            augment_args("claude", &["--bare".into()], root),
+            augment_args_when(true, "claude", &["--bare".into()], root),
             vec!["--bare"]
         );
         assert_eq!(
-            augment_args("claude", &["--settings=x".into()], root),
+            augment_args_when(true, "claude", &["--settings=x".into()], root),
             vec!["--settings=x"]
         );
         assert_eq!(
-            augment_args("codex", &["-c".into(), "notify=['mine']".into()], root),
+            augment_args_when(
+                true,
+                "codex",
+                &["-c".into(), "notify=['mine']".into()],
+                root
+            ),
             vec!["-c", "notify=['mine']"]
         );
     }

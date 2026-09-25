@@ -3864,6 +3864,20 @@ fn handle_agent_with_parent_cwd(
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
+            let allow_alt_screen = resolved.as_ref().is_some_and(|rc| {
+                rc.env
+                    .get("TUIC_ALLOW_ALT_SCREEN")
+                    .is_some_and(|value| value == "1")
+            });
+            if effective_agent_type.as_deref() == Some("claude")
+                && !allow_alt_screen
+                && !resolved
+                    .as_ref()
+                    .is_some_and(|rc| rc.env.contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"))
+            {
+                cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+            }
+
             // Inject peer env vars so spawned agents know their identity and parent.
             cmd.env("TUIC_SESSION", &session_id);
             if let Some(ref parent) = caller_tuic {
@@ -4001,8 +4015,10 @@ fn handle_agent_with_parent_cwd(
             if let Some(agent_type) = effective_agent_type.as_deref() {
                 launch_args = crate::agent_hook_launch::augment_args(
                     agent_type,
+                    &binary_path,
                     &launch_args,
                     &crate::config::config_dir(),
+                    allow_alt_screen,
                 );
             }
             for arg in launch_args {

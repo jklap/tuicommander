@@ -118,6 +118,8 @@ selection because the row layout changes.
 
 ### Scrollback in fullscreen apps
 
+Agents launched through TUICommander use native scrollback where their CLI supports it (see [AI Agents](ai-agents.md#native-scrollback-on-launch)). This keeps past conversation lines available after the agent exits. The separate alternate-screen history below remains for programs that use fullscreen mode, such as `vim` and `less`, and for agents that enter it despite their launch defaults.
+
 Apps that take over the screen (`gh run watch`, `less`, `man`, TUIs) run on the terminal's *alternate screen*, which by the original terminal spec has no scrollback at all — anything printed past the bottom of the window is gone. TUICommander enables an isolated alternate-screen history, giving the same user-visible result as iTerm2's save-to-scrollback option: the scrollbar stays available and you can reach what rolled off the top.
 
 Two details worth knowing:

@@ -145,19 +145,52 @@ export function buildAgentLaunchCommand(
 	command: string,
 	agentSessionId?: string | null,
 	agentType?: AgentType | null,
+	supportsNoAltScreen = false,
+	allowAltScreen = false,
 ): string {
-	if (!agentSessionId) return command;
+	let result = command;
+	if (agentSessionId) {
+		const parts = command.split(" ");
+		const binary = parts[0];
+		const binaryName = pathBasename(binary) ?? "";
 
-	const parts = command.split(" ");
-	const binary = parts[0];
-	const binaryName = pathBasename(binary) ?? "";
+		const isClaude = agentType === "claude" || binaryName.startsWith("claude");
+		if (isClaude) result = [binary, "--session-id", agentSessionId, ...parts.slice(1)].join(" ");
+	}
 
-	const isClaude = agentType === "claude" || binaryName.startsWith("claude");
-	if (!isClaude) return command;
+	if (allowAltScreen || /(^| )TUIC_ALLOW_ALT_SCREEN=1( |$)/.test(result)) return result;
+	if (supportsNoAltScreen && (agentType === "codex" || agentType === "grok" || agentType === "opencode")) {
+		const parts = splitEnvPrefix(result);
+		if ((agentType === "opencode" && parts.argv[1] === "run") || (agentType === "codex" && parts.argv[1] === "exec")) {
+			return result;
+		}
+		const screenFlag = agentType === "opencode" ? "--mini" : "--no-alt-screen";
+		if (!parts.argv.includes(screenFlag)) {
+			parts.argv.splice(1, 0, screenFlag);
+		}
+		return [...parts.env, ...parts.argv].join(" ");
+	}
+	return result;
+}
 
-	// Insert --session-id right after the binary
-	const rest = parts.slice(1);
-	return [binary, "--session-id", agentSessionId, ...rest].join(" ");
+/** The backend caches the actual CLI help probe; only a matching direct binary gets a flag. */
+export async function supportsAgentNoAltScreen(
+	agentType: AgentType,
+	command: string,
+	cwd?: string | null,
+): Promise<boolean> {
+	if (agentType !== "codex" && agentType !== "grok" && agentType !== "opencode") return false;
+	const binary = splitEnvPrefix(command).argv[0];
+	if (!binary) return false;
+	try {
+		const detected = await rpc<{ path: string | null; supports_no_alt_screen: boolean }>("detect_agent_binary", {
+			binary: agentType,
+			repoPath: cwd,
+		});
+		return !!detected.supports_no_alt_screen && (binary === agentType || binary === detected.path);
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -171,6 +204,7 @@ export function buildResumeCommand(
 	agentSessionId?: string | null,
 	launchCommand?: string | null,
 	cwd?: string | null,
+	supportsNoAltScreen = false,
 ): string | null {
 	let base: string | null = null;
 	if (agentSessionId) {
@@ -179,7 +213,13 @@ export function buildResumeCommand(
 	}
 	if (base === null) base = AGENTS[agentType].resumeCommand;
 	if (base === null) return null;
-	return applyDefaultRunConfig(agentType, base, launchCommand, cwd);
+	return buildAgentLaunchCommand(
+		applyDefaultRunConfig(agentType, base, launchCommand, cwd),
+		null,
+		agentType,
+		supportsNoAltScreen,
+		resolveLaunchEnv(agentType, launchCommand, cwd).TUIC_ALLOW_ALT_SCREEN === "1",
+	);
 }
 
 /**
@@ -205,6 +245,8 @@ export async function verifyAndBuildResumeCommand(
 	// The tab resumes on the machine that holds its working directory, so the run
 	// config that rebuilds the command has to be read there before it is used.
 	await ensureAgentConfigsForRepo(cwd);
+	const launch = launchCommand ?? AGENTS[agentType].binary;
+	const supportsNoAltScreen = await supportsAgentNoAltScreen(agentType, launch, cwd);
 
 	if (sessionId && cwd && disc) {
 		try {
@@ -219,7 +261,13 @@ export async function verifyAndBuildResumeCommand(
 			});
 			if (exists) {
 				const cmd = disc.resumeWithId(sessionId);
-				return applyDefaultRunConfig(agentType, cmd, launchCommand, cwd);
+				return buildAgentLaunchCommand(
+					applyDefaultRunConfig(agentType, cmd, launchCommand, cwd),
+					null,
+					agentType,
+					supportsNoAltScreen,
+					resolveLaunchEnv(agentType, launchCommand, cwd).TUIC_ALLOW_ALT_SCREEN === "1",
+				);
 			}
 			return null;
 		} catch {
@@ -228,5 +276,5 @@ export async function verifyAndBuildResumeCommand(
 	}
 
 	// No verified session — fall back to static resumeCommand
-	return buildResumeCommand(agentType, agentSessionId, launchCommand, cwd);
+	return buildResumeCommand(agentType, agentSessionId, launchCommand, cwd, supportsNoAltScreen);
 }
