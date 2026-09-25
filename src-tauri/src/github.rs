@@ -3812,7 +3812,7 @@ pub(crate) async fn fetch_ci_failure_logs_with_state(
             let (token, _) = crate::circleci::resolve_token()?;
             let token = token.ok_or_else(|| circleci_token_not_configured_error(&checks))?;
             let mut logs = String::new();
-            for (name, job) in jobs {
+            for (name, job) in jobs.into_iter().take(5) {
                 logs.push_str(&format!("===== FAILED CHECK: {name} =====\n"));
                 logs.push_str(
                     &crate::circleci::fetch_job_log(&state.http_client, &job, &token).await?,

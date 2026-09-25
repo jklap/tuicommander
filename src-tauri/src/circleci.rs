@@ -18,6 +18,14 @@ pub(crate) enum TokenSource {
 }
 
 const MAX_FAILED_ACTIONS: usize = 5;
+const MAX_LOG_BODY_BYTES: usize = 64 * 1024;
+
+fn is_safe_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
 
 fn vcs_slug(segment: &str) -> Option<&'static str> {
     match segment {
@@ -51,6 +59,9 @@ pub(crate) fn parse_check_url(value: &str) -> Option<CircleCiJob> {
         _ => return None,
     };
 
+    if !is_safe_segment(org) || !is_safe_segment(repo) {
+        return None;
+    }
     Some(CircleCiJob {
         vcs: vcs_slug(vcs)?.to_string(),
         org: org.to_string(),
@@ -60,11 +71,13 @@ pub(crate) fn parse_check_url(value: &str) -> Option<CircleCiJob> {
 }
 
 fn token_from_cli_config(config: &str) -> Option<String> {
-    config.lines().find_map(|line| {
-        let line = line.trim();
-        let value = line.strip_prefix("token:")?.trim();
-        (!value.is_empty()).then(|| value.to_string())
-    })
+    let config: serde_yaml::Value = serde_yaml::from_str(config).ok()?;
+    let mapping = config.as_mapping()?;
+    let host = mapping.get("host").and_then(serde_yaml::Value::as_str);
+    if host.is_some_and(|host| host.trim_end_matches('/').ne("https://circleci.com")) {
+        return None;
+    }
+    mapping.get("token").and_then(serde_yaml::Value::as_str).map(str::trim).filter(|token| !token.is_empty()).map(ToOwned::to_owned)
 }
 
 fn token_from_cli_config_file() -> Option<String> {
@@ -185,19 +198,17 @@ pub(crate) async fn fetch_job_log(
     job: &CircleCiJob,
     token: &str,
 ) -> Result<String, String> {
-    let url = format!(
-        "https://circleci.com/api/v1.1/project/{}/{}/{}/{}",
-        job.vcs, job.org, job.repo, job.build_num
-    );
+    let mut url = url::Url::parse("https://circleci.com/api/v1.1/project/").expect("static URL");
+    url.path_segments_mut().expect("static URL can hold path segments").extend([job.vcs.as_str(), job.org.as_str(), job.repo.as_str(), &job.build_num.to_string()]);
     let detail: serde_json::Value = client
         .get(url)
         .header("Circle-Token", token)
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|error| format!("CircleCI request failed: {error}"))?
+        .map_err(|error| format!("CircleCI request failed: {}", error.without_url()))?
         .error_for_status()
-        .map_err(|error| format!("CircleCI API error: {error}"))?
+        .map_err(|error| format!("CircleCI API error: {}", error.without_url()))?
         .json()
         .await
         .map_err(|error| format!("Failed to parse CircleCI job: {error}"))?;
@@ -211,15 +222,27 @@ pub(crate) async fn fetch_job_log(
     for (step, output_url) in actions {
         // output_url is a pre-signed S3 bearer URL: never attach Circle-Token
         // and never log it.
-        let chunks: Vec<serde_json::Value> = client
+        let response = client
             .get(&output_url)
             .send()
             .await
-            .map_err(|error| format!("CircleCI log fetch failed for {step}: {error}"))?
+            .map_err(|error| format!("CircleCI log fetch failed for {step}: {}", error.without_url()))?
             .error_for_status()
-            .map_err(|error| format!("CircleCI log API error for {step}: {error}"))?
-            .json()
-            .await
+            .map_err(|error| format!("CircleCI log API error for {step}: {}", error.without_url()))?;
+        if response.content_length().is_some_and(|length| length as usize > MAX_LOG_BODY_BYTES) {
+            return Err(format!("CircleCI log for {step} exceeds {MAX_LOG_BODY_BYTES} bytes"));
+        }
+        use futures_util::StreamExt;
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|error| format!("CircleCI log fetch failed for {step}: {}", error.without_url()))?;
+            if bytes.len() + chunk.len() > MAX_LOG_BODY_BYTES {
+                return Err(format!("CircleCI log for {step} exceeds {MAX_LOG_BODY_BYTES} bytes"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let chunks: Vec<serde_json::Value> = serde_json::from_slice(&bytes)
             .map_err(|error| format!("Failed to parse CircleCI log for {step}: {error}"))?;
         output.push_str(&format!("===== FAILED STEP: {step} =====\n"));
         for chunk in chunks {
