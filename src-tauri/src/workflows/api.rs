@@ -1,5 +1,6 @@
 use super::{
-    PublishedWorkflow, WorkflowClosure, WorkflowDraft, WorkflowGraph, WorkflowKind, WorkflowStore,
+    CheckDefinition, PublishedWorkflow, WorkflowClosure, WorkflowDraft, WorkflowGraph,
+    WorkflowKind, WorkflowStore,
 };
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +26,11 @@ pub enum WorkflowAction {
         id: String,
         expected_revision: i64,
         closure: WorkflowClosure,
+    },
+    UpdateChecks {
+        id: String,
+        expected_revision: i64,
+        checks: Vec<CheckDefinition>,
     },
     Publish {
         id: String,
@@ -116,6 +122,18 @@ pub fn definition_action(project: &str, action: WorkflowAction) -> Result<Workfl
                 &id,
                 expected_revision,
                 closure,
+            )?))
+        }
+        WorkflowAction::UpdateChecks {
+            id,
+            expected_revision,
+            checks,
+        } => {
+            draft_in_project(&store, &id, &project)?;
+            Ok(WorkflowReply::Draft(store.update_checks(
+                &id,
+                expected_revision,
+                checks,
             )?))
         }
         WorkflowAction::Publish {

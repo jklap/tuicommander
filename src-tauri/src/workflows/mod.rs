@@ -208,6 +208,56 @@ mod tests {
     }
 
     #[test]
+    fn published_checks_are_pinned_and_invalid_commands_are_rejected() {
+        let dir = tempfile::tempdir().expect("db dir");
+        let store = WorkflowStore::open_at(&dir.path().join("workflow.sqlite3")).expect("store");
+        let draft = store
+            .create_draft("/project", "Delivery", WorkflowKind::Story, story_graph())
+            .expect("draft");
+        let checks = vec![CheckDefinition {
+            id: "unit".into(),
+            argv: vec!["git".into(), "status".into()],
+            timeout_secs: 30,
+        }];
+        let edited = store
+            .update_checks(&draft.id, draft.draft_revision, checks.clone())
+            .expect("edit checks");
+        let published = store
+            .publish(&draft.id, edited.draft_revision)
+            .expect("publish");
+        assert_eq!(published.required_checks, checks);
+        assert!(
+            store
+                .update_checks(&draft.id, draft.draft_revision, vec![])
+                .is_err()
+        );
+        assert!(
+            store
+                .update_checks(
+                    &draft.id,
+                    edited.draft_revision,
+                    vec![CheckDefinition {
+                        id: "bad".into(),
+                        argv: vec!["sh".into(), "-c".into(), "true".into()],
+                        timeout_secs: 30,
+                    }]
+                )
+                .is_err()
+        );
+        let changed = store
+            .update_checks(&draft.id, edited.draft_revision, vec![])
+            .expect("edit again");
+        assert!(changed.required_checks.is_empty());
+        assert_eq!(
+            store
+                .get_published(&draft.id, 1)
+                .expect("pinned")
+                .required_checks,
+            checks
+        );
+    }
+
+    #[test]
     fn seeded_resolve_plan_pins_the_story_delivery_template() {
         let dir = tempfile::tempdir().expect("db dir");
         let store = WorkflowStore::open_at(&dir.path().join("workflow.sqlite3")).expect("store");
