@@ -983,12 +983,14 @@ optional manual session claim. No story database files are written to a
 repository, and there is no import or export path.
 
 Each operation opens a SQLite connection in WAL mode with a five-second busy
-timeout. Mutations use an immediate transaction and an expected story revision.
+timeout. New databases are created at SQLite `PRAGMA user_version = 1`.
+Version 0 is upgraded in place because its schema is compatible with version 1;
+a database with a newer version is rejected rather than opened with an unknown
+schema. Mutations use an immediate transaction and an expected story revision.
 Dependency cycles, cross-plan dependencies and concurrent claims are rejected.
 A story becomes ready when all dependencies are done. Plan state is derived from
-its stories rather than stored separately. A manual claim is released when
-its terminal closes; a workflow reservation will have a separate durable
-lifecycle.
+its stories rather than stored separately. A manual claim is released when its
+terminal closes.
 
 ## Additional Commands
 

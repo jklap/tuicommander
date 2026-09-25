@@ -1,6 +1,6 @@
 # Native plans and stories
 
-Native stories can be managed without starting a workflow. TUICommander stores plans, stories, criteria, dependencies, and revisions in its configuration directory. A plan names one project and a source document; its state is derived from its stories.
+Native stories are managed directly in TUICommander. Plans, stories, criteria, dependencies, and revisions are stored in its configuration directory. A plan names one project and a source document; its state is derived from its stories.
 
 Open a project, then select **Plans and Stories** in the toolbar. Create a plan with a title and source document or link. Add stories with acceptance criteria, priority, and optional relative file paths. Select a story to inspect its criteria, dependencies, and status. To work without an agent terminal, choose **Start work**, check criteria as they are met, then **Submit for review**. Approve the story or request changes; blocking and "Won't fix" are explicit manual actions. A dependency can be added while a story is Ready or Backlog. The dialog works in both desktop and browser mode.
 

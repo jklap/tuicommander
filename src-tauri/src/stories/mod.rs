@@ -11,6 +11,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_store_sets_schema_version_one() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+
+        StoryStore::open_at(&db).expect("open store");
+
+        let connection = rusqlite::Connection::open(db).expect("open database");
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("read schema version");
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn store_rejects_a_newer_schema_version() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+        let connection = rusqlite::Connection::open(&db).expect("open database");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("set future schema version");
+
+        let error = StoryStore::open_at(&db).expect_err("future schema is rejected");
+        assert!(error.contains("newer than supported"), "{error}");
+    }
+
+    #[test]
     fn operator_can_work_a_story_without_a_terminal_claim() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");

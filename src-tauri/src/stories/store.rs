@@ -11,6 +11,7 @@ use records::*;
 
 const STORE_FILE: &str = "stories.sqlite3";
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+const SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone, Debug)]
 pub struct StoryStore {
@@ -52,6 +53,14 @@ impl StoryStore {
             .map_err(|e| format!("enable story store WAL: {e}"))?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(|e| format!("enable story store foreign keys: {e}"))?;
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|e| format!("read story schema version: {e}"))?;
+        if version > SCHEMA_VERSION {
+            return Err(format!(
+                "story schema version {version} is newer than supported version {SCHEMA_VERSION}"
+            ));
+        }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS plans (
                 id TEXT PRIMARY KEY,
@@ -71,7 +80,8 @@ impl StoryStore {
             );
             CREATE INDEX IF NOT EXISTS stories_by_plan ON stories(plan_id);
             CREATE UNIQUE INDEX IF NOT EXISTS one_story_per_session
-              ON stories(claim_session) WHERE claim_session IS NOT NULL;",
+              ON stories(claim_session) WHERE claim_session IS NOT NULL;
+            PRAGMA user_version = 1;",
         )
         .map_err(|e| format!("prepare story schema: {e}"))?;
         Ok(conn)
@@ -225,7 +235,7 @@ impl StoryStore {
         Ok(story)
     }
 
-    /// A manual claim belongs to a live tab, not to a durable workflow reservation.
+    /// A manual claim belongs to a live tab and is released at tab teardown.
     pub fn release_session_claims(&self, session: &str) -> Result<usize, String> {
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
