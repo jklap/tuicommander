@@ -3,7 +3,7 @@ import { AGENTS } from "../../agents";
 import {
 	buildAgentLaunchCommand,
 	buildResumeCommand,
-	supportsAgentNoAltScreen,
+	prepareAgentLaunchCommand,
 	verifyAndBuildResumeCommand,
 } from "../../utils/agentSession";
 
@@ -30,24 +30,9 @@ vi.mock("../../transport", () => ({
 }));
 
 describe("buildAgentLaunchCommand", () => {
-	it("keeps native scrollback for supported Codex and Grok launches", () => {
-		expect(buildAgentLaunchCommand("codex", null, "codex", true)).toBe("codex --no-alt-screen");
-		expect(buildAgentLaunchCommand("grok --model fast", null, "grok", true)).toBe("grok --no-alt-screen --model fast");
-		expect(buildAgentLaunchCommand("opencode", null, "opencode", true)).toBe("opencode --mini");
-	});
-
-	it("does not duplicate a flag or override explicit screen choices", () => {
-		expect(buildAgentLaunchCommand("codex --no-alt-screen", null, "codex", true)).toBe("codex --no-alt-screen");
-		expect(buildAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN=1 grok", null, "grok", true)).toBe(
-			"TUIC_ALLOW_ALT_SCREEN=1 grok",
-		);
-		expect(buildAgentLaunchCommand("codex", null, "codex", true, true)).toBe("codex");
-		expect(buildAgentLaunchCommand("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0 claude", null, "claude")).toBe(
-			"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0 claude",
-		);
-	});
-	it("does not pass a flag to a CLI without the capability", () => {
-		expect(buildAgentLaunchCommand("codex", null, "codex", false)).toBe("codex");
+	it("leaves screen policy to the Rust launch-args builder", () => {
+		expect(buildAgentLaunchCommand("codex", null, "codex")).toBe("codex");
+		expect(buildAgentLaunchCommand("opencode run", null, "opencode")).toBe("opencode run");
 	});
 	it("injects --session-id for claude when UUID provided", () => {
 		expect(buildAgentLaunchCommand("claude", "abc-123")).toBe("claude --session-id abc-123");
@@ -82,6 +67,43 @@ describe("buildAgentLaunchCommand", () => {
 	});
 });
 
+describe("prepareAgentLaunchCommand", () => {
+	beforeEach(() => mockRpc.mockReset());
+
+	it("uses Rust's decision for a supported interactive launch", async () => {
+		mockRpc.mockResolvedValueOnce(["--no-alt-screen", "resume"]);
+		expect(await prepareAgentLaunchCommand("codex resume", null, "codex")).toBe("codex --no-alt-screen resume");
+		expect(mockRpc).toHaveBeenCalledWith("prepare_agent_launch_args", {
+			agentType: "codex",
+			binaryPath: "codex",
+			args: ["resume"],
+			allowAltScreen: false,
+			repoPath: undefined,
+		});
+	});
+
+	it("preserves non-interactive subcommands and excludes other agents", async () => {
+		mockRpc.mockResolvedValueOnce(["run"]).mockResolvedValueOnce(["exec"]).mockResolvedValueOnce([]);
+		expect(await prepareAgentLaunchCommand("opencode run", null, "opencode")).toBe("opencode run");
+		expect(await prepareAgentLaunchCommand("codex exec", null, "codex")).toBe("codex exec");
+		expect(await prepareAgentLaunchCommand("gemini", null, "gemini")).toBe("gemini");
+	});
+
+	it("passes an explicit opt-out without adding a flag", async () => {
+		mockRpc.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+		expect(await prepareAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN=1 codex", null, "codex")).toBe(
+			"TUIC_ALLOW_ALT_SCREEN=1 codex",
+		);
+		expect(await prepareAgentLaunchCommand("TUIC_ALLOW_ALT_SCREEN='1' codex", null, "codex")).toBe(
+			"TUIC_ALLOW_ALT_SCREEN='1' codex",
+		);
+		expect(mockRpc).toHaveBeenCalledWith(
+			"prepare_agent_launch_args",
+			expect.objectContaining({ allowAltScreen: true }),
+		);
+	});
+});
+
 describe("buildResumeCommand", () => {
 	it("returns --resume <uuid> for claude with UUID", () => {
 		expect(buildResumeCommand("claude", "abc-123")).toBe("claude --resume abc-123");
@@ -105,7 +127,6 @@ describe("buildResumeCommand", () => {
 
 	it("returns id-based resume for codex with UUID", () => {
 		expect(buildResumeCommand("codex", "abc-123")).toBe("codex resume abc-123");
-		expect(buildResumeCommand("codex", "abc-123", null, null, true)).toBe("codex --no-alt-screen resume abc-123");
 	});
 	it("respects a run config's alternate-screen opt-out on resume", () => {
 		const config = {
@@ -115,7 +136,7 @@ describe("buildResumeCommand", () => {
 			is_default: true,
 		};
 		mockAgentConfigsStore.getDefaultConfig.mockReturnValueOnce(config).mockReturnValueOnce(config);
-		expect(buildResumeCommand("codex", "abc-123", null, null, true)).toBe("codex resume abc-123");
+		expect(buildResumeCommand("codex", "abc-123", null, null)).toBe("codex resume abc-123");
 	});
 
 	it("falls back to static resume for codex without UUID", () => {
@@ -201,30 +222,6 @@ describe("sessionDiscovery in AgentConfig", () => {
 	});
 });
 
-describe("supportsAgentNoAltScreen", () => {
-	beforeEach(() => mockRpc.mockReset());
-	it("uses the probed direct binary and rejects a wrapper or older version", async () => {
-		mockRpc.mockResolvedValue({ path: "/opt/bin/codex", supports_no_alt_screen: true });
-		expect(await supportsAgentNoAltScreen("codex", "codex --model fast")).toBe(true);
-		expect(await supportsAgentNoAltScreen("codex", "/opt/bin/codex --model fast")).toBe(true);
-		expect(await supportsAgentNoAltScreen("codex", "my-codex-wrapper")).toBe(false);
-		mockRpc.mockResolvedValue({ path: "/opt/bin/codex", supports_no_alt_screen: false });
-		expect(await supportsAgentNoAltScreen("codex", "codex")).toBe(false);
-	});
-	it("probes the configured absolute binary rather than another version on PATH", async () => {
-		mockRpc.mockResolvedValue({ path: "/opt/custom/codex", supports_no_alt_screen: true });
-		expect(await supportsAgentNoAltScreen("codex", "/opt/custom/codex")).toBe(true);
-		expect(mockRpc).toHaveBeenCalledWith("detect_agent_binary", {
-			binary: "/opt/custom/codex",
-			repoPath: undefined,
-		});
-	});
-	it("does not pass an unverified flag when binary detection fails", async () => {
-		mockRpc.mockRejectedValueOnce(new Error("offline"));
-		expect(await supportsAgentNoAltScreen("grok", "grok")).toBe(false);
-	});
-});
-
 describe("verifyAndBuildResumeCommand", () => {
 	beforeEach(() => {
 		mockRpc.mockReset();
@@ -245,6 +242,19 @@ describe("verifyAndBuildResumeCommand", () => {
 		expect(result).toBe("claude --resume discovered-session-id");
 	});
 
+	it("prepares a verified Codex resume through the Rust argument builder", async () => {
+		mockRpc.mockResolvedValueOnce(true).mockResolvedValueOnce(["--no-alt-screen", "resume", "codex-session"]);
+		const result = await verifyAndBuildResumeCommand("codex", "/repo", "tuic-uuid-1", "codex-session");
+		expect(mockRpc).toHaveBeenCalledWith("prepare_agent_launch_args", {
+			agentType: "codex",
+			binaryPath: "codex",
+			args: ["resume", "codex-session"],
+			allowAltScreen: false,
+			repoPath: "/repo",
+		});
+		expect(result).toBe("codex --no-alt-screen resume codex-session");
+	});
+
 	it("returns null when claude agentSessionId not verified (session gone)", async () => {
 		mockRpc.mockResolvedValueOnce(false);
 		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", "stale-session");
@@ -253,7 +263,7 @@ describe("verifyAndBuildResumeCommand", () => {
 
 	it("returns null when claude has no agentSessionId", async () => {
 		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", null);
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("claude --continue");
 	});
 
@@ -265,13 +275,13 @@ describe("verifyAndBuildResumeCommand", () => {
 
 	it("uses agentSessionId directly when cwd is null (no verification)", async () => {
 		const result = await verifyAndBuildResumeCommand("claude", null, "tuic-uuid-1", "old-session-id");
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("claude --resume old-session-id");
 	});
 
 	it("skips verification for agents without sessionDiscovery", async () => {
 		const result = await verifyAndBuildResumeCommand("aider", "/tmp/repo", "tuic-uuid-1", null);
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("aider --restore-chat-history");
 	});
 
@@ -296,7 +306,7 @@ describe("verifyAndBuildResumeCommand", () => {
 	it("does not verify a stale Gemini tuicSession when discovery has no agentSessionId", async () => {
 		const result = await verifyAndBuildResumeCommand("gemini", "/tmp/repo", "stale-tuic-uuid", null);
 
-		expect(mockRpc).not.toHaveBeenCalled();
+		expect(mockRpc).not.toHaveBeenCalledWith("verify_agent_session", expect.anything());
 		expect(result).toBe("gemini --resume");
 	});
 

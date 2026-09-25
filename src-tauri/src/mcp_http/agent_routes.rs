@@ -17,18 +17,16 @@ use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
 
 pub(super) async fn detect_agents() -> impl IntoResponse {
-    let results: Vec<serde_json::Value> = crate::agent::KNOWN_AGENT_BINARIES
-        .iter()
-        .map(|name| {
-            let detection = crate::agent::detect_agent_binary(name.to_string());
-            serde_json::json!({
-                "name": name,
-                "path": detection.path,
-                "version": detection.version,
-                "supports_no_alt_screen": detection.supports_no_alt_screen,
-            })
-        })
-        .collect();
+    let mut results = Vec::new();
+    for name in crate::agent::KNOWN_AGENT_BINARIES {
+        let detection = crate::agent::detect_agent_binary(name.to_string()).await;
+        results.push(serde_json::json!({
+            "name": name,
+            "path": detection.path,
+            "version": detection.version,
+            "supports_no_alt_screen": detection.supports_no_alt_screen,
+        }));
+    }
     Json(results)
 }
 
@@ -36,12 +34,32 @@ pub(super) async fn detect_agent_binary_http(Query(q): Query<DetectBinaryQuery>)
     if !crate::agent::KNOWN_AGENT_BINARIES.contains(&q.binary.as_str()) {
         return Json(serde_json::json!({"error": "Unknown agent"})).into_response();
     }
-    let detection = crate::agent::detect_agent_binary(q.binary);
+    let detection = crate::agent::detect_agent_binary(q.binary).await;
     Json(serde_json::json!({
         "path": detection.path,
         "version": detection.version,
         "supports_no_alt_screen": detection.supports_no_alt_screen,
     }))
+    .into_response()
+}
+
+pub(super) async fn prepare_agent_launch_args_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<PrepareAgentLaunchArgsRequest>,
+) -> Response {
+    if let Err(response) = require_local_or_auth(&addr, auth.is_some()) {
+        return response.into_response();
+    }
+    Json(
+        crate::agent_hook_launch::prepare_agent_launch_args(
+            body.agent_type,
+            body.binary_path,
+            body.args,
+            body.allow_alt_screen,
+        )
+        .await,
+    )
     .into_response()
 }
 
@@ -230,7 +248,7 @@ pub(super) async fn spawn_agent_session(
         }
         path.clone()
     } else if let Some(ref agent_type) = body.agent_type {
-        let detection = crate::agent::detect_agent_binary(agent_type.clone());
+        let detection = crate::agent::detect_agent_binary(agent_type.clone()).await;
         match detection.path {
             Some(p) => p,
             None => {
@@ -242,7 +260,7 @@ pub(super) async fn spawn_agent_session(
         }
     } else {
         // Default to claude
-        let detection = crate::agent::detect_agent_binary("claude".to_string());
+        let detection = crate::agent::detect_agent_binary("claude".to_string()).await;
         match detection.path {
             Some(p) => p,
             None => {
@@ -328,12 +346,7 @@ pub(super) async fn spawn_agent_session(
                 }
                 launch_args.push(spawn_prompt.clone());
             }
-            if spawn_agent_type == "claude" {
-                cmd.env(
-                    "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN",
-                    if allow_alt_screen { "0" } else { "1" },
-                );
-            }
+            crate::pty::apply_agent_screen_env(&mut cmd, &spawn_env);
             for arg in crate::agent_hook_launch::augment_args(
                 &spawn_agent_type,
                 &spawn_binary_path,
@@ -478,6 +491,38 @@ mod tests {
             args: Some(vec!["--help".into()]),
             env: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn http_typed_agent_launch_uses_the_same_rust_screen_policy() {
+        let script = crate::test_support::fake_ssh_script(
+            "http-terminal-screen-args",
+            "printf '%s\\n' '--no-alt-screen'",
+            "echo --no-alt-screen",
+        );
+        let request = PrepareAgentLaunchArgsRequest {
+            agent_type: "codex".into(),
+            binary_path: script.to_string_lossy().into_owned(),
+            args: vec!["resume".into()],
+            allow_alt_screen: false,
+        };
+        let response =
+            prepare_agent_launch_args_http(ConnectInfo(loopback()), None, Json(request)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await,
+            serde_json::json!(["--no-alt-screen", "resume"])
+        );
+
+        let forbidden = PrepareAgentLaunchArgsRequest {
+            agent_type: "codex".into(),
+            binary_path: script.to_string_lossy().into_owned(),
+            args: vec!["resume".into()],
+            allow_alt_screen: false,
+        };
+        let response =
+            prepare_agent_launch_args_http(ConnectInfo(lan()), None, Json(forbidden)).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

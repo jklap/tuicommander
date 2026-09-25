@@ -1591,7 +1591,18 @@ Returns detected agent binaries and installed IDEs.
 GET /agents/detect?binary=claude
 ```
 
-Returns `{ "path": string|null, "version": string|null, "supports_no_alt_screen": boolean }` for a specific agent binary name or absolute executable path. Codex and Grok probe `--no-alt-screen`; OpenCode probes `--mini`. The help result is cached per executable and false when no compatible option is advertised. An absolute path checks that exact installed version.
+Returns `{ "path": string|null, "version": string|null, "supports_no_alt_screen": boolean }` for a specific agent binary name or absolute executable path. Codex and Grok probe `--no-alt-screen`; OpenCode probes `--mini`. Successful help results are cached per executable version. A failed probe warns once and is retried after a short cooldown; each attempt has a two-second deadline. An absolute path checks that exact installed version.
+
+### Prepare Agent Launch Arguments
+
+```
+POST /agents/launch-args
+Content-Type: application/json
+
+{ "agentType": "codex", "binaryPath": "codex", "args": ["resume"], "allowAltScreen": false }
+```
+
+Returns the argument array with the agent's supported native-scrollback option inserted before an interactive subcommand. An explicit option, an alternate-screen opt-out, or a non-interactive subcommand leaves the array unchanged. The desktop `prepare_agent_launch_args` command uses the same Rust builder. Remote HTTP callers must authenticate.
 
 ### Detect Installed IDEs
 

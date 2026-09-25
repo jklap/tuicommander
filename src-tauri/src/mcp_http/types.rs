@@ -254,6 +254,17 @@ pub(super) struct SpawnAgentRequest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PrepareAgentLaunchArgsRequest {
+    pub agent_type: String,
+    pub binary_path: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub allow_alt_screen: bool,
+}
+
+#[derive(Deserialize)]
 pub(super) struct HashPasswordRequest {
     pub password: String,
 }

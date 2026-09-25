@@ -308,6 +308,7 @@ remote daemon.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `detect_agent_binary` | `binary` | `AgentBinaryDetection` | Check binary name in PATH or an exact absolute path, version, and cached `supports_no_alt_screen` help probe |
+| `prepare_agent_launch_args` | `agent_type, binary_path, args, allow_alt_screen` | `Vec<String>` | Add a supported native-scrollback flag to interactive launch args; probes in a blocking worker with a deadline. HTTP parity: `POST /agents/launch-args` |
 | `detect_all_agent_binaries` | `binaries` | `HashMap<String, AgentBinaryDetection>` | Detect the named binaries in parallel, path only (no version or screen-capability lookup) |
 | `detect_claude_binary` | -- | `String` | Detect Claude binary |
 | `detect_installed_ides` | -- | `Vec<String>` | Detect installed IDEs |

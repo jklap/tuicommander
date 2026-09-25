@@ -1074,6 +1074,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(agent_routes::detect_agent_binary_http),
         )
         .route(
+            "/agents/launch-args",
+            post(agent_routes::prepare_agent_launch_args_http),
+        )
+        .route(
             "/agents/ides",
             get(agent_routes::detect_installed_ides_http),
         )
@@ -4687,7 +4691,7 @@ mod tests {
         // Whatever is installed on this machine must be reported; the reverse
         // (asserting a fixed list) would fail on a machine without them.
         for binary in crate::agent::KNOWN_AGENT_BINARIES {
-            if crate::agent::detect_agent_binary(binary.to_string())
+            if crate::agent::detect_agent_binary_sync(binary.to_string())
                 .path
                 .is_some()
             {

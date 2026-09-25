@@ -10,7 +10,7 @@ import { paneLayoutStore } from "../stores/paneLayout";
 import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
-import { buildAgentLaunchCommand, supportsAgentNoAltScreen } from "../utils/agentSession";
+import { prepareAgentLaunchCommand } from "../utils/agentSession";
 import { writeClipboard } from "../utils/clipboard";
 import { keyFor } from "../utils/hotkey";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
@@ -38,13 +38,12 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 		const active = terminalsStore.getActive();
 		if (!active?.ref || !active.sessionId) return;
 		const agentSessionId = agentType === "claude" ? null : (active.tuicSession ?? null);
-		const supportsNoAltScreen = await supportsAgentNoAltScreen(agentType, command, active.cwd);
-		const finalCommand = buildAgentLaunchCommand(
+		const finalCommand = await prepareAgentLaunchCommand(
 			command,
 			agentSessionId,
 			agentType,
-			supportsNoAltScreen,
 			allowAltScreen,
+			active.cwd,
 		);
 		const shellFamily = await getShellFamily(active.sessionId);
 		await sendCommand(
@@ -119,21 +118,21 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 			const config = AGENTS[agent.type];
 			const runConfigs = machineConfigs.getRunConfigs(agent.type);
 			const launchAgent = async (command: string, allowAltScreen = false) => {
-				const supportsNoAltScreen = await supportsAgentNoAltScreen(agent.type, command, repoPath);
 				const termId = await options.gitOps.handleAddTerminalToWorkspace(repoPath, branchName);
 				if (!termId) return;
 				const term = terminalsStore.get(termId);
 				const agentSessionId = agent.type === "claude" ? null : (term?.tuicSession ?? null);
+				const pendingInitCommand = await prepareAgentLaunchCommand(
+					command,
+					agentSessionId,
+					agent.type,
+					allowAltScreen,
+					repoPath,
+				);
 				terminalsStore.update(termId, {
 					name: config.name,
 					nameIsCustom: true,
-					pendingInitCommand: buildAgentLaunchCommand(
-						command,
-						agentSessionId,
-						agent.type,
-						supportsNoAltScreen,
-						allowAltScreen,
-					),
+					pendingInitCommand,
 					agentType: agent.type,
 					agentLaunchCommand: command,
 				});
