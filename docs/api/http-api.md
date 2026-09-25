@@ -2138,11 +2138,13 @@ use the returned id for later calls.
 GET /worktrees/lifecycle?repoPath=/path&workspaceId=feature-x~a1b2c3d4
 ```
 
-Returns a fresh `{ dirty_files, commit_status, removal_safety, error? }` verdict
+Returns a fresh `{ dirty_files, dirty_fingerprint?, submodule_unpushed_commits, commit_status, removal_safety, error? }` verdict
 for one exact workspace. `dirty_files` counts the staged, unstaged and untracked
 files a removal would discard; `null` means the inspection failed and is not the
-same answer as `0`. `commit_status` is `unmerged`, `in_sync`, `merged`, or
-`unknown` — `in_sync` is HEAD sitting on the default branch's tip, which
+same answer as `0`. `dirty_fingerprint` identifies checkout status, HEAD, and submodule refs for
+revalidation. `submodule_unpushed_commits` lists counts per initialized module
+for commits absent from its remote-tracking branches. `commit_status` is
+`unmerged`, `in_sync`, `merged`, or `unknown` — `in_sync` is HEAD sitting on the default branch's tip, which
 satisfies the same ancestry check as `merged` while having merged nothing.
 `removal_safety` is `safe`, `requires_force`, or `unknown`. An inspection
 failure is returned as an `unknown` verdict and must never be treated as zero or
@@ -2172,7 +2174,7 @@ Finalizes a merged worktree, addressed by workspace id. The merge already
 happened, so no branch is needed here — only which checkout to dispose of. `action` must be `"archive"` (moves to archive directory) or `"delete"` (removes worktree and branch).
 For `action: "delete"`, the response includes `branch_delete_warning` when the worktree was removed but safe branch deletion failed, for example because the branch has unmerged commits.
 
-`force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true`. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl` with the Tauri command, so both transports pass the identical gate.
+`force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true` and `"expectedFingerprint"` from the confirmed lifecycle verdict. A changed fingerprint aborts cleanup. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl_with_confirmation` with the Tauri command, so both transports pass the identical gate.
 
 ### Run Setup Script
 
@@ -2198,6 +2200,7 @@ Query parameters:
 - `deleteBranch` (optional, default `true`, or `false` when `force=true`) -- when `true`, also requests deletion of the local git branch
 - `force` (optional, default `false`) -- when `true`, permits discarding dirty linked-worktree files but does not bypass branch proof or a lock
 - `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
+- `expectedFingerprint` (required with `force=true`) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 
@@ -2206,7 +2209,9 @@ on full success. `removal_rule` names the rule that allowed removal:
 `in_sync`, `ancestry`, `patch_equivalence`, `kept_branch`, or `force`.
 A non-force request requires a clean worktree and submodules with no Git
 operation in progress, even when `deleteBranch=false`. A populated submodule
-requires one `git worktree remove --force` after a fresh clean-state check. A clean
+requires one `git worktree remove --force` after a fresh clean-state check.
+Initialized submodule refs are preserved in the main module repository; an
+uninitialized submodule without Git state does not block removal. A clean
 branch whose commits were squash- or rebase-merged can use
 `patch_equivalence` when `git cherry` finds no unique patches. Merge commits
 are refused because `git cherry` does not compare their resolution changes. When

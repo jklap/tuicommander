@@ -1198,6 +1198,18 @@ describe("transport", () => {
 			expect(result.path).toBe("/worktrees/locked?repoPath=%2Fr&deleteBranch=true&force=true&overrideLock=true");
 		});
 
+		it("forwards the confirmed worktree fingerprint to the HTTP removal route", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "dirty",
+				force: true,
+				expectedFingerprint: "abc123",
+			});
+			expect(result.path).toBe(
+				"/worktrees/dirty?repoPath=%2Fr&deleteBranch=false&force=true&expectedFingerprint=abc123",
+			);
+		});
+
 		it("keeps the branch by default when force only discards checkout files", () => {
 			const result = mapCommandToHttp("remove_worktree", {
 				repoPath: "/r",

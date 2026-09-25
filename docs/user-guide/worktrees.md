@@ -124,6 +124,10 @@ Removing a worktree without force also refuses uncommitted changes when the
 branch will be kept, including changes inside submodules. It stops if a Git operation is in progress. If an archive
 script adds a commit after the removal check, the worktree can be removed, but
 the branch stays and the result warns that the branch changed.
+The confirmation lists submodule commits absent from remote-tracking branches.
+A changed checkout or submodule state after force confirmation stops removal
+for a fresh review. Initialized submodule refs are preserved in the main
+checkout's module repository before removal.
 
 When using **Ask** mode, the cleanup dialog detects uncommitted changes and auto-stashes them during the branch switch. An "Unstash after switch" checkbox lets you restore changes on the target branch. That stash covers the **base repository**; the warning under the worktree step is about the branch's own directory, which is a different place.
 

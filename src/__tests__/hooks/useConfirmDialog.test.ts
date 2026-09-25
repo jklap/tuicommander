@@ -179,6 +179,7 @@ describe("useConfirmDialog", () => {
 				"feature-y",
 				{
 					dirtyFiles: 3,
+					submoduleUnpushedCommits: [{ path: "plugins", count: 7 }],
 					commitStatus: "unmerged",
 					removalSafety: "requires_force",
 				},
@@ -188,6 +189,7 @@ describe("useConfirmDialog", () => {
 			// The count, not the adjective: "dirty" never told the user what a
 			// removal costs, and this dialog is the last stop before it happens.
 			expect(dialog.dialogState()?.message).toContain("3 uncommitted files will be discarded");
+			expect(dialog.dialogState()?.message).toContain("plugins: 7 commits not on a remote-tracking branch");
 			dialog.handleClose();
 			expect(await promise).toBe(false);
 		});

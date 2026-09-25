@@ -24,6 +24,7 @@ export interface PostMergeCleanupDialogProps {
 	hasDirtyFiles?: boolean;
 	/** The branch's own worktree has uncommitted changes — archiving or deleting it destroys them */
 	worktreeDirty?: boolean;
+	submoduleUnpushedCommits?: Array<{ path: string; count: number }>;
 	onExecute: (steps: CleanupStep[], options?: { unstash?: boolean }) => void;
 	onSkip: () => void;
 	/** When true, checkboxes and buttons are disabled */
@@ -177,6 +178,13 @@ export const PostMergeCleanupDialog: Component<PostMergeCleanupDialogProps> = (p
 												{props.worktreeAction === "delete"
 													? `The ${props.branchName} worktree has uncommitted changes. Deleting it removes the directory — that work is lost.`
 													: `The ${props.branchName} worktree has uncommitted changes. They move to __archived/ with it.`}
+												<For each={props.submoduleUnpushedCommits ?? []}>
+													{(entry) => (
+														<div>
+															{entry.path}: {entry.count} commits not on a remote-tracking branch
+														</div>
+													)}
+												</For>
 											</div>
 										</Show>
 										<Show when={step.id === "switch" && step.checked && props.hasDirtyFiles}>

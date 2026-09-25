@@ -30,6 +30,8 @@ export interface WorkspaceLifecycleStatus {
 	/** Files a removal would discard — staged, unstaged and untracked. `null`
 	 *  when the inspection failed; never confuse that with 0. */
 	dirtyFiles: number | null;
+	dirtyFingerprint?: string;
+	submoduleUnpushedCommits?: Array<{ path: string; count: number }>;
 	commitStatus: WorkspaceCommitStatus;
 	removalSafety: WorkspaceRemovalSafety;
 	error?: string;

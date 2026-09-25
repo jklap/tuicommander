@@ -291,6 +291,8 @@ pub(super) struct RemoveWorktreeQuery {
     /// Explicit confirmation to remove a locked worktree.
     #[serde(rename = "overrideLock", default)]
     pub override_lock: Option<bool>,
+    #[serde(rename = "expectedFingerprint", default)]
+    pub expected_fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -505,6 +507,8 @@ pub(super) struct FinalizeMergeRequest {
     /// Skip the pre-flight guard that refuses to destroy a dirty worktree.
     #[serde(default)]
     pub force: Option<bool>,
+    #[serde(rename = "expectedFingerprint", default)]
+    pub expected_fingerprint: Option<String>,
 }
 
 /// One workspace, addressed by id, for the read-only queries.
@@ -558,6 +562,8 @@ pub(super) struct MergeArchiveRequest {
     /// Skip the pre-flight guard that refuses to destroy a dirty worktree.
     #[serde(default)]
     pub force: Option<bool>,
+    #[serde(rename = "expectedFingerprint", default)]
+    pub expected_fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]

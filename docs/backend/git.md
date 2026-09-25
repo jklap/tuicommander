@@ -176,7 +176,12 @@ operation in progress, and a HEAD matching the captured branch tip. Git needs
 one `--force` to remove a populated submodule even when it is clean; TUICommander
 uses it only after checking submodule status and rechecking dirtiness immediately
 before removal. A separate, confirmed lock override bypasses the lock during
-removal; dirty-file `force` alone does not bypass a lock. Branch deletion in
+removal; dirty-file `force` alone does not bypass a lock. Before removal, every
+initialized submodule's HEAD and refs are copied into preserved refs in the
+main checkout's module repository; if this fails, removal stops. An
+uninitialized submodule without Git state is safe to remove. Force confirmation
+can carry a fingerprint of checkout status, HEAD, and submodule refs, rechecked
+under the removal lock. Branch deletion in
 either mode uses the captured OID in a compare-and-delete operation. If proof
 fails or the branch moves, removal reports a warning and keeps the ref. For
 branch deletion, it checks the default branch's ancestry. A clean branch

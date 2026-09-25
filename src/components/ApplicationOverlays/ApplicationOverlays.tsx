@@ -242,6 +242,7 @@ function CleanupOverlay(props: { contract: CleanupOverlayContract }) {
 						hasTerminals={(branch?.terminals.length ?? 0) > 0}
 						hasDirtyFiles={context.hasDirtyFiles}
 						worktreeDirty={context.worktreeDirty}
+						submoduleUnpushedCommits={context.submoduleUnpushedCommits}
 						worktreeAction={props.contract.action()}
 						onWorktreeActionChange={props.contract.setAction}
 						executing={props.contract.executing()}
@@ -327,9 +328,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 					<RemoteRepoPicker
 						visible={true}
 						connectionId={connectionId()}
-						connectionName={
-							remoteConnectionsStore.getConnections()[connectionId()]?.connection.name ?? connectionId()
-						}
+						connectionName={remoteConnectionsStore.getConnections()[connectionId()]?.connection.name ?? connectionId()}
 						onClose={() => props.prompts.resolveRemotePicker(null)}
 						onConfirm={props.prompts.resolveRemotePicker}
 					/>
