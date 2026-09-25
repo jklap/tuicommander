@@ -71,6 +71,21 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
             attempt.state = AttemptState::Reported;
             attempt.outcome = Some(*outcome);
             attempt.report = report.clone();
+            if *outcome == AttemptOutcome::NeedsInput {
+                snapshot.status = RunStatus::Paused;
+            }
+        }
+        RunEventKind::InputAnswered { attempt_id, answer } => {
+            let attempt = snapshot
+                .attempts
+                .iter_mut()
+                .find(|attempt| attempt.id == *attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.outcome != Some(AttemptOutcome::NeedsInput) || attempt.input_answer.is_some()
+            {
+                return Err("attempt has no pending input request".into());
+            }
+            attempt.input_answer = Some(answer.clone());
         }
         RunEventKind::AgentBound {
             attempt_id,

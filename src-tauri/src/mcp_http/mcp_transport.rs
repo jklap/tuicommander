@@ -1203,7 +1203,7 @@ fn native_tool_definitions() -> serde_json::Value {
             "name": "workflow_report",
             "description": "Submit a typed outcome for the workflow attempt bound to this live managed agent session. A report is idempotent for its attempt and does not itself advance the story status.",
             "inputSchema": { "type": "object", "properties": {
-                "input": { "type": "object", "description": "AttemptReport with contractVersion, runId, storyId, storyRevision, attemptId, generation, outcome (completed|failed|needs_input|interrupted), summary, criterionResults [{index,satisfied,evidence}], and evidence [string]." }
+                "input": { "type": "object", "description": "AttemptReport with contractVersion, runId, storyId, storyRevision, attemptId, generation, outcome (completed|failed|needs_input|interrupted), summary, criterionResults [{index,satisfied,evidence}], and evidence [string]. needs_input requires inputRequest {question,options}; a completed reviewer report requires review {decision,artifactDigest,findings:[{criterionIndex,severity,summary,evidence}]} ." }
             }, "required": ["input"] }
         },
         {
@@ -5699,18 +5699,98 @@ fn handle_workflow_report(
     if snapshot.project != owner.to_string_lossy() {
         return serde_json::json!({"error": "workflow run does not belong to calling session's project"});
     }
+    let reported_story_id = report.story_id.clone();
     match store.report_bound_agent(report, &pty) {
         Ok(receipt) => {
-            crate::workflows::emit_run_changed(
-                state,
-                &receipt.snapshot.project,
-                &receipt.snapshot.id,
-                receipt.sequence,
-            );
+            if receipt.sequence > snapshot.sequence {
+                crate::workflows::emit_run_changed(
+                    state,
+                    &receipt.snapshot.project,
+                    &receipt.snapshot.id,
+                    receipt.sequence,
+                );
+            }
+            if receipt.sequence > snapshot.sequence
+                && reported_story_id != snapshot.plan_id
+                && matches!(
+                    &receipt.event.kind,
+                    crate::workflows::RunEventKind::AttemptReported { .. }
+                )
+            {
+                if let Ok(Some(coordinator_session)) =
+                    crate::workflows::active_coordinator_session(&receipt.snapshot)
+                {
+                    if let Some(peer) = state.resolve_peer_ref(&coordinator_session) {
+                        queue_workflow_coordinator_wake(
+                            state,
+                            &peer,
+                            &pty,
+                            &receipt.snapshot.id,
+                            &reported_story_id,
+                            receipt.sequence,
+                        );
+                    }
+                }
+            }
             to_json_or_error(receipt)
         }
         Err(error) => serde_json::json!({"error": error}),
     }
+}
+
+/// Inbox mail is a cursor into the durable run log, never a second result record.
+fn queue_workflow_coordinator_wake(
+    state: &AppState,
+    recipient: &str,
+    reporter: &str,
+    run_id: &str,
+    story_id: &str,
+    sequence: i64,
+) -> bool {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let message = crate::state::AgentMessage {
+        id: format!("workflow-event:{run_id}:{sequence}"),
+        from_tuic_session: reporter.to_owned(),
+        from_name: "workflow".into(),
+        content: serde_json::json!({
+            "type": "workflow_event",
+            "runId": run_id,
+            "storyId": story_id,
+            "sequence": sequence,
+        })
+        .to_string(),
+        timestamp: now_ms,
+        delivered_via_channel: false,
+    };
+    let message_id = message.id.clone();
+    let timestamp = {
+        let _guard = PEER_IDENTITY_BIND_LOCK.lock();
+        if !state.peer_agents.contains_key(recipient) {
+            return false;
+        }
+        state.push_agent_inbox(recipient, message)
+    };
+    if crate::pty::route_registered_orchestrator_mail(state, recipient, &message_id, timestamp)
+        .is_none()
+    {
+        let live_pty = state.live_pty_for_peer(recipient);
+        if state.assign_agent_delivery(recipient, &message_id, live_pty.is_some())
+            == crate::state::AgentDeliveryAssignment::Terminal
+        {
+            if let Some(session_id) = live_pty {
+                let outcome = crate::pty::deliver_notice_to_managed_pty(
+                    state,
+                    &session_id,
+                    crate::pty::PEER_MAIL_WAKE,
+                );
+                crate::pty::settle_terminal_delivery(state, recipient, &message_id, outcome);
+            }
+        }
+    }
+    true
 }
 
 #[derive(serde::Deserialize)]
@@ -5798,14 +5878,7 @@ fn launch_workflow_agent(
         return Err("workflow attempt is not running".into());
     }
     if attempt.story_id != run.plan_id
-        && !run.attempts.iter().any(|candidate| {
-            candidate.story_id == run.plan_id
-                && candidate.state == crate::workflows::AttemptState::Running
-                && candidate
-                    .agent
-                    .as_ref()
-                    .is_some_and(|agent| agent.session_id == caller)
-        })
+        && crate::workflows::active_coordinator_session(&run)?.as_deref() != Some(&caller)
     {
         return Err("only this run's active coordinator may launch a story worker".into());
     }
@@ -13547,6 +13620,36 @@ mod tests {
         assert_eq!(
             launch["error"],
             "workflow launch requires a bound live managed session"
+        );
+    }
+
+    #[test]
+    fn workflow_coordinator_wake_buffers_only_a_durable_event_cursor() {
+        let state = test_state();
+        assert!(!queue_workflow_coordinator_wake(
+            &state,
+            TEST_UUID_A,
+            "worker-pty",
+            "run-1",
+            "story-1",
+            6,
+        ));
+        register_peer(&state, TEST_UUID_A, "coordinator", "mcp-coordinator");
+        assert!(queue_workflow_coordinator_wake(
+            &state,
+            TEST_UUID_A,
+            "worker-pty",
+            "run-1",
+            "story-1",
+            7,
+        ));
+        let inbox = state.agent_inbox.get(TEST_UUID_A).unwrap();
+        assert_eq!(inbox.len(), 1);
+        let message = &inbox[0];
+        assert_eq!(message.from_tuic_session, "worker-pty");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&message.content).unwrap(),
+            serde_json::json!({"type": "workflow_event", "runId": "run-1", "storyId": "story-1", "sequence": 7})
         );
     }
 

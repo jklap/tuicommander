@@ -777,14 +777,13 @@ pub(super) fn ready_to_verify(snapshot: &RunSnapshot, stories: &[Story]) -> Resu
     if snapshot.planning_fingerprint.is_none() {
         return Err("planning is still open".into());
     }
-    if snapshot
-        .attempts
-        .iter()
-        .any(|attempt| attempt.state == AttemptState::Running)
-        || snapshot.effects.iter().any(|effect| {
-            effect.state == EffectState::Intended || effect.state == EffectState::Uncertain
-        })
-    {
+    if snapshot.attempts.iter().any(|attempt| {
+        attempt.state == AttemptState::Running
+            || (attempt.outcome == Some(AttemptOutcome::NeedsInput)
+                && attempt.input_answer.is_none())
+    }) || snapshot.effects.iter().any(|effect| {
+        effect.state == EffectState::Intended || effect.state == EffectState::Uncertain
+    }) {
         return Err("workflow has active or uncertain work".into());
     }
     if !stories.iter().all(|story| {
@@ -819,6 +818,7 @@ fn choose_event(
                 | RunCommand::ResolveUncertainEffect { .. }
                 | RunCommand::ReportAttempt { .. }
                 | RunCommand::ReportBoundAttempt { .. }
+                | RunCommand::AnswerInput { .. }
         )
     {
         return Ok(RunEventKind::Paused);
@@ -838,6 +838,7 @@ fn choose_event(
                 | RunCommand::ResolveUncertainEffect { .. }
                 | RunCommand::ReportAttempt { .. }
                 | RunCommand::ReportBoundAttempt { .. }
+                | RunCommand::AnswerInput { .. }
         )
     {
         return Ok(RunEventKind::PlanningReopened);
@@ -852,6 +853,7 @@ fn choose_event(
                 | RunCommand::MarkEffect { .. }
                 | RunCommand::ReportAttempt { .. }
                 | RunCommand::ReportBoundAttempt { .. }
+                | RunCommand::AnswerInput { .. }
         )
     {
         return Err("workflow is paused".into());
@@ -908,6 +910,7 @@ fn choose_event(
                     outcome: None,
                     agent: None,
                     report: None,
+                    input_answer: None,
                 },
             })
         }
@@ -962,6 +965,7 @@ fn choose_event(
                     outcome: None,
                     agent: None,
                     report: None,
+                    input_answer: None,
                 },
             })
         }
@@ -1072,6 +1076,16 @@ fn choose_event(
                     .criterion_results
                     .iter()
                     .any(|item| item.evidence.trim().is_empty() || item.evidence.len() > 2_000)
+                || (report.outcome == AttemptOutcome::NeedsInput) != report.input_request.is_some()
+                || report.input_request.as_ref().is_some_and(|request| {
+                    request.question.trim().is_empty()
+                        || request.question.len() > 2_000
+                        || request.options.len() > 16
+                        || request
+                            .options
+                            .iter()
+                            .any(|option| option.trim().is_empty() || option.len() > 256)
+                })
             {
                 return Err("invalid typed attempt report".into());
             }
@@ -1088,6 +1102,29 @@ fn choose_event(
                     != Some(caller_session.as_str())
             {
                 return Err("agent does not own the attempt".into());
+            }
+            let definition = if report.story_id == snapshot.plan_id {
+                WorkflowStore::open()?
+                    .get_published(&snapshot.definition_id, snapshot.definition_revision)?
+            } else {
+                WorkflowStore::open()?.get_published(
+                    &snapshot.story_definition_id,
+                    snapshot.story_definition_revision,
+                )?
+            };
+            let reviewer = definition.graph.nodes.iter().any(|node| {
+                node.id == attempt.node_id
+                    && matches!(
+                        node.kind,
+                        NodeKind::Agent {
+                            role: crate::workflows::AgentRole::Reviewer,
+                            ..
+                        }
+                    )
+            });
+            if (reviewer && report.outcome == AttemptOutcome::Completed) != report.review.is_some()
+            {
+                return Err("completed reviewer reports require review evidence".into());
             }
             let mut seen = std::collections::HashSet::new();
             if report.story_id == snapshot.plan_id {
@@ -1108,6 +1145,28 @@ fn choose_event(
                     .any(|item| item.index >= story.criteria.len() || !seen.insert(item.index))
                 {
                     return Err("invalid criterion result index".into());
+                }
+                if let Some(review) = &report.review {
+                    if review.artifact_digest.len() != 64
+                        || !review
+                            .artifact_digest
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit())
+                        || review.findings.len() > 100
+                        || (review.decision == ReviewDecision::Approved
+                            && !review.findings.is_empty())
+                        || (review.decision == ReviewDecision::ChangesRequested
+                            && review.findings.is_empty())
+                        || review.findings.iter().any(|finding| {
+                            finding.criterion_index >= story.criteria.len()
+                                || finding.summary.trim().is_empty()
+                                || finding.summary.len() > 1_000
+                                || finding.evidence.trim().is_empty()
+                                || finding.evidence.len() > 2_000
+                        })
+                    {
+                        return Err("invalid review evidence".into());
+                    }
                 }
             }
             if expired
@@ -1146,6 +1205,31 @@ fn choose_event(
                     state: EffectState::Intended,
                 },
             })
+        }
+        RunCommand::AnswerInput { attempt_id, answer } => {
+            validate_key("attempt id", &attempt_id)?;
+            if snapshot.status != RunStatus::Paused {
+                return Err("workflow is not paused for input".into());
+            }
+            if answer.trim().is_empty() || answer.len() > 4_000 {
+                return Err("invalid input answer".into());
+            }
+            let attempt = snapshot
+                .attempts
+                .iter()
+                .find(|attempt| attempt.id == attempt_id)
+                .ok_or("node attempt not found")?;
+            if attempt.outcome != Some(AttemptOutcome::NeedsInput)
+                || attempt.input_answer.is_some()
+                || attempt
+                    .report
+                    .as_ref()
+                    .and_then(|report| report.input_request.as_ref())
+                    .is_none()
+            {
+                return Err("attempt has no pending input request".into());
+            }
+            Ok(RunEventKind::InputAnswered { attempt_id, answer })
         }
         RunCommand::MarkEffect {
             effect_id,
@@ -1239,6 +1323,12 @@ fn choose_event(
                 .any(|effect| effect.state == EffectState::Uncertain)
             {
                 return Err("uncertain effects need an explicit resolution".into());
+            }
+            if snapshot.attempts.iter().any(|attempt| {
+                attempt.outcome == Some(AttemptOutcome::NeedsInput)
+                    && attempt.input_answer.is_none()
+            }) {
+                return Err("human input is still pending".into());
             }
             Ok(RunEventKind::Resumed)
         }

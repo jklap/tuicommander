@@ -87,6 +87,8 @@ pub struct NodeAttempt {
     pub agent: Option<AgentBinding>,
     #[serde(default)]
     pub report: Option<AttemptReport>,
+    #[serde(default)]
+    pub input_answer: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -110,6 +112,46 @@ pub struct CriterionResult {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InputRequest {
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecision {
+    Approved,
+    ChangesRequested,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewSeverity {
+    Minor,
+    Major,
+    Blocker,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewFinding {
+    pub criterion_index: usize,
+    pub severity: ReviewSeverity,
+    pub summary: String,
+    pub evidence: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewAssessment {
+    pub decision: ReviewDecision,
+    pub artifact_digest: String,
+    pub findings: Vec<ReviewFinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttemptReport {
     pub contract_version: u16,
     pub run_id: String,
@@ -121,6 +163,10 @@ pub struct AttemptReport {
     pub summary: String,
     pub criterion_results: Vec<CriterionResult>,
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub input_request: Option<InputRequest>,
+    #[serde(default)]
+    pub review: Option<ReviewAssessment>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -204,6 +250,10 @@ pub enum RunEventKind {
         #[serde(default)]
         report: Option<AttemptReport>,
     },
+    InputAnswered {
+        attempt_id: String,
+        answer: String,
+    },
     AgentBound {
         attempt_id: String,
         binding: AgentBinding,
@@ -273,6 +323,10 @@ pub enum RunCommand {
     ReportBoundAttempt {
         caller_session: String,
         report: AttemptReport,
+    },
+    AnswerInput {
+        attempt_id: String,
+        answer: String,
     },
     ReserveEffect {
         key: String,
