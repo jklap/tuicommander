@@ -13035,6 +13035,29 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn story_tool_lists_plans_for_a_bound_caller() {
+        let config = tempfile::tempdir().expect("config directory");
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project directory");
+        let state = test_state();
+        let mcp_sid = "story-mcp";
+        let tuic = TEST_UUID_A;
+        state.mcp.to_session.insert(mcp_sid.into(), tuic.into());
+        insert_managed_test_session(&state, "pty-story", &project.path().to_string_lossy());
+        state.bind_live_pty(tuic, "pty-story");
+        crate::repo_watcher::start_watching(&project.path().to_string_lossy(), &state)
+            .expect("watch project");
+        let result = handle_story(
+            &state,
+            &serde_json::json!({"input": {"action": "list_plans"}}),
+            Some(mcp_sid),
+        );
+        assert_eq!(result["Ok"]["type"], "plans", "unexpected result {result}");
+        assert_eq!(result["Ok"]["value"], serde_json::json!([]));
+    }
+
     /// Claude Code defers MCP tools behind ToolSearch: the model sees only the
     /// name and must load the schema first, which in practice it never does
     /// for `progress` — so no Claude terminal ever reported done/blocked while
