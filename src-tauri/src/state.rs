@@ -687,6 +687,19 @@ pub enum AppEvent {
     /// never saw the badge.
     #[serde(rename = "session-standby")]
     SessionStandby { session_id: String, standby: bool },
+    /// The raw PTY diagnostics-capture tap (`pty_capture.rs`) started or
+    /// stopped, or its session filter changed — via the Tauri command, the
+    /// HTTP route, or a raw curl POST from outside the app entirely. Global,
+    /// not per-session: `session_filter: None` means every session is being
+    /// recorded, so this can't be scoped to one `pty_session_id`. A frontend
+    /// tab evaluates "is *this* session being captured" itself from
+    /// `enabled` + `session_filter`.
+    #[serde(rename = "pty-capture-changed")]
+    PtyCaptureChanged {
+        enabled: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_filter: Option<String>,
+    },
     /// The theme registry finished its (debounced) reload from disk — clients
     /// should re-read `GET /config/themes`. Payload-free, like
     /// `RepositoriesChanged`: shipping the theme set on every save would copy
@@ -6019,6 +6032,9 @@ impl AppState {
             // Standby is a process-signal (SIGSTOP/wake) that lives on
             // `session_visibility`/the standby sweeper, not `SessionState`.
             | AppEvent::SessionStandby { .. }
+            // The capture tap's own `session_filter` is the source of truth
+            // for who's being recorded; no `SessionState` field mirrors it.
+            | AppEvent::PtyCaptureChanged { .. }
             | AppEvent::ThemesChanged
             // Clipboard text is transient, never accumulated.
             | AppEvent::PtyClipboardStore { .. } => {}

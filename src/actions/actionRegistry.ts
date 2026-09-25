@@ -12,9 +12,12 @@ import { keybindingsStore } from "../stores/keybindings";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
+import { toastsStore } from "../stores/toasts";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { isTauri } from "../transport";
 import { comboToDisplay } from "../utils/hotkey";
+import { isPerfDebug } from "../utils/perfDebug";
+import { ptyCaptureStore } from "../utils/ptyCapture";
 import { isHandsFreeArmed, toggleHandsFreeConversation } from "./handsFreeConversation";
 
 /** The one dynamic category (from `useCommandPaletteActions.ts`) the Command
@@ -113,6 +116,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"toggle-compose-panel": { label: "Toggle compose panel", category: "Panels" },
 	// Label is replaced per build by what the toggle will do — see getActionEntries.
 	"toggle-hands-free": { label: "Start hands-free conversation", category: "Dictation" },
+	"toggle-diagnostics-capture": { label: "Toggle diagnostics capture (active tab)", category: "Terminal" },
 };
 
 /**
@@ -182,6 +186,18 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"command-overview": handlers.toggleCommandOverview,
 		"detach-activity-dashboard": handlers.detachActivityDashboard,
 		"toggle-tunnels": () => tunnelPanelStore.toggle(),
+		"toggle-diagnostics-capture": () => {
+			const id = terminalsStore.getActive()?.sessionId;
+			if (id) {
+				void ptyCaptureStore.toggle(id);
+			} else {
+				// A freshly-spawned tab (PTY not assigned a sessionId yet) or a
+				// non-terminal active tab — ptyCaptureStore.toggle() itself always
+				// surfaces failure via a toast, so this no-op needs the same rather
+				// than silently doing nothing with no feedback at all.
+				toastsStore.add("Diagnostics capture", "No active terminal session to capture.", "warn");
+			}
+		},
 		"process-manager": handlers.toggleProcessManager,
 		"open-generators": handlers.toggleGenerators,
 		"show-remote-qr": handlers.showRemoteQr,
@@ -205,6 +221,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		// A browser tab never loads the dictation config (`refreshConfig` is
 		// desktop-only), so there the backend's answer to arming is the gate.
 		if (actionId === "toggle-hands-free" && isTauri() && !dictationStore.state.enabled) continue;
+		if (actionId === "toggle-diagnostics-capture" && !isPerfDebug()) continue;
 		const handler = handlerMap[actionId as ActionName];
 		if (!handler) continue;
 

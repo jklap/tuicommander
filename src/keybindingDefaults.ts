@@ -79,6 +79,7 @@ export const ACTION_NAMES = [
 	"block-search-toggle",
 	"answers-only",
 	"toggle-hands-free",
+	"toggle-diagnostics-capture",
 	// Numbered tabs and branches
 	...Array.from({ length: 9 }, (_, i) => `switch-tab-${i + 1}`),
 	...Array.from({ length: 9 }, (_, i) => `switch-branch-${i + 1}`),
@@ -165,6 +166,9 @@ export const DEFAULT_BINDINGS: Record<ActionName, string> = {
 	"toggle-compose-panel": "Cmd+I",
 	"detach-activity-dashboard": "",
 	"toggle-tunnels": "",
+	// Unbound by default: a debug tool, not a hot path, reachable via the
+	// Command Palette (gated on isPerfDebug() there).
+	"toggle-diagnostics-capture": "",
 	"process-manager": "",
 	"open-generators": "",
 	"show-remote-qr": "",
