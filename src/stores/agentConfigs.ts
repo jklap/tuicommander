@@ -64,6 +64,7 @@ interface AgentConfigsState {
 			skip_trust_dialog?: boolean;
 			ego_mode?: EgoPermissionMode;
 			ego_sandbox?: EgoSandbox;
+			wrap_user_function?: boolean | null;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
@@ -517,6 +518,20 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 				}),
 			);
 			await saveToDisk();
+		},
+
+		/** `null`/undefined = ask when detected; `true`/`false` = decided. */
+		getWrapUserFunction(type: AgentType): boolean | null {
+			return state.agents[type]?.wrap_user_function ?? null;
+		},
+
+		syncWrapUserFunction(type: AgentType, value: boolean | null): void {
+			setState(
+				produce((s) => {
+					if (!s.agents[type]) s.agents[type] = { run_configs: [] };
+					s.agents[type].wrap_user_function = value;
+				}),
+			);
 		},
 
 		/** Get all env flags for an agent */
