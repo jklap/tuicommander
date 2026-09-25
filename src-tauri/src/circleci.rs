@@ -375,6 +375,7 @@ async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
                 mut sequence: A,
             ) -> Result<String, A::Error> {
                 let mut tail = String::new();
+                let mut truncated = false;
                 while let Some(chunk) = sequence.next_element::<serde_json::Value>()? {
                     if let Some(message) = chunk.get("message").and_then(serde_json::Value::as_str)
                     {
@@ -387,6 +388,7 @@ async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
                                 cut += 1;
                             }
                             tail.drain(..cut);
+                            truncated = true;
                         }
                     }
                 }
@@ -396,8 +398,13 @@ async fn parse_log_tail(response: reqwest::Response) -> Result<String, String> {
                         cut += 1;
                     }
                     tail.drain(..cut);
+                    truncated = true;
                 }
-                Ok(tail)
+                if truncated {
+                    Ok(format!("[... CircleCI action log truncated ...]\n{tail}"))
+                } else {
+                    Ok(tail)
+                }
             }
         }
         let reader = BodyReader {
@@ -675,6 +682,7 @@ mod tests {
         .await
         .unwrap();
         assert!(logs.ends_with("last failure\n\n"));
+        assert!(logs.contains("[... CircleCI action log truncated ...]"));
         assert!(logs.len() <= super::MAX_LOG_BODY_BYTES + 100);
     }
 

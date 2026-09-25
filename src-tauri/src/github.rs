@@ -3649,8 +3649,17 @@ fn list_failing_checks_cli(
     repo_slug: &str,
     head_sha: &str,
 ) -> Result<Vec<FailingCheck>, String> {
+    list_failing_checks_cli_with(|| Command::new(gh), CI_CLI_TIMEOUT, repo_slug, head_sha)
+}
+
+fn list_failing_checks_cli_with(
+    mut command: impl FnMut() -> Command,
+    timeout: std::time::Duration,
+    repo_slug: &str,
+    head_sha: &str,
+) -> Result<Vec<FailingCheck>, String> {
     // Resolve the PR by its commit: a fork can use the same branch name.
-    let mut list_cmd = Command::new(gh);
+    let mut list_cmd = command();
     list_cmd.args([
         "pr",
         "list",
@@ -3664,15 +3673,14 @@ fn list_failing_checks_cli(
         "number,headRefOid",
     ]);
     crate::cli::apply_no_window(&mut list_cmd);
-    let prs =
-        crate::git_cli::output_with_deadline(&mut list_cmd, CI_CLI_TIMEOUT).map_err(|error| {
-            tracing::warn!(
-                source = "fetch_ci_failure_logs_impl",
-                ?error,
-                "gh pr list failed"
-            );
-            format!("gh pr list failed: {error}")
-        })?;
+    let prs = crate::git_cli::output_with_deadline(&mut list_cmd, timeout).map_err(|error| {
+        tracing::warn!(
+            source = "fetch_ci_failure_logs_impl",
+            ?error,
+            "gh pr list failed"
+        );
+        format!("gh pr list failed: {error}")
+    })?;
     if !prs.status.success() {
         let error = format!(
             "gh pr list failed: {}",
@@ -3692,7 +3700,7 @@ fn list_failing_checks_cli(
     let Some(pr_number) = pr_number_for_head(&prs_json, head_sha) else {
         return Ok(Vec::new());
     };
-    let mut cmd = Command::new(gh);
+    let mut cmd = command();
     cmd.args([
         "pr",
         "checks",
@@ -3704,15 +3712,14 @@ fn list_failing_checks_cli(
         &pr_number.to_string(),
     ]);
     crate::cli::apply_no_window(&mut cmd);
-    let output =
-        crate::git_cli::output_with_deadline(&mut cmd, CI_CLI_TIMEOUT).map_err(|error| {
-            tracing::warn!(
-                source = "fetch_ci_failure_logs_impl",
-                ?error,
-                "gh pr checks failed"
-            );
-            format!("gh pr checks failed: {error}")
-        })?;
+    let output = crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|error| {
+        tracing::warn!(
+            source = "fetch_ci_failure_logs_impl",
+            ?error,
+            "gh pr checks failed"
+        );
+        format!("gh pr checks failed: {error}")
+    })?;
     // Failing checks make gh exit non-zero, but its JSON is still usable.
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
         let message = format!(
@@ -3738,6 +3745,18 @@ fn pr_number_for_head(prs: &serde_json::Value, head_sha: &str) -> Option<u64> {
         .find(|pr| pr["headRefOid"].as_str() == Some(head_sha))?
         .get("number")?
         .as_u64()
+}
+
+fn normalize_ci_head_sha(head_sha: &str, selected: bool) -> Result<String, String> {
+    if head_sha.len() != 40 || !head_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(if selected {
+            "Invalid PR head SHA"
+        } else {
+            "Invalid local branch head SHA"
+        }
+        .to_string());
+    }
+    Ok(head_sha.to_ascii_lowercase())
 }
 
 /// Find failed jobs for the branch's latest head commit and fetch their logs.
@@ -3778,32 +3797,21 @@ fn fetch_ci_failure_logs_impl(
     let head_sha = if let Some(sha) = selected_head_sha {
         sha.to_string()
     } else {
-        let mut head_cmd = Command::new("git");
-        head_cmd.args([
-            "-C",
-            repo_path,
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("refs/heads/{branch}^{{commit}}"),
-        ]);
-        let head_output = crate::git_cli::output_with_deadline(&mut head_cmd, CI_CLI_TIMEOUT)
-            .map_err(|error| format!("Failed to resolve branch head: {error}"))?;
-        if !head_output.status.success() {
-            return Err("Cannot resolve the local branch head".to_string());
-        }
-        String::from_utf8_lossy(&head_output.stdout)
+        crate::git_cli::git_cmd(&repo_path_buf)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("refs/heads/{branch}^{{commit}}"),
+            ])
+            .timeout(CI_CLI_TIMEOUT)
+            .run()
+            .map_err(|error| format!("Failed to resolve branch head: {error}"))?
+            .stdout
             .trim()
             .to_string()
     };
-    if head_sha.len() != 40 || !head_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(if selected_head_sha.is_some() {
-            "Invalid PR head SHA"
-        } else {
-            "Invalid local branch head SHA"
-        }
-        .to_string());
-    }
+    let head_sha = normalize_ci_head_sha(&head_sha, selected_head_sha.is_some())?;
 
     // Step 1: list recent runs and restrict inspection to the latest head SHA.
     // A commit commonly has several workflow runs, all of which may contribute
@@ -3850,6 +3858,10 @@ fn fetch_ci_failure_logs_impl(
     // Step 2: inspect jobs on every workflow run for the current head. A run may
     // still be in progress while one of its jobs is already conclusively red.
     let mut failed_jobs = Vec::new();
+    // DEFERRED (N4): each subprocess has a deadline, but the entire sweep
+    // does not. A Tokio timeout around spawn_blocking would return while its
+    // blocking work keeps running. Propagate one deadline through the CLI and
+    // CircleCI requests before adding an overall bound and a job cap.
     for run_id in run_ids {
         crate::github_debug::log_api(
             "CLI",
@@ -4079,6 +4091,23 @@ mod tests {
     }
 
     #[test]
+    fn selected_ci_head_sha_is_normalized_and_invalid_sha_is_rejected() {
+        let upper = "AB".repeat(20);
+        assert_eq!(
+            normalize_ci_head_sha(&upper, true).unwrap(),
+            "ab".repeat(20)
+        );
+        assert_eq!(
+            normalize_ci_head_sha(&"a".repeat(39), true).unwrap_err(),
+            "Invalid PR head SHA"
+        );
+        assert_eq!(
+            normalize_ci_head_sha(&format!("{}g", "a".repeat(39)), true).unwrap_err(),
+            "Invalid PR head SHA"
+        );
+    }
+
+    #[test]
     fn selected_circleci_row_uses_only_its_log_when_actions_also_fail() {
         let selected = "https://circleci.com/gh/acme/widget/42";
         let checks = failing_checks_from_json(&serde_json::json!([
@@ -4185,6 +4214,51 @@ mod tests {
             list_failing_checks_cli(missing.to_str().unwrap(), "acme/widget", &"a".repeat(40))
                 .unwrap_err();
         assert!(error.contains("gh pr list failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hanging_gh_pr_list_has_a_deadline() {
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let scratch = tempfile::tempdir_in(target).unwrap();
+        let script = scratch.path().join("hanging-gh.sh");
+        // `sh <script>` avoids executing a newly written inode. `exec` makes
+        // sleep the direct child that output_with_deadline kills on timeout.
+        std::fs::write(&script, "exec sleep 60\n").unwrap();
+        let started = std::time::Instant::now();
+        let error = list_failing_checks_cli_with(
+            || {
+                let mut command = Command::new("sh");
+                command.arg(&script);
+                command
+            },
+            std::time::Duration::from_millis(150),
+            "acme/widget",
+            &"a".repeat(40),
+        )
+        .unwrap_err();
+        assert!(error.contains("gh pr list failed"));
+        assert!(error.contains("timed out"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn local_ci_head_resolution_uses_git_cli() {
+        let repo = tempfile::tempdir().unwrap();
+        let git_dir = repo.path().join(".git");
+        std::fs::create_dir(&git_dir).unwrap();
+        std::fs::write(
+            git_dir.join("config"),
+            "[remote \"origin\"]\n    url = https://github.com/acme/widget.git\n",
+        )
+        .unwrap();
+        let before = crate::git_cli::git_cmd_forks(repo.path());
+        let error =
+            fetch_ci_failure_logs_impl(repo.path().to_str().unwrap(), "missing", None, None)
+                .unwrap_err();
+        assert!(error.contains("Failed to resolve branch head"));
+        assert_eq!(crate::git_cli::git_cmd_forks(repo.path()), before + 1);
     }
 
     #[test]

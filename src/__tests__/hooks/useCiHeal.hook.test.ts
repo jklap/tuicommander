@@ -192,6 +192,16 @@ describe("useCiHeal budget + re-entry guard", () => {
 		await flush();
 		expect(h.loggerWarn).toHaveBeenCalled();
 		expect(h.loggerError).not.toHaveBeenCalled();
+		expect(h.toastAdd).toHaveBeenCalledWith(expect.any(String), expect.any(String), "warn");
+	});
+
+	it("shows an error toast for an unexpected CI log failure", async () => {
+		seed({ enabled: true, attempts: 0, healing: false });
+		h.invoke.mockRejectedValueOnce(new Error("gh pr list timed out"));
+		fireCiFailed();
+		await flush();
+		expect(h.loggerError).toHaveBeenCalled();
+		expect(h.toastAdd).toHaveBeenCalledWith(expect.any(String), expect.any(String), "error");
 	});
 
 	it("does not consume an attempt when prompt delivery fails", async () => {

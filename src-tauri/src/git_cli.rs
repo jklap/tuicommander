@@ -236,6 +236,10 @@ pub(crate) fn output_with_deadline(
             None => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
+                    // DEFERRED (N3): kill/reap covers the direct child only.
+                    // Killing a whole process tree needs process groups on
+                    // Unix and Job Objects on Windows; the reader threads are
+                    // deliberately not joined if a grandchild holds a pipe.
                     let _ = child.kill();
                     // Reap it, so a timeout never leaves a zombie behind.
                     let _ = child.wait();

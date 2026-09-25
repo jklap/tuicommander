@@ -1,5 +1,14 @@
 # MCP & HTTP Server
 
+## CI logs
+
+The MCP `repo` tool's `ci_logs` action accepts `path` and `branch` and fetches
+logs for the local branch head. It does not accept a selected check URL or PR
+head SHA. For a remote-only PR or a particular CircleCI check, use the
+`fetch_ci_failure_logs` Tauri command with `check_url` and `head_sha`, or
+`/repo/ci-failure-logs` with `checkUrl` and `headSha`. Both verify the selected
+check against that PR head.
+
 ## Native stories
 
 The `story` MCP tool accepts `{ input: StoryAction }`. It resolves the owning project and live PTY from the bound MCP caller; caller-supplied project and session IDs are ignored. The shared Rust story service enforces revision and project checks. The HTTP route `/stories/action` and desktop command `story_action_command` use the same service. `tuic story '<JSON action>' [--project PATH] [--session-id PTY]` provides a local CLI path. The first native slice does not include story import/export.
