@@ -38,6 +38,14 @@ beforeEach(() => {
 });
 
 describe("StoriesDialog", () => {
+	it("moves initial focus into the dialog", async () => {
+		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+		await screen.findByRole("heading", { name: "Implement API" });
+		await waitFor(() =>
+			expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close Plans and Stories" })),
+		);
+	});
+
 	it("loads plan and story detail, then starts manual work through the backend", async () => {
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByRole("heading", { name: "Implement API" });

@@ -375,7 +375,7 @@ Ideas panel with per-repo filtering and terminal integration.
 
 ### StoriesDialog (`StoriesDialog/`)
 
-The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It derives direct and transitive abandoned dependency labels from the loaded story graph. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. The plan column shows the WontFix count, including an all-cancelled label.
+The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It derives direct and transitive abandoned dependency labels from the loaded story graph. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. The plan column shows the WontFix count, including an all-cancelled label. Visible labels use `t()` and English catalog entries, the controls use style-guide tokens and button variants, and the close button takes focus when the dialog opens.
 
 ### ProgressDialog (`ProgressDialog/`)
 
