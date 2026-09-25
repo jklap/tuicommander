@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **CircleCI CI Auto-Heal** — Failed CircleCI checks can now contribute bounded, sanitised logs when a token is configured. Token removal is explicit, and remote transports use the same protected backend path.
+
 ### Added
 
 - **Settings expert mode** — An **Expert** switch in the Settings header shows or hides expert settings: settings whose default is correct for almost everyone. In basic mode an expert setting is hidden only while it has its default value, so a setting you changed is never hidden. A search result for an expert setting shows an **Expert** badge and opens it without changing the switch. The switch position is kept between restarts.

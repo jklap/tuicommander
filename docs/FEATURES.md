@@ -980,7 +980,7 @@ re-derived later.
   - **CI failure** — fetches failure logs and injects them with a fix prompt
   - **Merge conflict** (`mergeable === "CONFLICTING"`) — injects a resolve-conflicts prompt
 - Toggle per-branch via pill-switch toggle in PR detail popover (visible when CI is failing or the PR is conflicting), styled consistently with CI check item rows
-- Fetches completed failed-job logs directly via the GitHub Actions jobs API, including when sibling jobs keep the workflow run in progress; logs are sanitized and truncated before injection
+- Fetches completed failed-job logs directly via the GitHub Actions jobs API and configured CircleCI jobs, including when sibling jobs keep the workflow run in progress; logs are sanitised and truncated before injection
 - Waits for agent to be idle/awaiting input before injecting
 - Max 3 delivered attempts per block cycle, then stops and logs a warning; log-fetch and terminal-delivery failures do not consume the budget
 - Enabling while already blocked kicks off a heal immediately
