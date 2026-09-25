@@ -168,6 +168,27 @@ impl RunStore {
         read_snapshot(&self.connect()?, run_id)
     }
 
+    pub fn list_plan_runs(
+        &self,
+        project: &str,
+        plan_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RunSnapshot>, String> {
+        if limit == 0 || limit > 100 {
+            return Err("workflow run list limit must be between 1 and 100".into());
+        }
+        let conn = self.connect()?;
+        let mut stmt = conn
+            .prepare("SELECT snapshot_json FROM workflow_runs WHERE project=?1 AND plan_id=?2 ORDER BY rowid DESC LIMIT ?3")
+            .map_err(|error| format!("prepare plan runs: {error}"))?;
+        stmt.query_map(params![project, plan_id, limit as i64], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| format!("list plan runs: {error}"))?
+        .map(|row| decode(&row.map_err(|error| format!("read plan run: {error}"))?))
+        .collect()
+    }
+
     pub fn events_after(
         &self,
         run_id: &str,

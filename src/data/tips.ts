@@ -20,6 +20,11 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Workflow Run History",
+		description: "Open Run history in Plans and Stories to follow a plan's persisted workflow timeline.",
+		shortcut: null,
+	},
+	{
 		feature: "Command Palette",
 		description: "Search and run any action by name — shortcuts, settings, panels, everything.",
 		shortcut: `${mod}+P`,
