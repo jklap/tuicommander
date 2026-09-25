@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Markdown links stay in the app** — File and directory links in rendered Markdown open the appropriate TUICommander view; heading and line targets work, missing files show a toast, and unsupported URL schemes cannot navigate the WebView.
 - **Markdown links stay in the app** — File and directory links in rendered Markdown open the appropriate TUICommander view; heading and line targets work, missing files show a toast, and unsupported URL schemes cannot navigate the WebView. Local symlinks and parent paths work, UNC links are refused, and internal preview/plugin frames remain available.
 - **MCP bridge startup guard** — A TUICommander executable without its `tuic-bridge` sidecar no longer edits agent MCP configs. An explicit install cannot replace an existing bridge entry with an unresolved bare command; a missing entry may still use that fallback with a warning that lists searched paths.
+- **MCP bridge startup guard** — Startup requires a non-empty, executable sidecar from a stable app location. A dev or stray build keeps an existing working absolute MCP command, while a missing command can be repaired. Config edits preserve permissions, symlinks, comments and user-added entry fields; an unresolved bare command cannot replace an existing entry.
 
 - **CircleCI CI Auto-Heal** — Failed CircleCI checks can now contribute bounded, sanitised logs when a token is configured. Token removal is explicit, and remote transports use the same protected backend path.
 

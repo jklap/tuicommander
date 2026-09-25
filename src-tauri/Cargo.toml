@@ -173,6 +173,7 @@ jsonc-parser = { version = "0.33", features = ["cst", "serde", "serde_json"] }
 # Goose stores its MCP extensions in YAML. Deprecated upstream, but already in
 # the tree via gh-token, so the direct dependency adds nothing to the build.
 serde_yaml = "0.9"
+toml_edit = "0.25"
 portable-pty = "0.9"
 tokio = { version = "1", features = ["full"] }
 dashmap = "6"
