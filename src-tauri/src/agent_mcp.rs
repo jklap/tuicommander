@@ -1042,15 +1042,26 @@ fn yaml_command_edit(original: &str, key: &str, bridge_path: &str) -> Option<Str
 
 fn yaml_entry_insert(original: &str, key: &str, bridge_path: &str) -> Option<String> {
     let entry = serde_yaml::to_string(&goose_entry_value(bridge_path)).ok()?;
-    let mut block = format!("  {TUIC_MCP_KEY}:\n");
-    for line in entry.lines() {
-        block.push_str(&format!("    {line}\n"));
-    }
     let lines: Vec<&str> = original.lines().collect();
-    if let Some(section) = lines
+    let section = lines
         .iter()
-        .position(|line| yaml_indent(line) == 0 && yaml_line_key(line, key))
-    {
+        .position(|line| yaml_indent(line) == 0 && yaml_line_key(line, key));
+    let indent = if let Some(section) = section {
+        lines[(section + 1)..]
+            .iter()
+            .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+            .map_or(2, |line| match yaml_indent(line) {
+                0 => 2,
+                indent => indent,
+            })
+    } else {
+        2
+    };
+    let mut block = format!("{}{TUIC_MCP_KEY}:\n", " ".repeat(indent));
+    for line in entry.lines() {
+        block.push_str(&format!("{}{line}\n", " ".repeat(indent * 2)));
+    }
+    if let Some(section) = section {
         let line = lines[section];
         if line.trim() != format!("{key}:") {
             return None;
@@ -1074,6 +1085,34 @@ fn yaml_entry_insert(original: &str, key: &str, bridge_path: &str) -> Option<Str
         edited.push_str(&format!("{key}:\n{block}"));
         Some(edited)
     }
+}
+
+/// Reject a YAML edit unless the parsed document differs only at our entry.
+fn yaml_edit_is_surgical(
+    before: &serde_yaml::Value,
+    after: &serde_yaml::Value,
+    key: &str,
+    expected_entry: Option<serde_yaml::Value>,
+) -> bool {
+    let (mut before, mut after) = (before.clone(), after.clone());
+    before
+        .get_mut(key)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .and_then(|map| map.remove(TUIC_MCP_KEY));
+    let actual = after
+        .get_mut(key)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .and_then(|map| map.remove(TUIC_MCP_KEY));
+    if before.get(key).is_none()
+        && after.get(key).is_some_and(|section| {
+            section
+                .as_mapping()
+                .is_some_and(serde_yaml::Mapping::is_empty)
+        })
+    {
+        after.as_mapping_mut().unwrap().remove(key);
+    }
+    before == after && actual == expected_entry
 }
 
 /// goose's `ExtensionEntry` for a stdio server. `name` and `timeout` have no
@@ -1139,14 +1178,10 @@ fn ensure_yaml_mcp_entry(
                 return false;
             }
         };
-        if parsed
-            .get(key)
-            .and_then(|extensions| extensions.get(TUIC_MCP_KEY))
-            .and_then(|entry| entry.get("cmd"))
-            .and_then(serde_yaml::Value::as_str)
-            != Some(bridge_path)
-        {
-            tracing::error!(source = "mcp", agent = %agent_label, "Edited YAML has wrong bridge command");
+        let mut expected_entry = root[key][TUIC_MCP_KEY].clone();
+        expected_entry["cmd"] = bridge_path.into();
+        if !yaml_edit_is_surgical(&root, &parsed, key, Some(expected_entry)) {
+            tracing::error!(source = "mcp", agent = %agent_label, "Edited YAML changed fields outside the bridge command");
             return false;
         }
         backup_config_once(config_path, agent_label, &original);
@@ -1169,14 +1204,8 @@ fn ensure_yaml_mcp_entry(
             return false;
         }
     };
-    if parsed
-        .get(key)
-        .and_then(|extensions| extensions.get(TUIC_MCP_KEY))
-        .and_then(|entry| entry.get("cmd"))
-        .and_then(serde_yaml::Value::as_str)
-        != Some(bridge_path)
-    {
-        tracing::error!(source = "mcp", agent = %agent_label, "Edited YAML has wrong bridge command");
+    if !yaml_edit_is_surgical(&root, &parsed, key, Some(goose_entry_value(bridge_path))) {
+        tracing::error!(source = "mcp", agent = %agent_label, "Edited YAML changed other goose extensions");
         return false;
     }
     backup_config_once(config_path, agent_label, &original);
@@ -1233,12 +1262,8 @@ fn remove_yaml_mcp_entry(
     edited.replace_range(start..end.min(edited.len()), "");
     let parsed = serde_yaml::from_str::<serde_yaml::Value>(&edited)
         .map_err(|e| format!("Edited YAML is invalid: {e}"))?;
-    if parsed
-        .get(key)
-        .and_then(|extensions| extensions.get(TUIC_MCP_KEY))
-        .is_some()
-    {
-        return Err("Edited YAML still holds goose entry".to_string());
+    if !yaml_edit_is_surgical(&root, &parsed, key, None) {
+        return Err("Edited YAML changed fields outside the goose entry".to_string());
     }
     backup_config_once(config_path, agent_label, &original);
     write_text_file_if_unchanged(config_path, Some(&original), &edited)
@@ -1305,6 +1330,51 @@ fn working_configured_command(spec: &McpConfigSpec) -> Option<String> {
     let command = configured_bridge_command(spec)?;
     let path = std::path::Path::new(&command);
     (path.is_absolute() && usable_executable(path)).then_some(command)
+}
+
+fn entry_has_custom_transport(spec: &McpConfigSpec) -> bool {
+    const URL_KEYS: [&str; 4] = ["url", "httpUrl", "serverUrl", "uri"];
+    match spec.format {
+        McpFormat::Toml { .. } => read_toml_file(&spec.config_path)
+            .and_then(|root| root.get("mcp_servers")?.get(TUIC_MCP_KEY).cloned())
+            .is_some_and(|entry| {
+                URL_KEYS.iter().any(|key| entry.get(*key).is_some())
+                    || entry
+                        .get("type")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|kind| kind != "stdio" && kind != "local")
+            }),
+        McpFormat::Yaml => read_yaml_file(&spec.config_path)
+            .and_then(|root| {
+                root.get(spec.key_path.first().copied().unwrap_or("extensions"))?
+                    .get(TUIC_MCP_KEY)
+                    .cloned()
+            })
+            .is_some_and(|entry| {
+                URL_KEYS.iter().any(|key| entry.get(*key).is_some())
+                    || entry
+                        .get("type")
+                        .and_then(serde_yaml::Value::as_str)
+                        .is_some_and(|kind| kind != "stdio")
+            }),
+        McpFormat::Json | McpFormat::OpenCode => read_json_file(&spec.config_path)
+            .and_then(|root| navigate(&root, &spec.key_path)?.get(TUIC_MCP_KEY).cloned())
+            .is_some_and(|entry| {
+                URL_KEYS.iter().any(|key| entry.get(*key).is_some())
+                    || entry
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|kind| kind != "stdio" && kind != "local")
+            }),
+    }
+}
+
+fn custom_command_should_be_kept(command: &str, bridge_path: &str) -> bool {
+    if command == bridge_path || command == BRIDGE_NAME || command == "tuic-bridge.exe" {
+        return false;
+    }
+    let path = std::path::Path::new(command);
+    !path.is_absolute() || usable_executable(path)
 }
 
 fn bridge_location_is_stable(exe: &std::path::Path) -> bool {
@@ -1441,12 +1511,16 @@ fn ensure_mcp_configs_for<'a>(
         if !auto_install_allowed(&spec, agent) {
             continue;
         }
-        if let Some(command) = working_configured_command(&spec) {
-            if command != bridge_path {
-                tracing::info!(source = "mcp", agent, command, bridge = %bridge_path,
-                    "Keeping working bridge entry");
-                continue;
-            }
+        if entry_has_custom_transport(&spec) {
+            tracing::info!(source = "mcp", agent, "Keeping custom MCP transport");
+            continue;
+        }
+        if let Some(command) = configured_bridge_command(&spec)
+            && custom_command_should_be_kept(&command, &bridge_path)
+        {
+            tracing::info!(source = "mcp", agent, command, bridge = %bridge_path,
+                "Keeping custom or working bridge command");
+            continue;
         }
         ensure_spec_entry(&spec, &bridge_path, agent);
     }
@@ -1498,6 +1572,22 @@ pub(crate) fn install_agent_mcp(
 }
 
 fn install_spec(spec: &McpConfigSpec, bridge_path: &str, agent_label: &str) -> Result<(), String> {
+    if entry_has_custom_transport(spec) {
+        return Err(format!(
+            "MCP entry at {} uses a custom transport; remove it explicitly before installing a stdio bridge",
+            spec.config_path.display()
+        ));
+    }
+    if let Some(command) = configured_bridge_command(spec)
+        && !std::path::Path::new(&command).is_absolute()
+        && command != BRIDGE_NAME
+        && command != "tuic-bridge.exe"
+    {
+        return Err(format!(
+            "MCP entry at {} uses a custom command ({command}); remove it explicitly before installing a stdio bridge",
+            spec.config_path.display()
+        ));
+    }
     if let Some(command) = working_configured_command(spec) {
         if command != bridge_path {
             tracing::info!(source = "mcp", agent = %agent_label, command,
@@ -2496,6 +2586,50 @@ mod tests {
     }
 
     #[test]
+    fn yaml_install_preserves_nonstandard_extension_indentation_and_structure() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        for indent in [3, 4] {
+            let path = dir.path().join(format!("goose-{indent}.yaml"));
+            let before = format!(
+                "# keep root note\nextensions:\n{spaces}developer:\n{spaces}{spaces}enabled: true\n{spaces}other:\n{spaces}{spaces}cmd: /other\n",
+                spaces = " ".repeat(indent)
+            );
+            std::fs::write(&path, &before).unwrap();
+            assert!(ensure_yaml_mcp_entry(
+                &path,
+                "extensions",
+                "/bridge",
+                "goose"
+            ));
+            let after = std::fs::read_to_string(&path).unwrap();
+            let mut expected: serde_yaml::Value = serde_yaml::from_str(&before).unwrap();
+            let mut actual: serde_yaml::Value = serde_yaml::from_str(&after).unwrap();
+            assert_eq!(
+                actual["extensions"][TUIC_MCP_KEY]["cmd"].as_str(),
+                Some("/bridge")
+            );
+            actual["extensions"]
+                .as_mapping_mut()
+                .unwrap()
+                .remove(TUIC_MCP_KEY);
+            expected["extensions"]
+                .as_mapping_mut()
+                .unwrap()
+                .remove(TUIC_MCP_KEY);
+            assert_eq!(
+                actual, expected,
+                "other extensions changed at {indent} spaces: {after}"
+            );
+            assert!(after.contains(&format!("{spaces}developer:", spaces = " ".repeat(indent))));
+            assert!(after.contains(&format!(
+                "{spaces}cmd: /bridge",
+                spaces = " ".repeat(indent * 2)
+            )));
+        }
+    }
+
+    #[test]
     fn yaml_removal_preserves_unrelated_comments() {
         let _config = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
@@ -2803,6 +2937,121 @@ mod tests {
                 command_at_spec(&spec),
                 replacement.to_str().unwrap(),
                 "{label} missing entry not repaired"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_keeps_wrapper_commands_in_every_config_format() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let bridge = std::env::current_exe().unwrap();
+        for (label, format, key_path, contents) in [
+            (
+                "claude",
+                McpFormat::Json,
+                vec!["mcpServers"],
+                r#"{"mcpServers":{"tuicommander":{"type":"stdio","command":"bash","args":["-lc","tuic-bridge"],"env":{}}}}"#,
+            ),
+            (
+                "opencode",
+                McpFormat::OpenCode,
+                vec!["mcp"],
+                r#"{"mcp":{"tuicommander":{"type":"local","command":["bash","-lc","tuic-bridge"],"enabled":true}}}"#,
+            ),
+            (
+                "codex",
+                McpFormat::Toml {
+                    forward_session: true,
+                },
+                vec![],
+                "[mcp_servers.tuicommander]\ncommand = 'bash'\nargs = ['-lc', 'tuic-bridge']\n",
+            ),
+            (
+                "goose",
+                McpFormat::Yaml,
+                vec!["extensions"],
+                "extensions:\n  tuicommander:\n    type: stdio\n    cmd: bash\n    args: [-lc, tuic-bridge]\n",
+            ),
+        ] {
+            let path = dir.path().join(format!("{label}.config"));
+            std::fs::write(&path, contents).unwrap();
+            let spec = McpConfigSpec {
+                key_path,
+                format,
+                ..spec_at(path.clone())
+            };
+            ensure_mcp_configs_for(
+                &[],
+                Some(&bridge),
+                std::iter::once((label, spec_at_format(&spec))),
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                contents,
+                "{label} wrapper changed"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_keeps_http_entries_and_explicit_install_refuses_them() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let bridge = std::env::current_exe().unwrap();
+        for (label, format, key_path, contents) in [
+            (
+                "claude",
+                McpFormat::Json,
+                vec!["mcpServers"],
+                r#"{"mcpServers":{"tuicommander":{"type":"http","url":"http://127.0.0.1:9876/mcp"}}}"#,
+            ),
+            (
+                "opencode",
+                McpFormat::OpenCode,
+                vec!["mcp"],
+                r#"{"mcp":{"tuicommander":{"type":"remote","url":"http://127.0.0.1:9876/mcp"}}}"#,
+            ),
+            (
+                "codex",
+                McpFormat::Toml {
+                    forward_session: true,
+                },
+                vec![],
+                "[mcp_servers.tuicommander]\nurl = 'http://127.0.0.1:9876/mcp'\n",
+            ),
+            (
+                "goose",
+                McpFormat::Yaml,
+                vec!["extensions"],
+                "extensions:\n  tuicommander:\n    type: streamable_http\n    uri: http://127.0.0.1:9876/mcp\n",
+            ),
+        ] {
+            let path = dir.path().join(format!("{label}.config"));
+            std::fs::write(&path, contents).unwrap();
+            let spec = McpConfigSpec {
+                key_path,
+                format,
+                ..spec_at(path.clone())
+            };
+            ensure_mcp_configs_for(
+                &[],
+                Some(&bridge),
+                std::iter::once((label, spec_at_format(&spec))),
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                contents,
+                "{label} URL entry changed at launch"
+            );
+            assert!(
+                install_spec(&spec, bridge.to_str().unwrap(), label).is_err(),
+                "{label} URL entry was accepted for stdio install"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                contents,
+                "{label} URL entry changed on explicit install"
             );
         }
     }
