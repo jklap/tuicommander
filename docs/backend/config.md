@@ -489,7 +489,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `outline_panel_visible` | `bool` | `false` | Outline panel open |
 | `references_panel_visible` | `bool` | `false` | References panel open |
 | `ai_chat_panel_visible` | `bool` | `false` | AI chat panel open |
-| `file_browser_view_mode` | `String` | `"flat"` | File browser listing: `flat` or `tree` |
+| `file_browser_view_mode` | `String` | `"tree"` | File browser listing: `flat` or `tree` |
 | `diff_panel_width` | `u32` | `400` | Diff panel width in pixels |
 | `markdown_panel_width` | `u32` | `400` | Markdown panel width in pixels |
 | `notes_panel_width` | `u32` | `350` | Notes panel width in pixels |

@@ -8,6 +8,10 @@
 
 # To Test
 
+## File browser default (2026-09-25) — Rust, needs `make dev` restart
+
+- [ ] After restarting an isolated `TUIC_APP_INSTANCE=<id>` build with no saved `file_browser_view_mode`, open the file browser and confirm tree view is selected. Switch to flat list, restart, and confirm that choice remains selected.
+
 ## Night integration 2026-09-25 — Rust, needs `make dev` restart
 
 - [ ] After a `make dev` restart, run `tuic agent spawn …` outside TUICommander (no `TUIC_SESSION`): stderr shows one `registering an external MCP caller` notice and the spawn succeeds. `tuic session status <unique name or short id>` resolves; an ambiguous name returns an error.

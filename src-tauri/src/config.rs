@@ -1153,7 +1153,7 @@ fn default_diff_view_mode() -> String {
 }
 
 fn default_file_browser_view_mode() -> String {
-    "flat".to_string()
+    "tree".to_string()
 }
 
 impl Default for UIPrefsConfig {
@@ -4810,13 +4810,21 @@ mod tests {
     }
 
     /// A prefs file written before these fields existed must still load, with
-    /// each panel closed and the file browser flat -- the frontend defaults.
+    /// each panel closed and the file browser in tree view.
     #[test]
     fn ui_prefs_panel_fields_default_when_absent() {
         let loaded: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
         assert!(!loaded.outline_panel_visible);
         assert!(!loaded.references_panel_visible);
         assert!(!loaded.ai_chat_panel_visible);
+        assert_eq!(loaded.file_browser_view_mode, "tree");
+        assert_eq!(UIPrefsConfig::default().file_browser_view_mode, "tree");
+    }
+
+    #[test]
+    fn ui_prefs_respects_saved_flat_view() {
+        let loaded: UIPrefsConfig =
+            serde_json::from_str(r#"{"file_browser_view_mode":"flat"}"#).unwrap();
         assert_eq!(loaded.file_browser_view_mode, "flat");
     }
 
