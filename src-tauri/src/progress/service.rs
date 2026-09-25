@@ -395,6 +395,22 @@ mod tests {
     }
 
     #[test]
+    fn redaction_precedes_progress_length_validation() {
+        let config = tempfile::tempdir().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        let hint = project.path().to_string_lossy();
+        let secret = format!("ghp_{}", "A".repeat(40));
+        let raw = format!("{} {secret}", "a".repeat(470));
+        assert!(raw.chars().count() > MAX_TEXT_CHARS);
+        let entry = record_intent(&state, Some(&hint), &raw, None, Some("codex"), None)
+            .expect("redacted intent fits the journal cap");
+        assert!(!entry.text.contains(&secret));
+        assert!(entry.text.chars().count() <= MAX_TEXT_CHARS);
+    }
+
+    #[test]
     fn progress_names_are_bounded_before_storage() {
         let config = tempfile::tempdir().unwrap();
         let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -463,6 +479,17 @@ mod tests {
             unicode_hand_off.target_name.as_deref(),
             Some(expected_name.as_str())
         );
+        let space_at_limit = format!("{} suffix", "n".repeat(MAX_NAME_CHARS - 1));
+        let bounded = record_intent(
+            &state,
+            Some(&hint),
+            "Inspect the name limit",
+            Some(space_at_limit),
+            Some("codex"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(bounded.agent_name.as_deref(), Some("n".repeat(79).as_str()));
     }
 
     /// Collection off means the journal does not grow — not that it grows more

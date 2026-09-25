@@ -1348,6 +1348,11 @@ struct OpenIntent {
     end_row: usize,
 }
 
+#[cfg(test)]
+thread_local! {
+    static INTENT_CANDIDATE_GRID_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn incomplete_intent_title(text: &str) -> bool {
     text.rsplit_once('(')
         .is_some_and(|(_, suffix)| !suffix.contains(')') && suffix.split_whitespace().count() <= 3)
@@ -5908,6 +5913,8 @@ impl ChunkProcessor {
                         ..=row.row_index)
                         .rev()
                         .find_map(|anchor_row| {
+                            #[cfg(test)]
+                            INTENT_CANDIDATE_GRID_READS.with(|reads| reads.set(reads.get() + 1));
                             let mut line = vt.logical_line_at_row(anchor_row)?;
                             if crate::output_parser::structured_token_anchor(&line.text)
                                 != Some(crate::output_parser::StructuredTokenAnchor::Intent)
