@@ -3,7 +3,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import type { LanguageSupport } from "@codemirror/language";
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { Compartment, type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
+import { type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
 import {
 	crosshairCursor,
 	Decoration,
@@ -567,12 +567,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	});
 
 	// Base extensions
-	const wrapCompartment = new Compartment();
-	createExtension(wrapCompartment.of(wrapEnabled() ? EditorView.lineWrapping : []));
-	createEffect(() => {
-		const view = editorView();
-		if (view) view.dispatch({ effects: wrapCompartment.reconfigure(wrapEnabled() ? EditorView.lineWrapping : []) });
-	});
+	createExtension((): Extension => (wrapEnabled() ? EditorView.lineWrapping : []));
 	createExtension(codeEditorTheme);
 	createExtension(lineNumbers());
 	createExtension(history());
@@ -604,18 +599,26 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	createExtension(search());
 	createExtension(highlightSelectionMatches());
 	createExtension(searchOverview());
+	createExtension(
+		Prec.high(
+			EditorView.domEventHandlers({
+				keydown(event) {
+					if (event.code !== "KeyZ" || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+						return false;
+					}
+					event.preventDefault();
+					event.stopPropagation();
+					toggleWrap();
+					return true;
+				},
+			}),
+		),
+	);
 	// Open the shared <SearchBar> overlay instead of CodeMirror's built-in panel.
 	// High precedence so these win over searchKeymap's Mod-f (openSearchPanel).
 	createExtension(
 		Prec.high(
 			keymap.of([
-				{
-					key: "Alt-z",
-					run: () => {
-						toggleWrap();
-						return true;
-					},
-				},
 				{
 					key: "Mod-f",
 					run: () => {

@@ -6,6 +6,10 @@ import { changesField } from "../../components/CodeEditorPanel/gitGutter";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { uiStore } from "../../stores/ui";
 
+vi.hoisted(() => {
+	Object.defineProperty(navigator, "platform", { configurable: true, value: "Win32" });
+});
+
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn(async (command: string) => {
 		if (command === "read_editor_file") return "a long line that can wrap";
@@ -63,8 +67,16 @@ describe("editor wrap control", () => {
 		await waitFor(() => expect(container.querySelector(".cm-editor")).not.toBeNull());
 		const view = EditorView.findFromDOM(container.querySelector<HTMLElement>(".cm-editor")!)!;
 		expect(view.contentDOM.classList.contains("cm-lineWrapping")).toBe(false);
-		fireEvent.keyDown(view.contentDOM, { key: "z", altKey: true, code: "KeyZ" });
+		const event = new KeyboardEvent("keydown", {
+			key: "z",
+			altKey: true,
+			code: "KeyZ",
+			bubbles: true,
+			cancelable: true,
+		});
+		view.contentDOM.dispatchEvent(event);
 		expect(view.contentDOM.classList.contains("cm-lineWrapping")).toBe(true);
+		expect(event.defaultPrevented).toBe(true);
 		expect(uiStore.state.editorWrapCode).toBe(true);
 		unmount();
 	});
