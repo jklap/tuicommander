@@ -3466,8 +3466,13 @@ fn truncate_ci_logs(logs: &str) -> String {
     if logs.len() <= CI_LOG_MAX_CHARS {
         return logs.to_string();
     }
-    // Keep the tail — the most relevant failures are usually at the end
-    let truncated = &logs[logs.len() - CI_LOG_MAX_CHARS..];
+    // Keep the tail — the most relevant failures are usually at the end.
+    // The byte cut can land inside a multibyte character; move it forward.
+    let mut cut = logs.len() - CI_LOG_MAX_CHARS;
+    while !logs.is_char_boundary(cut) {
+        cut += 1;
+    }
+    let truncated = &logs[cut..];
     let start = truncated.find('\n').map(|i| i + 1).unwrap_or(0);
     format!(
         "[… truncated to last ~{CI_LOG_MAX_CHARS} chars …]\n{}",
@@ -5936,6 +5941,32 @@ mod tests {
         assert!(!result.contains("line 0:"));
         // Result length should be manageable
         assert!(result.len() <= CI_LOG_MAX_CHARS + 100); // header adds a bit
+    }
+
+    #[test]
+    fn test_ci_log_truncation_cut_inside_a_multibyte_char_does_not_panic() {
+        // Test runners print checkmarks, box drawing and emoji. A byte cut that
+        // lands inside one of them must move to a boundary, not panic the task.
+        for glyph in ["é", "✓", "🦀"] {
+            for pad in 1..glyph.len() {
+                let logs = format!("{}{}", "a".repeat(pad), glyph.repeat(CI_LOG_MAX_CHARS));
+                let result = truncate_ci_logs(&logs);
+
+                let tail = result.split_once('\n').map_or(result.as_str(), |(_, tail)| tail);
+                assert!(tail.len() <= CI_LOG_MAX_CHARS, "{glyph} pad {pad}");
+                assert!(tail.ends_with(glyph), "{glyph} pad {pad}");
+                assert!(tail.chars().all(|c| c.to_string() == glyph), "{glyph} pad {pad}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_ci_log_truncation_cut_before_a_newline_keeps_the_next_line() {
+        let logs = format!("{}é\nlast failure\n", "x".repeat(CI_LOG_MAX_CHARS));
+        let result = truncate_ci_logs(&logs);
+
+        assert!(result.starts_with("[… truncated"), "{result}");
+        assert!(result.ends_with("last failure"), "{result}");
     }
 
     #[test]
