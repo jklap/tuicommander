@@ -1101,6 +1101,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	circleci_set_token: {
 		map: (args) => ({ method: "POST", path: "/circleci/token", body: { token: args.token } }),
 	},
+	circleci_delete_token: {
+		map: () => ({ method: "DELETE", path: "/circleci/token" }),
+	},
 	github_set_pr_hide_drafts: {
 		map: (args) => ({ method: "POST", path: "/github/pr-hide-drafts", body: { hide: args.hide } }),
 	},
