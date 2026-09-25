@@ -446,7 +446,16 @@ async fn story_action_command(
     action: stories::StoryAction,
     session_id: Option<String>,
 ) -> Result<stories::StoryReply, String> {
-    let state = state.inner().clone();
+    story_action_command_for_state(state.inner().clone(), project, action, session_id).await
+}
+
+#[cfg(feature = "desktop")]
+async fn story_action_command_for_state(
+    state: Arc<AppState>,
+    project: String,
+    action: stories::StoryAction,
+    session_id: Option<String>,
+) -> Result<stories::StoryReply, String> {
     tokio::task::spawn_blocking(move || {
         stories::story_action_for_session(&state, &project, action, session_id.as_deref())
     })
@@ -2775,6 +2784,30 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn story_action_ipc_shared_path_creates_a_plan() {
+        let config = tempfile::tempdir().expect("config directory");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project directory");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let reply = story_action_command_for_state(
+            state,
+            project.path().to_string_lossy().into_owned(),
+            stories::StoryAction::CreatePlan {
+                title: "IPC plan".into(),
+                source: "plan.md".into(),
+            },
+            None,
+        )
+        .await
+        .expect("IPC story action");
+        let stories::StoryReply::Plan(plan) = reply else {
+            panic!("expected created plan");
+        };
+        assert_eq!(plan.title, "IPC plan");
+    }
 
     /// The body of one function, read out of this file's own source.
     fn fn_body(source: &str, signature: &str) -> String {
