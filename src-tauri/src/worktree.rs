@@ -5119,6 +5119,43 @@ branch refs/heads/feat
 
     #[cfg(unix)]
     #[test]
+    fn removing_a_workspace_unlinks_shared_stores_without_touching_the_parent() {
+        let (_config_guard, _config_dir) = with_temp_config_dir();
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(repo.join(".gitignore"), "stories\nplans\nideas\n").unwrap();
+        git_cmd(&repo).args(["add", ".gitignore"]).run().unwrap();
+        git_cmd(&repo).args(["commit", "-m", "ignore stores"]).run().unwrap();
+        fs::create_dir(repo.join("stories")).unwrap();
+        fs::write(repo.join("stories").join("keep.md"), "parent story").unwrap();
+        let config = WorktreeConfig {
+            task_name: "shared-remove".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("shared-remove".into()),
+            create_branch: true,
+        };
+        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
+            crate::cow::WarmingReport::default()
+        })
+        .expect("linked workspace");
+        assert!(
+            fs::symlink_metadata(created.path.join("stories"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        remove_worktree_by_workspace_id(&repo.to_string_lossy(), "shared-remove", false, None, false)
+            .expect("an ignored store link must not make the workspace dirty");
+
+        assert!(!created.path.exists(), "workspace directory removed");
+        assert_eq!(
+            fs::read_to_string(repo.join("stories").join("keep.md")).unwrap(),
+            "parent story"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn create_workspace_links_existing_shared_stores_to_the_parent() {
         let (_temp, repo, workspaces) = workspace_fixture();
         fs::create_dir(repo.join("stories")).unwrap();
