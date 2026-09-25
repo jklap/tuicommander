@@ -184,7 +184,7 @@ export async function supportsAgentNoAltScreen(
 	if (!binary) return false;
 	try {
 		const detected = await rpc<{ path: string | null; supports_no_alt_screen: boolean }>("detect_agent_binary", {
-			binary: agentType,
+			binary,
 			repoPath: cwd,
 		});
 		return !!detected.supports_no_alt_screen && (binary === agentType || binary === detected.path);
