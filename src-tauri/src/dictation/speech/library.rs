@@ -153,12 +153,28 @@ pub fn import_speech_voice(language: &Asset, name: &str, bytes: &[u8]) -> Result
 
     let dir = assets::user_voices_dir(language_name);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let partial = dir.join(format!(".{name}.partial"));
-    std::fs::write(&partial, bytes).map_err(|e| format!("{}: {e}", partial.display()))?;
-    place_voice_file(&partial, &dest).map_err(|error| match error.kind() {
+    let partial = voice_partial_file(&dir, name).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::write(partial.path(), bytes)
+        .map_err(|e| format!("{}: {e}", partial.path().display()))?;
+    place_voice_file(partial.path(), &dest).map_err(|error| match error.kind() {
         std::io::ErrorKind::AlreadyExists => already_imported(language, name),
         _ => format!("{}: {error}", dest.display()),
     })
+}
+
+/// Create a private staging file beside a voice's destination.
+///
+/// It must share `dest`'s directory because promotion is an atomic hard link,
+/// while its random suffix keeps simultaneous imports of the same name from
+/// overwriting each other's validated bytes before either can promote them.
+fn voice_partial_file(
+    dir: &std::path::Path,
+    name: &str,
+) -> std::io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new()
+        .prefix(&format!(".{name}."))
+        .suffix(".partial")
+        .tempfile_in(dir)
 }
 
 fn already_imported(language: &Asset, name: &str) -> String {
@@ -537,6 +553,34 @@ mod tests {
 
     fn imported(name: &str) -> PathBuf {
         assets::user_voices_dir("italian").join(format!("{name}.safetensors"))
+    }
+
+    #[test]
+    fn concurrent_imports_stage_same_named_voices_in_distinct_files() {
+        let (_root, _guard, _library) = library();
+        let dir = assets::user_voices_dir("italian");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let first = voice_partial_file(&dir, "nonna").unwrap();
+        let second = voice_partial_file(&dir, "nonna").unwrap();
+        std::fs::write(first.path(), b"first").unwrap();
+        std::fs::write(second.path(), b"second").unwrap();
+
+        assert_ne!(first.path(), second.path());
+        assert_eq!(std::fs::read(first.path()).unwrap(), b"first");
+        assert_eq!(std::fs::read(second.path()).unwrap(), b"second");
+
+        // Interleave promotion after both imports have staged their validated
+        // bytes: one wins the name, and the loser's bytes never reach it.
+        let destination = dir.join("nonna.safetensors");
+        place_voice_file(second.path(), &destination).unwrap();
+        assert_eq!(
+            place_voice_file(first.path(), &destination)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read(destination).unwrap(), b"second");
     }
 
     #[test]
