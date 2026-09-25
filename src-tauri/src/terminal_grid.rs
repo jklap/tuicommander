@@ -929,6 +929,11 @@ impl TerminalGrid {
         self.term.grid().history_size()
     }
 
+    /// Monotonic screen origin, including lines evicted from capped scrollback.
+    pub(crate) fn screen_origin(&self) -> usize {
+        self.term.grid().total_scrolled()
+    }
+
     /// Number of primary-screen scrollback lines, regardless of the active screen.
     pub fn primary_scrollback_count(&self) -> usize {
         self.term.primary_history_size()

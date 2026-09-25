@@ -12230,6 +12230,13 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
 /// intent must absorb every growing prefix before Progress sees it.
 #[test]
 fn captured_codex_streaming_intent_emits_one_complete_marker() {
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project");
     let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
         "codex-streaming-intent-20260924.tcap",
     ))
@@ -12238,8 +12245,16 @@ fn captured_codex_streaming_intent_emits_one_complete_marker() {
     // geometry; replay it at a fixed, spacious size rather than rejecting valid
     // stream evidence before it reaches the parser.
     let (rows, cols) = capture.geometry.unwrap_or((41, 128));
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "captured-codex-streaming-intent";
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("start project watcher");
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
     agent_session(&state, sid, SHELL_BUSY);
     state
         .session_maps
@@ -12299,6 +12314,21 @@ fn captured_codex_streaming_intent_emits_one_complete_marker() {
         )],
         "the captured growing prefixes must produce one complete intent"
     );
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent
+            && entry.text == "validating the streaming capture"));
 }
 
 /// Codex redraws its streaming response in place, then returns its cursor to
@@ -12697,11 +12727,114 @@ async fn codex_narrow_repaint_journals_only_the_closed_intent_and_title() {
         if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
 }
 
+/// A live Codex 80-column capture. Its marker grows across an indented second
+/// row while the first row repaints; only the completed title is a journal row.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn captured_codex_narrow_hard_wrap_journals_complete_intent() {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-narrow-progress-intent-20260925.tcap",
+    ))
+    .expect("decode Codex capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    assert_eq!(cols, 80);
+    let config = tempfile::tempdir().expect("config directory");
+    let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project = tempfile::tempdir().expect("registered project");
+    crate::config::replace_repositories_for_test(serde_json::json!({
+        "repos": { project.path().to_string_lossy(): {} }
+    }))
+    .expect("register project for ownership");
+    let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+    crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
+        .expect("register project watcher");
+    let sid = "captured-codex-narrow-hard-wrap";
+    crate::state::tests_support::insert_dummy_session(&state, sid);
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        sid,
+        project.path().to_str().expect("UTF-8 path"),
+    );
+    agent_session(&state, sid, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .expect("agent session")
+        .agent_type = Some("codex".to_string());
+    state.grid.vt_log_buffers.insert(
+        sid.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(rows, cols, 2000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(sid)
+        .expect("silence state")
+        .clone();
+    let mut parsed_events = state.event_bus.subscribe();
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("complete UTF-8 chunk"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    let text = "Controllo la cattura a 80 colonne e preparo la prova del journal con righe di continuazione e titolo finale";
+    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyParsed { parsed, .. }
+                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+            {
+                Some((
+                    parsed["text"].as_str().unwrap_or_default().to_string(),
+                    parsed["title"].as_str().map(str::to_string),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        intents,
+        [(text.to_string(), Some("Verifica stretta".to_string()))]
+    );
+    let entries = crate::progress::ProgressStore::open()
+        .expect("open Progress journal")
+        .list(
+            &project
+                .path()
+                .canonicalize()
+                .expect("canonical project")
+                .to_string_lossy(),
+            &crate::progress::ProgressListInput::default(),
+        )
+        .expect("list Progress journal")
+        .entries;
+    assert!(matches!(entries.as_slice(), [entry]
+        if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
+}
+
 fn run_progress_intent_case(
     chunks: &[&str],
     cols: u16,
     agent: bool,
     timer_idle: bool,
+) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    run_progress_intent_case_ending(chunks, cols, agent, timer_idle, None, true, false)
+}
+
+fn run_progress_intent_case_ending(
+    chunks: &[&str],
+    cols: u16,
+    agent: bool,
+    timer_idle: bool,
+    teardown: Option<&str>,
+    idle_is_quiet: bool,
+    fail_journal: bool,
 ) -> (Vec<(String, Option<String>)>, Vec<String>) {
     let config = tempfile::tempdir().expect("config directory");
     let _config_guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -12713,6 +12846,10 @@ fn run_progress_intent_case(
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
     crate::repo_watcher::start_watching(project.path().to_str().expect("UTF-8 path"), &state)
         .expect("register project watcher");
+    if fail_journal {
+        std::fs::create_dir(config.path().join("progress.sqlite3"))
+            .expect("block journal database path");
+    }
     let sid = "progress-intent-matrix";
     crate::state::tests_support::insert_dummy_session(&state, sid);
     crate::state::tests_support::set_session_cwd(
@@ -12744,6 +12881,11 @@ fn run_progress_intent_case(
         processor.process_chunk(chunk, &silence, sid, &state);
     }
     if timer_idle {
+        if idle_is_quiet {
+            silence.lock().last_output_at = std::time::Instant::now()
+                - SILENCE_INTENT_THRESHOLD
+                - std::time::Duration::from_millis(1);
+        }
         state
             .session_maps
             .shell_states
@@ -12752,6 +12894,16 @@ fn run_progress_intent_case(
             .store(SHELL_IDLE, std::sync::atomic::Ordering::Release);
         emit_open_intent_if_idle(&state, &silence, sid);
         emit_open_intent_if_idle(&state, &silence, sid);
+    }
+    match teardown {
+        Some("close") => {
+            close_pty_core(&state, sid, false);
+            assert!(!state.session_maps.sessions.contains_key(sid));
+        }
+        Some("kill") => assert!(kill_pty_core(&state, sid)),
+        Some("exit") => mark_session_exited(sid, &state),
+        None => {}
+        Some(other) => panic!("unknown teardown {other}"),
     }
     let events = std::iter::from_fn(|| parsed_events.try_recv().ok())
         .filter_map(|event| match event {
@@ -12766,28 +12918,107 @@ fn run_progress_intent_case(
             _ => None,
         })
         .collect();
-    let entries = crate::progress::ProgressStore::open()
-        .expect("open Progress journal")
-        .list(
-            &project
-                .path()
-                .canonicalize()
-                .expect("canonical project")
-                .to_string_lossy(),
-            &crate::progress::ProgressListInput::default(),
-        )
-        .expect("list Progress journal")
-        .entries
-        .into_iter()
-        .filter(|entry| entry.kind == crate::progress::ProgressKind::Intent)
-        .map(|entry| entry.text)
-        .collect();
+    let entries = if fail_journal {
+        Vec::new()
+    } else {
+        crate::progress::ProgressStore::open()
+            .expect("open Progress journal")
+            .list(
+                &project
+                    .path()
+                    .canonicalize()
+                    .expect("canonical project")
+                    .to_string_lossy(),
+                &crate::progress::ProgressListInput::default(),
+            )
+            .expect("list Progress journal")
+            .entries
+            .into_iter()
+            .filter(|entry| entry.kind == crate::progress::ProgressKind::Intent)
+            .map(|entry| entry.text)
+            .collect()
+    };
     (events, entries)
 }
 
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn progress_open_intent_close_matrix() {
+    for ending in ["close", "kill", "exit"] {
+        let (events, entries) = run_progress_intent_case_ending(
+            &["\x1b[4;1H\x1b[2K• intent: Preserve the final journal entry"],
+            80,
+            true,
+            false,
+            Some(ending),
+            true,
+            false,
+        );
+        assert_eq!(
+            events,
+            [("Preserve the final journal entry".into(), None)],
+            "{ending}"
+        );
+        assert_eq!(entries, ["Preserve the final journal entry"], "{ending}");
+    }
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Reviewing the streaming parser for the Progress journal\r\n  correctness guarantees (Review parser)",
+        ],
+        80,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [(
+            "Reviewing the streaming parser for the Progress journal correctness guarantees".into(),
+            Some("Review parser".into())
+        )]
+    );
+    assert_eq!(
+        entries,
+        ["Reviewing the streaming parser for the Progress journal correctness guarantees"]
+    );
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Inspect\n\x1b[5;1H\x1b[2K⠋ Working",
+            "\x1b[5;1H\x1b[2K\x1b[4;1H\x1b[2K● intent: Inspect the auth\n\x1b[5;1H\x1b[2K⠋ Working",
+            "\x1b[5;1H\x1b[2K\x1b[4;1H\x1b[2K● intent: Inspect the auth path (Auth path)\n\x1b[5;1H\x1b[2K⠋ Working",
+        ],
+        80,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [("Inspect the auth path".into(), Some("Auth path".into()))]
+    );
+    assert_eq!(entries, ["Inspect the auth path"]);
+
+    let filled_scrollback = "filler\r\n".repeat(2020);
+    let (events, entries) = run_progress_intent_case(
+        &[
+            &filled_scrollback,
+            "\x1b[16;1H\x1b[2K• intent: Inspect",
+            "\x1b[S",
+            "\x1b[15;1H\x1b[2K• intent: Inspect capped scrollback (Scrollback)",
+        ],
+        80,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [(
+            "Inspect capped scrollback".into(),
+            Some("Scrollback".into())
+        )]
+    );
+    assert_eq!(entries, ["Inspect capped scrollback"]);
+
     for chunks in [
         vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader\x1b[14;3H"],
         vec!["\x1b[4;1H\x1b[2K• intent: Read the configuration loader\r"],
@@ -12828,6 +13059,42 @@ async fn progress_open_intent_close_matrix() {
     );
     assert_eq!(events, [("Inspect the startup path".into(), None)]);
     assert_eq!(entries, ["Inspect the startup path"]);
+
+    let (events, entries) = run_progress_intent_case_ending(
+        &["\x1b[4;1H\x1b[2K• intent: Still streaming"],
+        80,
+        true,
+        true,
+        None,
+        false,
+        false,
+    );
+    assert!(events.is_empty());
+    assert!(entries.is_empty());
+
+    let (events, entries) = run_progress_intent_case_ending(
+        &["\x1b[4;1H\x1b[2K• intent: Inspect a closed store (Store error)"],
+        80,
+        true,
+        false,
+        None,
+        true,
+        true,
+    );
+    assert!(
+        events.is_empty(),
+        "failed journal write must not publish an intent"
+    );
+    assert!(entries.is_empty());
+
+    let secret = format!("ghp_{}", "A".repeat(40));
+    let chunk = format!("\x1b[4;1H\x1b[2K• intent: Inspect {secret} (Secret check)");
+    let (_, entries) = run_progress_intent_case(&[&chunk], 128, true, false);
+    assert_eq!(entries.len(), 1);
+    assert!(
+        !entries[0].contains(&secret),
+        "the journal persisted a secret"
+    );
 
     let (events, entries) = run_progress_intent_case(
         &[

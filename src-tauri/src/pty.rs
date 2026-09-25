@@ -800,6 +800,9 @@ pub(crate) fn classify_shell(cmd: &str) -> ShellFamily {
 /// false positives from AI agents that pause while thinking between API calls.
 const SILENCE_QUESTION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// An idle shell may still be receiving a streamed intent. Wait one quiet tick.
+const SILENCE_INTENT_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Maximum non-`?` chunks allowed after a `?` candidate before considering it stale.
 /// Claude Code prints 2-3 decoration chunks after a question (mode line, separator).
 /// Anything beyond this threshold means the agent continued working — not waiting.
@@ -1335,7 +1338,6 @@ fn decide(
     }
 }
 
-/// Shared state between the PTY reader thread and the silence-detection timer thread.
 #[derive(Clone)]
 struct OpenIntent {
     text: String,
@@ -5022,7 +5024,12 @@ fn emit_open_intent_if_idle(
         .get(session_id)
         .map(|session| session.turn_epoch)
         .unwrap_or(0);
-    let event = silence.lock().close_open_intent();
+    let event = {
+        let mut silence = silence.lock();
+        (silence.last_output_at.elapsed() >= SILENCE_INTENT_THRESHOLD)
+            .then(|| silence.close_open_intent())
+            .flatten()
+    };
     if let Some(event) = event {
         publish_intent_event(state, session_id, &event, turn_epoch);
     }
@@ -5179,13 +5186,13 @@ const MAX_RAW_CARRY: usize = 512;
 /// The write is synchronous. This runs on the PTY reader thread, which is not
 /// the async executor, and an intent arrives a few times a minute against a
 /// sub-millisecond WAL insert.
-fn record_intent_in_journal(state: &AppState, session_id: &str, text: &str) {
+fn record_intent_in_journal(state: &AppState, session_id: &str, text: &str) -> bool {
     let (agent_type, agent_name) = crate::progress::session_identity(state, session_id);
     if !crate::progress::progress_tracking_enabled(state, agent_type.as_deref()) {
-        return;
+        return true;
     }
     let Some(project) = crate::progress::project_for_session(state, session_id) else {
-        return;
+        return true;
     };
     match crate::progress::record_intent(
         state,
@@ -5197,13 +5204,17 @@ fn record_intent_in_journal(state: &AppState, session_id: &str, text: &str) {
     ) {
         Ok(entry) => {
             crate::mcp_http::mcp_transport::emit_progress_entry(state, entry);
+            true
         }
-        Err(error) => tracing::debug!(
+        Err(error) => {
+            tracing::warn!(
             source = "progress",
             session_id = %session_id,
             error = %error,
             "intent: not recorded in the Progress journal"
-        ),
+            );
+            false
+        }
     }
 }
 
@@ -5211,8 +5222,10 @@ fn publish_intent_event(state: &AppState, session_id: &str, event: &ParsedEvent,
     let ParsedEvent::Intent { text, .. } = event else {
         return;
     };
+    if !record_intent_in_journal(state, session_id, text) {
+        return;
+    }
     state.note_marker(session_id, crate::state::MarkerKind::Intent);
-    record_intent_in_journal(state, session_id, text);
     if let Ok(mut json) = serde_json::to_value(event) {
         if let Some(object) = json.as_object_mut() {
             object.insert("_turn_epoch".to_string(), turn_epoch.into());
@@ -5740,6 +5753,7 @@ impl ChunkProcessor {
             logical_prefix,
             physical_prefix,
             history_size,
+            intent_origin,
             intent_candidate,
         ): VtProcessResult = if let Some(vt_log) = state.grid.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
@@ -5754,6 +5768,7 @@ impl ChunkProcessor {
             unexpected_alt_screen =
                 self.should_warn_alt_screen(agent_type.as_deref(), vt.is_alternate_screen());
             let hist = vt.grid_history_size();
+            let intent_origin = vt.grid_screen_origin();
             // Did this chunk produce real output, or merely repaint rows that were
             // already there (SIGWINCH reflow, cursor blink, statusline)? In the
             // PRIMARY screen a repaint never grows the durable log while real work
@@ -5853,10 +5868,44 @@ impl ChunkProcessor {
             let physical_prefix = vt.physical_prefix_at_cursor();
             let intent_candidate = agent_type.as_ref().and_then(|_| {
                 changed.iter().rev().find_map(|row| {
-                    let line = vt.logical_line_at_row(row.row_index)?;
-                    (crate::output_parser::structured_token_anchor(&line.text)
-                        == Some(crate::output_parser::StructuredTokenAnchor::Intent))
-                    .then_some(line)
+                    // A later read may update only an indented continuation.
+                    // Search its bounded predecessors for the unchanged anchor.
+                    (row.row_index
+                        .saturating_sub(crate::output_parser::MAX_INTENT_CONTINUATION_ROWS)
+                        ..=row.row_index)
+                        .rev()
+                        .find_map(|anchor_row| {
+                            let mut line = vt.logical_line_at_row(anchor_row)?;
+                            if crate::output_parser::structured_token_anchor(&line.text)
+                                != Some(crate::output_parser::StructuredTokenAnchor::Intent)
+                            {
+                                return None;
+                            }
+                            let mut block = line.text.clone();
+                            let mut continuation_ends = Vec::new();
+                            let mut next = line.end_row + 1;
+                            for _ in 0..crate::output_parser::MAX_INTENT_CONTINUATION_ROWS {
+                                let Some(continuation) = vt.logical_line_at_row(next) else {
+                                    break;
+                                };
+                                if continuation.start_row != next {
+                                    break;
+                                }
+                                block.push('\n');
+                                block.push_str(&continuation.text);
+                                continuation_ends.push(continuation.end_row);
+                                next = continuation.end_row + 1;
+                            }
+                            let (dewrapped, absorbed) =
+                                crate::output_parser::dewrap_intent_continuation_with_rows(&block);
+                            line.text = dewrapped.into_owned();
+                            if absorbed > 0 {
+                                line.end_row = continuation_ends[absorbed - 1];
+                            }
+                            (line.start_row..=line.end_row)
+                                .contains(&row.row_index)
+                                .then_some(line)
+                        })
                 })
             });
 
@@ -5870,6 +5919,7 @@ impl ChunkProcessor {
                 logical_prefix,
                 physical_prefix,
                 hist,
+                intent_origin,
                 intent_candidate,
             )
         } else {
@@ -5882,6 +5932,7 @@ impl ChunkProcessor {
                 None,
                 None,
                 None,
+                0,
                 0,
                 None,
             )
@@ -6166,8 +6217,12 @@ impl ChunkProcessor {
             .map(|s| s.agent_type.is_some())
             .unwrap_or(false);
         let mut breaks = IntentBreaks::default();
-        self.intent_break_parser
-            .advance(&mut breaks, data.as_bytes());
+        if agent_active_for_parse
+            && (intent_candidate.is_some() || silence.lock().open_intent.is_some())
+        {
+            self.intent_break_parser
+                .advance(&mut breaks, data.as_bytes());
+        }
         let mut intent_events = Vec::new();
         if agent_active_for_parse {
             let candidate = intent_candidate.and_then(|line| {
@@ -6179,7 +6234,11 @@ impl ChunkProcessor {
                 Some((line, text, title))
             });
             let mut sl = silence.lock();
+            let mut candidate_grew = false;
             if let Some((line, text, title)) = candidate {
+                candidate_grew = sl.open_intent.as_ref().is_none_or(|open| {
+                    text.starts_with(&open.text) && text.len() > open.text.len()
+                });
                 let compatible = sl.open_intent.as_ref().is_some_and(|open| {
                     text.starts_with(&open.text) || open.text.starts_with(&text)
                 });
@@ -6196,22 +6255,24 @@ impl ChunkProcessor {
                 } else if sl.last_intent.as_ref() != Some(&(text.clone(), None)) {
                     sl.open_intent = Some(OpenIntent {
                         text,
-                        start_row: history_size + line.start_row,
-                        end_row: history_size + line.end_row,
+                        start_row: intent_origin + line.start_row,
+                        end_row: intent_origin + line.end_row,
                     });
                 }
             }
             let close = sl.open_intent.as_ref().is_some_and(|open| {
-                let end_row = open.end_row.saturating_sub(history_size);
-                let prose_below = changed_rows.iter().any(|row| {
-                    row.row_index > end_row
-                        && !row.text.trim().is_empty()
-                        && !is_chrome_row(&row.text)
-                        && crate::output_parser::structured_token_anchor(&row.text).is_none()
-                });
-                let broken_line = breaks.0 && cursor_row.is_some_and(|row| row > end_row);
+                let end_row = open.end_row.saturating_sub(intent_origin);
+                let prose_below = !candidate_grew
+                    && changed_rows.iter().any(|row| {
+                        row.row_index > end_row
+                            && !row.text.trim().is_empty()
+                            && !is_chrome_row(&row.text)
+                            && crate::output_parser::structured_token_anchor(&row.text).is_none()
+                    });
+                let broken_line =
+                    breaks.0 && !candidate_grew && cursor_row.is_some_and(|row| row > end_row);
                 let replaced = changed_rows.iter().any(|row| {
-                    history_size + row.row_index == open.start_row
+                    intent_origin + row.row_index == open.start_row
                         && crate::output_parser::structured_token_anchor(&row.text)
                             != Some(crate::output_parser::StructuredTokenAnchor::Intent)
                 });
@@ -6281,10 +6342,7 @@ impl ChunkProcessor {
             self.parser
                 .parse_clean_lines(rows, agent_active_for_parse)
                 .into_iter()
-                .filter(|e| {
-                    !matches!(e, ParsedEvent::Intent { .. })
-                        && !suppress_heuristic_question(hook_instrumented, e)
-                }),
+                .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
         );
         events.extend(intent_events);
 
@@ -7078,7 +7136,24 @@ fn retire_peer_identity(state: &AppState, tuic_session: &str) {
 /// drifted: an explicit close left every peer identity behind, and a session that
 /// exited normally leaked its terminal alias for the life of the process.
 /// **A new per-session map belongs in one of these two functions and nowhere else.**
+fn flush_open_intent_before_session_removal(session_id: &str, state: &AppState) {
+    if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+        let event = silence.lock().close_open_intent();
+        drop(silence);
+        if let Some(event) = event {
+            let turn_epoch = state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .map(|session| session.turn_epoch)
+                .unwrap_or(0);
+            publish_intent_event(state, session_id, &event, turn_epoch);
+        }
+    }
+}
+
 fn remove_live_session_state(session_id: &str, state: &AppState) {
+    flush_open_intent_before_session_removal(session_id, state);
     if let Err(error) = crate::stories::StoryStore::release_closed_session(session_id) {
         tracing::warn!(session_id = %session_id, error = %error, "Could not release story claim for closed session");
     }
@@ -7179,6 +7254,7 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
+    flush_open_intent_before_session_removal(session_id, state);
     if state.session_maps.sessions.remove(session_id).is_some() {
         state
             .metrics
@@ -7223,6 +7299,7 @@ type VtProcessResult = (
     Option<usize>,
     Option<crate::terminal_grid::LogicalPrefix>,
     Option<crate::terminal_grid::LogicalPrefix>,
+    usize,
     usize,
     Option<crate::terminal_grid::LogicalPrefix>,
 );
@@ -8990,6 +9067,7 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &Arc<AppState>) {
             .exit_codes
             .insert(session_id.to_string(), code);
     }
+    flush_open_intent_before_session_removal(session_id, state);
     if state.session_maps.sessions.remove(session_id).is_some() {
         state
             .metrics
@@ -10559,6 +10637,7 @@ pub(crate) fn close_pty_core(
     session_id: &str,
     cleanup_worktree: bool,
 ) -> Option<crate::state::WorktreeInfo> {
+    flush_open_intent_before_session_removal(session_id, state);
     let (_, session_mutex) = state.session_maps.sessions.remove(session_id)?;
     state
         .metrics
@@ -10636,6 +10715,7 @@ pub(crate) fn close_pty_core(
 /// immediately. The child exits near-instantly so `try_wait` captures the
 /// exit code before the tombstone is stamped.
 pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
+    flush_open_intent_before_session_removal(session_id, state);
     let Some((_, session_mutex)) = state.session_maps.sessions.remove(session_id) else {
         return false;
     };

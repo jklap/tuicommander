@@ -5098,6 +5098,10 @@ impl VtLogBuffer {
         self.grid.scrollback_count()
     }
 
+    pub(crate) fn grid_screen_origin(&self) -> usize {
+        self.grid.screen_origin()
+    }
+
     // --- Search delegate ---
 
     pub(crate) fn grid_search(&self, query: &str) -> Vec<crate::terminal_grid::SearchMatch> {

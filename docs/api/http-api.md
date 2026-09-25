@@ -26,6 +26,8 @@ project.
 | `/progress/flow/detail` | `{ ptyId, agentId, part }`, `part` is `prompt` or `report` | `{ text }` |
 
 Unknown fields are rejected. `text` is capped at 500 characters and `step` at 80.
+All Progress entry kinds redact secret-shaped text and step fields before
+storage; agent and target names are redacted and capped at 80 characters.
 Omit `ptyId` on `/progress/viewed` to mark the repository aggregate; supply it
 to mark one PTY. Each scope keeps a separate last-visit timestamp.
 `intent` is a valid entry *kind* but not a reportable one — TUIC writes those

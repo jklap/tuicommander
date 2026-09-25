@@ -21,6 +21,8 @@
 The journal is append-only. There is no pause, clear, correction or export
 command: an entry is written once and either kept or deleted. `intent` entries
 are written by TUIC from the agent's `intent:` marker and cannot be reported.
+Every stored entry has secret-shaped text and step values redacted; agent and
+target names are redacted and capped at 80 characters.
 
 All commands are invoked from the frontend via `invoke(command, args)`. In browser mode, these map to HTTP endpoints (see [HTTP API](http-api.md)).
 

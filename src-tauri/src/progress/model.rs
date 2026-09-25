@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_TEXT_CHARS: usize = 500;
 pub const MAX_STEP_CHARS: usize = 80;
+pub const MAX_NAME_CHARS: usize = 80;
+
+pub(crate) fn bounded_name(name: &str) -> Option<String> {
+    let redacted = crate::redaction::redact_secrets(name);
+    let trimmed = redacted.trim();
+    (!trimmed.is_empty()).then(|| trimmed.chars().take(MAX_NAME_CHARS).collect())
+}
 
 /// Newest entries returned by one `list`. There is no cursor and no paging: a
 /// multi-hour session yields tens of entries, so the cap exists to bound a
@@ -109,11 +116,7 @@ impl NewProgressEntry {
     }
 
     pub(crate) fn trimmed_agent_name(&self) -> Option<String> {
-        self.agent_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
+        self.agent_name.as_deref().and_then(bounded_name)
     }
 }
 

@@ -201,15 +201,6 @@ pub struct OutputParser {
     api_error_patterns: &'static [ApiErrorPattern],
     /// Dedup: last emitted suggest items to suppress re-emission on scroll.
     last_suggest_items: Option<Vec<String>>,
-    /// Dedup: last emitted intent, for the same reason and with the same rule.
-    ///
-    /// It matters more here than it does for the tab title, which is idempotent:
-    /// every intent is also a journal entry, and a repaint of a row that has not
-    /// changed is not a second announcement. Two identical intents separated by
-    /// other output DO both record — the second parse sees a different last
-    /// value in between only when the text actually differs, so the pair that
-    /// collapses is exactly the pair that arrived back to back.
-    last_intent: Option<(String, Option<String>)>,
     /// Input-turn epoch whose real working evidence reopened suggest dedup.
     /// A submission alone is insufficient because the previous suggest row can
     /// repaint while it is still visible; fresh work proves a new response has
@@ -257,7 +248,6 @@ impl OutputParser {
             rate_limit_patterns: &RATE_LIMIT_PATTERNS,
             api_error_patterns: &API_ERROR_PATTERNS,
             last_suggest_items: None,
-            last_intent: None,
             suggest_working_turn_epoch: None,
             last_api_error_match: None,
             session_conflict_fired: false,
@@ -324,12 +314,6 @@ impl OutputParser {
 
         // Plan file detection
         if let Some(evt) = parse_plan_file(&clean) {
-            events.push(evt);
-        }
-
-        // Intent declaration: `intent: text` at column 0
-        // Test-only parse assumes agent context (agent_active=true)
-        if let Some(evt) = parse_intent(&clean, true) {
             events.push(evt);
         }
 
@@ -428,33 +412,6 @@ impl OutputParser {
             events.push(evt);
         }
 
-        // Intent and suggest.
-        // Plain-prefix tokens (`intent:`, `suggest:` at column 0) are only parsed
-        // when an agent is detected — this prevents false positives from regular
-        // CLI tools that might output text starting with these keywords.
-        // An intent is now a journal row, not just a tab title, so a repaint
-        // that re-delivers the same line must not write a second one. Dedup is
-        // against the last intent *value*, and it is deliberately never cleared:
-        // an Ink full-frame repaint marks every row changed, so the intent line
-        // reappears long after the chunks in between carried none. Clearing on
-        // "this chunk had no intent" would therefore re-record on every full
-        // repaint that follows a partial one — hundreds of identical rows. The
-        // cost of the choice is that an agent re-declaring a byte-identical
-        // intent later in the session records once; that loses one line, while
-        // the alternative floods the journal. `last_suggest_items` next door
-        // has the same shape for the same reason (see `reset_input_dedup`).
-        if let Some(evt) = parse_intent(&joined, agent_active)
-            && let ParsedEvent::Intent {
-                ref text,
-                ref title,
-            } = evt
-        {
-            let seen = (text.clone(), title.clone());
-            if self.last_intent.as_ref() != Some(&seen) {
-                self.last_intent = Some(seen);
-                events.push(evt);
-            }
-        }
         // Suggest follow-up actions: `suggest: [ A | B | C ]` on one bounded
         // logical line. The token is fully self-contained (bounded by `[ … ]`),
         // so there is no parser-owned cross-chunk buffer — dedup against the last
@@ -1642,7 +1599,7 @@ lazy_static::lazy_static! {
 /// intent is one present-tense sentence plus a ≤3-word title, which covers two
 /// continuation rows on a narrow pane. The cap bounds the damage if every stop
 /// condition below misses at once.
-const MAX_INTENT_CONTINUATION_ROWS: usize = 2;
+pub(crate) const MAX_INTENT_CONTINUATION_ROWS: usize = 2;
 
 /// Rejoin an `intent:` token that the agent hard-wrapped across physical rows.
 ///
@@ -1662,20 +1619,26 @@ const MAX_INTENT_CONTINUATION_ROWS: usize = 2;
 ///
 /// Returns `Cow::Borrowed` when there is nothing to rejoin.
 fn dewrap_intent_continuation(text: &str) -> std::borrow::Cow<'_, str> {
+    dewrap_intent_continuation_with_rows(text).0
+}
+
+pub(crate) fn dewrap_intent_continuation_with_rows(
+    text: &str,
+) -> (std::borrow::Cow<'_, str>, usize) {
     if !text.contains('\n') {
-        return std::borrow::Cow::Borrowed(text);
+        return (std::borrow::Cow::Borrowed(text), 0);
     }
     let lines: Vec<&str> = text.split('\n').collect();
     let Some(anchor) = lines
         .iter()
         .position(|line| structured_token_anchor(line) == Some(StructuredTokenAnchor::Intent))
     else {
-        return std::borrow::Cow::Borrowed(text);
+        return (std::borrow::Cow::Borrowed(text), 0);
     };
 
     let mut merged = lines[anchor].trim_end().to_string();
     if intent_row_is_complete(&merged) {
-        return std::borrow::Cow::Borrowed(text);
+        return (std::borrow::Cow::Borrowed(text), 0);
     }
     let mut absorbed = 0;
     for line in lines.iter().skip(anchor + 1) {
@@ -1690,14 +1653,14 @@ fn dewrap_intent_continuation(text: &str) -> std::borrow::Cow<'_, str> {
         }
     }
     if absorbed == 0 {
-        return std::borrow::Cow::Borrowed(text);
+        return (std::borrow::Cow::Borrowed(text), 0);
     }
 
     let mut kept: Vec<&str> = Vec::with_capacity(lines.len() - absorbed);
     kept.extend_from_slice(&lines[..anchor]);
     kept.push(merged.as_str());
     kept.extend_from_slice(&lines[anchor + 1 + absorbed..]);
-    std::borrow::Cow::Owned(kept.join("\n"))
+    (std::borrow::Cow::Owned(kept.join("\n")), absorbed)
 }
 
 /// True when the row ends in a closed `(title)` — the protocol's only
@@ -4201,6 +4164,10 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     // --- Intent detection tests ---
 
+    fn parse_intent_events(clean: &str) -> Vec<ParsedEvent> {
+        parse_intent(clean, true).into_iter().collect()
+    }
+
     fn get_intent(events: &[ParsedEvent]) -> Option<String> {
         events.iter().find_map(|e| match e {
             ParsedEvent::Intent { text, .. } => Some(text.clone()),
@@ -4217,9 +4184,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     #[test]
     fn test_no_intent_normal_output() {
-        let mut parser = OutputParser::new();
-        assert!(get_intent(&parser.parse("Building project... done")).is_none());
-        assert!(get_intent(&parser.parse("The intent is to refactor")).is_none());
+        assert!(get_intent(&parse_intent_events("Building project... done")).is_none());
+        assert!(get_intent(&parse_intent_events("The intent is to refactor")).is_none());
     }
 
     // --- Plain-prefix intent tests ---
@@ -4229,16 +4195,14 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // Claude Code (and other Ink-hosted agents) prepend every assistant
         // output line with `● ` (U+25CF). The plain-prefix parser must still
         // recognise the token even when the bullet is present.
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{25CF} intent: wiring the parser (Parser Fix)");
+        let events = parse_intent_events("\u{25CF} intent: wiring the parser (Parser Fix)");
         assert_eq!(get_intent(&events), Some("wiring the parser".to_string()));
         assert_eq!(get_intent_title(&events), Some("Parser Fix".to_string()));
     }
 
     #[test]
     fn test_intent_plain_prefix_with_record_bullet() {
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{23FA} intent: fixing the layout bug");
+        let events = parse_intent_events("\u{23FA} intent: fixing the layout bug");
         assert_eq!(
             get_intent(&events),
             Some("fixing the layout bug".to_string())
@@ -4251,8 +4215,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // (U+2022), so an intent emitted as the opening line arrives bulleted.
         // Regression: this glyph was excluded from the token anchor, so Codex
         // intent capture silently never fired.
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{2022} intent: avvio watcher upstream (Upstream Watcher)");
+        let events =
+            parse_intent_events("\u{2022} intent: avvio watcher upstream (Upstream Watcher)");
         assert_eq!(
             get_intent(&events),
             Some("avvio watcher upstream".to_string())
@@ -4266,8 +4230,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     #[test]
     fn test_intent_plain_prefix_with_codex_hollow_bullet() {
         // Codex alternates • (U+2022) with ◦ (U+25E6) as a blink; both anchor.
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{25E6} intent: ricostruisco il modello");
+        let events = parse_intent_events("\u{25E6} intent: ricostruisco il modello");
         assert_eq!(
             get_intent(&events),
             Some("ricostruisco il modello".to_string())
@@ -4312,8 +4275,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     #[test]
     fn test_intent_plain_prefix_basic() {
-        let mut parser = OutputParser::new();
-        let events = parser.parse("intent: reading the config file");
+        let events = parse_intent_events("intent: reading the config file");
         assert_eq!(
             get_intent(&events),
             Some("reading the config file".to_string())
@@ -4322,8 +4284,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     #[test]
     fn test_intent_plain_prefix_with_title() {
-        let mut parser = OutputParser::new();
-        let events = parser.parse("intent: analyzing code (Analysis)");
+        let events = parse_intent_events("intent: analyzing code (Analysis)");
         assert_eq!(get_intent(&events), Some("analyzing code".to_string()));
         assert_eq!(get_intent_title(&events), Some("Analysis".to_string()));
     }
@@ -4334,25 +4295,23 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // still be detected: Claude Code indents every line after the
         // first by the bullet width, so plain-prefix intents emitted mid-
         // message arrive as `  intent: ...` rather than at column 0.
-        let mut parser = OutputParser::new();
         assert_eq!(
-            get_intent(&parser.parse("  intent: indented continuation")),
+            get_intent(&parse_intent_events("  intent: indented continuation")),
             Some("indented continuation".to_string()),
         );
     }
 
     #[test]
     fn test_intent_plain_prefix_midline_no_match() {
-        let mut parser = OutputParser::new();
         // Mid-line intent: should NOT match
-        assert!(get_intent(&parser.parse("The intent: of this code is clear")).is_none());
+        assert!(get_intent(&parse_intent_events("The intent: of this code is clear")).is_none());
     }
 
     #[test]
     fn test_intent_plain_prefix_in_multiline() {
         // Use \r\n to simulate real PTY output (LF without CR leaves cursor at same column)
-        let mut parser = OutputParser::new();
-        let events = parser.parse("some output\r\nintent: debugging login flow\r\nmore output");
+        let events =
+            parse_intent_events("some output\r\nintent: debugging login flow\r\nmore output");
         assert_eq!(
             get_intent(&events),
             Some("debugging login flow".to_string())
@@ -4361,21 +4320,18 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     #[test]
     fn test_intent_plain_prefix_too_short_filtered() {
-        let mut parser = OutputParser::new();
-        assert!(get_intent(&parser.parse("intent: ab")).is_none());
+        assert!(get_intent(&parse_intent_events("intent: ab")).is_none());
     }
 
     #[test]
     fn test_intent_plain_prefix_ellipsis_filtered() {
-        let mut parser = OutputParser::new();
-        assert!(get_intent(&parser.parse("intent: ...")).is_none());
+        assert!(get_intent(&parse_intent_events("intent: ...")).is_none());
     }
 
     #[test]
     fn test_intent_plain_prefix_no_space_after_colon_no_match() {
-        let mut parser = OutputParser::new();
         // Requires space after colon per `^intent:\s+`
-        assert!(get_intent(&parser.parse("intent:nospace")).is_none());
+        assert!(get_intent(&parse_intent_events("intent:nospace")).is_none());
     }
 
     // ---- The two markers the protocol forces into the same first message ----
@@ -4386,8 +4342,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // an `intent:` INSIDE that same message, so an agent that writes both as
         // one sentence run puts the token mid-row. A column-0-only anchor then
         // captured nothing at all — not a truncated intent, no intent.
-        let mut parser = OutputParser::new();
-        let events = parser.parse(
+        let events = parse_intent_events(
             "\u{2022} TUICommander v1.7.7 is connected. intent: fixing the parser (Parser Fix)",
         );
         assert_eq!(get_intent(&events), Some("fixing the parser".to_string()));
@@ -4398,11 +4353,13 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     fn test_ack_prefix_is_the_only_prose_allowed_before_the_token() {
         // The relaxation above is that one sentence and nothing else: any other
         // leading prose keeps the token rejected.
-        let mut parser = OutputParser::new();
         assert!(
-            get_intent(&parser.parse("Ready when you are. intent: reading the config")).is_none()
+            get_intent(&parse_intent_events(
+                "Ready when you are. intent: reading the config"
+            ))
+            .is_none()
         );
-        assert!(get_intent(&parser.parse("The intent: of this code is clear")).is_none());
+        assert!(get_intent(&parse_intent_events("The intent: of this code is clear")).is_none());
     }
 
     #[test]
@@ -4410,8 +4367,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         // Ink-hosted agents hard-wrap their own output and indent every
         // continuation row by the bullet width. Without a rejoin the regex `$`
         // cuts the token at the wrap, so the `(title)` — the tab title — is lost.
-        let mut parser = OutputParser::new();
-        let events = parser.parse(
+        let events = parse_intent_events(
             "\u{2022} intent: definisco piano, story e worktree isolato prima\n  dell'implementazione (SQLite plugin)",
         );
         assert_eq!(
@@ -4427,8 +4383,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     fn test_intent_dewraps_both_defects_at_once() {
         // The reported shape: the ack sentence, the token mid-row, and the tail
         // wrapped onto the next row.
-        let mut parser = OutputParser::new();
-        let events = parser.parse(
+        let events = parse_intent_events(
             "\u{2022} TUICommander v1.7.7 is connected. intent: definisco piano, story e worktree isolato prima\n  dell'implementazione (SQLite plugin)",
         );
         assert_eq!(
@@ -4444,9 +4399,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     fn test_intent_dewrap_stops_at_a_closed_title() {
         // A row that already carries `(title)` is a complete token. The row
         // below it is the agent's next paragraph, never a continuation.
-        let mut parser = OutputParser::new();
-        let events =
-            parser.parse("\u{2022} intent: reading the config (Config)\n  and then some prose");
+        let events = parse_intent_events(
+            "\u{2022} intent: reading the config (Config)\n  and then some prose",
+        );
         assert_eq!(get_intent(&events), Some("reading the config".to_string()));
         assert_eq!(get_intent_title(&events), Some("Config".to_string()));
     }
@@ -4454,8 +4409,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     #[test]
     fn test_intent_dewrap_needs_the_wrap_indent() {
         // An un-indented next row is a new logical line, not a wrap.
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{2022} intent: reading the config\nunrelated output line");
+        let events =
+            parse_intent_events("\u{2022} intent: reading the config\nunrelated output line");
         assert_eq!(get_intent(&events), Some("reading the config".to_string()));
         assert_eq!(get_intent_title(&events), None);
     }
@@ -4463,8 +4418,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     #[test]
     fn test_intent_dewrap_stops_at_a_bulleted_row() {
         // A bullet opens a new agent message even when Ink indents it.
-        let mut parser = OutputParser::new();
-        let events = parser.parse("\u{2022} intent: reading the config\n  \u{2022} next message");
+        let events =
+            parse_intent_events("\u{2022} intent: reading the config\n  \u{2022} next message");
         assert_eq!(get_intent(&events), Some("reading the config".to_string()));
     }
 
@@ -5101,12 +5056,14 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let rows = vec![row(0, "intent: Implementing feature (My title)")];
         let events = parser.parse_clean_lines(&rows, true);
         assert!(
-            events
+            !events
                 .iter()
-                .any(|e| matches!(e, ParsedEvent::Intent { title: Some(_), .. })),
-            "expected Intent with title, got: {:?}",
-            events
+                .any(|e| matches!(e, ParsedEvent::Intent { .. }))
         );
+        assert!(matches!(
+            parse_intent(&rows[0].text, true),
+            Some(ParsedEvent::Intent { title: Some(_), .. })
+        ));
     }
 
     #[test]
@@ -5198,11 +5155,12 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let rows = vec![row(0, "\u{25CF} intent: Implementing feature (My title)")];
         let events = parser.parse_clean_lines(&rows, true);
         assert!(
-            events.iter().any(
-                |e| matches!(e, ParsedEvent::Intent { title: Some(t), .. } if t == "My title")
-            ),
-            "expected Intent with title='My title', got: {:?}",
-            events
+            !events
+                .iter()
+                .any(|e| matches!(e, ParsedEvent::Intent { .. }))
+        );
+        assert!(
+            matches!(parse_intent(&rows[0].text, true), Some(ParsedEvent::Intent { title: Some(t), .. }) if t == "My title")
         );
     }
 
@@ -5277,22 +5235,21 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             row(1, "* Reading files..."),
         ];
         let events = parser.parse_clean_lines(&rows, true);
-        let has_intent = events
-            .iter()
-            .any(|e| matches!(e, ParsedEvent::Intent { .. }));
         let has_status = events
             .iter()
             .any(|e| matches!(e, ParsedEvent::StatusLine { .. }));
-        assert!(has_intent, "expected Intent event, got: {:?}", events);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ParsedEvent::Intent { .. }))
+        );
         assert!(has_status, "expected StatusLine event, got: {:?}", events);
     }
 
-    /// An Ink agent repaints its whole frame on every tick, so the same
-    /// `intent:` line reaches the parser again and again while it stays on
-    /// screen. Each one used to be an event; each event is now a journal row, so
-    /// an undeduplicated intent writes the same sentence hundreds of times.
+    /// The PTY chunk pipeline owns intent dedup; the generic row parser never
+    /// emits intents, even when an Ink frame repeats or changes the marker.
     #[test]
-    fn a_repainted_intent_is_emitted_once_and_a_changed_one_emits_again() {
+    fn a_repainted_intent_is_left_to_the_chunk_pipeline() {
         let mut parser = OutputParser::new();
         let first = vec![row(0, "intent: Rewriting the store (Store)")];
         let intents = |events: Vec<ParsedEvent>| {
@@ -5302,7 +5259,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                 .count()
         };
 
-        assert_eq!(intents(parser.parse_clean_lines(&first, true)), 1);
+        assert_eq!(intents(parser.parse_clean_lines(&first, true)), 0);
         assert_eq!(
             intents(parser.parse_clean_lines(&first, true)),
             0,
@@ -5312,8 +5269,8 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let second = vec![row(0, "intent: Building the dialog (Dialog)")];
         assert_eq!(
             intents(parser.parse_clean_lines(&second, true)),
-            1,
-            "a new phase must still be reported"
+            0,
+            "the chunk pipeline reports a new phase"
         );
     }
 

@@ -935,6 +935,10 @@ TUIC at `agent action=spawn` and `agent action=send`, with nullable
 `target_pty_id` and `target_name` columns naming the other terminal. All three
 host-written kinds are refused on every reporting path — they are observed, not
 claimed.
+Every journal insert redacts secret-shaped text and step fields before SQLite
+stores them. Agent and target display names are also redacted and capped at 80
+characters. Reads therefore return the stored redacted values in both the list
+and Flow view.
 
 A journal created before the hand-off kinds has a `CHECK` constraint that
 refuses them. SQLite cannot alter a `CHECK`, so opening such a database copies
