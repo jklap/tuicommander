@@ -336,11 +336,13 @@ private key to disk in cleartext.
 ### MCP Bridge Auto-Install
 
 On launch `agent_mcp::ensure_mcp_configs` writes the `tuicommander` bridge
-entry into each supported agent's own MCP config only when `tuic-bridge` is a
-file beside the running executable. A test binary, temporary copy or worktree
-build without that sidecar leaves every user agent config untouched, even if a
-bridge exists elsewhere on the machine. With a sidecar, the launch pass repairs
-stale paths when the app moves. Each target uses the format its tool reads:
+entry into each supported agent's own MCP config only when a non-empty,
+executable `tuic-bridge` is beside the running executable. Launches from a
+temporary directory, App Translocation, a mounted volume or an AppImage mount
+do not write agent configs. A test binary without that sidecar also leaves the
+configs untouched. A worktree build can add an entry or repair a missing
+executable, but it preserves a working absolute command from another install.
+Each target uses the format its tool reads:
 
 | Agent | Config file | Shape |
 |---|---|---|
@@ -353,7 +355,7 @@ stale paths when the app moves. Each target uses the format its tool reads:
 | Gemini CLI | `~/.gemini/settings.json` | JSON `mcpServers` |
 | Droid | `~/.factory/mcp.json` | JSON `mcpServers` |
 | opencode | `~/.config/opencode/opencode.json[c]` | JSON `mcp`, `{type:"local", command:[…]}` |
-| Codex | `~/.codex/config.toml` | TOML `[mcp_servers]` + `env_vars` allowlist |
+| Codex | `$CODEX_HOME/config.toml` or `~/.codex/config.toml` | TOML `[mcp_servers]` + `env_vars` allowlist |
 | Grok | `~/.grok/config.toml` | TOML `[mcp_servers]` |
 | goose | `~/.config/goose/config.yaml` | YAML `extensions` (`ExtensionEntry`) |
 | pi | `~/.pi/agent/mcp.json` | JSON `mcpServers` (pi-mcp-adapter extension) |
@@ -376,12 +378,12 @@ support comes from the optional pi-mcp-adapter extension, which owns
 `~/.pi/agent/mcp.json` — with no such file there is no adapter, so an
 auto-written entry would configure nothing.
 
-A target that already holds a `tuicommander` entry keeps getting path repairs
-even when presence no longer resolves, provided the launch has a bridge beside
-its executable. If an explicit install cannot locate a bridge, it warns with the
-searched paths and may use the bare `tuic-bridge` name for a new entry only. It
-never replaces an existing entry with that fallback, including a working
-absolute command. All target-presence gates live in `auto_install_allowed`,
+A target that already holds a `tuicommander` entry gets a path repair only when
+its command is bare or no longer names a non-empty executable. An explicit
+install may use the bare `tuic-bridge` name for a new entry when no bridge is
+located; it reports an error rather than using that fallback to repair an
+existing entry. A working absolute command is preserved. All target-presence
+gates live in `auto_install_allowed`,
 which only the launch pass consults: Settings → Agents installs on demand
 through `ensure_spec_entry` directly, because pressing Install states that the
 target is there — that is an explicit request, not a guess.
@@ -392,7 +394,8 @@ user preference, not a dedicated `mcp.json`. Those three carry
 `shared_settings_file: true` and the launch pass never creates or edits them:
 TUICommander being on the machine is not consent to rewrite the user's editor
 configuration. Settings → Agents installs them on request, and once installed
-they receive path repairs like any other target. `get_agent_mcp_status` returns
+their missing or unusable bridge commands can be repaired like any other target.
+`get_agent_mcp_status` returns
 the flag so the UI can say why the entry is missing.
 
 ### Never Reserializing a Third-Party Config
@@ -402,7 +405,7 @@ YAML alike). Treating a parse failure as an empty document is what reduced a
 user's 400-line Zed `settings.json` to our single entry
 ([#115](https://github.com/sstraus/tuicommander/issues/115)).
 
-JSON targets go further: they are never reserialized at all. `jsonc_edit`
+JSON targets are never reserialized as a whole. `jsonc_edit`
 parses the document into a concrete syntax tree, splices exactly one member,
 and prints it back, so text outside that member is byte-identical. This matters
 three times over — `serde_json` rejects the comments and trailing commas Zed,
@@ -413,7 +416,12 @@ VS Code and opencode all document as supported; `serde_json::Map` is a
 Only the documented dialect is accepted. Comments and trailing commas parse;
 single-quoted strings, unquoted keys and hexadecimal numbers do not, because a
 file using them is one the owning tool cannot read either — writing it back as
-if it were fine would be worse than refusing.
+if it were fine would be worse than refusing. TOML edits preserve comments and
+formatting through `toml_edit`. Goose YAML edits splice the bridge command or
+entry and validate the result; unsupported YAML layouts are left untouched.
+Existing config files are backed up once under TUICommander's `mcp-backups`
+directory before any edit. Atomic replacements preserve the file's permissions
+and follow config symlinks to their targets.
 
 Guard rails around the write:
 
