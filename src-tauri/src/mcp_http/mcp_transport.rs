@@ -427,6 +427,7 @@ fn bind_peer_identity_locked(
     name: String,
     project: Option<String>,
     registered_at: u64,
+    mcp_scoped_identity: bool,
 ) {
     let prior_mcp = state
         .peer_agents
@@ -466,6 +467,7 @@ fn bind_peer_identity_locked(
             name,
             project,
             registered_at,
+            mcp_scoped_identity,
         },
     );
     state
@@ -682,11 +684,20 @@ fn register_peer_identity(
     name: String,
     project: Option<String>,
     registered_at: u64,
+    mcp_scoped_identity: bool,
 ) -> Result<Option<String>, String> {
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
     match peer_identity_ownership_locked(state, mcp_sid, tuic_session) {
         PeerIdentityOwnership::Vacant(prior_mcp) => {
-            bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
+            bind_peer_identity_locked(
+                state,
+                mcp_sid,
+                tuic_session,
+                name,
+                project,
+                registered_at,
+                mcp_scoped_identity,
+            );
             Ok(prior_mcp)
         }
         // A session that already routes to the identity was bound to it by an
@@ -699,6 +710,7 @@ fn register_peer_identity(
                 if project.is_some() {
                     peer.project = project;
                 }
+                peer.mcp_scoped_identity = mcp_scoped_identity;
             }
             Ok(None)
         }
@@ -774,7 +786,7 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
             now_unix_ms(),
         ),
     };
-    bind_peer_identity_locked(state, mcp_sid, tuic, name, project, registered_at);
+    bind_peer_identity_locked(state, mcp_sid, tuic, name, project, registered_at, false);
     if let Some(prior_mcp) = prior_mcp {
         tracing::warn!(
             source = "mcp_initialize",
@@ -3807,7 +3819,12 @@ fn handle_agent_with_parent_cwd(
                 .and_then(|sid| state.mcp.to_session.get(sid).map(|e| e.value().clone()));
             let caller_tuic = caller_identity
                 .as_deref()
-                .filter(|identity| state.live_pty_for_peer(identity).is_some())
+                .filter(|identity| {
+                    state
+                        .peer_agents
+                        .get(*identity)
+                        .is_some_and(|peer| !peer.mcp_scoped_identity)
+                })
                 .map(str::to_string);
 
             // Effective prompt: context prepended for managed-peer spawns, unchanged otherwise.
@@ -4117,6 +4134,7 @@ fn handle_agent_with_parent_cwd(
                     name: peer_name.clone(),
                     project: effective_cwd.clone(),
                     registered_at: now_unix_ms(),
+                    mcp_scoped_identity: false,
                 },
             );
             state.agent_inbox.entry(session_id.clone()).or_default();
@@ -4375,6 +4393,15 @@ fn handle_messaging(
                     Ok(identity) => identity,
                     Err(error) => return error,
                 };
+            let mcp_scoped_identity = generated_identity
+                || (args["tuic_session"]
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .is_none()
+                    && previously_bound
+                        .as_deref()
+                        .and_then(|identity| state.peer_agents.get(identity))
+                        .is_some_and(|peer| peer.mcp_scoped_identity));
             let existing = state
                 .peer_agents
                 .get(&tuic_session)
@@ -4407,6 +4434,7 @@ fn handle_messaging(
                 name.clone(),
                 project,
                 now_ms,
+                mcp_scoped_identity,
             ) {
                 Ok(prior) => prior,
                 Err(error) => {
@@ -13255,6 +13283,7 @@ mod tests {
                 name: "progress-worker".to_string(),
                 project: Some(project.path().to_string_lossy().to_string()),
                 registered_at: 0,
+                mcp_scoped_identity: false,
             },
         );
         #[cfg(unix)]
@@ -14525,6 +14554,7 @@ mod tests {
                 name: "codex".to_string(),
                 project: Some("/Gits/personal/tuicommander".to_string()),
                 registered_at: 0,
+                mcp_scoped_identity: false,
             },
         );
 
@@ -14571,6 +14601,7 @@ mod tests {
                 name: "codex".to_string(),
                 project: Some("/Gits/personal/tuicommander".to_string()),
                 registered_at: 0,
+                mcp_scoped_identity: false,
             },
         );
 
@@ -15445,6 +15476,7 @@ mod tests {
                 name: "wiz".to_string(),
                 project: Some("/Gits/personal/alpha".to_string()),
                 registered_at: 0,
+                mcp_scoped_identity: false,
             },
         );
 
