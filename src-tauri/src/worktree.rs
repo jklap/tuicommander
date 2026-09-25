@@ -5288,6 +5288,49 @@ branch refs/heads/feat
     }
 
     #[test]
+    fn create_workspace_reports_an_unavailable_submodule_as_a_warning() {
+        let (_temp, repo, workspaces) = workspace_fixture();
+        fs::write(
+            repo.join(".gitmodules"),
+            "[submodule \"missing\"]\n\tpath = modules/missing\n\turl = /missing/remote\n",
+        )
+        .unwrap();
+        git_cmd(&repo)
+            .args([
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000,1111111111111111111111111111111111111111,modules/missing",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&repo).args(["add", ".gitmodules"]).run().unwrap();
+        git_cmd(&repo)
+            .args(["commit", "-m", "missing submodule"])
+            .run()
+            .unwrap();
+        let config = WorktreeConfig {
+            task_name: "missing-submodule".into(),
+            base_repo: repo.to_string_lossy().into_owned(),
+            branch: Some("missing-submodule".into()),
+            create_branch: true,
+        };
+
+        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
+            crate::cow::WarmingReport::default()
+        })
+        .unwrap();
+
+        assert!(
+            created.warnings.iter().any(|warning| {
+                warning.contains("modules/missing") && warning.contains("could not initialize")
+            }),
+            "warnings: {:?}",
+            created.warnings
+        );
+    }
+
+    #[test]
     fn workspace_payload_states_linked_isolation_and_clean_tracked_state() {
         let (_temp, repo, workspaces) = workspace_fixture();
         let config = WorktreeConfig {
@@ -5366,48 +5409,6 @@ branch refs/heads/feat
 
         let status = inspect_workspace_lifecycle(&repo, "trails");
 
-    #[test]
-    fn create_workspace_reports_an_unavailable_submodule_as_a_warning() {
-        let (_temp, repo, workspaces) = workspace_fixture();
-        fs::write(
-            repo.join(".gitmodules"),
-            "[submodule \"missing\"]\n\tpath = modules/missing\n\turl = /missing/remote\n",
-        )
-        .unwrap();
-        git_cmd(&repo)
-            .args([
-                "update-index",
-                "--add",
-                "--cacheinfo",
-                "160000,1111111111111111111111111111111111111111,modules/missing",
-            ])
-            .run()
-            .unwrap();
-        git_cmd(&repo).args(["add", ".gitmodules"]).run().unwrap();
-        git_cmd(&repo)
-            .args(["commit", "-m", "missing submodule"])
-            .run()
-            .unwrap();
-        let config = WorktreeConfig {
-            task_name: "missing-submodule".into(),
-            base_repo: repo.to_string_lossy().into_owned(),
-            branch: Some("missing-submodule".into()),
-            create_branch: true,
-        };
-
-        let created = create_workspace_with(&workspaces, &config, None, |_, _| {
-            crate::cow::WarmingReport::default()
-        })
-        .unwrap();
-
-        assert!(
-            created.warnings.iter().any(|warning| {
-                warning.contains("modules/missing") && warning.contains("could not initialize")
-            }),
-            "warnings: {:?}",
-            created.warnings
-        );
-    }
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
         assert_eq!(status.dirty_files, Some(0));
         assert!(worktree.exists());
