@@ -269,6 +269,17 @@ describe("transport", () => {
 				path: "/stories/action?path=%2Frepo%20a",
 				body: { action },
 			});
+			const remove = {
+				action: "remove_dependency",
+				story_id: "dependent",
+				dependency_id: "cancelled",
+				expected_revision: 3,
+			};
+			expect(mapCommandToHttp("story_action_command", { project: "/repo a", action: remove })).toEqual({
+				method: "POST",
+				path: "/stories/action?path=%2Frepo%20a",
+				body: { action: remove },
+			});
 		});
 
 		it("maps typed project progress controls", () => {

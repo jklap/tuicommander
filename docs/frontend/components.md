@@ -373,6 +373,10 @@ Ideas panel with per-repo filtering and terminal integration.
 - Count badge in panel header and in the StatusBar toggle button
 - Used notes shown with a checkmark and dimmed styling
 
+### StoriesDialog (`StoriesDialog/`)
+
+The project-scoped plan and story dialog creates manual plans and stories, presents criteria and dependency status, and sends revision-checked actions through the shared IPC/HTTP transport. It derives direct and transitive abandoned dependency labels from the loaded story graph. Only a direct WontFix dependency on a Backlog story offers the human Remove action; the backend decides whether the dependent becomes Ready. The plan column shows the WontFix count, including an all-cancelled label.
+
 ### ProgressDialog (`ProgressDialog/`)
 
 The whole Progress UI: one newest-first list for the active PTY by default,

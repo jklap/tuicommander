@@ -41,6 +41,40 @@ impl StoryStore {
         Ok(story)
     }
 
+    pub fn remove_dependency(
+        &self,
+        story_id: &str,
+        dependency_id: &str,
+        expected_revision: i64,
+        actor_session: Option<&str>,
+    ) -> Result<Story, String> {
+        if actor_session.is_some() {
+            return Err("dependency removal requires a user action".into());
+        }
+        let mut conn = self.connect()?;
+        let tx = immediate(&mut conn)?;
+        let mut story = read_story(&tx, story_id)?;
+        check_revision(&story, expected_revision)?;
+        if story.status != StoryStatus::Backlog {
+            return Err("dependencies can be removed only from backlog stories".into());
+        }
+        if !story.dependencies.iter().any(|id| id == dependency_id) {
+            return Err("dependency does not exist on story".into());
+        }
+        let dependency = read_story(&tx, dependency_id)?;
+        if dependency.plan_id != story.plan_id || dependency.status != StoryStatus::WontFix {
+            return Err("only cancelled dependencies in the same plan can be removed".into());
+        }
+        story.dependencies.retain(|id| id != dependency_id);
+        if dependencies_done(&tx, &story)? {
+            story.status = StoryStatus::Ready;
+        }
+        save_story(&tx, &mut story, expected_revision)?;
+        tx.commit()
+            .map_err(|e| format!("commit dependency removal: {e}"))?;
+        Ok(story)
+    }
+
     pub fn transition(
         &self,
         story_id: &str,
