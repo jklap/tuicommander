@@ -366,7 +366,7 @@ impl TuicBackend for IpcBackend {
     ) -> Result<String, String> {
         let body = serde_json::json!({ "cwd": cwd });
         // The server-side handler blocks for its own shell-readiness gate,
-        // bounded at `PANE_READY_TIMEOUT_MS` (5s, `tmux_routes.rs`) — the
+        // bounded at `SHELL_READINESS_TIMEOUT_MS` (5s, `mcp_transport.rs`) — the
         // default 3s client socket timeout is shorter than that, so a
         // legitimately slow (not hung) shell would otherwise time out
         // client-side and report failure even though the server would have
