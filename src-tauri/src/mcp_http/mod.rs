@@ -6204,6 +6204,20 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    fn short_socket_test_dir() -> tempfile::TempDir {
+        let dir = tempfile::Builder::new()
+            .prefix("s")
+            .tempdir_in(crate::test_support::short_socket_test_temp_root())
+            .expect("create repository-local socket test dir");
+        assert!(
+            dir.path().join("mcp-4294967295.sock").as_os_str().len() < 104,
+            "socket test path exceeds macOS SUN_LEN: {}",
+            dir.path().display()
+        );
+        dir
+    }
+
     /// Unix socket listener: binds, serves health check, cleans up socket file on drop.
     #[cfg(unix)]
     #[tokio::test]
@@ -6211,18 +6225,8 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let state = test_state();
-        // Use /tmp directly — macOS $TMPDIR can exceed SUN_LEN (104 bytes)
-        let tmp_dir = std::path::PathBuf::from("/tmp")
-            .join(format!("tuic-{}", &uuid::Uuid::new_v4().to_string()[..8]));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
-        let sock_path = tmp_dir.join("s");
+        let tmp_dir = short_socket_test_dir();
+        let sock_path = tmp_dir.path().join("s");
 
         // Bind Unix socket and serve the router (no auth, MCP enabled)
         let app = build_router(state.clone(), false, true);
@@ -6254,7 +6258,6 @@ mod tests {
 
         server.abort();
         let _ = std::fs::remove_file(&sock_path);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     /// Regression test: aborting the first server task must NOT remove the socket file
@@ -6263,19 +6266,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_unix_socket_rebind_no_race() {
-        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
-            "tuic-race-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        ));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
-        let sock_path = tmp_dir.join("s");
+        let tmp_dir = short_socket_test_dir();
+        let sock_path = tmp_dir.path().join("s");
 
         // First instance: bind and spawn server
         let _ = std::fs::remove_file(&sock_path);
@@ -6311,27 +6303,14 @@ mod tests {
 
         server2.abort();
         let _ = std::fs::remove_file(&sock_path);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     /// When a live socket exists, resolve_socket_path-style logic should pick an alternative.
     #[cfg(unix)]
     #[tokio::test]
     async fn test_multi_instance_socket_coexistence() {
-        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
-            "tuic-multi-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        ));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
-
-        let primary = tmp_dir.join("mcp.sock");
+        let tmp_dir = short_socket_test_dir();
+        let primary = tmp_dir.path().join("mcp.sock");
 
         // First instance: bind primary socket and start serving
         let _ = std::fs::remove_file(&primary);
@@ -6356,7 +6335,9 @@ mod tests {
         let primary_live = std::os::unix::net::UnixStream::connect(&primary).is_ok();
         assert!(primary_live, "primary should be detected as live");
 
-        let alt = tmp_dir.join(format!("mcp-{}.sock", std::process::id()));
+        let alt = tmp_dir
+            .path()
+            .join(format!("mcp-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&alt);
         let uds2 = tokio::net::UnixListener::bind(&alt).unwrap();
         let app2 = build_router(state.clone(), false, true)
@@ -6381,7 +6362,6 @@ mod tests {
         server2.abort();
         let _ = std::fs::remove_file(&primary);
         let _ = std::fs::remove_file(&alt);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     #[cfg(unix)]
@@ -6408,31 +6388,22 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_cleanup_stale_sockets() {
-        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
-            "tuic-stale-{}",
-            &uuid::Uuid::new_v4().to_string()[..8]
-        ));
-        match std::fs::create_dir_all(&tmp_dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("Skipping test: cannot create dir in sandbox");
-                return;
-            }
-            Err(e) => panic!("create_dir_all: {e}"),
-        }
+        let tmp_dir = short_socket_test_dir();
 
         // Create a socket file for a PID that definitely doesn't exist (PID 1 is launchd, skip it)
         let dead_pid = 99999;
-        let stale = tmp_dir.join(format!("mcp-{dead_pid}.sock"));
+        let stale = tmp_dir.path().join(format!("mcp-{dead_pid}.sock"));
         std::fs::write(&stale, "").unwrap();
         assert!(stale.exists());
 
         // Create a socket file for our own PID (alive)
-        let alive = tmp_dir.join(format!("mcp-{}.sock", std::process::id()));
+        let alive = tmp_dir
+            .path()
+            .join(format!("mcp-{}.sock", std::process::id()));
         std::fs::write(&alive, "").unwrap();
 
         // Run cleanup logic inline (can't call cleanup_stale_sockets directly as it uses config_dir)
-        for entry in std::fs::read_dir(&tmp_dir).unwrap().flatten() {
+        for entry in std::fs::read_dir(tmp_dir.path()).unwrap().flatten() {
             let name = entry.file_name();
             let Some(name_str) = name.to_str() else {
                 continue;
@@ -6458,7 +6429,6 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file(&alive);
-        let _ = std::fs::remove_dir(&tmp_dir);
     }
 
     // ---- VtLogBuffer HTTP integration tests ----

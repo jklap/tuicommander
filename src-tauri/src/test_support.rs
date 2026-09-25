@@ -11,6 +11,41 @@
 //! small: each returns the script the host shell understands for one step, so a
 //! test still reads as the thing it asserts.
 
+/// Scratch space for Rust tests. By default this is derived from the checkout
+/// at compile time, so direct `cargo test` and `cargo nextest` calls need no
+/// TMPDIR setup. The test runner may provide a per-run root explicitly.
+pub(crate) fn test_temp_root() -> std::path::PathBuf {
+    let root = std::env::var_os("TUIC_TEST_TMP_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.tmp/tuic-tests")
+        });
+    std::fs::create_dir_all(&root).expect("create repository test temp root");
+    root
+}
+
+/// Unix socket paths need a short prefix to fit macOS's 104-byte limit.
+#[cfg(unix)]
+pub(crate) fn short_socket_test_temp_root() -> std::path::PathBuf {
+    let requested = test_temp_root();
+    if requested
+        .join("sXXXXXX/mcp-4294967295.sock")
+        .as_os_str()
+        .len()
+        < 104
+    {
+        return requested;
+    }
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest
+        .ancestors()
+        .find(|path| path.file_name().is_some_and(|name| name == "Gits"))
+        .map(|gits| gits.join(".tmp/tuic-tests"))
+        .unwrap_or(requested);
+    std::fs::create_dir_all(&root).expect("create short socket test root");
+    root
+}
+
 /// The shell and the flag that makes it read a script from its argv — the same
 /// pair the production spawners pick.
 pub(crate) fn host_shell() -> (&'static str, &'static str) {

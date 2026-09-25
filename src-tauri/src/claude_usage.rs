@@ -1564,9 +1564,8 @@ mod tests {
     #[test]
     fn parse_jsonl_file_from_offset_works() {
         // Create a temp file with JSONL content
-        let dir = std::env::temp_dir().join("claude_usage_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("test.jsonl");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("test.jsonl");
 
         let content = r#"{"type":"user","message":"hello"}
 {"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
@@ -1621,9 +1620,6 @@ mod tests {
         let hourly14 = stats.hourly_tokens.get("2026-02-04T14").unwrap();
         assert_eq!(hourly14.input_tokens, 200);
         assert_eq!(hourly14.output_tokens, 100);
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn transcript(input: u64, output: u64, session: &str, hour: &str) -> String {
@@ -1751,9 +1747,8 @@ mod tests {
         // Simulates an active session: assistant message followed by
         // stop_hook_summary (which has a timestamp but is NOT turn_duration),
         // then the file ends with no turn_duration to flush pending tokens.
-        let dir = std::env::temp_dir().join("claude_usage_orphan_test");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("orphan.jsonl");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("orphan.jsonl");
 
         let content = r#"{"type":"user","message":"hello"}
 {"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
@@ -1780,17 +1775,14 @@ mod tests {
             "all tokens should be bucketed in hour 10"
         );
         assert_eq!(h10.output_tokens, 50 + 80 + 60);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn orphan_tokens_at_eof_use_last_timestamp() {
         // File ends with assistant message, no system line after it.
         // There IS a prior turn_duration so last_timestamp is known.
-        let dir = std::env::temp_dir().join("claude_usage_eof_orphan");
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("eof.jsonl");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("eof.jsonl");
 
         let content = r#"{"type":"assistant","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}
 {"type":"system","subtype":"turn_duration","timestamp":"2026-02-25T14:00:00Z","sessionId":"s1","durationMs":5000}
@@ -1805,8 +1797,6 @@ mod tests {
         let h14 = stats.hourly_tokens.get("2026-02-25T14").unwrap();
         assert_eq!(h14.input_tokens, 100 + 300);
         assert_eq!(h14.output_tokens, 50 + 120);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

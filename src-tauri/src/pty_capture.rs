@@ -311,8 +311,8 @@ mod tests {
     #[test]
     fn disabled_tap_writes_nothing() {
         let _guard = TEST_LOCK.lock();
-        let dir = std::env::temp_dir().join("tuic-capture-test-disabled");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let dir = scratch.path().join("disabled");
         set_enabled(false, None, dir.clone());
         record_with_geometry("session-a", b"hello", Some((24, 80)));
         assert!(!dir.exists());
@@ -321,8 +321,8 @@ mod tests {
     #[test]
     fn capture_respects_the_session_filter_and_the_size_cap() {
         let _guard = TEST_LOCK.lock();
-        let dir = std::env::temp_dir().join("tuic-capture-test-filter");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let dir = scratch.path().join("filter");
         set_enabled(true, Some("wanted".into()), dir.clone());
 
         record_with_geometry(
@@ -350,7 +350,6 @@ mod tests {
             !dir.join("other.tcap").exists(),
             "a filtered-out session must not be touched"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Re-enabling starts a new file rather than appending to the previous run:
@@ -358,8 +357,8 @@ mod tests {
     #[test]
     fn restarting_the_tap_truncates() {
         let _guard = TEST_LOCK.lock();
-        let dir = std::env::temp_dir().join("tuic-capture-test-restart");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let dir = scratch.path().join("restart");
 
         set_enabled(true, None, dir.clone());
         record_with_geometry("s", b"first run", Some((24, 80)));
@@ -373,14 +372,13 @@ mod tests {
         let records = decode(&bytes).expect("framed capture decodes");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].data, b"second");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn framed_capture_preserves_output_input_order_and_boundaries() {
         let _guard = TEST_LOCK.lock();
-        let dir = std::env::temp_dir().join("tuic-capture-test-framed");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let dir = scratch.path().join("framed");
         set_enabled(true, Some("s".into()), dir.clone());
         record_with_geometry("s", b"question?", Some((63, 160)));
         record_input_with_geometry("s", b"\r", Some((63, 160)));
@@ -400,14 +398,13 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair[0].elapsed_us <= pair[1].elapsed_us)
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn capture_exposes_geometry_and_decodes_tuiccap1() {
         let _guard = TEST_LOCK.lock();
-        let dir = std::env::temp_dir().join("tuic-capture-test-geometry");
-        let _ = std::fs::remove_dir_all(&dir);
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let dir = scratch.path().join("geometry");
         set_enabled(true, Some("s".into()), dir.clone());
         record_with_geometry("s", b"frame", Some((63, 160)));
         set_enabled(false, None, dir.clone());
@@ -425,6 +422,5 @@ mod tests {
         assert_eq!(decoded.geometry, None);
         assert_eq!(decoded.records[0].elapsed_us, 7);
         assert_eq!(decoded.records[0].data, b"old");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

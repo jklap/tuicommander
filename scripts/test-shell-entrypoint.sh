@@ -2,7 +2,9 @@
 set -euo pipefail
 
 project_root="$(git rev-parse --show-toplevel)"
-fixture_dir="$(mktemp -d)"
+test_tmp="${TUIC_TEST_TMP_ROOT:-$project_root/.tmp/tuic-tests}"
+mkdir -p "$test_tmp"
+fixture_dir="$(mktemp -d "$test_tmp/shell-entrypoint.XXXXXX")"
 trap 'rm -rf "$fixture_dir"' EXIT
 
 fixture="$fixture_dir/test-failing-fixture.sh"

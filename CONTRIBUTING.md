@@ -64,6 +64,12 @@ sync check, `cargo fmt --check`, `cargo clippy --release -- -D warnings`,
 
 To run a single gate, copy its command out of the `check` target in the
 [Makefile](Makefile) — that target is the source of truth for what CI enforces.
+Prefix standalone test commands with `scripts/with-test-tmp.sh` from the
+repository root (`../scripts/with-test-tmp.sh` from `src-tauri/`). It creates
+a per-run directory under `.tmp/tuic-tests/` and removes it when the command
+ends, including when a test fails. `make check`, `make test-shell`, `make cov`, and
+`make mutants` do this automatically. `make dev` and `cargo run` retain their
+normal runtime temporary directory.
 
 Mutation testing runs on a change, not on the tree: `make mutants RANGE=<base>`
 (default `HEAD~1`) needs `cargo install --locked cargo-mutants` and reports the

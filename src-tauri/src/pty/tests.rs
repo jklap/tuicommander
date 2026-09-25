@@ -13916,8 +13916,8 @@ fn cc_no_bullet_not_tool_call() {
 fn close_pty_core_kills_agent_grandchild() {
     use std::time::{Duration, Instant};
 
-    let pidfile = std::env::temp_dir().join(format!("tuic_pgkill_{}.pid", std::process::id()));
-    let _ = std::fs::remove_file(&pidfile);
+    let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let pidfile = scratch.path().join("grandchild.pid");
 
     let pty = native_pty_system()
         .openpty(PtySize {
@@ -13999,7 +13999,6 @@ fn close_pty_core_kills_agent_grandchild() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let _ = std::fs::remove_file(&pidfile);
     assert!(
         dead,
         "grandchild {grandchild} survived tab close — orphaned process tree"
@@ -14452,9 +14451,8 @@ fn check_pending_planfiles_emits_when_file_appears() {
     let sid = "planfile-emit";
     let mut cp = ChunkProcessor::new(None, None);
 
-    let dir = std::env::temp_dir().join(format!("tuic_planfile_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let file = dir.join("plan.md");
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let file = dir.path().join("plan.md");
     std::fs::write(&file, "# plan").expect("write plan file");
     let path = file.to_string_lossy().to_string();
 
@@ -14485,8 +14483,6 @@ fn check_pending_planfiles_emits_when_file_appears() {
         got,
         "a resolved plan file must emit a plan-file PtyParsed event"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── wake_session ────────────────────────────────────────────────

@@ -5,7 +5,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-TMPDIR=$(mktemp -d)
+scratch_root="${TUIC_TEST_TMP_ROOT:-$REPO_ROOT/.tmp/tuic-tests}"
+mkdir -p "$scratch_root"
+TMPDIR=$(mktemp -d "$scratch_root/it2-shim.XXXXXX")
 trap 'rm -rf "$TMPDIR"' EXIT
 
 PASS=0
