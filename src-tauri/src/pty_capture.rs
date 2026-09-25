@@ -323,11 +323,12 @@ mod tests {
     #[test]
     fn capture_directory_override_selects_an_absolute_directory() {
         let _guard = TEST_LOCK.lock();
-        let root = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let _config = crate::config::set_config_dir_override(root.path().join("config"));
         let selected_dir = root.path().join("selected");
-        // nextest runs this exact test in its own process; no other thread reads
-        // this task-specific environment variable while it changes.
+        // SAFETY: nextest runs this exact test in its own process and TEST_LOCK
+        // serializes the capture tests, so no other thread reads this
+        // task-specific environment variable while it changes.
         let previous = std::env::var_os("TUIC_CAPTURE_DIR");
         unsafe { std::env::remove_var("TUIC_CAPTURE_DIR") };
         let default_status = set_enabled_in_config_dir(true, Some("session-a".into()));
