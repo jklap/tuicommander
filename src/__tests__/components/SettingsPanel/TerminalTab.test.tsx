@@ -406,6 +406,15 @@ describe("TerminalTab", () => {
 			expect(queryByText(/already in the list/)).not.toBeNull();
 		});
 
+		it("refuses a case-variant duplicate key (Windows env vars collide case-insensitively)", () => {
+			const { getByPlaceholderText, getByText, queryByText } = render(() => <TerminalTab />);
+			fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: "existing_var" } });
+			fireEvent.click(getByText("Add"));
+
+			expect(mockSetCustomPtyEnv).not.toHaveBeenCalled();
+			expect(queryByText(/already in the list/)).not.toBeNull();
+		});
+
 		it("disables Add while the key field is blank", () => {
 			const { getByPlaceholderText, getByText } = render(() => <TerminalTab />);
 			const addButton = getByText("Add") as HTMLButtonElement;

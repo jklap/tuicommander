@@ -365,13 +365,22 @@ impl TuicBackend for IpcBackend {
         cwd: Option<&str>,
     ) -> Result<String, String> {
         let body = serde_json::json!({ "cwd": cwd });
-        let resp = crate::ipc::post(
+        // The server-side handler blocks for its own shell-readiness gate,
+        // bounded at `PANE_READY_TIMEOUT_MS` (5s, `tmux_routes.rs`) — the
+        // default 3s client socket timeout is shorter than that, so a
+        // legitimately slow (not hung) shell would otherwise time out
+        // client-side and report failure even though the server would have
+        // returned `Ok` moments later. Must stay comfortably above the
+        // server's own bound, with real margin, per this codebase's own
+        // "outer bound strictly larger than every bound inside it" rule.
+        let resp = crate::ipc::post_with_timeout(
             &format!(
                 "/tmux/panes/{}/materialize?label={}",
                 crate::urlencod(pane_id),
                 crate::urlencod(label)
             ),
             &body.to_string(),
+            std::time::Duration::from_secs(8),
         )
         .map_err(|e| e.to_string())?;
         if !resp.is_success() {

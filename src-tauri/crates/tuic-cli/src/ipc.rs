@@ -88,6 +88,14 @@ impl Response {
     }
 }
 
+/// The default per-request socket read/write timeout. Callers whose server-side
+/// handler can legitimately take longer than this (e.g. `materialize_pane`,
+/// whose server-side shell-readiness gate can hold the response for its own
+/// bounded wait) must use [`request_with_timeout`]/[`post_with_timeout`] with a
+/// value that exceeds the server-side bound by a real margin — never rely on
+/// this default silently covering it.
+const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Send an HTTP request over the IPC socket and return the response.
 pub fn request(method: &str, path: &str, body: Option<&str>) -> io::Result<Response> {
     request_with_headers(method, path, body, &[])
@@ -100,10 +108,23 @@ pub fn request_with_headers(
     body: Option<&str>,
     extra_headers: &[(&str, &str)],
 ) -> io::Result<Response> {
+    request_with_timeout(method, path, body, extra_headers, DEFAULT_TIMEOUT)
+}
+
+/// Same as [`request_with_headers`], with an explicit socket timeout override —
+/// for a call whose server-side handler can legitimately take longer than
+/// [`DEFAULT_TIMEOUT`] to respond.
+pub fn request_with_timeout(
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    extra_headers: &[(&str, &str)],
+    timeout: std::time::Duration,
+) -> io::Result<Response> {
     let mut stream = connect()?;
     #[cfg(unix)]
     {
-        let timeout = Some(std::time::Duration::from_secs(3));
+        let timeout = Some(timeout);
         stream.set_read_timeout(timeout)?;
         stream.set_write_timeout(timeout)?;
     }
@@ -219,6 +240,17 @@ pub fn get(path: &str) -> io::Result<Response> {
 /// Convenience: POST request with JSON body
 pub fn post(path: &str, body: &str) -> io::Result<Response> {
     request("POST", path, Some(body))
+}
+
+/// Convenience: POST request with JSON body and an explicit timeout override —
+/// for a call whose server-side handler can legitimately take longer than
+/// [`DEFAULT_TIMEOUT`] (e.g. `materialize_pane`'s shell-readiness gate).
+pub fn post_with_timeout(
+    path: &str,
+    body: &str,
+    timeout: std::time::Duration,
+) -> io::Result<Response> {
+    request_with_timeout("POST", path, Some(body), &[], timeout)
 }
 
 /// Convenience: PUT request with JSON body

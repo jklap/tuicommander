@@ -876,7 +876,7 @@
 	"terminal.heading.shell": "Shell",
 	"terminal.heading.shellIntegration": "Shell Integration",
 	"terminal.hint.blockFoldingEnabled": "Allow collapsing a command block's output with Cmd+Shift+. or a gutter click.",
-	"terminal.hint.customEnv": "Applied to every spawned terminal — shell tabs and agents alike. Overrides anything else that sets the same variable.",
+	"terminal.hint.customEnv": "Applied to every spawned terminal — shell tabs and agents alike. Overrides anything else that sets the same variable, including PATH — setting PATH here replaces it entirely rather than prepending to it.",
 	"terminal.hint.restoreScrollback": "Show a restored terminal's recent output above a fresh prompt. Saved as plain text in the app's config directory — off by default.",
 	"terminal.hint.restoreScrollbackLines": "Maximum lines of output saved per terminal when scrollback saving is on",
 	"terminal.hint.restoreShellTerminals": "Reopen plain shell tabs (not just agent tabs) in their saved directory when you relaunch",

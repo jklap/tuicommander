@@ -488,6 +488,17 @@ async fn materialize(
         .get(label)
         .and_then(|t| t.find_pane(pane_id).and_then(|p| p.tuic_session_id.clone()))
     {
+        // `pane.tuic_session_id` is recorded (below) BEFORE the shell-readiness
+        // gate runs, so a second concurrent `materialize` call for the same
+        // still-settling pane — a real, documented shape: `tuic-cli`'s own
+        // `respawn-pane` retry-on-eager-materialize comment names exactly this
+        // (a `split-window` that eagerly materializes racing `respawn-pane` for
+        // the same pane) — must not skip the gate just because it hit this fast
+        // path instead of the fresh-spawn path below. `apply_pane_readiness_gate`
+        // is cheap to call redundantly: `wait_for_shell_idle`'s own fast path
+        // returns immediately once the shell is already idle, which is the
+        // common case here (the pane was materialized a while ago).
+        apply_pane_readiness_gate(state, pane_id, &existing, PANE_READY_TIMEOUT_MS).await;
         return Ok(existing);
     }
     // `respawn-pane` — the only caller that ever materializes `new-session`'s
@@ -1517,6 +1528,114 @@ mod tests {
         )
         .await
         .expect("apply_pane_readiness_gate must return on its own timeout, not hang");
+    }
+
+    /// Regression for a race a code review caught: `pane.tuic_session_id` is
+    /// recorded (so the "already materialized" fast path can find it) BEFORE
+    /// the fresh-spawn path's own readiness-gate call runs — so a second
+    /// concurrent `materialize` call for the same pane, landing after that
+    /// record but before the first call's gate resolves, used to hit the fast
+    /// path and return immediately with no wait at all, defeating the whole
+    /// point of this feature for exactly the concurrent-caller shape it exists
+    /// to close (`tuic-cli`'s own `respawn-pane` retry comment documents a real
+    /// instance of two callers racing to materialize the same pane). Proven
+    /// here directly against `materialize()`'s fast-path branch: a pane
+    /// already holding a `tuic_session_id` whose shell is rigged to not be
+    /// idle yet must still block the fast path until it is.
+    #[tokio::test]
+    async fn materialize_fast_path_still_waits_for_a_not_yet_idle_shell() {
+        use std::sync::atomic::Ordering;
+
+        let state = super::super::tests::test_state();
+        let label = "test-materialize-fast-path-waits";
+
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(created.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let pane_id = created["pane_id"].as_str().unwrap().to_string();
+
+        // Materialize it for real once, then rig its shell back to BUSY — this
+        // simulates a second caller's `materialize` landing on the fast path
+        // (pane.tuic_session_id already set) while the shell isn't confirmed
+        // idle right now, without needing genuine spawn-level concurrency.
+        let materialized = materialize_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+            Json(MaterializePaneRequest { cwd: None }),
+        )
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(materialized.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let materialized: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let tuic_session_id = materialized["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        state
+            .session_maps
+            .shell_states
+            .get(&tuic_session_id)
+            .unwrap()
+            .store(crate::pty::SHELL_BUSY, Ordering::Release);
+
+        let mut waiter = tokio::spawn({
+            let waiting_state = state.clone();
+            let waiting_pane_id = pane_id.clone();
+            async move {
+                materialize_pane(
+                    State(waiting_state),
+                    Path(waiting_pane_id),
+                    label_query(label),
+                    Json(MaterializePaneRequest { cwd: None }),
+                )
+                .await
+                .into_response()
+            }
+        });
+
+        // The load-bearing assertion: with a not-yet-idle shell, the fast path
+        // must NOT have completed yet. A bare final-status check can't catch
+        // this bug — the fast path returns `Ok` either way, with or without
+        // waiting — so this checks ORDERING, not just the eventual outcome.
+        let still_pending = tokio::time::timeout(std::time::Duration::from_millis(50), &mut waiter)
+            .await
+            .is_err();
+        assert!(
+            still_pending,
+            "materialize's fast path must block on a not-yet-idle shell, not return immediately"
+        );
+
+        state
+            .session_maps
+            .shell_states
+            .get(&tuic_session_id)
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, Ordering::Release);
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: tuic_session_id.clone(),
+            parsed: serde_json::json!({"type": "shell-state", "state": "idle"}).into(),
+        });
+
+        let response = tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("the fast path must return once idle, not hang")
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]
