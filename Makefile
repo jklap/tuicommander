@@ -44,9 +44,9 @@ all: build sign
 SHELL_TEST_DIR ?= scripts
 
 # Run every repository shell test. New scripts named test-*.sh below scripts/
-# join this target automatically.
+# join this target automatically; local scripts git ignores do not.
 test-shell:
-	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" bash -c 'set -euo pipefail; found=0; while IFS= read -r script; do found=1; echo "shell test: $$script"; bash "$$script"; done < <(find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort); [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
+	@SHELL_TEST_DIR="$(SHELL_TEST_DIR)" bash -c 'set -euo pipefail; found=0; while IFS= read -r script; do git check-ignore -q "$$script" 2>/dev/null && continue; found=1; echo "shell test: $$script"; bash "$$script"; done < <(find "$$SHELL_TEST_DIR" -type f -name "test-*.sh" -print | LC_ALL=C sort); [ "$$found" -eq 1 ] || { echo "no shell tests found under $$SHELL_TEST_DIR" >&2; exit 1; }'
 
 # Install tracked git hooks. Idempotent.
 #   pre-commit — Makefile TUIC_APP_INSTANCE scope (bypass: --no-verify) +
