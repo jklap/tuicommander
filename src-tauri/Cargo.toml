@@ -310,7 +310,6 @@ sourcemap = { version = "9.3.2", optional = true }
 toml = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 ssh2-config = "0.7"
-strip-ansi-escapes = "0.2"
 
 [features]
 default = ["desktop"]
