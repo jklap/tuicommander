@@ -3858,7 +3858,7 @@ fn fetch_ci_failure_logs_impl(
     // Step 2: inspect jobs on every workflow run for the current head. A run may
     // still be in progress while one of its jobs is already conclusively red.
     let mut failed_jobs = Vec::new();
-    // DEFERRED (N4): each subprocess has a deadline, but the entire sweep
+    // DEFERRED (2026-09-25) — each subprocess has a deadline, but the entire sweep
     // does not. A Tokio timeout around spawn_blocking would return while its
     // blocking work keeps running. Propagate one deadline through the CLI and
     // CircleCI requests before adding an overall bound and a job cap.

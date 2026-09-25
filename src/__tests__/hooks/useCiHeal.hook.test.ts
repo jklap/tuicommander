@@ -185,9 +185,15 @@ describe("useCiHeal budget + re-entry guard", () => {
 		expect(h.repoState.repositories["/repo"].workspaces).not.toHaveProperty("main");
 	});
 
-	it("treats a missing CircleCI token as expected", async () => {
+	it.each([
+		"CircleCI token not configured",
+		"Failing checks are on external CI (not supported): Codacy",
+		"No failed GitHub Actions job found for the head commit",
+		"Timeout waiting for agent idle",
+		"Terminal no longer exists",
+	])("treats %s as an expected failure with a warn toast", async (message) => {
 		seed({ enabled: true, attempts: 0, healing: false });
-		h.invoke.mockRejectedValueOnce(new Error("CircleCI token not configured"));
+		h.invoke.mockRejectedValueOnce(new Error(message));
 		fireCiFailed();
 		await flush();
 		expect(h.loggerWarn).toHaveBeenCalled();
