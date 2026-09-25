@@ -44,6 +44,7 @@ use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex};
 
+use super::loudness::{self, Loudness};
 use super::speech::{Speech, SpeechAudio, SpeechCancel, SpeechError};
 
 /// How many replies may wait to be spoken.
@@ -297,6 +298,12 @@ struct Shared {
     wake: Condvar,
     /// Set once, before the first reply. See [`Speaker::observe`].
     observer: std::sync::OnceLock<Arc<dyn UtteranceObserver>>,
+    /// The level every reply is brought to, read once per reply after it has
+    /// rendered, so a change reaches the next reply and not one half played.
+    /// `None` plays the audio as the engine rendered it. A lock of its own, not
+    /// a field of [`State`]: the stage runs with `state` released, and a
+    /// settings save must not wait for a render to finish.
+    loudness: Mutex<Option<Loudness>>,
 }
 
 impl Shared {
@@ -383,6 +390,7 @@ impl Speaker {
             }),
             wake: Condvar::new(),
             observer: std::sync::OnceLock::new(),
+            loudness: Mutex::new(None),
         });
         let worker = std::thread::Builder::new()
             .name("speech-queue".to_string())
@@ -444,6 +452,18 @@ impl Speaker {
     /// replace a live consumer's stream halfway through a conversation.
     pub fn observe(&self, observer: Arc<dyn UtteranceObserver>) {
         let _ = self.shared.observer.set(observer);
+    }
+
+    /// Bring every reply rendered from now on to this level. A reply already
+    /// handed to the device keeps the level it was played at; nothing queued
+    /// is dropped.
+    pub fn set_loudness(&self, loudness: Loudness) {
+        *self.shared.loudness.lock() = Some(loudness);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loudness(&self) -> Option<Loudness> {
+        *self.shared.loudness.lock()
     }
 
     /// What became of a reply, or `None` if this speaker never issued that id
@@ -559,7 +579,13 @@ fn render_loop(shared: &Shared, speech: &dyn Speech, output: &dyn Output) {
         };
         shared.notify();
 
-        let rendered = speech.synthesize(&reply.text, &reply.voice, &cancel);
+        let mut rendered = speech.synthesize(&reply.text, &reply.voice, &cancel);
+        // With the state lock released: the stage takes milliseconds, and
+        // `hush` must not wait for it. Read now, not when the reply was
+        // queued, so a level change reaches the next reply to render.
+        if let (Ok(audio), Some(level)) = (rendered.as_mut(), *shared.loudness.lock()) {
+            loudness::process(audio, level);
+        }
 
         let mut state = shared.state.lock();
         state.in_flight = None;
@@ -789,6 +815,8 @@ mod tests {
     #[derive(Default)]
     struct Recorded {
         played: Vec<String>,
+        /// The samples of every reply, as the device was handed them.
+        samples: Vec<Vec<f32>>,
         stops: usize,
         /// Set by `play`, cleared by `stop`. A real device clears it when the
         /// mixer drains; here it is exact, which is what a test needs.
@@ -823,6 +851,10 @@ mod tests {
             self.recorded.lock().stops
         }
 
+        fn samples(&self) -> Vec<Vec<f32>> {
+            self.recorded.lock().samples.clone()
+        }
+
         /// The device draining by itself, which a real one does when the audio
         /// ends and a fake one cannot do on its own. Tests drive it explicitly
         /// rather than sleeping, so "played to the end" is a fact rather than
@@ -843,6 +875,7 @@ mod tests {
             }
             let mut recorded = self.recorded.lock();
             recorded.played.push(format!("{:.0}", audio.samples[0]));
+            recorded.samples.push(audio.samples.clone());
             recorded.speaking = true;
             Ok(())
         }
@@ -950,6 +983,133 @@ mod tests {
                 samples: vec![text.len() as f32; 4],
                 sample_rate: 24_000,
             })
+        }
+    }
+
+    /// An engine that renders a second of a -32 dBFS tone: a voice rendered
+    /// quiet, which is what the loudness stage exists for. Replies after the
+    /// first `render_freely` wait for `hold`.
+    struct QuietVoice {
+        hold: Arc<Mutex<()>>,
+        render_freely: usize,
+        started: AtomicUsize,
+    }
+
+    impl QuietVoice {
+        fn new(hold: Arc<Mutex<()>>, render_freely: usize) -> Self {
+            Self {
+                hold,
+                render_freely,
+                started: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl Speech for QuietVoice {
+        fn synthesize(
+            &self,
+            _text: &str,
+            _voice: &str,
+            _cancel: &SpeechCancel,
+        ) -> Result<SpeechAudio, SpeechError> {
+            if self.started.fetch_add(1, Ordering::SeqCst) >= self.render_freely {
+                let _held = self.hold.lock();
+            }
+            let amplitude = 10f32.powf(-32.0 / 20.0) * 2f32.sqrt();
+            let phase = 2.0 * std::f32::consts::PI * 440.0 / 24_000.0;
+            Ok(SpeechAudio {
+                samples: (0..24_000)
+                    .map(|i| amplitude * (phase * i as f32).sin())
+                    .collect(),
+                sample_rate: 24_000,
+            })
+        }
+    }
+
+    fn rms_db(samples: &[f32]) -> f32 {
+        let power = samples
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>()
+            / samples.len() as f64;
+        10.0 * power.log10() as f32
+    }
+
+    #[test]
+    fn a_reply_reaches_the_device_at_the_configured_level() {
+        // The level is applied before the device is handed the audio, so what
+        // the output port receives is what the user hears.
+        let output = Arc::new(FakeOutput::default());
+        let voice = QuietVoice::new(Arc::new(Mutex::new(())), usize::MAX);
+        let speaker = Speaker::new(Arc::new(voice), Arc::clone(&output) as _, 0);
+        speaker.set_loudness(Loudness {
+            volume_db: -18.0,
+            levelling: 0.67,
+        });
+
+        speaker.say(0, "ciao", "").expect("queued");
+        eventually("the reply to reach the device", || {
+            output.samples().len() == 1
+        });
+
+        let level = rms_db(&output.samples()[0]);
+        assert!(
+            (level + 18.0).abs() <= 1.0,
+            "played at {level} dBFS, configured -18"
+        );
+    }
+
+    #[test]
+    fn a_level_change_reaches_the_next_reply_without_dropping_the_queue() {
+        // Moving the volume slider mid-conversation must not cut a reply off
+        // or empty the queue — only change how loud the next one is.
+        let output = Arc::new(FakeOutput::default());
+        let hold = Arc::new(Mutex::new(()));
+        let held = hold.lock();
+        let speaker = Speaker::new(
+            Arc::new(QuietVoice::new(Arc::clone(&hold), 1)),
+            Arc::clone(&output) as _,
+            0,
+        );
+        speaker.set_loudness(Loudness {
+            volume_db: -18.0,
+            levelling: 0.67,
+        });
+
+        let first = speaker.say(0, "uno", "").expect("queued");
+        eventually("the first reply to reach the device", || {
+            output.samples().len() == 1
+        });
+        let second = speaker.say(0, "due", "").expect("queued");
+        let third = speaker.say(0, "tre", "").expect("queued");
+        eventually("the second reply to start rendering", || {
+            speaker.status().rendering
+        });
+
+        speaker.set_loudness(Loudness {
+            volume_db: -24.0,
+            levelling: 0.67,
+        });
+        drop(held);
+        eventually("all three replies to reach the device", || {
+            output.samples().len() == 3
+        });
+
+        let levels: Vec<f32> = output.samples().iter().map(|s| rms_db(s)).collect();
+        assert!(
+            (levels[0] + 18.0).abs() <= 1.0,
+            "first at {} dBFS",
+            levels[0]
+        );
+        for level in &levels[1..] {
+            assert!(
+                (level + 24.0).abs() <= 1.0,
+                "a later reply at {level} dBFS, configured -24"
+            );
+        }
+        assert_eq!(output.stops(), 0, "the level change stopped the device");
+        for id in [first, second, third] {
+            assert_ne!(speaker.utterance(id), Some(Utterance::Interrupted));
         }
     }
 

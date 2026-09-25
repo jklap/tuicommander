@@ -66,6 +66,38 @@ pub const VOICES_SUBDIR: &str = "voices";
 /// `pocket::voice_path`, which looks there after the language's own voices.
 pub const DOWNLOADED_VOICES_SUBDIR: &str = "voices";
 
+/// Where voice files the user imported are kept, one directory per language,
+/// under the speech models directory — outside the language directory for the
+/// same reason as [`DOWNLOADED_VOICES_SUBDIR`].
+pub const USER_VOICES_SUBDIR: &str = "user-voices";
+
+/// The largest voice file a user may import. The largest voice in the
+/// catalogue, a 24-layer French one, is about 33 MB; this leaves room above it
+/// without letting an import fill the disk or the memory it is decoded into.
+pub const MAX_USER_VOICE_BYTES: usize = 64 * 1024 * 1024;
+
+/// The longest name a user voice may have.
+pub const MAX_USER_VOICE_NAME: usize = 32;
+
+/// Where a language's imported voice files live. `language` is the name the
+/// app installs the language under (`Kind::Language.language`).
+pub fn user_voices_dir(language: &str) -> PathBuf {
+    bundles_dir().join(USER_VOICES_SUBDIR).join(language)
+}
+
+/// Whether a string can name a voice file: `[A-Za-z0-9_-]`, not empty.
+///
+/// A voice name comes from settings or from a user, and it becomes a file
+/// name. Anything else — a separator, a dot, a `..` — would let it name a file
+/// that is not a voice, and fail much further in with an error about tensor
+/// names.
+pub fn is_voice_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Half-installed assets live here, beside the finished ones but out of the
 /// way: the engine resolves a language by name, and a name starting with a dot
 /// is not a language.
@@ -203,6 +235,14 @@ impl Asset {
         match self.kind {
             Kind::Language { language, .. } => Some(language),
             Kind::Runtime | Kind::Voice { .. } => None,
+        }
+    }
+
+    /// The voice this asset downloads, for a voice asset.
+    pub fn voice(&self) -> Option<&'static str> {
+        match self.kind {
+            Kind::Voice { voice, .. } => Some(voice),
+            Kind::Language { .. } | Kind::Runtime => None,
         }
     }
 
@@ -1227,6 +1267,29 @@ pub fn find(id: &str) -> Option<&'static Asset> {
         .find(|asset| asset.id == id)
 }
 
+/// Every asset a download request may name: the catalogue, then the voices.
+pub fn every_asset() -> impl Iterator<Item = &'static Asset> {
+    CATALOGUE.iter().copied().chain(VOICES.iter())
+}
+
+/// The language asset a voice asset belongs to.
+pub fn language_of(voice: &Asset) -> Option<&'static Asset> {
+    let Kind::Voice { language, .. } = voice.kind else {
+        return None;
+    };
+    CATALOGUE
+        .iter()
+        .copied()
+        .find(|asset| asset.language() == Some(language))
+}
+
+/// The voices a language offers as downloads of their own, installed or not.
+pub fn downloadable_voices(language: &str) -> impl Iterator<Item = &'static Asset> {
+    VOICES
+        .iter()
+        .filter(move |asset| matches!(asset.kind, Kind::Voice { language: l, .. } if l == language))
+}
+
 /// The language assets, for a caller offering a choice of voice.
 #[cfg(test)]
 pub fn languages() -> impl Iterator<Item = &'static Asset> {
@@ -1623,17 +1686,9 @@ mod tests {
     // Voices as assets
     // -----------------------------------------------------------------
 
-    /// Every asset a download request may name: the catalogue and the voices.
-    fn every_asset() -> impl Iterator<Item = &'static Asset> {
-        CATALOGUE.iter().copied().chain(VOICES.iter())
-    }
-
     /// The downloadable voices of one language.
     fn voice_assets(language: &str) -> Vec<&'static Asset> {
-        VOICES
-            .iter()
-            .filter(|asset| matches!(asset.kind, Kind::Voice { language: l, .. } if l == language))
-            .collect()
+        downloadable_voices(language).collect()
     }
 
     /// The Kyutai revision a language's voices are pinned to, by the name

@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testInScope, testInScopeAsync } from "../helpers/store";
 import type { HandsFreeStatus } from "../../stores/dictation";
+import { testInScope, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
 /**
@@ -888,6 +888,26 @@ describe("dictationStore", () => {
 			});
 		});
 
+		it("saves a volume change and keeps the stored levelling", async () => {
+			// The two loudness sliders save one field each; the other must come
+			// from disk, not from a default that would undo the user's choice.
+			const stored = { speech_volume_db: -18, speech_levelling: 0.2 };
+			mockInvoke.mockReset();
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(command === "get_dictation_config" ? stored : undefined),
+			);
+
+			await testInScopeAsync(async () => {
+				await store.saveConfig({ speech_volume_db: -24 });
+
+				const call = mockInvoke.mock.calls.find(([name]) => name === "set_dictation_config");
+				if (!call) throw new Error("saveConfig must reach set_dictation_config");
+				const sent = (call[1] as { config: Record<string, unknown> }).config;
+				expect(sent.speech_volume_db, "the caller's own change must win").toBe(-24);
+				expect(sent.speech_levelling).toBe(0.2);
+			});
+		});
+
 		it("does not write a config it could not read first", async () => {
 			mockInvoke.mockReset();
 			mockInvoke.mockImplementation((command: string) =>
@@ -1401,6 +1421,111 @@ describe("dictationStore", () => {
 				expect(await store.armHandsFree("sess-1")).toBe(true);
 			});
 			expect(primeEarcons).toHaveBeenCalled();
+		});
+	});
+
+	describe("voice library (855-0948)", () => {
+		it("loads the speech volume and levelling into state", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(
+					command === "get_dictation_config" ? { speech_volume_db: -24, speech_levelling: 0.3 } : undefined,
+				),
+			);
+			await testInScopeAsync(async () => {
+				await store.refreshConfig();
+				expect(store.state.speechVolumeDb).toBe(-24);
+				expect(store.state.speechLevelling).toBe(0.3);
+			});
+		});
+
+		it("saves each loudness setting on its own and reflects it in state", async () => {
+			await testInScopeAsync(async () => {
+				await store.setSpeechVolumeDb(-21);
+				await store.setSpeechLevelling(0.5);
+				const sent = mockInvoke.mock.calls
+					.filter(([name]) => name === "set_dictation_config")
+					.map((call) => (call[1] as { config: Record<string, unknown> }).config);
+				expect(sent[0].speech_volume_db).toBe(-21);
+				expect(sent[1].speech_levelling).toBe(0.5);
+				expect(store.state.speechVolumeDb).toBe(-21);
+				expect(store.state.speechLevelling).toBe(0.5);
+			});
+		});
+
+		// The file travels as base64 so the payload is the same JSON on IPC and
+		// HTTP; the name is the file name without its extension.
+		it("imports a voice file as base64 under its file name, then re-reads the catalogue", async () => {
+			const file = new File([new Uint8Array([1, 2, 3, 250])], "my_voice.safetensors");
+			await testInScopeAsync(async () => {
+				await store.importSpeechVoice("it", file);
+				expect(mockInvoke).toHaveBeenCalledWith("import_speech_voice", {
+					language: "it",
+					name: "my_voice",
+					dataBase64: "AQID+g==",
+				});
+				expect(mockInvoke).toHaveBeenCalledWith("get_speech_assets");
+			});
+		});
+
+		it("reports why an import was refused instead of throwing", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				command === "import_speech_voice"
+					? Promise.reject("the voice file is over the 64 MB limit")
+					: Promise.resolve(command === "get_dictation_config" ? {} : undefined),
+			);
+			await testInScopeAsync(async () => {
+				const error = await store.importSpeechVoice("it", new File([new Uint8Array([1])], "big.safetensors"));
+				expect(error).toBe("the voice file is over the 64 MB limit");
+			});
+		});
+
+		it("deletes a user voice by language and name", async () => {
+			await testInScopeAsync(async () => {
+				await store.deleteSpeechVoice("it", "my_voice");
+				expect(mockInvoke).toHaveBeenCalledWith("delete_speech_voice", { language: "it", name: "my_voice" });
+			});
+		});
+
+		it("lists a language's voices with where each one comes from", async () => {
+			const voices = [
+				{ id: "giovanni", source: "default" },
+				{ id: "jean", source: "downloaded" },
+				{ id: "my_voice", source: "user" },
+			];
+			mockInvoke.mockImplementation((command: string) =>
+				Promise.resolve(command === "get_speech_voices" ? voices : command === "get_dictation_config" ? {} : undefined),
+			);
+			await testInScopeAsync(async () => {
+				await store.refreshSpeechVoices("it");
+				expect(mockInvoke).toHaveBeenCalledWith("get_speech_voices", { language: "it" });
+				expect(store.state.speechVoices).toEqual(voices);
+			});
+		});
+
+		// Listen needs no hands-free conversation: the backend renders the
+		// sample with the voice it is given, without changing the saved voice.
+		it("previews a voice without saving it", async () => {
+			await testInScopeAsync(async () => {
+				const error = await store.previewSpeechVoice("it", "jean");
+				expect(error).toBeNull();
+				expect(mockInvoke).toHaveBeenCalledWith("preview_speech_voice", {
+					language: "it",
+					voice: "jean",
+					text: expect.any(String),
+				});
+				expect(mockInvoke.mock.calls.some(([name]) => name === "set_dictation_config")).toBe(false);
+			});
+		});
+
+		it("returns why a preview was refused", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				command === "preview_speech_voice"
+					? Promise.reject("a reply is being spoken; try again when it ends")
+					: Promise.resolve(command === "get_dictation_config" ? {} : undefined),
+			);
+			await testInScopeAsync(async () => {
+				expect(await store.previewSpeechVoice("it", "jean")).toBe("a reply is being spoken; try again when it ends");
+			});
 		});
 	});
 });
