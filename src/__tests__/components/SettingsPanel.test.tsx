@@ -247,6 +247,26 @@ describe("SettingsPanel", () => {
 		expect(headingTexts).toContain("IDE");
 	});
 
+	it("opens the successor page for the tab keys this reorganization retired", () => {
+		// services split into MCP / Remote Access / Remote Machines, and providers
+		// became AI Chat; an old tuic://settings?tab=… link must land on a page.
+		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
+		try {
+			for (const [retired, label] of [
+				["services", "MCP"],
+				["providers", "AI Chat"],
+			]) {
+				const { container, unmount } = render(() => (
+					<SettingsPanel visible={true} onClose={() => {}} initialTab={retired} />
+				));
+				expect(container.querySelector(".navItem.active")?.textContent, retired).toBe(label);
+				unmount();
+			}
+		} finally {
+			vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(false);
+		}
+	});
+
 	it("lists AI Chat under AI when the feature flag is on", () => {
 		vi.mocked(settingsStore.isAiChatEnabled).mockReturnValue(true);
 		try {

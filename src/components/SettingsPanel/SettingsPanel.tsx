@@ -122,6 +122,10 @@ function defaultTab(ctx: SettingsContext): string {
  * them, and an unknown key renders no page at all. */
 const RETIRED_TABS: Record<string, string> = {
 	"developer-tools": "general",
+	// Services & MCP split into MCP, Remote Access and Remote Machines;
+	// AI Providers became AI Chat.
+	services: "mcp",
+	providers: "ai-chat",
 };
 
 /** The page to open for a requested tab key. */
