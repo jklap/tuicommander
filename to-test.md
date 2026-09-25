@@ -32,6 +32,9 @@
 
 ## Workflow definitions (2026-09-25) — Rust, needs `make dev` restart
 
+- [ ] In an isolated rebuilt instance, run two independent story workers. Let one request input so the run pauses, then let the other submit a current-generation report. Confirm its report is retained and an identical retry returns the same receipt while the run remains paused.
+- [ ] In an isolated rebuilt instance, integrate and accept a story, add an unrelated canonical commit, and confirm its dependent is held until `recertify_canonical` runs the pinned checks at the new clean tip. Confirm a later ref or tree change invalidates that recertification.
+
 - [ ] After rebuilding an isolated instance, save a direct-executable check with `update_checks`, publish the workflow, and confirm the published revision keeps its check set after the draft changes. A shell command or stale draft revision must be rejected.
 - [ ] After rebuilding an isolated instance, read an existing workflow definition and confirm its closure is `human`. Try publishing an `automatic` draft and confirm the API rejects it; switch back to `human` and publish at the current draft revision.
 - [ ] After rebuilding an isolated instance, transition a throwaway story through review and approve it through desktop IPC. Read `transition_history` through HTTP and confirm the approval records a human actor; approval through managed MCP or sessionless HTTP must be refused without a new history row. A non-approval sessionless HTTP transition must record `local_api`.

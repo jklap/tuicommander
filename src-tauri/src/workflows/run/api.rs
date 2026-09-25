@@ -37,6 +37,11 @@ pub enum RunAction {
         command_id: String,
         expected_sequence: i64,
     },
+    RecertifyCanonical {
+        run_id: String,
+        command_id: String,
+        expected_sequence: i64,
+    },
     ExecuteCheck {
         run_id: String,
         story_id: String,
@@ -153,6 +158,7 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
                     | RunCommand::AssignWorktree { .. }
                     | RunCommand::RecordCheck { .. }
                     | RunCommand::RecordIntegration { .. }
+                    | RunCommand::RecordRecertification { .. }
             ) {
                 return Err(
                     "agent binding, reports, and worktree assignment require a managed MCP session"
@@ -176,6 +182,18 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             Ok(RunReply::Receipt(store.record_integrated_story(
                 &run_id,
                 &story_id,
+                &command_id,
+                expected_sequence,
+            )?))
+        }
+        RunAction::RecertifyCanonical {
+            run_id,
+            command_id,
+            expected_sequence,
+        } => {
+            scoped_snapshot(&store, &owner, &run_id)?;
+            Ok(RunReply::Receipt(store.recertify_canonical(
+                &run_id,
                 &command_id,
                 expected_sequence,
             )?))
@@ -211,6 +229,7 @@ pub fn run_action_with_events(
         RunAction::StartPlan { .. }
             | RunAction::Command { .. }
             | RunAction::RecordIntegration { .. }
+            | RunAction::RecertifyCanonical { .. }
             | RunAction::ExecuteCheck { .. }
     );
     let reply = run_action(project, action)?;

@@ -236,6 +236,15 @@ pub struct IntegrationReceipt {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CanonicalReceipt {
+    pub canonical_ref: String,
+    pub commit: String,
+    pub tree: String,
+    pub post_checks: Vec<CheckReceipt>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSnapshot {
     pub id: String,
@@ -257,6 +266,8 @@ pub struct RunSnapshot {
     pub planning_fingerprint: Option<String>,
     pub verification_fingerprint: Option<String>,
     pub stories: Vec<StoryExecution>,
+    #[serde(default)]
+    pub canonical_recertification: Option<CanonicalReceipt>,
     pub attempts: Vec<NodeAttempt>,
     pub effects: Vec<EffectIntent>,
 }
@@ -320,6 +331,9 @@ pub enum RunEventKind {
     StoryIntegrated {
         story_id: String,
         receipt: IntegrationReceipt,
+    },
+    CanonicalRecertified {
+        receipt: CanonicalReceipt,
     },
     VerificationPassed {
         fingerprint: String,
@@ -401,6 +415,10 @@ pub enum RunCommand {
     RecordIntegration {
         story_id: String,
         receipt: IntegrationReceipt,
+    },
+    /// Internal only: canonical receipts are computed by the backend.
+    RecordRecertification {
+        receipt: CanonicalReceipt,
     },
     FinalVerificationPassed,
     Complete,

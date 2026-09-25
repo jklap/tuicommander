@@ -609,6 +609,75 @@ mod tests {
                 .transition(&dependent.id, current.revision, StoryCommand::StartManual)
                 .is_err()
         );
+        crate::git_cli::git_cmd(repo)
+            .args(["config", "--unset", "workflow.testpass"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            store
+                .recertify_canonical(
+                    &run.id,
+                    "failed-recertification",
+                    store.snapshot(&run.id).unwrap().sequence
+                )
+                .unwrap_err(),
+            "post-integration check policy failed"
+        );
+        crate::git_cli::git_cmd(repo)
+            .args(["config", "workflow.testpass", "true"])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(repo)
+            .args(["switch", "-q", "moved-ref"])
+            .run()
+            .unwrap();
+        assert!(
+            store
+                .recertify_canonical(
+                    &run.id,
+                    "wrong-recertification-ref",
+                    store.snapshot(&run.id).unwrap().sequence
+                )
+                .is_err()
+        );
+        crate::git_cli::git_cmd(repo)
+            .args(["switch", "-q", "main"])
+            .run()
+            .unwrap();
+        let recertified = store
+            .recertify_canonical(
+                &run.id,
+                "recertify-later-head",
+                store.snapshot(&run.id).unwrap().sequence,
+            )
+            .expect("recheck the new canonical tip");
+        assert!(matches!(
+            recertified.event.kind,
+            RunEventKind::CanonicalRecertified { .. }
+        ));
+        assert_eq!(
+            store
+                .recertify_canonical(&run.id, "recertify-later-head", recertified.sequence - 1)
+                .unwrap()
+                .sequence,
+            recertified.sequence
+        );
+        assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        let mut recertified_snapshot = store.snapshot(&run.id).unwrap();
+        recertified_snapshot.planning_fingerprint = Some("closed".into());
+        assert!(super::store::ready_to_verify(
+            &recertified_snapshot,
+            &[story.clone()]
+        )
+        .is_ok());
+        assert_eq!(
+            stories.get_story(&dependent.id).unwrap().status,
+            crate::stories::StoryStatus::Ready
+        );
+        drop(store);
+        let store = RunStore::open().unwrap();
+        assert_eq!(store.replay(&run.id).unwrap(), store.snapshot(&run.id).unwrap());
+        assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
         let conflict_worktree = config.path().join("conflict-worktree");
         crate::git_cli::git_cmd(repo)
             .args([
@@ -639,6 +708,7 @@ mod tests {
             .args(["commit", "-qm", "canonical edit"])
             .run()
             .unwrap();
+        assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
         assert!(
             crate::git_cli::git_cmd(repo)
                 .args(["merge", "--no-ff", "--no-edit", "conflict"])
@@ -655,6 +725,19 @@ mod tests {
                 )
                 .is_err()
         );
+        crate::git_cli::git_cmd(repo)
+            .args(["merge", "--abort"])
+            .run()
+            .unwrap();
+        assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
+        let cancelled = store
+            .command(&run.id, "cancel-after-integration", RunCommand::Cancel)
+            .unwrap();
+        assert_eq!(cancelled.snapshot.status, RunStatus::Cancelled);
+        store
+            .recertify_canonical(&run.id, "recertify-cancelled-run", cancelled.sequence)
+            .expect("a terminal run can renew its integration evidence");
+        assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
     }
 
     fn fixture() -> (
@@ -1002,6 +1085,151 @@ mod tests {
             .command(&run.id, "human-resume", RunCommand::Resume)
             .unwrap();
         assert_eq!(resumed.snapshot.status, RunStatus::Running);
+        assert_eq!(store.replay(&run.id).unwrap(), resumed.snapshot);
+    }
+
+    #[test]
+    fn parallel_report_survives_another_story_pausing_for_input() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let stories = StoryStore::open().unwrap();
+        let make_story = |title: &str, scope: &str| {
+            stories
+                .create_story(NewStory {
+                    plan_id: plan_id.clone(),
+                    title: title.into(),
+                    criteria: vec!["Done".into()],
+                    priority: 1,
+                    origin: StoryOrigin::Native,
+                    file_scope: vec![scope.into()],
+                })
+                .unwrap()
+        };
+        let needs_input = make_story("Needs input", "src/first");
+        let completed = make_story("Completes independently", "src/second");
+        let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+        let project_path = project.path().canonicalize().unwrap();
+        let run = store
+            .start_plan(
+                project_path.to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let bind = |story_id: &str, session_id: &str| {
+            let started = store
+                .command(
+                    &run.id,
+                    &format!("parallel-attempt:{story_id}"),
+                    RunCommand::StartAttempt {
+                        story_id: story_id.into(),
+                        node_id: "implement".into(),
+                    },
+                )
+                .unwrap();
+            let attempt = started.snapshot.attempts.last().unwrap().clone();
+            let reserved = store
+                .command(
+                    &run.id,
+                    &format!("spawn:{story_id}"),
+                    RunCommand::ReserveEffect {
+                        key: format!("spawn:{}", attempt.id),
+                        kind: EffectKind::SpawnAgent,
+                    },
+                )
+                .unwrap();
+            store
+                .bind_agent(
+                    &run.id,
+                    &attempt.id,
+                    AgentBinding {
+                        session_id: session_id.into(),
+                        task_id: None,
+                        effect_id: reserved.snapshot.effects.last().unwrap().id.clone(),
+                        prompt_contract_version: 1,
+                        prompt_sha256: "a".repeat(64),
+                        audit_preview: "parallel test".into(),
+                    },
+                )
+                .unwrap();
+            attempt
+        };
+        let waiting = bind(&needs_input.id, "worker-waiting");
+        let finishing = bind(&completed.id, "worker-finishing");
+        let report = |story: &crate::stories::Story,
+                      attempt: &NodeAttempt,
+                      outcome: AttemptOutcome| AttemptReport {
+            contract_version: 1,
+            run_id: run.id.clone(),
+            story_id: story.id.clone(),
+            story_revision: story.revision,
+            attempt_id: attempt.id.clone(),
+            generation: attempt.generation,
+            outcome,
+            summary: "Worker result".into(),
+            criterion_results: vec![],
+            evidence: vec![],
+            input_request: (outcome == AttemptOutcome::NeedsInput).then(|| InputRequest {
+                question: "Which option?".into(),
+                options: vec!["A".into()],
+            }),
+            review: None,
+        };
+        store
+            .report_bound_agent(
+                report(&needs_input, &waiting, AttemptOutcome::NeedsInput),
+                "worker-waiting",
+            )
+            .unwrap();
+        assert_eq!(store.snapshot(&run.id).unwrap().status, RunStatus::Paused);
+        let completed_report = report(&completed, &finishing, AttemptOutcome::Completed);
+        let receipt = store
+            .report_bound_agent(completed_report.clone(), "worker-finishing")
+            .unwrap();
+        assert!(matches!(receipt.event.kind, RunEventKind::AttemptReported { .. }));
+        assert_eq!(receipt.snapshot.status, RunStatus::Paused);
+        let saved = receipt
+            .snapshot
+            .attempts
+            .iter()
+            .find(|attempt| attempt.id == finishing.id)
+            .unwrap();
+        assert_eq!(saved.state, AttemptState::Reported);
+        assert_eq!(saved.report.as_ref(), Some(&completed_report));
+        assert_eq!(
+            store
+                .report_bound_agent(completed_report, "worker-finishing")
+                .unwrap()
+                .sequence,
+            receipt.sequence
+        );
+        assert_eq!(store.replay(&run.id).unwrap(), receipt.snapshot);
+        store
+            .command(
+                &run.id,
+                "answer-parallel-input",
+                RunCommand::AnswerInput {
+                    attempt_id: waiting.id,
+                    answer: "A".into(),
+                },
+            )
+            .unwrap();
+        let resumed = store
+            .command(&run.id, "resume-parallel-run", RunCommand::Resume)
+            .unwrap();
+        assert_eq!(resumed.snapshot.status, RunStatus::Running);
+        assert_eq!(
+            resumed
+                .snapshot
+                .attempts
+                .iter()
+                .find(|attempt| attempt.id == finishing.id)
+                .unwrap()
+                .report
+                .as_ref(),
+            saved.report.as_ref()
+        );
         assert_eq!(store.replay(&run.id).unwrap(), resumed.snapshot);
     }
 
@@ -2173,6 +2401,25 @@ mod tests {
             panic!("receipt reply");
         };
         assert_eq!(paused.sequence, run.sequence + 1);
+        assert!(
+            run_action(
+                &project_path,
+                RunAction::Command {
+                    run_id: run.id.clone(),
+                    command_id: "forged-recertification".into(),
+                    expected_sequence: paused.sequence,
+                    command: RunCommand::RecordRecertification {
+                        receipt: CanonicalReceipt {
+                            canonical_ref: "refs/heads/main".into(),
+                            commit: "a".repeat(40),
+                            tree: "b".repeat(40),
+                            post_checks: vec![],
+                        },
+                    },
+                }
+            )
+            .is_err()
+        );
         assert!(
             run_action(
                 &project_path,

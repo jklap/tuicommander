@@ -139,6 +139,7 @@ impl RunStore {
             planning_fingerprint: None,
             verification_fingerprint: None,
             stories: vec![],
+            canonical_recertification: None,
             attempts: vec![],
             effects: vec![],
         };
@@ -635,6 +636,92 @@ impl RunStore {
         Ok(result)
     }
 
+    /// Recheck a clean canonical tip after an unrelated commit advanced it.
+    /// The event certifies only previously accepted integrations whose source
+    /// commits still belong to the branch; it does not integrate a new story.
+    pub fn recertify_canonical(
+        &self,
+        run_id: &str,
+        command_id: &str,
+        expected_sequence: i64,
+    ) -> Result<RunReceipt, String> {
+        let _service_guard = SERVICE_RECEIPT_LOCK
+            .lock()
+            .map_err(|_| "workflow receipt service lock is poisoned")?;
+        if let Some(prior) = self.existing_service_receipt(run_id, command_id, expected_sequence)? {
+            return match &prior.event.kind {
+                RunEventKind::CanonicalRecertified { .. } => {
+                    StoryStore::open()?
+                        .reconcile_integrated_dependencies(&prior.snapshot.plan_id)?;
+                    Ok(prior)
+                }
+                _ => Err("workflow command id was reused with a different payload".into()),
+            };
+        }
+        let snapshot = self.snapshot(run_id)?;
+        if snapshot.sequence != expected_sequence {
+            return Err("stale workflow sequence".into());
+        }
+        let canonical = Path::new(&snapshot.project);
+        let canonical_ref = git_output(canonical, &["symbolic-ref", "HEAD"])?;
+        if snapshot.canonical_ref.as_deref() != Some(canonical_ref.as_str()) {
+            return Err("canonical branch moved since the run started".into());
+        }
+        let (commit, tree) = clean_artifact(canonical)?;
+        let stories = StoryStore::open()?;
+        let integrated: Vec<_> = snapshot
+            .stories
+            .iter()
+            .filter_map(|item| item.integration_receipt.as_ref().map(|receipt| (item, receipt)))
+            .collect();
+        if integrated.is_empty() {
+            return Err("run has no story integration to recertify".into());
+        }
+        for (execution, receipt) in integrated {
+            let story = stories.get_story(&execution.story_id)?;
+            if story.status != StoryStatus::Done
+                || !execution.accepted
+                || execution.accepted_revision != Some(story.revision)
+                || receipt.story_revision != story.revision
+                || receipt.canonical_ref != canonical_ref
+                || !source_is_ancestor(canonical, &receipt.source_commit, &commit)?
+            {
+                return Err("integrated story is stale or absent from canonical HEAD".into());
+            }
+        }
+        let definition = WorkflowStore::open()?.get_published(
+            &snapshot.story_definition_id,
+            snapshot.story_definition_revision,
+        )?;
+        let mut post_checks = Vec::with_capacity(definition.required_checks.len());
+        for check in &definition.required_checks {
+            let receipt = execute_pinned_check(check, canonical)?;
+            if receipt.exit_code != 0 {
+                return Err(format!("post-integration check {} failed", check.id));
+            }
+            post_checks.push(receipt);
+        }
+        if git_output(canonical, &["symbolic-ref", "HEAD"])? != canonical_ref
+            || clean_artifact(canonical)? != (commit.clone(), tree.clone())
+        {
+            return Err("canonical ref or tree moved after checks".into());
+        }
+        let receipt = CanonicalReceipt {
+            canonical_ref,
+            commit,
+            tree,
+            post_checks,
+        };
+        let result = self.command_expected(
+            run_id,
+            command_id,
+            expected_sequence,
+            RunCommand::RecordRecertification { receipt },
+        )?;
+        stories.reconcile_integrated_dependencies(&snapshot.plan_id)?;
+        Ok(result)
+    }
+
     /// Execute a check pinned by the run's published story definition. The
     /// receipt is recorded only while its story revision and Git artifact stay current.
     pub fn execute_check(
@@ -900,7 +987,7 @@ pub(super) fn receipt_current(
     let Ok((head, tree)) = clean_artifact(canonical) else {
         return Ok(false);
     };
-    let current_receipt = snapshot
+    let current_integration = snapshot
         .stories
         .iter()
         .filter_map(|item| item.integration_receipt.as_ref())
@@ -915,14 +1002,29 @@ pub(super) fn receipt_current(
                         && check.tree == tree
                 })
         });
-    if current_receipt.is_none()
+    let current_recertification = snapshot.canonical_recertification.as_ref().is_some_and(|item| {
+        item.canonical_ref == current_ref
+            && item.commit == head
+            && item.tree == tree
+            && item.post_checks.iter().all(|check| {
+                check.exit_code == 0
+                    && check.ref_name == current_ref
+                    && check.commit == head
+                    && check.tree == tree
+            })
+    });
+    if (current_integration.is_none() && !current_recertification)
         || receipt.canonical_ref != current_ref
         || snapshot.canonical_ref.as_deref() != Some(current_ref.as_str())
     {
         return Ok(false);
     }
+    source_is_ancestor(canonical, &receipt.source_commit, &head)
+}
+
+fn source_is_ancestor(canonical: &Path, source: &str, head: &str) -> Result<bool, String> {
     let ancestor = Command::new("git")
-        .args(["merge-base", "--is-ancestor", &receipt.source_commit, &head])
+        .args(["merge-base", "--is-ancestor", source, head])
         .current_dir(canonical)
         .status()
         .map_err(|error| format!("verify integrated source ancestry: {error}"))?;
@@ -1175,7 +1277,9 @@ fn choose_event(
     command: RunCommand,
     at_ms: i64,
 ) -> Result<RunEventKind, String> {
-    if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled) {
+    if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled)
+        && !matches!(command, RunCommand::RecordRecertification { .. })
+    {
         return Err("terminal workflow cannot advance".into());
     }
     let expired = at_ms > snapshot.started_ms + i64::from(snapshot.limits.max_duration_secs) * 1000;
@@ -1190,6 +1294,7 @@ fn choose_event(
                 | RunCommand::ReportAttempt { .. }
                 | RunCommand::ReportBoundAttempt { .. }
                 | RunCommand::AnswerInput { .. }
+                | RunCommand::RecordRecertification { .. }
         )
     {
         return Ok(RunEventKind::Paused);
@@ -1210,6 +1315,7 @@ fn choose_event(
                 | RunCommand::ReportAttempt { .. }
                 | RunCommand::ReportBoundAttempt { .. }
                 | RunCommand::AnswerInput { .. }
+                | RunCommand::RecordRecertification { .. }
         )
     {
         return Ok(RunEventKind::PlanningReopened);
@@ -1225,6 +1331,7 @@ fn choose_event(
                 | RunCommand::ReportAttempt { .. }
                 | RunCommand::ReportBoundAttempt { .. }
                 | RunCommand::AnswerInput { .. }
+                | RunCommand::RecordRecertification { .. }
         )
     {
         return Err("workflow is paused".into());
@@ -1414,7 +1521,6 @@ fn choose_event(
                 return Err("bound agent must use a typed attempt report".into());
             }
             if expired
-                || snapshot.status == RunStatus::Paused
                 || attempt.generation != generation
                 || attempt.state != AttemptState::Running
             {
@@ -1601,7 +1707,6 @@ fn choose_event(
                 }
             }
             if expired
-                || snapshot.status == RunStatus::Paused
                 || attempt.generation != report.generation
                 || attempt.state != AttemptState::Running
             {
@@ -1767,6 +1872,16 @@ fn choose_event(
                 return Err("story already has an integration receipt".into());
             }
             Ok(RunEventKind::StoryIntegrated { story_id, receipt })
+        }
+        RunCommand::RecordRecertification { receipt } => {
+            if snapshot.canonical_ref.as_deref() != Some(receipt.canonical_ref.as_str())
+                || receipt.commit.is_empty()
+                || receipt.tree.is_empty()
+                || !snapshot.stories.iter().any(|story| story.integration_receipt.is_some())
+            {
+                return Err("canonical recertification has no current integration".into());
+            }
+            Ok(RunEventKind::CanonicalRecertified { receipt })
         }
         RunCommand::FinalVerificationPassed => {
             ready_to_verify(snapshot, &stories)?;

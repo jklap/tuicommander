@@ -1,10 +1,25 @@
 .dialog { display: flex; flex-direction: column; width: min(1120px, calc(100vw - 32px)); max-height: min(82vh, 860px); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-popup); overflow: hidden; color: var(--fg-primary); font-family: var(--font-ui); }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
 .header h2 { margin: 0 0 2px; font-size: var(--font-xl); }
+.headerActions { display: flex; align-items: center; gap: 8px; }
+.headerActions button { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-secondary); padding: 5px 9px; font: var(--font-xs) var(--font-ui); cursor: pointer; }
+.headerActions button[aria-pressed="true"] { color: var(--fg-primary); border-color: var(--accent); }
+.headerActions button:disabled { opacity: .5; cursor: default; }
 .project { color: var(--fg-muted); font: var(--font-xs) var(--font-mono); overflow-wrap: anywhere; }
 .iconButton { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-secondary); cursor: pointer; }
 .iconButton:hover { background: var(--bg-highlight); color: var(--fg-primary); }
 .content { display: grid; grid-template-columns: minmax(170px, 22%) minmax(210px, 26%) minmax(0, 1fr); flex: 1; min-height: 0; }
+.runContent { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); flex: 1; min-height: 0; }
+.runList, .runDetail { min-width: 0; overflow-y: auto; }
+.runList { border-right: 1px solid var(--border); }
+.runDetail { padding: 18px 22px 24px; }
+.runDetail h3 { margin: 3px 0 0; font-size: var(--font-xl); }
+.timeline { list-style: none; margin: 18px 0 0; padding: 0; border-top: 1px solid var(--border); }
+.timeline li { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); color: var(--fg-secondary); font-size: var(--font-sm); text-transform: capitalize; }
+.timeline time, .eventSequence { color: var(--fg-muted); font: var(--font-xs) var(--font-mono); white-space: nowrap; }
+.loadMore { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-primary); padding: 5px 9px; font: var(--font-xs) var(--font-ui); cursor: pointer; }
+.loadMore:hover { background: var(--bg-highlight); }
+.loadMore:disabled { opacity: .5; cursor: default; }
 .planColumn, .storyColumn, .detail { min-width: 0; overflow-y: auto; }
 .planColumn, .storyColumn { border-right: 1px solid var(--border); }
 .columnHeader { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); }
@@ -55,4 +70,4 @@
 .dependencyRow button { flex: none; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-primary); padding: 4px 8px; font: inherit; font-size: var(--font-xs); cursor: pointer; }
 .dependencyRow button:hover { background: var(--bg-highlight); }
 .dependencyRow button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-@media (max-width: 760px) { .content { grid-template-columns: minmax(135px, 34%) minmax(0, 1fr); } .detail { grid-column: 1 / -1; min-height: 260px; border-top: 1px solid var(--border); } .storyColumn { border-right: 0; } }
+@media (max-width: 760px) { .content { grid-template-columns: minmax(135px, 34%) minmax(0, 1fr); } .detail { grid-column: 1 / -1; min-height: 260px; border-top: 1px solid var(--border); } .storyColumn { border-right: 0; } .runContent { grid-template-columns: minmax(145px, 38%) minmax(0, 1fr); } .runDetail { padding: 14px; } .timeline li { grid-template-columns: 32px minmax(0, 1fr); } .timeline time { grid-column: 2; } }
