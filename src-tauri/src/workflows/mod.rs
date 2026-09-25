@@ -118,6 +118,96 @@ mod tests {
     }
 
     #[test]
+    fn closure_defaults_to_human_and_automatic_cannot_be_published() {
+        let dir = tempfile::tempdir().expect("db dir");
+        let db = dir.path().join("workflow.sqlite3");
+        let store = WorkflowStore::open_at(&db).expect("store");
+        let draft = store
+            .create_draft("/project", "Delivery", WorkflowKind::Story, story_graph())
+            .expect("draft");
+        assert_eq!(draft.closure, WorkflowClosure::Human);
+        let first = store
+            .publish(&draft.id, draft.draft_revision)
+            .expect("human publish");
+        assert_eq!(first.closure, WorkflowClosure::Human);
+        let automatic = store
+            .update_closure(&draft.id, draft.draft_revision, WorkflowClosure::Automatic)
+            .expect("edit closure");
+        assert!(
+            store
+                .update_closure(&draft.id, draft.draft_revision, WorkflowClosure::Human)
+                .is_err()
+        );
+        assert!(
+            store
+                .publish(&draft.id, automatic.draft_revision)
+                .expect_err("automatic is unavailable")
+                .contains("automatic closure")
+        );
+        drop(store);
+        let reopened = WorkflowStore::open_at(&db).expect("reopen");
+        assert_eq!(
+            reopened.get_draft(&draft.id).expect("draft").closure,
+            WorkflowClosure::Automatic
+        );
+        assert_eq!(
+            reopened
+                .get_published(&draft.id, 1)
+                .expect("first revision")
+                .closure,
+            WorkflowClosure::Human
+        );
+    }
+
+    #[test]
+    fn existing_workflow_database_migrates_to_human_closure() {
+        let dir = tempfile::tempdir().expect("db dir");
+        let db = dir.path().join("workflow.sqlite3");
+        let conn = rusqlite::Connection::open(&db).expect("legacy db");
+        conn.execute_batch("CREATE TABLE workflow_definitions (
+            id TEXT PRIMARY KEY, project TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL,
+            graph_json TEXT NOT NULL, draft_revision INTEGER NOT NULL,
+            latest_published_revision INTEGER NOT NULL, last_published_draft_revision INTEGER NOT NULL,
+            builtin_key TEXT);
+            CREATE TABLE workflow_published (
+            id TEXT NOT NULL, revision INTEGER NOT NULL, project TEXT NOT NULL,
+            name TEXT NOT NULL, kind TEXT NOT NULL, graph_json TEXT NOT NULL,
+            PRIMARY KEY(id,revision));").expect("legacy schema");
+        conn.execute(
+            "INSERT INTO workflow_definitions VALUES (?1,?2,?3,?4,?5,1,1,1,NULL)",
+            rusqlite::params![
+                "legacy",
+                "/project",
+                "Delivery",
+                "story",
+                serde_json::to_string(&story_graph()).expect("graph")
+            ],
+        )
+        .expect("legacy draft");
+        conn.execute(
+            "INSERT INTO workflow_published VALUES (?1,1,?2,?3,?4,?5)",
+            rusqlite::params![
+                "legacy",
+                "/project",
+                "Delivery",
+                "story",
+                serde_json::to_string(&story_graph()).expect("graph")
+            ],
+        )
+        .expect("legacy publication");
+        drop(conn);
+        let store = WorkflowStore::open_at(&db).expect("migrate");
+        assert_eq!(
+            store.get_draft("legacy").expect("draft").closure,
+            WorkflowClosure::Human
+        );
+        assert_eq!(
+            store.get_published("legacy", 1).expect("published").closure,
+            WorkflowClosure::Human
+        );
+    }
+
+    #[test]
     fn seeded_resolve_plan_pins_the_story_delivery_template() {
         let dir = tempfile::tempdir().expect("db dir");
         let store = WorkflowStore::open_at(&dir.path().join("workflow.sqlite3")).expect("store");

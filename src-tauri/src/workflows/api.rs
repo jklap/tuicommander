@@ -1,4 +1,6 @@
-use super::{PublishedWorkflow, WorkflowDraft, WorkflowGraph, WorkflowKind, WorkflowStore};
+use super::{
+    PublishedWorkflow, WorkflowClosure, WorkflowDraft, WorkflowGraph, WorkflowKind, WorkflowStore,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -18,6 +20,11 @@ pub enum WorkflowAction {
         id: String,
         expected_revision: i64,
         graph: WorkflowGraph,
+    },
+    UpdateClosure {
+        id: String,
+        expected_revision: i64,
+        closure: WorkflowClosure,
     },
     Publish {
         id: String,
@@ -97,6 +104,18 @@ pub fn definition_action(project: &str, action: WorkflowAction) -> Result<Workfl
                 &id,
                 expected_revision,
                 graph,
+            )?))
+        }
+        WorkflowAction::UpdateClosure {
+            id,
+            expected_revision,
+            closure,
+        } => {
+            draft_in_project(&store, &id, &project)?;
+            Ok(WorkflowReply::Draft(store.update_closure(
+                &id,
+                expected_revision,
+                closure,
             )?))
         }
         WorkflowAction::Publish {
