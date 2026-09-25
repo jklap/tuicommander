@@ -2,6 +2,36 @@ use super::*;
 use std::collections::HashSet;
 
 impl StoryStore {
+    pub fn transition_history(&self, story_id: &str) -> Result<Vec<StoryTransition>, String> {
+        let conn = self.connect()?;
+        read_story(&conn, story_id)?;
+        let mut stmt = conn.prepare(
+            "SELECT revision,command_json,actor_json FROM story_transitions WHERE story_id=?1 ORDER BY revision"
+        ).map_err(|e| format!("prepare story transition history: {e}"))?;
+        let rows = stmt
+            .query_map([story_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| format!("read story transition history: {e}"))?;
+        rows.map(|row| {
+            let (revision, command_json, actor_json) =
+                row.map_err(|e| format!("read story transition: {e}"))?;
+            Ok(StoryTransition {
+                story_id: story_id.into(),
+                revision,
+                command: serde_json::from_str(&command_json)
+                    .map_err(|e| format!("decode story command: {e}"))?,
+                actor: serde_json::from_str(&actor_json)
+                    .map_err(|e| format!("decode story actor: {e}"))?,
+            })
+        })
+        .collect()
+    }
+
     pub fn add_dependency(
         &self,
         story_id: &str,
@@ -186,6 +216,15 @@ impl StoryStore {
             }
         }
         save_story(&tx, &mut story, expected_revision)?;
+        tx.execute(
+            "INSERT INTO story_transitions(story_id,revision,command_json,actor_json) VALUES (?1,?2,?3,?4)",
+            rusqlite::params![
+                story.id, story.revision,
+                serde_json::to_string(&command).map_err(|e| format!("encode story command: {e}"))?,
+                serde_json::to_string(&actor_session.map_or(StoryTransitionActor::Human, |session_id| StoryTransitionActor::ManagedSession { session_id: session_id.into() }))
+                    .map_err(|e| format!("encode story actor: {e}"))?,
+            ],
+        ).map_err(|e| format!("record story transition: {e}"))?;
         if story.status == StoryStatus::Done {
             promote_ready(&tx, &story.plan_id)?;
         }

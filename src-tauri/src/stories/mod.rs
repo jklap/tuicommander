@@ -541,6 +541,71 @@ mod tests {
     }
 
     #[test]
+    fn approval_records_human_provenance_and_rejects_managed_agents() {
+        let dir = tempfile::tempdir().expect("temporary config");
+        let db = dir.path().join("stories.sqlite3");
+        let store = StoryStore::open_at(&db).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Plan".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        let started = store
+            .transition(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("start");
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .expect("check");
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .expect("review");
+        assert!(
+            store
+                .transition_for_actor(
+                    &story.id,
+                    review.revision,
+                    StoryCommand::Approve,
+                    Some("managed-pty")
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.get_story(&story.id).expect("unchanged").status,
+            StoryStatus::Review
+        );
+        let done = store
+            .transition(&story.id, review.revision, StoryCommand::Approve)
+            .expect("approve");
+        drop(store);
+        let history = StoryStore::open_at(&db)
+            .expect("reopen")
+            .transition_history(&story.id)
+            .expect("history");
+        assert_eq!(history.len(), 4);
+        assert_eq!(history.last().expect("approval").revision, done.revision);
+        assert_eq!(
+            history.last().expect("approval").actor,
+            StoryTransitionActor::Human
+        );
+        assert_eq!(
+            history.last().expect("approval").command,
+            StoryCommand::Approve
+        );
+    }
+
+    #[test]
     fn manual_claim_conflicts_and_is_released_with_session() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
