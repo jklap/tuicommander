@@ -431,6 +431,25 @@ When modifying the Progress dialog, its store, or the surfaces that open it:
 | `docs/user-guide/settings.md` | The two `progress_tracking` toggles in the Agents table |
 | `docs/FEATURES.md` | Project history row |
 
+### Native Stories (manual plans and stories)
+
+When modifying the native story store, its actions, or any of the four surfaces
+that reach them:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/stories/store.rs`, `store/records.rs`, `store/transitions.rs` | Schema version, claims, revisions, transitions, and the read-only claim probe on session close |
+| `src-tauri/src/stories/model.rs`, `api.rs` | The `StoryAction` / `StoryReply` wire shapes and project scoping — one shape for every transport |
+| `src-tauri/src/pty.rs` | Claim release on session teardown (`remove_live_session_state`) |
+| `src-tauri/src/lib.rs` | `story_action_command` (IPC) |
+| `src-tauri/src/mcp_http/mod.rs` | `POST /stories/action` and its auth guard |
+| `src-tauri/src/mcp_http/mcp_transport.rs` | The MCP `story` tool (`handle_story`, bound caller only) |
+| `src-tauri/crates/tuic-cli/src/main.rs` | `tuic story` |
+| `src/transport.ts` + `src-tauri/src/mcp_http/command_table_paths.txt` | The `story_action_command` mapping; regenerate the paths file with `pnpm vitest run src/__tests__/transport.test.ts -u` |
+| `src/components/StoriesDialog/`, `src/stores/storiesUi.ts`, `src/components/Toolbar/Toolbar.tsx` | The dialog, its visibility store, and the toolbar entry point |
+| `docs/api/tauri-commands.md`, `docs/api/http-api.md`, `docs/backend/mcp-http.md` | The command, the route, and the MCP tool |
+| `docs/user-guide/native-stories.md`, `docs/FEATURES.md`, `SPEC.md` | The guide, the feature row, and the specification |
+
 ### Git & Worktree Integration
 When modifying git operations, worktree logic, or GitHub API:
 
