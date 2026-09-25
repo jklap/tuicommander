@@ -618,6 +618,33 @@ pub(crate) fn create_workspace(
     create_workspace_with(worktrees_dir, config, base_ref, crate::cow::warm_worktree)
 }
 
+/// Create the registered worktree and its required local inputs, but defer the
+/// expensive cache warm to the caller.
+pub(crate) fn create_workspace_unwarmed(
+    worktrees_dir: &Path,
+    config: &WorktreeConfig,
+    base_ref: Option<&str>,
+) -> Result<CreatedWorkspace, String> {
+    let src = PathBuf::from(&config.base_repo);
+    let branch = config
+        .branch
+        .clone()
+        .unwrap_or_else(|| sanitize_name(&config.task_name));
+    ensure_branch_has_no_workspace(&src, &branch)?;
+    let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
+    let branch = worktree.branch.unwrap_or(branch);
+    let mut warnings = link_shared_stores(&src, &worktree.path);
+    warnings.extend(initialize_submodules(&src, &worktree.path));
+    Ok(CreatedWorkspace {
+        workspace_id: workspace_id_of_worktree(&branch),
+        path: worktree.path,
+        branch,
+        kind: WorkspaceKind::Worktree,
+        warnings,
+        warmed_directories: 0,
+    })
+}
+
 /// `create_workspace` with warming injected for deterministic tests.
 pub(crate) fn create_workspace_with(
     worktrees_dir: &Path,
@@ -625,31 +652,16 @@ pub(crate) fn create_workspace_with(
     base_ref: Option<&str>,
     warm: impl Fn(&Path, &Path) -> crate::cow::WarmingReport,
 ) -> Result<CreatedWorkspace, String> {
+    let mut workspace = create_workspace_unwarmed(worktrees_dir, config, base_ref)?;
     let src = PathBuf::from(&config.base_repo);
-    let branch = config
-        .branch
-        .clone()
-        .unwrap_or_else(|| sanitize_name(&config.task_name));
-
-    ensure_branch_has_no_workspace(&src, &branch)?;
-    let worktree = create_worktree_with_stale_recovery(worktrees_dir, config, base_ref)?;
-    let branch = worktree.branch.unwrap_or(branch);
-    let mut warnings = link_shared_stores(&src, &worktree.path);
-    warnings.extend(initialize_submodules(&src, &worktree.path));
 
     // DEFERRED (2026-09-13): carrying the parent's tracked changes was dropped
     // with independent COW workspace creation. If reinstated, pipe
     // `git diff HEAD` in the parent to `git apply` in this linked worktree.
-    let warming = warm(&src, &worktree.path);
-    warnings.extend(warming.warnings);
-    Ok(CreatedWorkspace {
-        workspace_id: workspace_id_of_worktree(&branch),
-        path: worktree.path,
-        branch,
-        kind: WorkspaceKind::Worktree,
-        warnings,
-        warmed_directories: warming.warmed,
-    })
+    let warming = warm(&src, &workspace.path);
+    workspace.warnings.extend(warming.warnings);
+    workspace.warmed_directories = warming.warmed;
+    Ok(workspace)
 }
 
 const SHARED_WORKTREE_STORES: [&str; 3] = ["stories", "plans", "ideas"];
