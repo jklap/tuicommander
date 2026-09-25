@@ -5805,27 +5805,14 @@ fn test_vt_log_pipeline_status_line_normal_screen() {
     );
 }
 
-/// VtLogBuffer changed rows feed parse_clean_lines and produce an Intent event
-/// during alternate screen (e.g. Claude Code / Ink).
+/// The production chunk pipeline captures an alternate-screen intent.
+#[cfg(unix)]
 #[test]
 fn test_vt_log_pipeline_intent_alternate_screen() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    // Enter alternate screen (smcup: ESC[?1049h)
-    let _ = vt_log.process(b"\x1b[?1049h");
-    let changed = vt_log.process(b"intent: Doing work (Test)");
-    let events = parser.parse_clean_lines(&changed, true);
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ParsedEvent::Intent { .. })),
-        "expected Intent from alternate screen, got: {:?}",
-        events
-    );
+    let (events, entries) =
+        run_progress_intent_case(&["intent: Doing work (Test)"], 80, true, false);
+    assert_eq!(events, [("Doing work".into(), Some("Test".into()))]);
+    assert_eq!(entries, ["Doing work"]);
 }
 
 /// parse_osc94 is called on raw data (OSC 9;4 is invisible in clean rows).
@@ -5943,26 +5930,14 @@ fn test_e2e_question_then_decoration_then_silence() {
 
 // --- Headless reader structured event tests ---
 
-/// The headless reader logic: after process(), parse_clean_lines produces events.
-/// This verifies the core data flow without spawning a full AppState.
+/// A title-less marker reaches the journal at the idle boundary.
+#[cfg(unix)]
 #[test]
 fn test_headless_reader_intent_event_logic() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    let changed = vt_log.process(b"intent: Testing headless reader");
-    let events = parser.parse_clean_lines(&changed, true);
-
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, ParsedEvent::Intent { .. })),
-        "expected Intent from headless reader logic, got: {:?}",
-        events
-    );
+    let (events, entries) =
+        run_progress_intent_case(&["intent: Testing headless reader"], 80, true, true);
+    assert_eq!(events, [("Testing headless reader".into(), None)]);
+    assert_eq!(entries, ["Testing headless reader"]);
 }
 
 /// The headless reader emits events for alternate screen content (e.g. Claude Code).
@@ -6035,40 +6010,27 @@ fn test_cnl_sequence_does_not_leak() {
     );
 }
 
-/// Simulate Ink-style rendering: write intent, then use CPL to update it.
-/// This is what Claude Code does when updating its status line.
+/// Ink's CPL overwrite reaches the same chunk pipeline as a live PTY.
+#[cfg(unix)]
 #[test]
 fn test_vt100_ink_style_intent_with_cpl() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    // Simulate Ink render: write placeholder, then CPL + overwrite with intent
-    let _ = vt_log.process(b"\x1b[?1049h"); // alternate screen
-    let _ = vt_log.process(b"placeholder text\r\n");
-    // Ink update: go up, clear line, write intent
-    let changed =
-        vt_log.process(b"\x1b[1F\x1b[2Kintent: Fix all 34 documentation gaps (Fixing gaps)");
-    let events = parser.parse_clean_lines(&changed, true);
-    let intent = events.iter().find_map(|e| match e {
-        ParsedEvent::Intent { text, title, .. } => Some((text.clone(), title.clone())),
-        _ => None,
-    });
-    assert!(
-        intent.is_some(),
-        "intent must be detected after CPL overwrite; changed={:?}, events={:?}",
-        changed,
-        events
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "placeholder text\r\n",
+            "\x1b[1F\x1b[2Kintent: Fix all 34 documentation gaps (Fixing gaps)",
+        ],
+        80,
+        true,
+        false,
     );
-    let (text, title) = intent.unwrap();
     assert_eq!(
-        text, "Fix all 34 documentation gaps",
-        "intent text must be clean (no '1F' leak); got: {:?}",
-        text
+        events,
+        [(
+            "Fix all 34 documentation gaps".into(),
+            Some("Fixing gaps".into())
+        )]
     );
-    assert_eq!(title.as_deref(), Some("Fixing gaps"));
+    assert_eq!(entries, ["Fix all 34 documentation gaps"]);
 }
 
 /// Chunked delivery: CSI split across two process() calls.
@@ -6129,53 +6091,38 @@ fn test_unknown_private_csi_does_not_leak() {
 
 /// Simulate realistic Ink output with SGR + cursor movement + text.
 /// This mimics what Claude Code actually sends through the PTY.
+#[cfg(unix)]
 #[test]
 fn test_vt100_realistic_ink_render_cycle() {
-    use crate::output_parser::{OutputParser, ParsedEvent};
-    use crate::state::VtLogBuffer;
-
-    let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-    let mut parser = OutputParser::new();
-
-    let _ = vt_log.process(b"\x1b[?1049h"); // alternate screen
-
-    // Frame 1: Ink renders initial content with colors
-    let _ = vt_log.process(
-        b"\x1b[1;1H\x1b[38;2;128;128;128m\xe2\x97\x8f\x1b[0m \x1b[1mintent: Reading codebase structure (Reading code)\x1b[0m"
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[1;1H\x1b[38;2;128;128;128m●\x1b[0m \x1b[1mintent: Reading codebase structure (Reading code)\x1b[0m",
+            "\x1b[1F\x1b[2K\x1b[38;2;128;128;128m●\x1b[0m \x1b[1mintent: Fix all 34 documentation gaps (Fixing gaps)\x1b[0m",
+        ],
+        80,
+        true,
+        false,
     );
-
-    // Frame 2: Ink updates — cursor up, erase line, rewrite
-    // This is how Ink typically does incremental updates
-    let changed = vt_log.process(
-        b"\x1b[1F\x1b[2K\x1b[38;2;128;128;128m\xe2\x97\x8f\x1b[0m \x1b[1mintent: Fix all 34 documentation gaps (Fixing gaps)\x1b[0m"
+    assert_eq!(
+        events,
+        [
+            (
+                "Reading codebase structure".into(),
+                Some("Reading code".into())
+            ),
+            (
+                "Fix all 34 documentation gaps".into(),
+                Some("Fixing gaps".into())
+            )
+        ]
     );
-
-    let events = parser.parse_clean_lines(&changed, true);
-    let intent = events.iter().find_map(|e| match e {
-        ParsedEvent::Intent { text, title, .. } => Some((text.clone(), title.clone())),
-        _ => None,
-    });
-
-    // Print all changed rows for debugging
-    eprintln!("changed rows:");
-    for r in &changed {
-        eprintln!("  row[{}]: {:?}", r.row_index, r.text);
-    }
-    eprintln!("events: {:?}", events);
-
-    assert!(
-        intent.is_some(),
-        "intent must be detected in realistic Ink render; events={:?}",
-        events
+    assert_eq!(
+        entries,
+        [
+            "Fix all 34 documentation gaps",
+            "Reading codebase structure"
+        ]
     );
-    let (text, title) = intent.unwrap();
-    assert!(
-        !text.contains("1F"),
-        "intent text must not contain escape leak '1F'; got: {:?}",
-        text
-    );
-    assert_eq!(text, "Fix all 34 documentation gaps");
-    assert_eq!(title.as_deref(), Some("Fixing gaps"));
 }
 
 /// Multi-chunk Ink render: data arrives in small fragments.
@@ -12732,10 +12679,29 @@ async fn codex_narrow_repaint_journals_only_the_closed_intent_and_title() {
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn captured_codex_narrow_hard_wrap_journals_complete_intent() {
-    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+    replay_captured_codex_narrow_intent(
         "codex-narrow-progress-intent-20260925.tcap",
-    ))
-    .expect("decode Codex capture");
+        "Controllo la cattura a 80 colonne e preparo la prova del journal con righe di continuazione e titolo finale",
+        "Verifica stretta",
+    );
+}
+
+/// A second real narrow capture exercises Ink's continuation-row repaint after
+/// the first fixture exposed an early partial publication.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn captured_codex_narrow_ink_replay_journals_complete_intent() {
+    replay_captured_codex_narrow_intent(
+        "codex-narrow-ink-replay-20260925.tcap",
+        "Verifico il secondo replay Codex a larghezza stretta dopo la correzione dei frame Ink e degli intent ancora aperti",
+        "Replay finale",
+    );
+}
+
+#[cfg(unix)]
+fn replay_captured_codex_narrow_intent(name: &str, text: &str, title: &str) {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(name))
+        .expect("decode Codex capture");
     let (rows, cols) = capture.geometry.expect("capture geometry");
     assert_eq!(cols, 80);
     let config = tempfile::tempdir().expect("config directory");
@@ -12774,6 +12740,7 @@ async fn captured_codex_narrow_hard_wrap_journals_complete_intent() {
         .clone();
     let mut parsed_events = state.event_bus.subscribe();
     let mut processor = ChunkProcessor::new(None, None);
+    let mut intents = Vec::new();
     for record in capture.records {
         if record.direction == crate::pty_capture::CaptureDirection::Output {
             processor.process_chunk(
@@ -12783,25 +12750,18 @@ async fn captured_codex_narrow_hard_wrap_journals_complete_intent() {
                 &state,
             );
         }
-    }
-    let text = "Controllo la cattura a 80 colonne e preparo la prova del journal con righe di continuazione e titolo finale";
-    let intents: Vec<_> = std::iter::from_fn(|| parsed_events.try_recv().ok())
-        .filter_map(|event| match event {
-            crate::state::AppEvent::PtyParsed { parsed, .. }
-                if parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent") =>
+        for event in std::iter::from_fn(|| parsed_events.try_recv().ok()) {
+            if let crate::state::AppEvent::PtyParsed { parsed, .. } = event
+                && parsed.get("type").and_then(serde_json::Value::as_str) == Some("intent")
             {
-                Some((
+                intents.push((
                     parsed["text"].as_str().unwrap_or_default().to_string(),
                     parsed["title"].as_str().map(str::to_string),
-                ))
+                ));
             }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        intents,
-        [(text.to_string(), Some("Verifica stretta".to_string()))]
-    );
+        }
+    }
+    assert_eq!(intents, [(text.to_string(), Some(title.to_string()))]);
     let entries = crate::progress::ProgressStore::open()
         .expect("open Progress journal")
         .list(
@@ -12818,6 +12778,7 @@ async fn captured_codex_narrow_hard_wrap_journals_complete_intent() {
         if entry.kind == crate::progress::ProgressKind::Intent && entry.text == text));
 }
 
+#[cfg(unix)]
 fn run_progress_intent_case(
     chunks: &[&str],
     cols: u16,
@@ -12827,6 +12788,7 @@ fn run_progress_intent_case(
     run_progress_intent_case_ending(chunks, cols, agent, timer_idle, None, true, false)
 }
 
+#[cfg(unix)]
 fn run_progress_intent_case_ending(
     chunks: &[&str],
     cols: u16,
@@ -12980,6 +12942,26 @@ async fn progress_open_intent_close_matrix() {
     assert_eq!(
         entries,
         ["Reviewing the streaming parser for the Progress journal correctness guarantees"]
+    );
+
+    let (events, entries) = run_progress_intent_case(
+        &[
+            "\x1b[4;1H\x1b[2K● intent: Reviewing the narrow terminal\r\n  and the Progress journal\r\n  together (Narrow replay)",
+        ],
+        80,
+        true,
+        false,
+    );
+    assert_eq!(
+        events,
+        [(
+            "Reviewing the narrow terminal and the Progress journal together".into(),
+            Some("Narrow replay".into())
+        )]
+    );
+    assert_eq!(
+        entries,
+        ["Reviewing the narrow terminal and the Progress journal together"]
     );
 
     let (events, entries) = run_progress_intent_case(
