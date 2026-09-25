@@ -1066,4 +1066,53 @@ mod tests {
             AuthAdmission::Verify
         ));
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_verification_does_not_strand_the_next_login() {
+        use tower::ServiceExt;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut config = state.config.write();
+            config.services.auth.username = "boss".to_string();
+            config.services.auth.password_hash = bcrypt::hash("correct", 12).unwrap();
+            config.services.auth.auth_rate_limit_max = 10;
+        }
+        let app = axum::Router::new()
+            .route("/ping", axum::routing::get(|| async { "pong" }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&state),
+                basic_auth_middleware,
+            ));
+        let request = || {
+            Request::get("/ping")
+                .header(header::AUTHORIZATION, basic_header("boss", "wrong"))
+                .extension(ConnectInfo(SocketAddr::from(([203, 0, 113, 7], 51234))))
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+
+        let first = tokio::spawn(app.clone().oneshot(request()));
+        let ip: std::net::IpAddr = [203, 0, 113, 7].into();
+        let setup_deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let verifying = state
+                .auth_rate_limits
+                .get(&ip)
+                .is_some_and(|limit| !limit.state.lock().verifying.is_empty());
+            if verifying {
+                break;
+            }
+            assert!(std::time::Instant::now() < setup_deadline, "first request never reached bcrypt");
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        first.abort();
+        let _ = first.await;
+
+        let second = tokio::time::timeout(Duration::from_secs(10), app.clone().oneshot(request()))
+            .await
+            .expect("a cancelled verification stranded the next login in Wait")
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
+    }
 }
