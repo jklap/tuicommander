@@ -59,6 +59,12 @@ file-backed credential adapter, scoped below the selected instance directory.
 Instance selection precedes `--set-password`, so password setup writes only to
 the selected namespace.
 
+`TUIC_CAPTURE_DIR` overrides only the raw PTY capture directory. Set it to an
+absolute path before starting TUICommander to write `.tcap` files outside the
+instance config directory. A relative value rejects capture activation; it
+does not fall back to the default directory. `GET /diagnostics/capture` reports
+the selected directory while recording.
+
 Desktop verification may also set `TUIC_PORT=<port>` to choose the process-local
 HTTP listener port without changing `config.json`; an occupied port still uses the
 existing next-port retry.

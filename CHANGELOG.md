@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Configurable PTY capture directory** — `TUIC_CAPTURE_DIR` sends diagnostic `.tcap` files to an absolute path selected at process start. Relative paths reject capture activation.
+
 - **Editor line wrapping** — Text and Markdown files open wrapped, while code opens unwrapped. Toggle it from the editor header or with `Alt+Z`; each file kind remembers its setting.
 
 - **Settings expert mode** — An **Expert** switch in the Settings header shows or hides expert settings: settings whose default is correct for almost everyone. In basic mode an expert setting is hidden only while it has its default value, so a setting you changed is never hidden. A search result for an expert setting shows an **Expert** badge and opens it without changing the switch. The switch position is kept between restarts.

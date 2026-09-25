@@ -168,7 +168,8 @@ not proof that it was answered.
 
 Agent-state failures must be captured from the raw PTY stream before analysis.
 Enable `POST /diagnostics/capture` before reproducing, stop it afterward, then
-copy the reported `<config dir>/captures/<session-id>.tcap` file into
+copy the reported capture file (under `<config dir>/captures/` by default, or
+under the absolute `TUIC_CAPTURE_DIR` override) into
 `src-tauri/src/fixtures/agent_prompts/`. `/sessions/:id/output` is not a fixture
 source: it is a rendered, bounded ring snapshot and can lose one-shot escape
 sequences. TUICCAP2 fixtures preserve the initial terminal geometry,

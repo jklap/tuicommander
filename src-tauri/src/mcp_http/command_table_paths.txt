@@ -29,6 +29,7 @@
 /agents/detect
 /agents/detect-all
 /agents/ides
+/agents/launch-args
 /agents/open-in-app
 /agents/verify-session
 /api/plugins/output-watchers

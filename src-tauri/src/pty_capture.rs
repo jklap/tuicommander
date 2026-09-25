@@ -19,7 +19,9 @@
 //! curl localhost:9876/diagnostics/capture        # state + files written
 //! ```
 //!
-//! Captures land in `<app config dir>/captures/<session-id>.tcap` and stop
+//! Captures land in `<app config dir>/captures/<session-id>.tcap` by default.
+//! `TUIC_CAPTURE_DIR` selects an absolute output directory when the process
+//! must keep captures elsewhere. Files stop
 //! growing at [`MAX_CAPTURE_BYTES`] each: a fixture is a moment, not a session
 //! transcript, and an unattended tap must not fill Boss's disk.
 
@@ -251,19 +253,31 @@ pub(crate) fn decode_capture(bytes: &[u8]) -> Result<DecodedCapture, String> {
     Ok(DecodedCapture { geometry, records })
 }
 
-/// Start or stop the tap on the canonical capture directory, and report the new
-/// state. Every entry point — `POST /diagnostics/capture` and the desktop tab
-/// menu — goes through here, so the two can never disagree about where a
-/// capture lands.
+/// Start or stop the tap in the configured capture directory, and report the
+/// new state. Both HTTP and desktop entry points use this selection.
 pub(crate) fn set_enabled_in_config_dir(
     enabled: bool,
     session_filter: Option<String>,
 ) -> serde_json::Value {
-    set_enabled(
-        enabled,
-        session_filter,
-        crate::config::config_dir().join("captures"),
-    );
+    if !enabled {
+        set_enabled(false, None, PathBuf::new());
+        return status();
+    }
+    let dir = match std::env::var_os("TUIC_CAPTURE_DIR") {
+        Some(value) => {
+            let dir = PathBuf::from(value);
+            if !dir.is_absolute() {
+                set_enabled(false, None, PathBuf::new());
+                return serde_json::json!({
+                    "enabled": false,
+                    "error": "TUIC_CAPTURE_DIR must be absolute",
+                });
+            }
+            dir
+        }
+        None => crate::config::config_dir().join("captures"),
+    };
+    set_enabled(true, session_filter, dir);
     status()
 }
 
@@ -305,6 +319,43 @@ mod tests {
     /// The tap is one global switch, so these tests would otherwise disable each
     /// other mid-run under cargo's parallel harness.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn capture_directory_override_selects_an_absolute_directory() {
+        let _guard = TEST_LOCK.lock();
+        let root = tempfile::tempdir().unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let selected_dir = root.path().join("selected");
+        // nextest runs this exact test in its own process; no other thread reads
+        // this task-specific environment variable while it changes.
+        let previous = std::env::var_os("TUIC_CAPTURE_DIR");
+        unsafe { std::env::remove_var("TUIC_CAPTURE_DIR") };
+        let default_status = set_enabled_in_config_dir(true, Some("session-a".into()));
+        assert_eq!(
+            default_status["dir"],
+            serde_json::json!(root.path().join("config/captures").display().to_string())
+        );
+
+        unsafe { std::env::set_var("TUIC_CAPTURE_DIR", &selected_dir) };
+        let selected_status = set_enabled_in_config_dir(true, Some("session-a".into()));
+        assert_eq!(
+            selected_status["dir"],
+            serde_json::json!(selected_dir.display().to_string())
+        );
+        record_with_geometry("session-a", b"ready", Some((24, 80)));
+        assert!(selected_dir.join("session-a.tcap").exists());
+
+        set_enabled_in_config_dir(false, None);
+        unsafe { std::env::set_var("TUIC_CAPTURE_DIR", "relative") };
+        let invalid_status = set_enabled_in_config_dir(true, None);
+        assert_eq!(invalid_status["enabled"], false);
+        assert_eq!(invalid_status["error"], "TUIC_CAPTURE_DIR must be absolute");
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TUIC_CAPTURE_DIR", value) },
+            None => unsafe { std::env::remove_var("TUIC_CAPTURE_DIR") },
+        }
+    }
 
     /// Disabled is the default, and a disabled tap writes nothing — the state a
     /// shipped build must be in.
