@@ -483,6 +483,14 @@ impl OutputParser {
         parse_suggest_with_line(text, agent_active).is_some()
     }
 
+    /// A protocol title is an authoritative close for a streaming intent.
+    pub(crate) fn has_closed_title(&self, text: &str, agent_active: bool) -> bool {
+        matches!(
+            parse_intent(text, agent_active),
+            Some(ParsedEvent::Intent { title: Some(_), .. })
+        )
+    }
+
     /// Reopen the error dedup when the user submits a line: the agent is being
     /// asked again, so a recurrence of the same failure is a NEW failure and
     /// must notify.
