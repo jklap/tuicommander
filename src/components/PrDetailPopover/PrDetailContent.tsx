@@ -1,4 +1,5 @@
-import { type Component, createEffect, createMemo, For, type JSX, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
+import { invoke } from "../../invoke";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
@@ -9,6 +10,7 @@ import { onClickKeyDown } from "../../utils/a11y";
 import { getCiClass, getCiIcon } from "../../utils/ciDisplay";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { relativeTime } from "../../utils/time";
+import { stripAnsi } from "../../utils/stripAnsi";
 import { SeverityIcon } from "../shared/SeverityIcon";
 import { CiRing } from "../ui/CiRing";
 import s from "./PrDetailPopover.module.css";
@@ -109,6 +111,15 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	const prData = () => githubStore.getBranchPrData(props.repoPath, props.branch);
 	const checkSummary = () => githubStore.getCheckSummary(props.repoPath, props.branch);
 	const checkDetails = () => githubStore.getCheckDetails(props.repoPath, props.branch);
+	const [expandedCircleCiLog, setExpandedCircleCiLog] = createSignal<string | null>(null);
+	const [circleCiLog, setCircleCiLog] = createSignal("");
+	const isCircleCiFailure = (check: { state: string; html_url: string }) =>
+		getCiClass(check.state) === "failure" && /(^|\/\/)(app\.)?circleci\.com\//.test(check.html_url);
+	const toggleCircleCiLog = async (url: string) => {
+		if (expandedCircleCiLog() === url) return setExpandedCircleCiLog(null);
+		setExpandedCircleCiLog(url);
+		setCircleCiLog(await invoke<string>("fetch_circleci_logs", { url }));
+	};
 
 	// AI-review state lives in prReviewStore keyed by repo+PR, not in local
 	// signals — so an in-flight review survives the popover being closed and
@@ -362,6 +373,12 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 											<span class={cx(s.checkIcon, CI_CLASSES[getCiClass(check.state)])}>{getCiIcon(check.state)}</span>
 											<span class={s.checkName}>{check.context}</span>
 											<span class={cx(s.checkStatus, CI_CLASSES[getCiClass(check.state)])}>{check.state}</span>
+											<Show when={isCircleCiFailure(check)}>
+												<button type="button" onClick={(event) => { event.stopPropagation(); void toggleCircleCiLog(check.html_url); }}>Log</button>
+											</Show>
+											<Show when={expandedCircleCiLog() === check.html_url}>
+												<pre>{stripAnsi(circleCiLog())}</pre>
+											</Show>
 										</div>
 									);
 								}}
