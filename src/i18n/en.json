@@ -53,6 +53,7 @@
 	"codeEditor.largeFileWarning": "Large file — editing may be slow.",
 	"codeEditor.loading": "Loading...",
 	"codeEditor.lock": "Lock (read-only)",
+	"codeEditor.wrapLines": "Wrap lines",
 	"codeEditor.notDisplayableSub": "It looks like a binary or non-text file.",
 	"codeEditor.notDisplayableTitle": "This file can't be displayed",
 	"codeEditor.reload": "Reload",

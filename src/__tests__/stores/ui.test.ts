@@ -60,6 +60,37 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("editor wrapping", () => {
+		it("starts with text wrapped and code unwrapped", () => {
+			testInScope(() => {
+				expect(store.state.editorWrapText).toBe(true);
+				expect(store.state.editorWrapCode).toBe(false);
+			});
+		});
+
+		it("changes and persists only the selected kind", () => {
+			testInScope(() => {
+				mockInvoke.mockClear();
+				store.setEditorWrap("text", false);
+				expect(store.state.editorWrapText).toBe(false);
+				expect(store.state.editorWrapCode).toBe(false);
+				expect(JSON.parse(localStorage.getItem("tui-commander-editor-wrap")!)).toEqual({ text: false, code: false });
+				expect(mockInvoke).not.toHaveBeenCalledWith("save_ui_prefs", expect.anything());
+			});
+		});
+
+		it("restores both defaults from frontend preferences after a restart", async () => {
+			localStorage.setItem("tui-commander-editor-wrap", JSON.stringify({ text: false, code: true }));
+			vi.resetModules();
+			const restarted = (await import("../../stores/ui")).uiStore;
+			await testInScopeAsync(async () => {
+				await restarted.hydrate();
+				expect(restarted.state.editorWrapText).toBe(false);
+				expect(restarted.state.editorWrapCode).toBe(true);
+			});
+		});
+	});
+
 	describe("sidebar", () => {
 		it("defaults to visible", () => {
 			testInScope(() => {

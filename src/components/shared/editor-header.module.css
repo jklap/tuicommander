@@ -47,6 +47,12 @@
   color: var(--fg-primary);
 }
 
+.btn.active {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
 .btn svg {
   flex-shrink: 0;
 }

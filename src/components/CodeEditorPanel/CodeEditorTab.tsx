@@ -3,7 +3,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import type { LanguageSupport } from "@codemirror/language";
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
+import { Compartment, type Extension, Prec, StateEffect, StateField } from "@codemirror/state";
 import {
 	crosshairCursor,
 	Decoration,
@@ -44,7 +44,7 @@ import s from "./CodeEditorTab.module.css";
 import { EditorSearch } from "./EditorSearch";
 import { type GutterChange, gitChangeGutter, setChangesEffect } from "./gitGutter";
 import { type BlameLine, inlineBlame, setBlameEffect, setBlameEnabledEffect } from "./inlineBlame";
-import { detectLanguage } from "./languageDetection";
+import { detectLanguage, editorWrapKind } from "./languageDetection";
 import { searchOverview } from "./searchOverview";
 import { codeEditorTheme } from "./theme";
 
@@ -232,6 +232,11 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	 *  Non-blocking: the file is loaded normally; this only drives a warning banner. */
 	const [largeFile, setLargeFile] = createSignal(false);
 	const [isReadOnly, setIsReadOnly] = createSignal(false);
+	const wrapKind = createMemo(() => editorWrapKind(props.filePath));
+	const wrapEnabled = createMemo(() =>
+		wrapKind() === "text" ? uiStore.state.editorWrapText : uiStore.state.editorWrapCode,
+	);
+	const toggleWrap = () => uiStore.setEditorWrap(wrapKind(), !wrapEnabled());
 	/** True when the file changed on disk while editor has unsaved changes */
 	const [diskConflict, setDiskConflict] = createSignal(false);
 	/** Reactive dirty flag — only transitions on save/load, not every keystroke */
@@ -562,6 +567,12 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	});
 
 	// Base extensions
+	const wrapCompartment = new Compartment();
+	createExtension(wrapCompartment.of(wrapEnabled() ? EditorView.lineWrapping : []));
+	createEffect(() => {
+		const view = editorView();
+		if (view) view.dispatch({ effects: wrapCompartment.reconfigure(wrapEnabled() ? EditorView.lineWrapping : []) });
+	});
 	createExtension(codeEditorTheme);
 	createExtension(lineNumbers());
 	createExtension(history());
@@ -598,6 +609,13 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	createExtension(
 		Prec.high(
 			keymap.of([
+				{
+					key: "Alt-z",
+					run: () => {
+						toggleWrap();
+						return true;
+					},
+				},
 				{
 					key: "Mod-f",
 					run: () => {
@@ -800,6 +818,28 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				<Show when={dirty()}>
 					<span class={e.dirtyDot} title={t("codeEditor.unsaved", "Unsaved changes")} />
 				</Show>
+				<button
+					class={e.btn}
+					classList={{ [e.active]: wrapEnabled() }}
+					type="button"
+					onClick={toggleWrap}
+					aria-label={t("codeEditor.wrapLines", "Wrap lines")}
+					aria-pressed={wrapEnabled()}
+					title={`${t("codeEditor.wrapLines", "Wrap lines")} (Alt+Z)`}
+				>
+					<svg
+						width="12"
+						height="12"
+						viewBox="0 0 16 16"
+						fill="currentColor"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						aria-hidden="true"
+					>
+						<path fill="none" d="M2 3h12M2 6h12M2 9h9a2 2 0 0 1 0 4H8m0 0 2-2m-2 2 2 2M2 13h3" />
+					</svg>
+				</button>
 				<button
 					class={e.btn}
 					onClick={() => setIsReadOnly((v) => !v)}

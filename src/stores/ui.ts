@@ -5,6 +5,23 @@ import { appLogger } from "./appLogger";
 
 const LEGACY_SIDEBAR_VISIBLE_KEY = "tui-commander-sidebar-visible";
 const LEGACY_SIDEBAR_WIDTH_KEY = "tui-commander-sidebar-width";
+const EDITOR_WRAP_KEY = "tui-commander-editor-wrap";
+
+function loadEditorWrapPrefs(): { text: boolean; code: boolean } {
+	try {
+		const saved: unknown = JSON.parse(localStorage.getItem(EDITOR_WRAP_KEY) ?? "null");
+		if (saved && typeof saved === "object") {
+			const values = saved as Record<string, unknown>;
+			return {
+				text: typeof values.text === "boolean" ? values.text : true,
+				code: typeof values.code === "boolean" ? values.code : false,
+			};
+		}
+	} catch {
+		// An unavailable or malformed local preference keeps the normal defaults.
+	}
+	return { text: true, code: false };
+}
 
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 500;
@@ -72,6 +89,8 @@ interface UIStoreState {
 
 	// File browser view mode (persisted)
 	fileBrowserViewMode: "flat" | "tree";
+	editorWrapText: boolean;
+	editorWrapCode: boolean;
 
 	// External root (ephemeral) — when set, FileBrowserPanel browses this absolute
 	// path instead of the active repo. Used by "Open Folder…" / "Open Path…".
@@ -96,6 +115,7 @@ function clampWidth(v: number): number {
 
 /** Create the UI store */
 function createUIStore() {
+	const editorWrapPrefs = loadEditorWrapPrefs();
 	const [state, setState] = createStore<UIStoreState>({
 		sidebarVisible: true,
 		focusMode: false,
@@ -115,6 +135,8 @@ function createUIStore() {
 		settingsExpertMode: false,
 		diffViewMode: "split" as DiffViewMode,
 		fileBrowserViewMode: "tree" as "flat" | "tree",
+		editorWrapText: editorWrapPrefs.text,
+		editorWrapCode: editorWrapPrefs.code,
 		fileBrowserExternalRoot: null,
 		fileBrowserContentSearchNonce: 0,
 		activeDropdown: null,
@@ -270,6 +292,18 @@ function createUIStore() {
 		setFileBrowserViewMode(mode: "flat" | "tree"): void {
 			setState("fileBrowserViewMode", mode);
 			saveUIPrefs();
+		},
+
+		setEditorWrap(kind: "text" | "code", enabled: boolean): void {
+			setState(kind === "text" ? "editorWrapText" : "editorWrapCode", enabled);
+			try {
+				localStorage.setItem(
+					EDITOR_WRAP_KEY,
+					JSON.stringify({ text: state.editorWrapText, code: state.editorWrapCode }),
+				);
+			} catch (err) {
+				appLogger.warn("store", "Failed to persist editor wrapping", err);
+			}
 		},
 
 		// External root (ephemeral, not persisted) — lets the file browser escape

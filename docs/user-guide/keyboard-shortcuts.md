@@ -181,6 +181,7 @@ While holding the modifier, all branches show numbered badges. Press a number to
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+S` | Save file |
+| `Alt+Z` | Toggle line wrapping and remember it for this file kind |
 
 ## Ideas Panel (when textarea is focused)
 
