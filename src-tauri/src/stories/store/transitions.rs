@@ -106,7 +106,7 @@ impl StoryStore {
             return Err("only cancelled dependencies in the same plan can be removed".into());
         }
         story.dependencies.retain(|id| id != dependency_id);
-        if dependencies_done(&tx, &story)? {
+        if dependencies_integrated(&tx, &story, &self.db_path)? {
             story.status = StoryStatus::Ready;
         }
         save_story(&tx, &mut story, expected_revision)?;

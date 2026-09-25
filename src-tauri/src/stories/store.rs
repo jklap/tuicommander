@@ -1,12 +1,11 @@
 use super::model::{
     NewPlan, NewStory, Plan, PlanState, PlanView, Story, StoryCommand, StoryOrigin, StoryRead,
-    StoryTransition, StoryTransitionActor,
-    StoryStatus,
+    StoryStatus, StoryTransition, StoryTransitionActor,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use uuid::Uuid;
@@ -23,6 +22,7 @@ const SCHEMA_VERSION: i64 = 1;
 #[derive(Debug)]
 pub struct StoryStore {
     connection: Mutex<Connection>,
+    db_path: PathBuf,
 }
 
 impl StoryStore {
@@ -64,6 +64,7 @@ impl StoryStore {
         }
         Ok(Self {
             connection: Mutex::new(Self::open_connection(path)?),
+            db_path: path.to_path_buf(),
         })
     }
 
@@ -192,7 +193,8 @@ impl StoryStore {
         validate_new_story(&input)?;
         self.get_plan(&input.plan_id)?;
         let story = build_story(input);
-        insert_story(&self.connect()?, &story)?;
+        let conn = self.connect()?;
+        insert_story(&conn, &story)?;
         Ok(story)
     }
 

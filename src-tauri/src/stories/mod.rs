@@ -339,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn removing_a_cancelled_dependency_respects_every_remaining_prerequisite() {
+    fn removing_a_cancelled_dependency_keeps_unintegrated_prerequisites_blocked() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
         let plan = store
@@ -434,9 +434,15 @@ mod tests {
         store
             .transition(&outstanding.id, outstanding.revision, StoryCommand::Approve)
             .expect("done");
+        store
+            .reconcile_integrated_dependencies(&plan.id)
+            .expect("reconcile without an integration receipt");
         assert_eq!(
-            store.get_story(&dependent.id).expect("promoted").status,
-            StoryStatus::Ready
+            store
+                .get_story(&dependent.id)
+                .expect("still blocked")
+                .status,
+            StoryStatus::Backlog
         );
         assert_eq!(
             store.plan_state(&plan.id).expect("state"),

@@ -644,6 +644,17 @@ mod tests {
             .args(["switch", "-q", "main"])
             .run()
             .unwrap();
+        std::fs::write(repo.join("dirty.txt"), "untracked\n").unwrap();
+        assert!(
+            store
+                .recertify_canonical(
+                    &run.id,
+                    "dirty-recertification",
+                    store.snapshot(&run.id).unwrap().sequence
+                )
+                .is_err()
+        );
+        std::fs::remove_file(repo.join("dirty.txt")).unwrap();
         let recertified = store
             .recertify_canonical(
                 &run.id,
@@ -665,18 +676,17 @@ mod tests {
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
         let mut recertified_snapshot = store.snapshot(&run.id).unwrap();
         recertified_snapshot.planning_fingerprint = Some("closed".into());
-        assert!(super::store::ready_to_verify(
-            &recertified_snapshot,
-            &[story.clone()]
-        )
-        .is_ok());
+        assert!(super::store::ready_to_verify(&recertified_snapshot, &[story.clone()]).is_ok());
         assert_eq!(
             stories.get_story(&dependent.id).unwrap().status,
             crate::stories::StoryStatus::Ready
         );
         drop(store);
         let store = RunStore::open().unwrap();
-        assert_eq!(store.replay(&run.id).unwrap(), store.snapshot(&run.id).unwrap());
+        assert_eq!(
+            store.replay(&run.id).unwrap(),
+            store.snapshot(&run.id).unwrap()
+        );
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
         let conflict_worktree = config.path().join("conflict-worktree");
         crate::git_cli::git_cmd(repo)
@@ -1187,7 +1197,10 @@ mod tests {
         let receipt = store
             .report_bound_agent(completed_report.clone(), "worker-finishing")
             .unwrap();
-        assert!(matches!(receipt.event.kind, RunEventKind::AttemptReported { .. }));
+        assert!(matches!(
+            receipt.event.kind,
+            RunEventKind::AttemptReported { .. }
+        ));
         assert_eq!(receipt.snapshot.status, RunStatus::Paused);
         let saved = receipt
             .snapshot
