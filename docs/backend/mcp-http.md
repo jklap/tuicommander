@@ -1449,12 +1449,13 @@ its `meta.message_id`. This lets a later omitted-`since` wait recover it even if
 it had already returned newer mail; recipients deduplicate the replay by
 `meta.message_id`.
 
-Inbox overflow evicts only the oldest message that has no active delivery lease
-or has already been returned to a waiter or dispatched to a terminal. It never
-evicts `TerminalPending` or waiter-owned mail, because either may still need a
-terminal-failure requeue. If all 100 retained messages are in flight, `agent
-action=send` rejects the new message with an error asking the sender to retry
-after delivery completes; it does not silently discard any mail.
+Inbox overflow evicts only the oldest safe `tuic-auto-*` lifecycle notice.
+Lifecycle state observations are replaceable; peer mail (including mail returned
+from a waiter or terminal) is never evicted while lifecycle notices remain. It
+never evicts `TerminalPending` or waiter-owned mail, because either may still
+need a terminal-failure requeue. If the inbox contains peer mail only, or every
+lifecycle notice is in flight, `agent action=send` rejects the new message with
+an error asking the sender to retry; it does not silently discard any mail.
 
 The server never infers orchestrator role from child spawn, peer name, prompt, MCP
 activity, or SSE presence. Registration is the sole declaration seam. Wake
@@ -1489,7 +1490,7 @@ This requires the client to be launched with `--dangerously-load-development-cha
 ### Limits
 
 - Max message size: 64 KB
-- Inbox capacity: 100 messages per agent (FIFO eviction)
+- Inbox capacity: 100 messages per agent (lifecycle-first eviction; peer mail back-pressure)
 - Peer registrations cleaned up on MCP session delete and TTL reap, except where
   the identity is still addressable — see below
 

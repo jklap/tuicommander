@@ -2305,17 +2305,16 @@ impl AppState {
     }
 
     /// Buffer a message into `recipient`'s inbox with bounded, lifecycle-aware
-    /// FIFO eviction. An overflow may evict only mail whose owner has already
-    /// observed or dispatched it; in-flight delivery stays recoverable.
+    /// FIFO eviction. An overflow may evict only lifecycle notices whose owner
+    /// has already observed or dispatched them; peer mail stays recoverable.
     ///
-    /// On overflow we evict the oldest *non-lifecycle* message first, so peer
-    /// chatter can never silently drop a `tuic-auto-*` lifecycle notification;
-    /// we only fall back to evicting the oldest message overall when the inbox
-    /// is entirely lifecycle notifications (orchestrator badly stuck). Every
-    /// genuine eviction bumps `agent_inbox_evictions`, surfaced as
-    /// `missed_count` on the next `inbox` read. When every retained message is
-    /// in flight, reject the new one so the sender can retry instead of dropping
-    /// a message that terminal delivery may need to requeue.
+    /// On overflow we evict the oldest safe `tuic-auto-*` lifecycle notice first.
+    /// Peer mail is never evicted, including after terminal delivery has returned
+    /// it to the inbox: peer results and task output cannot be reconstructed from
+    /// a later lifecycle state change. Every genuine eviction bumps
+    /// `agent_inbox_evictions`, surfaced as `missed_count` on the next `inbox`
+    /// read. When the inbox contains peer mail only, or every lifecycle notice is
+    /// in flight, reject the new message so its sender can retry.
     pub(crate) fn try_push_agent_inbox(
         &self,
         recipient: &str,
@@ -2340,21 +2339,12 @@ impl AppState {
                 let evict_idx = inbox
                     .iter()
                     .position(|message| {
-                        !message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX)
+                        message.id.starts_with(LIFECYCLE_MSG_ID_PREFIX)
                             && matches!(
                                 gate.owners.get(&message.id),
                                 None | Some(AgentDeliveryOwner::WaiterObserved)
                                     | Some(AgentDeliveryOwner::TerminalDispatched)
                             )
-                    })
-                    .or_else(|| {
-                        inbox.iter().position(|message| {
-                            matches!(
-                                gate.owners.get(&message.id),
-                                None | Some(AgentDeliveryOwner::WaiterObserved)
-                                    | Some(AgentDeliveryOwner::TerminalDispatched)
-                            )
-                        })
                     })
                     .ok_or(AgentInboxFull)?;
                 inbox.remove(evict_idx).map(|message| message.id)
@@ -5446,30 +5436,36 @@ mod tests {
         );
     }
 
-    // ── push_agent_inbox: lifecycle notifications survive peer-send flooding ──
+    // ── push_agent_inbox: lifecycle notifications yield before peer mail ──
 
     #[test]
-    fn push_agent_inbox_protects_lifecycle_from_send_eviction() {
+    fn push_agent_inbox_evicts_lifecycle_before_peer_mail() {
         let state = tests_support::make_test_app_state();
         let rcpt = "orchestrator";
 
-        // A single critical lifecycle notification arrives first.
-        state.push_agent_inbox(rcpt, make_msg("tuic-auto-child-exit-1"));
-
-        // Then a peer floods the inbox well past capacity with chatter.
-        for i in 0..(AGENT_INBOX_CAPACITY + 50) {
-            state.push_agent_inbox(rcpt, make_msg(&format!("send-{i}")));
+        // Lifecycle notices are coalescible state observations; a peer result is
+        // not. Fill the inbox with notices plus one durable peer message.
+        for i in 0..(AGENT_INBOX_CAPACITY - 1) {
+            state.push_agent_inbox(rcpt, make_msg(&format!("tuic-auto-state-{i}")));
         }
+        state.push_agent_inbox(rcpt, make_msg("peer-result"));
+
+        // Another state update must replace an older lifecycle notice, never the
+        // peer message which a parent may not otherwise recover.
+        state
+            .try_push_agent_inbox(rcpt, make_msg("tuic-auto-state-overflow"))
+            .expect("an unleased lifecycle notice leaves an eviction slot");
 
         let inbox = state.agent_inbox.get(rcpt).expect("inbox exists");
-        // Hard bound respected …
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
-        // … but the lifecycle message was NOT the one evicted.
         assert!(
-            inbox.iter().any(|m| m.id == "tuic-auto-child-exit-1"),
-            "lifecycle notification must survive send flooding"
+            inbox.iter().any(|m| m.id == "peer-result"),
+            "peer mail must survive lifecycle eviction pressure"
         );
-        // Evictions are counted (nothing dropped silently).
+        assert!(
+            !inbox.iter().any(|m| m.id == "tuic-auto-state-0"),
+            "the oldest lifecycle notice is evicted first"
+        );
         assert!(
             *state.agent_inbox_evictions.get(rcpt).unwrap() > 0,
             "genuine evictions must bump the missed-count counter"
@@ -5522,7 +5518,7 @@ mod tests {
     }
 
     #[test]
-    fn push_agent_inbox_evicts_oldest_waiter_observed_mail_before_terminal_pending() {
+    fn push_agent_inbox_rejects_peer_only_overflow_after_waiter_delivery() {
         let state = tests_support::make_test_app_state();
         let recipient = "peer";
 
@@ -5542,13 +5538,17 @@ mod tests {
             state.push_agent_inbox(recipient, make_msg(&format!("returned-{index}")));
         }
 
-        state
-            .try_push_agent_inbox(recipient, make_msg("overflow"))
-            .expect("returned mail leaves an eviction slot");
+        assert_eq!(
+            state.try_push_agent_inbox(recipient, make_msg("overflow")),
+            Err(AgentInboxFull)
+        );
 
         let inbox = state.agent_inbox.get(recipient).expect("inbox exists");
         assert!(inbox.iter().any(|message| message.id == "terminal-pending"));
-        assert!(!inbox.iter().any(|message| message.id == "waiter-observed"));
+        assert!(
+            inbox.iter().any(|message| message.id == "waiter-observed"),
+            "returned peer mail is not an eviction candidate"
+        );
     }
 
     #[test]
@@ -5585,11 +5585,11 @@ mod tests {
             AgentDeliveryAssignment::Terminal
         );
         for index in 0..(AGENT_INBOX_CAPACITY - 1) {
-            state.push_agent_inbox(recipient, make_msg(&format!("returned-{index}")));
+            state.push_agent_inbox(recipient, make_msg(&format!("tuic-auto-state-{index}")));
         }
         state
-            .try_push_agent_inbox(recipient, make_msg("overflow"))
-            .expect("returned mail leaves an eviction slot");
+            .try_push_agent_inbox(recipient, make_msg("tuic-auto-state-overflow"))
+            .expect("safe lifecycle mail leaves an eviction slot");
 
         state.release_terminal_delivery(recipient, "terminal-pending");
 
