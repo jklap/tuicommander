@@ -263,6 +263,10 @@ describe("transport", () => {
 		});
 
 		it("routes native story actions to the owning project", () => {
+			expect(mapCommandToHttp("story_capabilities", {})).toEqual({
+				method: "GET",
+				path: "/stories/capabilities",
+			});
 			const action = { action: "get_story", story_id: "story-1" };
 			expect(mapCommandToHttp("story_action_command", { project: "/repo a", action })).toEqual({
 				method: "POST",

@@ -81,6 +81,17 @@ export interface HttpMapping {
 	notFoundAsNull?: boolean;
 }
 
+export class HttpRpcError extends Error {
+	constructor(
+		public readonly command: string,
+		public readonly status: number,
+		body: string,
+	) {
+		super(`RPC ${command} failed: ${status} ${body}`);
+		this.name = "HttpRpcError";
+	}
+}
+
 /** Helper to encode a required argument for URL path/query usage */
 function encodeArg(command: string, args: Record<string, unknown>, key: string): string {
 	const val = args[key];
@@ -790,6 +801,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/stories/action?path=${p("project")}`,
 			body: { action: args.action, sessionId: args.sessionId },
 		}),
+	},
+	story_capabilities: {
+		map: () => ({ method: "GET", path: "/stories/capabilities" }),
 	},
 	progress_delete: {
 		map: (args, p) => ({ method: "POST", path: `/progress/delete?path=${p("project")}`, body: args.input }),
@@ -2481,7 +2495,7 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 			return null as T;
 		}
 		const text = await resp.text().catch(() => resp.statusText);
-		throw new Error(`RPC ${command} failed: ${resp.status} ${text}`);
+		throw new HttpRpcError(command, resp.status, text);
 	}
 
 	const contentType = resp.headers.get("content-type") || "";
