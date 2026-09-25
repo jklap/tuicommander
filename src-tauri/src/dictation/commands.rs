@@ -2368,7 +2368,12 @@ impl DictationConfig {
     /// The level replies are brought to.
     pub fn loudness(&self) -> super::loudness::Loudness {
         super::loudness::Loudness {
-            volume_db: self.speech_volume_db,
+            // A hand-edited config may hold anything: keep the documented range.
+            volume_db: if self.speech_volume_db.is_finite() {
+                self.speech_volume_db.clamp(-30.0, -12.0)
+            } else {
+                default_speech_volume_db()
+            },
             levelling: self.speech_levelling,
         }
     }
@@ -3169,6 +3174,24 @@ mod tests {
         let fresh = DictationConfig::default();
         assert_eq!(config.speech_volume_db, fresh.speech_volume_db);
         assert_eq!(config.speech_levelling, fresh.speech_levelling);
+    }
+
+    /// A hand-edited config can carry any number; the stage only accepts the
+    /// documented -30..-12 dB, or the final clamp would distort every reply.
+    #[test]
+    fn the_loudness_stage_gets_a_volume_in_the_documented_range() {
+        for (stored, expected) in [
+            (6.0, -12.0),
+            (-60.0, -30.0),
+            (-20.0, -20.0),
+            (f32::NAN, -18.0),
+        ] {
+            let config = DictationConfig {
+                speech_volume_db: stored,
+                ..DictationConfig::default()
+            };
+            assert_eq!(config.loudness().volume_db, expected, "stored {stored}");
+        }
     }
 
     /// Settings > Dictation moves these two numbers and nothing else carries
